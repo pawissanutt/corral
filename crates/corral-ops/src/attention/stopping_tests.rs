@@ -56,11 +56,21 @@ fn actual_job_monitor_is_not_manual_attention() {
         "registered_at":"2026-10-29T07:00:00Z",
         "observation":{"at":"2026-10-29T07:00:00Z","state":"pending","detail":"waiting"}
     })).unwrap());
-    let mut conditions = Vec::new();
-    obligation_conditions(&task, &task.runs[0], at(), &mut conditions);
-    assert_eq!(conditions.len(), 1);
-    assert_eq!(conditions[0].responsible, Responsible::Executor);
-    assert_ne!(conditions[0].reason_code, "manual_wait_overdue");
+    let assessment = assessment(&task, |_| {});
+    let condition = assessment
+        .conditions
+        .iter()
+        .find(|c| c.kind == "obligation_wait")
+        .unwrap();
+    assert_eq!(condition.responsible, Responsible::Executor);
+    assert_ne!(condition.reason_code, "manual_wait_overdue");
+    let projected = super::super::classify::run_conditions_ref(&task, at()).unwrap();
+    let condition = projected
+        .iter()
+        .find(|c| c.kind == "obligation_wait")
+        .unwrap();
+    assert_eq!(condition.responsible, Responsible::Executor);
+    assert_ne!(condition.reason_code, "manual_wait_overdue");
 }
 
 fn reviewer(health: HostHealth, blocking: Option<bool>) -> Task {

@@ -181,7 +181,7 @@ impl WaitRecord {
     pub fn settled_job_exit(&self) -> bool {
         let channel = match &self.request.handle {
             WaitHandle::Channel { channel_id, .. } => Some(channel_id.as_str()),
-            WaitHandle::Gate { .. } => None,
+            WaitHandle::Gate { .. } | WaitHandle::TaskStatus { .. } => None,
         };
         settled_job_exit_parts(
             channel,

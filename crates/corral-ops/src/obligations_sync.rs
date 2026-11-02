@@ -182,6 +182,12 @@ fn post_inbox_wakes(ctx: &Ctx, id: &str) -> Result<()> {
     use corral_core::inbox::{
         DeliveryMode, Inbox, MAX_PAYLOAD, MessageBinding, Post, Recipient, Urgency,
     };
+    let head = ctx.store.head(id)?;
+    if !head.current_run.as_ref().is_some_and(|run| {
+        run.outcome.is_none() && run.agent_host.is_none() && run.delivery == DeliveryMode::Inbox
+    }) {
+        return Ok(());
+    }
     let task = ctx.store.get(id)?;
     let Some(run) = task.current_run().filter(|r| {
         r.outcome.is_none()
@@ -286,7 +292,7 @@ fn task_status_ready(ctx: &Ctx, wait: &WaitRecord) -> Result<bool> {
         TaskWaitStatus::Done => Status::Done,
         TaskWaitStatus::Dropped => Status::Dropped,
     };
-    if ctx.store.get(task)?.status == target {
+    if ctx.store.head(task)?.status == target {
         return Ok(true);
     }
     Ok(ctx.store.events_shared()?.iter().any(|event| {

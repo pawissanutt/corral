@@ -92,6 +92,7 @@ pub(super) fn final_obligations(
             registered_at: fixture::now(),
             observation: observation.clone(),
             receipt: Some(receipt(run, &wait, ReceiptOutcome::Ready)),
+            wake_message: None,
         },
         corral_core::DecisionRecord {
             request: corral_core::DecisionRequest {
