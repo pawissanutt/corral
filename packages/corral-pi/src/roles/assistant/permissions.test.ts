@@ -158,6 +158,33 @@ test("private production host: global skill, external edit, audit and second-she
 }, 240_000);
 
 // Same scope-limit cases as the Rust suite, with an injected HOME.
+test("permission grants and parent allow settings cannot authorize either rollout data root", async () => {
+  const f = fixture(), previous = process.env.XDG_DATA_HOME;
+  try {
+    const data = join(f.base, "data");
+    process.env.XDG_DATA_HOME = data;
+    mkdirSync(data);
+    delete f.paths.protectedDirs;
+    f.paths.temp = join(f.base, "scratch");
+    f.grant(true);
+    for (const allow of [[], [data, join(f.home, ".local/share")]]) {
+      f.paths.settings = { allow, deny: [] };
+      for (const parent of [join(data, "corral"), join(f.home, ".local/share/corral")]) {
+        for (const name of ["pi-native", "corral-pi"]) {
+          const root = join(parent, name);
+          mkdirSync(root, { recursive: true });
+          expect((await f.write(join(root, "auth/auth.json")))?.reason).toContain("fixed_rule");
+        }
+      }
+    }
+    expect(f.calls).toHaveLength(0);
+    expect(f.dialogs).toHaveLength(0);
+  } finally {
+    if (previous === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = previous;
+    f.close();
+  }
+});
+
 test("scope limit, normalized settings, broad deny and role-independent syntax", () => {
   const home = "/home/u";
   for (const path of ["/", "/home", "/etc", home, `${home}/`, `${home}/.`]) {

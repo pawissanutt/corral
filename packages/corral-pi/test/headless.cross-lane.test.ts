@@ -273,7 +273,15 @@ test("a headless reviewer asks, survives host loss through explicit resume and c
   expect(second.capability_transition ?? null).toBeNull();
   expect([state().mode, state().generation]).toEqual(["headless", 2]);
 
-  // When the owner answers and sync delivers it (with the resume notice) by bridge:
+  // Settle the recovery notice before installing the answer's one-shot provider script.
+  // Binding is not a turn barrier: a late notice could otherwise consume call_verdict while
+  // the question is still open, leaving the real answer with the fixture's default response.
+  const noticeEnded = events!.next((event) => event.kind === "agent_turn_ended" && event.task === "T-001"
+    && event.detail?.role === "reviewer" && event.detail?.generation === 2);
+  cli("sync");
+  await noticeEnded;
+
+  // When the owner answers and sync delivers it by bridge:
   writeFileSync(steps, JSON.stringify([
     { toolCalls: [{ callId: "call_verdict", name: "corral_verdict", arguments: {
       verdict: "approve", notes: "Approved after the owner's answer.",
