@@ -33,8 +33,14 @@ been cleanly integrated, retaining its corral-pi naming and this task's cost gui
 Owner Q5 approved production-target quick Clippy (full keeps all targets) and changed the
 cap to measured test execution, excluding compilation/preparation. Load/core is logged;
 busy phases are reported rather than failing a budget. The two old compile-included
-failures stay in the evidence; they are not relabeled as passes. A fresh quick receipt is
-pending. Original full-wall <600s and the new full test budget are **not yet measured**. Owner Q1 explicitly
+failures stay in the evidence; they are not relabeled as passes. Third quick attempt
+`ag-e3e1f7d649f065f3` reached tests: **427 passed, 1 failed** before fail-fast stopped the
+3085-test selection. Runtime **23.961s**, build/preparation **232.831s**; observed runtime
+load/core **0.908 → 0.713**, so the cap applied. The failing existing managed-skill equality
+check caught an unstamped packaged worker skill after the guidance edit. Its content hash
+is now regenerated from the canonical source; the same unchanged test passes (0.062s
+nextest wall). No assertion, timeout or skill-equality rule was weakened. A fresh quick
+receipt is pending. Original full-wall <600s and the full test budget remain **unmeasured**. Owner Q1 explicitly
 approved using the landing full gate as the after measurement; PM extracts/posts its table.
 Estimates above are planning ranges, not a promise that their sum is under 600s. The old
 per-test times were measured under substantially more simultaneous history-fixture work;
@@ -164,6 +170,9 @@ changes, shared store/Git/herdr changes, and missing/old gate contexts.
 - The cold first gate and incomplete timings remain evidence, not a successful benchmark.
   The next authorized attempt measures the corrected execution-only 180s budget. It logs
   prepared-binary compile time, nextest/work-budget/Bun execution and observed load/core.
+- The third attempt demonstrated the new separation on real candidate tests, then caught
+  generated managed-skill drift. Regenerated the packaged SHA-256 (`ac715700…dc35`), retaining
+  the existing byte-equality check. Its targeted prebuilt run passes without recompilation.
 
 ## Checks so far
 
