@@ -50,9 +50,14 @@ restart, resume, attend, present or authorize anything.
 ## Isolated real-input check
 
 Build the candidate binary and the disposable `pi_inbox_fixture` example, then run
-`scripts/qa-pi-inbox.py` with its output directory, `--corral` candidate path and
-`--seed` example path. It owns a fresh PTY and private HOME/XDG, uses the production
-host entrypoint and candidate Rust CLI, and deletes its fixture on exit. It makes
+the fixture script (the options below belong to that Python script, not corral):
+
+```bash
+python3 scripts/qa-pi-inbox.py .evidence/inbox-pty --corral target/debug/corral --seed target/debug/examples/pi_inbox_fixture
+```
+
+It owns a fresh PTY and private HOME/XDG, uses the production host entrypoint and
+candidate Rust CLI, and deletes its fixture on exit. It makes
 no model requests and never attaches to a live herdr pane. Its result, ANSI frames
 and before/after canonical-file hashes prove keyboard/mouse inspection, history,
 answer-flow navigation and draft continuity without answer or owner-input effects.
