@@ -619,6 +619,28 @@ pub(crate) fn auto_retry(
 }
 
 #[allow(clippy::too_many_arguments)]
+// Only a recognizable pre-exec Pi refusal with no bound host and an unchanged tree can
+// bypass the portable handoff. A crash after hello is not evidence of an unstarted agent.
+fn launch_refused_before_start(run: &Run) -> Result<bool> {
+    if run.outcome != Some(RunOutcome::Failed)
+        || !crate::agent::hooks::run_is_pi_native(run)
+        || !run.blocked_excerpt.as_deref().is_some_and(|text| {
+            text.lines()
+                .any(|line| line.contains("corral agent launch refused: "))
+        })
+        || run.agent_host.as_ref().is_none_or(|host| {
+            host.generations
+                .iter()
+                .any(|generation| generation.bound.is_some())
+        })
+        || !run.worktree.is_dir()
+    {
+        return Ok(false);
+    }
+    Ok(corral_git::is_clean(&run.worktree)?
+        && corral_git::rev_sha(&run.worktree, "HEAD")? == run.base_sha)
+}
+
 fn retry_with(
     ctx: &Ctx,
     id: &str,
@@ -681,11 +703,13 @@ fn retry_with(
         },
     )?;
     crate::routing::validate_model(ctx, &decision)?;
+    crate::agent::hooks::preflight::route(ctx, corral_core::agent::AgentRole::Worker, &decision)?;
     let reachable = match &prev.herdr {
         Some(h) => ctx.herdr.pane_get(&h.pane_id)?.is_some(),
         None => false,
     };
     let can_checkpoint = reachable && prev.worktree.is_dir();
+    let refused_before_start = launch_refused_before_start(&prev)?;
     // An availability handoff never depends on the old pane: a missing source tree or
     // checkpoint is not permission to replay work whose outcome is unknown.
     if availability.is_some() {
@@ -695,7 +719,7 @@ fn retry_with(
             prev.worktree.display()
         );
         crate::resume::require_checkpoint(&task, &prev)?;
-    } else if can_checkpoint {
+    } else if can_checkpoint && !refused_before_start {
         if automatic {
             crate::resume::require_checkpoint(&task, &prev)?;
         } else {
@@ -719,7 +743,10 @@ fn retry_with(
                 t.status.label()
             );
         }
-        if can_checkpoint || availability.is_some() {
+        if (can_checkpoint || availability.is_some())
+            && !(availability.is_none()
+                && launch_refused_before_start(t.current_run().context("missing_run")?)?)
+        {
             crate::resume::require_checkpoint(t, t.current_run().context("missing_run")?)?;
         }
         // Close only the identity validated under this lock. A failed close leaves
