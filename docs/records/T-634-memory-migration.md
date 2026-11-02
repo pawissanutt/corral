@@ -47,12 +47,16 @@ is recorded separately by Corral.
 
 ## PM operational handoff / completion status
 
-**Pending actual PM evidence.** Rehearsal alone does not complete the migration
-scenario. T-647/R2/Q1 requests the workspace PM's real selected-source inventory,
-imports and sanitized attestation. No private source paths or raw personal memory
-are included in this source report.
+**In-repo delivery complete; real cutover deferred.** The owner answer to
+T-647/R2/Q1 (revision 2) directs this run to deliver only the sanitized guide,
+synthetic rehearsal and inventory template with tests. Real OmO inventory/import,
+projection checks and the umbrella memory commit are a separate owner-approved
+operational step the PM runs after this task lands, not evidence required for this
+run. Rehearsal does not claim that operational migration is complete. No private
+workspace memory was written or committed by the coding child, and no private
+source paths or raw personal memory are included in this source report.
 
-PM completion must identify a private topic/disposition inventory and before/after
+The later PM operational completion must identify a private topic/disposition inventory and before/after
 source SHA-256 manifest, retained category examples (or explicit not-applicable
 categories), fresh PM/assistant/corral-worker projection inspections, uncommitted
 visibility, long-note retrieval, no OmO fallback/dual writes, source immutability
