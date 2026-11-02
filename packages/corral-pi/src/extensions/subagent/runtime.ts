@@ -55,7 +55,13 @@ class Slots {
   state() { return { running: this.active, queued: this.queue.length }; }
 }
 
+export interface AuxiliaryObservation {
+  readonly request: string; readonly parent: string; readonly kind: AuxiliaryKind;
+  readonly model: string; state: string; sessionFile?: string;
+}
 export class AuxiliaryRuntime {
+  private readonly observations = new Map<string, AuxiliaryObservation>();
+  inspection(): readonly AuxiliaryObservation[] { return [...this.observations.values()].slice(-100).map(item => ({ ...item })); }
   private readonly explore: Slots;
   private readonly oracle = new Slots(1);
   private readonly webSearch = new Slots(1);
@@ -99,6 +105,8 @@ export class AuxiliaryRuntime {
     this.controllers.add(controller);
     const timeout = AbortSignal.timeout(settings.timeout_secs * 1000);
     const signal = AbortSignal.any([controller.signal, timeout, ...(outer ? [outer] : [])]);
+    const observation: AuxiliaryObservation = { request, parent: options.sessionId(), kind, model: `${provider}/${model}`, state: "preparing" };
+    this.observations.set(request, observation);
     const common = { kind: "auxiliary", request, usage_kind: kind };
     let release: (() => void) | undefined;
     let prepared = false;
@@ -110,10 +118,14 @@ export class AuxiliaryRuntime {
       const reference = await options.record({ ...common, action: "prepare", model: `${provider}/${model}` });
       prepared = true;
       if (typeof reference.session_file !== "string" || reference.session_id !== request) throw new Error("invalid auxiliary reference");
+      // Search uses a different transcript format; only SDK native children are eligible.
+      if (kind !== "web_search") observation.sessionFile = reference.session_file;
+      observation.state = "queued";
       release = await this.slots(kind).take(signal);
       signal.throwIfAborted();
       await options.record({ ...common, action: "started" });
       started = true;
+      observation.state = "running";
       outcome = "uncertain";
       signal.throwIfAborted();
       result = await options.execute({ request, kind, provider, model, prompt,
@@ -125,7 +137,7 @@ export class AuxiliaryRuntime {
       // its canonical record still says running. Admission will refuse rather than double-spend.
       try {
         if (prepared) await options.record({ ...common, action: "finish", outcome: started ? outcome : "not_started" });
-      } finally { release?.(); this.controllers.delete(controller); }
+      } finally { observation.state = outcome; release?.(); this.controllers.delete(controller); }
     }
     if (!result) throw new Error("auxiliary request did not finish");
     return { ...result, text: kind === "web_search" ? result.text : result.text.slice(0, 32768), request, generation: options.generation };

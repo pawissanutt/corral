@@ -89,6 +89,7 @@ test("a job is recorded before it spawns, with its pid and kernel start time, an
   expect(fields(output, ["bytes_total", "bytes_stored", "truncated", "offset", "next_offset"]))
     .toEqual({ bytes_total: 3000, bytes_stored: 1024, truncated: true, offset: 1000, next_offset: 1024 });
   expect(output.text).toBe("x".repeat(24));
+  expect(fx.runtime.inspection()[0]).toMatchObject({ job: "j3-1", state: "exited", exitCode: 0, groupClear: true, bytes: 3000, truncated: true });
 });
 
 test("a line monitor armed before its line reports one match, before the exit", async () => {
@@ -107,6 +108,7 @@ test("a line monitor armed before its line reports one match, before the exit", 
   await fx.runtime.settled(job as string);
   // Then exactly one match was reported, and only then the exit.
   expect(fx.actions()).toEqual(["prepare", "started", "line", "exited"]);
+  expect(fx.runtime.inspection()[0]?.watches[0]).toMatchObject({ armed: true, matched: "READY", reportQueued: true });
   expect(fx.sent.find((s) => s.payload.action === "line")?.payload).toEqual({
     action: "line", job: "j3-1", wait: "j3-1.m1", line: "READY",
   });

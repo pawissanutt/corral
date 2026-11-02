@@ -74,6 +74,7 @@ import { executionRefusal, nestedCorralRead } from "../roles/common/execution.ts
 import { OWNER_INPUT_TEXT_MAX, ownerInputText, utf8Prefix } from "../roles/assistant/owner-action.ts";
 import type { ConfirmUi } from "../tools/define.ts";
 import { memoryContext } from "./memory.ts";
+import { transcriptPreview } from "./transcript-preview.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -314,6 +315,7 @@ export class HostSession {
       readProjects: signal => options.client.projectScopes(signal),
       inspection: () => options.client.inspectionSnapshot(),
       readInbox: signal => options.client.attentionSnapshot(signal),
+      readTranscript: id => this.readAgentTranscript(id),
     });
     this.unsubscribePanels = this.panels ? options.events.on(event => {
       if (event.kind === "terminal_input" && typeof event.input_sequence === "number" && event.input_sequence >= this.terminalInputSequence) {
@@ -1177,9 +1179,23 @@ export class HostSession {
           ? `Budget: ${JSON.stringify(this.budget.state())}` : "Budget unavailable · legacy generation"],
         ...(this.inspector?.snapshot() ?? { events: this.options.events.since(0, 512 * 8192, 512), receipts: [], receiptsOmitted: 0 }),
       },
+      agents: [{ id: session.sessionId, session: session.sessionId, kind: this.options.identity.role,
+        state: session.isStreaming ? "streaming" : this.open ? "turn open" : "settled locally",
+        model: session.model ? `${session.model.provider}/${session.model.id}` : null,
+        tokens: this.panelTokens, transcript: !!session.sessionFile && session.sessionId === this.boundSessionId },
+        ...(this.auxiliary?.inspection() ?? []).map(child => ({ id: child.request, session: child.request,
+          parent: child.parent, kind: `native ${child.kind}`, state: child.state, model: child.model, transcript: !!child.sessionFile && child.parent === this.boundSessionId }))],
       jobs, auxiliary: this.auxiliary?.state() ?? null,
       steering: session.getSteeringMessages().length, followUps: session.getFollowUpMessages().length,
     };
+  }
+
+  private async readAgentTranscript(id: string): Promise<string> {
+    if (!this.bound || this.session.sessionId !== this.boundSessionId) throw new Error("Transcript unavailable: stale/unbound host");
+    if (id === this.session.sessionId && this.session.sessionFile) return transcriptPreview(this.session.sessionFile, id);
+    const child = this.auxiliary?.inspection().find(child => child.request === id);
+    if (!child?.sessionFile || child.parent !== this.boundSessionId) throw new Error("Selected agent missing or transcript ineligible");
+    return transcriptPreview(child.sessionFile, child.request);
   }
 
   state(): Record<string, unknown> {
@@ -1187,6 +1203,8 @@ export class HostSession {
     const resources = this.runtime.services.resourceLoader;
     return {
       role: this.options.identity.role,
+      identity: this.options.identity,
+      native_children: this.auxiliary?.inspection().map(({ sessionFile: _file, ...child }) => child) ?? null,
       todo: this.loadout.includes("corral_todo"),
       // The plan the widget renders and the model summary names: one host ledger.
       ledger: this.ledger?.current ? { plan: this.ledger.current.plan ?? null, revision: this.ledger.current.revision } : null,
