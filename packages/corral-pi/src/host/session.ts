@@ -317,6 +317,7 @@ export class HostSession {
       inspection: () => options.client.inspectionSnapshot(),
       lifecycle: () => options.client.inspectionSnapshot(true),
       readInbox: signal => options.client.attentionSnapshot(signal),
+      readHistory: request => options.client.history(request),
       readTranscript: id => this.readAgentTranscript(id),
     });
     this.unsubscribePanels = this.panels ? options.events.on(event => {

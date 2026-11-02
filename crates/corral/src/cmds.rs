@@ -487,7 +487,21 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
         ),
         Cmd::Search(args) => crate::search_cmd::run(&open(&root)?, args),
         Cmd::Log(args) => crate::log_cmd::run(&open(&root)?, args),
-        Cmd::Show { id, json } => show(&open(&root)?, &id, json),
+        Cmd::Show { id, json, recorded } => {
+            let ctx = open(&root)?;
+            if recorded {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&task_output::task_json(
+                        &ctx.store.get(&id)?,
+                        true
+                    ))?
+                );
+                Ok(())
+            } else {
+                show(&ctx, &id, json)
+            }
+        }
         Cmd::Comment {
             id,
             text,

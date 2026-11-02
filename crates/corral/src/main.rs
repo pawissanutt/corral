@@ -305,6 +305,9 @@ pub enum Cmd {
         id: String,
         #[arg(long)]
         json: bool,
+        /// Read only the recorded task, without refreshing sessions, usage or gate state
+        #[arg(long, requires = "json")]
+        recorded: bool,
     },
     /// Append a comment to a task, optionally sending it to the agent
     Comment {

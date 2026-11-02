@@ -19,6 +19,7 @@ import { type FakeCorral, writeFakeCorral } from "./support/fake-corral.ts";
 import { type FixtureInstall, buildFixtureInstall } from "./support/fixture-install.ts";
 import { expectReplacementsRefused } from "./support/replacement.ts";
 import { nextEvent, within } from "./support/wait.ts";
+import { historyUI } from "./support/history-ui.ts";
 
 const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 1 };
 const CTL = "c".repeat(64);
@@ -53,6 +54,13 @@ beforeAll(async () => {
   const sdk = await import("@earendil-works/pi-coding-agent");
   corral = writeFakeCorral(work);
   const client = new CorralClient({ corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host.sessionId() });
+  client.history = async request => {
+    if (request.kind === "tasks") return [{ id: "T-999", title: "Historical task" }];
+    if (request.kind === "task") return { id: "T-999", runs: [{ id: "R1", ended: "yesterday", summary: "Recorded historical summary" }] };
+    if (request.kind === "questions") return [];
+    if (request.kind === "transcript") return '{"type":"message","message":{"role":"user","content":"Historical input"}}\n';
+    throw new Error("Unsupported history fixture read");
+  };
   host = await HostSession.create({
     sdk, identity, cwd, agentDir: join(work, "pi-agent"), model: "gpt-6.1-sol", modules, client, events, network,
     sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
@@ -260,7 +268,19 @@ test("while bound, every native session replacement is refused and later deliver
   // Given the bound host and the session file its hello reported to corral:
   const boundFile = String(corral.calls()[0]?.envelope.payload.session_file);
   expect(host.session.sessionFile).toBe(boundFile);
-  // When the owner attempts /new, /resume, /fork and import:
+  // Historical inspection uses the panel's read channel, not Pi's replacement APIs.
+  const before = host.state(), bytes = readFileSync(boundFile, "utf8");
+  const history = historyUI([0, 0, 0], ["t", "\x1b"]);
+  const draft = history.ui.getEditorText();
+  await host.panels?.workbench.history.open(history.ui);
+  expect(history.frames.join("\n")).toContain("Historical input");
+  expect(history.ui.getEditorText()).toBe(draft);
+  expect(host.state().identity).toEqual(before.identity);
+  expect(host.state().generation).toEqual(before.generation);
+  expect(host.state().role).toEqual(before.role);
+  expect(host.state().session).toEqual(before.session);
+  expect(readFileSync(boundFile, "utf8")).toBe(bytes);
+  // When the owner attempts /new, /resume, /fork and import after browsing:
   await expectReplacementsRefused(host, events);
   // Then a delivery and a tool call made afterwards are written to the bound file, after its marker.
   await host.submit(input("/fixture-call read", "prompt", "call-after"), "rq-call-after");

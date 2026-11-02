@@ -3,6 +3,7 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import { TOML } from "bun";
+import { readHistory, type HistoryRequest } from "./history.ts";
 
 import type { CodeParent } from "../extensions/codemode/child.ts";
 import type { CorralOp, HostIdentity } from "../roles/types.ts";
@@ -98,6 +99,9 @@ export interface CorralClientOptions {
 export class CorralClient {
   constructor(private readonly options: CorralClientOptions) {}
   get workspaceRoot(): string { return this.options.root; }
+  history(request: HistoryRequest): Promise<unknown> {
+    return readHistory(this.options.corral, this.options.root, request);
+  }
 
   /** Read the bound ledger on startup/resume without creating a mutation receipt. */
   todoSnapshot(signal?: AbortSignal): Promise<unknown> {
