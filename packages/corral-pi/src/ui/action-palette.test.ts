@@ -62,6 +62,16 @@ test("presentation adds no ambient resources", () => {
   expect(restrictedSettings().extensions).toEqual([]);
 });
 
+test("appearance changes seed new canvas defaults before full-frame erases", () => {
+  const canvas = new PanelCanvas();
+  canvas.write("\x1b[?1049h\x1b[0mold appearance");
+  setPanelAppearance("light"); setCanvasAppearance("light");
+  const repaint = canvas.write("\x1b[?2026h\x1b[2J").data;
+  expect(repaint.startsWith("\x1b[38;2;23;33;47m\x1b[48;2;255;255;255m")).toBeTrue();
+  expect(repaint.indexOf("48;2;255;255;255")).toBeLessThanOrEqual(repaint.indexOf("[2J") - 1);
+  expect(canvas.write("\x1b[?2026h\x1b[2J").data).toBe("\x1b[?2026h\x1b[2J");
+});
+
 function luminance(hex: string): number {
   const rgb = [1, 3, 5].map(i => Number.parseInt(hex.slice(i, i + 2), 16) / 255)
     .map(c => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);

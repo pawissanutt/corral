@@ -52,7 +52,7 @@ export class NativePanels implements PanelSurface {
   offset = 0;
   private terminal: PanelTerminal | undefined;
   private ui: ExtensionUIContext | undefined;
-  private requestRender: (() => void) | undefined;
+  private requestRender: ((force?: boolean) => void) | undefined;
   private editorFocused: (() => boolean) | undefined;
   private activeSelection: (() => boolean) | undefined;
   private hasOverlay: (() => boolean) | undefined;
@@ -457,7 +457,7 @@ export class NativePanels implements PanelSurface {
         owner.updateDensity = () => editor.setPaddingX(2);
         owner.nativeKeys = id => keys.getKeys(id).join(", ");
         owner.editorFocused = () => editor.focused;
-        owner.requestRender = () => tui.requestRender();
+        owner.requestRender = force => tui.requestRender(force);
         owner.hasOverlay = () => tui.hasOverlay();
         owner.activeSelection = tui instanceof TuiAltScreen ? () => tui.hasActiveSelection() : () => false;
         return editor;
@@ -545,6 +545,7 @@ export class NativePanels implements PanelSurface {
       `Appearance: ${appearance}${appearance === this.appearance ? " (current)" : ""}`, "", () => {
         this.appearance = appearance; setPanelAppearance(appearance); setCanvasAppearance(appearance);
         if (this.ui && this.themeCtor) this.ui.setTheme(panelTheme(this.themeCtor, this.ui.theme.getColorMode(), appearance));
+        this.requestRender?.(true);
         this.refresh();
       }));
     for (const density of ["comfortable", "compact"] as const) items.push(action(`density.${density}`,
