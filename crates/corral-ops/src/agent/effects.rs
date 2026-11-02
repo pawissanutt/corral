@@ -601,6 +601,19 @@ fn subscribe(
     });
 }
 
+/// Arm the same durable wake when a native worker registers through the CLI.
+pub(crate) fn subscribe_cli_wait(run: &mut corral_core::Run, wait: &str) {
+    if let Some(state) = run.agent_host.as_deref_mut() {
+        subscribe(
+            state,
+            &format!("cli-wait:{wait}"),
+            WakeKind::Wait,
+            wait,
+            WakeState::Armed,
+        );
+    }
+}
+
 /// Writes a wait's subscription in the wait's own transaction (F5).
 pub fn subscribe_wait(task: &mut Task, origin: &RequestOrigin, wait: &str) -> Result<()> {
     let state = state_mut(task, &origin.binding.container)?;

@@ -136,6 +136,9 @@ pub struct WaitRecord {
     pub registered_at: Timestamp,
     pub observation: WaitObservation,
     pub receipt: Option<ResumeReceipt>,
+    /// Inbox message committed atomically for a non-native task-status wake.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wake_message: Option<String>,
 }
 
 impl WaitRecord {

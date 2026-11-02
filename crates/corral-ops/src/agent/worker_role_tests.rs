@@ -650,6 +650,37 @@ fn task_status_event_wakes_once_after_dependency_moves_away() {
 }
 
 #[test]
+fn cli_registered_native_task_wait_wakes_once() {
+    let w = worker(false);
+    let dependency = w
+        .ctx()
+        .store
+        .create("dependency", Some("corral"), Status::Ready, "")
+        .unwrap();
+    let request = corral_core::WaitRequest {
+        version: 1,
+        id: "cli-dep".into(),
+        run: "R1".into(),
+        condition: "dependency done".into(),
+        owner: "worker".into(),
+        source: corral_core::ObligationSource::Worker,
+        deadline: None,
+        handle: corral_core::WaitHandle::TaskStatus {
+            task: dependency.id.clone(),
+            status: corral_core::TaskWaitStatus::Done,
+        },
+    };
+    crate::register_wait(w.ctx(), &w.id, request, Timestamp::now()).unwrap();
+    crate::move_task(w.ctx(), &dependency.id, Status::Done, true).unwrap();
+    for _ in 0..2 {
+        let now = Timestamp::now();
+        crate::obligations_sync::reconcile_one(w.ctx(), &w.id, now, None).unwrap();
+        w.sync(now);
+    }
+    assert_eq!(w.messages("wait_wake").len(), 1);
+}
+
+#[test]
 fn task_status_wait_resolves_when_already_dropped() {
     let w = worker(false);
     let dependency = w

@@ -324,6 +324,7 @@ fn monitor(
             detail: "waiting for the job".into(),
         },
         receipt: None,
+        wake_message: None,
     });
     target.obligations.settle_parking(&parked, &own, now);
     // A job that already ended answers its new monitor at once, with the same single wake.

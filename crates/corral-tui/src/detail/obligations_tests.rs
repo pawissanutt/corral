@@ -39,6 +39,7 @@ fn wait(id: &str, state: WaitState, condition: &str, detail: &str) -> WaitRecord
             detail: detail.into(),
         },
         receipt: None,
+        wake_message: None,
     }
 }
 

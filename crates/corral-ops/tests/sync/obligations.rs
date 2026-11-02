@@ -56,6 +56,92 @@ fn state(task: &corral_core::Task) -> WaitState {
         .state
 }
 
+#[path = "obligations_cli_tests.rs"]
+mod cli_tests;
+
+#[test]
+fn cli_status_wait_posts_one_durable_non_native_inbox_wake() {
+    let fx = Fx::new("fake");
+    fx.ctx
+        .store
+        .update("T-001", |t| {
+            t.runs[0].delivery = corral_core::inbox::DeliveryMode::Inbox;
+            Ok(())
+        })
+        .unwrap();
+    let dependency = fx
+        .ctx
+        .store
+        .create("dependency", None, Status::Ready, "")
+        .unwrap();
+    let mut request = wait(&fx);
+    request.handle = WaitHandle::TaskStatus {
+        task: dependency.id.clone(),
+        status: corral_core::TaskWaitStatus::Done,
+    };
+    request.deadline = None;
+    register_wait(&fx.ctx, "T-001", request, fx.at(0)).unwrap();
+    corral_ops::move_task(&fx.ctx, &dependency.id, Status::Done, true).unwrap();
+    fx.sync(10);
+    fx.sync(20);
+    let inbox = corral_core::inbox::Inbox::new(
+        &fx.ctx.store,
+        corral_core::inbox::Recipient::Run {
+            task: "T-001".into(),
+            run: "R1".into(),
+        },
+    )
+    .unwrap();
+    let wakes: Vec<_> = inbox
+        .messages()
+        .unwrap()
+        .into_iter()
+        .filter(|m| m.kind == "wait_wake")
+        .collect();
+    assert_eq!(wakes.len(), 1);
+    assert_eq!(
+        fx.ctx.store.get("T-001").unwrap().runs[0].obligations.waits[0]
+            .wake_message
+            .as_deref(),
+        Some(wakes[0].id.as_str())
+    );
+}
+
+#[test]
+fn cli_manual_waits_with_unsupported_or_unverifiable_handles_reach_attention() {
+    for missing_capability in [true, false] {
+        let fx = Fx::new("fake");
+        let mut request = wait(&fx);
+        if missing_capability {
+            request.handle = WaitHandle::Channel {
+                channel_id: "ci".into(),
+                capability: None,
+            };
+        } else {
+            request.deadline = None;
+        }
+        let registered = register_wait(&fx.ctx, "T-001", request, fx.at(0)).unwrap();
+        assert_eq!(
+            state(&registered),
+            if missing_capability {
+                WaitState::Unsupported
+            } else {
+                WaitState::Unverifiable
+            }
+        );
+        let board = corral_ops::attention::board(&fx.ctx, fx.at(1800)).unwrap();
+        let entry = board.tasks.iter().find(|t| t.task == "T-001").unwrap();
+        assert!(
+            entry
+                .assessment
+                .conditions
+                .iter()
+                .any(|c| c.reason_code == "manual_wait_overdue"
+                    && c.responsible == corral_core::attention::Responsible::Pm)
+        );
+    }
+}
+
 #[test]
 fn pending_wait_is_not_a_question_even_when_terminal_reports_blocked() {
     // Given a bounded channel wait and a misleading terminal status.
