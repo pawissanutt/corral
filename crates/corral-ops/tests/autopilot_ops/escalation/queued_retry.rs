@@ -1,6 +1,37 @@
 use super::*;
 use corral_core::{AutoProfileSelection, ProfileRole, RouteSource, SelectionActor};
 
+#[test]
+fn retry_unstarted_pi_refusal_without_checkpoint() {
+    let fx = configured(1);
+    fx.ctx.store.update(&fx.id, |task| {
+        task.status = Status::NeedsMe;
+        let run = task.current_run_mut().unwrap();
+        run.harness = Some("pi-native".into());
+        run.checkpoint_required = true;
+        run.outcome = Some(corral_core::RunOutcome::Failed);
+        run.ended = Some(now());
+        run.blocked_excerpt = Some("corral agent launch refused: memory_contract_unavailable: installed host lacks memory projection v1".into());
+        run.agent_host = Some(Box::new(corral_core::agent::AgentRunState::new(
+            serde_json::from_value(serde_json::json!({"role":"worker", "store":"test", "project":"test", "generation":0})).unwrap()
+        )));
+        Ok(())
+    }).unwrap();
+    let before = fx.run();
+    assert!(before.checkpoints.is_empty());
+    let dirty = before.worktree.join("uncommitted-refusal-work");
+    std::fs::write(&dirty, "do not discard").unwrap();
+    assert!(corral_ops::retry(&fx.ctx, &fx.id, &ProfileChoice::default()).is_err());
+    assert_eq!(std::fs::read_to_string(&dirty).unwrap(), "do not discard");
+    assert_eq!(fx.task().runs.len(), 1);
+    std::fs::remove_file(dirty).unwrap();
+    corral_ops::retry(&fx.ctx, &fx.id, &ProfileChoice::default()).unwrap();
+    let task = fx.task();
+    assert_eq!(task.runs.len(), 2);
+    assert_eq!(task.current_run().unwrap().id, "R2");
+    assert!(task.runs[0].checkpoints.is_empty());
+}
+
 fn selection(fx: &Fx, profile: &str, id: &str) -> AutoProfileSelection {
     let task = fx.task();
     AutoProfileSelection {
