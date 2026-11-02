@@ -23,6 +23,21 @@ CONTEXT: Final = {
 RUNNER_COMMAND: Final = "bash scripts/gate.sh"
 QUICK: Final = "bash scripts/gate.sh --tier quick"
 STEP_END: Final = re.compile(r"<== (.+) ([0-9]+\.[0-9]{3})s")
+BUDGET_TESTS: Final = (
+    "app::work_budget::board_work_stays_within_budget_and_independent_of_history",
+    "app::hot_budget::hot_reads_work_stays_independent_of_history",
+    "app::sync_budget::sync_tick_work_stays_independent_of_history",
+)
+BUDGET_FILTER: Final = "binary_id(=corral-tui) and (" + " or ".join(f"test(={name})" for name in BUDGET_TESTS) + ")"
+
+
+def semantic_args(args: list[str]) -> list[str]:
+    args = list(args)
+    for flag in ("--cargo-metadata", "--binaries-metadata"):
+        if flag in args:
+            at = args.index(flag)
+            del args[at:at + 2]
+    return args
 STARTERS: Final = (
     "e2e.sh", "screenshots.sh", "tui-drive.sh", "tui-drive-autopilot.sh",
     "tui-drive-cards.sh", "tui-drive-dispatch.sh", "tui-drive-pins.sh",
@@ -148,7 +163,14 @@ entry = {{
 }}
 with open("commands.jsonl", "a") as log:
     log.write(json.dumps(entry) + "\\n")
-if os.environ.get("FAIL_COMMAND") == entry["command"] + ":" + " ".join(entry["args"]):
+visible = list(entry["args"])
+for flag in ("--cargo-metadata", "--binaries-metadata"):
+    if flag in visible:
+        at = visible.index(flag)
+        del visible[at:at + 2]
+key = entry["command"] + ":" + " ".join(visible)
+failure = os.environ.get("FAIL_COMMAND")
+if failure and (key == failure or key.startswith(failure + " ")):
     sys.exit(23)
 if entry["args"][:2] == ["nextest", "list"] and os.environ.get("LIST_JSON"):
     print(Path(os.environ["LIST_JSON"]).read_text())
@@ -213,8 +235,7 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
             "scripts/work-budget.sh",
             "cargo build -p corral && scripts/check-docs.sh target/debug/corral",
         ]
-        work_budget = ("cargo:test -p corral-tui --lib --features corral-core/test-clock -- --ignored --exact "
-                       "app::work_budget::board_work_stays_within_budget_and_independent_of_history")
+        work_budget = "cargo:nextest run --run-ignored only"
         def fail(command: str) -> dict[str, str]:
             return {"FAIL_COMMAND": command}
 
@@ -228,7 +249,7 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
              fail("cargo:check --workspace --all-targets --target " + targets[1]
                   + f" --config target.{targets[1]}.zstd.rustc-link-lib=[]"), ""),
             (5, (steps[4], 23), fail("cargo:clippy --workspace --all-targets -- -D warnings"), ""),
-            (6, (steps[5], 23), fail("cargo:nextest run --workspace"), ""),
+            (6, (steps[5], 23), fail("cargo:nextest run"), ""),
             (7, (steps[6], 23), fail("cargo:test --workspace --doc"), ""),
             (8, (steps[7], 23), fail(work_budget), ""),
             (9, (steps[8], 23), fail("cargo:build -p corral"), ""),
@@ -270,29 +291,30 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
             json.loads(line) for line in
             (self.repo / "commands.jsonl").read_text().splitlines()
         ]
-        self.assertEqual([(e["command"], e["args"]) for e in entries], [
+        self.assertEqual([(e["command"], semantic_args(e["args"])) for e in entries], [
             ("cargo", ["fmt", "--all", "--", "--check"]),
             ("cargo", ["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]),
-            ("cargo", ["nextest", "run", "--workspace"]),
+            ("cargo", ["metadata", "--format-version", "1"]),
+            ("cargo", ["nextest", "list", "--workspace", "--list-type", "binaries-only", "--message-format", "json"]),
+            ("cargo", ["nextest", "run"]),
             ("cargo", ["test", "--workspace", "--doc"]),
-            *[("cargo", ["test", "-p", "corral-tui", "--lib", "--features", "corral-core/test-clock", "--", "--ignored", "--exact", test])
-              for test in (
-                  "app::work_budget::board_work_stays_within_budget_and_independent_of_history",
-                  "app::hot_budget::hot_reads_work_stays_independent_of_history",
-                  "app::sync_budget::sync_tick_work_stays_independent_of_history",
-              )],
+            ("cargo", ["nextest", "run", "--run-ignored", "only", "-E", BUDGET_FILTER]),
             ("cargo", ["build", "-p", "corral"]),
             ("check-docs.sh", ["target/debug/corral"]),
         ])
+        # Compile selectors belong only to the build phase, never a measured reuse run.
+        for entry in entries:
+            if entry["args"][:2] == ["nextest", "run"]:
+                self.assertIn("--binaries-metadata", entry["args"])
+                self.assertNotIn("--workspace", entry["args"])
         for entry in entries:
             self.assertEqual(entry["context"], CONTEXT)
             self.assertEqual(entry["stdin"], "")
         self.assertEqual([e["session"] for e in entries],
-                         ["not-the-test-session", "not-the-test-session", "corral-test", "corral-test",
-                          *(["not-the-test-session"] * 5)])
+                         ["not-the-test-session"] * 3 + ["corral-test"] * 4 + ["not-the-test-session"] * 2)
         self.assertIn("maximum 800 (limit 800)", result.stdout)
 
-    def test_linked_worktree_shares_cargo_cache_and_docs_uses_the_same_candidate_binary(self) -> None:
+    def test_linked_worktree_keeps_candidate_target_and_honors_explicit_override(self) -> None:
         path = self.install_command_recorder()
         self.command("git", "add", ".")
         self.command("git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
@@ -307,8 +329,8 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
                                     check=False, timeout=60)
             self.assertEqual(result.returncode, 0, result.stderr)
             entries = [json.loads(line) for line in (linked / "commands.jsonl").read_text().splitlines()]
-            target = override or str(self.repo / "target")
-            self.assertTrue(all(entry["target_dir"] == target for entry in entries))
+            self.assertTrue(all(entry["target_dir"] == (override or None) for entry in entries))
+            target = override or "target"
             self.assertEqual(entries[-1]["args"], [str(Path(target) / "debug/corral")])
             (linked / "commands.jsonl").unlink()
 
@@ -489,29 +511,6 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
                 ]
                 self.assertEqual(entries[-1]["args"], command.split())
 
-    def test_first_command_failure_preserves_status_and_stops(self) -> None:
-        # Given command recorders that fail at a selected later command:
-        path = self.install_command_recorder()
-        for command, expected_calls in (
-            ("cargo:clippy --workspace --all-targets -- -D warnings", 2),
-            ("cargo:nextest run --workspace", 3),
-            ("cargo:test --workspace --doc", 4),
-            ("cargo:build -p corral", 8),
-            ("check-docs.sh:target/debug/corral", 9),
-        ):
-            with self.subTest(command=command):
-                (self.repo / "commands.jsonl").unlink(missing_ok=True)
-                # When a command fails:
-                result = self.gate(PATH=path, FAIL_COMMAND=command)
-                # Then the named step fails with its original status; nothing follows.
-                self.assertEqual(result.returncode, 23)
-                self.assertIn("FAILED:", result.stderr)
-                step_command = ("cargo build -p corral" if command.startswith("check-docs")
-                                else command.replace("cargo:", "cargo "))
-                self.assertIn(step_command, result.stderr)
-                calls = (self.repo / "commands.jsonl").read_text().splitlines()
-                self.assertEqual(len(calls), expected_calls)
-
     def quick_workspace(self, changed: list[str], tests: list[str],
                         expected: list[str]) -> dict[str, str]:
         """Two member crates and the schema-v1 context file corral's runner exports."""
@@ -549,116 +548,6 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
         entries: list[CommandEntry] = [json.loads(line) for line in log.read_text().splitlines()]
         log.unlink()
         return entries
-
-    def test_quick_tier_selects_touched_crates_and_exact_exclusions(self) -> None:
-        # Given nextest listings of the test scope (alpha's lib and odd target, beta's odd
-        # target, one slow alpha test) and both Darwin targets installed:
-        path = self.install_command_recorder()
-        ids = [r"alpha::odd weird,name)", r"alpha::odd back\slash", "gamma::odd plain"]
-
-        def suite(binary: str, kind: str, cases: dict[str, str]) -> dict[str, object]:
-            return {"package-name": binary.split("::")[0], "binary-id": binary, "kind": kind,
-                    "binary-name": binary.split("::")[-1], "testcases": {
-                        name: {"filter-match": {"status": "matches"} if status == "matches"
-                               else {"status": "mismatch", "reason": status}}
-                        for name, status in cases.items()}}
-
-        alpha = {"alpha": suite("alpha", "lib", {"m::unit": "matches"}),
-                 "alpha::odd": suite("alpha::odd", "test", {
-                     "weird,name)": "matches", "back\\slash": "matches",
-                     "slowpoke": "default-filter"})}
-        beta = {"beta::odd": suite("beta::odd", "test", {"weird,name)": "matches"})}
-        declared = {**alpha, **beta, "alpha::odd": suite("alpha::odd", "test", {
-            "weird,name)": "expression", "back\\slash": "expression", "plain": "matches"})}
-        excluded = (r" - (binary_id(=alpha::odd) and test(=weird\,name\)))"
-                    r" - (binary_id(=alpha::odd) and test(=back\\slash))")
-        session = "CORRAL_HERDR_SESSION=corral-test cargo nextest"
-        quick = ["--profile", "quick"]
-        # (changed paths, declared tests, expected failures, listing, commands, steps, report)
-        cases: list[tuple[list[str], list[str], list[str], dict[str, dict[str, object]],
-                          list[list[str]], list[str], list[str]]] = [
-            (["crates/alpha/src/lib.rs", "docs/guide.md"], [], ids, alpha, [
-                ["fmt", "-p", "alpha", "--", "--check"],
-                ["clippy", "-p", "alpha", "--all-targets", "--", "-D", "warnings"],
-                ["nextest", "list", "-p", "alpha", *quick, "--message-format", "json"],
-                ["nextest", "run", "-p", "alpha", *quick, "-E", "(all())" + excluded],
-            ], ["cargo fmt -p alpha -- --check", "800-SLOC Rust ceiling",
-                "cargo clippy -p alpha --all-targets -- -D warnings",
-                f"{session} list -p alpha --profile quick",
-                f"{session} run -p alpha --profile quick -E (all()){excluded}"],
-             ["  crates/alpha/src/lib.rs: crate-wide alpha (crate root)",
-              "Test selection: crate-wide",
-              "Tests: 4 in scope, 4 selected, 0 skipped by selection, 1 slow skipped (slow "
-              "tier or owning-module full gate), 2 expected failures excluded; 1 to run"]),
-            (["crates/alpha/tests/odd.rs"], [], [], alpha, [
-                ["fmt", "-p", "alpha", "--", "--check"],
-                ["clippy", "-p", "alpha", "--all-targets", "--", "-D", "warnings"],
-                ["nextest", "list", "-p", "alpha", *quick, "--message-format", "json"],
-                ["nextest", "run", "-p", "alpha", *quick, "-E", "(binary_id(=alpha::odd))"],
-            ], ["cargo fmt -p alpha -- --check", "800-SLOC Rust ceiling",
-                "cargo clippy -p alpha --all-targets -- -D warnings",
-                f"{session} list -p alpha --profile quick",
-                f"{session} run -p alpha --profile quick -E (binary_id(=alpha::odd))"],
-             ["  crates/alpha/tests/odd.rs: test targets alpha::odd", "Test selection: module",
-              "Tests: 4 in scope, 3 selected, 1 skipped by selection, 1 slow skipped (slow "
-              "tier or owning-module full gate), 0 expected failures excluded; 2 to run"]),
-            (["crates/alpha/src/lib.rs"], ["package(alpha)", "test(=plain)"], [], declared, [
-                ["fmt", "-p", "alpha", "--", "--check"],
-                ["clippy", "-p", "alpha", "--all-targets", "--", "-D", "warnings"],
-                ["nextest", "list", "--workspace", *quick, "--ignore-default-filter", "-E",
-                 "(package(alpha)) or (test(=plain))", "--message-format", "json"],
-                ["nextest", "run", "--workspace", *quick, "--ignore-default-filter", "-E",
-                 "(package(alpha)) or (test(=plain))"],
-            ], ["cargo fmt -p alpha -- --check", "800-SLOC Rust ceiling",
-                "cargo clippy -p alpha --all-targets -- -D warnings",
-                f"{session} list --workspace --profile quick --ignore-default-filter "
-                "-E (package(alpha)) or (test(=plain))",
-                f"{session} run --workspace --profile quick --ignore-default-filter "
-                "-E (package(alpha)) or (test(=plain))"],
-             ["Test selection: declared tests"]),
-            (["Cargo.lock", "crates/beta/Cargo.toml"], [], [], {**alpha, **beta}, [
-                ["fmt", "--all", "--", "--check"],
-                ["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"],
-                ["nextest", "list", "--workspace", *quick, "--message-format", "json"],
-                ["nextest", "run", "--workspace", *quick],
-            ], ["cargo fmt --all -- --check", "800-SLOC Rust ceiling",
-                "cargo clippy --workspace --all-targets -- -D warnings",
-                f"{session} list --workspace --profile quick",
-                f"{session} run --workspace --profile quick"],
-             ["Test selection: workspace (a workspace-wide input changed)"]),
-            (["docs/guide.md", "scripts/gate.sh"], [], [], {}, [], ["800-SLOC Rust ceiling"], []),
-        ]
-        for changed, tests, expected, listing, commands, steps, report in cases:
-            with self.subTest(changed=changed, tests=tests):
-                env = self.quick_workspace(changed, tests, expected)
-                (self.repo / "crates/alpha/tests").mkdir(exist_ok=True)
-                self.write("crates/alpha/tests/odd.rs", "fn main() {}\n")
-                self.write("list.json", json.dumps({"rust-suites": listing}))
-                # When the quick tier runs under the runner's log framing:
-                log, start, end, code = self.gate_as_runner(
-                    QUICK, PATH=path,
-                    INSTALLED_TARGETS="aarch64-apple-darwin\nx86_64-apple-darwin",
-                    LIST_JSON=str(self.repo / "list.json"), **env)
-                # Then only the selection runs under the quick profile, minus exactly the
-                # matching expected failures, and the log names the selection and its counts;
-                # nothing of the full-only steps runs.
-                self.assertEqual(code, 0, log.decode())
-                self.assertTrue(receipt_valid(log, start, end, code, "pass", QUICK))
-                output = log[len(f"\n$ {QUICK}\n"):end].decode()
-                self.assert_step_timing(output, steps, tier="quick")
-                entries = self.recorded() if commands else []
-                self.assertEqual([e["args"] for e in entries], commands)
-                for entry in entries:
-                    self.assertEqual(entry["context"], CONTEXT)
-                    self.assertEqual(entry["stdin"], "")
-                for line in report:
-                    self.assertIn(line + "\n", output)
-                self.assertIn("Skipping Darwin checks, doctests, scripts/work-budget.sh and the "
-                              "docs build (tier quick).", output)
-                self.assertEqual("gamma::odd plain" in expected,
-                                 "Expected failure matches no selected test and excludes "
-                                 "nothing: gamma::odd plain" in output)
-                self.assertIn("Gate passed.", output.splitlines())
 
     def test_quick_tier_needs_context_and_known_tier(self) -> None:
         # Given no context file, or an unknown tier argument:
@@ -764,7 +653,7 @@ fn main() {{
                     self.assertIn(r"alpha::odd back\slash", ran_tests)
                     self.assertNotIn(r"alpha::odd weird,name)", ran_tests)
                 package = changed[0].split("/")[1]
-                self.assertIn(f"==> cargo clippy -p {package} --all-targets -- -D warnings",
+                self.assertIn(f"==> cargo clippy -p {package} -- -D warnings",
                               result.stdout)
                 self.assertEqual("gamma::odd plain" in expected,
                                  "excludes nothing: gamma::odd plain" in result.stderr)

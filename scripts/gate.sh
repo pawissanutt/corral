@@ -19,9 +19,6 @@ if (($#)); then
   fi
   tier=$2
 fi
-if [[ ${CORRAL_GATE_BUDGET_CHILD:-} != 1 ]]; then
-  exec python3 "$(dirname "$0")/gate_timer.py" "$tier" "$0" "$@"
-fi
 printf '==> tier %s\n' "$tier"
 
 # Each announced step closes with one '<== <step> <seconds>s' line, whether it succeeds or
@@ -53,6 +50,9 @@ end_step() {
 on_error() {
   status=$?
   if ((step_active)); then end_step; fi
+  if [[ -f ${CORRAL_TEST_BUDGET_STATE:-/absent} ]]; then
+    python3 scripts/gate_timer.py report "$CORRAL_TEST_BUDGET_STATE" || true
+  fi
   printf 'FAILED: %s (exit %s)\n' "$step" "$status" >&2
   exit "$status"
 }
@@ -61,18 +61,25 @@ step="repository setup"
 step_active=0
 trap on_error ERR
 cd "$(dirname "$0")/.."
-# Linked task worktrees share the primary checkout's Cargo cache, as AGENTS.md promises.
-# Keep an explicit caller override. Cargo still fingerprints each candidate's sources.
-if [[ -z ${CARGO_TARGET_DIR:-} && -f .git ]]; then
-  common_dir=$(git rev-parse --path-format=absolute --git-common-dir)
-  export CARGO_TARGET_DIR="$(dirname "$common_dir")/target"
-  printf 'Shared Cargo target: %s\n' "$CARGO_TARGET_DIR"
-fi
+# Keep Cargo's worktree-local default: shared top-level CLI executable paths can be
+# overwritten by a concurrent candidate after Cargo releases its build lock.
+# An explicit caller target remains supported; an empty override means the default.
+if [[ -z ${CARGO_TARGET_DIR:-} ]]; then unset CARGO_TARGET_DIR; fi
 docs_binary="${CARGO_TARGET_DIR:-target}/debug/corral"
+gate_dir=$(mktemp -d)
+trap 'rm -rf "$gate_dir"' EXIT
+export CORRAL_TEST_BUDGET_STATE="$gate_dir/budget.json"
+python3 scripts/gate_timer.py init "$CORRAL_TEST_BUDGET_STATE" "$tier"
+now_us
+gate_started=$now
 pi_tests=()
 python3 scripts/test_cost.py count
 
 finish() {
+  python3 scripts/gate_timer.py report "$CORRAL_TEST_BUDGET_STATE"
+  now_us
+  printf 'Gate total wall (including compilation): %d.%03ds\n' \
+    $(((now - gate_started) / 1000000)) $(((now - gate_started) / 1000 % 1000))
   python3 scripts/test_cost.py "$([[ $tier == quick ]] && echo quick || echo default)" || on_error
   if [[ -s "${CORRAL_TEST_HARNESS_SHIM_LOG:-}" ]]; then
     printf 'FAILED: tests invoked a real agent harness:\n' >&2
@@ -101,14 +108,25 @@ quick_helper() {
   python3 scripts/gate_select.py "$@"
 }
 
+# Compile once outside the test budget. Runtime commands use only these candidate-bound
+# metadata files: they cannot silently rebuild when a cache is cold.
+prepare_test_binaries() {
+  export CORRAL_GATE_CARGO_METADATA="$gate_dir/cargo.json"
+  export CORRAL_GATE_BINARIES_METADATA="$gate_dir/binaries.json"
+  python3 scripts/gate_timer.py compile "$CORRAL_TEST_BUDGET_STATE" cargo-metadata \
+    --output "$CORRAL_GATE_CARGO_METADATA" -- cargo metadata --format-version 1 || return
+  CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_timer.py compile \
+    "$CORRAL_TEST_BUDGET_STATE" nextest-binaries --output "$CORRAL_GATE_BINARIES_METADATA" -- \
+    cargo nextest list "$@" --list-type binaries-only --message-format json || return
+}
+
 if [[ $tier == quick ]]; then
   step="reading the gate context"
   if [[ -z ${CORRAL_GATE_CONTEXT:-} || ! -f $CORRAL_GATE_CONTEXT ]]; then
     printf 'FAILED: --tier quick needs CORRAL_GATE_CONTEXT naming a gate context file\n' >&2
     exit 2
   fi
-  quick_dir=$(mktemp -d)
-  trap 'rm -rf "$quick_dir"' EXIT
+  quick_dir=$gate_dir
   quick_helper plan "$CORRAL_GATE_CONTEXT" >"$quick_dir/plan.sh"
   # shellcheck disable=SC1091
   source "$quick_dir/plan.sh"
@@ -135,8 +153,9 @@ if [[ $tier == quick ]]; then
   end_step
 
   if ((${#scope[@]})); then
-    begin_step "cargo clippy ${scope[*]} --all-targets -- -D warnings"
-    cargo clippy "${scope[@]}" --all-targets -- -D warnings
+    begin_step "cargo clippy ${scope[*]} -- -D warnings"
+    python3 scripts/gate_timer.py compile "$CORRAL_TEST_BUDGET_STATE" clippy -- \
+      cargo clippy "${scope[@]}" -- -D warnings
     end_step
   fi
 
@@ -153,14 +172,18 @@ if [[ $tier == quick ]]; then
       list_args=("${test_scope[@]}" "${profile[@]}" -E "$selection")
     fi
     begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest list ${list_args[*]}"
-    CORRAL_HERDR_SESSION=corral-test cargo nextest list "${list_args[@]}" \
+    prepare_test_binaries "${test_scope[@]}" || on_error
+    reuse=(--cargo-metadata "$CORRAL_GATE_CARGO_METADATA" --binaries-metadata "$CORRAL_GATE_BINARIES_METADATA")
+    actual_list=("${profile[@]}" "${reuse[@]}")
+    ((declared)) && actual_list+=(-E "$selection")
+    CORRAL_HERDR_SESSION=corral-test cargo nextest list "${actual_list[@]}" \
       --message-format json >"$quick_dir/list.json"
     quick_helper select "$CORRAL_GATE_CONTEXT" "$quick_dir/list.json" "${expected[@]}" \
       >"$quick_dir/select.sh"
     # shellcheck disable=SC1091
     source "$quick_dir/select.sh"
     end_step
-    run_args=("${test_scope[@]}" "${profile[@]}")
+    run_args=("${profile[@]}" "${reuse[@]}")
     [[ $run_filter != "all()" ]] && run_args+=(-E "$run_filter")
     # Approved exclusions or the slow group may cover the whole selection; nextest would call
     # that an empty run. A declared selection that matched nothing still reaches nextest and
@@ -168,8 +191,9 @@ if [[ $tier == quick ]]; then
     if ((remaining == 0 && !(declared && selected == 0))); then
       printf '\nSkipping cargo nextest run (no selected test remains to run).\n'
     else
-      begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest run ${run_args[*]}"
-      CORRAL_HERDR_SESSION=corral-test cargo nextest run "${run_args[@]}"
+      begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest run (prebuilt, tier quick)"
+      CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_timer.py run \
+        "$CORRAL_TEST_BUDGET_STATE" nextest -- cargo nextest run "${run_args[@]}"
       end_step
     fi
   else
@@ -215,7 +239,8 @@ elif command -v rustup >/dev/null 2>&1; then
     if [[ $'\n'"$installed_targets"$'\n' == *$'\n'"$target"$'\n'* ]]; then
       begin_step "cargo check --workspace --all-targets --target $target"
       printf 'Rust-only check: skipping SQLite/zstd C compilation (no Apple SDK required).\n'
-      LIBSQLITE3_SYS_USE_PKG_CONFIG=1 cargo check --workspace --all-targets --target "$target" \
+      LIBSQLITE3_SYS_USE_PKG_CONFIG=1 python3 scripts/gate_timer.py compile \
+        "$CORRAL_TEST_BUDGET_STATE" "$target" -- cargo check --workspace --all-targets --target "$target" \
         --config "target.$target.zstd.rustc-link-lib=[]"
       end_step
     else
@@ -227,10 +252,11 @@ else
 fi
 
 begin_step "cargo clippy --workspace --all-targets -- -D warnings"
-cargo clippy --workspace --all-targets -- -D warnings
+python3 scripts/gate_timer.py compile "$CORRAL_TEST_BUDGET_STATE" clippy -- \
+  cargo clippy --workspace --all-targets -- -D warnings
 end_step
 
-nextest_args=(--workspace)
+nextest_args=()
 nextest_label="CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace"
 if [[ $landing_filter != "all()" ]]; then
   printf '\nTorture suites: owning-module selection (see profile.slow).\n'
@@ -238,7 +264,10 @@ if [[ $landing_filter != "all()" ]]; then
   nextest_label+=" -E <owning-module selection>"
 fi
 begin_step "$nextest_label"
-CORRAL_HERDR_SESSION=corral-test cargo nextest run "${nextest_args[@]}"
+prepare_test_binaries --workspace || on_error
+reuse=(--cargo-metadata "$CORRAL_GATE_CARGO_METADATA" --binaries-metadata "$CORRAL_GATE_BINARIES_METADATA")
+CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_timer.py run \
+  "$CORRAL_TEST_BUDGET_STATE" nextest -- cargo nextest run "${reuse[@]}" "${nextest_args[@]}"
 end_step
 
 begin_step "CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc"
@@ -256,7 +285,7 @@ else
 fi
 
 begin_step "cargo build -p corral && scripts/check-docs.sh $docs_binary"
-cargo build -p corral
+python3 scripts/gate_timer.py compile "$CORRAL_TEST_BUDGET_STATE" candidate-build -- cargo build -p corral
 scripts/check-docs.sh "$docs_binary"
 end_step
 

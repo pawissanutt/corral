@@ -1,4 +1,6 @@
-# Host wall-clock budgets, enforced around the complete recipe (including compilation).
+# Cumulative nextest/work-budget/Bun runtime budgets; compilation is reported separately.
+# Runtime caps apply only when observed load/core stays <=1.0, never to busy/cold-cache work.
+# slow is a host-maintenance wall guard, also quiet-load conditional, not a worker gate.
 [seconds]
 quick = 180
 full = 600

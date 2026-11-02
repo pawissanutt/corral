@@ -7,6 +7,14 @@ exec </dev/null
 cd "$(dirname "$0")/.."
 
 package=packages/corral-pi
+timer="$PWD/scripts/gate_timer.py"
+compile() {
+  if [[ -n ${CORRAL_TEST_BUDGET_STATE:-} ]]; then
+    python3 "$timer" compile "$CORRAL_TEST_BUDGET_STATE" "pi-$1" -- "$@"
+  else
+    "$@"
+  fi
+}
 if [[ ! -d $package ]]; then
   printf 'pi-lane: %s is absent; skipping\n' "$package"
   exit 0
@@ -25,8 +33,18 @@ if [[ $(command -v node) != "$shims/node" ]]; then
   exit 1
 fi
 
+# Cross-lane helpers normally build these lazily. Prepare them before the measured
+# Bun phase, so a cold Rust cache is compilation evidence rather than a test-budget failure.
+if [[ -n ${CORRAL_TEST_BUDGET_STATE:-} ]] && python3 scripts/gate_pi.py "$@"; then
+  compile cargo build -p corral --bin corral --features corral-ops/hermetic-harness
+  compile cargo test -p corral-ops --lib --no-run
+fi
 cd "$package"
-bun install --frozen-lockfile
+compile bun install --frozen-lockfile
 # Quick gates pass the changed modules' test consumers; no args means the full package.
-bun test "$@"
-bun run --bun typecheck
+if [[ -n ${CORRAL_TEST_BUDGET_STATE:-} ]]; then
+  python3 "$timer" run "$CORRAL_TEST_BUDGET_STATE" pi -- bun test "$@"
+else
+  bun test "$@"
+fi
+compile bun run --bun typecheck

@@ -40,9 +40,10 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
 ## Build and test
 
 - Always build with the repo's `.cargo/config.toml` (it disables the crashing global sccache wrapper). If a build fails with an sccache error, prefix the command with `RUSTC_WRAPPER=`.
-- Gates in linked worktrees derive the shared primary-checkout `corral/target` from Git
-  unless `CARGO_TARGET_DIR` is explicit; Cargo serializes builds on its lock, which is expected.
-  Set the same `CARGO_TARGET_DIR` for targeted worktree checks when reusing that cache.
+- Gates retain Cargo's worktree-local target by default, keeping concurrent candidates
+  from overwriting each other's top-level CLI executable. Explicit `CARGO_TARGET_DIR` is
+  respected; share executable targets only with external serialization through execution,
+  not just Cargo's build lock. Compile once per gate and reuse its candidate-bound metadata.
   Keep the gate/work-budget test-clock feature union aligned to avoid a redundant rebuild.
 - Check one crate: `cargo check -p <crate>`; test one crate: `cargo test -p <crate>`.
 - Before `corral done`, run the gate your run contract names. In a tiered run that is `corral gate <id> --wait`, exactly once after the final rebase: corral selects the tier (quick during review rounds and for Plan-target members), records the receipt, and autopilot reuses it. Audited tasks then capture evidence, record it against the attempt that gate printed, run `corral done <id> --check`, then `corral done`. Evidence recorded for a quick receipt follows the candidate only through corral's authorized carries (tier promotion, clean replay); any other change needs fresh evidence. Legacy and untiered runs keep the gate commands their contract lists.
@@ -59,7 +60,11 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
   serializes shared live fixtures, caps ordinary tests at 10s, and disables retries. Explicit
   measured integration/torture exceptions retain their original 30s report-only guards,
   with one-line reasons; they are not extra full-tier exclusions. Never bump a failing timeout.
-  `.config/gate.toml` enforces quick <=180s and full <=600s including compilation.
+  `.config/gate.toml` caps measured nextest/work-budget/Bun execution at quick <=180s
+  and full <=600s, excluding compilation/preparation. Logs record build and total wall time
+  separately plus load/core; busy/unknown-load phases are reported, not budget failures.
+  Quick lints touched production targets; full retains all-target Clippy. Selected tests
+  still compile and execute in quick, using fresh prebuilt metadata (no runtime rebuild).
   See [gate cost policy](docs/guide/gate-costs.md) for added-test cost reporting and the host
   nightly slow lane (nice 19, idle I/O, load/core <=1.0, private herdr, deduplicated failure
   tasks). PM installs its documented cron line after landing; workers never install it.
