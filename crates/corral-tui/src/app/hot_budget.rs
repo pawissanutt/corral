@@ -8,8 +8,8 @@
 //! container), warm in this process and cold in a fresh one, and again after a real
 //! current-run mutation, an unrelated record write and deletion of the cache root. Between the
 //! base and each larger variant every unattributed cell is unchanged, the unattributed
-//! hydration cell is 0, every inclusive total is the sum of its cells, and each FU-3 cell
-//! equals its expected work on that variant's own rows. The measured pass's own resource
+//! hydration cell is 0, every inclusive total is the sum of its cells, and FU-3 reads stay
+//! within v2 header-only bounds on that variant's rows. The measured pass's own resource
 //! samples and branch are checked before any counter is compared.
 
 use std::collections::BTreeMap;

@@ -7,7 +7,7 @@
 //! current-run mutation (sync writing back a stale `agent_state`); cold runs measure each of
 //! those steps in a fresh process on the settled store. Between the base and each larger variant every
 //! unattributed cell is unchanged, the unattributed hydration cell is 0, every inclusive total
-//! is the sum of its cells, each FU-3 cell equals its expected work on that variant's own rows,
+//! is the sum of its cells, FU-3 reads stay within v2 header-only bounds on that variant's rows,
 //! and the usage refresh's own-record cells equal the refreshed runs' own rows exactly. The
 //! mutation commits as one task change on the change feed.
 
