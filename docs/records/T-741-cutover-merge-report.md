@@ -15,6 +15,7 @@ Storage-v2 remains authoritative. No `corral-core` file, schema, storage API, ga
 - Carry actionable queued refusals through v2's typed `RecordArea`, preserving the legacy-string decoder and asset-repair invalidation.
 - Port retry preflight and the narrowly scoped pre-exec checkpoint exemption. Read canonical keyed generation rows, not the history-free shell's empty generation vector; both initial admission and the locked recheck retain the checkpoint requirement after any earlier hello. A new regression covers an unbound replacement after a bound generation, dirty work, and committed HEAD drift.
 - Port incoming tests from removed filesystem persistence paths to v2 record APIs and canonical reviewer scratch paths. Keep read-only, corruption, exact callback identity, and retry assertions intact.
+- The first assigned quick gate stopped at the exact 800-SLOC ceiling: the merged launch-refusal hint made `sync.rs` 801 code lines. Extract pane excerpt capture and the unchanged hint into `sync_excerpt.rs`, preserving behavior without changing the ceiling or exclusions. The private targeted sync/metered matrix then passed all **11 tests**.
 
 ## Verification
 
@@ -30,7 +31,7 @@ Storage-v2 remains authoritative. No `corral-core` file, schema, storage API, ga
 - `python3 scripts/qa-pi-panel-proof.py .evidence/panel-qa`: PASS on `6d55a599`. Owned production-host PTY with offline control-plane/provider fixture; scoped agent/transcript/job navigation, bounded transcript at wide/narrow widths, real owned job running/line-match/exit 7, unchanged session/generation, and clean terminal exit.
 - `cargo fmt --all` and `git diff --check`: clean.
 
-The required receipted quick gate runs after the final commit and merge-preserving rebase onto current storage-v2. Its log and exact candidate receipt are separate canonical artifacts. The attached ancestry proof records current main, both merge parents, storage-v2 ancestry, and unchanged core storage blobs.
+The first receipted quick gate (`ag-d3421ad04bfde9db`) failed solely at the SLOC check before Clippy/tests. After the helper extraction, the required receipted quick gate runs again after the final commit and merge-preserving rebase onto current storage-v2. Its log and exact candidate receipt are separate canonical artifacts. The attached ancestry proof records current main, both merge parents, storage-v2 ancestry, and unchanged core storage blobs.
 
 ## Limits / handoff
 
