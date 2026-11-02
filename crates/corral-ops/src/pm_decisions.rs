@@ -224,6 +224,49 @@ pub fn pm_resolve(ctx: &Ctx, id: &str, answer: &str) -> Result<()> {
     )
 }
 
+/// Durable coordination records for read-only navigation. A presentation is not an answer;
+/// native and portable requests must use their own exact response lifecycle.
+pub(crate) fn inbox(
+    ctx: &Ctx,
+    project: Option<&str>,
+    tasks: &[corral_core::Task],
+    bin: &str,
+) -> Result<Vec<crate::attention::inbox::Item>> {
+    let mut items = Vec::new();
+    for record in read(ctx)?.records.values() {
+        let decision = &record.decision;
+        let task = tasks.iter().find(|task| task.id == decision.task);
+        if project
+            .is_some_and(|project| task.and_then(|task| task.project.as_deref()) != Some(project))
+        {
+            continue;
+        }
+        let resolved = externally_resolved(ctx, decision)?;
+        let pending = record.answer.is_none() && !resolved;
+        let own_flow = decision.action.kind != PmActionKind::Question;
+        items.push(crate::attention::inbox::Item {
+            kind: "coordination_decision", task: decision.task.clone(),
+            container: decision.run.as_ref().map(|run| format!("{}/{run}", decision.task)),
+            key: decision.id.clone(), revision: crate::verification::digest(&serde_json::to_vec(&(record, resolved))?),
+            revision_kind: "source_digest", state: if pending { "pending" } else { "resolved" }.into(), pending,
+            scope: task.and_then(|task| task.project.clone()).unwrap_or_else(|| "workspace".into()),
+            reason: decision.action.why.clone(), responsible: "owner".into(),
+            detail: vec![format!("Source: {}", decision.source), format!("Request digest: {}", decision.request_digest),
+                record.answer.as_ref().map(|answer| format!("Owner answer: {answer}")).unwrap_or_else(|| "No recorded owner answer".into())],
+            inspect: format!("{bin} pm brief --json"),
+            response: (pending && own_flow).then(|| format!(
+                "In a separate trusted owner terminal: {bin} pm resolve {} --answer <answer>\nThis records an answer only; it never grants dispatch, acceptance or permission authority.",
+                crate::gate_script::q(&decision.id)
+            )), pm_eligible: false,
+        });
+    }
+    Ok(items)
+}
+
+#[cfg(test)]
+#[path = "pm_decisions_inbox_tests.rs"]
+mod inbox_tests;
+
 fn record_task<'a>(records: &'a Decisions, id: &str) -> Option<&'a str> {
     records.records.get(id).and_then(|record| {
         (record.decision.task != "workspace").then_some(record.decision.task.as_str())

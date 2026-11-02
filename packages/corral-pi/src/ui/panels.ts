@@ -5,13 +5,13 @@ import {
   getKeybindings, isKeyRelease, matchesKey, Text, TuiAltScreen, visibleWidth, type Component, type Keybinding, type Terminal, type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
-import { PanelTerminal, type PanelSurface } from "./panel-terminal.ts";
+import { PanelTerminal, PANEL_WIDTH, type PanelSurface } from "./panel-terminal.ts";
 import { NativeWorkbench } from "./workbench.ts";
 import { panelTheme } from "./panels-theme.ts";
 import { composerLayout, composerTitle, overviewLines, panelFooter, splitRow } from "./panels-chrome.ts";
 import { pagerLabel, scrollWindow, selectionWindow, type PageWindow } from "./panels-pager.ts";
 import {
-  box, pad, panelLines, plainLabel, diffLine, PANEL_TABS, PANEL_BG, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, RESET,
+  box, pad, panelLines, plainLabel, diffLine, styledPanelLine, PANEL_TABS, PANEL_BG, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, RESET,
   type FilesState, type PanelSnapshot, type PanelTab, type PanelLine,
 } from "./panels-view.ts";
 
@@ -20,6 +20,9 @@ export interface NativePanelsOptions {
   readonly cwd: string;
   readonly inspection?: () => Promise<unknown>;
   readonly snapshot: () => PanelSnapshot | null;
+  readonly readInbox?: (signal: AbortSignal) => Promise<unknown>;
+  readonly projectDir?: string;
+  readonly readProjects?: (signal: AbortSignal) => Promise<unknown>;
 }
 interface TabHit { readonly from: number; readonly to: number; readonly tab: PanelTab }
 interface PagerHit { readonly y: number; readonly from: number; readonly to: number }
@@ -110,7 +113,8 @@ export class NativePanels implements PanelSurface {
   }
   async loadFiles(): Promise<void> { await this.workbench.review.refresh(); }
   private displayed(): { readonly rows: readonly PanelLine[]; readonly overview: boolean } {
-    if (this.wide && this.tab === "Context" && !this.focused) return { rows: overviewLines(this.options.snapshot(), this.files), overview: true };
+    if (this.wide && this.tab === "Context" && !this.focused) return { rows: overviewLines(this.options.snapshot(), this.files,
+      { name: this.workbench.scopeLabel, required: this.workbench.review.scopeRequired }), overview: true };
     const rows = this.tab === "Files" ? this.workbench.files() : this.lines();
     return { rows: this.wide ? rows : rows.filter(line => !line.heading), overview: false };
   }
@@ -121,8 +125,14 @@ export class NativePanels implements PanelSurface {
     const rows = this.terminal?.rows ?? 0;
     return this.wide ? Math.max(0, rows - 5) : this.inlineCapacity(rows);
   }
-  private page(capacity: number): { readonly window: PageWindow; readonly pager: string } {
+  private wrapped(width: number): { readonly rows: readonly PanelLine[]; readonly overview: boolean } {
     const { rows, overview } = this.displayed();
+    return { overview, rows: rows.flatMap(row => row.text.trim() === "" ? [row]
+      : new Text(row.text, 0, 0).render(Math.max(1, width - (row.indent ?? 0) - (row.continuationIndent ?? 0)))
+        .map((text, index) => ({ ...row, text, indent: (row.indent ?? 0) + (index ? row.continuationIndent ?? 0 : 0) }))) };
+  }
+  private page(capacity: number, width: number): { readonly window: PageWindow; readonly pager: string } {
+    const { rows, overview } = this.wrapped(width);
     let window: PageWindow;
     if (this.tab === "Files") {
       const selected = rows.findIndex(row => row.action?.kind === "diff" && row.action.path === this.workbench.review.selected);
@@ -133,21 +143,21 @@ export class NativePanels implements PanelSurface {
     return { window, pager: capacity > 0 ? pagerLabel(window, rows.length) : "" };
   }
   private styled(rows: readonly PanelLine[]): string[] {
-    return rows.map(row => (row.heading ? PANEL_BLUE : PANEL_MUTED) + row.text + PANEL_TEXT);
+    return rows.map(styledPanelLine);
   }
   renderSidebar(width: number, height: number): readonly string[] {
-    const { window, pager } = this.page(Math.max(0, height - 5)), inner = width - 4;
+    const inner = width - 4, { window, pager } = this.page(Math.max(0, height - 5), inner);
     const hint = this.focused ? (pager ? "↑/↓ · Enter · Esc" : "←/→ tabs · ↑/↓ · Enter · Esc") : pager ? "F6 · Ctrl+B" : "F6 inspect · Ctrl+B inline";
     this.railPager = pager ? { y: height - 2, from: inner - visibleWidth(pager), to: inner } : undefined;
     const lines = [this.tabs(), "", ...this.styled(window.rows)];
     while (lines.length < height - 3) lines.push("");
     lines.push(splitRow(PANEL_MUTED + hint + PANEL_TEXT, pager ? PANEL_BLUE + pager + PANEL_TEXT : "", inner));
-    return box("Session", lines, width, height, this.focused);
+    return box(this.workbench.review.scopeRequired ? "Choose project" : this.workbench.scopeLabel, lines, width, height, this.focused);
   }
   renderInline(width: number, rows: number): string[] {
     this.inlinePager = undefined;
     if (this.wide) return [];
-    const { window, pager } = this.page(this.inlineCapacity(rows));
+    const { window, pager } = this.page(this.inlineCapacity(rows), Math.max(1, width - 2));
     const tabs = PANEL_TEXT + " " + this.tabs(), room = width - visibleWidth(tabs) - 2;
     const hints = this.focused ? ["↑↓ Enter · Esc", "↑↓ · Esc", ""] : ["F6 inspect", ""];
     const hint = hints.find(text => visibleWidth(pager) + (pager && text ? 2 : 0) + visibleWidth(text) <= room) ?? "";
@@ -165,7 +175,7 @@ export class NativePanels implements PanelSurface {
       const file = visible[Math.max(0, Math.min(visible.length - 1, index + delta))];
       if (file) { void this.workbench.openFile(file.path); this.workbench.focused = false; }
     } else if (this.capacity > 0) {
-      const { rows, overview } = this.displayed();
+      const { rows, overview } = this.wrapped(this.wide ? PANEL_WIDTH - 4 : Math.max(1, (this.terminal?.columns ?? 80) - 2));
       const current = scrollWindow(rows, this.capacity, overview ? this.overviewOffset : this.offset).offset;
       const next = scrollWindow(rows, this.capacity, current + delta).offset;
       if (overview) this.overviewOffset = next; else this.offset = next;
@@ -177,6 +187,7 @@ export class NativePanels implements PanelSurface {
     this.inspecting = true;
     try {
     if (this.tab === "Files") {
+      if (this.workbench.review.scopeRequired) { await this.workbench.repository(); return; }
       if (this.files.kind === "unread" || this.files.kind === "error") { await this.loadFiles(); return; }
       if (this.files.kind === "ready") {
         const file = this.workbench.review.current;
@@ -253,6 +264,7 @@ export class NativePanels implements PanelSurface {
         this.choose("Files"); this.focused = false;
         void this.workbench.openFile(action.path); this.refresh(); return;
       }
+      case "scope": void this.workbench.repository(); return;
       case "files": this.focused = true; this.choose("Files"); return;
       default: {
         const unreachable: never = action;
@@ -288,7 +300,7 @@ export class NativePanels implements PanelSurface {
       }
     }
     if (!this.canInteract || mouse) return false;
-    if (matchesKey(data, "f7") || matchesKey(data, "f8") || matchesKey(data, "f9") || matchesKey(data, "f10")) {
+    if (matchesKey(data, "f7") || matchesKey(data, "f8") || matchesKey(data, "f9") || matchesKey(data, "f10") || matchesKey(data, "f11")) {
       this.focused = false;
       if (matchesKey(data, "f7")) this.tab = "Files";
       if (matchesKey(data, "f8")) this.tab = "Agents";
@@ -308,6 +320,7 @@ export class NativePanels implements PanelSurface {
       const tab = PANEL_TABS[index]; if (tab) this.choose(tab); return true;
     }
     if (matchesKey(data, "up") || matchesKey(data, "down")) { this.move(matchesKey(data, "down") ? 1 : -1); return true; }
+    if (data === "o") { void this.workbench.repository(); return true; }
     if (matchesKey(data, "enter")) { void this.inspect(); return true; }
     const keys = getKeybindings();
     if (VIEWPORT_KEYS.some(key => keys.matches(data, key))) return false;
@@ -402,12 +415,14 @@ export class NativePanels implements PanelSurface {
     pi.on("thinking_level_select", () => { this.refresh(); });
     pi.on("tool_result", () => { this.workbench.invalidateFiles(); this.refresh(); });
     pi.registerCommand("panels", {
-      description: "Native session inspector: context, files, agents, plan, evidence, refresh or toggle",
+      description: "Native session inspector: context, files, agents, plan, evidence, inbox, refresh or toggle",
       handler: async (args, ctx) => {
         if (ctx.mode !== "tui" || !this.terminal) { ctx.ui.notify("Native panels require the interactive Corral host.", "warning"); return; }
         const value = args.trim().toLowerCase();
+        if (value === "project") { await this.workbench.repository(); this.refresh(); return; }
         if (value === "evidence") { this.focused = false; this.workbench.setView("evidence"); return; }
-        if (value === "refresh") { await this.workbench.inspection.refresh(true); await this.loadFiles(); return; }
+        if (value === "inbox") { this.focused = false; this.workbench.setView("inbox"); this.refresh(); return; }
+        if (value === "refresh") { await this.workbench.inspection.refresh(true); await this.loadFiles(); if (this.workbench.view === "inbox") await this.workbench.inbox.refresh(); return; }
         if (value === "toggle") { this.sidebarEnabled = !this.sidebarEnabled; this.terminal.refreshLayout(); return; }
         const tab = PANEL_TABS.find(tab => tab.toLowerCase() === value);
         if (tab) this.choose(tab);

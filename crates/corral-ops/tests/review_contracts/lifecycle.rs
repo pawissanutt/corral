@@ -48,6 +48,65 @@ fn ordinary_replacement_rejects_the_previous_reviewer_callback() {
     assert_eq!(saved.verdict, Some(Verdict::Changes));
 }
 
+#[test]
+fn visual_reviewer_can_be_replaced_after_image_delivery_failure() {
+    let fx = fixture(|_| {});
+    let id = candidate(&fx, "ui", &[], "web/app.tsx");
+    let shot = fx._tmp.path().join("shot.png");
+    std::fs::write(&shot, b"\x89PNG\r\n\x1a\nfixture").unwrap();
+    corral_ops::add_artifact(
+        &fx.ctx,
+        &id,
+        &shot,
+        Some(ArtifactKind::Screenshot),
+        Some("UI"),
+    )
+    .unwrap();
+    let first = corral_ops::review_run(&fx.ctx, &id, None).unwrap();
+    assert_eq!(first.reviewer, "visual");
+    let run = fx
+        .ctx
+        .store
+        .get(&id)
+        .unwrap()
+        .current_run()
+        .unwrap()
+        .id
+        .clone();
+    let prompt = std::fs::read_to_string(
+        corral_ops::review_notes_path(&fx.ctx, &id, &run)
+            .unwrap()
+            .with_file_name("review.md"),
+    )
+    .unwrap();
+    assert!(prompt.contains("corral_ask"));
+    assert!(prompt.contains("corral review-run <task> --reviewer"));
+    assert!(prompt.contains("replacement supersedes this attempt"));
+    // The first reviewer cannot open the screenshot and asks the PM to replace it.
+    // The PM chooses a known image-capable independent profile, not the owner.
+    let replacement = corral_ops::review_run(&fx.ctx, &id, Some("design")).unwrap();
+    assert_eq!(replacement.reviewer, "design");
+    assert_ne!(attempt(&first), attempt(&replacement));
+    assert_eq!(packet(&fx, &id)["bound"]["gaps"], serde_json::json!([]));
+    assert!(packet(&fx, &id).to_string().contains("shot.png"));
+    stale(corral_ops::verdict_bound(
+        &fx.ctx,
+        &id,
+        Verdict::Approve,
+        "could not see image",
+        Some(&attempt(&first)),
+    ));
+    let saved = corral_ops::verdict_bound(
+        &fx.ctx,
+        &id,
+        Verdict::Approve,
+        "image inspected",
+        Some(&attempt(&replacement)),
+    )
+    .unwrap();
+    assert_eq!(saved.verdict, Some(Verdict::Approve));
+}
+
 fn strong_review(fx: &Fx, id: &str) -> (String, ReviewRecord) {
     let routine = corral_ops::review_run(&fx.ctx, id, None).unwrap();
     let StrongerOutcome::Rerouted { superseded } = stronger(fx, id, &routine) else {

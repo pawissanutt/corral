@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use crate::dispatch::Admission;
 use crate::{Change, Ctx, DispatchOpts, DispatchOutcome};
 
-const REFUSALS: corral_core::records::RecordArea<BTreeMap<String, String>> =
+const REFUSALS: corral_core::records::RecordArea<BTreeMap<String, RefusalRecord>> =
     corral_core::records::RecordArea::new("queue-refusals");
 
 pub(crate) fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
@@ -94,7 +94,11 @@ pub(crate) fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
                 // here describes, so its recovery keeps retrying every pass.
                 match ctx.store.head(&task.id) {
                     Ok(current) if current.launch.is_none() => {
-                        refusals.record(&task.id, refusal_state(ctx, &current)?);
+                        let reason = err
+                            .downcast_ref::<crate::agent::hooks::preflight::Refusal>()
+                            .filter(|refusal| refusal.code == "memory_contract_unavailable")
+                            .map(ToString::to_string);
+                        refusals.record(&task.id, refusal_state(ctx, &current)?, reason, now);
                     }
                     _ => refusals.clear(&task.id),
                 }
@@ -190,6 +194,20 @@ fn refusal_state(ctx: &Ctx, task: &TaskHead) -> Result<String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error).with_context(|| format!("reading {}", catalog.display())),
     }
+    // Asset repair must invalidate a cached refusal even when configuration is unchanged.
+    let assets = ctx
+        .store
+        .config
+        .agent
+        .assets_dir
+        .clone()
+        .or_else(|| crate::agent::install::installed_assets(ctx).ok().flatten());
+    if let Some(assets) = assets {
+        match std::fs::read(assets.join("compat.json")) {
+            Ok(bytes) => hash.update(bytes),
+            Err(error) => hash.update(error.to_string()),
+        }
+    }
     if let Some(project) = task.project.as_deref()
         && let Ok(repo) = ctx.store.project_path(project)
     {
@@ -216,9 +234,32 @@ fn refusal_state(ctx: &Ctx, task: &TaskHead) -> Result<String> {
     Ok(format!("{:x}", hash.finalize()))
 }
 
+/// Actionable queue failures are projected into the attention board until admission succeeds.
+pub(crate) fn attention_refusals(ctx: &Ctx) -> Result<BTreeMap<String, (Timestamp, String)>> {
+    Ok(Refusals::load(ctx)?
+        .states
+        .into_iter()
+        .filter_map(|(id, record)| match record {
+            RefusalRecord::Actionable { at, reason, .. } => Some((id, (at, reason))),
+            RefusalRecord::Legacy(_) => None,
+        })
+        .collect())
+}
+
 /// The state each persistent refusal was logged under, shared by every syncing process.
+#[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+enum RefusalRecord {
+    Legacy(String),
+    Actionable {
+        state: String,
+        reason: String,
+        at: Timestamp,
+    },
+}
+
 struct Refusals {
-    states: BTreeMap<String, String>,
+    states: BTreeMap<String, RefusalRecord>,
     changed: bool,
 }
 
@@ -243,11 +284,19 @@ impl Refusals {
     }
 
     fn unchanged(&self, id: &str, state: &str) -> bool {
-        self.states.get(id).is_some_and(|logged| logged == state)
+        self.states.get(id).is_some_and(|logged| match logged {
+            RefusalRecord::Legacy(logged) => logged == state,
+            RefusalRecord::Actionable { state: logged, .. } => logged == state,
+        })
     }
 
-    fn record(&mut self, id: &str, state: String) {
-        self.changed |= self.states.insert(id.to_owned(), state.clone()) != Some(state);
+    fn record(&mut self, id: &str, state: String, reason: Option<String>, at: Timestamp) {
+        let record = match reason {
+            Some(reason) => RefusalRecord::Actionable { state, reason, at },
+            None => RefusalRecord::Legacy(state),
+        };
+        self.states.insert(id.to_owned(), record);
+        self.changed = true;
     }
 
     fn clear(&mut self, id: &str) {

@@ -102,7 +102,9 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
             ) => Refused,
         },
         Cmd::Attention(args) => match &args.cmd {
-            None | Some(AttentionCmd::List | AttentionCmd::Stats { .. }) => Read,
+            None | Some(AttentionCmd::List | AttentionCmd::Inbox | AttentionCmd::Stats { .. }) => {
+                Read
+            }
             Some(
                 AttentionCmd::Attend { .. }
                 | AttentionCmd::Park { .. }

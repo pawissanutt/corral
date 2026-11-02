@@ -21,6 +21,8 @@ pub struct AttentionArgs {
 pub enum AttentionCmd {
     /// List the current read-only attention assessment (the default)
     List,
+    /// Read all canonical question/decision history and current blocking reasons; never answers
+    Inbox,
     /// Record handling without answering, moving or authorizing the task
     Attend {
         key: String,
@@ -113,6 +115,29 @@ pub fn run(ctx: &Ctx, args: AttentionArgs) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&stats)?);
             } else {
                 print_stats(&stats);
+            }
+            return Ok(());
+        }
+        Some(AttentionCmd::Inbox) => {
+            let inbox = corral_ops::attention::inbox::list(
+                ctx,
+                args.project.as_deref(),
+                jiff::Timestamp::now(),
+            )?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&inbox)?);
+            } else {
+                for item in inbox.items {
+                    println!(
+                        "{}  {}  {}@{} ({})  {}",
+                        item.task,
+                        item.state,
+                        item.key,
+                        item.revision,
+                        item.revision_kind,
+                        one_line(&item.reason)
+                    );
+                }
             }
             return Ok(());
         }

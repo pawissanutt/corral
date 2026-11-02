@@ -677,7 +677,13 @@ fn reconcile(
     } else {
         None
     };
-    let excerpt = excerpt.or(refreshed);
+    let excerpt = excerpt.or(refreshed).map(|text| {
+        if text.contains("corral agent launch refused: memory_contract_unavailable:") {
+            format!("{text}\nFix: run `corral agent install` or update the configured Pi assets, then retry.")
+        } else {
+            text
+        }
+    });
 
     let unchanged = to == task.status
         && run.agent_state.as_deref() == Some(state.as_str())

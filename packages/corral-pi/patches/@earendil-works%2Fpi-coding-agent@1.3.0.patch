@@ -1,3 +1,41 @@
+diff --git a/dist/utils/image-process.js b/dist/utils/image-process.js
+--- a/dist/utils/image-process.js
++++ b/dist/utils/image-process.js
+@@ -1,3 +1,4 @@
++import { getImageDimensions } from "@earendil-works/pi-tui";
+ import { convertImageBytesToPng } from "./image-convert.js";
+ import { formatDimensionNote, resizeImage } from "./image-resize.js";
+ function baseMimeType(mimeType) {
+@@ -44,15 +45,27 @@ export async function processImage(bytes, mimeType, options) {
+     if (!normalized) {
+         return {
+             ok: false,
+-            message: "[Image omitted: could not be converted to a supported inline image format.]",
++            message: `[Image omitted: could not be converted to a supported inline image format (original ${bytes.byteLength} bytes; inline base64 limit ${options?.resizeOptions?.maxBytes ?? 4.5 * 1024 * 1024} bytes).]`,
+         };
+     }
+     if (autoResizeImages) {
++        // Already-inline images do not require Photon, which may be unavailable in
++        // a compiled host. Respect the provider's byte and dimension limits.
++        const data = Buffer.from(normalized.bytes).toString("base64");
++        const limits = options?.resizeOptions;
++        const dimensions = getImageDimensions(data, normalized.mimeType);
++        const maxBytes = limits?.maxBytes ?? 4.5 * 1024 * 1024;
++        if (dimensions && dimensions.widthPx > 0 && dimensions.heightPx > 0 &&
++            dimensions.widthPx <= (limits?.maxWidth ?? 2000) &&
++            dimensions.heightPx <= (limits?.maxHeight ?? 2000) && data.length < maxBytes) {
++            const hint = conversionHint(normalized.convertedFrom, normalized.mimeType);
++            return { ok: true, data, mimeType: normalized.mimeType, hints: hint ? [hint] : [] };
++        }
+         const resized = await resizeImage(normalized.bytes, normalized.mimeType, options?.resizeOptions);
+         if (!resized) {
+             return {
+                 ok: false,
+-                message: "[Image omitted: could not be resized below the inline image size limit.]",
++                message: `[Image omitted: could not process or resize image (original ${bytes.byteLength} bytes, base64 ${data.length} bytes; inline base64 limit ${maxBytes} bytes, dimensions limit ${limits?.maxWidth ?? 2000}x${limits?.maxHeight ?? 2000}).]`,
+             };
+         }
+         const hints = [];
 diff --git a/dist/modes/interactive/chat-viewport.d.ts b/dist/modes/interactive/chat-viewport.d.ts
 index 65638e7fc46589141ca4b0d37e7032f553d6f573..b94d7375521752f911de63a0cd0dff5827b3e819 100644
 --- a/dist/modes/interactive/chat-viewport.d.ts

@@ -22,6 +22,7 @@ pub struct Neighborhood<'a> {
     pub availability: BTreeMap<String, AvailabilityEpisode>,
     pub missing_reviewers: BTreeMap<String, Timestamp>,
     pub prepared_refusals: BTreeMap<String, (Timestamp, String)>,
+    pub queue_refusals: BTreeMap<String, (Timestamp, String)>,
     by_id: BTreeMap<&'a str, &'a dyn TaskRef>,
     // Only the explicit cold compatibility constructor retains full-task sources.
     cold_tasks: Option<&'a [Task]>,
@@ -187,6 +188,7 @@ impl<'a> Neighborhood<'a> {
             availability: BTreeMap::new(),
             missing_reviewers: BTreeMap::new(),
             prepared_refusals: BTreeMap::new(),
+            queue_refusals: BTreeMap::new(),
             by_id,
             cold_tasks: None,
             slots,

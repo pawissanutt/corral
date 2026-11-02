@@ -11,6 +11,10 @@ use crate::Ctx;
 use crate::cleanup::{Cleanup, cleanup_head};
 use crate::integration::RepairKey;
 
+#[cfg(test)]
+#[path = "retry_tests.rs"]
+mod tests;
+
 /// Current HEAD of a run's worktree, or None when the worktree is gone or unreadable.
 fn worktree_head(worktree: &std::path::Path) -> Option<String> {
     worktree
@@ -100,6 +104,42 @@ pub(crate) fn auto_retry(
     )
 }
 
+// Only a recognizable pre-exec Pi refusal with no bound host and an unchanged tree can
+// bypass the portable handoff. A crash after hello is not evidence of an unstarted agent.
+fn launch_refused_before_start(
+    task: &impl corral_core::TaskRef,
+    run: &corral_core::RunHead,
+) -> Result<bool> {
+    if run.outcome != Some(RunOutcome::Failed)
+        || !crate::agent::hooks::run_head_is_pi_native(run)
+        || !run.blocked_excerpt.as_deref().is_some_and(|text| {
+            text.lines()
+                .any(|line| line.contains("corral agent launch refused: "))
+        })
+        || run.agent_host.is_none()
+        || !run.worktree.is_dir()
+    {
+        return Ok(false);
+    }
+    let host = run.agent_host.as_ref().context("missing host")?;
+    let container = corral_core::agent::ContainerRef::Worker {
+        task: task.id().clone(),
+        run: run.id.clone(),
+    };
+    // Shell runs deliberately contain no generation history. Inspect canonical keyed rows,
+    // including older generations: an unbound replacement cannot erase an earlier hello.
+    for n in 1..=host.binding.generation {
+        if task
+            .agent_generation(&container, n)?
+            .is_some_and(|generation| generation.bound.is_some())
+        {
+            return Ok(false);
+        }
+    }
+    Ok(corral_git::is_clean(&run.worktree)?
+        && corral_git::rev_sha(&run.worktree, "HEAD")? == run.base_sha)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn retry_with(
     ctx: &Ctx,
@@ -165,11 +205,14 @@ pub(super) fn retry_with(
         },
     )?;
     crate::routing::validate_model(ctx, &decision)?;
+    crate::agent::hooks::preflight::route(ctx, corral_core::agent::AgentRole::Worker, &decision)?;
     let reachable = match &prev.herdr {
         Some(h) => ctx.herdr.pane_get(&h.pane_id)?.is_some(),
         None => false,
     };
     let can_checkpoint = reachable && prev.worktree.is_dir();
+    let refused_before_start =
+        launch_refused_before_start(&head, head.current_run.as_deref().context("missing_run")?)?;
     // An availability handoff never depends on the old pane: a missing source tree or
     // checkpoint is not permission to replay work whose outcome is unknown.
     if availability.is_some() {
@@ -179,7 +222,7 @@ pub(super) fn retry_with(
             prev.worktree.display()
         );
         crate::resume::require_checkpoint_head(&head, &prev.id)?;
-    } else if can_checkpoint {
+    } else if can_checkpoint && !refused_before_start {
         if automatic {
             crate::resume::require_checkpoint_head(&head, &prev.id)?;
         } else {
@@ -209,7 +252,13 @@ pub(super) fn retry_with(
                 t.status.label()
             );
         }
-        if can_checkpoint || availability.is_some() {
+        if (can_checkpoint || availability.is_some())
+            && !(availability.is_none()
+                && launch_refused_before_start(
+                    &*t,
+                    t.head().current_run.as_deref().context("missing_run")?,
+                )?)
+        {
             crate::resume::require_checkpoint_head(t.head(), &prev.id)?;
         }
         // Close only the identity validated under this lock. A failed close leaves

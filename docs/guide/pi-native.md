@@ -868,9 +868,9 @@ host from the `packages/corral-pi` package (by default the one in the checkout t
 built from). It refuses a fixture
 installation (`fixture_assets_not_allowed`) and a Bun outside the package's `compat.json`
 range (`bun_unavailable`, `bun_version_unsupported`), then copies only what a host runs:
-`package.json`, `bun.lock`, `compat.json`, `src/` (without `*.test.ts`) and `assets/`, never
-`test/` or `fixture.json`. It runs `bun install --frozen-lockfile` in that copy and stores it as
-`$XDG_DATA_HOME/corral/pi-native/assets/<digest>/` (`~/.local/share/corral/pi-native/...`
+`package.json`, `bun.lock`, `compat.json`, `src/` (without `*.test.ts`), `assets/` and dependency
+`patches/`, never `test/` or `fixture.json`. It runs `bun install --frozen-lockfile` in that copy
+and stores it as `$XDG_DATA_HOME/corral/pi-native/assets/<digest>/` (`~/.local/share/corral/pi-native/...`
 without an absolute `XDG_DATA_HOME`), recording the digest in `installed.json` beside it.
 Reinstalling an unchanged package reuses the same directory.
 

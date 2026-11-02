@@ -129,7 +129,7 @@ pub fn asset_digest(dir: &Path) -> Result<String> {
             }
         }
     }
-    for tree in ["src", "assets"] {
+    for tree in ["src", "assets", "patches"] {
         if dir.join(tree).exists() {
             collect(dir, Path::new(tree), &mut files)?;
         }

@@ -39,14 +39,18 @@ Click the **model ▾** label to open Pi's existing model picker (keyboard: Ctrl
 
 ## Practical change review
 
-The default is all uncommitted changes in the Git worktree containing the launch directory. The actual Git root is resolved once per scope, so repository-relative paths also work when launched in a subdirectory. A bound worker's launch worktree remains its initial review scope; browsing another repository does not rebind the host or change the model's cwd.
+Bound task/run sessions retain their canonical committed-candidate comparison. Other repository-bound sessions use working changes. Workspace assistant/PM sessions without a project directory show **Choose project**, never workspace-wide Git changes or a misleading clean-workspace result.
+
+Use **o** in Changes or a focused inspector, click the Files project row, or run **/panels project** to choose a configured project or one of this assistant's scratch worktrees. The chosen scope is visible in the main view bar and rail title. A selected directory that is not a repository root is refused rather than widened to its parent workspace. Project selection clears the previous file/filter/diff metadata; an explicit Files scope offers only working/staged/unstaged comparisons, not a different task's canonical candidate. Browsing never rebinds the session, changes its tools, model cwd, inbox scope or canonical plan.
+
+Files emphasizes the filename first, then status, known line deltas and directory on separate rows. Agents separates the bound session, activity and helpers; a workspace session explicitly says it has no bound project. Plan identifies its session, reports done/open/dropped counts, separates phases and wraps long steps, criteria and waits. Waiting steps use warning color; completed steps recede. The plan remains the session ledger, not a project-wide progress claim.
 
 While review has keyboard focus:
 
 | Key | Action |
 |---|---|
 | `/` | Filter changed paths by space-separated search terms |
-| `o` | Choose a read-only repository scope |
+| `o` | Choose a project or scratch worktree (read-only Files scope) |
 | `c` | All uncommitted → unstaged → staged comparisons |
 | `j` / `k` | Next / previous file, without closing the view |
 | arrows / PgUp / PgDn | Scroll the main view |

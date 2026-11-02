@@ -78,6 +78,7 @@ const ROWS: &[(&str, &[&str], Class)] = &[
     ),
     ("attention", &[], Read),
     ("attention list", &[], Read),
+    ("attention inbox", &[], Read),
     ("attention attend", &["T-001", "--note", "n"], Refused),
     ("attention park", &["T-001", "--reason", "r"], Refused),
     (
