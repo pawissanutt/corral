@@ -101,7 +101,7 @@ try:
     assert not [c for c in calls if c['op'] not in ('hello', 'event')], calls
     assert not [c for c in calls if c['op'] == 'event' and c['payload'].get('kind') == 'turn_started'], calls
     assert all(c['identity']['generation'] == 1 for c in calls)
-    scene('return-conversation', 'Conversation', b'\x1b[20~')
+    scene('return-conversation', 'Chat', b'\x1b[20~')
     send(b'\x04'); until('\x1b[?1049l'); proc.wait(timeout=10)
     assert proc.returncode == 0
     (args.output / 'result.json').write_text(json.dumps(dict(status='PASS', candidate=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip(), initial_size=dict(columns=140, rows=46), resizes=resizes, source='offline canonical read fixture; production host/main.ts and NativeWorkbench',

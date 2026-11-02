@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripTerminalSequences, Text, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
 import { NativePanels } from "./panels.ts";
 import { anchoredRow } from "./reading-anchor.ts";
 import type { PanelSnapshot } from "./panels-view.ts";
@@ -140,10 +141,19 @@ test("the main view bar keeps its focused hints and click targets at the minimum
   const { native } = panels(52, 24);
   const root = native.workbench.mount(new Text("transcript", 0, 0));
   native.workbench.setView("changes");
-  const bar = stripTerminalSequences(root.render(52)[0] ?? "");
-  expect(visibleWidth(bar)).toBeLessThanOrEqual(52);
-  expect(bar).toContain("Esc");
-  expect(bar).toContain("Enter");
-  expect(bar).not.toContain("…");
+  for (const width of [34, 52, 104]) {
+    const bar = stripTerminalSequences(renderLayoutFrame(root, width, 24, () => {}).lines[0] ?? "");
+    expect(visibleWidth(bar)).toBeLessThanOrEqual(width);
+    expect(bar).toContain("Esc");
+    expect(bar).toContain("Enter");
+    expect(bar).not.toContain("…");
+    const graph = width < 64 ? " G " : " Graph ", timeline = width < 64 ? " L " : " Timeline ";
+    const click = (label: string): TuiMouseEvent => ({ type: "click", button: "left", x: bar.indexOf(label) + 1, y: 0,
+      screenX: bar.indexOf(label) + 1, screenY: 0, width, height: 24, shift: false, alt: false, ctrl: false, clickCount: 1 });
+    root.handleMouse?.(click(graph));
+    expect(native.workbench.view).toBe("graph");
+    root.handleMouse?.(click(timeline));
+    expect(native.workbench.view).toBe("timeline");
+  }
   native.dispose();
 });

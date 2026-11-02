@@ -107,10 +107,11 @@ export class NativeWorkbench {
     return {
       render: width => {
         this.anchorTranscript(width);
-        const compact = width < 90;
-        const labels: readonly [MainView, string][] = [["conversation", compact ? " Chat " : " Conversation F9 "],
-          ["changes", compact ? " Diff " : " Changes F7 "], ["activity", compact ? " Jobs " : " Activity F8 "],
-          ["evidence", compact ? " Proof " : " Evidence F10 "], ["inbox", compact ? " Inbox " : " Inbox F11 "], ["graph", " Graph "], ["timeline", " Timeline "]];
+        const compact = width < 110, minimum = width < 52;
+        const labels: readonly [MainView, string][] = [["conversation", minimum ? " C " : compact ? " Chat " : " Conversation F9 "],
+          ["changes", minimum ? " D " : compact ? " Diff " : " Changes F7 "], ["activity", minimum ? " J " : compact ? " Jobs " : " Activity F8 "],
+          ["evidence", minimum ? " E " : compact ? " Proof " : " Evidence F10 "], ["inbox", minimum ? " I " : compact ? " Inbox " : " Inbox F11 "],
+          ["graph", width < 64 ? " G " : " Graph "], ["timeline", width < 64 ? " L " : " Timeline "]];
         let x = 0;
         hits = labels.map(([view, label]) => ({ view, to: x += label.length }));
         return [PANEL_BG + pad(labels.map(([view, label]) => (this.view === view || view === "activity" && this.view === "agents" ? PANEL_BLUE : PANEL_MUTED) + label).join("") + PANEL_MUTED +

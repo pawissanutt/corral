@@ -56,3 +56,10 @@ stale label. Reconciliation preserves a selected canonical identity if still pre
 
 Raw test output, PTY ANSI, input/resize manifest and screenshots are attached to the task.
 The run's assigned receipted quick gate is recorded separately by corral.
+
+The first quick gate caught a real regression: the added navigation labels displaced
+Esc/Enter hints at 52 columns (739 Bun tests passed, one failed). The fix uses compact
+G/L labels at 52 columns and single-letter tabs at 34 columns, with verbose tabs only
+when they fit. The same failing test now verifies untruncated hints and actual pointer
+hit targets for Graph/Timeline at 34, 52 and 104 columns. Red/green logs are attached;
+no unrelated gate failures were patched.
