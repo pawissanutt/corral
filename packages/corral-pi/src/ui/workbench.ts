@@ -9,7 +9,7 @@ import { anchoredRow } from "./reading-anchor.ts";
 import { NativeImageViewer } from "./image-viewer.ts";
 import { ReviewStore, comparisonLabel, fileStatus, type PatchSnapshot } from "./review-store.ts";
 import { LifecycleView } from "./lifecycle-view.ts";
-import { activityRows } from "./activity-view.ts";
+import { activityRows, type ActivityMode } from "./activity-view.ts";
 import { agentRows } from "./agent-view.ts";
 import { InspectionStore, evidenceLines } from "./inspection.ts";
 import { usageLines } from "./usage-view.ts";
@@ -50,7 +50,10 @@ export class NativeWorkbench {
   private transcript: ScrollView | undefined; private transcriptWidth = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
   private debounce: ReturnType<typeof setTimeout> | undefined;
-  private jobId: string | undefined; private jobHits = new Map<number, string>(); private hunk = 0; private hunkRows: number[] = [];
+  private jobId: string | undefined; private jobHits = new Map<number, string>();
+  private activityMode: ActivityMode = "jobs"; private helperRequest: string | undefined;
+  private helperHits = new Map<number, string>(); private activityModes = new Map<number, ActivityMode>();
+  private hunk = 0; private hunkRows: number[] = [];
   private hunkSources: number[] = []; private lastPatch = ""; private displayedPath: string | undefined;
   private displayedRoot: string | undefined;
   private displayedBase: string | undefined;
@@ -101,6 +104,14 @@ export class NativeWorkbench {
     }
     this.options.changed();
   }
+  openHelpers(request?: string): void {
+    this.activityMode = "helpers";
+    if (request !== undefined) this.helperRequest = request;
+    this.setView("activity");
+  }
+  private switchActivity(mode: ActivityMode): void {
+    this.activityMode = mode; this.activityScroll?.scrollToStart(); this.focused = true; this.options.changed();
+  }
   async openFile(path: string): Promise<void> {
     this.setView("changes"); await this.review.select(path); this.acceptPatch();
   }
@@ -147,7 +158,14 @@ export class NativeWorkbench {
     if (transcript instanceof ScrollView) this.transcript = transcript;
     this.changesScroll = new ScrollView({ render: width => this.renderChanges(width), handleMouse: event => this.diffMouse(event), invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
     this.activityScroll = new ScrollView({ render: width => this.renderActivity(width), handleMouse: event => {
-      if (this.options.canInteract() && plainClick(event)) { this.focused = true; const job = this.jobHits.get(event.y); if (job !== undefined) this.jobId = job; this.options.changed(); return { handled: true }; } return undefined;
+      if (this.options.canInteract() && plainClick(event)) {
+        this.focused = true;
+        const mode = this.activityModes.get(event.y), helper = this.helperHits.get(event.y), job = this.jobHits.get(event.y);
+        if (mode !== undefined) this.switchActivity(mode);
+        if (helper !== undefined) this.helperRequest = helper;
+        if (job !== undefined) this.jobId = job;
+        this.options.changed(); return { handled: true };
+      } return undefined;
     }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
     this.agentsScroll = new ScrollView({ render: width => this.renderAgents(width), handleMouse: event => {
       if (!this.options.canInteract() || !plainClick(event)) return undefined;
@@ -234,14 +252,20 @@ export class NativeWorkbench {
     } finally { this.readingTranscript = false; this.options.changed(); }
   }
   private renderActivity(width: number): string[] {
-    this.jobHits.clear(); const rows: string[] = [], snapshot = this.options.snapshot();
+    this.jobHits.clear(); this.helperHits.clear(); this.activityModes.clear(); const rows: string[] = [];
+    const snapshot = this.options.snapshot();
     this.jobId ??= snapshot?.jobs?.[0]?.job;
     const selected = snapshot?.jobs?.findIndex(job => job.job === this.jobId) ?? -1;
-    for (const row of activityRows(snapshot, selected)) {
+    if (this.activityMode === "helpers" && this.helperRequest === undefined) this.helperRequest = snapshot?.helpers?.[0]?.request;
+    for (const row of activityRows(snapshot, selected, Date.now(), this.activityMode, this.helperRequest)) {
       const line = row.text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
-      const wrapped = new Text(this.ui ? this.ui.theme.fg(row.color ?? "muted", line) : line, 0, 0).render(width);
-      const id = row.job === undefined ? undefined : snapshot?.jobs?.[row.job]?.job;
-      if (id) { for (let i = 0; i < wrapped.length; i++) this.jobHits.set(rows.length + i, id); }
+      const wrapped = line === "" ? [""] : new Text(this.ui ? this.ui.theme.fg(row.color ?? "text", line) : line, 0, 0).render(width);
+      for (let i = 0; i < wrapped.length; i++) {
+        const id = row.job === undefined ? undefined : snapshot?.jobs?.[row.job]?.job;
+        if (id) this.jobHits.set(rows.length + i, id);
+        if (row.helper !== undefined) this.helperHits.set(rows.length + i, row.helper);
+        if (row.mode !== undefined) this.activityModes.set(rows.length + i, row.mode);
+      }
       rows.push(...wrapped);
     }
     return rows;
@@ -404,6 +428,7 @@ export class NativeWorkbench {
     if (this.view === "activity" && (data === "g" || data === "l")) { this.setView(data === "g" ? "graph" : "timeline"); return true; }
     if ((this.view === "graph" || this.view === "timeline") && this.lifecycle.handleInput(data)) { this.lifecycleScroll?.scrollTo(0, { disableFollow: true }); return true; }
     if (this.view === "inbox" && this.inboxView.handleInput(data)) return true;
+    if (this.view === "activity" && data === "h") { this.switchActivity(this.activityMode === "jobs" ? "helpers" : "jobs"); return true; }
     if (matchesKey(data, "enter") || matchesKey(data, "tab")) { this.focused = false; this.options.changed(); return true; }
     if (this.view === "activity" && data === "a") { this.setView("agents"); return true; }
     if (this.view === "agents" && data === "b") { this.setView("activity"); return true; }
@@ -425,6 +450,11 @@ export class NativeWorkbench {
       else if (this.view === "agents") {
         const agents = this.options.snapshot()?.agents ?? [], index = agents.findIndex(agent => agent.id === this.agentId);
         this.agentId = agents[Math.max(0, Math.min(agents.length - 1, index + (data === "j" ? 1 : -1)))]?.id;
+      }
+      else if (this.activityMode === "helpers") {
+        const helpers = this.options.snapshot()?.helpers ?? [];
+        const from = helpers.findIndex(helper => helper.request === this.helperRequest);
+        this.helperRequest = helpers[Math.max(0, Math.min(helpers.length - 1, from + (data === "j" ? 1 : -1)))]?.request;
       }
       else {
         const jobs = this.options.snapshot()?.jobs ?? [], index = jobs.findIndex(job => job.job === this.jobId);

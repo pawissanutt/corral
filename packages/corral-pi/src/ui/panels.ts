@@ -266,6 +266,8 @@ export class NativePanels implements PanelSurface {
         this.choose("Files"); this.focused = false;
         void this.workbench.openFile(action.path); this.refresh(); return;
       }
+      case "helpers": this.focused = false; this.workbench.openHelpers(); this.refresh(); return;
+      case "helper": this.focused = false; this.workbench.openHelpers(action.request); this.refresh(); return;
       case "scope": void this.workbench.repository(); return;
       case "files": this.focused = true; this.choose("Files"); return;
       default: {
@@ -417,10 +419,11 @@ export class NativePanels implements PanelSurface {
     pi.on("thinking_level_select", () => { this.refresh(); });
     pi.on("tool_result", () => { this.workbench.invalidateFiles(); this.refresh(); });
     pi.registerCommand("panels", {
-      description: "Native session inspector: context, files, agents, jobs, plan, evidence, usage, inbox, refresh or toggle",
+      description: "Native session inspector: context, files, agents, jobs, helpers, plan, evidence, usage, inbox, project, refresh or toggle",
       handler: async (args, ctx) => {
         if (ctx.mode !== "tui" || !this.terminal) { ctx.ui.notify("Native panels require the interactive Corral host.", "warning"); return; }
         const value = args.trim().toLowerCase();
+        if (value === "helpers") { this.focused = false; this.workbench.openHelpers(); this.refresh(); return; }
         if (value === "project") { await this.workbench.repository(); this.refresh(); return; }
         if (value === "agents") { this.choose("Agents"); this.focused = false; this.refresh(); return; }
         if (value === "jobs") { this.focused = false; this.workbench.setView("activity"); this.refresh(); return; }
