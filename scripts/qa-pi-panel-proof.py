@@ -36,6 +36,10 @@ proc: subprocess.Popen[bytes] | None = None
 selector = selectors.DefaultSelector()
 log = bytearray()
 states = []
+scenes = []
+resizes = []
+size = dict(columns=140, rows=46)
+candidate = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip()
 try:
     env = {key: value for key, value in os.environ.items() if not key.startswith(('HERDR_', 'CORRAL_', 'PI_'))}
     env.update(HOME=str(work / 'home'), XDG_CONFIG_HOME=str(work / 'config'), XDG_DATA_HOME=str(work / 'data'),
@@ -126,11 +130,14 @@ try:
     def save_frame(name, after=0):
         until(lambda: len(log) > after and log.endswith(b'\x1b[?2026l'), 'complete synchronized terminal frame')
         (args.output / (name + '.ansi')).write_bytes(log)
+        scenes.append(dict(name=name, bytes=len(log), **size))
 
     def text(value, after=0): return value.encode() in log[after:]
     def send(value): os.write(master, value)
 
     def resize(columns, rows):
+        resizes.append(dict(offset=len(log), columns=columns, rows=rows))
+        size.update(columns=columns, rows=rows)
         fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
         os.kill(host.pid, signal.SIGWINCH)
 
@@ -260,7 +267,8 @@ try:
     if host.returncode != 0: raise AssertionError('host exit ' + str(host.returncode))
     (args.output / 'pty-session.ansi').write_bytes(log)
     (args.output / 'bridge-states.json').write_text(json.dumps(states, indent=2))
-    result = dict(status='PASS', production_entrypoint='src/host/main.ts', provider='offline fixture transport and fake control plane',
+    result = dict(status='PASS', candidate=candidate, initial_size=dict(columns=140, rows=46), scenes=scenes, resizes=resizes,
+                  production_entrypoint='src/host/main.ts', provider='offline fixture transport and fake control plane',
                   checks=['SGR pointer opens native model picker; Escape retains draft', 'SGR pointer cycles supported effort in the same session',
                           'read tool call and held first delta render in the 140-column panel layout', 'stock Ctrl+O expands real tool output',
                           'bridge get_state: same generation and bound/current session while streaming, inspecting and at 80/52/140 columns',
