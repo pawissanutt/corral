@@ -214,17 +214,18 @@ corral agent doctor
 digest; re-run it after replacing `corral-pi-host` by hand. Anthropic profiles also need
 the `claude` CLI (Claude Code) on PATH.
 
-From a checkout (contributors, or a binary built with `cargo install`), the host runs from
-source on a Bun inside the tested range its `compat.json` records (currently exactly 1.4.2):
+For a binary built with `cargo install` from a checkout that still exists, `corral agent install`
+rebuilds the compiled host from that checkout using Bun (currently exactly 1.4.2), atomically
+replaces the sibling host, and installs it. If checkout HEAD differs from the binary's build
+commit, reinstall corral with `cargo install` or explicitly select a host with `--from`.
+Use `--no-build` to retain the sibling-first behavior. To install the package as source instead:
 
 ```sh
 corral agent install --from <corral checkout>/packages/corral-pi
 ```
 
-That copies the package and runs `bun install --frozen-lockfile` in the copy. A binary
-built from a checkout defaults `--from` to that checkout's `packages/corral-pi` when no
-`corral-pi-host` sits beside it. `scripts/build-pi-host.sh <out>` builds the release host
-locally. Neither install nor login touches `~/.codex`, `~/.claude` or another agent's
+That copies the package and runs `bun install --frozen-lockfile` in the copy.
+`scripts/build-pi-host.sh <out>` builds the release host locally. Neither install nor login touches `~/.codex`, `~/.claude` or another agent's
 store.
 
 ## Contributors

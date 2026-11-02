@@ -769,7 +769,8 @@ Install the Pi-native host assets into the user data directory
 Usage: corral agent install [OPTIONS]
 
 Options:
-      --from <FROM>  Package directory, or a compiled corral-pi-host, to install from (default: the corral-pi-host beside this corral, else this build's checkout)
+      --from <FROM>  Package directory or compiled corral-pi-host to install from
+      --no-build     Use the sibling host instead of rebuilding from the source checkout
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
       --json         
   -h, --help         Print help
