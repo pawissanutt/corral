@@ -27,8 +27,11 @@ const review = z.object({
   id: z.string(), started: timestamp, ended: timestamp.nullish(),
   agent: z.string(), usage: usage.nullish(), agent_host: host.nullish(),
 });
+// Read-only alias for measured run records created before the harness rename.
+const harness = z.enum(["omo", "corral-pi", "pi-native"])
+  .transform((value) => value === "pi-native" ? "corral-pi" as const : value);
 export const runSchema = z.object({
-  id: z.string(), harness: z.enum(["omo", "corral-pi"]),
+  id: z.string(), harness,
   model: z.string(), effort: z.string(), base_sha: z.string().min(1),
   started: timestamp, usage: usage.nullish(),
   review: z.object({ reviewer: z.string(), verdict: z.string().nullish() }).nullish(),
@@ -61,13 +64,21 @@ const arm = z.object({
   event_surface: z.enum(["log_all", "export_events"]),
   before: snapshot, after: snapshot,
 }).strict();
-export const pairSchema = z.object({
+export const pairSchema = z.preprocess((value) => {
+  // Historical comparison manifests retain the old arm key; parsed output is canonical.
+  if (value && typeof value === "object" && !Array.isArray(value)
+    && "pi_native" in value && !("corral_pi" in value)) {
+    const { pi_native, ...rest } = value;
+    return { ...rest, corral_pi: pi_native };
+  }
+  return value;
+}, z.object({
   id: z.string().min(1), expected_tokens: count.positive(),
   source_task: z.string().min(1),
   selection: z.string().min(1),
-  order: z.array(z.enum(["omo", "corral-pi"])).length(2),
+  order: z.array(harness).length(2),
   omo: arm, corral_pi: arm,
-}).strict();
+}).strict());
 export const manifestSchema = z.object({
   version: z.literal(1), seed: z.string().min(1),
   data_kind: z.enum(["synthetic", "measured"]),
