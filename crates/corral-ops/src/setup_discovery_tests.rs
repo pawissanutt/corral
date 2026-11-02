@@ -108,8 +108,8 @@ fn empty_inventory_when_config_has_no_harnesses() {
 }
 
 #[test]
-fn pi_native_is_reported_ready_with_its_vendors_and_efforts() {
-    // Given a config that does not name pi-native, and a host the doctor reports ready.
+fn corral_pi_is_reported_ready_with_its_vendors_and_efforts() {
+    // Given a config that does not name corral-pi, and a host the doctor reports ready.
     let mut config = Config::default_for(std::path::Path::new("/nonexistent"));
     config.harnesses.clear();
     config.agents.clear();
@@ -125,7 +125,7 @@ fn pi_native_is_reported_ready_with_its_vendors_and_efforts() {
     let entry = report
         .harnesses
         .iter()
-        .find(|h| h.key == "pi-native")
+        .find(|h| h.key == "corral-pi")
         .unwrap();
     assert!(entry.installed && entry.models.is_empty());
     assert_eq!(entry.vendors, vec!["openai".to_owned()]);
@@ -134,13 +134,13 @@ fn pi_native_is_reported_ready_with_its_vendors_and_efforts() {
 }
 
 #[test]
-fn pi_native_carries_the_models_its_host_listed() {
+fn corral_pi_carries_the_models_its_host_listed() {
     // Given a ready host whose detection listed provider-qualified models.
     let mut config = Config::default_for(std::path::Path::new("/nonexistent"));
     config.harnesses.clear();
     config.agents.clear();
     let probed = crate::HarnessInfo {
-        key: "pi-native".into(),
+        key: "corral-pi".into(),
         program: None,
         path: Some("/bin/bun".into()),
         version: Some("1.3.0".into()),
@@ -162,15 +162,15 @@ fn pi_native_carries_the_models_its_host_listed() {
     let entry = report
         .harnesses
         .iter()
-        .find(|h| h.key == "pi-native")
+        .find(|h| h.key == "corral-pi")
         .unwrap();
     assert_eq!(entry.models, vec!["openai-codex/gpt-6.1-sol".to_owned()]);
     report.validate().unwrap();
 }
 
 #[test]
-fn pi_native_is_listed_unready_only_when_configured() {
-    // Given an unready host and a config that opts in through a pi-native harness.
+fn corral_pi_is_listed_unready_only_when_configured() {
+    // Given an unready host and a config that opts in through a corral-pi harness.
     let mut config = Config::default_for(std::path::Path::new("/nonexistent"));
     config.harnesses.clear();
     config.agents.clear();
@@ -186,7 +186,7 @@ fn pi_native_is_listed_unready_only_when_configured() {
         .is_empty()
     );
     config.harnesses.insert(
-        "pi-native".into(),
+        "corral-pi".into(),
         corral_core::Harness {
             command: "{corral} agent launch {delivery_args}".into(),
             flags: None,
@@ -203,7 +203,7 @@ fn pi_native_is_listed_unready_only_when_configured() {
     let entries: Vec<_> = report
         .harnesses
         .iter()
-        .filter(|h| h.key == "pi-native")
+        .filter(|h| h.key == "corral-pi")
         .collect();
     assert_eq!(entries.len(), 1);
     assert!(!entries[0].installed);

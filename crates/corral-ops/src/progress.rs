@@ -174,7 +174,7 @@ pub fn update_progress(ctx: &Ctx, id: &str, input: &ProgressUpdate) -> Result<Ta
     progress_inner(ctx, id, input, None).map(|(task, _)| task)
 }
 
-/// The Pi-native `progress` op: its receipt commits in the progress write.
+/// The corral-pi `progress` op: its receipt commits in the progress write.
 pub fn update_progress_request(
     ctx: &Ctx,
     id: &str,
@@ -226,7 +226,7 @@ pub fn save_checkpoint(ctx: &Ctx, id: &str, input: &CheckpointUpdate) -> Result<
     checkpoint_inner(ctx, id, input, None).map(|(task, _)| task)
 }
 
-/// The Pi-native `checkpoint` op: its receipt commits with the checkpoint record.
+/// The corral-pi `checkpoint` op: its receipt commits with the checkpoint record.
 pub fn save_checkpoint_request(
     ctx: &Ctx,
     id: &str,

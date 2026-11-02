@@ -30,7 +30,7 @@ test("a preceding Pi pane records a crash in its own fixture state", async () =>
     const state = join(assets.dir, "pi-state");
     writeFileSync(join(state, "crashes.json"), JSON.stringify([{ timestamp: new Date().toISOString(), message: "planted previous crash" }]));
     const config = join(workspace, ".corral/corral.toml");
-    writeFileSync(config, `${readFileSync(config, "utf8")}\n[profiles.pi]\nharness = "pi-native"\nmodel = "gpt-6.1-sol"\nvendor = "openai"\n[agent]\nassets_dir = ${JSON.stringify(assets.dir)}\n`);
+    writeFileSync(config, `${readFileSync(config, "utf8")}\n[profiles.pi]\nharness = "corral-pi"\nmodel = "gpt-6.1-sol"\nvendor = "openai"\n[agent]\nassets_dir = ${JSON.stringify(assets.dir)}\n`);
     cli("new", "Crash fixture worker", "-p", "app", "--ready");
     cli("dispatch", "T-001", "--profile", "pi", "--force");
     const launched = JSON.parse(cli("show", "T-001", "--json")).runs.at(-1);
@@ -74,7 +74,7 @@ export default { ...auth, transport() { const transport = fixtureTransport(); re
   return transport.send(input, init);
 }; } };`);
     const config = join(workspace, ".corral/corral.toml");
-    writeFileSync(config, `${readFileSync(config, "utf8")}\n[profiles.pi]\nharness = "pi-native"\nmodel = "gpt-6.1-sol"\nvendor = "openai"\n[agent]\nassets_dir = ${JSON.stringify(assets.dir)}\n`);
+    writeFileSync(config, `${readFileSync(config, "utf8")}\n[profiles.pi]\nharness = "corral-pi"\nmodel = "gpt-6.1-sol"\nvendor = "openai"\n[agent]\nassets_dir = ${JSON.stringify(assets.dir)}\n`);
     cli("new", "Finish fixture worker", "-p", "app", "--ready");
     events = await EventFollower.open(workspace);
     const kickoff = events.next(e => e.kind === "agent_turn_ended" && e.task === "T-001", 90_000, "kickoff");

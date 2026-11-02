@@ -1,4 +1,4 @@
-// Question-answer cross-lane fixture (T-489): the real corral binary dispatches a pi-native run onto
+// Question-answer cross-lane fixture (T-489): the real corral binary dispatches a corral-pi run onto
 // the package's production worker role and real delivery module, with the provider scripted from a
 // steps file, in the private plugin-free herdr server of scripts/test-herdr.sh. The kickoff turn asks
 // a real question through corral_ask; the owner then types /new into the pane, which the bound host
@@ -89,7 +89,7 @@ export default {
   const config = join(workspace, ".corral/corral.toml");
   writeFileSync(config, `${readFileSync(config, "utf8")}
 [profiles.pi]
-harness = "pi-native"
+harness = "corral-pi"
 model = "gpt-6.1-sol"
 vendor = "openai"
 effort = "high"
@@ -151,10 +151,10 @@ test("a question answered after the owner's refused /new is observed from the or
   // Then corral observed that answer member from the transcript hello bound, in the bound session:
   const receipt = requireReceipt(workspace, container ?? "", Number(seq));
   expect(receipt).toBeDefined();
-  expect(receipt.via).toBe("pi_native");
+  expect(receipt.via).toBe("corral_pi");
   const envelope = inboxEnvelopes(workspace, container ?? "")
     .find(candidate => candidate.payload.includes("Use the inbox adapter."))!;
-  expect(envelope.adapter).toBe("pi_native");
+  expect(envelope.adapter).toBe("corral_pi");
   expect(envelope.binding.transcript).toBe(binding.session_file);
   const session = readFileSync(binding.session_file, "utf8").trim().split("\n").map((line) => JSON.parse(line));
   const written = session.find((entry) => entry.id === receipt.detail.entry_id);

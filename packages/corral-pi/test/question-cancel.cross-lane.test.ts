@@ -35,7 +35,7 @@ test("CLI cancel releases a live worker's blocking question without another turn
     const config = join(root, ".corral/corral.toml");
     writeFileSync(config, readFileSync(config, "utf8") + `
 [profiles.pi]
-harness = "pi-native"
+harness = "corral-pi"
 model = "gpt-6.1-sol"
 vendor = "openai"
 [agent]

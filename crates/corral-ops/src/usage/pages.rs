@@ -39,7 +39,7 @@ pub fn transcript_page(
 }
 
 fn page(run: &Run, store: &Store, first: usize, last: usize) -> Result<String> {
-    let (paths, searched, bound) = if crate::agent::hooks::run_is_pi_native(run) {
+    let (paths, searched, bound) = if crate::agent::hooks::run_is_corral_pi(run) {
         let mut paths = Vec::new();
         if let Some(state) = run.agent_host.as_deref() {
             for bound in state.generations.iter().filter_map(|g| g.bound.as_ref()) {

@@ -64,6 +64,7 @@ pub struct Config {
     pub routing: crate::Routing,
     /// Harness key -> how to launch it (command template + model/effort flag map).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(with = "crate::harness_compat::keys")]
     pub harnesses: BTreeMap<String, Harness>,
     /// Profile key -> named harness + model + effort preset.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -83,7 +84,7 @@ pub struct Config {
         skip_serializing_if = "crate::assistant::AssistantCfg::is_default"
     )]
     pub assistant: crate::assistant::AssistantCfg,
-    /// `[agent]`: Pi-native host settings; they apply only to pi-native runs.
+    /// `[agent]`: corral-pi host settings; they apply only to corral-pi runs.
     #[serde(default, skip_serializing_if = "AgentCfg::is_default")]
     pub agent: AgentCfg,
     /// Opt-in lesson distillation schedule and dispatch selection.

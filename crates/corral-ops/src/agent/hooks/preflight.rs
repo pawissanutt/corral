@@ -1,4 +1,4 @@
-//! The dispatch, review-run and pm-open preflight for pi-native profiles (F6), owned by
+//! The dispatch, review-run and pm-open preflight for corral-pi profiles (F6), owned by
 //! integration-seams. It refuses before any worktree, pane or bootstrap exists, naming the
 //! missing piece and the T-252 child that supplies it. Later children make it pass by adding
 //! modules to the asset directory, never by editing this check.
@@ -8,7 +8,7 @@ use anyhow::Result;
 use corral_core::agent::AgentRole;
 use corral_core::{ResolvedProfile, RouteDecision};
 
-use super::{consulted, is_pi_native};
+use super::{consulted, is_corral_pi};
 use crate::Ctx;
 
 /// A preflight refusal: a stable code plus what is missing and who supplies it.
@@ -22,7 +22,7 @@ impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "pi-native preflight refused: {}: {}",
+            "corral-pi preflight refused: {}: {}",
             self.code, self.detail
         )
     }
@@ -45,22 +45,22 @@ pub fn role_owner(role: AgentRole) -> &'static str {
     }
 }
 
-/// A dispatch route: resolved only when its harness is pi-native.
+/// A dispatch route: resolved only when its harness is corral-pi.
 pub fn route(ctx: &Ctx, role: AgentRole, route: &RouteDecision) -> Result<()> {
-    if !is_pi_native(&route.harness) {
+    if !is_corral_pi(&route.harness) {
         return Ok(());
     }
     check(ctx, role, &ctx.store.config.resolve_route(route)?)
 }
 
-/// Refuses a pi-native profile whose vendor, assets, GO manifest or modules are missing.
+/// Refuses a corral-pi profile whose vendor, assets, GO manifest or modules are missing.
 pub fn check(ctx: &Ctx, role: AgentRole, resolved: &ResolvedProfile) -> Result<()> {
-    if !is_pi_native(&resolved.harness) {
+    if !is_corral_pi(&resolved.harness) {
         return Ok(());
     }
     consulted("preflight");
-    corral_core::check_pi_native_vendor(&resolved.profile, resolved.vendor.as_deref())?;
-    corral_core::check_pi_native_metered_opt_in(
+    corral_core::check_corral_pi_vendor(&resolved.profile, resolved.vendor.as_deref())?;
+    corral_core::check_corral_pi_metered_opt_in(
         &resolved.profile,
         ctx.store
             .config
@@ -76,7 +76,7 @@ pub fn check(ctx: &Ctx, role: AgentRole, resolved: &ResolvedProfile) -> Result<(
             refuse(
                 "assets_unavailable",
                 format!(
-                    "no pi-native asset installation; set [agent] assets_dir or install one \
+                    "no corral-pi asset installation; set [agent] assets_dir or install one \
                      (owner {})",
                     super::super::install::OWNER
                 ),
@@ -142,7 +142,7 @@ pub fn metered_notice(
     resolved: &ResolvedProfile,
     binding: &super::super::aws_profile::AwsBinding,
 ) -> Option<String> {
-    (is_pi_native(&resolved.harness) && resolved.vendor.as_deref() == Some("amazon-bedrock")).then(
+    (is_corral_pi(&resolved.harness) && resolved.vendor.as_deref() == Some("amazon-bedrock")).then(
         || {
             format!(
                 "metered: {role} profile {} runs on Amazon Bedrock (per-token AWS billing; \
@@ -238,7 +238,7 @@ pub(crate) fn host_vendors(dir: &Path) -> Vec<String> {
 }
 
 fn allowed(declared: &[String]) -> Vec<String> {
-    corral_core::PI_NATIVE_VENDORS
+    corral_core::CORRAL_PI_VENDORS
         .iter()
         .filter(|vendor| declared.iter().any(|d| d == *vendor))
         .map(|vendor| (*vendor).to_owned())
@@ -259,7 +259,7 @@ fn host_provider(dir: &Path, vendor: Option<&str>) -> Result<(), Refusal> {
     Err(refuse(
         "provider_unsupported_by_host",
         format!(
-            "vendor '{vendor}' is allowed for pi-native profiles but the installed host declares \
+            "vendor '{vendor}' is allowed for corral-pi profiles but the installed host declares \
              providers [{}] in {}/compat.json; use a supported vendor or install a host that \
              declares '{vendor}'",
             declared.join(", "),

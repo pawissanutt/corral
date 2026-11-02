@@ -291,7 +291,7 @@ fn prepared_planner_launch_child() {
     .dir(&fx.ctx)
     .unwrap();
     let run = serde_json::from_value(json!({
-        "id":"D1", "profile":"bedrock", "harness":"pi-native", "model":MODEL, "delivery":"inbox",
+        "id":"D1", "profile":"bedrock", "harness":"corral-pi", "model":MODEL, "delivery":"inbox",
         "vendor":"amazon-bedrock", "effort":null,
         "execution":ExecutionSnapshot::new(&fx.ctx.store.config, resolved),
         "route":corral_core::RouteSource::Override,

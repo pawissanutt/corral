@@ -1,4 +1,4 @@
-//! Sync seam: one hook call per task that holds pi-native work, and one per open container
+//! Sync seam: one hook call per task that holds corral-pi work, and one per open container
 //! inside it. It persists F4 question terminalization, owner deadlines, the unattended rule,
 //! gate reservations and uncertain gate starts, due wakes and run-end cleanup. It reports each
 //! open container's binding health, so sync leaves `idle_no_report` unset for a healthy host,
@@ -23,7 +23,7 @@ use super::super::bridge::liveness::{LossReason, Probe};
 use corral_core::{Run, Status, Task, TaskRef};
 use jiff::Timestamp;
 
-use super::{consulted, run_is_pi_native};
+use super::{consulted, run_is_corral_pi};
 use crate::Ctx;
 
 /// The watchdog needs the current native generation, which compatibility shells omit.
@@ -43,7 +43,7 @@ pub(crate) fn watchdog_run(head: &corral_core::TaskHead, run: &Run) -> Result<Ru
     Ok(projected)
 }
 
-/// One open pi-native container and whether its host binding is healthy.
+/// One open corral-pi container and whether its host binding is healthy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContainerSync {
     pub container: ContainerRef,
@@ -72,18 +72,18 @@ impl TaskSync {
     }
 }
 
-/// Every pi-native worker run and review child of the task, open or closed.
+/// Every corral-pi worker run and review child of the task, open or closed.
 fn containers(task: &Task) -> Vec<(ContainerRef, &Run)> {
     let mut out = Vec::new();
     for run in &task.runs {
-        if run_is_pi_native(run) {
+        if run_is_corral_pi(run) {
             let worker = ContainerRef::Worker {
                 task: task.id.clone(),
                 run: run.id.clone(),
             };
             out.push((worker, run));
         }
-        for child in run.review_runs.iter().filter(|c| run_is_pi_native(c)) {
+        for child in run.review_runs.iter().filter(|c| run_is_corral_pi(c)) {
             let reviewer = ContainerRef::Reviewer {
                 task: task.id.clone(),
                 run: run.id.clone(),
@@ -174,7 +174,7 @@ pub(crate) fn task_id(ctx: &Ctx, id: &str, now: Timestamp) -> Result<TaskSync> {
                 })
                 .map(|question| {
                     format!(
-                        "Pi-native question {} needs you: {}",
+                        "corral-pi question {} needs you: {}",
                         question.key, question.text
                     )
                 });
@@ -378,7 +378,7 @@ fn probe_one(ctx: &Ctx, recipient: &Recipient, container: &ContainerRef, state: 
     }
 }
 
-/// Once per sync pass: the PM wake outbox and the PM's host, while a Pi-native PM record exists,
+/// Once per sync pass: the PM wake outbox and the PM's host, while a corral-pi PM record exists,
 /// and the host of every open assistant session.
 pub fn pass(ctx: &Ctx) -> Result<()> {
     if pm_state::load(&ctx.store)?.is_some() {
@@ -409,8 +409,8 @@ pub fn pass(ctx: &Ctx) -> Result<()> {
 
 /// The Needs me excerpt prefixes of a live worker whose host is lost or whose provider
 /// authentication failed; `settle_lost` releases them once the cause is gone.
-pub const LOST_PREFIX: &str = "Pi-native host lost: ";
-pub const AUTH_PREFIX: &str = "Pi-native provider authentication failed: ";
+pub const LOST_PREFIX: &str = "corral-pi host lost: ";
+pub const AUTH_PREFIX: &str = "corral-pi provider authentication failed: ";
 
 /// Why the task's live worker needs the owner: its host is lost (resume, retry or discard), or
 /// its latest turn failed provider authentication (`corral agent login`, never a paid fallback).

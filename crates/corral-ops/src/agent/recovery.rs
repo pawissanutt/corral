@@ -78,13 +78,13 @@ pub fn resolve(ctx: &Ctx, target: &AgentTarget) -> Result<ContainerRef> {
 
 fn snapshot(ctx: &Ctx, container: &ContainerRef) -> Result<(AgentRunState, Option<Task>)> {
     let Some(id) = container.task() else {
-        let pm = pm_state::load(&ctx.store)?.context("no Pi-native PM is bound")?;
+        let pm = pm_state::load(&ctx.store)?.context("no corral-pi PM is bound")?;
         return Ok((pm.state, None));
     };
     let task = ctx.store.get(id)?;
     let state = agent::container_state(&task, container)
         .cloned()
-        .with_context(|| format!("{} has no Pi-native binding", container.key()))?;
+        .with_context(|| format!("{} has no corral-pi binding", container.key()))?;
     Ok((state, Some(task)))
 }
 
@@ -158,7 +158,7 @@ fn relaunch(ctx: &Ctx, container: &ContainerRef, state: &AgentRunState) -> Resul
     let generation = state.current_generation();
     let launched = generation.map(|g| g.pane.clone());
     let Some(task) = container.task() else {
-        let pm = pm_state::load(&ctx.store)?.context("no Pi-native PM is bound")?;
+        let pm = pm_state::load(&ctx.store)?.context("no corral-pi PM is bound")?;
         return Ok(Relaunch {
             pane: launched.unwrap_or(pm.pane),
             target: None,
@@ -729,7 +729,7 @@ fn update_due(receipt: &RequestReceipt) -> bool {
     receipt.recovery_update_due()
 }
 
-/// Every pi-native container of the task with a receipt owed its one `recovery_update`.
+/// Every corral-pi container of the task with a receipt owed its one `recovery_update`.
 fn due_updates<T: TaskRef + ?Sized>(task: &T) -> Result<Vec<(ContainerRef, String)>> {
     let mut due = Vec::new();
     for container in task.unfinished_native_containers()? {

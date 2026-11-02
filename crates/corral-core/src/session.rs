@@ -35,9 +35,11 @@ pub struct RoleSession {
     pub id: Option<String>,
     pub transcript: Option<PathBuf>,
     pub directory: PathBuf,
+    #[serde(with = "crate::harness_compat::string")]
     pub harness: String,
     /// Frozen CLI flag family, independent of later harness configuration edits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(with = "crate::harness_compat::optional")]
     pub adapter: Option<String>,
     pub model: Option<String>,
     pub vendor: Option<String>,

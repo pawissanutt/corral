@@ -79,7 +79,7 @@ fn worker(ctx: &Ctx, container: &ContainerRef) -> Result<Worker> {
         .agent_host
         .as_deref()
         .cloned()
-        .with_context(|| format!("{} has no Pi-native binding", container.key()))?;
+        .with_context(|| format!("{} has no corral-pi binding", container.key()))?;
     Ok(Worker {
         task: task.clone(),
         run: run.clone(),

@@ -1,4 +1,4 @@
-// The Pi-native reviewer role (T-252 reviewer-role): upstream read, grep, find, ls and bash, with
+// The corral-pi reviewer role (T-252 reviewer-role): upstream read, grep, find, ls and bash, with
 // no edit or write tool, plus corral_ask, corral_withdraw, corral_evidence, corral_artifact and
 // corral_verdict, and the reviewer contract from the installed assets. Each review child starts
 // its current request after hello, even in a retained conversation. An observed attempt is not

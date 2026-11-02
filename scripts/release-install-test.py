@@ -104,7 +104,7 @@ def verify(dist: Path, target: str) -> None:
                     assert result.stdout.strip() == f"corral {version}", result.stdout
                     if windows:
                         return
-                    # The compiled Pi-native host installed beside corral and registered by
+                    # The compiled corral-pi host installed beside corral and registered by
                     # `corral agent install`, with no Bun on PATH.
                     host = installed.with_name("corral-pi-host")
                     probe = subprocess.run(
@@ -112,7 +112,7 @@ def verify(dist: Path, target: str) -> None:
                         capture_output=True, text=True, timeout=60, check=True,
                     )
                     assert probe.stdout.startswith("corral-pi-host pi "), probe.stdout
-                    data = Path(environment["XDG_DATA_HOME"]) / "corral" / "pi-native"
+                    data = Path(environment["XDG_DATA_HOME"]) / "corral" / "corral-pi"
                     record = json.loads((data / "installed.json").read_text())
                     assert (Path(record["path"]) / "corral-pi-host").is_file(), record
                     assert (Path(record["path"]) / "compat.json").is_file(), record

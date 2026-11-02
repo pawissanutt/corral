@@ -1,4 +1,4 @@
-//! Which pi-native assets an assistant session runs (T-653). A generation's contract and tool
+//! Which corral-pi assets an assistant session runs (T-653). A generation's contract and tool
 //! descriptions are fixed when it launches, from the assets its bootstrap named; the owner-action
 //! kinds are decided by the installed `corral` at every call. This readback sets the two side by
 //! side, so a session that predates the installed assets says so instead of guessing.
@@ -74,7 +74,7 @@ impl HostAssets {
         let installed = match (&self.installed_sha256, &self.installed_error) {
             (Some(digest), _) => format!("installed {}", short(digest)),
             (None, Some(error)) => format!("installed assets unknown ({error})"),
-            (None, None) => "no pi-native installation".to_owned(),
+            (None, None) => "no corral-pi installation".to_owned(),
         };
         if self.generation == 0 {
             return format!("host: no generation yet; {installed}");

@@ -674,9 +674,9 @@ fn failed_discovery_warns_and_allows_routing_and_dispatch() {
 }
 
 #[cfg(unix)]
-/// pi-native profiles over a harness report where the installed host listed both providers'
+/// corral-pi profiles over a harness report where the installed host listed both providers'
 /// offline catalogs (fixture listing output, no live provider).
-fn pi_native_ws() -> Ws {
+fn corral_pi_ws() -> Ws {
     let mut profiles = String::new();
     for (name, vendor, model) in [
         ("pi-typo", "openai", "openai-codex/gpt-6.1-sl"),
@@ -692,7 +692,7 @@ fn pi_native_ws() -> Ws {
         ),
     ] {
         profiles.push_str(&format!(
-            "[profiles.{name}]\nharness = 'pi-native'\nvendor = '{vendor}'\nmodel = '{model}'\n"
+            "[profiles.{name}]\nharness = 'corral-pi'\nvendor = '{vendor}'\nmodel = '{model}'\n"
         ));
     }
     let ws = routing_ws(&profiles);
@@ -707,7 +707,7 @@ fn pi_native_ws() -> Ws {
         .as_array_mut()
         .expect("harnesses")
         .push(serde_json::json!({
-            "key": "pi-native",
+            "key": "corral-pi",
             "program": null,
             "path": "/fixture/bun",
             "version": "1.3.0",
@@ -726,16 +726,16 @@ fn pi_native_ws() -> Ws {
 
 #[cfg(unix)]
 #[test]
-fn a_misspelled_pi_native_model_gets_close_matches_from_its_listed_catalog() {
-    // Given an OpenAI pi-native profile with a typo, and both providers listed.
-    let ws = pi_native_ws();
+fn a_misspelled_corral_pi_model_gets_close_matches_from_its_listed_catalog() {
+    // Given an OpenAI corral-pi profile with a typo, and both providers listed.
+    let ws = corral_pi_ws();
     // When it is dispatched.
     let out = dispatch_with_herdr(&ws.root, &["--profile", "pi-typo"]);
     // Then its provider's listed models reject the typo with close matches, not as unverified.
     let error = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
     assert!(
-        error.contains("not an exact discovered model ID for harness 'pi-native'"),
+        error.contains("not an exact discovered model ID for harness 'corral-pi'"),
         "{error}"
     );
     assert!(
@@ -753,8 +753,8 @@ fn a_misspelled_pi_native_model_gets_close_matches_from_its_listed_catalog() {
 
 #[cfg(unix)]
 #[test]
-fn bare_and_qualified_pi_native_ids_of_the_profiles_provider_pass_model_checks() {
-    let ws = pi_native_ws();
+fn bare_and_qualified_corral_pi_ids_of_the_profiles_provider_pass_model_checks() {
+    let ws = corral_pi_ws();
     for profile in [
         "pi-openai",
         "pi-openai-bare",
@@ -769,7 +769,7 @@ fn bare_and_qualified_pi_native_ids_of_the_profiles_provider_pass_model_checks()
         .expect("route json");
         let out = dispatch_with_herdr(&ws.root, &["--profile", profile]);
         // Then neither the route nor the final dispatch validation rejects the model; dispatch
-        // stops later, at the pi-native preflight of this fixture without an installation.
+        // stops later, at the corral-pi preflight of this fixture without an installation.
         assert_eq!(
             route["warnings"],
             serde_json::json!([]),
@@ -782,7 +782,7 @@ fn bare_and_qualified_pi_native_ids_of_the_profiles_provider_pass_model_checks()
             "{profile}: {error}"
         );
         assert!(
-            error.contains("pi-native preflight refused"),
+            error.contains("corral-pi preflight refused"),
             "{profile}: {error}"
         );
         assert!(!ws.root.join("launch").exists());
@@ -791,8 +791,8 @@ fn bare_and_qualified_pi_native_ids_of_the_profiles_provider_pass_model_checks()
 
 #[cfg(unix)]
 #[test]
-fn a_pi_native_profile_rejects_the_other_providers_models() {
-    let ws = pi_native_ws();
+fn a_corral_pi_profile_rejects_the_other_providers_models() {
+    let ws = corral_pi_ws();
     // Given profiles bound to one provider naming the other provider's listed selector:
     for (profile, own, other) in [
         (

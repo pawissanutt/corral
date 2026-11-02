@@ -285,8 +285,8 @@ fn fresh_install_writes_every_role_for_installed_harnesses_only() {
     std::fs::create_dir_all(home.join(".claude")).unwrap();
     for (harness, marker, skills) in SKILL_HARNESSES {
         let writes = corral_ops::ensure_skills(home, harness).unwrap();
-        if *harness == "pi-native" || home.join(marker).is_dir() {
-            let roles: &[&str] = if *harness == "pi-native" {
+        if *harness == "corral-pi" || home.join(marker).is_dir() {
+            let roles: &[&str] = if *harness == "corral-pi" {
                 &PI_SKILLS
             } else {
                 &ROLE_SKILLS
@@ -394,7 +394,7 @@ fn run_prompt_names_the_worker_skill() {
 }
 
 #[test]
-fn pi_native_prompt_lessons_follow_the_worker_lessons_capability() {
+fn corral_pi_prompt_lessons_follow_the_worker_lessons_capability() {
     // Given a project lesson that matches every run.
     let (tmp, mut ctx) = workspace();
     let task = task(&ctx);
@@ -411,15 +411,15 @@ fn pi_native_prompt_lessons_follow_the_worker_lessons_capability() {
     };
     // Then the default includes lessons for every harness.
     assert!(has_lessons(&ctx, "omp"));
-    assert!(has_lessons(&ctx, "pi-native"));
-    // When the worker opts out, only the pi-native prompt drops them; lesson storage is unchanged.
+    assert!(has_lessons(&ctx, "corral-pi"));
+    // When the worker opts out, only the corral-pi prompt drops them; lesson storage is unchanged.
     ctx.store
         .config
         .agent
         .capabilities
         .set(corral_core::agent::AgentRole::Worker, "lessons", false)
         .unwrap();
-    assert!(!has_lessons(&ctx, "pi-native"));
+    assert!(!has_lessons(&ctx, "corral-pi"));
     assert!(has_lessons(&ctx, "omp"));
     assert_eq!(ctx.store.lessons("app").unwrap().len(), 1);
 }

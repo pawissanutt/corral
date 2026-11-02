@@ -89,7 +89,7 @@ pub enum PmObservation {
         approval_ready: bool,
         notes_file: String,
     },
-    /// An open Pi-native question for the PM to answer with a basis, or escalate.
+    /// An open corral-pi question for the PM to answer with a basis, or escalate.
     AgentQuestion {
         task: String,
         key: String,
@@ -98,7 +98,7 @@ pub enum PmObservation {
         blocking: bool,
         text: String,
     },
-    /// A Pi-native question that waits on the owner: escalated, or unattended.
+    /// A corral-pi question that waits on the owner: escalated, or unattended.
     OwnerQuestion {
         task: String,
         key: String,

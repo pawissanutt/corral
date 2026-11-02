@@ -1,5 +1,5 @@
 // Recovery cross-lane fixture for upstream tools (T-252 recovery): the real corral binary dispatches
-// a pi-native run onto the package's production worker role, with the fixture provider scripted from
+// a corral-pi run onto the package's production worker role, with the fixture provider scripted from
 // a steps file, in the private plugin-free herdr server of scripts/test-herdr.sh. The real Bun host
 // is SIGKILLed inside an upstream edit, and its next generation inside a bash command whose child
 // process keeps running. Both block on a FIFO, so each kill lands inside the tool by rendezvous,
@@ -180,7 +180,7 @@ export default {
   const config = join(workspace, ".corral/corral.toml");
   writeFileSync(config, `${readFileSync(config, "utf8")}
 [profiles.pi]
-harness = "pi-native"
+harness = "corral-pi"
 model = "gpt-6.1-sol"
 vendor = "openai"
 effort = "high"

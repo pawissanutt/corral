@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::tests::{ask, messages, receipt, resume, run_recipient, state, sync};
 use super::*;
 use crate::agent::bridge::fixture::{self as f, Fx, HostProc, SESSION};
-use crate::agent::delivery::{INPUT_MAX_BYTES, PiNativeAdapter, wire_key};
+use crate::agent::delivery::{CorralPiAdapter, INPUT_MAX_BYTES, wire_key};
 use crate::agent::test_support as ts;
 
 fn binding(fx: &Fx, to: &Recipient, host: &ts::Host) -> SessionBinding {
@@ -299,7 +299,7 @@ fn a_notice_too_large_for_the_pi_input_keeps_every_class_in_evidence_and_strands
         };
         let wire = binding(&fx, &run_recipient(&fx), &next);
         let first = inbox
-            .publish(&wire, "pi_native", INPUT_MAX_BYTES, true)
+            .publish(&wire, "corral_pi", INPUT_MAX_BYTES, true)
             .unwrap()
             .unwrap();
         let payload = inbox.payload(&first).unwrap();
@@ -321,7 +321,7 @@ fn a_notice_too_large_for_the_pi_input_keeps_every_class_in_evidence_and_strands
             }
             assert!(inbox.close_settled(&first).unwrap());
             let second = inbox
-                .publish(&wire, "pi_native", INPUT_MAX_BYTES, true)
+                .publish(&wire, "corral_pi", INPUT_MAX_BYTES, true)
                 .unwrap()
                 .unwrap();
             assert_eq!(second.members, [queued.seq]);
@@ -342,7 +342,7 @@ fn an_envelope_the_lost_host_never_confirmed_is_settled_without_a_resend_and_the
         let earlier = post(&inbox, "owner_reply", "Sent before the loss.");
         let wire = binding(&fx, &run_recipient(&fx), &bound);
         let mut sent = inbox
-            .publish(&wire, "pi_native", INPUT_MAX_BYTES, true)
+            .publish(&wire, "corral_pi", INPUT_MAX_BYTES, true)
             .unwrap()
             .unwrap();
         inbox
@@ -389,7 +389,7 @@ fn an_envelope_the_lost_host_never_confirmed_is_settled_without_a_resend_and_the
         };
         let g2 = binding(&fx, &run_recipient(&fx), &next);
         let first = inbox
-            .publish(&g2, "pi_native", INPUT_MAX_BYTES, true)
+            .publish(&g2, "corral_pi", INPUT_MAX_BYTES, true)
             .unwrap()
             .unwrap();
         assert_eq!(first.members, [notice.seq], "{case}");
@@ -464,7 +464,7 @@ fn an_answer_queued_while_the_host_was_lost_is_observed_in_generation_2_after_th
         let bridge = f::bridge(&fx.ctx.store, &to, 2, Some(f::CAP), f::quiet);
 
         // Then production delivery sends the notice first and the answer after it:
-        let status = crate::delivery::deliver(&fx.ctx, &to, &PiNativeAdapter, None).unwrap();
+        let status = crate::delivery::deliver(&fx.ctx, &to, &CorralPiAdapter, None).unwrap();
         assert!(
             matches!(status, crate::delivery::DeliveryStatus::Sent { .. }),
             "{status:?}"
@@ -491,7 +491,7 @@ fn an_answer_queued_while_the_host_was_lost_is_observed_in_generation_2_after_th
             .unwrap()
             .to_owned();
         host_entry(&next, &key, &text);
-        crate::delivery::deliver(&fx.ctx, &to, &PiNativeAdapter, None).unwrap();
+        crate::delivery::deliver(&fx.ctx, &to, &CorralPiAdapter, None).unwrap();
         let receipt = observed(&inbox, answer).expect("the answer is observed");
         assert_eq!(
             receipt.binding.unwrap().endpoint,

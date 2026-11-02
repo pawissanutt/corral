@@ -6,7 +6,7 @@ fn native(fx: &Fx) -> Recipient {
         .store
         .update(&fx.task.id, |task| {
             let run = task.current_run_mut().unwrap();
-            run.harness = Some("pi-native".into());
+            run.harness = Some("corral-pi".into());
             run.delivery = DeliveryMode::Inbox;
             Ok(())
         })

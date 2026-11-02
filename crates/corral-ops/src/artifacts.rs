@@ -101,7 +101,7 @@ pub(crate) fn add_artifact_to_run(
     add_artifact_inner(ctx, id, Target::Named(run), path, kind, title, None, None).map(|(a, _)| a)
 }
 
-/// The Pi-native `artifact` op: attaches to the requester's run (a reviewer's parent run)
+/// The corral-pi `artifact` op: attaches to the requester's run (a reviewer's parent run)
 /// and commits the receipt with the artifact entry; the blob stays content-deduplicated.
 pub fn add_artifact_request(
     ctx: &Ctx,

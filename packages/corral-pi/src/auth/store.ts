@@ -4,7 +4,7 @@
 // (Models.getAuth runs it inside modify) rewrites the credential in place. A Codex credential
 // still in the pre-T-479 shared auth.json is read from there and moved into openai-codex.json
 // by its first write, so an existing login keeps working. Only OAuth credentials are kept: an
-// API key would be a paid fallback, which pi-native never uses.
+// API key would be a paid fallback, which corral-pi never uses.
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
@@ -148,7 +148,7 @@ export class FileCredentialStore implements CredentialStore {
       const current = this.load();
       const next = await fn(current ? structuredClone(current) : undefined);
       if (next === undefined) return current;
-      if (!isOAuth(next)) throw new CredentialsUnavailable("pi-native stores only OAuth credentials (no API key fallback)");
+      if (!isOAuth(next)) throw new CredentialsUnavailable("corral-pi stores only OAuth credentials (no API key fallback)");
       this.writeAtomically(this.file, next);
       this.retireLegacy();
       return structuredClone(next);

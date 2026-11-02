@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 
 use anyhow::Result;
 use corral_core::{
-    AccessFacets, Config, JsonPath, ModelEvidence, ModelEvidenceSource, PI_NATIVE_HARNESS,
-    PathProblems, Read, is_pi_native,
+    AccessFacets, CORRAL_PI_HARNESS, Config, JsonPath, ModelEvidence, ModelEvidenceSource,
+    PathProblems, Read, is_corral_pi,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -27,7 +27,7 @@ pub struct DiscoveredHarness {
     pub installed: bool,
     pub models: Vec<String>,
     pub efforts: Vec<String>,
-    /// Vendors the harness accepts; reported only by harnesses that restrict them (pi-native).
+    /// Vendors the harness accepts; reported only by harnesses that restrict them (corral-pi).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vendors: Vec<String>,
 }
@@ -55,14 +55,14 @@ pub struct CandidateObservation {
 /// Only existing harness probes run here. Listing a model proves neither authentication
 /// nor execution, and cannot identify an exact connection or settings.
 ///
-/// The built-in pi-native host has no command to probe: it is installed exactly when
+/// The built-in corral-pi host has no command to probe: it is installed exactly when
 /// `corral agent doctor` reports it ready (credentials from file metadata only).
 pub fn setup_discover(ctx: &Ctx) -> SetupDiscovery {
     let config = &ctx.store.config;
     let ready = crate::agent::hooks::doctor::ready(ctx);
     let mut harnesses = crate::detect_harnesses(config);
-    if ready && !harnesses.iter().any(|h| is_pi_native(&h.key)) {
-        harnesses.push(crate::harness::detect_pi_native(config));
+    if ready && !harnesses.iter().any(|h| is_corral_pi(&h.key)) {
+        harnesses.push(crate::harness::detect_corral_pi(config));
     }
     discover_with(
         corral_core::clock::now(),
@@ -77,27 +77,27 @@ fn discover_with(
     observed_at: Timestamp,
     harnesses: Vec<crate::HarnessInfo>,
     config: &Config,
-    pi_native_ready: bool,
-    pi_native_vendors: Vec<String>,
+    corral_pi_ready: bool,
+    corral_pi_vendors: Vec<String>,
 ) -> SetupDiscovery {
     let mut discovery = sanitized_discovery(observed_at, harnesses);
-    if pi_native_ready || crate::agent::hooks::configured(config) {
+    if corral_pi_ready || crate::agent::hooks::configured(config) {
         let models = discovery
             .harnesses
             .iter()
-            .find(|h| is_pi_native(&h.key))
+            .find(|h| is_corral_pi(&h.key))
             .map(|h| h.models.clone())
             .unwrap_or_default();
-        discovery.harnesses.retain(|h| !is_pi_native(&h.key));
+        discovery.harnesses.retain(|h| !is_corral_pi(&h.key));
         discovery.harnesses.push(DiscoveredHarness {
-            key: PI_NATIVE_HARNESS.into(),
-            installed: pi_native_ready,
+            key: CORRAL_PI_HARNESS.into(),
+            installed: corral_pi_ready,
             models,
             efforts: config
-                .harness(PI_NATIVE_HARNESS)
+                .harness(CORRAL_PI_HARNESS)
                 .map(|(_, flags)| flags.efforts)
                 .unwrap_or_default(),
-            vendors: pi_native_vendors,
+            vendors: corral_pi_vendors,
         });
         discovery.harnesses.sort_by(|a, b| a.key.cmp(&b.key));
     }

@@ -51,7 +51,7 @@ export function claudeSystemPrompt(messages: readonly Message[]): Options["syste
     .filter((entry): entry is [string, string] => typeof entry[1] === "string" && !PI_HARNESS_SECTIONS.has(entry[0]))
     .map(([, text]) => text);
   const append = [base, ...sections].map((text) => text.trim()).filter(Boolean).join("\n\n")
-    .replace(/\s*\(Pi-native\)/g, "").replace(/\bPi-native\b/g, "corral");
+    .replace(/\s*\(corral-pi\)/g, "").replace(/\bcorral-pi\b/g, "corral");
   return { type: "preset", preset: "claude_code", ...(append ? { append } : {}) };
 }
 

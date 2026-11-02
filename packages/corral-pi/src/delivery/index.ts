@@ -1,5 +1,5 @@
 // The real delivery module (inbox-adapter). For every new bridge input it appends one
-// `corral_delivery` custom entry to the Pi session before Pi sees the text. corral's pi_native
+// `corral_delivery` custom entry to the Pi session before Pi sees the text. corral's corral_pi
 // adapter observes a message only from this entry: its idempotency key names the envelope and
 // its text_sha256 must equal the envelope's SHA-256. The host deduplicates by key, so a resend
 // after an uncertain send never writes a second entry.

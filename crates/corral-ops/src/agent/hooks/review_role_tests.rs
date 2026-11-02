@@ -1,4 +1,4 @@
-//! T-252 reviewer-role acceptance: `corral review-run` with a pi-native profile binds the review
+//! T-252 reviewer-role acceptance: `corral review-run` with a corral-pi profile binds the review
 //! child from the launcher, and the bound host's verdict, questions, supersession, stale attempts
 //! and silent turns go through `corral agent call` envelopes and the sync hook.
 use std::os::unix::fs::PermissionsExt;
@@ -67,7 +67,7 @@ fn write(dir: &Path, file: &str, text: &str) {
     std::fs::write(path, text).unwrap();
 }
 
-/// A Review task in project `corral` whose done run R1 is reviewed by the pi-native profile `pi`
+/// A Review task in project `corral` whose done run R1 is reviewed by the corral-pi profile `pi`
 /// through `corral review-run`; `host` is the review child's host after hello.
 struct Review {
     fx: ts::Fx,
@@ -122,7 +122,7 @@ fn review_with(setup: impl FnOnce(&Ctx, &str)) -> Review {
     let project = serde_json::from_value(json!({"path": "app"})).unwrap();
     store.config.projects.insert("corral".into(), project);
     let profile = serde_json::from_value(json!({
-        "harness": "pi-native", "model": "gpt-6.1-sol", "vendor": "openai", "effort": "high"
+        "harness": "corral-pi", "model": "gpt-6.1-sol", "vendor": "openai", "effort": "high"
     }))
     .unwrap();
     store.config.profiles.insert("pi".into(), profile);
@@ -344,7 +344,7 @@ fn review_run_binds_the_parent_run_review_child_and_callback_token_from_the_laun
     assert_eq!(state.binding.callback.as_deref(), Some(token.as_str()));
     let pane = &child.herdr.as_ref().unwrap().pane_id;
     assert_eq!(&state.generation(1).unwrap().pane, pane);
-    assert_eq!(child.harness.as_deref(), Some("pi-native"));
+    assert_eq!(child.harness.as_deref(), Some("corral-pi"));
     let identity = &review.host.identity;
     assert_eq!(
         (identity.run.as_deref(), identity.review.as_deref()),
@@ -691,7 +691,7 @@ mod moved;
 
 /// Store setup for the reviewer cross-lane fixture
 /// (packages/corral-pi/src/roles/reviewer/cross-lane.test.ts): a Review task whose done R1 has a
-/// pending review and a pi-native review child in the fixture's private herdr pane, a review
+/// pending review and a corral-pi review child in the fixture's private herdr pane, a review
 /// prompt with a Gate contract (review) section, and generation 1 opened for the in-process host.
 /// It prints one `REVIEWER_LANE <json>` line with the bind nonce the host proves at hello.
 #[test]
@@ -724,7 +724,7 @@ fn reviewer_cross_lane_setup() {
     }))
     .unwrap();
     let child: corral_core::Run = serde_json::from_value(json!({
-        "id": "R1-review1", "agent": "pi", "harness": "pi-native", "delivery": "inbox",
+        "id": "R1-review1", "agent": "pi", "harness": "corral-pi", "delivery": "inbox",
         "worktree": app, "branch": "main", "base": "main", "base_sha": head,
         "started": jiff::Timestamp::now(), "herdr": herdr,
     }))

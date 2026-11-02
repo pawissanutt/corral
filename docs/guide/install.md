@@ -21,8 +21,8 @@ with SHA-256 sidecars and installer-proof records after validation.
 | Windows | x86_64 / AMD64 | `corral-x86_64-pc-windows-msvc.zip` |
 
 Each archive has an adjacent `<archive>.sha256` file. From v0.4.0 the Linux and
-macOS archives also contain `corral-pi-host`, the compiled [Pi-native agent
-host](#optional-the-pi-native-agent-host); the Windows archive does not. Linux
+macOS archives also contain `corral-pi-host`, the compiled [corral-pi agent
+host](#optional-the-corral-pi-agent-host); the Windows archive does not. Linux
 `corral` uses musl rather than requiring a particular glibc version;
 `corral-pi-host` is a glibc build (any mainstream distribution, not Alpine). macOS packages target macOS
 14 or later. Windows packages statically link the MSVC runtime and target 64-bit Windows
@@ -194,10 +194,10 @@ independent proof of publisher identity. Archives and checksum files come
 from the same release. macOS notarization and Windows Authenticode signing
 are not part of this release pipeline.
 
-## Optional: the Pi-native agent host
+## Optional: the corral-pi agent host
 
-The [Pi-native host](pi-native.md) is opt-in and needs nothing above unless you configure a
-`pi-native` profile. It runs on Linux and macOS.
+The [corral-pi host](corral-pi.md) is opt-in and needs nothing above unless you configure a
+`corral-pi` profile. It runs on Linux and macOS.
 
 From a release (v0.4.0 and later) `install.sh` installs `corral-pi-host` beside `corral`
 and runs `corral agent install` for you. The host is one executable that embeds Bun and
@@ -209,7 +209,7 @@ corral agent doctor
 ```
 
 `corral agent install` copies the host into
-`$XDG_DATA_HOME/corral/pi-native/assets/<digest>/` (`~/.local/share/...` without
+`$XDG_DATA_HOME/corral/corral-pi/assets/<digest>/` (`~/.local/share/...` without
 `XDG_DATA_HOME`) with the `compat.json` and role files it writes there, and records the
 digest; re-run it after replacing `corral-pi-host` by hand. Anthropic profiles also need
 the `claude` CLI (Claude Code) on PATH.

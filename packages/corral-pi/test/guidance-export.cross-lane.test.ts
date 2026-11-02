@@ -1,4 +1,4 @@
-// guidance-and-session cross-lane (T-564): the real corral binary dispatches a pi-native worker
+// guidance-and-session cross-lane (T-564): the real corral binary dispatches a corral-pi worker
 // running the production worker role from a fixture installation, in the private plugin-free
 // herdr server of scripts/test-herdr.sh. Through the bridge and the visible pane it observes the
 // packaged role skill winning over a home impostor, trusted project guidance, template and skill
@@ -80,7 +80,7 @@ beforeAll(async () => {
   }
   writeFileSync(join(workspace, ".corral/corral.toml"), `${readFileSync(join(workspace, ".corral/corral.toml"), "utf8")}
 [profiles.pi]
-harness = "pi-native"
+harness = "corral-pi"
 model = "gpt-6.1-sol"
 vendor = "openai"
 effort = "high"
@@ -131,7 +131,7 @@ test("a dispatched worker keeps its role skill, loads trusted guidance and expan
     const pack = ["frontend", "visual-qa", "programming", "debugging", "git-master", "simplify-and-cleanup"];
     expect(Object.keys(skills).sort()).toEqual(["corral-worker", "xl-home", "xl-skill", ...pack].sort());
     for (const name of pack) {
-      expect(skills[name]).toBe(join(process.env.HOME ?? "", ".corral/skills/pi-native", name, "SKILL.md"));
+      expect(skills[name]).toBe(join(process.env.HOME ?? "", ".corral/skills/corral-pi", name, "SKILL.md"));
       const installed = readFileSync(skills[name]!, "utf8");
       expect(installed).toMatch(new RegExp(`<!-- corral-skill: ${name} version=\\S+ sha256=[a-f0-9]{64} -->`));
     }

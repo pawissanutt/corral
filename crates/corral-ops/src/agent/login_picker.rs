@@ -6,7 +6,7 @@ use std::io::Write;
 
 use anyhow::{Context, Result};
 
-pub const TITLE: &str = "Log in a model provider for pi-native";
+pub const TITLE: &str = "Log in a model provider for corral-pi";
 pub const HINT: &str = "\u{2191}/\u{2193} move \u{b7} Enter select \u{b7} q cancel";
 const LABEL_WIDTH: usize = 34;
 
@@ -178,7 +178,7 @@ mod tests {
         let (_, screen) = drive(b"q");
         assert_eq!(
             screen,
-            "Log in a model provider for pi-native\r\n\
+            "Log in a model provider for corral-pi\r\n\
              > OpenAI Codex (ChatGPT Plus/Pro)   [logged in]\r\n  \
              Anthropic Claude (Pro/Max)        [not logged in]\r\n\
              \u{2191}/\u{2193} move \u{b7} Enter select \u{b7} q cancel\r\n"

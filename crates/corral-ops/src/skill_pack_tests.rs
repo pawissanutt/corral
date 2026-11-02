@@ -5,9 +5,9 @@ fn pi_pack_is_isolated_refreshable_and_preserves_owner_files() {
     let home = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(home.path().join(".agents")).unwrap();
     std::fs::create_dir_all(home.path().join(".omo")).unwrap();
-    let writes = install_harness_skills(home.path(), "pi-native", false).unwrap();
+    let writes = install_harness_skills(home.path(), "corral-pi", false).unwrap();
     assert_eq!(writes.len(), 6);
-    let root = home.path().join(".corral/skills/pi-native");
+    let root = home.path().join(".corral/skills/corral-pi");
     for name in PI_SKILLS {
         let text = std::fs::read_to_string(root.join(name).join("SKILL.md")).unwrap();
         assert_eq!(text, role_skill_markdown(name).unwrap());
@@ -20,7 +20,7 @@ fn pi_pack_is_isolated_refreshable_and_preserves_owner_files() {
     std::fs::write(&stale, format!("{SKILL_MARKER}\nstale")).unwrap();
     let foreign = root.join("debugging/SKILL.md");
     std::fs::write(&foreign, "owner skill").unwrap();
-    let again = install_harness_skills(home.path(), "pi-native", false).unwrap();
+    let again = install_harness_skills(home.path(), "corral-pi", false).unwrap();
     assert_eq!(
         again.iter().find(|w| w.role == "frontend").unwrap().action,
         SkillAction::Refreshed
@@ -38,7 +38,7 @@ fn pi_pack_is_isolated_refreshable_and_preserves_owner_files() {
     }
     assert!(duplicate_skills(home.path(), "omo").is_empty());
     assert!(
-        ensure_skills(home.path(), "pi-native")
+        ensure_skills(home.path(), "corral-pi")
             .unwrap()
             .iter()
             .any(|w| w.action == SkillAction::Current)

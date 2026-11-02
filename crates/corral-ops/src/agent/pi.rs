@@ -1,4 +1,4 @@
-//! `corral pi`: start the Pi-native host from nothing (T-490), as `pi` starts plain Pi.
+//! `corral pi`: start the corral-pi host from nothing (T-490), as `pi` starts plain Pi.
 //!
 //! In a workspace `corral pi` opens a new assistant session in the owner's herdr pane and
 //! `--resume A-<n>` continues one there (T-544); both run the host as a child so a clean exit
@@ -60,7 +60,7 @@ pub(crate) fn platform() -> Result<()> {
     } else {
         Err(refuse(
             "unsupported_platform",
-            "the Pi-native host runs on Unix",
+            "the corral-pi host runs on Unix",
         ))
     }
 }
@@ -126,7 +126,7 @@ pub fn adopt(ctx: &Ctx, pane: &str, overrides: &Overrides) -> Result<Prepared> {
             return Err(refuse(
                 "pm_alive",
                 format!(
-                    "a live Pi-native PM (generation {}) is bound to pane {}; `corral agent \
+                    "a live corral-pi PM (generation {}) is bound to pane {}; `corral agent \
                      resume --pm --replace` replaces it",
                     pm.state.binding.generation, pm.pane
                 ),
@@ -336,7 +336,7 @@ pub fn bare_command(
     let assets = super::install::installed_in(data_root)?.ok_or_else(|| {
         refuse(
             "assets_unavailable",
-            "no pi-native asset installation; run `corral agent install`",
+            "no corral-pi asset installation; run `corral agent install`",
         )
     })?;
     let compiled = compiled_host(&assets);

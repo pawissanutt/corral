@@ -39,7 +39,7 @@ fn cowork_live_setup() {
     store.config.profiles.insert(
         "owner".into(),
         serde_json::from_value(
-            json!({"harness":"pi-native", "model":"gpt-6.1-sol", "vendor":"openai"}),
+            json!({"harness":"corral-pi", "model":"gpt-6.1-sol", "vendor":"openai"}),
         )
         .unwrap(),
     );

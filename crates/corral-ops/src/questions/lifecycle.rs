@@ -1,4 +1,4 @@
-//! Sweeps over one task that the sync hook (integration-seams) calls per live Pi-native
+//! Sweeps over one task that the sync hook (integration-seams) calls per live corral-pi
 //! container: F4 terminalization, owner deadlines and the unattended rule. Each is idempotent.
 use anyhow::Result;
 use corral_core::TaskRef;
@@ -11,13 +11,13 @@ use jiff::Timestamp;
 
 use super::triage::{Change, NeedsMe, answer_body, transact_system};
 use super::{
-    PI_NATIVE_MESSAGE_KINDS, QuestionKey, QuestionRefusal, recorded_pending_views_ref, transition,
+    CORRAL_PI_MESSAGE_KINDS, QuestionKey, QuestionRefusal, recorded_pending_views_ref, transition,
     triage,
 };
 use crate::Ctx;
 
 /// Persists F4 closure once: every recorded-pending question of a closed worker run or review
-/// child becomes cancelled with the closure reason, and the container's undelivered Pi-native
+/// child becomes cancelled with the closure reason, and the container's undelivered corral-pi
 /// messages are cancelled `recipient_closed`. Returns the keys cancelled by this call.
 pub fn terminalize(ctx: &Ctx, task_id: &str) -> Result<Vec<String>> {
     let now = ctx.store.now();
@@ -82,7 +82,7 @@ fn cancel_messages(ctx: &Ctx, container: &ContainerRef) -> Result<()> {
     };
     let inbox = Inbox::new(&ctx.store, recipient)?;
     for message in inbox.unfinished_messages()? {
-        if !PI_NATIVE_MESSAGE_KINDS.contains(&message.kind.as_str())
+        if !CORRAL_PI_MESSAGE_KINDS.contains(&message.kind.as_str())
             || inbox.terminal(message.seq)?.is_some()
             || inbox
                 .receipt(message.seq, ReceiptLevel::Observed)?

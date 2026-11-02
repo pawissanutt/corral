@@ -64,7 +64,7 @@ fn ctx_at(root: &Path) -> Ctx {
     }
 }
 
-/// A Running task in project `corral` whose R1 is bound to a pi-native worker host that said hello.
+/// A Running task in project `corral` whose R1 is bound to a corral-pi worker host that said hello.
 struct Worker {
     fx: ts::Fx,
     id: String,
@@ -106,7 +106,7 @@ fn worker(gate: bool) -> Worker {
         .unwrap();
     let herdr = Herdr::with_bin(bin, None);
     let run: corral_core::Run = serde_json::from_value(json!({
-        "id": "R1", "agent": "pi", "harness": "pi-native", "worktree": app, "branch": "main",
+        "id": "R1", "agent": "pi", "harness": "corral-pi", "worktree": app, "branch": "main",
         "base": "main", "base_sha": git(&app, &["rev-parse", "HEAD"]),
         "started": "2026-01-01T00:00:00Z",
         "herdr": {"workspace_id": "w0", "pane_id": "w0:p1", "socket": herdr.socket_path().unwrap()},
@@ -863,14 +863,14 @@ fn owner_input_typed_during_a_bridge_turn_makes_it_owner_engaged_with_no_nudge()
 }
 
 #[test]
-fn a_pi_native_dispatch_refuses_unlisted_vendors_and_runs_both_shipped_providers() {
+fn a_corral_pi_dispatch_refuses_unlisted_vendors_and_runs_both_shipped_providers() {
     let w = worker(false);
     let mut ctx = ctx_at(w.ctx().store.root());
     let package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/corral-pi");
     ctx.store.config.agent.assets_dir = Some(package);
     for vendor in ["mistral", "anthropic", "openai"] {
         let profile = serde_json::from_value(json!({
-            "harness": "pi-native", "model": "gpt-6.1-sol", "vendor": vendor,
+            "harness": "corral-pi", "model": "gpt-6.1-sol", "vendor": vendor,
         }))
         .unwrap();
         ctx.store.config.profiles.insert(vendor.into(), profile);

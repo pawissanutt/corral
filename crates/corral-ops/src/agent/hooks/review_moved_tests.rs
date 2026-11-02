@@ -1,4 +1,4 @@
-//! T-522 R2 F2: a pi-native reviewer whose verdict is refused only because sync attached an
+//! T-522 R2 F2: a corral-pi reviewer whose verdict is refused only because sync attached an
 //! integration packet for a cleanly moved main is relaunched once its turn ends, independently of
 //! pane idleness, instead of being nudged and escalated. An open turn is never interrupted, and a
 //! refusal after the candidate changed keeps the nudge-then-escalate path.
@@ -10,7 +10,7 @@ use corral_herdr::{AgentStatus, PaneInfo};
 
 use super::*;
 
-/// A pi-native review of a candidate on branch `feature`, in its own worktree off `main`.
+/// A corral-pi review of a candidate on branch `feature`, in its own worktree off `main`.
 fn feature_review() -> Review {
     review_with(|ctx, id| {
         let app = ctx.store.root().join("app");
@@ -80,7 +80,7 @@ fn approve(review: &Review, call: &str) -> CallResponse {
     )
 }
 
-/// The review watchdog with the reviewer's pane present and busy: a healthy pi-native host's
+/// The review watchdog with the reviewer's pane present and busy: a healthy corral-pi host's
 /// pane status is not a signal, so recovery must not depend on it.
 fn watchdog(review: &Review) {
     let pane = review.host.pane.clone();
@@ -98,7 +98,7 @@ fn watchdog(review: &Review) {
         .unwrap();
 }
 
-/// One sync pass in sync's own order: the review watchdog, then the pi-native hook.
+/// One sync pass in sync's own order: the review watchdog, then the corral-pi hook.
 fn sync_pass(review: &Review) {
     watchdog(review);
     review.sync();

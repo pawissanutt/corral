@@ -75,7 +75,7 @@ impl Fixture {
         store.config.profiles.insert(
             "native-planner".into(),
             serde_json::from_value(json!({
-                "harness":"pi-native", "model":MODEL, "vendor":"anthropic", "effort":"high",
+                "harness":"corral-pi", "model":MODEL, "vendor":"anthropic", "effort":"high",
             }))
             .unwrap(),
         );

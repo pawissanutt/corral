@@ -1,4 +1,4 @@
-//! `corral pi`: start the Pi-native host from nothing. In a workspace it opens an assistant, with
+//! `corral pi`: start the corral-pi host from nothing. In a workspace it opens an assistant, with
 //! `--pm` the PM and with `--resume A-<n>` an assistant's next generation; outside a workspace,
 //! or with `--bare`, plain Pi. Handler bodies live in `corral_ops::agent::pi`.
 use std::path::Path;

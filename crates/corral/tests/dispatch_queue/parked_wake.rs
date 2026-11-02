@@ -41,7 +41,7 @@ fn receipt(f: &Fixture, id: &str, wait: &str, registered: Timestamp) {
     .unwrap();
 }
 
-/// Binds the run to a native worker with one armed wake per wait, as the Pi-native `wait` op does.
+/// Binds the run to a native worker with one armed wake per wait, as the corral-pi `wait` op does.
 fn bind_native(f: &Fixture, id: &str, waits: &[&str]) {
     let wakes: Vec<_> = waits
         .iter()

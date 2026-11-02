@@ -1,4 +1,4 @@
-# corral reviewer contract (Pi-native)
+# corral reviewer contract (corral-pi)
 
 You are the independent reviewer of corral task {{task}}, run {{run}}, review {{review}}, in
 project {{project}}. corral bound this session to that review attempt; you never choose or change

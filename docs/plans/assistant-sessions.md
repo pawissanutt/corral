@@ -20,13 +20,13 @@ goal: "Add many short-lived assistant sessions for querying, research, analysis,
 non_goals:
   - "No second PM, no PM-to-assistant delegation, no assistant-driven autopilot or background board operation."
   - "No security hardening (owner direction 2026-10-29, UX first): no OS sandbox, no action-level binding proofs, no confirmation of every mutation, no multi-party approval; these are deferred enterprise ideas (see Threat model)."
-  - "No OmO or Claude assistant harness; assistants are Pi-native only. Other harnesses keep `corral pi --bare` or their own shells."
+  - "No OmO or Claude assistant harness; assistants are corral-pi only. Other harnesses keep `corral pi --bare` or their own shells."
   - "No new capability resolver or tool gating system; the assistant column is one more role in T-460's catalog."
   - "No change to how ordinary tasks are reviewed or accepted, and no review bypass outside owner-instructed co-work landings."
   - "No cross-machine sessions, no shared assistants between owners, no assistant concurrency hard limit beyond the soft cap and the existing machine-load check."
 decisions:
   - "Owner (2026-10-29): name is assistant, short label asst; many assistants, one PM; durable PM inbox in .corral with recorded outcomes and nothing typed into the PM pane; scratch worktrees allowed and spikes never land; owner authority on explicit instruction with ambiguous or out-of-scope requests routed to the PM instead of refused; co-work in the same role without a prior task, gate on finish, review optional with default none, landing on explicit instruction."
-  - "The assistant is a sixth Pi-native role (`AgentRole::Assistant`) with its own container record, generations and usage, not a fake worker run or PM alias. It consumes T-563's resolver with its own column."
+  - "The assistant is a sixth corral-pi role (`AgentRole::Assistant`) with its own container record, generations and usage, not a fake worker run or PM alias. It consumes T-563's resolver with its own column."
   - "Workspace-scoped, not project-bound: reads span the workspace; every mutation names its project and is checked against that project at commit."
   - "Reads and filing use the existing CLI from the assistant's shell. The host exports `CORRAL_ASSISTANT=A-<n>`; one exhaustive command classification in the CLI entry point allows read and filing commands, attributes them to `assistant:A-<n>`, and refuses every other mutation with a pointer to the typed owner operation or the PM inbox."
   - "Owner direction (2026-10-29), UX first: a clear, explicit owner instruction in the conversation is the authorization. Owner-level actions use one typed operation, `owner_action`, over the existing authenticated receipt client; it cites the owner message it executes (which must be a real pane-typed owner input of this session) and records it, with no check that the text proves the exact action. Only the confirm class (dropping or force-moving tasks, deleting non-scratch worktrees or branches, config changes) waits for a host confirmation. Own scratch disposal is not in that class."
@@ -104,7 +104,7 @@ affected_paths:
   - packages/corral-pi/src/roles/types.ts
   - packages/corral-pi/src/roles/pm/tools.ts
   - packages/corral-pi/src/host/session.ts
-  - docs/guide/pi-native.md
+  - docs/guide/corral-pi.md
   - docs/guide/pm.md
   - docs/guide/assistants.md
 contracts:
@@ -125,7 +125,7 @@ dependencies:
       - scenario: "Create, list, show and end two sessions through the store API and CLI; read stats."
         expected: "IDs A-1 and A-2 are allocated atomically; records and containers round-trip; ended sessions keep transcript paths; `corral stats` has an assistant role row and per-session cost lines (unknown until the T-460 usage collector reports)."
   - task: assistant-launch
-    write_scope: [crates/corral/src/pi_cmd.rs, crates/corral-ops/src/agent/pi.rs, crates/corral-ops/src/agent/call.rs, crates/corral-ops/src/agent/ops/assistant.rs, packages/corral-pi/src/roles/assistant, packages/corral-pi/src/roles/types.ts, docs/guide/pi-native.md, docs/guide/assistants.md]
+    write_scope: [crates/corral/src/pi_cmd.rs, crates/corral-ops/src/agent/pi.rs, crates/corral-ops/src/agent/call.rs, crates/corral-ops/src/agent/ops/assistant.rs, packages/corral-pi/src/roles/assistant, packages/corral-pi/src/roles/types.ts, docs/guide/corral-pi.md, docs/guide/assistants.md]
     depends_on: [assistant-sessions]
     acceptance:
       - scenario: "C1 and C12 in an isolated herdr server; resume A-1 after killing its host."
@@ -172,7 +172,7 @@ dependencies:
     write_scope: [crates/corral/src/pi_cmd.rs, crates/corral-ops/src/assistant, crates/corral/src/run_cmd.rs, crates/corral-ops/src/usage.rs]
     depends_on: [assistant-launch]
     acceptance:
-      - scenario: "C11 for OmO, Claude and Pi-native runs and a reviewer child; a missing transcript."
+      - scenario: "C11 for OmO, Claude and corral-pi runs and a reviewer child; a missing transcript."
         expected: "Bounded brief and transcript pages; the missing file yields `transcript_unavailable` with the searched location."
   - task: assistant-board
     write_scope: [crates/corral-tui/src]
@@ -188,7 +188,7 @@ verification:
   - "Each child runs the gate its run contract names; landing runs the full gate."
 owner_decisions:
   - "OD1 `corral pi` default: recommend the assistant in a workspace and `--pm` for the PM (changes T-490's default; the launch prints which one opened)."
-  - "OD4 PM wake for inbox items: recommend a native, deduplicated wake for a Pi-native PM and sweep-only for an OmO PM; alternative is sweep-only everywhere."
+  - "OD4 PM wake for inbox items: recommend a native, deduplicated wake for a corral-pi PM and sweep-only for an OmO PM; alternative is sweep-only everywhere."
   - "OD5 Co-work record: recommend materializing a task at finish; alternative is a new non-task history entity read by every board, history and stats reader."
   - "OD6 Defaults: recommend assistant.max_live 4 (soft), assistant.scratch_max 8, scratch idle GC after 7 days with a diff artifact saved."
   - "OD7 Session ID prefix: recommend A-<n>."
@@ -233,7 +233,7 @@ for it in the conversation, recording the owner message it executes.
 
 Included, in delivery order:
 
-1. **Assistant role and sessions.** A sixth Pi-native role with its own session records,
+1. **Assistant role and sessions.** A sixth corral-pi role with its own session records,
    transcript, artifacts, cost and resume; `corral pi` opens one, `corral pi --pm` the PM.
 2. **Attributed reads and filing.** Assistants use the corral CLI from their shell. A single
    classification at the CLI entry point allows read and filing commands under
@@ -513,7 +513,7 @@ authorized executable cards and pending questions, oldest first. Owner words in 
 are evidence of intent, not authority: the PM acts inside its own policy and escalates
 owner-only requests through its existing owner cards. The Pi PM gets `corral_inbox_read`
 and `corral_inbox_resolve` (claim and resolve) tools; the OmO PM uses the CLI. Nothing is
-typed into the PM pane. OD4: a Pi-native PM also receives a native wake deduplicated as
+typed into the PM pane. OD4: a corral-pi PM also receives a native wake deduplicated as
 `pmi:<id>:<revision>`, like `qwake`.
 
 **Outcome to the assistant.** On resolve, a live author session gets one native agent-inbox
@@ -591,7 +591,7 @@ task through the normal `corral new` path with the spike diff attached; the scra
 with results and costs, latest review notes, open questions and artifact refs, with
 truncation marked. Focus grants no authority over the task. A new read command
 `corral run transcript <task> <run> [--review <n>] [--lines a-b]` pages transcripts for
-OmO, Claude and Pi-native runs and review children using the transcript locators that sync
+OmO, Claude and corral-pi runs and review children using the transcript locators that sync
 and usage already use, refusing `transcript_unavailable` with the searched location.
 
 ### Board integration

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { RoleContext } from "../types.ts";
-import { piNativeRoot } from "../../auth/paths.ts";
+import { corralPiRoot } from "../../auth/paths.ts";
 import { PermissionBroker } from "./permissions.ts";
 
 export interface WriteSettings { readonly allow: readonly string[]; readonly deny: readonly string[] }
@@ -64,8 +64,8 @@ export function classifyWrite(input: string, context: PathContext): Classificati
   const own = [...(context.scratch ?? []), join(workspace, ".corral", "artifacts", "assistant", session)];
   const config = process.env.XDG_CONFIG_HOME || join(home, ".config");
   const protectedDirs = context.protectedDirs ?? [join(config, "corral"), join(config, "herdr"),
-    join(home, ".config", "corral"), join(home, ".config", "herdr"), piNativeRoot(),
-    join(home, ".local", "share", "corral", "pi-native")];
+    join(home, ".config", "corral"), join(home, ".config", "herdr"), corralPiRoot(),
+    join(home, ".local", "share", "corral", "corral-pi")];
   const protectedForms = protectedDirs.flatMap((p) => [p, real(p)]).filter((p): p is string => p !== undefined);
   for (const form of [shown, canonical]) {
     if (form === undefined) return result("refuse", "fixed_rule");

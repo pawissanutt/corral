@@ -1,4 +1,4 @@
-//! Pi-native usage from the run's bound Pi session files, priced at API-equivalent rates and
+//! corral-pi usage from the run's bound Pi session files, priced at API-equivalent rates and
 //! deduplicated by (session ID, response ID). Owner: T-252 child pi-usage.
 //!
 //! The collector reads the `session_file` each generation of a worker run or review child bound at
@@ -7,7 +7,7 @@
 //! session, yields the same `Usage`. `openai-codex/<model>` is priced as `<model>` through corral
 //! pricing; the API-equivalent figure is `estimated_usd` and Pi's own reported cost stays in
 //! `reported_usd`. PM sessions are bound to the `AgentPm` record, never to a run, so they are
-//! attributed to no implementation task and are excluded from the Pi-native vs OmO comparison.
+//! attributed to no implementation task and are excluded from the corral-pi vs OmO comparison.
 //! The shared container readback also covers PM/planning, plus durable auxiliary references;
 //! references never authorize another host or replace a bound transcript.
 use std::collections::BTreeMap;

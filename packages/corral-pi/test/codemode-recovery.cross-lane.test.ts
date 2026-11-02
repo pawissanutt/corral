@@ -1,4 +1,4 @@
-// Code Mode recovery cross-lane (T-683): the real corral binary dispatches a pi-native run onto the
+// Code Mode recovery cross-lane (T-683): the real corral binary dispatches a corral-pi run onto the
 // package's production worker role (Code Mode on in its standard snapshot), in the private plugin-free
 // herdr server of scripts/test-herdr.sh. The kickoff turn runs one cell that commits corral_ask through
 // the real envelope with its parent identity, then blocks in a nested edit on a FIFO, where the real
@@ -99,7 +99,7 @@ export default {
   const config = join(workspace, ".corral/corral.toml");
   writeFileSync(config, `${readFileSync(config, "utf8")}
 [profiles.pi]
-harness = "pi-native"
+harness = "corral-pi"
 model = "gpt-6.1-sol"
 vendor = "openai"
 effort = "high"

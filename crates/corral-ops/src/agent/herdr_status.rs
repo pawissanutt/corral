@@ -1,4 +1,4 @@
-//! The corral side of a Pi-native host's herdr projection (T-605). A bound host reports itself to
+//! The corral side of a corral-pi host's herdr projection (T-605). A bound host reports itself to
 //! its pane as agent `corral-pi` (`packages/corral-pi/src/host/herdr.ts`); that status is display
 //! only, never evidence of a run's outcome. Corral allocates each binding its herdr sequence
 //! epoch, tells a live host about question transitions it did not make itself, and releases a

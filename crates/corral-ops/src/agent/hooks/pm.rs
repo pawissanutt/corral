@@ -1,13 +1,13 @@
-//! PM launch seam for a pi-native PM profile. Owner: T-252 child pm-role.
+//! PM launch seam for a corral-pi PM profile. Owner: T-252 child pm-role.
 use anyhow::{Context, Result, ensure};
 use corral_core::agent::AgentRole;
 use corral_core::{ProfileChoice, ResolvedProfile};
 
-use super::{consulted, is_pi_native};
+use super::{consulted, is_corral_pi};
 use crate::Ctx;
 
 /// pm open's preflight, before any policy delivery, workspace or pane: the bootstrap
-/// connection's profile, else the configured `pm.agent` profile when its harness is pi-native.
+/// connection's profile, else the configured `pm.agent` profile when its harness is corral-pi.
 pub fn preflight(ctx: &Ctx, bootstrap: Option<&ResolvedProfile>) -> Result<()> {
     let resolved = match bootstrap {
         Some(resolved) => resolved.clone(),
@@ -18,7 +18,7 @@ pub fn preflight(ctx: &Ctx, bootstrap: Option<&ResolvedProfile>) -> Result<()> {
                 .profiles
                 .get(name)
                 .map_or(name.as_str(), |p| p.harness.as_str());
-            if !is_pi_native(harness) {
+            if !is_corral_pi(harness) {
                 return Ok(());
             }
             let choice = ProfileChoice {
@@ -29,10 +29,10 @@ pub fn preflight(ctx: &Ctx, bootstrap: Option<&ResolvedProfile>) -> Result<()> {
         }
     };
     super::preflight::check(ctx, AgentRole::Pm, &resolved)?;
-    if is_pi_native(&resolved.harness) {
+    if is_corral_pi(&resolved.harness) {
         ensure!(
             resolved.model.is_some(),
-            "a Pi-native PM needs a model; run `corral pi --pm --model <model>`"
+            "a corral-pi PM needs a model; run `corral pi --pm --model <model>`"
         );
         project(ctx)?;
     }
@@ -112,8 +112,8 @@ pub fn profile_with(ctx: &Ctx, overrides: &Overrides) -> Result<ResolvedProfile>
         None,
     )?;
     ensure!(
-        is_pi_native(&resolved.harness),
-        "the PM resume profile must be pi-native"
+        is_corral_pi(&resolved.harness),
+        "the PM resume profile must be corral-pi"
     );
     apply(&mut resolved, overrides)?;
     preflight(ctx, Some(&resolved))?;
@@ -193,7 +193,7 @@ pub fn prepared(
         model: resolved
             .model
             .clone()
-            .context("a Pi-native PM needs a model")?,
+            .context("a corral-pi PM needs a model")?,
         provider: resolved.model.as_deref().and_then(|model| {
             super::super::launch::host_provider(resolved.vendor.as_deref(), model)
         }),
@@ -245,7 +245,7 @@ pub(crate) mod tests {
         let config = &mut fx.ctx.store.config;
         config.pm.agent = "pm-pi".into();
         let profile: Profile = serde_json::from_value(json!({
-            "harness": "pi-native", "model": "gpt-fixture", "vendor": "openai"
+            "harness": "corral-pi", "model": "gpt-fixture", "vendor": "openai"
         }))
         .unwrap();
         config.profiles.insert("pm-pi".into(), profile);

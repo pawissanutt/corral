@@ -1,4 +1,4 @@
-//! The `pi_native` inbox adapter: send is bridge `submit_input` with the envelope idempotency
+//! The `corral_pi` inbox adapter: send is bridge `submit_input` with the envelope idempotency
 //! key, observe reads the host-written `corral_delivery` session entry whose `text_sha256` is
 //! the envelope's SHA-256 (`packages/corral-pi/src/delivery/index.ts` writes it before Pi sees
 //! the text). One adapter serves worker runs, review children (`ReviewRun`) and the bound PM.
@@ -20,8 +20,8 @@ use crate::delivery::{
 
 mod observe;
 
-/// Adapter name recorded on every pi-native envelope.
-pub const ADAPTER: &str = "pi_native";
+/// Adapter name recorded on every corral-pi envelope.
+pub const ADAPTER: &str = "corral_pi";
 /// The T-252 child that lands the adapter.
 pub const OWNER: &str = "inbox-adapter";
 /// `origin` of every inbox input; the host's delivery module copies it into its entry.
@@ -36,8 +36,8 @@ pub const INPUT_MAX_BYTES: usize = 8 * 1024;
 /// one outcome per key for the generation's lifetime, so a resend of the same key is safe.
 const PERMANENT: [&str; 3] = ["bad_input", "frame_too_large", "unknown_command"];
 
-/// The registered pi-native adapter.
-pub struct PiNativeAdapter;
+/// The registered corral-pi adapter.
+pub struct CorralPiAdapter;
 
 /// The bridge idempotency key of an envelope: the host accepts `[A-Za-z0-9._:-]` only, so the
 /// envelope key's `@env` separator travels as `:env` (inbox keys never contain `:`).
@@ -85,11 +85,11 @@ fn container(recipient: &Recipient) -> Option<ContainerRef> {
     }
 }
 
-/// `Err(reason)` when the recipient has no Pi-native binding at all.
+/// `Err(reason)` when the recipient has no corral-pi binding at all.
 fn target(ctx: &Ctx, recipient: &Recipient) -> Result<Result<Target, String>> {
     let Some(container) = container(recipient) else {
         return Ok(Err(
-            "pi_native delivery serves worker runs, review children and the PM".into(),
+            "corral_pi delivery serves worker runs, review children and the PM".into(),
         ));
     };
     if let ContainerRef::Assistant { session } = &container {
@@ -132,7 +132,7 @@ fn target(ctx: &Ctx, recipient: &Recipient) -> Result<Result<Target, String>> {
                     closed: None,
                 }
             })
-            .ok_or_else(|| "host_unbound: no Pi-native PM is bound".into())),
+            .ok_or_else(|| "host_unbound: no corral-pi PM is bound".into())),
     }
 }
 
@@ -195,12 +195,12 @@ fn disposition(value: Disposition) -> &'static str {
     }
 }
 
-impl PiNativeAdapter {
+impl CorralPiAdapter {
     fn submit(binding: &SessionBinding, envelope: &Envelope, text: String) -> SendOutcome {
         let Some((dir, generation)) = binding.endpoint.as_deref().and_then(endpoint_generation)
         else {
             return SendOutcome::Rejected {
-                reason: "pi_native binding has no generation endpoint".into(),
+                reason: "corral_pi binding has no generation endpoint".into(),
                 retryable_after_fix: false,
             };
         };
@@ -219,28 +219,28 @@ impl PiNativeAdapter {
                 return match error.downcast_ref::<BridgeError>() {
                     Some(refusal) if PERMANENT.contains(&refusal.code.as_str()) => {
                         SendOutcome::Rejected {
-                            reason: format!("pi_native submit_input: {refusal}"),
+                            reason: format!("corral_pi submit_input: {refusal}"),
                             retryable_after_fix: false,
                         }
                     }
                     _ => SendOutcome::Uncertain {
-                        reason: format!("pi_native submit_input: {error:#}"),
+                        reason: format!("corral_pi submit_input: {error:#}"),
                     },
                 };
             }
         };
         if reply.idempotency_key != key {
             return SendOutcome::Uncertain {
-                reason: "pi_native submit_input: the reply names another key".into(),
+                reason: "corral_pi submit_input: the reply names another key".into(),
             };
         }
         let reason = reply.reason.clone().unwrap_or_default();
         match reply.disposition {
             Disposition::Rejected if reason == "idempotency_conflict" => SendOutcome::Conflicted {
-                reason: "pi_native submit_input: idempotency_conflict".into(),
+                reason: "corral_pi submit_input: idempotency_conflict".into(),
             },
             Disposition::Rejected => SendOutcome::Rejected {
-                reason: format!("pi_native submit_input rejected: {reason}"),
+                reason: format!("corral_pi submit_input rejected: {reason}"),
                 retryable_after_fix: true,
             },
             other => SendOutcome::Admitted {
@@ -254,7 +254,7 @@ impl PiNativeAdapter {
     }
 }
 
-impl DeliveryAdapter for PiNativeAdapter {
+impl DeliveryAdapter for CorralPiAdapter {
     fn harness(&self) -> &'static str {
         ADAPTER
     }
@@ -340,14 +340,14 @@ impl DeliveryAdapter for PiNativeAdapter {
         };
         if text.len() > INPUT_MAX_BYTES {
             return SendOutcome::Rejected {
-                reason: format!("pi_native input exceeds {INPUT_MAX_BYTES} bytes"),
+                reason: format!("corral_pi input exceeds {INPUT_MAX_BYTES} bytes"),
                 retryable_after_fix: false,
             };
         }
         // A closed container is refused at the last moment too; its messages are cancelled
         // `recipient_closed` by question terminalization.
         match Recipient::parse_key(envelope.idempotency_key.split('@').next().unwrap_or(""))
-            .context("pi_native envelope key")
+            .context("corral_pi envelope key")
             .and_then(|recipient| target(ctx, &recipient))
         {
             Ok(Ok(Target {
@@ -362,7 +362,7 @@ impl DeliveryAdapter for PiNativeAdapter {
             Ok(_) => {}
             Err(error) => {
                 return SendOutcome::Uncertain {
-                    reason: format!("pi_native recipient unreadable: {error:#}"),
+                    reason: format!("corral_pi recipient unreadable: {error:#}"),
                 };
             }
         }

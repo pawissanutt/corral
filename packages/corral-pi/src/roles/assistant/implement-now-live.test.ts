@@ -77,7 +77,7 @@ test("live implement-now: one ambiguous question, scratch work, a candidate-boun
     const fixture = JSON.parse(line) as Fixture;
     const bootstrap = JSON.parse(readFileSync(fixture.bootstrap, "utf8"));
     const launch = parseLaunchMessage(readFileSync(fixture.launch, "utf8"));
-    const auth = join(workspace, "data/corral/pi-native/auth");
+    const auth = join(workspace, "data/corral/corral-pi/auth");
     mkdirSync(auth, { recursive: true, mode: 0o700 });
     writeFileSync(join(auth, "auth.json"), JSON.stringify({ "openai-codex": { type: "oauth", access: syntheticAccess(),
       refresh: "synthetic-refresh", expires: Date.now() + 3_600_000, accountId: "synthetic" } }), { mode: 0o600 });

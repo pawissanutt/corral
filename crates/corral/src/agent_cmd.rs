@@ -1,4 +1,4 @@
-//! `corral agent`: the complete v1 subcommand and flag surface of the Pi-native host. Handler
+//! `corral agent`: the complete v1 subcommand and flag surface of the corral-pi host. Handler
 //! bodies live in `corral_ops::agent`, so later T-252 children never edit this file.
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -18,13 +18,13 @@ pub struct AgentArgs {
 
 #[derive(Subcommand)]
 pub(crate) enum AgentCmd {
-    /// Run one Pi-native host request: a JSON envelope on stdin, one JSON receipt on stdout
+    /// Run one corral-pi host request: a JSON envelope on stdin, one JSON receipt on stdout
     Call {
         /// Enumerated v1 operation; must equal the envelope's op
         #[arg(long, value_parser = op_names())]
         op: String,
     },
-    /// Start the Pi-native host in this pane from a one-shot bootstrap (run by corral)
+    /// Start the corral-pi host in this pane from a one-shot bootstrap (run by corral)
     Launch {
         /// One-shot bootstrap file written by dispatch, review-run, pm open or resume
         #[arg(long)]
@@ -33,7 +33,7 @@ pub(crate) enum AgentCmd {
         #[arg(long)]
         assets: Option<PathBuf>,
     },
-    /// Install the Pi-native host assets into the user data directory
+    /// Install the corral-pi host assets into the user data directory
     Install {
         /// Package directory or compiled corral-pi-host to install from
         #[arg(long)]
@@ -61,14 +61,14 @@ pub(crate) enum AgentCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Show a Pi-native binding: generations, host health, receipts, questions and turns
+    /// Show a corral-pi binding: generations, host health, receipts, questions and turns
     State {
         #[command(flatten)]
         target: TargetArgs,
         #[arg(long)]
         json: bool,
     },
-    /// Cancel a Pi-native host turn; the run, its questions and receipts stay live
+    /// Cancel a corral-pi host turn; the run, its questions and receipts stay live
     Cancel {
         #[command(flatten)]
         target: TargetArgs,
@@ -76,7 +76,7 @@ pub(crate) enum AgentCmd {
         #[arg(long)]
         turn: Option<u64>,
     },
-    /// Fence a lost Pi-native generation and start the next one in the same pane
+    /// Fence a lost corral-pi generation and start the next one in the same pane
     Resume {
         #[command(flatten)]
         target: TargetArgs,
@@ -118,7 +118,7 @@ pub(crate) struct TargetArgs {
     /// Review child ID of the run (default: the worker run itself)
     #[arg(long, requires = "task")]
     review: Option<String>,
-    /// The bound Pi-native PM instead of a task
+    /// The bound corral-pi PM instead of a task
     #[arg(long)]
     pm: bool,
 }

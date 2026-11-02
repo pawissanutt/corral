@@ -18,7 +18,7 @@ fn actual_legacy_and_native_review_entries_keep_distinct_single_notice_claims() 
             }))?);
             if producer != "legacy_review_watchdog" {
                 parent.review_runs.push(serde_json::from_value(json!({
-                    "id":"R1-review1","agent":"fixture","harness":"pi-native",
+                    "id":"R1-review1","agent":"fixture","harness":"corral-pi",
                     "worktree":"/missing-fixture-worktree","branch":"corral/T",
                     "base":"main","base_sha":"abc","started":at(0),
                     "agent_host":{

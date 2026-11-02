@@ -1,4 +1,4 @@
-//! Pi-native question cards (question-lifecycle): an open question is PM triage, and an
+//! corral-pi question cards (question-lifecycle): an open question is PM triage, and an
 //! escalated or unattended one is an owner card showing its key, revision and text.
 use corral_core::Task;
 use corral_core::agent::{QuestionKind, QuestionState};
@@ -84,7 +84,7 @@ pub(super) fn card(observation: &PmObservation, bin: &str) -> PmAction {
                     question_kind,
                     text,
                     format!(
-                        "A Pi-native agent asked a {}{question_kind} question.",
+                        "A corral-pi agent asked a {}{question_kind} question.",
                         if *blocking { "blocking " } else { "" }
                     ),
                     "Answer any kind, citing resolvable basis refs and a scope note; escalate only what needs the owner's own judgment.",

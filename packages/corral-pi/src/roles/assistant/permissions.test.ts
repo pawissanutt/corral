@@ -82,7 +82,7 @@ test("private production host: global skill, external edit, audit and second-she
     const launch = parseLaunchMessage(readFileSync(fixture.launch, "utf8"));
     expect(launch.capabilities?.enabled).toContain("write_permissions");
     const corral = corralBinary();
-    const auth = join(workspace, "data/corral/pi-native/auth"); mkdirSync(auth, { recursive: true, mode: 0o700 });
+    const auth = join(workspace, "data/corral/corral-pi/auth"); mkdirSync(auth, { recursive: true, mode: 0o700 });
     const part = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
     const access = `${part({ alg: "none", typ: "JWT" })}.${part({ exp: Math.floor(Date.now() / 1000) + 3600, "https://api.openai.com/auth": { chatgpt_account_id: "synthetic" } })}.synthetic-signature`;
     writeFileSync(join(auth, "auth.json"), JSON.stringify({ "openai-codex": { type: "oauth", access, refresh: "synthetic", expires: Date.now() + 3600000, accountId: "synthetic" } }), { mode: 0o600 });

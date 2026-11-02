@@ -1,4 +1,4 @@
-//! Assistant sessions on the Pi-native host (T-544, member assistant-launch): the soft live cap
+//! Assistant sessions on the corral-pi host (T-544, member assistant-launch): the soft live cap
 //! and machine-load admission, a new session in the owner's pane, generation-fenced resume and
 //! host shutdown when a session ends. An assistant takes no coding slot and names no project;
 //! its pane is the owner's, adopted like the PM's: corral never closes it or types into it.
@@ -53,15 +53,15 @@ pub fn profile(ctx: &Ctx, name: Option<&str>, overrides: &Overrides) -> Result<R
         ..ProfileChoice::default()
     };
     let mut resolved = config.resolve_profile(&choice, None, None)?;
-    if !crate::agent::hooks::is_pi_native(&resolved.harness) {
+    if !crate::agent::hooks::is_corral_pi(&resolved.harness) {
         let profiles: Vec<&str> = config
             .profiles
             .iter()
-            .filter(|(_, profile)| crate::agent::hooks::is_pi_native(&profile.harness))
+            .filter(|(_, profile)| crate::agent::hooks::is_corral_pi(&profile.harness))
             .map(|(name, _)| name.as_str())
             .collect();
         let fix = if profiles.is_empty() {
-            "no Pi-native profile exists; add one with `corral config set profiles.<name> ...` or use setup".to_owned()
+            "no corral-pi profile exists; add one with `corral config set profiles.<name> ...` or use setup".to_owned()
         } else {
             let preferred = if profiles.contains(&"pi-sol") {
                 "pi-sol"
@@ -69,14 +69,14 @@ pub fn profile(ctx: &Ctx, name: Option<&str>, overrides: &Overrides) -> Result<R
                 profiles[0]
             };
             format!(
-                "run `corral config set assistant.agent {preferred}`; Pi-native profiles: {}",
+                "run `corral config set assistant.agent {preferred}`; corral-pi profiles: {}",
                 profiles.join(", ")
             )
         };
         return Err(refuse(
             "assistant_profile",
             format!(
-                "profile '{name}' runs harness '{}', and assistants are Pi-native only; {fix}",
+                "profile '{name}' runs harness '{}', and assistants are corral-pi only; {fix}",
                 resolved.harness
             ),
         ));
@@ -413,7 +413,7 @@ pub fn run_host(prepared: &Prepared) -> Result<std::process::ExitStatus> {
 pub fn run_host(_prepared: &Prepared) -> Result<std::process::ExitStatus> {
     Err(refuse(
         "unsupported_platform",
-        "the Pi-native host runs on Unix",
+        "the corral-pi host runs on Unix",
     ))
 }
 

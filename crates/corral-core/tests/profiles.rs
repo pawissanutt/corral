@@ -291,12 +291,12 @@ fn resolution_order_and_overrides() {
 }
 
 #[test]
-fn pi_native_profiles_resolve_for_listed_vendors_and_refuse_unlisted_ones() {
-    // Given opt-in pi-native profiles for anthropic, openai and an unlisted vendor.
+fn corral_pi_profiles_resolve_for_listed_vendors_and_refuse_unlisted_ones() {
+    // Given opt-in corral-pi profiles for anthropic, openai and an unlisted vendor.
     let d = tempdir().unwrap();
     let mut c = Config::default_for(d.path());
     for vendor in ["anthropic", "openai", "amazon-bedrock", "mistral"] {
-        let mut p = profile("pi-native", Some("some-model"), None);
+        let mut p = profile("corral-pi", Some("some-model"), None);
         p.vendor = Some(vendor.into());
         c.profiles.insert(vendor.into(), p);
     }
@@ -310,22 +310,22 @@ fn pi_native_profiles_resolve_for_listed_vendors_and_refuse_unlisted_ones() {
         let r = c
             .resolve_profile(&choice(Some(name), None, None), None, None)
             .unwrap();
-        assert_eq!(r.harness, "pi-native");
-        let checked = corral_core::check_pi_native_vendor(&r.profile, r.vendor.as_deref());
+        assert_eq!(r.harness, "corral-pi");
+        let checked = corral_core::check_corral_pi_vendor(&r.profile, r.vendor.as_deref());
         // Then only the listed vendors pass; the refusal names the allowlist.
         assert_eq!(checked.is_ok(), allowed, "{name}");
         if !allowed {
             let msg = format!("{:#}", checked.unwrap_err());
             assert!(
                 msg.starts_with(
-                    "vendor_refused: pi-native profile 'mistral' uses vendor 'mistral'"
+                    "vendor_refused: corral-pi profile 'mistral' uses vendor 'mistral'"
                 ) && msg.contains("openai, anthropic"),
                 "{msg}"
             );
         }
     }
     // And a missing vendor is still refused.
-    assert!(corral_core::check_pi_native_vendor("p", None).is_err());
+    assert!(corral_core::check_corral_pi_vendor("p", None).is_err());
     // The built-in default stays the OmO profile (OD4): the opt-in profiles change nothing.
     assert_eq!(c.default_profile(None, None), "omo");
 }
@@ -354,7 +354,7 @@ fn metered_vendor_requires_explicit_opt_in_but_subscriptions_do_not() {
         (None, None, true),
     ] {
         // When the metered opt-in is checked, then only explicit metered routes pass.
-        let checked = corral_core::check_pi_native_metered_opt_in("p", explicit, resolved);
+        let checked = corral_core::check_corral_pi_metered_opt_in("p", explicit, resolved);
         assert_eq!(checked.is_ok(), allowed, "{explicit:?} {resolved:?}");
         if !allowed {
             assert!(
@@ -403,7 +403,7 @@ fn bedrock_catalog_ids_infer_vendor_without_losing_version_colons() {
 }
 
 #[test]
-fn pi_native_bedrock_candidates_require_metered_cost() {
+fn corral_pi_bedrock_candidates_require_metered_cost() {
     use corral_core::{CandidateCost, ExecutionCandidate};
     // Given the same explicit Bedrock candidate with each cost classification.
     let c = Config::default_for(Path::new("/nonexistent"));
@@ -420,7 +420,7 @@ fn pi_native_bedrock_candidates_require_metered_cost() {
     ] {
         let candidate = ExecutionCandidate {
             id: "bedrock".into(),
-            harness: "pi-native".into(),
+            harness: "corral-pi".into(),
             connection: "aws-profile".into(),
             provider: "amazon-bedrock".into(),
             model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0".into(),

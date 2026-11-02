@@ -1,7 +1,7 @@
 //! PM and owner triage by key and revision: answer (and owner supersede), escalate, cancel and the
 //! owner's deadline. Each action is one task transaction that takes the recipient's
 //! `Inbox::lock()` first and reserves its message with `reserve_in`, so the question state, a
-//! Pi-native PM's receipt and the message commit together (deliver -> inbox -> task order).
+//! corral-pi PM's receipt and the message commit together (deliver -> inbox -> task order).
 use anyhow::{Context, Result};
 use corral_core::agent::{
     self, AGENT_RECORD_VERSION, ANSWER_TEXT_MAX_BYTES, AgentQuestion, AnswerBy, ContainerRef,
@@ -27,7 +27,7 @@ pub(super) use heads::{apply_needs_me_ref, record_entry_notice_ref};
 mod system;
 pub(super) use system::transact_system;
 
-/// A Pi-native PM request: its admitted origin and the PM liveness, fence and project-scope
+/// A corral-pi PM request: its admitted origin and the PM liveness, fence and project-scope
 /// check that the commit transaction repeats on the target task.
 pub struct PmRequest<'a> {
     pub origin: &'a RequestOrigin,
@@ -86,7 +86,7 @@ pub enum Applied {
         outcome: Outcome,
         receipt: Option<RequestReceipt>,
     },
-    /// A Pi-native PM replayed a committed request; its stored receipt is returned unchanged.
+    /// A corral-pi PM replayed a committed request; its stored receipt is returned unchanged.
     Replayed(RequestReceipt),
 }
 
@@ -433,7 +433,7 @@ pub(super) fn transact(
                             },
                             // Not question-bound: that convention marks an OmO native answer
                             // (`dispatch/inbox_reply.rs`) which the inbox never packs. A triage
-                            // answer is a `pi_native` message and travels in an envelope.
+                            // answer is a `corral_pi` message and travels in an envelope.
                             ..MessageBinding::default()
                         },
                         subject: Some(json!({"key": key, "revision": question.revision})),

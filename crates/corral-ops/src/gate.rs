@@ -276,7 +276,7 @@ pub fn gate_start_with_force(ctx: &Ctx, id: &str, force: bool) -> Result<GateRec
     gate_start_origin(ctx, id, force, crate::operating::Origin::Owner, None, None)
 }
 
-/// A Pi-native `corral_gate`: the attempt derives from the request unless a retained
+/// A corral-pi `corral_gate`: the attempt derives from the request unless a retained
 /// preparation binds one, and both submit paths are fenced on the request's binding.
 pub(crate) fn gate_start_request(
     ctx: &Ctx,

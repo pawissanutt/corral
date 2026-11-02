@@ -112,7 +112,7 @@ test("a host session activates exactly the loadout and loads only the installed 
   const skills = host.runtime.services.resourceLoader.getSkills().skills;
   expect(skills.map((skill) => [skill.name, skill.filePath])).toEqual([["corral-worker", join(assets.dir, SKILL_ASSET)]]);
   expect(readFileSync(skills[0]?.filePath ?? "", "utf8")).toBe(readFileSync(join(PACKAGE_ROOT, SKILL_ASSET), "utf8"));
-  expect(host.session.systemPrompt).toContain("# corral worker contract (Pi-native)");
+  expect(host.session.systemPrompt).toContain("# corral worker contract (corral-pi)");
 });
 
 test("each corral tool call is one envelope whose request ID derives from the session and tool call", async () => {

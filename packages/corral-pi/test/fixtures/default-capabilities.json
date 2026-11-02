@@ -70,7 +70,7 @@
         "settings": {
           "user_dirs": [
             "~/.agents/skills",
-            "~/.corral/skills/pi-native"
+            "~/.corral/skills/corral-pi"
           ]
         },
         "source": "preset"
@@ -191,7 +191,7 @@
         "settings": {
           "user_dirs": [
             "~/.agents/skills",
-            "~/.corral/skills/pi-native"
+            "~/.corral/skills/corral-pi"
           ]
         },
         "source": "preset"

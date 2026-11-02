@@ -637,7 +637,7 @@ pub(crate) fn advance_reviewer(
     now: Timestamp,
 ) -> Result<Drive> {
     let id = &head.id;
-    if crate::agent::hooks::run_is_pi_native(child) {
+    if crate::agent::hooks::run_is_corral_pi(child) {
         let Some(parent) = head.current_run.as_deref() else {
             return Ok(Drive::Quiet);
         };

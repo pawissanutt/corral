@@ -104,7 +104,7 @@ test("the contract is the installed reviewer-contract.md with the bound identity
 test("a host session activates exactly the loadout and denies a write the model attempts", async () => {
   expect([...host.loadout]).toEqual([...UPSTREAM, ...CORRAL_TOOLS]);
   expect([...(host.state().active_tools as string[])].sort()).toEqual([...UPSTREAM, ...CORRAL_TOOLS].sort());
-  expect(host.session.systemPrompt).toContain("# corral reviewer contract (Pi-native)");
+  expect(host.session.systemPrompt).toContain("# corral reviewer contract (corral-pi)");
   const target = join(cwd, "edited.txt");
   fixtureTransport().script([
     { toolCalls: [{ callId: "call-write", name: "write", arguments: { path: target, content: "x" } }] },

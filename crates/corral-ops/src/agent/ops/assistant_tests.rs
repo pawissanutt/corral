@@ -14,7 +14,7 @@ use crate::agent::test_support as ts;
 const PANE: &str = "w1:p7";
 const OTHER: &str = "w1:p8";
 
-/// The PM fixture's pi-native profile, assets with an assistant role module, two owner panes.
+/// The PM fixture's corral-pi profile, assets with an assistant role module, two owner panes.
 fn assistant_fixture() -> Fx {
     let fx = fixture();
     let assets = fx.root().join("assets/src/roles/assistant");
@@ -75,7 +75,7 @@ fn assistant_profile_refusals_give_actionable_fixes() {
         text.contains("corral config set assistant.agent pi-sol"),
         "{text}"
     );
-    assert!(text.contains("Pi-native profiles: pi-sol, pm-pi"), "{text}");
+    assert!(text.contains("corral-pi profiles: pi-sol, pm-pi"), "{text}");
 
     fx.ctx
         .store
@@ -87,7 +87,7 @@ fn assistant_profile_refusals_give_actionable_fixes() {
     let text = profile(&ctx, None, &Overrides::default())
         .unwrap_err()
         .to_string();
-    assert!(text.contains("no Pi-native profile exists"), "{text}");
+    assert!(text.contains("no corral-pi profile exists"), "{text}");
     assert!(
         text.contains("corral config set profiles.<name> ..."),
         "{text}"
@@ -462,7 +462,7 @@ fn doctor_shows_the_resolved_assistant_column_and_its_digest() {
     let checks = crate::agent::hooks::doctor::checks_with(&fx.ctx, None, None).unwrap();
     let line = checks
         .iter()
-        .find(|check| check.id == "pi_native_capabilities")
+        .find(|check| check.id == "corral_pi_capabilities")
         .unwrap();
     let snapshot = fx
         .ctx

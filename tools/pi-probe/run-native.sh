@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bun-hosted native Pi probe in a private, plugin-free herdr fixture, with node,
+# Bun-hosted corral-pi probe in a private, plugin-free herdr fixture, with node,
 # npm and npx shimmed to fail. The pinned runtime is installed from the
 # committed bun.lock into an empty fixture root. Offline by default: a synthetic
 # credential and the fake Codex transport, zero provider requests.

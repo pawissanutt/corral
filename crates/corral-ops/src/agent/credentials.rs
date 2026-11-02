@@ -27,7 +27,7 @@ pub const LOGIN_ENTRY: &str = "src/auth/login.ts";
 /// Present only in assets whose login honors `--provider` (T-479).
 pub const PROVIDERS_ENTRY: &str = "src/auth/providers.ts";
 
-/// A pi-native login provider (subscription OAuth or a metered AWS profile binding).
+/// A corral-pi login provider (subscription OAuth or a metered AWS profile binding).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Provider {
     pub id: &'static str,
@@ -142,7 +142,7 @@ fn file_status(root: &Path, _name: &str) -> CredentialStatus {
     CredentialStatus {
         dir: auth_dir(root),
         present: false,
-        problem: Some("the Pi-native host runs on Unix only".into()),
+        problem: Some("the corral-pi host runs on Unix only".into()),
     }
 }
 
@@ -153,7 +153,7 @@ pub fn login_assets(explicit: Option<PathBuf>, root: &Path) -> Result<PathBuf> {
         Some(dir) => dir,
         None => installed_in(root)?.with_context(|| {
             format!(
-                "assets_unavailable: no pi-native installation under {}; run `corral agent \
+                "assets_unavailable: no corral-pi installation under {}; run `corral agent \
                  install` first",
                 root.display()
             )
@@ -209,7 +209,7 @@ pub fn ensure_auth_dir(dir: &Path) -> Result<()> {
 
 #[cfg(not(unix))]
 pub fn ensure_auth_dir(_dir: &Path) -> Result<()> {
-    bail!("the Pi-native host runs on Unix only")
+    bail!("the corral-pi host runs on Unix only")
 }
 
 pub const USAGE: &str = "usage_error: `corral agent login` picks a provider interactively only on a \
@@ -258,7 +258,7 @@ fn pick_on_terminal(rows: &[picker::Row<'_>]) -> Result<Option<usize>> {
 
 #[cfg(not(unix))]
 fn pick_on_terminal(_rows: &[picker::Row<'_>]) -> Result<Option<usize>> {
-    bail!("the Pi-native host runs on Unix only")
+    bail!("the corral-pi host runs on Unix only")
 }
 
 /// Log in through Pi OAuth, or Rust-only AWS line prompts for Amazon Bedrock.
@@ -288,7 +288,7 @@ pub fn login_with_aws(
     if chosen.id == "amazon-bedrock" {
         let home = std::env::var_os("HOME").context("credentials_unavailable: HOME is not set")?;
         super::aws_profile::login(&root, Path::new(&home), aws.profile, aws.region, terminal)?;
-        println!("pi-native amazon-bedrock AWS profile binding stored (metered)");
+        println!("corral-pi amazon-bedrock AWS profile binding stored (metered)");
         return Ok(());
     }
     let explicit = match Store::find_root(start) {
@@ -335,7 +335,7 @@ pub fn login_with_aws(
     match (stored.present, stored.problem) {
         (true, None) => {
             println!(
-                "pi-native {} credentials present in {}",
+                "corral-pi {} credentials present in {}",
                 chosen.id,
                 stored.dir.display()
             );

@@ -51,7 +51,7 @@ pub(crate) fn fixture() -> (Fx, ResolvedProfile) {
     fx.ctx.store.config.profiles.insert(
         "bedrock".into(),
         serde_json::from_value(json!({
-            "harness":"pi-native", "vendor":"amazon-bedrock", "model":MODEL,
+            "harness":"corral-pi", "vendor":"amazon-bedrock", "model":MODEL,
         }))
         .unwrap(),
     );
@@ -323,7 +323,7 @@ fn sso_doctor_and_preflight_report_valid_expired_and_missing_tokens_read_only() 
 fn non_bedrock_profiles_do_not_get_a_metered_notice() {
     let fx = crate::agent::test_support::fx();
     let resolved: ResolvedProfile = serde_json::from_value(json!({
-        "profile":"codex", "harness":"pi-native", "command":"unused",
+        "profile":"codex", "harness":"corral-pi", "command":"unused",
         "model":"gpt-fixture", "vendor":"openai", "effort":null, "model_args":[],
     }))
     .unwrap();
@@ -345,7 +345,7 @@ fn inferred_bedrock_preflight_refuses_before_assets_credentials_or_launch() {
     fx.ctx.store.config.profiles.insert(
         "inferred".into(),
         serde_json::from_value(json!({
-            "harness":"pi-native", "model":format!("amazon-bedrock/{MODEL}"),
+            "harness":"corral-pi", "model":format!("amazon-bedrock/{MODEL}"),
         }))
         .unwrap(),
     );

@@ -255,7 +255,7 @@ pub fn record_evidence(
     evidence_inner(ctx, id, observation, None).map(|(record, _)| record)
 }
 
-/// The Pi-native `evidence` op: its receipt commits with the ledger entry.
+/// The corral-pi `evidence` op: its receipt commits with the ledger entry.
 pub fn record_evidence_request(
     ctx: &Ctx,
     id: &str,

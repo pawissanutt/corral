@@ -63,7 +63,7 @@ test("live private-pane C11: focused production assistant consumes brief and pag
     const taskRecord = () => JSON.parse(ok([corral, "show", fixture.task, "--json"], { cwd: workspace }));
     const before = taskRecord();
     const data = join(workspace, "data");
-    const auth = join(data, "corral/pi-native/auth");
+    const auth = join(data, "corral/corral-pi/auth");
     mkdirSync(auth, { recursive: true, mode: 0o700 });
     writeFileSync(join(auth, "auth.json"), JSON.stringify({ "openai-codex": { type: "oauth", access: syntheticAccess(),
       refresh: "synthetic-refresh", expires: Date.now() + 3_600_000, accountId: "synthetic" } }), { mode: 0o600 });

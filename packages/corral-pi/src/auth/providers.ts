@@ -1,4 +1,4 @@
-// The providers pi-native can run (OD5, T-479, T-504): each one's corral vendor, picker label, Pi
+// The providers corral-pi can run (OD5, T-479, T-504): each one's corral vendor, picker label, Pi
 // model API, auth kind, and the only destinations its host and its login may reach. The Rust side
 // (crates/corral-ops/src/agent/credentials.rs, PROVIDERS) lists the same ids and labels.
 // OpenAI Codex and Anthropic run on a subscription OAuth login; Amazon Bedrock is the one metered

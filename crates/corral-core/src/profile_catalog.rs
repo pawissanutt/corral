@@ -64,6 +64,7 @@ impl ProfileEligibility {
 #[serde(deny_unknown_fields)]
 pub struct ExecutionCandidate {
     pub id: String,
+    #[serde(with = "crate::harness_compat::string")]
     pub harness: String,
     pub connection: String,
     pub provider: String,
@@ -144,16 +145,16 @@ impl ExecutionCandidate {
             "candidate provider disagrees with model identity"
         );
         flags.render(&self.harness, Some(&self.model), self.effort.as_deref())?;
-        if crate::is_pi_native(&self.harness) {
+        if crate::is_corral_pi(&self.harness) {
             // Built in and argument-free: model and effort travel in the host bootstrap, so the
             // flag map's effort check above and the vendor allowlist are its rules.
-            crate::check_pi_native_vendor(&self.id, Some(&self.provider))?;
+            crate::check_corral_pi_vendor(&self.id, Some(&self.provider))?;
             ensure!(
-                !crate::PI_NATIVE_METERED_VENDORS.contains(&self.provider.as_str())
+                !crate::CORRAL_PI_METERED_VENDORS.contains(&self.provider.as_str())
                     || matches!(self.cost, CandidateCost::Metered { .. }),
-                "pi-native metered candidate requires metered cost"
+                "corral-pi metered candidate requires metered cost"
             );
-            ensure!(self.args.is_empty(), "pi-native candidate takes no args");
+            ensure!(self.args.is_empty(), "corral-pi candidate takes no args");
         } else {
             ensure!(
                 command.contains("{model_args}"),

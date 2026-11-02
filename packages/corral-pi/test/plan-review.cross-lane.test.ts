@@ -22,7 +22,7 @@ owner_decisions: []
 Implementation details.
 `;
 
-test("launched pi-native plan reviewer records a fixture verdict", async () => {
+test("launched corral-pi plan reviewer records a fixture verdict", async () => {
   if (!privateHerdr()) {
     console.log("plan review cross-lane: skipped (requires private test-herdr server)");
     return;
@@ -62,7 +62,7 @@ test("launched pi-native plan reviewer records a fixture verdict", async () => {
     } else {
       config += "\n[resources]\nmax_load_per_core = 1000000.0\n";
     }
-    writeFileSync(configPath, `${config}\n[agent]\nassets_dir = ${JSON.stringify(assets.dir)}\n[agent.capabilities.plan_reviewer]\nrole_enabled = true\n[profiles.pi]\nharness = "pi-native"\nmodel = "gpt-6.1-sol"\nvendor = "openai"\neffort = "high"\n`);
+    writeFileSync(configPath, `${config}\n[agent]\nassets_dir = ${JSON.stringify(assets.dir)}\n[agent.capabilities.plan_reviewer]\nrole_enabled = true\n[profiles.pi]\nharness = "corral-pi"\nmodel = "gpt-6.1-sol"\nvendor = "openai"\neffort = "high"\n`);
     cli("new", "Fixture plan", "-p", "app", "--ready");
     const plan = join(workspace, "plan.md");
     writeFileSync(plan, PLAN);

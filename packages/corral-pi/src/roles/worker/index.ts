@@ -1,5 +1,5 @@
 import { memoryTools } from "../common/memory.ts";
-// The Pi-native worker role (T-252 worker-role, OD3): upstream read, edit, write, bash, grep,
+// The corral-pi worker role (T-252 worker-role, OD3): upstream read, edit, write, bash, grep,
 // find and ls plus the worker's corral tools, the worker contract from the installed assets and
 // the corral-worker skill shipped beside this module. Nothing is loaded from the worktree. A fresh
 // session starts its first turn with the run prompt once Pi binds the role's extension, which

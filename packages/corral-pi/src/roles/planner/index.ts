@@ -1,4 +1,4 @@
-// The Pi-native planner role (T-460 plan-roles): upstream read, grep, find and ls, with no shell,
+// The corral-pi planner role (T-460 plan-roles): upstream read, grep, find and ls, with no shell,
 // edit or write tool, plus corral_ask, corral_withdraw, corral_plan_write and corral_plan_submit.
 // The source tree stays read-only; corral writes only this run's plan file. Submitting is the
 // planner's one completion step; it never reviews, approves or dispatches its plan.
@@ -14,7 +14,7 @@ const UPSTREAM: readonly UpstreamTool[] = ["read", "grep", "find", "ls"];
 const TOOLS: readonly CorralToolSpec[] = [receiptLookupTool(), askTool, withdrawTool, planWriteTool("plan"), planSubmitTool];
 const OPS: readonly CorralOp[] = ["hello", "event", ...TOOLS.map((tool) => tool.op)];
 
-export const CONTRACT = `# corral planner contract (Pi-native)
+export const CONTRACT = `# corral planner contract (corral-pi)
 
 You are the planner of corral task {{task}}, design run {{run}}, in project {{project}}.
 You write one plan; you do not implement it, review it, approve it or dispatch work.

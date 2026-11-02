@@ -1,4 +1,4 @@
-// Recovery cross-lane fixture (T-252 recovery): the real corral binary dispatches a pi-native run
+// Recovery cross-lane fixture (T-252 recovery): the real corral binary dispatches a corral-pi run
 // onto a fixture installation in the private plugin-free herdr server of scripts/test-herdr.sh.
 // `corral agent cancel` reaches the idle host and then a turn whose provider request was
 // accepted, without fencing. The Bun host is SIGKILLed inside a held turn while the pane stays;
@@ -83,7 +83,7 @@ beforeAll(async () => {
   const config = join(workspace, ".corral/corral.toml");
   writeFileSync(config, `${readFileSync(config, "utf8")}
 [profiles.pi]
-harness = "pi-native"
+harness = "corral-pi"
 model = "gpt-6.1-sol"
 vendor = "openai"
 effort = "high"
@@ -171,7 +171,7 @@ test("cancel never fences, and a host killed inside a turn resumes on its Pi ses
   let task = show("T-001");
   expect(task.status).toBe("needs_me");
   expect(task.runs.at(-1).outcome).toBeUndefined();
-  expect(task.runs.at(-1).blocked_excerpt).toMatch(/^Pi-native host lost: T-001\/R1 generation 1\./);
+  expect(task.runs.at(-1).blocked_excerpt).toMatch(/^corral-pi host lost: T-001\/R1 generation 1\./);
   // And corral's loss reconciliation released generation 1's herdr report: no stale working state or
   // corral-pi identity is left on the pane (dispatch's own task/run tokens stay), which stays open:
   const released = herdr("pane", "get", pane).pane;

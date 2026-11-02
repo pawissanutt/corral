@@ -1,6 +1,6 @@
 //! Store setup for the worker-role cross-lane fixture
 //! (packages/corral-pi/src/roles/worker/cross-lane.test.ts): a Running task in project `corral`
-//! whose R1 is a pi-native inbox run in the fixture's private herdr pane, a run prompt with a
+//! whose R1 is a corral-pi inbox run in the fixture's private herdr pane, a run prompt with a
 //! Gate contract section, and generation 1 opened for the in-process host. It prints one
 //! `WORKER_LANE <json>` line with the bind nonce the host proves at hello.
 use std::path::PathBuf;
@@ -42,7 +42,7 @@ fn worker_cross_lane_setup() {
         .output()
         .unwrap();
     let run: corral_core::Run = serde_json::from_value(json!({
-        "id": "R1", "agent": "pi", "harness": "pi-native", "delivery": "inbox", "worktree": app,
+        "id": "R1", "agent": "pi", "harness": "corral-pi", "delivery": "inbox", "worktree": app,
         "branch": "main", "base": "main",
         "base_sha": String::from_utf8_lossy(&base.stdout).trim(),
         "started": jiff::Timestamp::now(),

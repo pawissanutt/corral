@@ -1,5 +1,5 @@
 //! Test fixture shared by the recovery tests (T-252 recovery): a git worktree, a fake herdr that
-//! logs every call, a pi-native worker run bound to a real stand-in host process, a scripted
+//! logs every call, a corral-pi worker run bound to a real stand-in host process, a scripted
 //! bridge socket in the generation's runtime directory, and the gate executor child process of
 //! op-receipts, which the tests release or SIGKILL at its failpoints.
 use std::io::{BufRead, BufReader, Write};
@@ -87,14 +87,14 @@ impl Drop for Fx {
 
 pub(crate) fn run_json(id: &str, app: &Path, pane: &str, herdr: &Herdr) -> Value {
     json!({
-        "id": id, "agent": "pi", "harness": "pi-native", "model": "gpt-fixture",
+        "id": id, "agent": "pi", "harness": "corral-pi", "model": "gpt-fixture",
         "worktree": app, "branch": "main", "base": "main", "base_sha": git(app, &["rev-parse", "HEAD"]),
         "started": "2026-01-01T00:00:00Z", "delivery": "inbox",
         "herdr": {"workspace_id": "w0", "pane_id": pane, "socket": herdr.socket_path().unwrap()},
     })
 }
 
-/// A Running pi-native task in project `corral`; `gate` configures a gate command, and
+/// A Running corral-pi task in project `corral`; `gate` configures a gate command, and
 /// `drain_secs` bounds resume's wait for reservation executors.
 pub(crate) fn fixture(gate: bool, drain_secs: u64) -> Fx {
     let tmp = tempfile::tempdir().unwrap();

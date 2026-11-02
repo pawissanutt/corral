@@ -36,6 +36,7 @@ pub mod file_stamp;
 pub mod fs_guard;
 pub mod gate_presets;
 pub mod gate_tier;
+pub mod harness_compat;
 pub mod hints;
 pub mod history_summary;
 pub mod hooks;

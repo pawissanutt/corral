@@ -320,7 +320,7 @@ flags = "generic"
 model_flag = "--model"
 ```
 
-`corral harness list` shows which harnesses are installed, their versions and models. The built-in pi-native
+`corral harness list` shows which harnesses are installed, their versions and models. The built-in corral-pi
 harness lists the installed host's offline Pi catalog (`openai-codex/<id>`, `anthropic/<id>`) for each provider
 `corral agent doctor` sees logged in; without an installation or a login it falls back to free-text models with a
 note naming `corral agent install` or `corral agent login`.
@@ -453,7 +453,7 @@ The profile for a run is the first of these that applies:
 
 Rules skip a profile whose model is not available (with a warning). Explicit choices are always honored, but
 dispatch checks the final model against what the harness reports before it creates a worktree or pane: the
-model must exactly match a discovered id (`provider/id` for OMO, OMP and pi-native), and an unknown id fails with the close
+model must exactly match a discovered id (`provider/id` for OMO, OMP and corral-pi), and an unknown id fails with the close
 matches instead of silently picking another model. If harness discovery itself failed, dispatch warns and allows
 the unverified model. `corral harness list --refresh` re-detects installed models.
 
@@ -740,7 +740,7 @@ action; `--json` includes `session_policy` and each run's `session` record. A se
 
 OmO and OMP use role-specific transcript directories; Claude uses separately allocated exact session
 UUIDs. A resumed process is given the recorded file or UUID, never the newest session in the worktree.
-Pi-native hosts likewise receive the exact recorded transcript, including generation 1 of a new
+corral-pi hosts likewise receive the exact recorded transcript, including generation 1 of a new
 review accounting child. Its callback capability is new, so the old review attempt cannot authorize
 the new candidate. Each review receives the current candidate, gate packet, callback and prior
 findings and must check the delta and unresolved findings again.
@@ -1065,7 +1065,7 @@ See [board events](events.md) for delivery, wait filters, cursors and harness-sp
 
 ## agent.capabilities
 
-Optional Pi-native features per role; only pi-native runs read them.
+Optional corral-pi features per role; only corral-pi runs read them.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -1082,7 +1082,7 @@ todo = false
 ```
 
 Settings are resolved once per generation and again on explicit resume. See
-[Pi-native capabilities](pi-native.md#capabilities) for the catalog and recovery behavior.
+[corral-pi capabilities](corral-pi.md#capabilities) for the catalog and recovery behavior.
 
 ## herdr
 

@@ -45,7 +45,7 @@ describe("shared model catalog", () => {
     const ambientPath = config([{ id: "ambient-pi-model" }]);
     const data = mkdtempSync(join(tmpdir(), "corral-catalog-data-"));
     directories.push(data);
-    const owned = join(data, "corral", "pi-native");
+    const owned = join(data, "corral", "corral-pi");
     mkdirSync(owned, { recursive: true });
     writeConfig(join(owned, "models.json"), [{ id: "corral-owned-model" }]);
     const previousXdg = process.env.XDG_DATA_HOME;

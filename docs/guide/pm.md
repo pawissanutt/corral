@@ -3,7 +3,7 @@
 Keep PM handoffs and notes in workspace machine state under `.corral/pm/`. Use
 `.evidence/` for worktree scratch and tracked `docs/records/` for durable project reports.
 
-## Pi-native operating procedure
+## corral-pi operating procedure
 
 Pi's Rust launcher writes `.corral/prompts/pm-pi.json` on every launch/resume with the
 workspace, approved project paths and a compact effective-policy summary (mode, pause,
@@ -148,7 +148,7 @@ an item in the wrong state refuses `item_state`.
 `workset.inbox`, oldest first. The first one becomes `next` only when no authorized action
 or unpresented decision is pending. Its `why` names the item, its author and kind, and
 its evidence carries the requested command and quoted owner words. The OmO PM uses these
-cards and the CLI above on its sweep. A Pi-native PM also gets one `pm_inbox_wake` per open
+cards and the CLI above on its sweep. A corral-pi PM also gets one `pm_inbox_wake` per open
 item, keyed `pmi:<id>:0` and delivered by sync like a question wake. It reads and acts on
 items with `corral_inbox_read` and `corral_inbox_resolve` (claim, then resolve at the
 current revision). Items are workspace-wide, not limited to the PM's project.
@@ -164,9 +164,9 @@ finds it live again; the key and the host's idempotency keep it to one delivery.
 session receives nothing: the outcome stays in the item, which its session record lists.
 The normal board/sync worker still owns automatic transitions.
 
-### Opt-in Pi-native PM
+### Opt-in corral-pi PM
 
-OmO remains the default PM. Selecting a `pi-native` PM profile opts into a
+OmO remains the default PM. Selecting a `corral-pi` PM profile opts into a
 different tool loadout, not additional authority. The Pi PM is bound to one
 approved project scope, separately from worker and reviewer runs. Its typed
 read tools provide brief, next, task, question and evidence readback; its

@@ -114,13 +114,13 @@ fn model_picker_filters_and_picks() {
 }
 
 #[test]
-fn pi_native_model_picker_lists_the_installed_hosts_models() {
-    // Given OpenAI and Anthropic pi-native profiles and a detection report where the installed
+fn corral_pi_model_picker_lists_the_installed_hosts_models() {
+    // Given OpenAI and Anthropic corral-pi profiles and a detection report where the installed
     // host listed both providers' catalogs.
     let fx = fixture();
     let mut text = fx.toml();
-    text.push_str("\n[profiles.pi]\nharness = \"pi-native\"\nvendor = \"openai\"\n");
-    text.push_str("\n[profiles.pi-claude]\nharness = \"pi-native\"\nvendor = \"anthropic\"\n");
+    text.push_str("\n[profiles.pi]\nharness = \"corral-pi\"\nvendor = \"openai\"\n");
+    text.push_str("\n[profiles.pi-claude]\nharness = \"corral-pi\"\nvendor = \"anthropic\"\n");
     std::fs::write(fx.ctx.store.config_path(), text).unwrap();
     let cache = fx
         .ctx
@@ -134,7 +134,7 @@ fn pi_native_model_picker_lists_the_installed_hosts_models() {
         .as_array_mut()
         .unwrap()
         .push(serde_json::json!({
-            "key": "pi-native", "program": null, "path": "/usr/bin/bun", "version": "1.3.0",
+            "key": "corral-pi", "program": null, "path": "/usr/bin/bun", "version": "1.3.0",
             "models": ["openai-codex/gpt-6.1-sol", "openai-codex/gpt-5.5",
                        "anthropic/claude-opus-5-5"],
             "model_source": "listed", "efforts": [], "takes_effort": true

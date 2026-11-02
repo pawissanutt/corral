@@ -433,7 +433,7 @@ fn harness_of<'a>(harness: Option<&'a str>, agent: &'a str, config: &'a Config) 
 }
 
 pub(crate) fn collect(run: &mut Run, store: &Store) {
-    let result = if crate::agent::hooks::run_is_pi_native(run) {
+    let result = if crate::agent::hooks::run_is_corral_pi(run) {
         crate::agent::hooks::usage::collect(run, store)
     } else {
         (|| {

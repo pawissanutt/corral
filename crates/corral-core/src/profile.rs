@@ -11,49 +11,49 @@ use crate::Config;
 /// Profile used when nothing else names one.
 pub const FALLBACK_PROFILE: &str = "omo";
 
-/// The opt-in Pi-native host harness (T-252). Its key is its identity: no other harness may use
-/// its flag map, so every seam recognizes a Pi-native run from `Run.harness` alone.
-pub const PI_NATIVE_HARNESS: &str = "pi-native";
+/// The opt-in corral-pi host harness (T-252). Its key is its identity: no other harness may use
+/// its flag map, so every seam recognizes a corral-pi run from `Run.harness` alone.
+pub const CORRAL_PI_HARNESS: &str = "corral-pi";
 /// Built-in launch template; `{corral}` and `{delivery_args}` are rendered by the agent launch
 /// hook. Model and effort travel in the one-shot bootstrap, never on the command line.
-pub const PI_NATIVE_COMMAND: &str = "{corral} agent launch {delivery_args}";
-/// Vendors a pi-native profile may use. Bedrock is the explicit metered exception to OD5.
-pub const PI_NATIVE_VENDORS: [&str; 4] = ["openai", "anthropic", "amazon-bedrock", "llama.cpp"];
+pub const CORRAL_PI_COMMAND: &str = "{corral} agent launch {delivery_args}";
+/// Vendors a corral-pi profile may use. Bedrock is the explicit metered exception to OD5.
+pub const CORRAL_PI_VENDORS: [&str; 4] = ["openai", "anthropic", "amazon-bedrock", "llama.cpp"];
 /// Metered vendors require an explicit profile vendor, never model-only inference.
-pub const PI_NATIVE_METERED_VENDORS: [&str; 1] = ["amazon-bedrock"];
+pub const CORRAL_PI_METERED_VENDORS: [&str; 1] = ["amazon-bedrock"];
 
-pub fn is_pi_native(harness: &str) -> bool {
-    harness == PI_NATIVE_HARNESS
+pub fn is_corral_pi(harness: &str) -> bool {
+    crate::harness_compat::canonical(harness) == CORRAL_PI_HARNESS
 }
 
-/// The pi-native vendor allowlist, checked before any worktree or pane exists.
-pub fn check_pi_native_vendor(profile: &str, vendor: Option<&str>) -> Result<()> {
+/// The corral-pi vendor allowlist, checked before any worktree or pane exists.
+pub fn check_corral_pi_vendor(profile: &str, vendor: Option<&str>) -> Result<()> {
     match vendor {
-        Some(vendor) if PI_NATIVE_VENDORS.contains(&vendor) => Ok(()),
+        Some(vendor) if CORRAL_PI_VENDORS.contains(&vendor) => Ok(()),
         Some(vendor) => bail!(
-            "vendor_refused: pi-native profile '{profile}' uses vendor '{vendor}' (allowed: {})",
-            PI_NATIVE_VENDORS.join(", ")
+            "vendor_refused: corral-pi profile '{profile}' uses vendor '{vendor}' (allowed: {})",
+            CORRAL_PI_VENDORS.join(", ")
         ),
         None => bail!(
-            "vendor_refused: pi-native profile '{profile}' has no vendor; set vendor or a \
+            "vendor_refused: corral-pi profile '{profile}' has no vendor; set vendor or a \
              provider-qualified model (allowed: {})",
-            PI_NATIVE_VENDORS.join(", ")
+            CORRAL_PI_VENDORS.join(", ")
         ),
     }
 }
 
 /// Refuses an inferred metered route; the profile's raw vendor must name the resolved vendor.
-pub fn check_pi_native_metered_opt_in(
+pub fn check_corral_pi_metered_opt_in(
     profile: &str,
     explicit_vendor: Option<&str>,
     resolved_vendor: Option<&str>,
 ) -> Result<()> {
     if let Some(vendor) = resolved_vendor
-        && PI_NATIVE_METERED_VENDORS.contains(&vendor)
+        && CORRAL_PI_METERED_VENDORS.contains(&vendor)
         && explicit_vendor != Some(vendor)
     {
         bail!(
-            "metered_vendor_not_explicit: pi-native profile '{profile}' must explicitly set \
+            "metered_vendor_not_explicit: corral-pi profile '{profile}' must explicitly set \
              vendor = \"{vendor}\" to opt in to metered usage"
         );
     }
@@ -115,6 +115,7 @@ pub struct Harness {
     /// Built-in flag map: "omo", "omp", "claude" or "generic". Default: the harness key when it names a
     /// built-in, else "generic" (no model or effort).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(with = "crate::harness_compat::optional")]
     pub flags: Option<String>,
     /// Overrides the flag map's model flag (e.g. "--model").
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -135,6 +136,7 @@ pub struct Harness {
 #[derive(Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct HarnessCapabilities {
+    #[serde(with = "crate::harness_compat::optional")]
     flags: Option<String>,
     model_flag: Option<String>,
     effort_flag: Option<String>,
@@ -159,6 +161,7 @@ pub struct Profile {
     /// Absent on legacy/manual presets. The enclosing map key remains the stable identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<crate::ProfileMetadata>,
+    #[serde(with = "crate::harness_compat::string")]
     pub harness: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -197,12 +200,13 @@ impl FlagMap {
     /// Built-in flag map by name: omo `--model X --thinking Y` (off..max), omp the same plus "auto",
     /// claude `--model X --effort Y` (low..max), generic none.
     pub fn builtin(name: &str) -> Option<FlagMap> {
+        let name = crate::harness_compat::canonical(name);
         let (model, effort, levels): (Option<&str>, Option<&str>, &[&str]) = match name {
             "omo" => (Some("--model"), Some("--thinking"), &PI_EFFORTS),
             "omp" => (Some("--model"), Some("--thinking"), &OMP_EFFORTS),
             "claude" => (Some("--model"), Some("--effort"), &CLAUDE_EFFORTS),
             // Validates model and effort; resolve_profile renders no argv for it.
-            PI_NATIVE_HARNESS => (Some("--model"), Some("--thinking"), &PI_EFFORTS),
+            CORRAL_PI_HARNESS => (Some("--model"), Some("--thinking"), &PI_EFFORTS),
             "generic" => (None, None, &[]),
             _ => return None,
         };
@@ -255,9 +259,11 @@ pub(crate) fn normalize_effort(effort: &str) -> String {
 impl Harness {
     /// Flag validity does not depend on a decodable command template.
     pub(crate) fn base_flag_map(key: &str, flags: Option<&str>) -> Result<FlagMap> {
+        let key = crate::harness_compat::canonical(key);
+        let flags = flags.map(crate::harness_compat::canonical);
         match flags {
-            Some(PI_NATIVE_HARNESS) if key != PI_NATIVE_HARNESS => bail!(
-                "harness '{key}': flags '{PI_NATIVE_HARNESS}' belong only to harness {PI_NATIVE_HARNESS}"
+            Some(CORRAL_PI_HARNESS) if key != CORRAL_PI_HARNESS => bail!(
+                "harness '{key}': flags '{CORRAL_PI_HARNESS}' belong only to harness {CORRAL_PI_HARNESS}"
             ),
             Some(name) => FlagMap::builtin(name).ok_or_else(|| {
                 anyhow!(
@@ -315,6 +321,7 @@ pub struct ProfileChoice {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedProfile {
     pub profile: String,
+    #[serde(with = "crate::harness_compat::string")]
     pub harness: String,
     /// The harness command template.
     pub command: String,
@@ -540,9 +547,9 @@ impl Config {
                             ProfileCheck::Effort
                         },
                     ),
-                    // Pi-native model and effort travel in the bootstrap, not argv.
+                    // corral-pi model and effort travel in the bootstrap, not argv.
                     Ok(_)
-                        if !command.contains("{model_args}") && !is_pi_native(&profile.harness) =>
+                        if !command.contains("{model_args}") && !is_corral_pi(&profile.harness) =>
                     {
                         let message = format!(
                             "harness '{}' command has no {{model_args}} placeholder; {field} cannot be passed",
@@ -686,6 +693,7 @@ impl Config {
 
     /// Command template and flag map of a harness: `[harnesses.<key>]`, else legacy `[agents.<key>]`.
     pub fn harness(&self, key: &str) -> Result<(String, FlagMap)> {
+        let key = crate::harness_compat::canonical(key);
         if let Some(h) = self.harnesses.get(key) {
             return Ok((h.command.clone(), h.flag_map(key)?));
         }
@@ -695,9 +703,9 @@ impl Config {
                 .ok_or_else(|| anyhow!("generic flag map missing"))?;
             return Ok((a.command.clone(), flags));
         }
-        if is_pi_native(key) {
+        if is_corral_pi(key) {
             return Ok((
-                PI_NATIVE_COMMAND.to_owned(),
+                CORRAL_PI_COMMAND.to_owned(),
                 Harness::base_flag_map(key, None)?,
             ));
         }
@@ -726,7 +734,7 @@ impl Config {
             .unwrap_or_else(|| self.default_profile(task_profile, project));
         let (harness, model, effort, args) = if let Some(p) = self.profiles.get(&name) {
             (
-                p.harness.clone(),
+                crate::harness_compat::canonical(&p.harness).to_owned(),
                 p.model.clone(),
                 p.effort.clone(),
                 p.args.clone(),
@@ -752,9 +760,9 @@ impl Config {
         let mut model_args = flags
             .render(&harness, model.as_deref(), effort.as_deref())
             .map_err(|e| anyhow!("profile '{name}': {e}"))?;
-        if is_pi_native(&harness) {
+        if is_corral_pi(&harness) {
             if !args.is_empty() {
-                bail!("profile '{name}': pi-native profiles take no extra args");
+                bail!("profile '{name}': corral-pi profiles take no extra args");
             }
             model_args.clear();
         }
@@ -786,9 +794,9 @@ mod local_vendor_tests {
         // Given the cloud vendors and an explicit local inference vendor.
         for vendor in ["openai", "anthropic", "amazon-bedrock", "llama.cpp"] {
             // When dispatch checks the vendor, then each supported route is admitted.
-            assert!(check_pi_native_vendor("configured", Some(vendor)).is_ok());
+            assert!(check_corral_pi_vendor("configured", Some(vendor)).is_ok());
         }
-        assert!(check_pi_native_vendor("configured", Some("unconfigured")).is_err());
-        assert!(check_pi_native_vendor("configured", None).is_err());
+        assert!(check_corral_pi_vendor("configured", Some("unconfigured")).is_err());
+        assert!(check_corral_pi_vendor("configured", None).is_err());
     }
 }

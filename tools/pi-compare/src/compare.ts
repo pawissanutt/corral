@@ -46,13 +46,13 @@ export function validatePair(pair: Pair, seed: string, omo: Show, pi: Show, omoS
     return identity;
   };
   if (canonical(fixed(pair.omo.before)) !== canonical(fixed(pair.omo.after))
-    || canonical(fixed(pair.pi_native.before)) !== canonical(fixed(pair.pi_native.after))
-    || canonical(pair.omo.before) !== canonical(pair.pi_native.before)
-    || canonical(pair.omo.after) !== canonical(pair.pi_native.after)) {
+    || canonical(fixed(pair.corral_pi.before)) !== canonical(fixed(pair.corral_pi.after))
+    || canonical(pair.omo.before) !== canonical(pair.corral_pi.before)
+    || canonical(pair.omo.after) !== canonical(pair.corral_pi.after)) {
     errors.push("binary/config/contract/reviewer/PM/slot identity drift");
   }
   for (const [show, start, arm, harness] of [
-    [omo, omoStart, pair.omo, "omo"], [pi, piStart, pair.pi_native, "pi-native"],
+    [omo, omoStart, pair.omo, "omo"], [pi, piStart, pair.corral_pi, "corral-pi"],
   ] as const) {
     const run = selectedRun(show, arm.run);
     const initial = selectedRun(start, arm.run);
@@ -79,7 +79,7 @@ export function validatePair(pair: Pair, seed: string, omo: Show, pi: Show, omoS
     }
   }
   const left = selectedRun(omo, pair.omo.run);
-  const right = selectedRun(pi, pair.pi_native.run);
+  const right = selectedRun(pi, pair.corral_pi.run);
   if (omo.id === pi.id && left.id === right.id) errors.push("worker execution reused across arms");
   if (left.base_sha !== right.base_sha) errors.push("base differs");
   if (left.effort !== right.effort) errors.push("effort differs");
@@ -105,12 +105,12 @@ export async function compare(manifest: Manifest, root: string) {
   const used = new Set<string>();
   const pairs: {
     id: string; size: string; kind: string; invalid: string[];
-    budget_stop: boolean; omo: Metrics; pi_native: Metrics;
+    budget_stop: boolean; omo: Metrics; corral_pi: Metrics;
     raw: { path: string; sha256: string }[];
   }[] = [];
   for (const pair of manifest.pairs) {
-    const paths = [pair.omo.show, pair.omo.events, pair.pi_native.show, pair.pi_native.events,
-      pair.selection, pair.omo.start_show, pair.pi_native.start_show];
+    const paths = [pair.omo.show, pair.omo.events, pair.corral_pi.show, pair.corral_pi.events,
+      pair.selection, pair.omo.start_show, pair.corral_pi.start_show];
     const raw = await Promise.all(paths.map((path) => readRaw(resolve(root, path))));
     const [leftShow, leftEvents, rightShow, rightEvents] = raw;
     if (leftShow === undefined || leftEvents === undefined || rightShow === undefined || rightEvents === undefined) {
@@ -133,10 +133,10 @@ export async function compare(manifest: Manifest, root: string) {
     if (used.has(pair.source_task)) invalid.push("task reused across pairs");
     used.add(pair.source_task);
     const left = measure(omo, selectedRun(omo, pair.omo.run), parseEvents(leftEvents));
-    const right = measure(pi, selectedRun(pi, pair.pi_native.run), parseEvents(rightEvents));
+    const right = measure(pi, selectedRun(pi, pair.corral_pi.run), parseEvents(rightEvents));
     const first = pair.order[0] === "omo" ? left : right;
     const secondRun = pair.order[0] === "omo"
-      ? selectedRun(pi, pair.pi_native.run) : selectedRun(omo, pair.omo.run);
+      ? selectedRun(pi, pair.corral_pi.run) : selectedRun(omo, pair.omo.run);
     if (Date.parse(first.approved_at) > Date.parse(secondRun.started)) {
       invalid.push("arms overlap before independent approval");
     }
@@ -147,7 +147,7 @@ export async function compare(manifest: Manifest, root: string) {
     const budgetStop = left.total_tokens + right.total_tokens > 2 * pair.expected_tokens;
     pairs.push({
       id: pair.id, size: omo.size, kind: omo.kind, invalid, budget_stop: budgetStop,
-      omo: left, pi_native: right,
+      omo: left, corral_pi: right,
       raw: paths.map((path, index) => {
         const content = raw[index];
         if (content === undefined) throw new ComparisonError("raw_missing", path);
@@ -162,7 +162,7 @@ export async function compare(manifest: Manifest, root: string) {
     && new Set(pairs.map((pair) => pair.kind)).size > 1
     && new Set(manifest.pairs.map((pair) => pair.id)).size === 6;
   const omo = aggregate(pairs.map((pair) => pair.omo));
-  const pi = aggregate(pairs.map((pair) => pair.pi_native));
+  const pi = aggregate(pairs.map((pair) => pair.corral_pi));
   const checks = thresholds(omo, pi);
   const stopped = pairs.some((pair) => pair.budget_stop);
   const valid = complete && pairs.every((pair) => !pair.invalid.length) && !stopped;
@@ -172,7 +172,7 @@ export async function compare(manifest: Manifest, root: string) {
     version: 1, data_kind: manifest.data_kind, complete, valid, budget_stop: stopped,
     outcome: !valid || !measured ? "not_evaluated" : pass ? "pass" : "fail",
     pm_evaluated: false, defaults_changed: false,
-    thresholds: checks, aggregates: { omo, pi_native: pi }, pairs,
+    thresholds: checks, aggregates: { omo, corral_pi: pi }, pairs,
   };
 }
 export type Report = Awaited<ReturnType<typeof compare>>;

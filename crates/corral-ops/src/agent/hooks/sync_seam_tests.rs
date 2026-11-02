@@ -1,4 +1,4 @@
-//! sync's idle rule at the pi-native seam: an idle pane past `idle_after_secs` is flagged
+//! sync's idle rule at the corral-pi seam: an idle pane past `idle_after_secs` is flagged
 //! `idle_no_report` unless the sync hook reported the run's binding healthy.
 use std::collections::HashMap;
 
@@ -9,7 +9,7 @@ use serde_json::json;
 use super::*;
 
 #[test]
-fn a_healthy_pi_native_binding_leaves_idle_no_report_unset() {
+fn a_healthy_corral_pi_binding_leaves_idle_no_report_unset() {
     for (healthy, flagged) in [(false, true), (true, false)] {
         // Given a Running run seen working, now idle in its pane for an hour:
         let tmp = tempfile::tempdir().unwrap();
@@ -21,7 +21,7 @@ fn a_healthy_pi_native_binding_leaves_idle_no_report_unset() {
         let task = ctx.store.create("Idle", None, Status::Running, "").unwrap();
         let socket = ctx.herdr.socket_path().unwrap();
         let run: Run = serde_json::from_value(json!({
-            "id": "R1", "agent": "pi", "harness": "pi-native", "worktree": tmp.path(),
+            "id": "R1", "agent": "pi", "harness": "corral-pi", "worktree": tmp.path(),
             "branch": "main", "base": "main", "base_sha": "fixture",
             "started": "2026-10-15T00:00:00Z", "herdr": {"workspace_id": "w1", "pane_id": "w1:p1", "socket": socket},
             "seen_pane": true, "seen_working": true, "idle_since": "2026-10-15T00:00:00Z"

@@ -95,7 +95,7 @@ struct Pending {
     refused_request: Option<String>,
 }
 
-/// The Pi-native request a gate launch executes for; `ReviewLaunch::submit` fences on it.
+/// The corral-pi request a gate launch executes for; `ReviewLaunch::submit` fences on it.
 #[derive(Debug, Clone)]
 pub(crate) struct GateRequest {
     pub(crate) request_id: String,

@@ -113,7 +113,7 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
         },
         Cmd::Agent(args) => match &args.cmd {
             // The host's authenticated channel: the operation's role table decides what the
-            // assistant role may do, as for every other Pi-native role.
+            // assistant role may do, as for every other corral-pi role.
             AgentCmd::Call { .. } => File,
             AgentCmd::Doctor { .. } | AgentCmd::State { .. } => Read,
             AgentCmd::Rewind { list, .. } => read_unless(!list),

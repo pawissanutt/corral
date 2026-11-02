@@ -48,7 +48,7 @@ pub fn register_wait(ctx: &Ctx, id: &str, request: WaitRequest, now: Timestamp) 
     ctx.store.get(id)
 }
 
-/// The Pi-native `wait` op: its receipt and wake subscription commit with the wait.
+/// The corral-pi `wait` op: its receipt and wake subscription commit with the wait.
 pub fn register_wait_request(
     ctx: &Ctx,
     id: &str,

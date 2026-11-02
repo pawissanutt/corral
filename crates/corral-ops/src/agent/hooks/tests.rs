@@ -1,4 +1,4 @@
-//! Seam tests: other harnesses never reach a hook; pi-native profiles are refused before any
+//! Seam tests: other harnesses never reach a hook; corral-pi profiles are refused before any
 //! worktree or pane; run-end cleanup; the sync hook; op and subcommand routing.
 use std::collections::HashMap;
 use std::path::Path;
@@ -40,7 +40,7 @@ fn task_with(fx: &Fx, harness: &str) -> Task {
 
 fn pi_profile(fx: &mut Fx, vendor: &str) {
     let profile = serde_json::from_value(json!({
-        "harness": "pi-native", "model": "gpt-6.1-sol", "vendor": vendor, "effort": "high"
+        "harness": "corral-pi", "model": "gpt-6.1-sol", "vendor": vendor, "effort": "high"
     }))
     .unwrap();
     fx.ctx.store.config.profiles.insert("pi".into(), profile);
@@ -71,7 +71,7 @@ fn exercise(fx: &Fx, task: &Task, profile: &ResolvedProfile) -> Vec<&'static str
     for target in [run, child] {
         let mut copy = target.clone();
         crate::usage::collect(&mut copy, &ctx.store);
-        let _ = crate::delivery::adapters::pi_native(target);
+        let _ = crate::delivery::adapters::corral_pi(target);
     }
     let harness = run.harness.as_deref().unwrap();
     let _ = crate::delivery::owner::launch_mode(harness);
@@ -90,7 +90,7 @@ fn exercise(fx: &Fx, task: &Task, profile: &ResolvedProfile) -> Vec<&'static str
 
     let mut done = task.clone();
     done.status = Status::Done;
-    if task_is_pi_native(&done) {
+    if task_is_corral_pi(&done) {
         cleanup::run_end(ctx, &done).unwrap();
     }
     if configured(&ctx.store.config) {
@@ -101,7 +101,7 @@ fn exercise(fx: &Fx, task: &Task, profile: &ResolvedProfile) -> Vec<&'static str
 
 #[test]
 fn other_harnesses_never_reach_an_agent_hook() {
-    // Given an OmO task and the default OmO profile, with no pi-native profile configured:
+    // Given an OmO task and the default OmO profile, with no corral-pi profile configured:
     let fx = fx();
     let task = task_with(&fx, "omo");
     let omo = resolved(&fx, None);
@@ -110,7 +110,7 @@ fn other_harnesses_never_reach_an_agent_hook() {
     let consulted = exercise(&fx, &task, &omo);
     // Then no hook is consulted and the existing decisions are unchanged.
     assert_eq!(consulted, Vec::<&str>::new());
-    assert!(!task_is_pi_native(&task) && !configured(&fx.ctx.store.config));
+    assert!(!task_is_corral_pi(&task) && !configured(&fx.ctx.store.config));
     assert_eq!(
         crate::delivery::owner::launch_mode("omo"),
         DeliveryMode::Inbox
@@ -123,11 +123,11 @@ fn other_harnesses_never_reach_an_agent_hook() {
 }
 
 #[test]
-fn pi_native_runs_reach_every_hook() {
-    // Given the same task on the pi-native harness and a pi-native profile:
+fn corral_pi_runs_reach_every_hook() {
+    // Given the same task on the corral-pi harness and a corral-pi profile:
     let mut fx = fx();
     pi_profile(&mut fx, "openai");
-    let task = task_with(&fx, "pi-native");
+    let task = task_with(&fx, "corral-pi");
     let pi = resolved(&fx, Some("pi"));
     // When every seam runs, each reaches its hook, so the other-harness test can fail.
     let consulted = exercise(&fx, &task, &pi);
@@ -147,17 +147,49 @@ fn pi_native_runs_reach_every_hook() {
         );
     }
     assert_eq!(
-        crate::delivery::owner::review_launch_mode("pi-native"),
+        crate::delivery::owner::review_launch_mode("corral-pi"),
         DeliveryMode::Inbox
     );
     assert!(pi.model_args.is_empty(), "{:?}", pi.model_args);
-    assert_eq!(pi.command, corral_core::PI_NATIVE_COMMAND);
+    assert_eq!(pi.command, corral_core::CORRAL_PI_COMMAND);
 }
 
 #[test]
-fn pi_native_usage_note_names_the_missing_collector() {
-    let fx = fx();
+fn legacy_pi_native_config_dispatches_as_corral_pi() {
+    let mut fx = fx();
+    let path = fx.ctx.store.root().join("legacy-harness.toml");
+    std::fs::write(
+        &path,
+        r#"
+[profiles.pi-sol]
+harness = "pi-native"
+model = "gpt-6.1-sol"
+vendor = "openai"
+effort = "high"
+"#,
+    )
+    .unwrap();
+    let config = corral_core::Config::load(&path).unwrap();
+    assert_eq!(config.profiles["pi-sol"].harness, "corral-pi");
+    assert!(!config.to_toml().contains("pi-native"));
+    fx.ctx.store.config.profiles = config.profiles;
+    let pi = resolved(&fx, Some("pi-sol"));
+    assert_eq!(pi.profile, "pi-sol");
+    assert_eq!(pi.harness, "corral-pi");
+    assert_eq!(pi.command, corral_core::CORRAL_PI_COMMAND);
+    assert!(pi.model_args.is_empty());
     let task = task_with(&fx, "pi-native");
+    let loaded = fx.ctx.store.get(&task.id).unwrap();
+    assert_eq!(loaded.runs[0].harness.as_deref(), Some("corral-pi"));
+    let consulted = exercise(&fx, &loaded, &pi);
+    assert!(consulted.contains(&"preflight"));
+    assert!(consulted.contains(&"delivery"));
+}
+
+#[test]
+fn corral_pi_usage_note_names_the_missing_collector() {
+    let fx = fx();
+    let task = task_with(&fx, "corral-pi");
     for mut run in [task.runs[0].clone(), task.runs[0].review_runs[0].clone()] {
         crate::usage::collect(&mut run, &fx.ctx.store);
         assert_eq!(run.usage, None);
@@ -184,7 +216,7 @@ fn refusal(error: anyhow::Error) -> String {
 #[test]
 fn preflight_names_the_missing_piece_and_its_owner() {
     let _data_root = ts::private_data_root();
-    // Given a pi-native profile and an asset directory filled in one step at a time:
+    // Given a corral-pi profile and an asset directory filled in one step at a time:
     let mut fx = fx();
     pi_profile(&mut fx, "openai");
     let pi = resolved(&fx, Some("pi"));
@@ -194,7 +226,7 @@ fn preflight_names_the_missing_piece_and_its_owner() {
             .map(refusal)
             .unwrap_or_default()
     };
-    assert!(check(&fx, AgentRole::Worker).starts_with("assets_unavailable: no pi-native asset"));
+    assert!(check(&fx, AgentRole::Worker).starts_with("assets_unavailable: no corral-pi asset"));
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("assets");
     fx.ctx.store.config.agent.assets_dir = Some(dir.clone());
@@ -252,7 +284,7 @@ fn preflight_names_the_missing_piece_and_its_owner() {
     let error = preflight::check(&fx.ctx, AgentRole::Worker, &unlisted).unwrap_err();
     assert!(
         format!("{error:#}")
-            .starts_with("vendor_refused: pi-native profile 'pi' uses vendor 'mistral'"),
+            .starts_with("vendor_refused: corral-pi profile 'pi' uses vendor 'mistral'"),
         "{error:#}"
     );
     // An allowlisted vendor the installed host does not declare is refused with its own code,
@@ -293,7 +325,7 @@ fn preflight_names_the_missing_piece_and_its_owner() {
 #[test]
 fn dispatch_and_pm_open_refuse_before_any_worktree_or_pane() {
     let _data_root = ts::private_data_root();
-    // Given a pi-native profile with no installed assets, a Ready task in a real project, and a
+    // Given a corral-pi profile with no installed assets, a Ready task in a real project, and a
     // terminal engine that does not exist (any pane or workspace call would fail differently):
     let mut fx = fx();
     let repo = tempfile::tempdir().unwrap();
@@ -327,7 +359,7 @@ fn dispatch_and_pm_open_refuse_before_any_worktree_or_pane() {
         .store
         .create("Pi task", Some("corral"), Status::Ready, "")
         .unwrap();
-    // When dispatch runs with the pi-native profile, and the PM opens on it:
+    // When dispatch runs with the corral-pi profile, and the PM opens on it:
     let opts = crate::DispatchOpts {
         profile: Some("pi".into()),
         ..Default::default()
@@ -368,8 +400,8 @@ fn run_end_cleanup_removes_only_ended_runtime_and_keeps_sessions() {
     use corral_core::inbox::Recipient;
     let fx = fx();
     let root = tempfile::tempdir().unwrap();
-    // Given a lost (resumable) pi-native run with a superseded and an open, host-lost child:
-    let task = task_with(&fx, "pi-native");
+    // Given a lost (resumable) corral-pi run with a superseded and an open, host-lost child:
+    let task = task_with(&fx, "corral-pi");
     let id = task.id.clone();
     let worker = ContainerRef::Worker {
         task: id.clone(),
@@ -386,7 +418,7 @@ fn run_end_cleanup_removes_only_ended_runtime_and_keeps_sessions() {
             t.status = Status::NeedsMe;
             t.runs[0]
                 .review_runs
-                .push(with_harness("R1-review2", "p3", "pi-native"));
+                .push(with_harness("R1-review2", "p3", "corral-pi"));
             Ok(())
         })
         .unwrap();
@@ -474,7 +506,7 @@ fn run_end_cleanup_removes_only_ended_runtime_and_keeps_sessions() {
 
 #[test]
 fn sync_hook_calls_once_per_open_container_and_terminalizes_closed_ones() {
-    // Given a Review task whose pi-native reviewer asked a question, then was superseded by a
+    // Given a Review task whose corral-pi reviewer asked a question, then was superseded by a
     // new review child, with the worker run's host healthy:
     let fx = fx();
     let (id, target) = ts::reviewer_task(&fx);
@@ -503,7 +535,7 @@ fn sync_hook_calls_once_per_open_container_and_terminalizes_closed_ones() {
             t.runs[0].agent_host.as_mut().unwrap().binding.health = HostHealth::Healthy;
             t.runs[0]
                 .review_runs
-                .push(with_harness("R1-review2", "p3", "pi-native"));
+                .push(with_harness("R1-review2", "p3", "corral-pi"));
             Ok(())
         })
         .unwrap();
@@ -646,7 +678,7 @@ fn every_agent_subcommand_routes_to_its_owner_module() {
         );
         assert_eq!(command.owner(), "recovery");
         assert!(
-            error.to_string().contains("no Pi-native PM is bound"),
+            error.to_string().contains("no corral-pi PM is bound"),
             "{error}"
         );
     }

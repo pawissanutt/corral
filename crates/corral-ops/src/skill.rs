@@ -11,7 +11,7 @@ pub const SKILL_HARNESSES: &[(&str, &str, &str)] = &[
     ("omp", ".omp", ".omp/agent/skills"),
     ("claude", ".claude", ".claude/skills"),
     ("agents", ".agents", ".agents/skills"),
-    ("pi-native", ".corral", ".corral/skills/pi-native"),
+    ("corral-pi", ".corral", ".corral/skills/corral-pi"),
 ];
 
 /// (harness, shared harness): the harness's loader also reads the shared harness's skills dir, so when that
@@ -366,7 +366,7 @@ pub fn ensure_skills(home: &Path, harness: &str) -> Result<Vec<SkillWrite>> {
     let Some((_, marker, _)) = SKILL_HARNESSES.iter().find(|(name, ..)| *name == harness) else {
         return Ok(Vec::new());
     };
-    if harness != "pi-native" && !home.join(marker).is_dir() {
+    if harness != "corral-pi" && !home.join(marker).is_dir() {
         return Ok(Vec::new());
     }
     install_harness_skills(home, harness, false)
@@ -389,7 +389,12 @@ fn shared_row(
 pub fn skills_dir_for(home: &Path, harness: &str) -> Option<PathBuf> {
     let (_, _, own) = harness_row(harness)?;
     let dir = shared_row(home, harness).map_or(*own, |(_, _, shared)| *shared);
-    Some(home.join(dir))
+    let path = home.join(dir);
+    Some(if harness == "corral-pi" {
+        corral_core::harness_compat::directory(&path)
+    } else {
+        path
+    })
 }
 
 /// Installs every role skill for `harness` into `skills_dir_for`, then removes the corral-owned copies that
@@ -401,8 +406,9 @@ pub fn install_harness_skills(home: &Path, harness: &str, force: bool) -> Result
         return Ok(Vec::new());
     };
     let serving = shared_row(home, harness).unwrap_or(own);
-    if harness == "pi-native" {
-        return install_skills(&home.join(serving.2), force, &PI_SKILLS);
+    if harness == "corral-pi" {
+        let path = corral_core::harness_compat::directory(&home.join(serving.2));
+        return install_skills(&path, force, &PI_SKILLS);
     }
     let mut writes = install_role_skills(&home.join(serving.2), force)?;
     let mut removed = Vec::new();
@@ -538,15 +544,15 @@ pub fn role_skill_markdown(role: &str) -> Option<String> {
         WORKER_SKILL => include_str!("../assets/skills/corral-worker.md").to_string(),
         PLANNER_SKILL => include_str!("../assets/skills/corral-planner.md").to_string(),
         SUBMIT_SKILL => include_str!("../assets/skills/corral-submit.md").to_string(),
-        "frontend" => include_str!("../assets/skills/pi-native/frontend/SKILL.md").to_string(),
-        "visual-qa" => include_str!("../assets/skills/pi-native/visual-qa/SKILL.md").to_string(),
+        "frontend" => include_str!("../assets/skills/corral-pi/frontend/SKILL.md").to_string(),
+        "visual-qa" => include_str!("../assets/skills/corral-pi/visual-qa/SKILL.md").to_string(),
         "programming" => {
-            include_str!("../assets/skills/pi-native/programming/SKILL.md").to_string()
+            include_str!("../assets/skills/corral-pi/programming/SKILL.md").to_string()
         }
-        "debugging" => include_str!("../assets/skills/pi-native/debugging/SKILL.md").to_string(),
-        "git-master" => include_str!("../assets/skills/pi-native/git-master/SKILL.md").to_string(),
+        "debugging" => include_str!("../assets/skills/corral-pi/debugging/SKILL.md").to_string(),
+        "git-master" => include_str!("../assets/skills/corral-pi/git-master/SKILL.md").to_string(),
         "simplify-and-cleanup" => {
-            include_str!("../assets/skills/pi-native/simplify-and-cleanup/SKILL.md").to_string()
+            include_str!("../assets/skills/corral-pi/simplify-and-cleanup/SKILL.md").to_string()
         }
         _ => return None,
     };

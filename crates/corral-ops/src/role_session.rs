@@ -324,7 +324,7 @@ pub(crate) fn command_head(
     run: &RunHead,
     resolved: &ResolvedProfile,
 ) -> Result<ResolvedProfile> {
-    if corral_core::is_pi_native(&resolved.harness) {
+    if corral_core::is_corral_pi(&resolved.harness) {
         return Ok(resolved.clone());
     }
     let Some(session) = &run.session else {

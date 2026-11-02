@@ -1,4 +1,4 @@
-//! Reviewer seam for pi-native review children (T-252 reviewer-role): the launch that binds the
+//! Reviewer seam for corral-pi review children (T-252 reviewer-role): the launch that binds the
 //! parent run, the review child and its callback token, the gate section of the review prompt,
 //! and turn classification with OD11. A reviewer turn that ends without a verdict is
 //! `no_verdict`; the generation's one `turn_nudge` goes to the child, and the next silent turn
@@ -27,7 +27,7 @@ pub const REVIEW_HOLD_PREFIX: &str = "reviewer turn_ended_without_report: ";
 
 /// The Needs me excerpt prefix of an open review child whose host is lost while its pane stays
 /// (recovery); resume returns the task to Review.
-pub const LOST_PREFIX: &str = "Pi-native reviewer host lost: ";
+pub const LOST_PREFIX: &str = "corral-pi reviewer host lost: ";
 
 /// The heading of the gate section a tiered review prompt carries.
 pub const REVIEW_GATE_HEADING: &str = "## Gate contract (review, authoritative)";
@@ -50,7 +50,7 @@ pub fn command<T: corral_core::TaskRef + ?Sized>(
     resolved: &ResolvedProfile,
     pane: &str,
 ) -> Option<Result<String>> {
-    super::is_pi_native(&resolved.harness).then(|| pi_command(ctx, task, parent, pane, resolved))
+    super::is_corral_pi(&resolved.harness).then(|| pi_command(ctx, task, parent, pane, resolved))
 }
 
 /// The launcher binds the parent run, the review child and the callback token from the saved
@@ -83,7 +83,7 @@ fn pi_command<T: corral_core::TaskRef + ?Sized>(
         model: child
             .model
             .clone()
-            .context("a pi-native reviewer needs a model")?,
+            .context("a corral-pi reviewer needs a model")?,
         provider: child
             .model
             .as_deref()
@@ -159,7 +159,7 @@ pub fn idle_exempt(child: &Run) -> bool {
         .is_some_and(|state| matches!(state.binding.health, HostHealth::Healthy | HostHealth::Lost))
 }
 
-/// Whether the open pi-native reviewer is between turns after one that ended without a verdict:
+/// Whether the open corral-pi reviewer is between turns after one that ended without a verdict:
 /// superseding its review then interrupts no active turn, and it precedes the turn's nudge.
 pub fn between_silent_turns(task: &Task) -> bool {
     consulted("review");
@@ -316,7 +316,7 @@ pub fn classify(
     }
 }
 
-/// The open pi-native review child of the current run of a Review task.
+/// The open corral-pi review child of the current run of a Review task.
 fn live_reviewer(task: &Task) -> Option<ContainerRef> {
     if task.status != Status::Review {
         return None;
@@ -453,7 +453,7 @@ fn due<T: corral_core::TaskRef + ?Sized>(
     }))
 }
 
-/// OD11 for the open pi-native reviewer of a Review task, from sync: posts the generation's one
+/// OD11 for the open corral-pi reviewer of a Review task, from sync: posts the generation's one
 /// `turn_nudge` (the message and the spent mark commit together), or escalates the review to
 /// Needs me after a later silent turn. True when it changed anything.
 pub fn nudge(ctx: &Ctx, task_id: &str) -> Result<bool> {

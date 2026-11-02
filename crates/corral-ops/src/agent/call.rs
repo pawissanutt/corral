@@ -721,14 +721,14 @@ enum PmCall {
     Cancel(PmCancel),
 }
 
-/// question_answer, question_escalate and question_cancel from the Pi-native PM: committed in the
+/// question_answer, question_escalate and question_cancel from the corral-pi PM: committed in the
 /// target task's transaction with a receipt in `Task.agent_pm_receipts`, after the PM's liveness,
 /// fence, saved pane and project scope are rechecked there (F1.c).
 fn pm_question(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallResponse> {
     let generation = envelope.identity.generation;
     let guard = |task: &Task| -> Result<()> {
         let pm = pm_state::load(&ctx.store)?.ok_or_else(|| {
-            Rejection::new(RejectCode::ContainerNotFound, "no Pi-native PM is bound")
+            Rejection::new(RejectCode::ContainerNotFound, "no corral-pi PM is bound")
         })?;
         admission::recheck_pm(&pm, generation)?;
         if !super::hooks::pm::contains(

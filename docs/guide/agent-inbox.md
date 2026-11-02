@@ -1,7 +1,7 @@
 # Agent inbox
 
 Coding and planning runs launched with the `omo` harness, and worker runs and review children
-launched with the opt-in `pi-native` harness, use `delivery: inbox`; every other harness, plan
+launched with the opt-in `corral-pi` harness, use `delivery: inbox`; every other harness, plan
 review and PM session keeps `delivery: legacy`. The mode is fixed at launch:
 runs started before this version stay legacy for their lifetime, with today's replies,
 `--resend`, pending-reply guard and completion behavior.
@@ -54,10 +54,10 @@ Inbox recipients have keys such as `T-144_R2`, `T-144_plan-P1`,
 Records live under `.corral/inbox/<key>/`; sequence and envelope counters live on the
 recipient's run, or in `.corral/state/pm-inbox.json`.
 
-## Pi-native host
+## corral-pi host
 
-The `pi_native` adapter delivers to a Pi-native worker run (`T-144_R2`), review child
-(`T-144_R2_rv-R2-review1`) and the bound Pi-native PM (`pm`) over the host bridge, never by
+The `corral_pi` adapter delivers to a corral-pi worker run (`T-144_R2`), review child
+(`T-144_R2_rv-R2-review1`) and the bound corral-pi PM (`pm`) over the host bridge, never by
 typing into the pane. It binds the container's current generation: its Pi session id, its
 `host.sock` and its session file. The adapter is ready only while the container is open and
 its current generation is bound, healthy and answers `hello`. A message that was never sent

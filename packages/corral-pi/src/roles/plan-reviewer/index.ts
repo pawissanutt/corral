@@ -1,4 +1,4 @@
-// The Pi-native plan reviewer role (T-460 plan-roles): upstream read, grep, find and ls, with no
+// The corral-pi plan reviewer role (T-460 plan-roles): upstream read, grep, find and ls, with no
 // shell, edit or write tool, plus corral_ask, corral_withdraw, corral_plan_write (its notes
 // report) and corral_plan_verdict. It reviews one bound plan attempt and never accepts a plan.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -14,7 +14,7 @@ const UPSTREAM: readonly UpstreamTool[] = ["read", "grep", "find", "ls"];
 const TOOLS: readonly CorralToolSpec[] = [receiptLookupTool(), askTool, withdrawTool, planWriteTool("notes"), planVerdictTool];
 const OPS: readonly CorralOp[] = ["hello", "event", ...TOOLS.map((tool) => tool.op)];
 
-export const CONTRACT = `# corral plan reviewer contract (Pi-native)
+export const CONTRACT = `# corral plan reviewer contract (corral-pi)
 
 You review plan {{run}} of corral task {{task}} (attempt {{review}}) in project {{project}}.
 This is plan review, not implementation review.

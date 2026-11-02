@@ -1,9 +1,9 @@
-# Pi-native agent questions
+# corral-pi agent questions
 
-A Pi-native worker or reviewer (plan T-252) never waits on screen text for an answer. It asks
+A corral-pi worker or reviewer (plan T-252) never waits on screen text for an answer. It asks
 through `corral agent call --op ask`, and corral stores the question on the asking run or review
 child. The PM triages it by key and revision, and the owner decides anything the PM may not.
-OmO runs keep their native question handling; this page covers Pi-native runs only.
+OmO runs keep their native question handling; this page covers corral-pi runs only.
 
 ## Keys and revisions
 
@@ -34,7 +34,7 @@ open. A review child closes on a recorded verdict, `supersede_review`, a pane lo
 existing path, a newer review attempt, or a closed parent run. Readers treat the questions of a
 closed container as cancelled at once. The sync hook (`questions::terminalize`) then records
 `cancelled` with the reason `run_ended`, `review_closed`, `review_superseded` or
-`review_interrupted`. It also cancels the container's undelivered Pi-native messages
+`review_interrupted`. It also cancels the container's undelivered corral-pi messages
 (`recipient_closed`). Any later action on those keys is refused `question_closed`.
 
 ## Asking (agent)
@@ -81,7 +81,7 @@ must cite at least one basis ref, and every ref must resolve to a canonical obje
 
 The PM must also state a `--scope-note`. The PM may answer a pending question of any kind,
 including `owner_only` and `permission` and escalated ones; only the owner supersedes an answer.
-The PM may reclassify a question upward when it escalates, never downward. A Pi-native PM uses
+The PM may reclassify a question upward when it escalates, never downward. A corral-pi PM uses
 the `question_answer`, `question_escalate` and `question_cancel` ops. Each one commits in the
 target task's transaction with a receipt in `Task.agent_pm_receipts`, after its liveness, fence
 and project scope are rechecked there.
@@ -133,7 +133,7 @@ push_kinds = ["done", "needs_me", "question_opened", "question_escalated"]
 `turn_ended_without_report`. None of them is in the default list. They are PM-actionable kinds,
 so push delivers them when selected and a default `corral wait` wakes on them; an OmO PM
 watcher therefore wakes on `question_opened` even with push off. `question_answered` and the
-other question events never wake a wait or push. With no Pi-native PM bound and no push of
+other question events never wake a wait or push. With no corral-pi PM bound and no push of
 `question_opened`, `corral agent doctor` reports that no push route exists, that OmO PM
 watchers wake through `corral wait` on `question_opened`, and that a blocking question reaches
 Blocked after `agent.question_unattended_secs`. Question events reference keys

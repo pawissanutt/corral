@@ -1,4 +1,4 @@
-//! AgentPm v1: the Pi-native PM's backend state area, outside every task.
+//! AgentPm v1: the corral-pi PM's backend state area, outside every task.
 //! Only one PM is bound at a time; its task and run are always null.
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
