@@ -205,14 +205,14 @@ pub fn install_compiled(host: &Path, root: &Path) -> Result<InstallRecord> {
 }
 
 /// `corral-pi-host pi <pi> bun <bun>` -> `(pi, bun)`.
-fn parse_host_version(text: &str) -> Option<(String, String)> {
+pub(super) fn parse_host_version(text: &str) -> Option<(String, String)> {
     match text.split_whitespace().collect::<Vec<_>>()[..] {
         ["corral-pi-host", "pi", pi, "bun", bun] => Some((pi.to_owned(), bun.to_owned())),
         _ => None,
     }
 }
 
-fn run_host(host: &Path, args: &[&std::ffi::OsStr]) -> Result<String> {
+pub(super) fn run_host(host: &Path, args: &[&std::ffi::OsStr]) -> Result<String> {
     let output = std::process::Command::new(host)
         .args(args)
         .stdin(std::process::Stdio::null())
