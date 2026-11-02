@@ -26,6 +26,7 @@ mod dependency_labels;
 #[cfg(test)]
 mod dependency_tests;
 mod handling;
+pub mod inbox;
 pub mod metrics;
 mod outbox;
 mod stopping;
