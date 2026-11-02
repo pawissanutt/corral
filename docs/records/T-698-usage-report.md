@@ -61,4 +61,51 @@ The existing 34/52/104-column test now also clicks Usage before Graph/Timeline, 
 no-ellipsis and full Esc/Enter assertions. Targeted rerun: 26 TS tests passed across usage-view,
 inspection, workbench and panel-shell. Typecheck passed separately (the first combined shell
 hit its timeout during typecheck). Actual-input source and viewport captures were regenerated
-after the hint correction. No visual screenshot PASS or physical-terminal QA is claimed.
+after the hint correction. At that submission no visual screenshot PASS or physical-terminal QA was claimed; the review evidence gap is addressed below.
+
+## Review F1 — owned terminal screenshot and interaction evidence
+
+Added `scripts/qa-pi-usage.py` and a `--usage` mode to the existing terminal screenshot
+rasterizer. No production behavior changed in this review round. Reproduction:
+
+```sh
+python3 scripts/qa-pi-usage.py .evidence/inspection-source.json .evidence/usage-pty
+bun scripts/qa/pi-panel-screenshots.mjs .evidence/usage-pty --usage
+```
+
+The source is the previously attached real T-698/R1 collector inspection JSON, not invented
+accounting. The driver copies current candidate assets to a temporary directory, uses private
+HOME/XDG/config/runtime/session directories, starts production `host/main.ts` on a newly owned
+PTY, and supplies only offline fixture auth/bridge transports. It never addresses a herdr pane,
+owner session, PM session, or dispatched worker pane. Its one fixture conversation response is
+explicitly `FAKE_TRANSPORT_OK`; no provider call is made. The real accounting is independently
+replayed through the canonical inspection read seam; fake conversation usage does not replace it.
+Budget accounting is genuinely unavailable in this legacy fixture and stays labeled unknown.
+
+The driver sends actual PTY bytes for `/panels usage`, `c` on/off, PageDown/PageUp, resize,
+F9, draft text, and the native Usage navigation click. It checks only hello/event calls, exactly
+one offline fixture turn, and generation 1 throughout; it removes its process group, assets and
+private state on exit. `result.json` records candidate HEAD, exact input bytes, frame byte counts,
+resize boundaries and asserted transitions. `screenshots.json` pins ANSI/PNG hashes, dimensions,
+candidate and renderer. The established xterm.js 5.5.0 renderer replays the actual PTY output and
+resize sequence, validates the visible terminal buffer, checks PNG signatures/dimensions, and
+closes its owned browser/server. It does not render reconstructed SDK text or a mock UI.
+
+| Case | Terminal evidence | Observation |
+|---|---|---|
+| Open wide source/table | `wide-source-table.png` | PASS: complete task/run/model numeric table and uncertainty copy; genuine unavailable budget |
+| Chart on | `wide-chart-toggle.png` | PASS: exact table values remain alongside token bars |
+| Chart off | `wide-source-restored.png` | PASS: table retained, bars absent (visible-buffer assertion) |
+| Budget section | `wide-budget.png` | PASS: explicit unavailable/legacy, not zero; no invented limits |
+| Compact chart top | `compact-chart-top.png` | PASS: 52-column stacked source values and bars, dock/navigation retained |
+| Scroll to compact end | `compact-budget.png` | PASS: model/source values and unavailable budget reachable with PageDown |
+| Retained draft in Usage | `draft-usage-top.png` | PASS: draft remains in composer after native navigation reopens Usage |
+| Return to conversation | `draft-return.png` | PASS: same conversation prompt/reply and unsent draft visible after F9 |
+
+All eight PNGs were opened for pixel inspection. Wide captures use 180×38 terminal cells;
+compact captures use 52×38. Source rows wrap without dropping numeric categories. The compact
+binding/status and input-observation title ellipsize as existing chrome; Usage source content
+is scrollable, not silently truncated. No accessibility conformance, physical terminal hardware,
+provider invoice or full live-board claim is made. The screenshot evidence supersedes only the
+earlier missing terminal-composition/interaction check; earlier functional test results remain
+historical checks, and a fresh assigned quick gate is required for this committed candidate.

@@ -10,7 +10,12 @@ const directory = resolve(process.argv[2]);
 const result = JSON.parse(await readFile(join(directory, "result.json"), "utf8"));
 assert.equal(result.status, "PASS");
 assert.equal(result.candidate, execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(), "Capture must match the current candidate");
-const requested = process.argv.includes("--lifecycle") ? new Map([
+const requested = process.argv.includes("--usage") ? new Map([
+  ["wide-source-table", "Scope │ Input"], ["wide-chart-toggle", "Token bars"],
+  ["wide-source-restored", "Scope │ Input"], ["wide-budget", "Budget accounting unavailable"],
+  ["compact-chart-top", "Token bars"], ["compact-budget", "Budget accounting unavailable"],
+  ["draft-usage-top", "RETAINED_USAGE_DRAFT"], ["draft-return", "RETAINED_USAGE_DRAFT"],
+]) : process.argv.includes("--lifecycle") ? new Map([
   ["wide-graph", "Task graph:"], ["wide-selected-missing", "Inspect canonical task T-999"],
   ["compact-list", "Dependency list"], ["compact-selected-prerequisite", "Inspect canonical task T-002"],
   ["compact-timeline", "Lifecycle timeline"], ["wide-timeline", "Lifecycle timeline"],
@@ -67,6 +72,12 @@ try {
     assert.equal(await browser.evaluate("term.rows"), scene.rows);
     const visible = await browser.evaluate("Array.from({length:term.rows},(_,i)=>term.buffer.active.getLine(term.buffer.active.viewportY+i)?.translateToString(true)??'').join('\\n')");
     assert(visible.includes(requested.get(scene.name)), `${scene.name}: expected actual terminal state is not visible`);
+    if (scene.name === "draft-return") {
+      assert(visible.includes("Usage capture conversation") && visible.includes("FAKE_TRANSPORT_OK"), "Same retained conversation must accompany the draft");
+    }
+    if (scene.name === "draft-usage-top") assert(visible.includes("Measured usage"), "Draft must remain while Usage is open");
+    if (scene.name === "wide-source-restored") assert(!visible.includes("Token bars"), "Chart off restores source-only presentation");
+    await writeFile(join(directory, scene.name + ".screen.txt"), visible + "\n");
     const cell = await browser.evaluate("term._core._renderService.dimensions.css.cell");
     const width = Math.ceil(cell.width * scene.columns) + 32, height = Math.ceil(cell.height * scene.rows) + 32;
     await browser.evaluate(`Object.assign(document.getElementById("terminal").style,{width:"${width - 32}px",height:"${height - 32}px"})`);
