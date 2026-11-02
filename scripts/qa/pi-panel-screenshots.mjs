@@ -20,6 +20,11 @@ const requested = process.argv.includes("--usage") ? new Map([
   ["contrast-selected-140x46", "Bound to Corral"], ["dark-selected-140x46", "Bound to Corral"],
   ["compact-140x46", "Bound to Corral"], ["role-disabled-140x46", "Role worker cannot answer"],
   ["effort-52x24", "Cycle effort"], ["native-model-selector-52x24", "Only showing models"],
+]) : process.argv.includes("--artifacts") ? new Map([
+  ["wide-artifacts", "Artifacts · read-only catalog"], ["wide-image-fallback", "Graphics unavailable"], ["wide-image-viewer", "Esc close"],
+  ["wide-report-opened", "FIXTURE_REPORT_BODY"], ["wide-absent-open", "Unavailable · not opened"], ["wide-html-browser", "Browser requested"],
+  ["wide-other-run", "Evidence: unknown"], ["wide-compare", "Comparison · A and B"], ["compact-compare", "Comparison"],
+  ["compact-export-refused", "Session export refused"], ["stale-disconnected-retained", "STALE / disconnected"],
 ]) : process.argv.includes("--lifecycle") ? new Map([
   ["wide-graph", "Task graph:"], ["wide-selected-missing", "Inspect canonical task T-999"],
   ["compact-list", "Dependency list"], ["compact-selected-prerequisite", "Inspect canonical task T-002"],
@@ -31,6 +36,7 @@ const requested = process.argv.includes("--usage") ? new Map([
   ["existing-transcript-wide", "Transcript"], ["existing-transcript-narrow", "Transcript"],
   ["real-job-running", "armed locally"], ["real-job-line-match", "match observed"], ["real-job-exited", "exit 7"],
 ]);
+if (result.graphics) requested.delete(result.graphics === "kitty" ? "wide-image-fallback" : "wide-image-viewer");
 const [js, css] = await Promise.all([
   fetch("https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"),
   fetch("https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css"),

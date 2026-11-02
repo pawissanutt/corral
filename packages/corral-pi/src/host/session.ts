@@ -315,7 +315,10 @@ export class HostSession {
       readProjects: signal => options.client.projectScopes(signal),
       canRenderTool: name => exploreLoadout(this.loadout).includes(name),
       inspection: () => options.client.inspectionSnapshot(),
-      lifecycle: () => options.client.inspectionSnapshot(true),
+      lifecycle: () => options.client.inspectionSnapshot("lifecycle"),
+      artifacts: () => options.client.inspectionSnapshot("artifacts"),
+      artifactViewer: (reference, viewer) => options.client.artifactViewer(reference, viewer),
+      exportSession: async () => (await this.reportedExport()).text,
       readInbox: signal => options.client.attentionSnapshot(signal),
       readHistory: request => options.client.history(request),
       readTranscript: id => this.readAgentTranscript(id),
@@ -530,6 +533,19 @@ export class HostSession {
     if (!this.exportable() || this.options.exportDir === undefined) throw new Error("session_export is not enabled for this role");
     if (!this.bound) throw new Error("host_not_bound");
     return exportSnapshot(this.session, this.sessionId(), this.options.exportDir, this.options.client);
+  }
+
+  /** `/corral-export` and the artifact panel's export action share one gated, journaled path. */
+  private async reportedExport(): Promise<{ readonly text: string; readonly committed: boolean }> {
+    try {
+      const { path, receipt } = await this.exportSession();
+      this.options.events.emit("session_exported", { path, state: receipt.state, replayed: receipt.replayed === true });
+      return { text: `corral: session export ${receipt.state}${receipt.replayed ? " (already attached)" : ""}: ${path}`, committed: receipt.state === "committed" };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.options.events.emit("session_export_failed", { reason: reason.slice(0, 512) });
+      throw error;
+    }
   }
 
   get loadout(): readonly string[] { return [...this.baseLoadout, ...this.mcp?.names() ?? []]; }
@@ -767,14 +783,10 @@ export class HostSession {
         description: "Attach this session's current branch to corral as an offline HTML artifact",
         handler: async (_args, ctx) => {
           try {
-            const { path, receipt } = await this.exportSession();
-            this.options.events.emit("session_exported", { path, state: receipt.state, replayed: receipt.replayed === true });
-            ctx.ui.notify(`corral: session export ${receipt.state}${receipt.replayed ? " (already attached)" : ""}: ${path}`,
-              receipt.state === "committed" ? "info" : "warning");
+            const { text, committed } = await this.reportedExport();
+            ctx.ui.notify(text, committed ? "info" : "warning");
           } catch (error) {
-            const reason = error instanceof Error ? error.message : String(error);
-            this.options.events.emit("session_export_failed", { reason: reason.slice(0, 512) });
-            ctx.ui.notify(`corral: session export failed: ${reason}`, "error");
+            ctx.ui.notify(`corral: session export failed: ${error instanceof Error ? error.message : String(error)}`, "error");
           }
         },
       });

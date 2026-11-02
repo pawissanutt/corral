@@ -130,17 +130,37 @@ export class CorralClient {
   }
 
   /** Bounded canonical read, deliberately not read_show/full task hydration or a mutation. */
-  inspectionSnapshot(lifecycle = false): Promise<unknown> {
+  inspectionSnapshot(projection?: "lifecycle" | "artifacts"): Promise<unknown> {
     const { identity, corral, root } = this.options;
     const { task, run } = identity;
     if (!task || !run) return Promise.reject(new CorralCallError("inspection_unbound", "No task/run bound to this session"));
     return new Promise((resolve, reject) => {
-      const child = execFile(corral, ["run", "inspect", task, "--run", run, ...(lifecycle ? ["--lifecycle"] : [])], {
+      const child = execFile(corral, ["run", "inspect", task, "--run", run, ...(projection ? [`--${projection}`] : [])], {
         cwd: root, timeout: 30_000, maxBuffer: 128 * 1024,
       }, (error, stdout) => {
         if (error) { reject(new CorralCallError("inspection_read", error.message)); return; }
         try { resolve(JSON.parse(stdout)); }
         catch { reject(new CorralCallError("inspection_read", "Invalid inspection response")); }
+      });
+      child.stdin?.end();
+    });
+  }
+
+  /**
+   * An existing artifact viewer for one catalog reference, run with argv only: `show` prints bounded
+   * readable text; `serve` asks corral's loopback artifact server to open the browser. Callers
+   * invoke `serve` only on an explicit owner action.
+   */
+  artifactViewer(reference: string, viewer: "show" | "serve"): Promise<string> {
+    if (!/^(?:T-\d+:[A-Za-z0-9._-]+|A-\d+):[A-Za-z0-9._-]+$/.test(reference)) {
+      return Promise.reject(new CorralCallError("artifact_viewer", "Invalid artifact reference"));
+    }
+    return new Promise((resolve, reject) => {
+      const child = execFile(this.options.corral, ["--root", this.options.root, "artifact", viewer, reference], {
+        cwd: this.options.root, timeout: CALL_TIMEOUT_MS, maxBuffer: 512 * 1024,
+      }, (error, stdout) => {
+        if (error) { reject(new CorralCallError("artifact_viewer", error.message)); return; }
+        resolve(stdout);
       });
       child.stdin?.end();
     });

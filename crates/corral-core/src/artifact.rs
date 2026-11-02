@@ -111,6 +111,30 @@ impl Store {
             .pop())
     }
 
+    /// At most `limit` artifact rows of `task`, newest stored first, read as one page, and
+    /// whether older rows exist beyond it. A bounded window, never the whole artifact history.
+    pub fn artifact_window(&self, task: &str, limit: u32) -> Result<(Vec<Artifact>, bool)> {
+        use crate::backend::{RowQuery, TaskNum, TaskPart};
+        use crate::work::{Counter, Subject};
+        let num = TaskNum(crate::store::id_number(&Self::normalize_id(task)?));
+        let query = RowQuery {
+            newest_first: true,
+            ..RowQuery::part(TaskPart::Artifact)
+        };
+        let page = self.view()?.rows(num, &query, PageReq::first(limit))?;
+        let more = page.next.is_some();
+        let rows = page
+            .items
+            .into_iter()
+            .map(|row| {
+                let bytes = u64::try_from(serde_json::to_string(&row.doc)?.len())?;
+                crate::work::decoded(Counter::HistoryRowDecodes, bytes, Subject::Plain);
+                Ok(serde_json::from_value(row.doc)?)
+            })
+            .collect::<Result<Vec<Artifact>>>()?;
+        Ok((rows, more))
+    }
+
     /// The artifacts of `task` stored after row key `after`, in stored order.
     pub fn artifact_rows_after(&self, task: &str, after: &str) -> Result<Vec<Artifact>> {
         let page = PageReq {

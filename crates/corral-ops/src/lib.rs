@@ -289,6 +289,7 @@ pub use plan_acceptance::{
     plan_checkpoint, plan_checkpoint_automatic, plan_evidence, plan_verify,
 };
 pub use review_routing::ReviewMapping;
+pub mod artifact_gallery;
 pub mod lifecycle_panel;
 pub mod review_contracts;
 pub mod review_packet;

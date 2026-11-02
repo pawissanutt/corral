@@ -26,6 +26,9 @@ export interface NativePanelsOptions {
   readonly cwd: string;
   readonly inspection?: () => Promise<unknown>;
   readonly lifecycle?: () => Promise<unknown>;
+  readonly artifacts?: () => Promise<unknown>;
+  readonly artifactViewer?: (reference: string, viewer: "show" | "serve") => Promise<string>;
+  readonly exportSession?: () => Promise<string>;
   readonly readTranscript?: (id: string) => Promise<string>;
   readonly snapshot: () => PanelSnapshot | null;
   readonly readInbox?: (signal: AbortSignal) => Promise<unknown>;
