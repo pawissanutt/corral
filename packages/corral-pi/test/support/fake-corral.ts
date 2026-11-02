@@ -32,6 +32,15 @@ if (process.argv[2] === "run" && process.argv[3] === "inspect") {
   if (!existsSync(inspection)) { process.stderr.write("No inspection supplied in this fixture\\n"); process.exit(1); }
   process.stdout.write(readFileSync(inspection, "utf8")); process.exit(0);
 }
+const viewer = process.argv.indexOf("artifact");
+if (viewer > 1 && (process.argv[viewer + 1] === "show" || process.argv[viewer + 1] === "serve")) {
+  // Existing artifact viewers: recorded separately; serve never launches a browser in fixtures.
+  appendFileSync(join(dir, "viewer-calls.jsonl"), JSON.stringify(process.argv.slice(2)) + "\\n");
+  const shown = join(dir, "artifact-show.txt");
+  if (process.argv[viewer + 1] === "serve") { process.stdout.write("http://127.0.0.1:9/fixture\\n"); process.exit(0); }
+  if (!existsSync(shown)) { process.stderr.write("No artifact text supplied in this fixture\\n"); process.exit(1); }
+  process.stdout.write(readFileSync(shown, "utf8")); process.exit(0);
+}
 const reading = process.argv[2] === "show" || process.argv[3] === "state"
   || (process.argv[2] === "assistant" && process.argv[3] === "show");
 if (!reading) appendFileSync(join(dir, "calls.jsonl"), JSON.stringify({ argv: process.argv.slice(2), stdin,

@@ -20,6 +20,9 @@ pub enum RunCmd {
         /// Read bounded dependency and append-order lifecycle data instead of evidence
         #[arg(long)]
         lifecycle: bool,
+        /// Read the bounded artifact catalog with available provenance instead of evidence
+        #[arg(long, conflicts_with = "lifecycle")]
+        artifacts: bool,
         /// Explicit bound run; never silently follows the latest run
         #[arg(long)]
         run: String,
@@ -166,7 +169,18 @@ fn payload<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
 pub fn run(ctx: &Ctx, cmd: RunCmd) -> Result<()> {
     let now = Timestamp::now();
     let task = match cmd {
-        RunCmd::Inspect { id, run, lifecycle } => {
+        RunCmd::Inspect {
+            id,
+            run,
+            lifecycle,
+            artifacts,
+        } => {
+            if artifacts {
+                let text =
+                    serde_json::to_string(&corral_ops::artifact_gallery::inspect(ctx, &id, &run)?)?;
+                println!("{text}");
+                return Ok(());
+            }
             if lifecycle {
                 let text =
                     serde_json::to_string(&corral_ops::lifecycle_panel::inspect(ctx, &id, &run)?)?;
