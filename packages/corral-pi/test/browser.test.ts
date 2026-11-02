@@ -281,10 +281,21 @@ test("a cancelled call stops its browser and removes its profile", async () => {
   if (!chrome) return;
   // Given a page load the dev server never answers.
   const controller = new AbortController();
-  const call = run("browser_navigate", { url: `${origin}/hang` }, controller.signal);
-  call.catch(() => {});
-  // When the request reaches the server and the call is cancelled.
-  await within(hangReached, 20_000, "the hanging page request");
+  // The call's start-up and page deadlines run on fake timers that are never advanced: on a loaded
+  // host a slow start-up raced a 20 s wait against an equal timeout_ms (T-768). Only the request
+  // reaching the server or the call failing ends the wait now; the test timeout bounds it.
+  jest.useFakeTimers();
+  let call: ReturnType<typeof run>;
+  try {
+    call = run("browser_navigate", { url: `${origin}/hang` }, controller.signal);
+    call.catch(() => {});
+    const ended = call.then(() => { throw new Error("the call finished before its page request reached the server"); });
+    ended.catch(() => {});
+    // When the request reaches the server and the call is cancelled.
+    await Promise.race([hangReached, ended]);
+  } finally {
+    jest.useRealTimers();
+  }
   // Then, while it runs, the browser's profile and HOME are that call's own fresh directory.
   const main = owned(profiles).map((pid) => ({
     argv: readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0"),
@@ -296,6 +307,8 @@ test("a cancelled call stops its browser and removes its profile", async () => {
   controller.abort();
   // Then the call fails as interrupted and the browser and its profile are gone.
   await expect(call).rejects.toThrow(/browser_interrupted/);
+  // The call settles only after close() saw the browser exit and removed its profile.
+  expect(readdirSync(profiles)).toEqual([]);
   await cleanedUp(profiles, profiles);
 }, 60_000);
 
