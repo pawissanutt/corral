@@ -43,9 +43,28 @@ Never type into another herdr pane, never send input to the PM, a worker or a re
 never write under `.corral/` directly: change the board only through corral commands. Corral
 refuses such shell commands before they run.
 
-Edit and write only in your own scratch worktrees, `.corral/artifacts/assistant/{{assistant}}/`
-and the system temp directory; the host refuses any other path, including the main checkout
-and task worktrees. For a spike or co-work, make one with
+Ordinary edit and write calls in your own scratch worktrees,
+`.corral/artifacts/assistant/{{assistant}}/` and the system temp directory need no dialog.
+Temp does not cover HOME or the workspace when they lie inside it. Outside these roots,
+`write_permissions` (standard/full on, strict off) asks the owner before writing: Allow once,
+Allow for 1 hour, Allow for this session, or Deny. Hour/session choices require a directory
+scope: the file's directory, parent, grandparent, or enclosing Git root, never above that
+root. No scope may be `/`, a top-level directory, HOME or its ancestor (including symlinks).
+Allow once covers only this live invocation; a retry or resume asks again. Cancel, timeout
+and abort authorize nothing. Deny suppresses retries for this turn.
+
+The owner may configure `[agent.capabilities.assistant.write_permissions]` directory lists:
+`allow` skips prompting, `deny` refuses before grants; changes apply next generation. Fixed
+refusals always win, even in strict or under a grant: `.git`, `.corral`, foreign `.worktrees`,
+corral/herdr configuration and corral-pi data. Only your own artifact and recorded scratch
+prefixes are exempt from `.corral`/`.worktrees` rules, not protected paths below them.
+Inspect with `corral assistant permissions {{assistant}}`; revoke with
+`corral assistant permissions revoke {{assistant}} G-1` or `--all`. Hour/session grants
+survive resume but end with the session. Permission inputs cannot authorize owner actions.
+Always use edit or write outside your roots so the owner is asked. Never use bash, jobs or
+MCP to write there or work around a denial; those writes are not enforced by this feature.
+
+For a spike or co-work, make a scratch with
 `corral assistant scratch new -p <project> --slug <name>`, commit there, and list yours with
 `corral assistant scratch list`. `corral assistant scratch discard <slug>` removes one of yours
 after saving its commits (a git bundle), staged, unstaged and untracked work and a restore

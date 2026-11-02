@@ -400,6 +400,10 @@ fn sync_scoped(
         Ok(followed) => *rebuild |= !followed,
         Err(error) => crate::content_refresh::defer_corrupt_blob_cache_refresh(error)?,
     }
+    // External container IPC follows admission and holds no inventory lease.
+    if let Err(error) = crate::sandbox_cleanup::sweep(ctx) {
+        crate::messages::report(None, "sandbox-cleanup", format!("{error:#}"));
+    }
     Ok(changes)
 }
 

@@ -480,30 +480,31 @@ fn run_effect(
                 .context("owed event detail missing")?;
             let kind = event["kind"].as_str().context("owed event kind missing")?;
             let mut detail = event["detail"].clone();
-            if kind == "verdict"
-                && let Home::Container(container) = home
-            {
-                let child = match container {
-                    ContainerRef::Worker { run, .. } => task.run_head(run)?.and_then(|r| r.review),
-                    ContainerRef::Reviewer { run, review, .. } => {
-                        task.review_child(run, review)?.and_then(|r| r.review)
-                    }
-                    _ => None,
-                };
-                let review = child.or_else(|| named.as_ref().and_then(|r| r.review.clone()));
-                let notes = review.and_then(|r| r.notes);
-                ctx.store.try_update_head(task_id, |_| {
-                    detail["notes"] = notes
-                        .as_deref()
-                        .map(|s| ctx.store.event_text(s))
-                        .transpose()?
-                        .unwrap_or(serde_json::Value::Null);
+            let container = match home {
+                Home::Container(container) if kind == "verdict" => container,
+                _ => {
                     ctx.store.log_event(Some(task_id), kind, detail)?;
-                    Ok(true)
-                })?;
-                return Ok(true);
-            }
-            ctx.store.log_event(Some(task_id), kind, detail)?;
+                    return Ok(true);
+                }
+            };
+            let child = match container {
+                ContainerRef::Worker { run, .. } => task.run_head(run)?.and_then(|r| r.review),
+                ContainerRef::Reviewer { run, review, .. } => {
+                    task.review_child(run, review)?.and_then(|r| r.review)
+                }
+                _ => None,
+            };
+            let review = child.or_else(|| named.as_ref().and_then(|r| r.review.clone()));
+            let notes = review.and_then(|r| r.notes);
+            ctx.store.try_update_head(task_id, |_| {
+                detail["notes"] = notes
+                    .as_deref()
+                    .map(|s| ctx.store.event_text(s))
+                    .transpose()?
+                    .unwrap_or(serde_json::Value::Null);
+                ctx.store.log_event(Some(task_id), kind, detail)?;
+                Ok(true)
+            })?;
             Ok(true)
         }
         "effect:reconcile_wait" => {

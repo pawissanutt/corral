@@ -49,6 +49,7 @@ impl NativeRecord {
                     UsageSessionKind::Explore => "explore",
                     UsageSessionKind::Oracle => "oracle",
                     UsageSessionKind::Summary => "summary",
+                    UsageSessionKind::WebSearch => "web_search",
                 };
                 format!("session:{}:{kind}:{}", s.generation, s.session_id)
             }

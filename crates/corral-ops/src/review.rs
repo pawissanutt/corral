@@ -123,8 +123,19 @@ fn done_inner(
     result: Option<&str>,
     report: Option<&effects::Report<'_>>,
 ) -> Result<(Task, Option<corral_core::agent::RequestReceipt>)> {
+    let started = std::time::Instant::now();
+    let trace = |stage: &str| {
+        if std::env::var_os("CORRAL_DONE_TIMING").is_some() {
+            eprintln!(
+                "done {id}: {stage}: {:.3}s",
+                started.elapsed().as_secs_f64()
+            );
+        }
+    };
+    trace("start");
     let head = ctx.store.head(id)?;
     let task = finish_task(&head)?;
+    trace("task loaded");
     if crate::plan_pilot::handles(&task) {
         bail!("plan runs finish with `corral plan submit`, not `corral done`");
     }
@@ -148,7 +159,9 @@ fn done_inner(
         report.check_gate_ref(ctx, &task)?;
     }
     crate::delivery::owner::done_gate(ctx, &task)?;
+    trace("owner admission");
     crate::resume::require_checkpoint_head(&head, &run.id)?;
+    trace("checkpoint admission");
     if run.checkpoint_required && !corral_git::is_clean(&run.worktree)? {
         bail!("commit_before_checkpoint: commit work, then save a checkpoint before done");
     }
@@ -177,6 +190,7 @@ fn done_inner(
         .with_context(|| format!("writing {}", diff_file.display()))?;
     std::fs::write(&summary_file, format!("{}\n", summary.trim_end()))
         .with_context(|| format!("writing {}", summary_file.display()))?;
+    trace("audit and diff");
     let title = format!("Final diff +{} \u{2212}{}", stat.added, stat.removed);
     let snapshots = add_artifact(
         ctx,
@@ -202,8 +216,11 @@ fn done_inner(
         );
     }
     snapshots?;
+    trace("snapshots");
     let scanned = scan_artifacts(ctx, &task.id)?;
+    trace("artifact scan");
     let thumbnails = crate::capture_html_thumbnails(ctx, &task.id)?;
+    trace("thumbnails");
 
     // Capture before the transition: a failed promotion leaves done retryable, and never
     // returns an error after committing its success receipt. The provider keeps its files.
@@ -211,6 +228,7 @@ fn done_inner(
     transcript_run.ended = Some(corral_core::clock::now());
     crate::transcripts::worker(ctx, &task.id, &transcript_run, false)?;
     let admission = crate::delivery::owner::done_admission(ctx, &task)?;
+    trace("final admission");
     let detail = json!({ "run": run.id, "added": stat.added, "removed": stat.removed, "files": stat.files.len(), "scanned": scanned.len(), "thumbnails": thumbnails, "completion_audited":audit.audited, "identity":audit.identity, "dispatch_base":run.base_sha, "integration_base":base });
     let mut receipt = None;
     let mut finished = None;
@@ -292,6 +310,7 @@ fn done_inner(
     })?;
     let mut task = finished.context("done update produced no result")?;
     task.artifacts = head.artifacts_of(&run.id)?;
+    trace("transition committed");
     drop(admission);
     if report.is_some() {
         return Ok((task, receipt));

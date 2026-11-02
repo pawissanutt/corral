@@ -86,6 +86,65 @@ fn auxiliary_records_are_bound_capped_terminal_and_receipted() {
 }
 
 #[test]
+fn subscription_search_needs_its_snapshot_and_records_usage_without_oracle() {
+    let fx = fx();
+    let task = worker_task(&fx, "p1");
+    let target = BindTarget::Worker {
+        task: task.clone(),
+        run: "R1".into(),
+    };
+    let host = bind(&fx, &target, "p1", "s1");
+    committed(&hello(&fx, &host));
+    let call = |seq, action: &str, request: &str| {
+        let mut payload = json!({"kind":"auxiliary", "action":action, "request":request,
+            "usage_kind":"web_search"});
+        if action == "prepare" {
+            payload["model"] = json!("anthropic/claude-sonnet-5-5");
+        }
+        if action == "finish" {
+            payload["outcome"] = json!("uncertain");
+        }
+        send(
+            &fx,
+            &envelope(&host, "event", &format!("ev-1-{seq}"), payload, false),
+            "event",
+        )
+    };
+    assert_eq!(
+        code(&call(1, "prepare", "disabled")),
+        Some("op_not_allowed")
+    );
+    let config: corral_core::agent_capabilities::AgentCapabilities =
+        serde_json::from_value(json!({"worker":{"web":{"search_provider":"subscription"}}}))
+            .unwrap();
+    let snapshot = config.resolve(AgentRole::Worker, None);
+    assert!(!snapshot.enabled("oracle"));
+    fx.ctx
+        .store
+        .update(&task, |task| {
+            task.runs[0].agent_host.as_mut().unwrap().generations[0].capabilities =
+                Some(snapshot.clone());
+            Ok(())
+        })
+        .unwrap();
+    committed(&call(2, "prepare", "search-1"));
+    committed(&call(3, "started", "search-1"));
+    committed(&call(4, "prepare", "search-2"));
+    assert_eq!(code(&call(5, "started", "search-2")), Some("bad_request"));
+    committed(&call(6, "finish", "search-1"));
+    committed(&call(7, "started", "search-2"));
+    let saved = state(&fx, &target.container());
+    assert_eq!(
+        saved.usage_sessions[0].kind,
+        corral_core::agent::UsageSessionKind::WebSearch
+    );
+    assert_eq!(
+        saved.usage_sessions[0].outcome,
+        Some(AuxiliaryOutcome::Uncertain)
+    );
+}
+
+#[test]
 fn auxiliary_prepare_refuses_disabled_feature_and_path_injection() {
     let fx = fx();
     let task = worker_task(&fx, "p1");

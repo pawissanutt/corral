@@ -1,7 +1,7 @@
 {
   "assistant": {
-    "catalog": 8,
-    "digest": "1fe8a8524e424a0cd9eef0a5d5b174c1f8cb0a6681204ff8e9217720b9a9ba1f",
+    "catalog": 9,
+    "digest": "3fb42241c4a1c9a5de853a59527ba3088c4835b753e2b80c60d5859bbcb7bcb3",
     "features": {
       "ask_user": {
         "enabled": true,
@@ -96,6 +96,14 @@
       "web.enabled": {
         "enabled": true,
         "source": "preset"
+      },
+      "write_permissions": {
+        "enabled": true,
+        "settings": {
+          "allow": [],
+          "deny": []
+        },
+        "source": "preset"
       }
     },
     "mcp": {
@@ -113,8 +121,8 @@
     }
   },
   "pm": {
-    "catalog": 8,
-    "digest": "36179f2c0cae554a69116bbde4cd2eda07380c2081312895ecd7dbbab769f013",
+    "catalog": 9,
+    "digest": "07cbefb5fd2b13a106daa944d49ecb60ab05f2de81338fe2a9bad519fa161b68",
     "features": {
       "ask_user": {
         "enabled": true,

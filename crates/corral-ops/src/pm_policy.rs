@@ -77,6 +77,24 @@ pub(crate) fn snapshot(ctx: &Ctx) -> Result<PolicySnapshot> {
     })
 }
 
+/// Launch context is orientation, not a task permission cache. Keep its size independent
+/// of task count; fresh typed reads supply task permissions, refusals and scope members.
+pub(crate) fn native_summary(policy: &PolicySnapshot) -> Value {
+    json!({
+        "mode": policy.mode,
+        "paused": policy.paused,
+        "revision": policy.revision,
+        "authorization": policy.authorization,
+        "authority": policy.authority,
+        "scope_counts": {
+            "projects": policy.scope.projects.len(),
+            "tasks": policy.scope.tasks.len(),
+            "observed_tasks": policy.permissions.len(),
+        },
+        "task_details": "Read fresh corral_brief, corral_next and corral_show; launch summary omits per-task permissions, refusals and scope members.",
+    })
+}
+
 pub(crate) fn instructions(policy: &PolicySnapshot) -> Result<String> {
     Ok(format!(
         "[corral-policy]\n\n## Effective operating policy replacement\n\n\
@@ -87,9 +105,14 @@ pub(crate) fn instructions(policy: &PolicySnapshot) -> Result<String> {
          owner action for starts and acceptance. Autopilot does not require renewed routine \
          consent for currently delegated actions. Never enlarge scope, clear a hold, waive a \
          check, act as the independent reviewer, or restart workers on a policy wake. \
-         Read `corral pm brief --json` and `corral pm next --json` for fresh state; recompute \
-         after each authorized action, continuing independent work despite pending questions. \
-         Never replay an old command from this update.\n\n```json\n{}\n```\n",
+         Read fresh brief and next (Pi: corral_brief and corral_next; other harnesses: \
+         `corral pm brief --json` and `corral pm next --json`); recompute after each authorized \
+         action, continuing independent work despite pending questions. Delegation here is to \
+         Corral's executor, not an expansion of a harness's tool authority. Pi PM must not run \
+         pm act, pm workset, sync, dispatch or acceptance: leave routine execution to Corral. \
+         Use the current supported owner entry point when executor authority is missing; do not \
+         ask for routine consent again when it is already delegated. Never replay an old command \
+         from this update.\n\n```json\n{}\n```\n",
         serde_json::to_string_pretty(policy)?
     ))
 }

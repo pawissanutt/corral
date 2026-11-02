@@ -327,7 +327,8 @@ fn bound_mode_execs_in_process_and_leaves_no_bootstrap_on_disk() {
     let fx = fixture();
     owner_pane(&fx);
     let assets = fx.root().join("assets");
-    let compat = json!({"version": 1, "verdict": "GO", "bun": {"range": "1.4.2"}});
+    let compat =
+        json!({"version": 1, "verdict": "GO", "bun": {"range": "1.4.2"}, "memory_projection": 1});
     std::fs::write(assets.join("compat.json"), compat.to_string()).unwrap();
     std::fs::create_dir_all(assets.join(HOST_ENTRY).parent().unwrap()).unwrap();
     std::fs::write(assets.join(HOST_ENTRY), "// host\n").unwrap();

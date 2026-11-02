@@ -210,7 +210,14 @@ fn pi_native_launch_wrapper_under_a_nested_shell_is_never_stuck() {
 fn registered_pi_capability_does_not_raise_stuck() {
     let fx = Fx::new("pi-native");
     let processes = Processes::default();
-    pi_native_pane(&fx, &processes, &[(46, 44, &["rust-analyzer"])]);
+    pi_native_pane(
+        &fx,
+        &processes,
+        &[
+            (46, 44, &["rust-analyzer"]),
+            (47, 46, &["rust-analyzer-proc-macro-srv"]),
+        ],
+    );
     let session = fx.bin_dir.join("session.jsonl");
     let registry = format!("{}.capabilities-44.json", session.display());
     std::fs::write(
@@ -269,6 +276,66 @@ fn registered_pi_capability_does_not_raise_stuck() {
     let task = sync(&fx, &processes, 900);
     assert_eq!(task.current_run().unwrap().stuck.as_ref().unwrap().pid, 47);
     assert_eq!(fx.events("stuck"), 1);
+}
+
+#[test]
+fn worker_interpreter_language_servers_are_exempt_but_unrelated_commands_are_not() {
+    for argv in [
+        &[
+            "node",
+            "/opt/typescript-language-server/lib/cli.js",
+            "--stdio",
+        ][..],
+        &[
+            "node",
+            "/opt/pyright-internal/langserver.index.js",
+            "--stdio",
+        ][..],
+        &[
+            "node",
+            "/opt/svelte-language-server/bin/server.js",
+            "--stdio",
+        ][..],
+    ] {
+        let fx = Fx::new("pi-native");
+        let processes = Processes::default();
+        pi_native_pane(&fx, &processes, &[(46, 45, argv)]);
+        fx.herdr_says("idle");
+        sync(&fx, &processes, 0);
+        assert!(
+            sync(&fx, &processes, 301)
+                .current_run()
+                .unwrap()
+                .stuck
+                .is_none()
+        );
+    }
+    for (parent, argv) in [
+        (
+            45,
+            &["node", "/opt/build.js", "typescript-language-server"][..],
+        ),
+        (
+            20,
+            &["node", "/opt/typescript-language-server/lib/cli.js"][..],
+        ),
+    ] {
+        let fx = Fx::new("pi-native");
+        let processes = Processes::default();
+        pi_native_pane(&fx, &processes, &[(46, parent, argv)]);
+        fx.herdr_says("idle");
+        sync(&fx, &processes, 0);
+        assert_eq!(
+            sync(&fx, &processes, 301)
+                .current_run()
+                .unwrap()
+                .stuck
+                .as_ref()
+                .unwrap()
+                .pid,
+            46
+        );
+    }
 }
 
 #[test]

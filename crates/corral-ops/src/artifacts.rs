@@ -402,119 +402,150 @@ fn attach_head(
     title: Option<&str>,
     transcript: bool,
 ) -> Result<Option<Artifact>> {
+    let mut result = None;
+    ctx.store.try_update_head(id, |task| {
+        result = Some(attach_to_head(
+            ctx,
+            task,
+            target,
+            bytes.len(),
+            sha,
+            (file_name, source),
+            kind,
+            title,
+            transcript,
+            None,
+        )?);
+        Ok(true)
+    })?;
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn attach_to_head(
+    ctx: &Ctx,
+    t: &mut corral_core::TaskHeadMut,
+    target: Target<'_>,
+    bytes: usize,
+    sha: &str,
+    (file_name, source): (&str, &Path),
+    kind: Option<ArtifactKind>,
+    title: Option<&str>,
+    transcript: bool,
+    cached: Option<&mut Vec<(usize, Artifact)>>,
+) -> Result<Artifact> {
     use corral_core::TaskRef as _;
     let kind = kind.unwrap_or_else(|| ArtifactKind::guess(file_name));
-    let mut result = None;
-    ctx.store.try_update_head(id, |t| {
-        let current = t.current_run_head()?.map(|r| r.id.clone());
-        let planning = t.last_plan_run_head()?.map(|r| (r.id.clone(), r.state));
-        let run = match target {
-            Target::Expected(run)
-                if current.as_deref() != Some(run)
-                    && planning.as_ref().is_none_or(|(id, _)| id != run) =>
-            {
-                bail!("stale_retry: run changed before attaching artifact");
-            }
-            Target::Named(run) if t.run_head(run)?.is_none() => {
-                bail!("run {run} does not exist on {}", t.id);
-            }
-            Target::Expected(run) | Target::Named(run) => run.to_string(),
-            Target::Current | Target::Promotion => planning
-                .filter(|(_, state)| *state != corral_core::PlanRunState::Approved)
-                .map(|(id, _)| id)
-                .or(current)
-                .unwrap_or_else(|| "R0".to_string()),
-        };
-        let before = t
-            .head()
-            .current_run
-            .as_ref()
-            .filter(|r| r.id == run)
-            .map(|_| t.head().summary.current_artifacts.accepted_proof.clone());
-        let mut rows = if transcript {
-            t.head()
-                .artifact_registration_by_sha(&run, sha)?
-                .into_iter()
-                .collect()
-        } else {
-            t.head().artifact_rows_of(&run)?
-        };
-        if let Some((index, mut existing)) = rows.iter().find(|(_, a)| a.sha256 == sha).cloned() {
-            if existing.purged_at.is_some() {
-                existing.compressed_bytes = None;
-                existing.purged_at = None;
-                t.edit_artifact(index, |a| {
-                    *a = existing.clone();
-                    Ok(())
-                })?;
-                buffer_artifact_event(ctx, &t.id, &existing)?;
-            }
-            rows.iter_mut()
-                .filter(|(i, _)| *i == index)
-                .for_each(|(_, a)| *a = existing.clone());
-            crate::artifact_storage::record_row_keys(ctx, &t.id, &existing, index, false)?;
-            if transcript {
-                crate::pm_next::observe::load_checks::published_transcript(
-                    ctx,
-                    t.head(),
-                    &existing,
-                    before.as_ref(),
-                )?;
+    let current = t.current_run_head()?.map(|r| r.id.clone());
+    let planning = t.last_plan_run_head()?.map(|r| (r.id.clone(), r.state));
+    let run = match target {
+        Target::Expected(run)
+            if current.as_deref() != Some(run)
+                && planning.as_ref().is_none_or(|(id, _)| id != run) =>
+        {
+            bail!("stale_retry: run changed before attaching artifact");
+        }
+        Target::Named(run) if t.run_head(run)?.is_none() => {
+            bail!("run {run} does not exist on {}", t.id);
+        }
+        Target::Expected(run) | Target::Named(run) => run.to_string(),
+        Target::Current | Target::Promotion => planning
+            .filter(|(_, state)| *state != corral_core::PlanRunState::Approved)
+            .map(|(id, _)| id)
+            .or(current)
+            .unwrap_or_else(|| "R0".to_string()),
+    };
+    let before = t
+        .head()
+        .current_run
+        .as_ref()
+        .filter(|r| r.id == run)
+        .map(|_| t.head().summary.current_artifacts.accepted_proof.clone());
+    let mut loaded;
+    let rows = match cached {
+        Some(rows) => rows,
+        None => {
+            loaded = if transcript {
+                t.head()
+                    .artifact_registration_by_sha(&run, sha)?
+                    .into_iter()
+                    .collect()
             } else {
-                crate::pm_next::observe::load_checks::published_rows(
-                    ctx, &t.id, &rows, index, false,
-                )?;
-            }
-            result = Some(existing);
-            return Ok(true);
+                t.head().artifact_rows_of(&run)?
+            };
+            &mut loaded
         }
-        let index = usize::try_from(t.head().summary.artifacts)?;
-        let snap_name = format!("{}-{file_name}", &sha[..8]);
-        let artifact = Artifact {
-            run: run.clone(),
-            kind,
-            title: title
-                .map(str::to_string)
-                .unwrap_or_else(|| file_name.to_string()),
-            path: format!("artifacts/{}/{run}/{snap_name}", t.id),
-            source: source.to_string_lossy().into_owned(),
-            sha256: sha.to_string(),
-            bytes: u64::try_from(bytes.len()).context("artifact length overflow")?,
-            added: corral_core::clock::now(),
-            tier_override: None,
-            compressed_bytes: None,
-            purged_at: None,
-        };
-        if artifact.kind == ArtifactKind::Diff {
-            for (index, earlier) in &mut rows {
-                if earlier.kind == ArtifactKind::Diff && earlier.tier_override.is_none() {
-                    earlier.tier_override = Some(corral_core::ArtifactTier::Transient);
-                    t.edit_artifact(*index, |a| {
-                        *a = earlier.clone();
-                        Ok(())
-                    })?;
-                    crate::artifact_storage::record_row_keys(ctx, &t.id, earlier, *index, false)?;
-                }
-            }
+    };
+    if let Some((index, mut existing)) = rows.iter().find(|(_, a)| a.sha256 == sha).cloned() {
+        if existing.purged_at.is_some() {
+            existing.compressed_bytes = None;
+            existing.purged_at = None;
+            t.edit_artifact(index, |a| {
+                *a = existing.clone();
+                Ok(())
+            })?;
+            buffer_artifact_event(ctx, &t.id, &existing)?;
         }
-        t.add_artifact(artifact.clone())?;
-        crate::artifact_storage::record_row_keys(ctx, &t.id, &artifact, index, true)?;
-        rows.push((index, artifact.clone()));
+        rows.iter_mut()
+            .filter(|(i, _)| *i == index)
+            .for_each(|(_, a)| *a = existing.clone());
+        crate::artifact_storage::record_row_keys(ctx, &t.id, &existing, index, false)?;
         if transcript {
             crate::pm_next::observe::load_checks::published_transcript(
                 ctx,
                 t.head(),
-                &artifact,
+                &existing,
                 before.as_ref(),
             )?;
         } else {
-            crate::pm_next::observe::load_checks::published_rows(ctx, &t.id, &rows, index, true)?;
+            crate::pm_next::observe::load_checks::published_rows(ctx, &t.id, rows, index, false)?;
         }
-        buffer_artifact_event(ctx, &t.id, &artifact)?;
-        result = Some(artifact);
-        Ok(true)
-    })?;
-    Ok(result)
+        return Ok(existing);
+    }
+    let index = usize::try_from(t.head().summary.artifacts)?;
+    let snap_name = format!("{}-{file_name}", &sha[..8]);
+    let artifact = Artifact {
+        run: run.clone(),
+        kind,
+        title: title
+            .map(str::to_string)
+            .unwrap_or_else(|| file_name.to_string()),
+        path: format!("artifacts/{}/{run}/{snap_name}", t.id),
+        source: source.to_string_lossy().into_owned(),
+        sha256: sha.to_string(),
+        bytes: u64::try_from(bytes).context("artifact length overflow")?,
+        added: corral_core::clock::now(),
+        tier_override: None,
+        compressed_bytes: None,
+        purged_at: None,
+    };
+    if artifact.kind == ArtifactKind::Diff {
+        for (index, earlier) in rows.iter_mut() {
+            if earlier.kind == ArtifactKind::Diff && earlier.tier_override.is_none() {
+                earlier.tier_override = Some(corral_core::ArtifactTier::Transient);
+                t.edit_artifact(*index, |a| {
+                    *a = earlier.clone();
+                    Ok(())
+                })?;
+                crate::artifact_storage::record_row_keys(ctx, &t.id, earlier, *index, false)?;
+            }
+        }
+    }
+    t.add_artifact(artifact.clone())?;
+    crate::artifact_storage::record_row_keys(ctx, &t.id, &artifact, index, true)?;
+    rows.push((index, artifact.clone()));
+    if transcript {
+        crate::pm_next::observe::load_checks::published_transcript(
+            ctx,
+            t.head(),
+            &artifact,
+            before.as_ref(),
+        )?;
+    } else {
+        crate::pm_next::observe::load_checks::published_rows(ctx, &t.id, rows, index, true)?;
+    }
+    buffer_artifact_event(ctx, &t.id, &artifact)?;
+    Ok(artifact)
 }
 
 /// Called inside the same task operation that publishes the artifact registration.
@@ -578,41 +609,8 @@ pub(crate) fn glob_match(pattern: &str, path: &str) -> bool {
     segments_match(&pat, &segs)
 }
 
-/// Finds files in the run worktree matching config.artifacts.globs that changed since the run's base
-/// (corral_git changed files incl. untracked) and adds each with `ArtifactKind::guess`. Returns the added ones.
-/// Simple glob support is enough: "**" any dirs, "*" within one path segment.
-pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
-    let task = ctx.store.head(id)?;
-    let Some(run) = task.current_run.as_deref() else {
-        return Ok(Vec::new());
-    };
-    let stat = corral_git::diff_stat(&run.worktree, &run.base_sha)?;
-    let cfg = &ctx.store.config.artifacts;
-    let mut added = Vec::new();
-    let paths = stat
-        .files
-        .iter()
-        .map(|file| file.path.clone())
-        .chain(corral_git::ignored_artifact_scratch(&run.worktree)?);
-    for path in paths {
-        if !cfg.globs.iter().any(|g| glob_match(g, &path)) {
-            continue;
-        }
-        let full = run.worktree.join(&path);
-        match std::fs::metadata(&full) {
-            Ok(m) if m.is_file() && m.len() <= cfg.max_bytes => {}
-            _ => continue,
-        }
-        // Registration returns a content-addressed path; consult the pre-registration view.
-        let artifact = add_artifact(ctx, &task.id, &full, None, None)?;
-        if task.artifact_by_path(&artifact.path)?.is_none()
-            && !added.iter().any(|a: &Artifact| a.path == artifact.path)
-        {
-            added.push(artifact);
-        }
-    }
-    Ok(added)
-}
+mod scan;
+pub use scan::scan_artifacts;
 
 /// Every artifact of every task, newest first.
 pub fn all_artifacts(ctx: &Ctx) -> Result<Vec<ArtifactRow>> {

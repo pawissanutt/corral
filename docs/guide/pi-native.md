@@ -33,6 +33,43 @@ when you dispatch, before a worktree exists.
 Other `[agent]` settings apply only to pi-native runs: `question_unattended_secs` (default
 600), `gate_start_uncertain_secs` (default 300) and `drain_secs` (default 60).
 
+### Retained memory
+
+Bound Pi-native PMs, assistants and workers have `corral_memory_list`,
+`corral_memory_read`, `corral_memory_put` and `corral_memory_remove`. All four use
+authenticated operations and receipts; selectors cannot choose a workspace root or author.
+List pages contain at most 20 entries; body reads contain at most 4096 UTF-8 bytes.
+Writes require a freshly read content hash (explicit null for creation), and the service
+stamps author/time. Missing-receipt mutations have unknown file effects: explicitly reread
+before any new intentional write, never automatically retry.
+
+Canonical Markdown lives in the bound workspace's `.corral/memory`, not the coding
+worktree. Changes are immediately visible without a commit; memory operations never
+change HEAD or the index. Use normal explicit workspace commits to preserve history.
+Memory is not a secret store.
+
+Launch and explicit resume capture working-tree summaries in a private generation-local
+`memory-context.md`. The complete projection is at most 12,288 UTF-8 bytes: up to 6 KiB
+workspace, 2 KiB own shared role, and (workers only) 4 KiB trusted bound-project memory.
+PMs and assistants do not preload project memory. Whole entries are omitted with a count
+and retrieval hint; long notes and people context stay available through paginated tools.
+Provenance and sources are labelled; memory is fallible retained context below current
+instructions and policy, never a grant, owner message or task-state change.
+
+Reload and compaction retain the same generation block through shared Pi/Claude prompt
+assembly without appending conversation messages. Active sessions explicitly reread newer
+entries with the tools; there is no live watcher or OmO fallback. Installed assets must
+advertise `memory_projection: 1` in `compat.json`; reinstall older hosts rather than
+silently dropping memory. Bare Pi, explore children, reviewers and planning roles receive
+no memory tools or projection.
+
+Workers read workspace and read/write their own role and bound project; they propose
+workspace knowledge through the PM inbox. Worker-role guidance is shared across projects,
+not a private persona store. PM project access follows effective approved scope; assistants
+explicitly select registered projects. Project reads respect project-text trust.
+Reusable evidence-backed project rules remain lessons, and unfinished work remains in
+inbox/tasks; link those records rather than copying mutable operational history.
+
 ### Language servers
 
 Workers retain built-in Rust and TypeScript servers in every preset. Reviewer LSP is enabled
@@ -78,6 +115,7 @@ error. The catalog today, as strict / standard / full:
 | Key | Worker, PM | Reviewer, planner, plan reviewer |
 |---|---|---|
 | `todo` | off / on / on | not available |
+| `write_permissions` | not available (assistant only: off / on / on) | not available |
 | `llama_cpp.enabled` | off / off / off | off / off / off |
 | `web.enabled` | worker off / on / on; not available to PM | off / on / on |
 | `context_files` | off / on / on | off / on / on |
@@ -98,6 +136,13 @@ error. The catalog today, as strict / standard / full:
 | `headless` | worker off / off / off; not available to PM | reviewer off / off / off; not available to planning roles |
 
 `headless` is never a preset default; set it per role (see [Headless runs](#headless-runs)).
+
+Assistant-only `write_permissions` allows scoped owner dialogs for external edit/write calls.
+For example, `[agent.capabilities.assistant.write_permissions]` with
+`allow = ['~/.agents/skills']` and `deny = ['~/.agents/skills/corral']` skips prompting in the
+first directory except the denied subtree. Settings apply next generation; fixed protected
+paths always refuse. See [assistant write permissions](assistants.md#write-permissions) for
+scope limits, once/hour/session choices, inspection and revocation.
 
 A compound key also takes a table with an optional `enabled` and its settings:
 
@@ -182,7 +227,7 @@ Corral tools also refuse to run from inside another tool. See
 
 ### Curated Pi-native skill pack
 
-`corral agent install` also installs five lean, Pi-compatible Agent Skills. To install or refresh
+`corral agent install` also installs six lean, Pi-compatible Agent Skills. To install or refresh
 just the pack, run `corral skill install --harness pi-native`. Worker dispatch also ensures the
 pack is current. A fresh standard/full session lists these skills and can load them by reading
 its listed `SKILL.md` or with `/skill:name`:
@@ -194,6 +239,13 @@ its listed `SKILL.md` or with `/skill:name`:
 | `programming` | Typed boundaries/errors, exhaustive variants and tests that can fail |
 | `debugging` | Competing hypotheses, discriminating probes and a reproduced fix |
 | `git-master` | Atomic commits, safe rebases and evidence-led history search |
+| `simplify-and-cleanup` | Bounded code, comment and docs cleanup with behavior/meaning preservation and proportional verification |
+
+Ask for cleanup naturally or invoke `/skill:simplify-and-cleanup` with explicit files or a diff/base
+and an audit/apply request. Review requests remain read-only; cleanup requests follow the role's
+existing edit permissions. The skill prefers existing checks, adds tests only for concrete uncovered
+behavioral risks, and skips changes that need substantial new testing to establish safety. It does
+not waive required gates or review, and making no edits is a valid outcome.
 
 The pack lives only in `~/.corral/skills/pi-native/<name>/SKILL.md`, outside OmO's bundled,
 `.omo` and shared `.agents` discovery roots, so it does not duplicate OmO's own skills. Do not
@@ -216,28 +268,104 @@ The pack's tests check tool references against the standard worker's actual tool
 
 ### Codemode
 
-`codemode` runs JavaScript in the pinned upstream QuickJS VM. It can batch independent tool
-calls with `Promise.all`/`Promise.allSettled` and filter their results before returning context:
+`codemode` runs JavaScript cells on Corral's own persistent Bun kernel (T-682): one kernel per
+host session, started on the first cell, with no QuickJS or other engine behind it. Use it
+to batch independent tool calls, chain dependent ones and filter large results before anything
+reaches the model. Standard enables it for worker, reviewer and planning roles; PM requires full
+or an explicit `codemode = true` in its role table. Strict and `codemode = false` leave the tool
+absent, and every direct tool keeps working. MCP and tool search are independent: neither
+enables codemode, and codemode needs neither.
+
+Arguments: `code` (raw JavaScript, not a JSON string or fence), `wait_ms` (foreground window,
+default 60000, at most 600000), `cancel` (`"cell-N"`, stops that live cell) and `reset` (discard
+every variable, then run `code` if given).
+
+**Globals.** `tools.<name>(args)` returns a Promise of that tool's result. `print(...)` and
+`console.log/info/warn/error/debug` emit text, `display(value)` emits text or an image
+(`{type: "image", data: <base64 or bytes>, mimeType}`), and `setTimeout`/`clearTimeout` schedule
+work inside the cell. There is no `Bun`, `process`, `require`, `fetch` or `import`: every
+capability is a tool call. Only printed or displayed output and an explicit `return` value reach
+the model, so keep large intermediate results in variables.
+
+**Persistence and reset.** Top-level `const`/`let`/`function`/`class` declarations persist from
+cell to cell. They are discarded, and the result says so, by `reset`, by cancelling a running
+cell, at its deadline, on a reload, and when the host restarts. Nothing is snapshotted or
+re-run. Cells of one session run one at a time in submission order; calls inside a cell overlap.
+
+**Authority.** A tool usable directly is usable from a cell and nothing else is: the callable
+list in the tool's description and every nested execution derive from the same loadout check,
+and Pi's validation, the host's `tool_call` controls, shell rules, hooks and owner confirmations
+apply exactly as to a direct call. Corral mutations are allowed; another tool that nests calls
+through `ctx.executeTool` may still nest only the receipt-free board reads, because only a cell
+journals its children. Each nested call has its own
+identity, `<codemode call id>/<cell>.<n>`: receipted tools derive their request ID from it and
+send it as `identity.parent`, which corral checks against the request ID and stores on the
+receipt, so a replayed child returns its one receipt and a new child never reuses one. Before a
+child starts and when it settles the host appends a `corral_code_call` entry to the session; if
+the host is lost, resume classifies every child without a settled entry from its own receipt,
+including children of a detached cell. A confirm-class owner action shows the owner its command
+and waits for the actual answer; other calls in the cell keep running meanwhile, and code never
+supplies an answer or authority.
+
+**Result shapes.** Corral tools resolve to their canonical response object: a receipt
+(`request_id`, `op`, `state`, `result`, `identity`, `replayed`), refusals included, or a host
+failure `{request_id, op, error: {code, category, reason, effect, lookup?}}`. Other tools resolve
+to their text. A call refused or failed without a structured result rejects with an `Error`
+whose `name`, `message` and `code` (`denied`, `not_run`, `tool_error`, `stale_binding`) survive
+`JSON.stringify`. The model-visible result keeps the cell's own status (`ok`, `error`,
+`cancelled`, `timeout`, `reset`, `closed`) apart from its nested calls: counts of ok, failed and
+still-running children and committed receipts, then a bounded list of every failure with tool,
+child identity, request ID, error code and message, and recorded effect (a receipt state, `read`,
+`not_started` or `unknown`). The list appears even when the script caught the failure.
+
+**Detached cells.** A cell still running after `wait_ms` detaches: the call returns its handle at
+once and the cell settles in the background. Its settlement is reported exactly once: by the
+`cancel` call that stopped it, or by one notice that enters the session through the host's bridge
+delivery, journaled as `corral_delivery` with key `code:g<generation>:<cell>` and its own
+bridge-origin turn. The notice is bounded at 32 KiB, but its status, nested-call counts, failure list
+(failures past the eighth still named by tool) and return value always stay whole; only printed
+output yields, with a note saying how many bytes it shows. Keep a large result in a top-level
+variable to read it in a later cell. Do not poll. Continue independent work; when a plan step needs the result,
+record that step as waiting on event `code cell <cell>` with `corral_todo` so request
+continuation (T-679) does not wake you meanwhile: with only waiting steps open, corral decides
+`waiting_event` and continues nothing, while an actionable independent step is still continued. A
+reload settles running cells `closed` and
+reports them after the reload; a host shutdown reports nothing, and resume's recovery notice
+classifies their children instead.
+
+**Failures.** A failed or interrupted cell is never re-run, and committed nested effects stand.
+Reconcile an uncertain mutation with `corral_receipt_lookup` (its failure names the lookup)
+instead of re-running the cell. Tool subprocesses keep their ordinary OS and network access; the
+kernel is not an OS sandbox.
 
 ```javascript
+// Independent reads in parallel; only the filtered lines reach the model.
 const files = await Promise.all(["README.md", "AGENTS.md"].map(path => tools.read({ path })));
-text(files.map(source => source.split("\n").filter(line => line.startsWith("#"))));
+print(files.map(source => source.split("\n").filter(line => line.startsWith("#"))));
 ```
 
-The input is raw JavaScript, not a JSON string or code fence. Only script output and its return
-value reach the model; nested tool names/statuses remain attributed to the outer call in the
-session. Standard enables it for worker, reviewer and planning roles; PM requires full or an
-explicit `codemode = true` in its role table. Strict and `codemode = false` leave it absent.
-MCP and tool search are independent: neither enables codemode, and codemode needs neither.
+```javascript
+// A dependent read -> mutation -> read chain (PM): each step uses the previous result.
+const shown = await tools.corral_show({ task: "T-9", section: "overview" });
+if (shown.state !== "committed") throw new Error(shown.result.code);
+const made = await tools.corral_comment({ task: "T-9", text: "Checked the overview." });
+if (made.state !== "committed") throw new Error(made.result.code);
+const back = await tools.corral_receipt_lookup({ request_id: made.request_id, task: "T-9" });
+return { comment: back.state, request: made.request_id };
+```
 
-Scripts have no Node APIs, filesystem, network or timers of their own. Nested tools use the
-same execution check as direct calls: denied role tools cannot run, and **all Corral operations
-must be called directly**, never from a script. Classifier/image model execution and the
-`models` global are disabled; showing an existing image is still possible. Tool subprocesses
-retain their ordinary OS/network access; this is not an OS sandbox. A failed or interrupted
-script does not undo tools already run. Recovery classifies an unfinished `codemode` call as
-`outcome_unknown`, even if its source appears read-only, and preserves a worktree snapshot for
-reconciliation. Reload rebuilds the extension from the same generation snapshot.
+```javascript
+// An uncertain mutation is reconciled, never retried blindly.
+const asked = await tools.corral_ask({ kind: "clarification", text: "Which input?" });
+if (asked.error?.lookup) {
+  const found = await tools[asked.error.lookup.tool](asked.error.lookup.arguments);
+  return found.lookup.found ? found.state : "not committed yet";
+}
+```
+
+A fixture pipeline that reads a 819,232-byte tool result and returns one selected line emitted
+112 bytes to model context; calling the same tool directly emitted 819,227 bytes
+(`test/codemode-compose.test.ts`, `CODEMODE_EMITTED_BYTES`).
 
 ### Local inference (llama.cpp)
 
@@ -305,6 +433,7 @@ max_bytes = 1048576        # default: response body byte limit
 timeout_ms = 15000        # default: whole request, including DNS, redirects and body
 max_redirects = 5         # default; supported range 0..10
 # searxng_url = "http://127.0.0.1:8888/" # optional base URL or /search endpoint
+# search_provider = "subscription"     # opt in to the current Codex/Claude login; default: searxng
 ```
 
 The same table works under `reviewer`, `planner` and `plan_reviewer`. Omitting
@@ -333,10 +462,34 @@ instructions while public fetch remains usable. A configured SearXNG endpoint ma
 be local, independently of `hosts`; search does not follow redirects. This exception
 never authorizes private `web_fetch` or broadens the provider's global fetch policy.
 
-Both tools share the host network ledger and execution check, including nested calls
-and reloads. Interrupted calls are `interrupted_no_effect` for this GET-only contract;
-network activity is still counted. Subprocess networking remains outside the
-in-process guard.
+Set `search_provider = "subscription"` to use the **current selected model** on a
+corral-owned OpenAI Codex or Claude subscription instead. Codex uses the hosted
+Responses `web_search` tool; Claude uses a separate Claude Agent SDK query whose only
+executable tool is native `WebSearch` (no shell, files, MCP or `WebFetch`). No ambient
+credentials, separately billed API route, SearXNG fallback, or alternate model is
+selected on failure. Availability depends on the subscription, model and region;
+unsupported providers, quota/auth failures and answers without completed search
+evidence fail explicitly. This does not guarantee the account has extra usage disabled.
+
+Subscription results include `provider`, `model`, `request`, a synthesized `answer`,
+and source `results` (titles/URLs, capped by `num_results`). The valid JSON envelope
+is bounded by the smaller of `max_bytes` and 32768 bytes, with `truncated` set when
+sources or answer are shortened. `timeout_ms` covers queueing and execution. Fetch
+host restrictions still apply to `web_fetch`, not provider-side search sources.
+
+Each search is serialized per host and registered as auxiliary `web_search` usage
+before execution, with its own transcript and model usage. Interrupted/failed work
+retains uncertain accounting; the host does not replay the invocation. Hosted service work
+has no reliable finite priced reservation, so a **hard token or USD budget refuses
+subscription search before model execution**; unlimited budgets still record usage. Provider
+model-token pricing is API-equivalent accounting, not a subscription invoice or a
+complete search-service fee estimate. Existing SearXNG behavior is unchanged.
+
+Both tools share the execution check, including nested calls and reloads. Public
+fetch and SearXNG use the host network ledger; Codex search uses its guarded provider
+transport. Claude subprocess networking remains outside the in-process guard.
+Interrupted fetch is `interrupted_no_effect`; interrupted search is conservatively
+`outcome_unknown` because subscription quota may have been consumed.
 
 ### Workspace MCP and tool search
 
@@ -517,6 +670,30 @@ by the existing 8 KiB receipt-result limit. Worker progress appears in board car
 `corral show`; the PM ledger appears in `corral agent state --pm` and its JSON output.
 The compact host transcript shows the operation, step and resulting revision.
 
+PM and assistant sessions keep one request plan at a time (T-679). Their contracts ask for a
+phased plan on every multi-step request and an update as each step changes; with `todo` off
+they say so instead. Each plan has an identity (`P1`, `P2`, ...) that the Todo widget header
+shows beside its revision. `init` is refused while the current plan has open steps; once
+every step is done or dropped, the next `init` keeps the old plan in history and opens the
+next one. `append` with a new `phase` and a `label` opens a phase for a mid-request
+correction. `{"op":"wait","step":"land","on":{"kind":"event","event":"T-12 lands"}}` or
+`"on":{"kind":"owner","question":"..."}` marks a step as waiting; starting or finishing it
+clears that. Updates may name `"plan":"P2"`, and one that names an older plan is refused.
+
+The host restores the ledger at startup and resume and gives every model request a bounded
+summary of the current plan (identity, revision, outstanding steps, waits and the next
+action). It is built from the latest accepted ledger right before each request, so a todo
+update earlier in the same turn is already reflected, and it is never written into Pi's
+session file. When a turn ends with an actionable step, corral may grant one continuation
+per plan revision. The host starts it only while the pane is idle, the budget holds and no
+newer turn has started since the granting one, and only after re-reading the ledger and
+finding the same plan revision; a turn that starts during that read, even one that is
+cancelled or fails, voids the grant. A cancelled, aborted or failed turn is never
+continued, and neither is a turn waiting on an event or the owner. A continued turn that
+changes nothing stops continuation, and so does a run of 8; the stop is shown in the pane.
+Board activity alone never starts a continuation. `corral agent state --pm` shows the
+request record as `todo_requests`.
+
 ### Background jobs
 
 Worker generations with `background_shell` expose `job_start`, `job_output`, `job_kill` and
@@ -652,8 +829,15 @@ stays headless while the setting is on; turning it off makes the next generation
 and records the change. The setting is read at dispatch and resume, so it applies to hosts
 launched after the change.
 
-`[agent] ui` sets how the run pane looks (default `"rich"`). In rich mode the pane uses the
-Dracula palette (a dark theme; on a light terminal background use `plain`) and shows a
+`[agent] ui` sets how the run pane looks (default `"rich"`). Rich mode now starts the real
+Pi interactive host in fullscreen with a graphite session sidebar and filled composer.
+At fewer than 105 columns the sidebar relocates into a native inspector above the composer;
+the real transcript, editor, bindings, model controls and permission dialogs remain Pi-owned.
+`F6` focuses the inspector, arrows navigate, Enter inspects, Escape returns to composing, and
+`Ctrl+B` switches wide sidebar/inline modes or compacts narrow details. `/panels context`,
+`/panels files`, `/panels agents`, `/panels plan` and `/panels refresh` expose the same real
+state and bounded read-only Git inspection. See [native panels](pi-panels.md) for scope and checks.
+There is no browser or local web server in the production UI. The pane retains its
 two-line header (role, task and run, generation, model, effort and worktree), names the
 terminal tab after the task and role (`T-503 worker`), and adds footer status for the corral
 binding (a filled dot with the generation, such as `● g2`, or the footer text “○ corral unbound”

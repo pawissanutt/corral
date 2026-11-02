@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 pub enum UsageSessionKind {
     Explore,
     Oracle,
+    WebSearch,
     Summary,
 }
 

@@ -32,6 +32,23 @@ test("a corral call renders as its short name and the one argument that says wha
   expect(renderCallText("corral_done", { summary: "x".repeat(200) }, plain).length).toBeLessThanOrEqual(120);
 });
 
+test("task read cards distinguish exact questions, sections, continuation and failures", () => {
+  expect(renderCallText("corral_show", { task: "T-337", section: "questions", key: "T-337/R1/Q16", limit: 4096 }, plain))
+    .toBe("corral show T-337 · Question T-337/R1/Q16 · from 0, ≤4096 chars");
+  expect(renderCallText("corral_show", { task: "T-337" }, plain)).toBe("corral show T-337 · Overview");
+  expect(renderCallText("corral_show", { task: "T-337", section: "spec", offset: 4096 }, plain))
+    .toContain("Spec · from 4096");
+  const page = { section: "questions", revision: 3, offset: 0, end_offset: 4096, total_chars: 5000,
+    next_offset: 4096, truncated: true, content_json: "x".repeat(4096) };
+  expect(renderResultText(receipt("committed", page), false, false, plain))
+    .toBe("✓ questions · 0–4096/5000 chars · next=4096 · rev=3");
+  expect(renderResultText(receipt("committed", { ...page, offset: 4096, end_offset: 5000, next_offset: null }), false, false, plain))
+    .toContain("4096–5000/5000 chars · complete");
+  expect(renderResultText(receipt("committed", page), true, false, plain)).toContain(page.content_json);
+  expect(renderResultText(receipt("rejected", { code: "bad_request", reason: "question key not found in this task" }), false, false, plain))
+    .toContain("✗ rejected  bad_request: question key not found");
+});
+
 test("a receipt renders as one line: its state and the result fields worth reading", () => {
   expect(renderResultText(receipt("committed", { key: "Q-3", rev: 0, tier: "quick" }), false, false, plain))
     .toBe("✓ key=Q-3 · tier=quick");

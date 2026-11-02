@@ -235,16 +235,7 @@ pub struct HostSpec {
     pub adopt: bool,
 }
 
-/// The Pi provider a host bound to `vendor` (else the model's inferred vendor) runs on.
-pub fn host_provider(vendor: Option<&str>, model: &str) -> Option<String> {
-    if vendor == Some("llama.cpp") {
-        return Some("llama.cpp".to_owned());
-    }
-    let vendor = vendor
-        .map(str::to_owned)
-        .or_else(|| corral_core::infer_vendor(model))?;
-    super::credentials::provider_for_vendor(&vendor).map(|p| p.id.to_owned())
-}
+pub use super::hooks::launch::host_provider;
 
 /// A written one-shot bootstrap and the explicit asset directory its launch names, if any.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -401,6 +392,7 @@ pub fn prepare_bootstrap(
     let supported = super::bridge::assets::read_compat(&assets)
         .map(|pins| pins.capabilities)
         .unwrap_or_default();
+    let memory = super::hooks::memory::projection(&ctx.store, target.role(), &project)?;
     let grant = open_generation_with(&ctx.store, target, pane, spec.adopt, Some(&supported))?;
     let (task, run, review) = match &container {
         ContainerRef::Worker { task, run } => (Some(task.clone()), Some(run.clone()), None),
@@ -454,6 +446,10 @@ pub fn prepare_bootstrap(
     };
     let dir = runtime_dir_for(&ctx.store, &bootstrap.runtime_key()?)
         .join(format!("g{}", grant.generation));
+    ensure_private_dir(&runtime_root(), &dir)?;
+    if let Some(text) = memory {
+        write_private(&dir.join(super::hooks::memory::FILE), text.as_bytes())?;
+    }
     let path = write_bootstrap(&dir, &bootstrap)?;
     Ok(Prepared {
         bootstrap: path,
@@ -704,6 +700,8 @@ pub fn check_with(
         ));
     }
     let compat = read_compat(&assets)?;
+    super::hooks::memory::compatible(&assets, bootstrap.role)
+        .map_err(|error| refuse("memory_contract_unavailable", format!("{error:#}")))?;
     let digest = asset_digest(&assets)
         .map_err(|error| refuse("assets_unavailable", format!("{error:#}")))?;
     if digest != bootstrap.asset_sha256 {
@@ -832,6 +830,8 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
         "model": bootstrap.model, "provider": bootstrap.provider, "effort": bootstrap.effort,
         "aws": bootstrap.aws,
         "prompt_file": bootstrap.prompt_file, "ui": bootstrap.ui.as_str(),
+        "memory_file": super::hooks::memory::role(bootstrap.role)
+            .map(|_| ready.generation_dir.join(super::hooks::memory::FILE)),
         "todo": bootstrap.todo,
         "capabilities": bootstrap.capabilities.as_ref().map(|snapshot| {
             let mut payload = json!({

@@ -66,10 +66,18 @@ export interface JobRuntimeOptions {
   readonly onEvent?: (kind: "job_started" | "job_exited", data: Record<string, unknown>) => void;
 }
 
+export interface JobInspection {
+  readonly job: string; readonly command: string; readonly state: "running" | "exited";
+  readonly startedAt: number | undefined; readonly endedAt: number | undefined;
+  readonly exitCode: number | null; readonly signal: string | null; readonly groupClear: boolean;
+  readonly bytes: number; readonly truncated: boolean; readonly tail: string; readonly monitorAttempts: number;
+  readonly watches: readonly { wait: string; pattern: string; armed: boolean; matched: string | undefined; reportQueued: boolean; deadline: string }[];
+}
 interface Watcher {
   readonly wait: string;
   readonly regex: RegExp;
   readonly afterLine: number;
+  readonly deadline: string;
   armed: boolean;
   matched?: string;
   reported: boolean;
@@ -77,6 +85,8 @@ interface Watcher {
 
 interface Job {
   readonly id: string;
+  startedAt: number | undefined;
+  endedAt: number | undefined;
   readonly command: string;
   readonly file: string;
   readonly child: ChildProcess;
@@ -248,7 +258,7 @@ export class JobRuntime {
     let finish!: () => void;
     let close!: () => void;
     const job: Job = {
-      id, command, file, child, pid: child.pid, start: startTimeOf(child.pid), state: "running", exitCode: null,
+      id, startedAt: undefined, endedAt: undefined, command, file, child, pid: child.pid, start: startTimeOf(child.pid), state: "running", exitCode: null,
       signal: null, groupClear: false, status: "", bytes: 0, stored: 0, fd, tail: Buffer.alloc(0), partial: "", lines: 0,
       monitors: 0, inflight: 0, drained: [], reports: Promise.resolve(), watchers: [],
       closed: new Promise((resolve) => { close = resolve; }),
@@ -264,6 +274,7 @@ export class JobRuntime {
       if (job.partial) this.line(job, job.partial);
       job.partial = "";
       job.state = "exited";
+      job.endedAt = Date.now();
       const status = job.commandStatus;
       job.exitCode = status === undefined ? code : status < 128 ? status : null;
       job.signal = status === undefined ? signal : status > 128 ? SIGNAL_NAMES[status - 128] ?? `SIG${status - 128}` : null;
@@ -296,7 +307,7 @@ export class JobRuntime {
     // The open stdin is the launcher's lifeline: it is closed only when this host goes away.
     await new Promise<void>((resolve) => {
       if (!child.stdin) resolve();
-      else if (recorded) child.stdin.write("run\n", () => resolve());
+      else if (recorded) { job.startedAt = Date.now(); child.stdin.write("run\n", () => resolve()); }
       else child.stdin.end(() => resolve());
     });
     if (!recorded) return { job: id, state: "not_started", reason: "corral did not record the job's process identity" };
@@ -382,6 +393,7 @@ export class JobRuntime {
     const job = this.job(id);
     const wait = `${id}.m${++job.monitors}`;
     let watcher: Watcher | undefined;
+    const deadline = new Date(Date.now() + timeoutSecs * 1000).toISOString();
     if (on === "line") {
       if (!pattern) throw new JobError("a line monitor needs a pattern");
       let regex: RegExp;
@@ -390,10 +402,9 @@ export class JobRuntime {
       } catch (error) {
         throw new JobError(`invalid pattern: ${error instanceof Error ? error.message : error}`);
       }
-      watcher = { wait, regex, afterLine: job.lines, armed: false, reported: false };
+      watcher = { wait, regex, deadline, afterLine: job.lines, armed: false, reported: false };
       job.watchers.push(watcher);
     }
-    const deadline = new Date(Date.now() + timeoutSecs * 1000).toISOString();
     job.inflight++;
     try {
       const receipt = await this.options.call("job_monitor", key, {
@@ -482,6 +493,15 @@ export class JobRuntime {
     }));
   }
 
+  /** Local observations only: exited/report-queued never means canonical settlement. */
+  inspection(): readonly JobInspection[] {
+    return [...this.jobs.values()].map(job => ({
+      job: job.id, command: job.command, state: job.state, startedAt: job.startedAt, endedAt: job.endedAt,
+      exitCode: job.exitCode, signal: job.signal, groupClear: job.groupClear,
+      bytes: job.bytes, truncated: job.bytes > job.stored, tail: job.tail.subarray(-8192).toString("utf8"), monitorAttempts: job.monitors,
+      watches: job.watchers.map(w => ({ wait: w.wait, pattern: w.regex.source, armed: w.armed, matched: w.matched, reportQueued: w.reported, deadline: w.deadline })),
+    }));
+  }
   state(): Record<string, unknown>[] {
     return [...this.jobs.values()].map((job) => ({
       job: job.id, pid: job.pid, state: job.state, exit_code: job.exitCode, signal: job.signal,

@@ -127,6 +127,44 @@ fn owner_changes_after_approval_reopen_review_gate_with_fresh_worker_session() {
 }
 
 #[test]
+fn approval_after_backward_wall_step_still_resolves_changes_round() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+    };
+    let ahead = corral_core::clock::now() + jiff::SignedDuration::from_hours(1);
+    let wall = Arc::new(AtomicI64::new(ahead.as_second()));
+    let source = Arc::clone(&wall);
+    corral_core::clock::with_test_wall(
+        move || jiff::Timestamp::from_second(source.load(Ordering::SeqCst)).unwrap(),
+        || {
+            let fx = Fx::new(true, |_| {});
+            let id = approved(&fx);
+            corral_ops::request_changes(&fx.ctx, &id, "address the finding").unwrap();
+            fx.commit(&id, "finding.txt");
+            let gate = fx.gate(&id);
+            fx.observe(&id, &gate.identity.as_ref().unwrap().attempt);
+            fx.checkpoint(&id);
+            corral_ops::done(&fx.ctx, &id, SUMMARY).unwrap();
+            let round = fx.run(&id).changes_round.unwrap().at;
+            wall.fetch_sub(7200, Ordering::SeqCst);
+            let approval =
+                corral_ops::verdict(&fx.ctx, &id, Verdict::Approve, "addressed").unwrap();
+            assert!(approval.at > round);
+            let task = fx.ctx.store.get(&id).unwrap();
+            assert_eq!(
+                corral_ops::gate_readback(&fx.ctx, &task)
+                    .unwrap()
+                    .gate_contract
+                    .unwrap()
+                    .phase,
+                GatePhase::Landing
+            );
+        },
+    );
+}
+
+#[test]
 fn renewed_approval_after_owner_changes_restores_landing_gate() {
     // Given a changes round and a fresh quick receipt on its changed candidate.
     let fx = Fx::new(true, |_| {});

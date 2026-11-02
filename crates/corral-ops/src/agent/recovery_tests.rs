@@ -354,6 +354,8 @@ fn resume_fences_the_dead_generation_classifies_its_dangling_calls_and_relaunche
     // And nothing was replayed: no gate ran.
     assert_eq!(gate_runs(&fx), 0);
 }
+#[path = "recovery_memory_tests.rs"]
+mod memory;
 
 #[derive(Clone, Copy, Debug)]
 enum Window {

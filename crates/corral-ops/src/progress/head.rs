@@ -80,6 +80,8 @@ pub(super) fn next_progress<T: TaskRef + ?Sized>(
             .context("progress_revision_exhausted")?,
         spec_revision: input.spec_revision.clone(),
         phases: input.phases.clone(),
+        plan: None,
+        waits: Vec::new(),
     })
 }
 

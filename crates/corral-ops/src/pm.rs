@@ -345,6 +345,31 @@ pub(crate) fn prompt_file(ctx: &Ctx) -> Result<std::path::PathBuf> {
         .join("pm.md"))
 }
 
+/// The Pi role assembles its installed instructions with this bounded data snapshot.
+/// Project guidance is loaded separately by the host under its recorded trust settings.
+pub(crate) fn save_native_context(ctx: &Ctx) -> Result<std::path::PathBuf> {
+    let projects = crate::agent::hooks::pm::projects(&ctx.store)?
+        .into_iter()
+        .map(|name| Ok((name.clone(), ctx.store.project_path(&name)?)))
+        .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
+    let bytes = serde_json::to_vec_pretty(&json!({
+        "version": 1,
+        "workspace": ctx.store.root(),
+        "projects": projects,
+        "policy": crate::pm_policy::native_summary(&crate::pm_policy::snapshot(ctx)?),
+    }))?;
+    ensure!(
+        bytes.len() <= 64 * 1024,
+        "Pi PM operating context exceeds 64 KiB"
+    );
+    let path = ctx
+        .store
+        .scratch_spool(corral_core::backend::ScratchKind::Prompt, "pm")?
+        .join("pm-pi.json");
+    crate::pm_policy::write_atomic(&path, &bytes)?;
+    Ok(path)
+}
+
 fn pm_prompt(ctx: &Ctx, policy: &crate::pm_policy::PolicySnapshot) -> Result<String> {
     let corral = corral_bin()?.display().to_string();
     let mut out = String::from("# corral PM\n\n");

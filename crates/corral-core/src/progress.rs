@@ -93,6 +93,29 @@ pub struct RunProgress {
     pub revision: u64,
     pub spec_revision: String,
     pub phases: Vec<ProgressPhase>,
+    /// Session ledgers only (PM, assistant): the current request plan, `P<n>` (T-679).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// Session ledgers only: open steps that wait on a named event or an owner answer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waits: Vec<StepWait>,
+}
+
+/// What an open step of a session ledger waits on; starting or ending the step clears it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WaitOn {
+    /// A named observable event, such as a task landing or a board message arriving.
+    Event { event: String },
+    /// The owner's answer to a question asked in the pane.
+    Owner { question: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepWait {
+    pub step: String,
+    pub on: WaitOn,
 }
 
 impl RunProgress {

@@ -385,11 +385,11 @@ impl GrantState {
 }
 
 impl WriteGrant {
-    /// A clock reading before `granted_at` (moved back) or at or after `expires_at` expires an
-    /// hour grant; a session grant ends only with its session.
+    /// An hour grant expires at its deadline. A backward wall-clock adjustment must not
+    /// expire it early; it can instead extend the grant until the clock reaches its deadline.
+    /// A session grant ends only with its session.
     pub fn expired(&self, now: Timestamp) -> bool {
-        self.expires_at
-            .is_some_and(|end| now >= end || now < self.granted_at)
+        self.expires_at.is_some_and(|end| now >= end)
     }
 
     pub fn state(&self, now: Timestamp, ended: bool) -> GrantState {

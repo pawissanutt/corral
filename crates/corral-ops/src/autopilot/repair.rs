@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Context;
 use corral_git::MergePreflight;
 
 impl Pilot<'_> {
@@ -115,26 +116,54 @@ impl Pilot<'_> {
 
     pub(super) fn rebase(&self) -> Result<Step> {
         let mut key = RepairKey::new(self.head, self.run, "rebase_conflict")?;
-        if self.policy.merge == MergeMode::Ff {
-            key.reason = "base_moved".into();
-            return self.integration_changes(key, Vec::new(), None);
-        }
         // The real replay is authoritative even when merge-tree was clean.
-        let _action = corral_core::work::action(self.id(), OperatingActionKind::Repair);
         let rebased = self
             .ctx
             .store
             .dispatch_update_head(self.id(), |store, current| {
-                crate::operating::require(store, &*current, OperatingActionKind::Repair)?;
                 key.check(&*current)?;
-                crate::verdict_carry::rebase(self.ctx, &*current, self.run, &key.base)
+                // Replaying an approved candidate is verification preparation, not a
+                // worker repair. Keep all Gate authority and recovery checks in force;
+                // only an approval bound to this head (or our own clean replay) qualifies.
+                let run = current.current_run_head()?.context("missing current run")?;
+                let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
+                let approved = match run.review.as_ref() {
+                    Some(review) if review.verdict == Some(Verdict::Approve) => {
+                        review.sha == head
+                            || crate::verdict_carry::clean_replay(
+                                self.ctx,
+                                &*current,
+                                &run,
+                                &review.sha,
+                                &head,
+                            )?
+                    }
+                    _ => false,
+                };
+                // Preserve worker integration for unapproved fast-forward candidates.
+                // An approved clean replay is re-gated before the eventual ff landing.
+                if self.policy.merge == MergeMode::Ff && !approved {
+                    return Ok(None);
+                }
+                let action = if approved {
+                    OperatingActionKind::Gate
+                } else {
+                    OperatingActionKind::Repair
+                };
+                let _action = corral_core::work::action(self.id(), action);
+                crate::operating::require(store, &*current, action)?;
+                crate::verdict_carry::rebase(self.ctx, &*current, &run, &key.base).map(Some)
             })
             .map(|(_, outcome)| outcome);
         match rebased {
-            Ok(RebaseOutcome::Conflict { message, paths }) => {
+            Ok(None) => {
+                key.reason = "base_moved".into();
+                self.integration_changes(key, Vec::new(), None)
+            }
+            Ok(Some(RebaseOutcome::Conflict { message, paths })) => {
                 self.integration_changes(key, paths, Some(message))
             }
-            Ok(RebaseOutcome::Rebased) => {
+            Ok(Some(RebaseOutcome::Rebased)) => {
                 let head = corral_git::rev_sha(&self.run.worktree, "HEAD")?;
                 let note = format!(
                     "rebased onto {} at {}; gate required on the integrated candidate",

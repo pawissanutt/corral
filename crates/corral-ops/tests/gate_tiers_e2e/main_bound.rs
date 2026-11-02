@@ -128,6 +128,62 @@ fn landed_after_one_changes_round(main_moves: bool) {
 }
 
 #[test]
+fn sync_collection_and_evidence_stay_ordered_after_wall_clock_steps_back() {
+    use jiff::SignedDuration;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+    };
+
+    // The synthetic wall clock starts ahead of the real wall clock. Rewinding it
+    // makes either the old fixed sync date or a raw wall reading precede the gate.
+    let ahead = corral_core::clock::now() + SignedDuration::from_hours(1);
+    let wall = Arc::new(AtomicI64::new(ahead.as_second()));
+    let source = Arc::clone(&wall);
+    corral_core::clock::with_test_wall(
+        move || Timestamp::from_second(source.load(Ordering::SeqCst)).unwrap(),
+        || {
+            let fx = Fx::new(Suite::Green, |_| {});
+            let id = fx
+                .ctx
+                .store
+                .create("clock", Some("app"), Status::Ready, "spec")
+                .unwrap()
+                .id;
+            fx.audit(&id);
+            corral_ops::dispatch(
+                &fx.ctx,
+                &id,
+                &DispatchOpts {
+                    profile: Some("fake".into()),
+                    ..DispatchOpts::default()
+                },
+            )
+            .unwrap();
+            let boundary = corral_core::clock::now();
+            corral_ops::gate_start(&fx.ctx, &id).unwrap();
+            wall.fetch_sub(7200, Ordering::SeqCst);
+            fx.sync();
+            let gate = fx.run(&id).gate.unwrap();
+            assert_eq!(gate.result, GateResult::Pass);
+            assert!(
+                gate.at > boundary,
+                "collection was stamped before gate start"
+            );
+            observe(&fx, &id, &gate.identity.unwrap().attempt);
+            let task = fx.task(&id);
+            let failures = corral_ops::evidence_failures(
+                &fx.ctx,
+                &task,
+                &corral_core::RunHead::of(task.current_run().unwrap()).unwrap(),
+            )
+            .unwrap();
+            assert!(failures.is_empty(), "{failures:?}");
+        },
+    );
+}
+
+#[test]
 fn quick_review_rounds_then_one_full_landing_gate_promote_the_approval_on_a_still_main() {
     landed_after_one_changes_round(false);
 }

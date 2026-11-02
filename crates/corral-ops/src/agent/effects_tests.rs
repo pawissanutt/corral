@@ -149,6 +149,7 @@ fn origin(
             session_id: "s1".into(),
             generation,
             turn: None,
+            parent: None,
         },
         binding: RequestBinding {
             container,
@@ -346,6 +347,9 @@ fn bound(fx: &Fx, call: &str, op: &str) -> RequestOrigin {
     let generation = fx.bind();
     fx.call(generation, call, op)
 }
+
+#[path = "effects_clock_tests.rs"]
+mod clock_tests;
 
 #[test]
 fn wait_artifact_checkpoint_done_and_verdict_survive_every_crash_point() {

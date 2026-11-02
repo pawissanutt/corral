@@ -28,16 +28,17 @@ export type CorralOp =
   | "question_answer" | "question_escalate" | "question_cancel" | "reply" | "comment"
   | "capture" | "read_brief" | "read_next" | "read_show" | "read_list" | "read_search"
   | "read_route" | "read_artifacts" | "read_lessons" | "inbox_read" | "inbox_resolve"
+  | "memory_list" | "memory_read" | "memory_put" | "memory_remove"
   | "job" | "job_monitor"
-  | "plan_write" | "plan_submit" | "plan_verdict" | "owner_action";
+  | "plan_write" | "plan_submit" | "plan_verdict" | "owner_action" | "write_permission";
 
 export const CORRAL_OPS: readonly CorralOp[] = [
   "hello", "event", "receipt_lookup", "ask", "withdraw", "wait", "progress", "checkpoint",
   "evidence", "artifact", "gate", "done", "verdict", "question_answer", "question_escalate",
   "question_cancel", "reply", "comment", "capture", "read_brief", "read_next", "read_show",
   "read_list", "read_search", "read_route", "read_artifacts", "read_lessons", "inbox_read", "inbox_resolve",
-  "todo", "job", "job_monitor",
-  "plan_write", "plan_submit", "plan_verdict", "owner_action",
+  "todo", "job", "job_monitor", "memory_list", "memory_read", "memory_put", "memory_remove",
+  "plan_write", "plan_submit", "plan_verdict", "owner_action", "write_permission",
 ];
 
 /** The launcher-bound identity; never chosen by the model. */
@@ -78,6 +79,16 @@ export interface RoleContext {
   readonly capabilities?: CapabilitySet;
   /** LSP server settings resolved for this generation. */
   readonly lspSettings?: Readonly<Record<string, unknown>>;
+  /** Fresh canonical assistant scratch roots; never sourced from legacy files. */
+  readonly scratchRoots?: () => Promise<readonly string[]>;
+  readonly writePermission?: {
+    readonly settings: import("./assistant/paths.ts").WriteSettings;
+    onBound(notice: () => Promise<void>): Promise<void>;
+    sessionId(): string;
+    turn(): { id: number | undefined; signal: AbortSignal };
+    call(requestId: string, payload: Record<string, unknown>): Promise<import("../tools/corral.ts").CorralReceipt>;
+    emit(kind: string, data: Record<string, unknown>): void;
+  };
   readonly registerCapability?: (pid: number) => () => void;
   /** The worktree (worker, reviewer) or workspace root (pm, assistant) Pi works in. */
   readonly cwd: string;
@@ -94,6 +105,8 @@ export interface CorralToolSpec<P = Record<string, unknown>> {
   readonly description: string;
   readonly op: CorralOp;
   readonly parameters: TSchema;
+  /** Machine shape of operation results; the canonical receipt envelope is supplied centrally. */
+  readonly resultSchema?: TSchema;
   /** The canonical payload sent for validated tool parameters. */
   payload(params: P): Record<string, unknown>;
   /** A deadline longer than the client's default, for an op that runs a whole corral command. */

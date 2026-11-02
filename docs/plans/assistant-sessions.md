@@ -403,6 +403,12 @@ edit/write limited by a fixed host path guard to the session's scratch worktrees
 `herdr pane` input commands and direct writes under `.corral/` (they stop accidents by an
 honest model; see Threat model). No preset grants owner authority.
 
+Amendment T-656@P3: the fixed edit/write roots above are now default no-dialog roots.
+Assistant-only `write_permissions` (standard/full on, strict off) permits external writes
+with owner once/hour/session decisions or configured allow directories, subject to fixed
+refusals and scope limits. See [write permissions](../guide/assistants.md#write-permissions).
+This does not change board, owner-action or landing authority, nor shell/MCP enforcement.
+
 ### Entry authority: command classification
 
 The host exports `CORRAL_ASSISTANT=A-<n>` (with the container's generation) into the

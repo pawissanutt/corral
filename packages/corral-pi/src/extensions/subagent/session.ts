@@ -28,7 +28,7 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
   const extension = (pi: ExtensionAPI) => {
     for (const tool of options.localTools.filter((tool) => allowed.has(tool.name))) pi.registerTool(tool);
     pi.on("tool_call", (event) => {
-      const reason = executionRefusal(event.toolName, event.parentToolCallId !== undefined, allowed, new Set());
+      const reason = executionRefusal(event.toolName, event.parentToolCallId !== undefined, allowed);
       return reason ? { block: true, reason } : undefined;
     });
     pi.on("user_bash", () => ({ result: { output: "auxiliary sessions cannot run bash", exitCode: 1, cancelled: false, truncated: false } }));

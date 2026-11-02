@@ -9,6 +9,7 @@ import { loadModules, modulePaths } from "../../host/modules.ts";
 import { CorralClient } from "../../tools/corral.ts";
 import { snapshotProgress } from "../../ui/todo.ts";
 import { PACKAGE_ROOT } from "../../../test/support/fixture-install.ts";
+import { REQUEST_ASSET, REQUEST_OFF_ASSET } from "../common/todo.ts";
 import type { HostIdentity } from "../types.ts";
 import { GENERATION_ENV, SESSION_ENV, exportAssistantSession } from "./env.ts";
 import assistant, { CONTRACT_ASSET, UPSTREAM, assistantRole } from "./index.ts";
@@ -31,9 +32,11 @@ test("the assistant loadout reads, shells and writes behind its path guard, and 
   expect(assistant.upstreamTools).toContain("edit");
   expect(assistant.upstreamTools).toContain("write");
   expect(typeof assistant.extend).toBe("function");
-  expect(assistant.corralOps).toEqual(["hello", "event", "receipt_lookup", "todo", "owner_action"]);
-  expect(assistant.tools(context).map((tool) => tool.name)).toEqual(["corral_owner_action"]);
-  expect(assistant.tools({ ...context, todo: true }).map((tool) => tool.name)).toEqual(["corral_owner_action", "corral_todo"]);
+  const memoryOps = ["memory_list", "memory_read", "memory_put", "memory_remove"];
+  const memoryNames = memoryOps.map((op) => `corral_${op}`);
+  expect(assistant.corralOps).toEqual(["hello", "event", "receipt_lookup", "todo", "owner_action", "write_permission", ...memoryOps]);
+  expect(assistant.tools(context).map((tool) => tool.name)).toEqual(["corral_receipt_lookup", "corral_owner_action", ...memoryNames]);
+  expect(assistant.tools({ ...context, todo: true }).map((tool) => tool.name)).toEqual(["corral_receipt_lookup", "corral_owner_action", ...memoryNames, "corral_todo"]);
 });
 
 test("the contract names the bound session and leaves no placeholder", () => {
@@ -128,11 +131,20 @@ test("the contract tells the model to cite the tagged owner input and route uncl
   expect(contract).toContain("corral pm inbox show PMI-<n>");
 });
 
-test("the loaded assistant contract equals the shipped asset with its bound identity", () => {
-  const contract = assistantRole(PACKAGE_ROOT).contract(context);
-  const shipped = readFileSync(join(PACKAGE_ROOT, CONTRACT_ASSET), "utf8");
-  expect(contract).toBe(shipped.replaceAll("{{assistant}}", identity.assistant ?? ""));
-});
+for (const todo of [true, false, undefined] as const) {
+  test(`the loaded assistant contract equals the shipped assets with its bound identity (todo=${String(todo)})`, async () => {
+    // Given the independently read shipped assets for this capability setting and bound session.
+    const configured = todo === undefined ? context : { ...context, todo };
+    const shipped = readFileSync(join(PACKAGE_ROOT, CONTRACT_ASSET), "utf8");
+    const execution = readFileSync(join(PACKAGE_ROOT, todo === true ? REQUEST_ASSET : REQUEST_OFF_ASSET), "utf8");
+    const expected = `${shipped.replaceAll("{{assistant}}", identity.assistant ?? "")}\n\n${execution}`;
+    // When the production fixed-path loader and the explicit-root role build their contracts.
+    const loaded = await loadModules(PACKAGE_ROOT, "assistant");
+    // Then both equal the complete shipped copy, including identity and the selected request section.
+    expect(loaded.role.contract(configured)).toBe(expected);
+    expect(assistantRole(PACKAGE_ROOT).contract(configured)).toBe(expected);
+  });
+}
 
 /**
  * A receipt client with Rust's rules for one request ID: an exact-payload replay returns the

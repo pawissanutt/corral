@@ -132,9 +132,6 @@ pub(crate) fn sweep(ctx: &Ctx, tasks: &[Task]) {
     {
         failed(ctx, &task.id, "inventory", &error);
     }
-    for task in terminal {
-        reap_sandboxes(ctx, task, &mut Vec::new());
-    }
 }
 
 fn reap_sandboxes(ctx: &Ctx, task: &Task, warnings: &mut Vec<String>) {

@@ -54,6 +54,7 @@ mod lesson_distill;
 pub mod lesson_rows;
 mod lesson_signals;
 mod lessons;
+pub mod memory;
 mod movement;
 #[cfg(not(target_os = "linux"))]
 mod native_process;
@@ -288,6 +289,7 @@ pub use review_routing::ReviewMapping;
 pub mod review_contracts;
 pub mod review_packet;
 pub mod review_receipts;
+pub mod workbench;
 pub use parked::ParkedRun;
 pub use reviewer::{StrongerOutcome, request_stronger_review, review_callback_token};
 pub use routing::{

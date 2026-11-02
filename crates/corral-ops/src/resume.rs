@@ -99,6 +99,9 @@ pub fn resume_packet(ctx: &Ctx, task: &Task, run: &Run) -> Result<ResumePacket> 
         }) {
             reasons.push("source_run_changed".into());
         }
+        if source.is_some_and(|s| s.id == run.id) && obligations_changed(run, record) {
+            reasons.push("obligations_changed".into());
+        }
         if source
             .and_then(|s| s.progress.as_ref())
             .map_or(0, |p| p.revision)
@@ -114,6 +117,15 @@ pub fn resume_packet(ctx: &Ctx, task: &Task, run: &Run) -> Result<ResumePacket> 
     }
     if let Some(source) = source {
         for record in source.checkpoints.iter().rev() {
+            // Admission requires the latest checkpoint for the current run. Older
+            // snapshots may only supply progress when resuming into a new run.
+            if source.id == run.id
+                && checkpoint
+                    .as_ref()
+                    .is_some_and(|c| c.artifact != record.artifact)
+            {
+                break;
+            }
             if !assess(record)?.is_empty() {
                 continue;
             }
@@ -198,7 +210,9 @@ pub(crate) fn resume_packet_head(
     let mut identity: Option<[String; 3]> = None;
     let source_missing = source.id != run.id && !source.worktree.is_dir();
     let source_progress = source.progress.as_ref().map_or(0, |p| p.revision);
-    let mut assess = |meta: &CheckpointMeta| -> Result<Vec<String>> {
+    let mut assess = |meta: &CheckpointMeta,
+                      record: Option<&CheckpointRecord>|
+     -> Result<Vec<String>> {
         let [head_sha, base, tree] = match &identity {
             Some(identity) => identity.clone(),
             None => identity
@@ -228,6 +242,9 @@ pub(crate) fn resume_packet_head(
         {
             reasons.push("source_run_changed".into());
         }
+        if source.id == run.id && record.is_some_and(|record| obligations_changed(run, record)) {
+            reasons.push("obligations_changed".into());
+        }
         if source_progress != meta.progress_revision {
             reasons.push("progress_changed".into());
         }
@@ -239,14 +256,18 @@ pub(crate) fn resume_packet_head(
             head.emitted_checkpoint(&newest)?
                 .context("newest checkpoint payload missing")?,
         );
-        packet.reasons = assess(&newest)?;
+        packet.reasons = assess(&newest, packet.checkpoint.as_ref())?;
         packet.status = ResumeStatus::Stale;
         let mut candidate = Some((newest.clone(), packet.reasons.is_empty()));
         while let Some((meta, compatible)) = candidate.take() {
             if !compatible {
+                // Older snapshots may restore a new run, never admit the same current run.
+                if source.id == run.id {
+                    break;
+                }
                 candidate = match metas.next().transpose()? {
                     Some(next) => {
-                        let compatible = assess(&next)?.is_empty();
+                        let compatible = assess(&next, None)?.is_empty();
                         Some((next, compatible))
                     }
                     None => None,
@@ -344,6 +365,14 @@ pub(crate) fn is_control_reply(
                 },
                 |event| event.kind == "checkpoint_requested",
             ))
+}
+
+fn obligations_changed(run: &Run, record: &CheckpointRecord) -> bool {
+    let mut current = run.obligations.clone();
+    let mut captured = record.checkpoint.run_obligations.clone();
+    current.waits.retain(|wait| wait.unresolved());
+    captured.waits.retain(|wait| wait.unresolved());
+    current != captured
 }
 
 /// A worker calling `done` is reachable by definition. Retry uses this only for a live pane.

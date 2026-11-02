@@ -1,7 +1,7 @@
 //! Envelope v1 of `corral agent call`: parsing with bounds, the canonical payload digest and
 //! the request-ID derivations. Nothing here reads the store.
 use corral_core::Store;
-use corral_core::agent::{AgentRole, RequestIdentity, paths::sha256_hex};
+use corral_core::agent::{AgentRole, CallParent, RequestIdentity, paths::sha256_hex};
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -265,6 +265,38 @@ fn identity(identity: &RequestIdentity) -> Result<(), Rejection> {
     Ok(())
 }
 
+/// A nested Code Mode call (T-683) is a model-facing op whose request ID is derived from its
+/// session and parent, so its receipt binds the child to one cell of one transcript call.
+fn nested(op: AgentOp, envelope: &Envelope, parent: &CallParent) -> Result<(), Rejection> {
+    if matches!(op, AgentOp::Hello | AgentOp::Event) {
+        return Err(bad(
+            "hello and event are host lifecycle calls and name no Code Mode parent",
+        ));
+    }
+    let id = &parent.tool_call_id;
+    if id.is_empty() || id.len() > 512 || id.chars().any(char::is_control) {
+        return Err(bad(
+            "identity.parent.tool_call_id must be 1-512 bytes without control characters",
+        ));
+    }
+    token("identity.parent.cell", &parent.cell, 128, "_.:-")?;
+    token("identity.parent.call", &parent.call, 160, "_.:-")?;
+    let seq = parent
+        .call
+        .strip_prefix(parent.cell.as_str())
+        .and_then(|rest| rest.strip_prefix('.'));
+    if !seq.is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())) {
+        return Err(bad("identity.parent.call must be <cell>.<n>"));
+    }
+    if envelope.request_id != tool_request_id(&envelope.identity.session_id, &parent.child_key()) {
+        return Err(bad(
+            "a nested request_id must be the tool request ID of its session and \
+             <tool_call_id>/<call>",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn error_category(error: &serde_json::Error) -> &'static str {
     match error.classify() {
         serde_json::error::Category::Io => "io",
@@ -323,6 +355,9 @@ fn check(op_flag: &str, envelope: &Envelope) -> Result<AgentOp, Rejection> {
     }
     identity(&envelope.identity)?;
     request_id(&envelope.request_id, envelope.identity.generation)?;
+    if let Some(parent) = &envelope.identity.parent {
+        nested(op, envelope, parent)?;
+    }
     secret("auth.host_cap", &envelope.auth.host_cap)?;
     if let Some(nonce) = &envelope.auth.bind_nonce {
         secret("auth.bind_nonce", nonce)?;

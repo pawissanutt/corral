@@ -97,7 +97,7 @@ fn pending_reply_and_owner_wait_each_defer_without_status_reset() {
 }
 
 #[test]
-fn transport_failure_persists_delivery_evidence_and_retries_once() {
+fn transport_failure_persists_delivery_evidence_without_replaying() {
     // Given a transport refusal, not an acknowledged submission.
     let fx = Fx::new();
     fx.worker_change("file.rs");
@@ -116,12 +116,14 @@ fn transport_failure_persists_delivery_evidence_and_retries_once() {
     assert_eq!(fx.receipts().last().unwrap().detail["state"], "failed");
     // Given the transport is restored.
     std::fs::remove_file(fx.bin.join("fail")).unwrap();
-    // When retried, then the same notice is acknowledged once.
+    // A failed paste may already be in the composer: never replay it on sync.
     fx.tick(3);
     fx.tick(4);
-    assert_eq!(fx.sent().len(), 1);
+    assert!(fx.sent().is_empty());
+    assert_eq!(fx.state().notices.len(), 1);
     assert_eq!(fx.state().notices[0].id, failed.notices[0].id);
-    assert!(fx.state().notices[0].delivery.as_ref().unwrap().submitted);
+    assert_eq!(fx.state().notices[0].state, DeliveryState::Failed);
+    assert_eq!(fx.receipts().len(), 2);
 }
 
 #[test]
@@ -251,7 +253,7 @@ fn replaced_shell_after_a_failed_submission_is_not_a_retry_target() {
     // When a retry reconciles the live shell.
     delivery::deliver(&fx.ctx, &path, &mut state, 0, true).unwrap();
     // Then it cannot redirect the notice to the replacement process.
-    assert_eq!(state.notices[0].state, DeliveryState::Cancelled);
+    assert_eq!(state.notices[0].state, DeliveryState::Failed);
     assert!(fx.sent().is_empty());
 }
 

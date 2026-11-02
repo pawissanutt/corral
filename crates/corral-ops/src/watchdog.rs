@@ -215,6 +215,7 @@ pub(crate) fn foreign_process(
             // differs from the configured harness name (shebangs, symlinks, wrappers).
             && !launched(&local, info, processes)?
             && !registered_capability(run, process.pid, &local)
+            && !worker_language_server(ctx, run, &local, processes)?
             && local.elapsed_secs > ctx.store.config.sync.stuck_after_secs
         {
             return Ok(Some(StuckProcess {
@@ -225,6 +226,78 @@ pub(crate) fn foreign_process(
         }
     }
     Ok(None)
+}
+
+// Only exempt recognized language-server processes with a verifiable worker ancestor.
+// Executables with the same name in unrelated process trees remain actionable.
+fn worker_language_server(
+    ctx: &Ctx,
+    run: &Run,
+    process: &ProcessSnapshot,
+    processes: &dyn ProcessControl,
+) -> Result<bool> {
+    if !language_server_command(&process.argv) {
+        return Ok(false);
+    }
+    let mut pid = process.parent_pid;
+    for _ in 0..32 {
+        if pid <= 1 {
+            break;
+        }
+        let Some(parent) = processes.inspect(pid)? else {
+            break;
+        };
+        if registered_capability(run, pid, &parent) || protected(ctx, run, &parent.argv) {
+            return Ok(true);
+        }
+        if parent.parent_pid == pid {
+            break;
+        }
+        pid = parent.parent_pid;
+    }
+    Ok(false)
+}
+
+// For interpreter launches inspect only the script argument, not arbitrary later arguments:
+// a command mentioning a language server must not gain an exemption.
+fn language_server_command(argv: &[String]) -> bool {
+    let Some(exe) = argv.first().map(|s| basename(s)) else {
+        return false;
+    };
+    let server_name = |name: &str| {
+        let name = name.to_ascii_lowercase();
+        name == "rust-analyzer"
+            || name == "rust-analyzer-proc-macro-srv"
+            || name == "clangd"
+            || name == "gopls"
+            || name == "pylsp"
+            || name.contains("language-server")
+            || name.contains("languageserver")
+            || name.contains("langserver")
+            || name.contains("language_server")
+    };
+    if server_name(exe) {
+        return true;
+    }
+    if !matches!(
+        exe.to_ascii_lowercase().trim_end_matches(".exe"),
+        "node" | "nodejs" | "bun" | "python" | "python3"
+    ) {
+        return false;
+    }
+    let Some(script) = argv.iter().skip(1).find(|arg| !arg.starts_with('-')) else {
+        return false;
+    };
+    // Inline code is an arbitrary command, not a script path.
+    if argv
+        .iter()
+        .skip(1)
+        .take_while(|arg| *arg != script)
+        .any(|arg| matches!(arg.as_str(), "-c" | "-e" | "--eval" | "-m"))
+    {
+        return false;
+    }
+    script.split(['/', '\\']).any(server_name)
 }
 
 /// Capability entries belong to the current bound host, not to a process name. A stale or
@@ -342,6 +415,7 @@ pub fn unstick_with(
         .context("stuck process exited")?;
     if launched(&current, &info, processes)?
         || registered_capability(run, expected.pid, &current)
+        || worker_language_server(ctx, run, &current, processes)?
         || current.started != expected.started
         || current.argv != expected.argv
     {

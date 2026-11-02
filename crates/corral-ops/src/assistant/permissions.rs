@@ -15,9 +15,29 @@ use serde_json::Value;
 
 const FEATURE: &str = "write_permissions";
 
-/// The canonical form of an existing directory.
+/// Resolve a directory without creating it: canonicalize its existing ancestor, then append
+/// missing components, just as the host does before Pi creates a new file's parent directories.
+/// A dangling symlink, inaccessible ancestor or existing non-directory never resolves.
 pub fn resolve_dir(path: &Path) -> Option<PathBuf> {
-    std::fs::canonicalize(path).ok().filter(|dir| dir.is_dir())
+    let mut existing = path;
+    let mut missing = Vec::new();
+    loop {
+        match std::fs::symlink_metadata(existing) {
+            Ok(_) => {
+                let mut canonical = std::fs::canonicalize(existing).ok()?;
+                if !canonical.is_dir() {
+                    return None;
+                }
+                canonical.extend(missing.into_iter().rev());
+                return Some(canonical);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(existing.file_name()?);
+                existing = existing.parent()?;
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 /// Writes every queued audit line of `session` with its key, then clears the written keys.

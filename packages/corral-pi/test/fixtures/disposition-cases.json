@@ -1,0 +1,51 @@
+[
+  { "name": "no plan", "progress": null, "disposition": { "state": "complete" } },
+  {
+    "name": "the started step comes before earlier pending steps",
+    "progress": { "revision": 3, "spec_revision": "pm:", "plan": "P1", "phases": [{ "id": "p", "label": "P", "steps": [
+      { "id": "a", "label": "A", "status": { "state": "pending" }, "criteria": [] },
+      { "id": "b", "label": "B", "status": { "state": "in_progress" }, "criteria": [] }
+    ] }] },
+    "disposition": { "state": "actionable", "next": "b" }
+  },
+  {
+    "name": "an owner question leaves independent work actionable",
+    "progress": { "revision": 4, "spec_revision": "pm:", "plan": "P1", "phases": [{ "id": "p", "label": "P", "steps": [
+      { "id": "ask", "label": "Ask", "status": { "state": "in_progress" }, "criteria": [] },
+      { "id": "free", "label": "Free", "status": { "state": "pending" }, "criteria": [] }
+    ] }], "waits": [{ "step": "ask", "on": { "kind": "owner", "question": "Which project?" } }] },
+    "disposition": { "state": "actionable", "next": "free" }
+  },
+  {
+    "name": "the owner gates when every open step waits",
+    "progress": { "revision": 5, "spec_revision": "assistant:A-1", "plan": "P2", "phases": [
+      { "id": "p", "label": "P", "steps": [
+        { "id": "land", "label": "Land", "status": { "state": "pending" }, "criteria": [] },
+        { "id": "ask", "label": "Ask", "status": { "state": "pending" }, "criteria": [] }
+      ] },
+      { "id": "q", "label": "Q", "steps": [
+        { "id": "done", "label": "Done", "status": { "state": "done" }, "criteria": [] }
+      ] }
+    ], "waits": [
+      { "step": "land", "on": { "kind": "event", "event": "T-12 lands" } },
+      { "step": "ask", "on": { "kind": "owner", "question": "Ship it?" } }
+    ] },
+    "disposition": { "state": "awaiting_owner", "question": "Ship it?", "steps": ["ask"] }
+  },
+  {
+    "name": "only event waits remain",
+    "progress": { "revision": 6, "spec_revision": "pm:", "plan": "P3", "phases": [{ "id": "p", "label": "P", "steps": [
+      { "id": "x", "label": "X", "status": { "state": "dropped", "reason": "Not needed" }, "criteria": [] },
+      { "id": "land", "label": "Land", "status": { "state": "in_progress" }, "criteria": [] }
+    ] }], "waits": [{ "step": "land", "on": { "kind": "event", "event": "T-12 lands" } }] },
+    "disposition": { "state": "waiting_event", "event": "T-12 lands", "steps": ["land"] }
+  },
+  {
+    "name": "every step done or dropped",
+    "progress": { "revision": 7, "spec_revision": "pm:", "plan": "P3", "phases": [{ "id": "p", "label": "P", "steps": [
+      { "id": "a", "label": "A", "status": { "state": "done" }, "criteria": [] },
+      { "id": "b", "label": "B", "status": { "state": "dropped", "reason": "Superseded" }, "criteria": [] }
+    ] }] },
+    "disposition": { "state": "complete" }
+  }
+]

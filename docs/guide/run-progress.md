@@ -95,6 +95,15 @@ Step completion is execution bookkeeping, not acceptance evidence. Marking
 every step done does not satisfy criteria, pass a gate, approve a review, or
 finish the task. Use the separate evidence, gate, verdict, and approval workflow.
 
+## Diagnosing a slow completion
+
+Set `CORRAL_DONE_TIMING=1` on a CLI `corral done` invocation to print cumulative
+stage timings to stderr. Artifact harvesting batches metadata updates while still
+hashing each eligible file; large scratch directories can therefore take time to
+read. A worker whose done tool times out should use the returned receipt lookup:
+if the receipt committed, completion succeeded; if it is absent after the killed
+executor exits, check task status and retry. Do not assume a timeout was a refusal.
+
 ## Checkpoint payload
 
 Save a checkpoint after publishing progress. Copy the returned progress revision

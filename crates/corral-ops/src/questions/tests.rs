@@ -558,3 +558,109 @@ fn config_defaults_to_question_push_kinds_and_preserves_agent_defaults() {
             .any(|p| p == "agent.question_unattended_secs must be > 0")
     );
 }
+
+#[test]
+fn native_pm_claim_effect_readback_outcome_continues_past_owner_wait_and_replays_once() {
+    use corral_core::pm_inbox::{ItemKind, ItemState, NewPmItem, Resolution};
+    let fx = fx();
+    let (id, worker) = worker(&fx);
+    let pm = pm_host(&fx);
+    let owner = ask(
+        &fx,
+        &worker,
+        "owner",
+        json!({
+            "kind":"owner_only", "text":"Expand scope?", "options":["keep", "expand"]
+        }),
+    )
+    .receipt()
+    .unwrap()
+    .result["key"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let clarification = ask_ok(&fx, &worker, "clarify", false);
+    fx.ctx
+        .store
+        .pm_inbox_post(NewPmItem {
+            from: "owner".into(),
+            kind: ItemKind::Question,
+            subject: "Answer clarification".into(),
+            body: "Use the existing spec".into(),
+            refs: vec![clarification.clone()],
+            requested_action: None,
+            owner_words: None,
+            key: None,
+        })
+        .unwrap();
+    let escalation = json!({"key":owner,"rev":1,"note":"Keep current scope (recommended) or expand; expansion needs owner approval."});
+    let escalated = send(
+        &fx,
+        &pm,
+        "question_escalate",
+        "escalate",
+        escalation.clone(),
+    );
+    assert_eq!(question(&fx, &owner).state, QuestionState::Escalated);
+    let claim = json!({"id":"PMI-1","expected_revision":0,"action":"claim"});
+    let claimed = send(&fx, &pm, "inbox_resolve", "claim", claim.clone());
+    assert_eq!(claimed.receipt().unwrap().result["revision"], 1);
+    let answer = |rev| {
+        json!({"key":clarification,"rev":rev,"text":"Use the default",
+        "basis_refs":[spec_ref(&fx, &id)],"scope_note":"Existing acceptance"})
+    };
+    assert_eq!(
+        code(&send(&fx, &pm, "question_answer", "stale", answer(0))),
+        Some("stale_revision")
+    );
+    // A comment is not an answer. The PM then reads the canonical question again.
+    send(
+        &fx,
+        &pm,
+        "comment",
+        "note",
+        json!({"task":id,"text":"Investigating"}),
+    );
+    assert_eq!(question(&fx, &clarification).state, QuestionState::Open);
+    let read = send(
+        &fx,
+        &pm,
+        "read_show",
+        "fresh",
+        json!({"task":id,"section":"questions"}),
+    );
+    assert!(read.receipt().is_some());
+    let revision = question(&fx, &clarification).revision;
+    let answered = send(&fx, &pm, "question_answer", "answer", answer(revision));
+    assert_eq!(question(&fx, &clarification).state, QuestionState::Answered);
+    assert_eq!(
+        fx.ctx.store.pm_inbox_item("PMI-1").unwrap().state,
+        ItemState::Claimed
+    );
+    let outcome = json!({"id":"PMI-1","expected_revision":1,"action":"resolve",
+        "outcome":"done","text":"Answered canonical question", "refs":[clarification]});
+    let resolved = send(&fx, &pm, "inbox_resolve", "resolve", outcome.clone());
+    // Duplicate wake: replay stable tool IDs; no second notification, transition or effect.
+    for (op, call, payload, receipt) in [
+        ("question_escalate", "escalate", escalation, escalated),
+        ("inbox_resolve", "claim", claim, claimed),
+        ("question_answer", "answer", answer(revision), answered),
+        ("inbox_resolve", "resolve", outcome, resolved),
+    ] {
+        assert_eq!(
+            send(&fx, &pm, op, call, payload).receipt(),
+            receipt.receipt()
+        );
+    }
+    let item = fx.ctx.store.pm_inbox_item("PMI-1").unwrap();
+    assert_eq!((item.state, item.revision), (ItemState::Resolved, 2));
+    assert_eq!(item.outcome.unwrap().resolution, Resolution::Done);
+    assert_eq!(question(&fx, &owner).state, QuestionState::Escalated);
+    assert_eq!(
+        messages(&fx, &id, "R1")
+            .iter()
+            .filter(|m| m.kind == "question_answer")
+            .count(),
+        1
+    );
+}

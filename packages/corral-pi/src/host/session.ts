@@ -18,7 +18,9 @@ import type { AwsBinding, AwsCredentialResolver } from "../auth/aws.ts";
 import { RunBudget } from "../capabilities/budget.ts";
 import { BashPermissions } from "../capabilities/bash-rules.ts";
 import { compactionSettings } from "../capabilities/compaction.ts";
-import { codemode } from "../capabilities/codemode.ts";
+import { codemodeTool } from "../capabilities/codemode.ts";
+import { nestedChild } from "../extensions/codemode/child.ts";
+import { CODE_CALL_ENTRY, CodeRuntime } from "../extensions/codemode/runtime.ts";
 import { HOOK_ENTRY, Hooks } from "../capabilities/hooks.ts";
 import { CHECKPOINT_ENTRY, Checkpoints } from "../capabilities/checkpoints.ts";
 import { type HostControls, installToolControls, parseControls } from "./tool-controls.ts";
@@ -29,12 +31,17 @@ import type { EventLog } from "../bridge/events.ts";
 import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../claude/stream.ts";
 import type { QuestionUpdate, SubmitInput, SubmitResult } from "../bridge/protocol.ts";
 import type { DeliveryHost } from "../delivery/types.ts";
+import { scratchRoots, writeSettings } from "../roles/assistant/paths.ts";
 import type { HostIdentity, RoleContext } from "../roles/types.ts";
 import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from "../tools/corral.ts";
 import { corralToolNames, defineCorralTool } from "../tools/define.ts";
 import { installChrome } from "../ui/chrome.ts";
+import { NativePanels } from "../ui/panels.ts";
+import type { PanelJob, PanelSnapshot } from "../ui/panels-view.ts";
+import { InspectorActivity } from "../ui/inspector.ts";
 import { corralRenderers } from "../ui/render.ts";
-import { installTodo } from "../ui/todo.ts";
+import { TodoLedger, installTodo } from "../ui/todo.ts";
+import { type DueContinuation, RequestContext, continuationText } from "./request.ts";
 import type { HostCapabilities, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
 import { askUserEnabled, askUserTool } from "./ask-user.ts";
@@ -43,9 +50,12 @@ import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, guardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 import { createModelCatalog } from "./catalog.ts";
 import { installModelSelection, subscriptionRoutes } from "./subscriptions.ts";
+import { observeTerminalInput, type InputObservation } from "./input-observation.ts";
 import { browserSettings, browserTools } from "../extensions/browser/index.ts";
 import { createLocalModels } from "./local-models.ts";
 import { webTools } from "../extensions/web/index.ts";
+import { runSubscriptionSearch } from "../extensions/web/subscription.ts";
+import { streamClaudeSearch } from "../claude/search.ts";
 import { configuredServers, lspToolkit, type LspToolkit } from "../extensions/lsp/index.ts";
 import { capabilityRegistry } from "../extensions/registry.ts";
 import { McpAccess } from "../capabilities/mcp.ts";
@@ -60,9 +70,10 @@ import { auxiliarySettings } from "../extensions/subagent/settings.ts";
 import { exploreTool } from "../extensions/subagent/index.ts";
 import { oracleTool } from "../extensions/oracle/index.ts";
 import { runAuxiliarySession } from "../extensions/subagent/session.ts";
-import { executionRefusal } from "../roles/common/execution.ts";
+import { executionRefusal, nestedCorralRead } from "../roles/common/execution.ts";
 import { OWNER_INPUT_TEXT_MAX, ownerInputText, utf8Prefix } from "../roles/assistant/owner-action.ts";
 import type { ConfirmUi } from "../tools/define.ts";
+import { memoryContext } from "./memory.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -76,6 +87,7 @@ export interface HostSessionOptions {
   readonly aws?: AwsRoute;
   readonly effort?: string;
   readonly promptFile?: string;
+  readonly memoryFile?: string;
   readonly todo?: boolean;
   /** The generation's recorded snapshot; when present it decides todo. */
   readonly capabilities?: HostCapabilities;
@@ -100,7 +112,8 @@ export interface HostSessionOptions {
   readonly herdr?: HerdrLifecycle;
 }
 
-type TurnOrigin = { kind: "bridge"; idempotency_key: string } | { kind: "owner_terminal" } | { kind: "unknown" };
+type TurnOrigin = { kind: "bridge" | "continuation"; idempotency_key: string } | { kind: "owner_terminal" }
+  | { kind: "unknown" };
 
 const THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
 const STATE_SECTION_MAX_BYTES = 8 * 1024;
@@ -189,11 +202,15 @@ export function restrictProvider(
   let streamSimple = provider.streamSimple.bind(provider) as StreamFunction;
   if (route.lane !== undefined) {
     if (!lane) throw new Error(`model_unavailable: ${route.id} runs through the ${route.lane} lane, which has no configuration`);
-    registerClaudeSdkApi(lane);
-    const api = getApiProvider(CLAUDE_SDK_API);
-    if (!api) throw new Error(`model_unavailable: the ${route.lane} lane is not registered`);
-    stream = (current, context, options) => api.stream({ ...current, api: CLAUDE_SDK_API }, context, options);
-    streamSimple = (current, context, options) => api.streamSimple({ ...current, api: CLAUDE_SDK_API }, context, options);
+    if (lane.searchOnly) {
+      stream = streamSimple = (current, context, options) => streamClaudeSearch(lane, current, context, options);
+    } else {
+      registerClaudeSdkApi(lane);
+      const api = getApiProvider(CLAUDE_SDK_API);
+      if (!api) throw new Error(`model_unavailable: the ${route.lane} lane is not registered`);
+      stream = (current, context, options) => api.stream({ ...current, api: CLAUDE_SDK_API }, context, options);
+      streamSimple = (current, context, options) => api.streamSimple({ ...current, api: CLAUDE_SDK_API }, context, options);
+    }
   }
   const checked = (current: { api: string }, streamOptions: unknown) => {
     if (current.api !== route.modelApi) throw new Error("provider_api_not_allowed");
@@ -234,12 +251,20 @@ export function providerErrorClass(message: string): string {
 
 export class HostSession {
   runtime!: AgentSessionRuntime;
+  readonly panels: NativePanels | undefined;
+  private readonly unsubscribePanels: (() => void) | undefined;
+  private terminalInput: InputObservation | undefined;
+  private terminalInputSequence = 0;
   private readonly baseLoadout: readonly string[];
   private mcp: McpAccess | undefined;
   private readonly roleContext: RoleContext;
   private readonly localTools: readonly ToolDefinition[];
   private dialogPi: ExtensionAPI | undefined;
   private readonly jobs: JobRuntime | undefined;
+  /** The generation's Code Mode kernel and its nested-call bridge (T-683); absent when disabled. */
+  private readonly code: CodeRuntime | undefined;
+  private writePermissionNotice: (() => Promise<void>) | undefined;
+  private writeAbort = new AbortController();
   private turn = 0;
   private open = false;
   private cancelRequested: number | undefined;
@@ -252,6 +277,9 @@ export class HostSession {
   private calls: Promise<unknown> = Promise.resolve();
   private readonly stats = { sent: 0, committed: 0, rejected: 0, failed: 0, lastError: undefined as string | undefined };
   private deniedTools = 0;
+  private inspector: InspectorActivity | undefined;
+  private panelTokens: number | undefined;
+  private panelTokenLeaf: string | null | undefined;
   private sessionsCreated = 0;
   /** How the bound host is attached: InteractiveMode in its pane, or headless (T-577). */
   private attached: "interactive" | "headless" | undefined;
@@ -264,12 +292,32 @@ export class HostSession {
   private readonly checkpoints: Checkpoints | undefined;
   private readonly auxiliary: AuxiliaryRuntime | undefined;
   private auxiliaryModels: Models | undefined;
+  private searchModels: Models | undefined;
   private readonly budget: RunBudget;
+  private ledger: TodoLedger | undefined;
+  /** PM and assistant with todo on: the request summary and continuation (T-679). */
+  private request: RequestContext | undefined;
+  /** Continuation rechecks, kept off `calls` so lifecycle reports and budget records never wait on one. */
+  private continuations: Promise<void> = Promise.resolve();
+  private closing = false;
 
   readonly provider: ProviderId;
 
   private constructor(private readonly options: HostSessionOptions) {
     this.provider = options.provider ?? "openai-codex";
+    this.panels = options.ui === "plain" ? undefined : new NativePanels({
+      identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
+      inspection: () => options.client.inspectionSnapshot(),
+    });
+    this.unsubscribePanels = this.panels ? options.events.on(event => {
+      if (event.kind === "terminal_input" && typeof event.input_sequence === "number" && event.input_sequence >= this.terminalInputSequence) {
+        this.terminalInputSequence = event.input_sequence;
+        this.terminalInput = { key: String(event.key), disposition: event.disposition as InputObservation["disposition"],
+          ...(typeof event.reason === "string" ? { reason: event.reason } : {}),
+          ...(typeof event.policy === "string" ? { policy: event.policy } : {}) };
+      }
+      this.panels?.refresh();
+    }) : undefined;
     this.budget = new RunBudget({
       unbounded: PROVIDERS[this.provider].lane !== undefined,
       record: async (payload) => {
@@ -295,6 +343,24 @@ export class HostSession {
       ...(options.guidance?.settings.lsp ? { lspSettings: options.guidance.settings.lsp } : {}),
       ...(options.effort ? { effort: options.effort } : {}),
       ...(options.promptFile ? { promptFile: options.promptFile } : {}),
+      ...(options.identity.role === "assistant" ? {
+        scratchRoots: async () => scratchRoots(await options.client.todoSnapshot(), options.identity.assistant ?? ""),
+      } : {}),
+      ...(options.identity.role === "assistant" && options.capabilities?.enabled.includes("write_permissions") ? {
+        writePermission: {
+          settings: writeSettings(options.guidance?.settings.write_permissions),
+          onBound: async (notice: () => Promise<void>) => {
+            this.writePermissionNotice = notice;
+            if (this.bound) await notice();
+          },
+          sessionId: () => this.sessionId(),
+          turn: () => ({ id: this.currentTurn(), signal: this.writeAbort.signal }),
+          call: (requestId: string, payload: Record<string, unknown>) => options.client.call("write_permission", {
+            requestId, payload, turn: this.currentTurn(),
+          }),
+          emit: (kind: string, data: Record<string, unknown>) => { options.events.emit(kind, data); },
+        },
+      } : {}),
     };
     const role = options.modules.role;
     const specs = role.tools(this.roleContext);
@@ -319,11 +385,29 @@ export class HostSession {
       this.additionalLsp = lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp), registerCapability });
     }
     this.jobs = this.jobRuntime(registerCapability);
-    const auxiliary = auxiliarySettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
-    if (auxiliary.explore || auxiliary.oracle) {
+    this.code = options.capabilities?.enabled.includes("codemode") ? new CodeRuntime({
+      generation: options.identity.generation,
+      emit: (kind, data) => { options.events.emit(kind, data); },
+      journal: (data) => { this.session.sessionManager.appendCustomEntry(CODE_CALL_ENTRY, data); },
+      // A detached cell's one notice enters like bridge input: journaled delivery, its own turn origin.
+      notify: async (key, text) => {
+        const sent = await this.submit({ text, busyPolicy: "follow_up", idempotencyKey: key, origin: "code-cell" }, key);
+        return sent.reason === undefined ? sent.disposition : `${sent.disposition}: ${sent.reason}`;
+      },
+    }) : undefined;
+    const subscriptionSearch = webEnabled && options.capabilities?.web?.search_provider === "subscription";
+    const auxiliary = { ...auxiliarySettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings),
+      ...(subscriptionSearch ? { web_search: { model: null, timeout_secs: (options.capabilities?.web?.timeout_ms ?? 15000) / 1000 } } : {}),
+    };
+    if (auxiliary.explore || auxiliary.oracle || auxiliary.web_search) {
       this.auxiliary = new AuxiliaryRuntime({
         settings: auxiliary, generation: options.identity.generation, provider: this.provider, model: options.model,
         sessionId: () => this.sessionId(),
+        searchModel: () => {
+          const model = this.runtime?.session.model;
+          return model && ["openai-codex", "anthropic"].includes(model.provider) && this.searchModels?.getModel(model.provider, model.id)
+            ? { provider: model.provider, model: model.id } : undefined;
+        },
         record: async (payload) => {
           if (!this.bound) throw new Error("host_not_bound");
           await this.drained();
@@ -335,6 +419,11 @@ export class HostSession {
           return receipt.result as Record<string, unknown>;
         },
         execute: (invocation, signal) => {
+          if (invocation.kind === "web_search") {
+            if (!this.searchModels || !options.capabilities?.web) throw new Error("subscription search runtime is not ready");
+            return runSubscriptionSearch({ sdk: options.sdk, models: this.searchModels, cwd: options.cwd,
+              settings: options.capabilities.web }, invocation, signal);
+          }
           if (!this.auxiliaryModels) throw new Error("auxiliary model runtime is not ready");
           return runAuxiliarySession({ sdk: options.sdk, models: this.auxiliaryModels, provider: this.provider,
             cwd: options.cwd, agentDir: options.agentDir, parentLoadout: this.loadout, localTools: this.localTools }, invocation, signal);
@@ -350,7 +439,11 @@ export class HostSession {
         this.dialogPi.sendUserMessage(message, { deliverAs: "followUp" });
         return message;
       })] : []),
-      ...(this.additionalLsp?.tools ?? []), ...(webEnabled && options.network.web ? webTools(options.network.web) : []),
+      ...(this.additionalLsp?.tools ?? []), ...(webEnabled && options.network.web ? webTools(options.network.web,
+        subscriptionSearch ? async (id, query, count, signal) => {
+          if (!this.auxiliary) throw new Error("subscription search is disabled");
+          return (await this.auxiliary.run("web_search", id, JSON.stringify({ query, count }), signal)).text;
+        } : undefined) : []),
       ...(this.jobs ? jobTools(this.jobs, options.identity.role === "worker") : []),
       ...(this.auxiliary && auxiliary.explore ? [exploreTool(this.auxiliary)] : []),
       ...(this.auxiliary && auxiliary.oracle ? [oracleTool(this.auxiliary)] : []),
@@ -469,9 +562,28 @@ export class HostSession {
       }
     }
     host.auxiliaryModels = models;
+    if (options.capabilities?.enabled.includes("web.enabled") && options.capabilities.web?.search_provider === "subscription") {
+      const providers = subscriptions.providers.filter((id) => id === "openai-codex" || id === "anthropic");
+      const search = await createModelCatalog(subscriptions.credentials, { providers });
+      for (const id of providers) {
+        const fetch = guardedFetch(options.network.fetch, (destination) => { options.network.refuse?.(destination); }, id).fetch;
+        restrictProvider(search, id, fetch as typeof globalThis.fetch,
+          { configDir: join(options.agentDir, "claude-search"), cwd: options.cwd, searchOnly: true });
+        const restricted = search.getProvider(id);
+        if (!restricted) throw new Error("subscription search provider is unavailable");
+        // Hosted searches/subprocess loops have no priced finite reservation. Hard budgets
+        // fail closed rather than pretending a model-token bound covers service charges.
+        search.registerNativeProvider({ ...restricted,
+          stream: host.budget.wrap(restricted.stream.bind(restricted), true),
+          streamSimple: host.budget.wrap(restricted.streamSimple.bind(restricted), true),
+        });
+      }
+      host.searchModels = search;
+    }
     const thinkingLevel = options.effort && THINKING.has(options.effort)
       ? (options.effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh") : undefined;
-    const contract = options.modules.role.contract(host.roleContext);
+    const contract = [options.modules.role.contract(host.roleContext),
+      memoryContext(options.identity.role, options.memoryFile, options.runtimeDir)].filter(Boolean).join("\n\n");
     const factory: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
       const settingsManager = sdk.SettingsManager.inMemory(host.settings);
       const guidance = selectGuidance({
@@ -523,8 +635,15 @@ export class HostSession {
 
   private async extension(pi: ExtensionAPI): Promise<void> {
     this.dialogPi = pi;
-    if (this.options.capabilities?.enabled.includes("codemode")) {
-      await codemode(this.options.sdk.createCodemodeExtension)(pi);
+    const code = this.code;
+    if (code) {
+      pi.registerTool(codemodeTool(code, (names) =>
+        names.filter((name) => executionRefusal(name, true, new Set(this.loadout)) === undefined)));
+      pi.on("session_start", () => { code.bound(); });
+      pi.on("session_shutdown", async (event) => {
+        if (event.reason === "reload") await code.rebind();
+        else await code.close();
+      });
     }
     if (this.additionalLsp) pi.on("session_shutdown", async () => { await this.additionalLsp?.shutdown(); });
     const settings = this.options.capabilities?.mcp;
@@ -540,7 +659,16 @@ export class HostSession {
     if (search) pi.registerTool(toolSearch(pi, (name) => this.loadout.includes(name)));
     const specs = this.options.modules.role.tools(this.roleContext);
     const corral = new Set([...corralToolNames(specs), ...(this.jobs && this.options.identity.role === "worker" ? [JOB_MONITOR_TOOL] : [])]);
+    const reads = new Set(specs.filter((spec) => nestedCorralRead(spec.op)).map((spec) => spec.name));
     const rich = this.options.ui !== "plain";
+    this.inspector ??= new InspectorActivity(this.options.events, () => this.panels?.refresh());
+    this.inspector.extend(pi, corral);
+    const role = this.options.identity.role;
+    this.ledger = this.loadout.includes("corral_todo")
+      ? new TodoLedger(this.options.identity, () => this.options.client.todoSnapshot()) : undefined;
+    this.ledger?.extend(pi);
+    this.request = this.ledger && (role === "pm" || role === "assistant") ? new RequestContext(this.ledger) : undefined;
+    this.request?.extend(pi);
     for (const spec of specs) {
       const tool = defineCorralTool(spec, {
         client: this.options.client, allowedOps: this.options.modules.role.corralOps,
@@ -556,18 +684,25 @@ export class HostSession {
         identity: this.options.identity, provider: this.provider, model: this.options.model,
         cwd: this.options.cwd, ...(this.options.effort ? { effort: this.options.effort } : {}),
       }, this.options.events, () => this.bound, this.options.sdk.Theme);
-      if (this.loadout.includes("corral_todo")) {
-        installTodo(pi, this.options.identity, () => this.options.client.todoSnapshot());
-      }
+      if (this.ledger) installTodo(pi, this.ledger, this.request === undefined);
+      this.panels?.install(pi, this.options.sdk);
+      const unsubscribe = this.ledger?.onChange(() => this.panels?.refresh());
+      pi.on("session_shutdown", (event) => {
+        unsubscribe?.();
+        if (event.reason !== "reload") { this.unsubscribePanels?.(); this.panels?.dispose(); }
+      });
     }
     for (const tool of this.localTools) pi.registerTool(tool);
-    // One execution check for model-issued and nested (`ctx.executeTool`) calls. A corral tool
-    // runs only at top level, where its request ID is bound to a transcript tool call.
+    // One execution check for model-issued and nested calls; a Code Mode child it refuses is
+    // reported as denied with no effect.
     pi.on("tool_call", (event) => {
       const allowed = new Set(this.loadout);
       const nested = event.parentToolCallId !== undefined;
-      const reason = executionRefusal(event.toolName, nested, allowed, corral);
+      const child = nested ? nestedChild(event.toolName, event.toolCallId) : undefined;
+      const unjournaled = corral.has(event.toolName) && !reads.has(event.toolName) && child === undefined;
+      const reason = executionRefusal(event.toolName, nested, allowed, unjournaled);
       if (!reason) return undefined;
+      if (child) child.denied = reason;
       this.deniedTools++;
       this.options.events.emit("tool_denied", { tool: event.toolName, ...(nested ? { nested: true } : {}) });
       return {
@@ -618,9 +753,7 @@ export class HostSession {
         },
       });
     }
-    pi.on("tool_result", (event) => {
-      if (event.parentToolCallId === undefined) this.observeQuestion(event.toolName, event.input, event.details);
-    });
+    pi.on("tool_result", (event) => this.observeQuestion(event.toolName, event.input, event.details));
     pi.on("input", async (event) => {
       if (this.open && event.source === "interactive") this.ownerInput = true;
       else this.lastInputSource = event.source;
@@ -685,7 +818,12 @@ export class HostSession {
 
   private watch(session: AgentSession): void {
     this.unsubscribe?.();
+    this.terminalInputSequence = 0;
+    this.terminalInput = undefined;
+    observeTerminalInput(session, this.options.events);
+    this.panelTokens = undefined;
     this.unsubscribe = session.subscribe((event) => {
+      if (event.type === "message_end") this.panelTokens = undefined;
       if (event.type === "agent_start") this.turnStarted();
       else if (event.type === "agent_settled") this.turnEnded(event.aborted);
       else if (event.type === "queue_update") {
@@ -699,6 +837,8 @@ export class HostSession {
   }
 
   private turnStarted(): void {
+    this.writeAbort.abort();
+    this.writeAbort = new AbortController();
     this.turn++;
     this.open = true;
     const origin: TurnOrigin = this.nextTurnOrigin
@@ -736,6 +876,7 @@ export class HostSession {
   }
 
   private turnEnded(aborted: boolean): void {
+    this.writeAbort.abort();
     if (!this.open) return;
     this.open = false;
     const cancelled = this.cancelRequested === this.turn;
@@ -774,6 +915,8 @@ export class HostSession {
     if (kind === "budget_exhausted") payload.budget = data.budget;
     if (kind === "turn_ended" && data.owner_input === true) payload.owner_input = true;
     if (kind === "turn_ended" && data.cancelled === true) payload.cancelled = true;
+    const role = this.options.identity.role;
+    if (kind === "turn_ended" && data.aborted === true && (role === "pm" || role === "assistant")) payload.aborted = true;
     const requestId = eventRequestId(this.options.identity.generation, event.seq);
     this.calls = this.calls.then(() => this.send(requestId, payload, turn));
   }
@@ -790,6 +933,7 @@ export class HostSession {
           this.stats.lastError = JSON.stringify(receipt.result).slice(0, 256);
         } else {
           this.stats.committed++;
+          if (payload.kind === "turn_ended" && receipt.state === "committed") this.turnRecorded(receipt.result, turn);
         }
         return;
       } catch (error) {
@@ -801,6 +945,54 @@ export class HostSession {
     this.stats.lastError = last instanceof Error ? last.message.slice(0, 256) : String(last);
   }
 
+  /** Corral's request decision for ended turn `turn`: a stop is shown, a due continuation queued. */
+  private turnRecorded(result: unknown, turn: number): void {
+    const stopped = this.request?.stopped(result);
+    if (stopped) {
+      this.options.events.emit("continuation_stopped", { reason: stopped });
+      this.request?.notify(`corral: automatic continuation stopped (${stopped.replace("_", " ")}); `
+        + "the plan still has open steps.");
+    }
+    const due = this.request?.due(result);
+    if (due) this.continuations = this.continuations.then(() => this.continueRequest(due, turn));
+  }
+
+  /**
+   * Starts the continuation that ended turn `granted` earned, only while that turn is still the
+   * latest, the pane is idle, the budget holds and the canonical plan is still the granted
+   * revision, each checked again after the ledger read: a turn that started (and perhaps was
+   * cancelled or failed) meanwhile voids it.
+   */
+  private async continueRequest(due: DueContinuation, granted: number): Promise<void> {
+    const key = due.continuation.key;
+    const skip = (reason: string) => { this.options.events.emit("continuation_skipped", { key, reason }); };
+    const ledger = this.ledger;
+    const blocked = () => this.closing ? "closing" : this.open ? "busy"
+      : this.budget.state().stopped ? "budget_exhausted" : this.turn !== granted ? "superseded_by_turn" : undefined;
+    const before = ledger ? blocked() : "closing";
+    if (before || !ledger) return skip(before ?? "closing");
+    try {
+      await ledger.restore();
+    } catch {
+      return skip("recheck_failed");
+    }
+    const after = blocked();
+    if (after) return skip(after);
+    const current = ledger.current;
+    if (current?.plan !== due.plan || current.revision !== due.revision) return skip("superseded");
+    this.options.events.emit("continuation", { key, attempt: due.continuation.attempt, plan: due.plan,
+      revision: due.revision });
+    this.session.prompt(continuationText(due), {
+      source: "rpc",
+      preflightResult: (disposition) => {
+        if (disposition === "started") this.nextTurnOrigin = { kind: "continuation", idempotency_key: key };
+        else skip(disposition);
+      },
+    }).catch((error: unknown) => {
+      skip(`refused: ${(error instanceof Error ? error.message : String(error)).slice(0, 128)}`);
+    });
+  }
+
   markAttached(mode: "interactive" | "headless"): void {
     this.attached = mode;
     this.options.events.emit(mode);
@@ -810,9 +1002,24 @@ export class HostSession {
     return this.calls;
   }
 
+  /** Every continuation recheck queued so far has decided (and, if due, submitted its prompt). */
+  continued(): Promise<void> {
+    return this.continuations;
+  }
+
+  /** Every detached Code Mode cell's notice started so far has been delivered or refused. */
+  async codeNoticed(): Promise<void> {
+    await this.code?.notified();
+  }
+
   async close(): Promise<void> {
+    this.closing = true;
+    this.unsubscribePanels?.();
+    this.panels?.dispose();
     const released = this.options.herdr?.close();
     // Stop the parent's follow-up loop before cancelled children can return tool results.
+    this.writeAbort.abort();
+    await this.code?.close();
     const aborted = this.session.abort();
     await this.auxiliary?.close();
     await this.jobs?.shutdown();
@@ -849,6 +1056,7 @@ export class HostSession {
     const bound = (receipt.result ?? {}) as { herdr_seq_epoch_ms?: unknown; questions?: unknown };
     this.options.herdr?.bind({ sessionId, sessionFile, epochMs: bound.herdr_seq_epoch_ms, questions: bound.questions });
     if ((this.options.capabilities?.catalog ?? 0) >= 7) await this.budget.refresh();
+    await this.writePermissionNotice?.();
     this.options.events.emit("bound", { generation: this.options.identity.generation, session_id: sessionId });
     return receipt;
   }
@@ -910,8 +1118,45 @@ export class HostSession {
     this.cancelRequested = this.turn;
     const cancelled = this.turn;
     this.options.events.emit("cancel", { turn: cancelled });
+    this.writeAbort.abort();
     await this.session.abort();
     return { cancelled: true, turn: cancelled };
+  }
+
+  private panelSnapshot(): PanelSnapshot | null {
+    if (!this.runtime) return null;
+    const session = this.session;
+    const leaf = session.sessionManager.getLeafId();
+    if (leaf !== this.panelTokenLeaf) { this.panelTokenLeaf = leaf; this.panelTokens = undefined; }
+    const jobs: PanelJob[] | null = this.jobs ? this.jobs.inspection().map(detail => ({ job: detail.job, state: detail.state, detail })) : null;
+    return {
+      bound: this.bound, model: session.model ? `${session.model.provider}/${session.model.id}` : null,
+      effort: session.thinkingLevel, effortAvailable: session.supportsThinking(),
+      ...(this.terminalInput ? { input: this.terminalInput } : {}),
+      streaming: session.isStreaming, context: session.getContextUsage(),
+      tokens: this.panelTokens ??= session.getSessionStats().tokens.total, tools: session.getActiveToolNames(),
+      contextFiles: this.guidance.contextFiles.map(file => file.path),
+      skills: this.runtime.services.resourceLoader.getSkills().skills.map(skill => skill.name),
+      ledger: this.ledger?.current ?? null, ledgerStale: this.ledger?.unavailable ?? true,
+      inspector: {
+        session: session.sessionId, boundSession: this.boundSessionId ?? null,
+        turn: this.turn, turnOpen: this.open,
+        capabilities: this.options.capabilities ?? null,
+        guidance: {
+          projectText: this.options.guidance?.projectText ?? null,
+          skillPaths: this.guidance.skillPaths, promptPaths: this.guidance.promptPaths,
+          prompts: this.runtime.services.resourceLoader.getPrompts().prompts.map(prompt => prompt.name),
+          skills: this.runtime.services.resourceLoader.getSkills().skills.map(skill => `${skill.name} · ${skill.filePath}`),
+        },
+        // Only effective SDK settings, never raw capability/MCP settings or credentials.
+        settings: Object.entries(this.settings).map(([key, value]) => `${key}: ${JSON.stringify(value)}`),
+        budget: [(this.options.capabilities?.catalog ?? 0) >= 7
+          ? `Budget: ${JSON.stringify(this.budget.state())}` : "Budget unavailable · legacy generation"],
+        ...(this.inspector?.snapshot() ?? { events: this.options.events.since(0, 512 * 8192, 512), receipts: [], receiptsOmitted: 0 }),
+      },
+      jobs, auxiliary: this.auxiliary?.state() ?? null,
+      steering: session.getSteeringMessages().length, followUps: session.getFollowUpMessages().length,
+    };
   }
 
   state(): Record<string, unknown> {
@@ -920,6 +1165,8 @@ export class HostSession {
     return {
       role: this.options.identity.role,
       todo: this.loadout.includes("corral_todo"),
+      // The plan the widget renders and the model summary names: one host ledger.
+      ledger: this.ledger?.current ? { plan: this.ledger.current.plan ?? null, revision: this.ledger.current.revision } : null,
       capabilities: this.options.capabilities ?? null,
       mcp: this.mcp?.state() ?? null,
       generation: this.options.identity.generation,
@@ -942,6 +1189,7 @@ export class HostSession {
         context_files: resources.getAgentsFiles().agentsFiles.length,
       },
       jobs: this.jobs?.state() ?? null,
+      codemode: this.code?.state() ?? null,
       checkpoints: this.checkpoints !== undefined,
       auxiliary: this.auxiliary?.state() ?? null,
       budget: (this.options.capabilities?.catalog ?? 0) >= 7 ? this.budget.state() : { unavailable: "legacy generation predates budget accounting" },

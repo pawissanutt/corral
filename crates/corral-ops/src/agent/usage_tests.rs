@@ -341,6 +341,11 @@ fn auxiliary_references_survive_serialization_and_share_response_deduplication()
     };
     for (key, kind, text) in [
         (
+            "web-search",
+            UsageSessionKind::WebSearch,
+            FIXTURE.to_owned(),
+        ),
+        (
             "summary-copy",
             UsageSessionKind::Summary,
             FIXTURE.to_owned(),
@@ -376,8 +381,9 @@ fn auxiliary_references_survive_serialization_and_share_response_deduplication()
     let once = collect_state(&state, None, &fx.ctx.store).unwrap();
     assert_eq!(once, collect_state(&state, None, &fx.ctx.store).unwrap());
     assert_eq!(tokens(&once), totals().map(|n| n * 2));
-    assert_eq!(state.usage_sessions[1].generation, 1);
-    assert_eq!(state.usage_sessions[1].kind, UsageSessionKind::Oracle);
+    assert_eq!(state.usage_sessions[2].generation, 1);
+    assert_eq!(state.usage_sessions[2].kind, UsageSessionKind::Oracle);
+    assert_eq!(state.usage_sessions[0].kind, UsageSessionKind::WebSearch);
     // The references are canonical state, not a runtime directory scan.
     assert!(
         paths::usage_session_file(&fx.ctx.store, &container, "../../escape")

@@ -87,10 +87,13 @@ fn stale_checkpoints(fx: &Fx, id: &str, shape: Checkpoints, stale: usize) {
         .unwrap();
 }
 
-fn packet(fx: &Fx, id: &str) -> (serde_json::Value, WorkSnapshot, u64) {
+fn packet(fx: &Fx, id: &str, same_run: bool) -> (serde_json::Value, WorkSnapshot, u64) {
     let head = fx.ctx.store.head(id).unwrap();
     let shell = head.shell_task().unwrap();
-    let run = head.current_run_record().unwrap().unwrap();
+    let mut run = head.current_run_record().unwrap().unwrap();
+    if !same_run {
+        run.id = "R2".into();
+    }
     let (packet, cells, git) = measure(|| {
         crate::resume::resume_packet_head(&fx.ctx, &head, &shell, head.current_run.as_deref(), &run)
             .unwrap()
@@ -100,50 +103,59 @@ fn packet(fx: &Fx, id: &str) -> (serde_json::Value, WorkSnapshot, u64) {
 
 #[test]
 fn resume_packet_head_equals_the_full_packet_and_reads_only_scanned_metas() {
-    for shape in [
-        Checkpoints::AllStale,
-        Checkpoints::OlderCompatible,
-        Checkpoints::NewestCompatible,
-    ] {
-        let mut sizes = Vec::new();
-        for stale in [1, 10] {
-            let fx = Fx::new();
-            let id = worker(&fx);
-            stale_checkpoints(&fx, &id, shape, stale);
-            let task: Task = fx.ctx.store.get(&id).unwrap();
-            let full = serde_json::to_value(
-                crate::resume_packet(&fx.ctx, &task, task.current_run().unwrap()).unwrap(),
-            )
-            .unwrap();
-            let (head, cells, git) = packet(&fx, &id);
-            assert_eq!(head, full, "{shape:?} x{stale}: the head packet differs");
-            sizes.push((stale, cells, git));
+    for same_run in [true, false] {
+        for shape in [
+            Checkpoints::AllStale,
+            Checkpoints::OlderCompatible,
+            Checkpoints::NewestCompatible,
+        ] {
+            let mut sizes = Vec::new();
+            for stale in [1, 10] {
+                let fx = Fx::new();
+                let id = worker(&fx);
+                stale_checkpoints(&fx, &id, shape, stale);
+                let task: Task = fx.ctx.store.get(&id).unwrap();
+                let mut run = task.current_run().unwrap().clone();
+                if !same_run {
+                    run.id = "R2".into();
+                }
+                let full =
+                    serde_json::to_value(crate::resume_packet(&fx.ctx, &task, &run).unwrap())
+                        .unwrap();
+                let (head, cells, git) = packet(&fx, &id, same_run);
+                assert_eq!(head, full, "{shape:?} x{stale}: the head packet differs");
+                sizes.push((stale, cells, git));
+            }
+            let [(small, a, git_a), (large, b, git_b)] = sizes.try_into().unwrap();
+            let added = u64::try_from(large - small).unwrap();
+            // A scanned meta and its registration lookup are each one own record.
+            let scanned = if same_run {
+                0
+            } else {
+                match shape {
+                    Checkpoints::NewestCompatible => 0,
+                    _ => 2 * added,
+                }
+            };
+            assert_eq!(
+                b.own_record_rows() - a.own_record_rows(),
+                scanned,
+                "{shape:?}: own-record rows"
+            );
+            assert_eq!(git_a, git_b, "{shape:?}: identity work follows the metas");
+            assert_eq!(
+                a.emitted_rows(),
+                b.emitted_rows(),
+                "{shape:?}: a rejected candidate's payload was decoded"
+            );
+            for counter in Counter::DECODES {
+                assert_eq!(a.get(counter), b.get(counter), "{shape:?} {counter:?}");
+            }
+            assert_eq!(
+                (a.unattributed_hydrations(), b.unattributed_hydrations()),
+                (0, 0)
+            );
         }
-        let [(small, a, git_a), (large, b, git_b)] = sizes.try_into().unwrap();
-        let added = u64::try_from(large - small).unwrap();
-        // A scanned meta and its registration lookup are each one own record.
-        let scanned = match shape {
-            Checkpoints::NewestCompatible => 0,
-            _ => 2 * added,
-        };
-        assert_eq!(
-            b.own_record_rows() - a.own_record_rows(),
-            scanned,
-            "{shape:?}: own-record rows"
-        );
-        assert_eq!(git_a, git_b, "{shape:?}: identity work follows the metas");
-        assert_eq!(
-            a.emitted_rows(),
-            b.emitted_rows(),
-            "{shape:?}: a rejected candidate's payload was decoded"
-        );
-        for counter in Counter::DECODES {
-            assert_eq!(a.get(counter), b.get(counter), "{shape:?} {counter:?}");
-        }
-        assert_eq!(
-            (a.unattributed_hydrations(), b.unattributed_hydrations()),
-            (0, 0)
-        );
     }
 }
 

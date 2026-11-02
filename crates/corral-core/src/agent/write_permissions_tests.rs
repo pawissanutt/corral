@@ -201,7 +201,7 @@ fn the_scope_limit_refuses_root_top_level_and_home_ancestors_in_either_form() {
 }
 
 #[test]
-fn an_hour_grant_allows_until_its_expiry_and_a_clock_before_it_expires_it() {
+fn an_hour_grant_survives_a_backward_clock_jump_but_expires_at_its_deadline() {
     // Given an hour grant on /srv/proj made at 10:00.
     let mut c = container();
     let (input, grant) = c
@@ -215,16 +215,26 @@ fn an_hour_grant_allows_until_its_expiry_and_a_clock_before_it_expires_it() {
     assert_eq!(grant.expires_at, Some(at("11:00")));
     assert_eq!(input.permission.unwrap().expires_at, Some(at("11:00")));
     let target = Path::new("/srv/proj/sub/b.txt");
-    // Then 10:59 allows; 11:00 and a clock moved back to 09:59 find no grant.
+    // A backward jump remains active; the deadline still expires the grant.
     for (time, allowed, state) in [
         ("10:59", true, GrantState::Active),
         ("11:00", false, GrantState::Expired),
-        ("09:59", false, GrantState::Expired),
+        ("09:59", true, GrantState::Active),
     ] {
         let found = check(&c.write_grants, target, at(time), &home(), same);
         assert_eq!(found.is_some(), allowed, "{time}");
         assert_eq!(c.write_grants[0].state(at(time), false), state, "{time}");
     }
+    assert!(
+        c.revoke_write_grants("A-1", Some("G-1"), "owner", at("11:00"), false)
+            .unwrap_err()
+            .contains("G-1 is expired")
+    );
+    assert_eq!(
+        c.revoke_write_grants("A-1", Some("G-1"), "owner", at("09:59"), false)
+            .unwrap(),
+        ["G-1"]
+    );
     assert!(
         check(
             &c.write_grants,

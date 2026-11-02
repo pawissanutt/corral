@@ -64,6 +64,18 @@ test("snapshot settings and project-text trust reach the host; a corral without 
   }
 });
 
+test("write permissions require assistant role and validated snapshot settings", () => {
+  const capabilities = { catalog: 9, digest: "d".repeat(64), preset: "standard",
+    enabled: ["write_permissions"], settings: { write_permissions: { allow: ["~/.agents/skills"], deny: ["/"] } }, project_text: false };
+  const assistant = { ...message, role: "assistant", project: "", assistant: "A-1", capabilities };
+  expect(parseLaunchMessage(JSON.stringify(assistant)).guidance?.settings.write_permissions).toEqual(capabilities.settings.write_permissions);
+  expect(() => parseLaunchMessage(JSON.stringify({ ...message, capabilities }))).toThrow("not available");
+  for (const settings of [{ allow: ["/"] }, { allow: ["~"] }, { allow: ["relative"] }, { deny: ["~/a/../b"] }, { allow: ["~/x*"] }]) {
+    expect(() => parseLaunchMessage(JSON.stringify({ ...assistant, capabilities: { ...capabilities, settings: { write_permissions: settings } } }))).toThrow("write_permissions");
+  }
+  expect(() => parseLaunchMessage(JSON.stringify({ ...assistant, capabilities: { ...capabilities, settings: {} } }))).toThrow("write_permissions");
+});
+
 test("compat.json advertises exactly the capabilities this host implements", () => {
   const compat = JSON.parse(readFileSync(fileURLToPath(new URL("../../compat.json", import.meta.url)), "utf8"));
   expect(compat.capabilities).toEqual([...HOST_CAPABILITIES]);
