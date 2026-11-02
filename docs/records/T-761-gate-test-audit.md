@@ -16,7 +16,7 @@ from the automatic landing full gate; no estimate below is a measured full-tier 
 | `800-SLOC Rust ceiling` | 3.241 | pending landing | 3–5 | Unchanged assurance |
 | `cargo check --workspace --all-targets --target aarch64-apple-darwin` | 54.211 | pending landing | 0 for this candidate; ~50 if selected | Platform/dependency changes only; always plan verify |
 | `cargo check --workspace --all-targets --target x86_64-apple-darwin` | 51.499 | pending landing | 0 for this candidate; ~50 if selected | Platform/dependency changes only; always plan verify |
-| `cargo clippy --workspace --all-targets -- -D warnings` | 5.794 | pending landing | 20–90 (cache-sensitive) | Same lints; `--profile test` and shared cache |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 5.794 | pending landing | 20–90 (cache-sensitive) | Same lints and shared cache; test-profile experiment reverted |
 | `CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace` | 958.953 | pending landing | 250–550 incl. compilation (unmeasured) | Split budget cases; fixed torture catalog selected by owner changes |
 | `CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc` | 8.324 | pending landing | 8–15 | Unchanged assurance |
 | `scripts/work-budget.sh` | 1086.361 | pending landing | 33–40 if feature union stays warm | No repeat action budgets; small exact-counter board fixtures |
@@ -26,7 +26,12 @@ from the automatic landing full gate; no estimate below is a measured full-tier 
 Baseline timed-step sum: **2379.927s**.
 Quick gate attempt `ag-c286ea5d1c00b6d4` failed at **180.005s**, enforcing the cap:
 fmt 3.021s, SLOC 3.834s, Clippy 86.555s, then nextest was still compiling. **No tests ran.**
-A corrected quick attempt is pending. Full <600s: **not yet measured**. Owner Q1 explicitly
+Second quick attempt `ag-b19e871f1d73e960` also failed at **180.006s** before tests:
+Clippy with the experimental test profile took122.960s, then nextest was compiling. The
+profile experiment was reverted, not retried to hide the result. T-729 main movement has
+been cleanly integrated, retaining its corral-pi naming and this task's cost guidance.
+A further quick attempt is pending a technical choice about test-body lint placement.
+Full <600s: **not yet measured**. Owner Q1 explicitly
 approved using the landing full gate as the after measurement; PM extracts/posts its table.
 Estimates above are planning ranges, not a promise that their sum is under 600s. The old
 per-test times were measured under substantially more simultaneous history-fixture work;
@@ -128,9 +133,10 @@ changes, shared store/Git/herdr changes, and missing/old gate contexts.
 - Hypothesis 2: unnecessary feature-union changes. `cargo tree` shows zero `test-clock`
   entries for TUI-only tests versus one for the gate scope. Work budgets now explicitly
   keep `corral-core/test-clock`, avoiding a second core/ops/TUI build just to toggle it.
-- Clippy also uses `--profile test`, matching nextest's optimized dependency profile;
-  all-target lint scope, debug assertions and overflow checks stay enabled. The temporary
-  real-Cargo quick fixture validates the flag, not just an argv recorder.
+- Clippy test-profile alignment was tested and reverted after the second receipt showed
+  a slower cold check (122.960s). Keeping a failed performance hypothesis would not be an
+  optimization. No timeout, assertion or lint was relaxed. Quick test-body lint placement
+  versus full all-target lint coverage is now an explicit PM technical question (Q5).
 - Separate selection defect: a known private library fixture with no own tests fell back
   to every test of its crate. A minimal red fixture selects 17 instead of 1. The fix selects
   its nearest enclosing test module plus any existing integration/caller terms, not unrelated

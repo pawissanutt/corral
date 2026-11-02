@@ -207,7 +207,7 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
         steps = [
             "cargo fmt --all -- --check", "800-SLOC Rust ceiling",
             *(f"cargo check --workspace --all-targets --target {t}" for t in targets),
-            "cargo clippy --profile test --workspace --all-targets -- -D warnings",
+            "cargo clippy --workspace --all-targets -- -D warnings",
             "CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace",
             "CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc",
             "scripts/work-budget.sh",
@@ -227,7 +227,7 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
             (4, (steps[3], 23),
              fail("cargo:check --workspace --all-targets --target " + targets[1]
                   + f" --config target.{targets[1]}.zstd.rustc-link-lib=[]"), ""),
-            (5, (steps[4], 23), fail("cargo:clippy --profile test --workspace --all-targets -- -D warnings"), ""),
+            (5, (steps[4], 23), fail("cargo:clippy --workspace --all-targets -- -D warnings"), ""),
             (6, (steps[5], 23), fail("cargo:nextest run --workspace"), ""),
             (7, (steps[6], 23), fail("cargo:test --workspace --doc"), ""),
             (8, (steps[7], 23), fail(work_budget), ""),
@@ -272,7 +272,7 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
         ]
         self.assertEqual([(e["command"], e["args"]) for e in entries], [
             ("cargo", ["fmt", "--all", "--", "--check"]),
-            ("cargo", ["clippy", "--profile", "test", "--workspace", "--all-targets", "--", "-D", "warnings"]),
+            ("cargo", ["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]),
             ("cargo", ["nextest", "run", "--workspace"]),
             ("cargo", ["test", "--workspace", "--doc"]),
             *[("cargo", ["test", "-p", "corral-tui", "--lib", "--features", "corral-core/test-clock", "--", "--ignored", "--exact", test])
@@ -493,7 +493,7 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
         # Given command recorders that fail at a selected later command:
         path = self.install_command_recorder()
         for command, expected_calls in (
-            ("cargo:clippy --profile test --workspace --all-targets -- -D warnings", 2),
+            ("cargo:clippy --workspace --all-targets -- -D warnings", 2),
             ("cargo:nextest run --workspace", 3),
             ("cargo:test --workspace --doc", 4),
             ("cargo:build -p corral", 8),
@@ -579,11 +579,11 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
                           list[list[str]], list[str], list[str]]] = [
             (["crates/alpha/src/lib.rs", "docs/guide.md"], [], ids, alpha, [
                 ["fmt", "-p", "alpha", "--", "--check"],
-                ["clippy", "--profile", "test", "-p", "alpha", "--all-targets", "--", "-D", "warnings"],
+                ["clippy", "-p", "alpha", "--all-targets", "--", "-D", "warnings"],
                 ["nextest", "list", "-p", "alpha", *quick, "--message-format", "json"],
                 ["nextest", "run", "-p", "alpha", *quick, "-E", "(all())" + excluded],
             ], ["cargo fmt -p alpha -- --check", "800-SLOC Rust ceiling",
-                "cargo clippy --profile test -p alpha --all-targets -- -D warnings",
+                "cargo clippy -p alpha --all-targets -- -D warnings",
                 f"{session} list -p alpha --profile quick",
                 f"{session} run -p alpha --profile quick -E (all()){excluded}"],
              ["  crates/alpha/src/lib.rs: crate-wide alpha (crate root)",
@@ -592,11 +592,11 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
               "tier or owning-module full gate), 2 expected failures excluded; 1 to run"]),
             (["crates/alpha/tests/odd.rs"], [], [], alpha, [
                 ["fmt", "-p", "alpha", "--", "--check"],
-                ["clippy", "--profile", "test", "-p", "alpha", "--all-targets", "--", "-D", "warnings"],
+                ["clippy", "-p", "alpha", "--all-targets", "--", "-D", "warnings"],
                 ["nextest", "list", "-p", "alpha", *quick, "--message-format", "json"],
                 ["nextest", "run", "-p", "alpha", *quick, "-E", "(binary_id(=alpha::odd))"],
             ], ["cargo fmt -p alpha -- --check", "800-SLOC Rust ceiling",
-                "cargo clippy --profile test -p alpha --all-targets -- -D warnings",
+                "cargo clippy -p alpha --all-targets -- -D warnings",
                 f"{session} list -p alpha --profile quick",
                 f"{session} run -p alpha --profile quick -E (binary_id(=alpha::odd))"],
              ["  crates/alpha/tests/odd.rs: test targets alpha::odd", "Test selection: module",
@@ -604,13 +604,13 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
               "tier or owning-module full gate), 0 expected failures excluded; 2 to run"]),
             (["crates/alpha/src/lib.rs"], ["package(alpha)", "test(=plain)"], [], declared, [
                 ["fmt", "-p", "alpha", "--", "--check"],
-                ["clippy", "--profile", "test", "-p", "alpha", "--all-targets", "--", "-D", "warnings"],
+                ["clippy", "-p", "alpha", "--all-targets", "--", "-D", "warnings"],
                 ["nextest", "list", "--workspace", *quick, "--ignore-default-filter", "-E",
                  "(package(alpha)) or (test(=plain))", "--message-format", "json"],
                 ["nextest", "run", "--workspace", *quick, "--ignore-default-filter", "-E",
                  "(package(alpha)) or (test(=plain))"],
             ], ["cargo fmt -p alpha -- --check", "800-SLOC Rust ceiling",
-                "cargo clippy --profile test -p alpha --all-targets -- -D warnings",
+                "cargo clippy -p alpha --all-targets -- -D warnings",
                 f"{session} list --workspace --profile quick --ignore-default-filter "
                 "-E (package(alpha)) or (test(=plain))",
                 f"{session} run --workspace --profile quick --ignore-default-filter "
@@ -618,11 +618,11 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
              ["Test selection: declared tests"]),
             (["Cargo.lock", "crates/beta/Cargo.toml"], [], [], {**alpha, **beta}, [
                 ["fmt", "--all", "--", "--check"],
-                ["clippy", "--profile", "test", "--workspace", "--all-targets", "--", "-D", "warnings"],
+                ["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"],
                 ["nextest", "list", "--workspace", *quick, "--message-format", "json"],
                 ["nextest", "run", "--workspace", *quick],
             ], ["cargo fmt --all -- --check", "800-SLOC Rust ceiling",
-                "cargo clippy --profile test --workspace --all-targets -- -D warnings",
+                "cargo clippy --workspace --all-targets -- -D warnings",
                 f"{session} list --workspace --profile quick",
                 f"{session} run --workspace --profile quick"],
              ["Test selection: workspace (a workspace-wide input changed)"]),
@@ -764,7 +764,7 @@ fn main() {{
                     self.assertIn(r"alpha::odd back\slash", ran_tests)
                     self.assertNotIn(r"alpha::odd weird,name)", ran_tests)
                 package = changed[0].split("/")[1]
-                self.assertIn(f"==> cargo clippy --profile test -p {package} --all-targets -- -D warnings",
+                self.assertIn(f"==> cargo clippy -p {package} --all-targets -- -D warnings",
                               result.stdout)
                 self.assertEqual("gamma::odd plain" in expected,
                                  "excludes nothing: gamma::odd plain" in result.stderr)

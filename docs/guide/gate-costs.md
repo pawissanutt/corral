@@ -22,9 +22,9 @@ timer sends TERM then KILL to its owned process group and exits nonzero on expir
 Linked worktrees use the primary checkout's shared `target/` unless the caller explicitly
 sets `CARGO_TARGET_DIR`; the docs checker uses that same candidate binary, never a stale
 worktree-local path. Work budgets keep the workspace's `corral-core/test-clock` feature union
-to avoid recompiling core/ops/TUI merely to toggle a test-only feature. Clippy uses
-`--profile test` as well, keeping the same all-target lint set while sharing the optimized
-test dependency profile; debug assertions and overflow checks remain enabled. It never
+to avoid recompiling core/ops/TUI merely to toggle a test-only feature. An experimental
+Clippy `--profile test` alignment made the cold check slower and was reverted; the time
+budget, lint set, debug assertions and overflow checks were not relaxed. It never
 changes a test's result to PASS. Nextest caps ordinary tests at 10s with no retries. Explicit
 measured integration exceptions retain their original 30s report-only guards, each with a
 one-line defect/fixture reason in `.config/nextest.toml`; this does not exclude them from
