@@ -79,6 +79,28 @@ test("rail mouse and F8/Enter open the same native agent chat directly, leaving 
   } finally { h.stop(); }
 });
 
+test("main navigation has no duplicate Agents or Jobs tab in any view or width", () => {
+  const h = fixture();
+  try {
+    for (const select of [() => h.native.workbench.setView("conversation"),
+      () => h.native.workbench.openHelpers("first"), () => h.native.workbench.openJob("build")]) {
+      select();
+      for (const width of [52, 80, 140]) {
+        const bar = stripTerminalSequences(h.frame(width).lines[0] ?? "");
+        expect(bar).not.toMatch(/\bAgents?\b|\bJobs?\b/);
+        expect(bar).toContain(width < 90 ? "Chat" : "Conversation");
+        expect(bar).toContain(width < 90 ? "Diff" : "Changes");
+      }
+    }
+    h.physical.send("\x1b[19~");
+    expect(h.native.focused).toBeTrue();
+    expect(h.native.tab).toBe("Agents");
+    expect(plain(h.native.renderSidebar(34, 34))).toContain("Agents · 2 active");
+    h.physical.send("\r");
+    expect(h.native.workbench.selectedActivity).toEqual({ kind: "helper", request: "first" });
+  } finally { h.stop(); }
+});
+
 test("Jobs open output, keep stable identity through insertion, and never steal the selected agent view", () => {
   const h = fixture();
   try {
