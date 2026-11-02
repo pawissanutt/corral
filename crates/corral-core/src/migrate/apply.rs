@@ -121,7 +121,7 @@ fn drain_check(m: &Migrate) -> Result<()> {
         unclassified.join(", ")
     );
     let board = LegacyBoard::read(corral)?;
-    let (blockers, _) = board.blockers(corral)?;
+    let (blockers, _) = board.blockers(corral, m.runtime_probe.as_ref())?;
     if !blockers.is_empty() {
         let list: Vec<String> = blockers.iter().map(ToString::to_string).collect();
         bail!(

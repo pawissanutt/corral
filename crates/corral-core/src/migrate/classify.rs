@@ -25,6 +25,8 @@ pub enum Disposition {
     Evidence,
     /// Derivable caches the v2 store rebuilds under its cache root.
     Cache,
+    /// Retained Pi runtime bytes, copied into agent/sessions/legacy-role as well as a blob.
+    Runtime,
     /// Uncommitted temporary files.
     Tmp,
     Lock,
@@ -40,9 +42,20 @@ const fn area(name: &'static str, disposition: Disposition) -> Area {
     Area { name, disposition }
 }
 
-fn is_task_id(name: &str) -> bool {
-    name.strip_prefix("T-")
+fn numbered(name: &str, prefix: &str) -> bool {
+    name.strip_prefix(prefix)
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn is_task_id(name: &str) -> bool {
+    numbered(name, "T-")
+}
+
+fn is_role_run(name: &str) -> bool {
+    let (run, review) = name
+        .split_once("-review")
+        .map_or((name, None), |(r, n)| (r, Some(n)));
+    numbered(run, "R") && review.is_none_or(|n| numbered(n, ""))
 }
 
 /// Run prompts are `<task>-<run>.md` with a run id `R<n>`; other prompt files are evidence.
@@ -69,6 +82,25 @@ pub fn classify(path: &str) -> Option<Area> {
             area("workspace-evidence", Evidence)
         }
         ["artifacts", task, _run, _file] if is_task_id(task) => area("artifacts", Artifact),
+        ["artifacts", "assistant", id, files @ ..] if numbered(id, "A-") && !files.is_empty() => {
+            area("assistant-artifacts", Artifact)
+        }
+        ["assistants", name]
+            if name
+                .strip_suffix(".md")
+                .is_some_and(|id| numbered(id, "A-")) =>
+        {
+            area("assistant-sessions", Record)
+        }
+        ["pm-inbox", name]
+            if name
+                .strip_suffix(".md")
+                .is_some_and(|id| numbered(id, "PMI-")) =>
+        {
+            area("pm-inbox-items", Record)
+        }
+        // Owner-authored PM handoffs, patches and cutover evidence; no application reader.
+        ["pm", files @ ..] if !files.is_empty() => area("pm-evidence", Evidence),
         ["prompts", name] if is_run_prompt(name) => area("run-prompts", RunPrompt),
         ["prompts", _] => area("prompt-evidence", Evidence),
         ["inbox", ..] => area("inbox", Inbox),
@@ -85,6 +117,33 @@ fn classify_state(rest: &[&str]) -> Option<Area> {
     }
     let json = |dir: &str| rest.len() == 2 && rest[0] == dir && file.ends_with(".json");
     Some(match rest {
+        ["role-sessions", task, run, files @ ..]
+            if is_task_id(task) && is_role_run(run) && !files.is_empty() =>
+        {
+            if file.ends_with(".lease") {
+                area("role-session-leases", Tmp)
+            } else {
+                area("role-sessions", Runtime)
+            }
+        }
+        ["launch-exits", name] if name.ends_with(".owner") || name.ends_with(".exited") => {
+            area("launch-exits", Tmp)
+        }
+        ["launch-exits", name] if name.ends_with(".log") => area("launch-exit-logs", Evidence),
+        ["agent-assistant", name]
+            if name
+                .strip_suffix(".json")
+                .is_some_and(|id| numbered(id, "A-")) =>
+        {
+            area("assistant-containers", Record)
+        }
+        ["assistant-inbox", name]
+            if name
+                .strip_suffix(".json")
+                .is_some_and(|id| numbered(id, "A-")) =>
+        {
+            area("assistant-inbox", Record)
+        }
         _ if json("action-authorizations") => area("authorizations", Authorization),
         _ if json("operating-claims") => area("operating-claims", Record),
         _ if json("operating-starts") => area("operating-starts", Record),
@@ -117,6 +176,10 @@ fn classify_state_file(name: &str) -> Option<Area> {
     use Disposition::*;
     let record = |area_name| Some(area(area_name, Record));
     match name {
+        "agent-pm.json" => record("agent-pm"),
+        "queue-refusals.json" => record("queue-refusals"),
+        "assistant-counter" => record("assistant-counter"),
+        "pm-inbox-counter" => record("pm-inbox-counter"),
         "automation.json" => record("automation"),
         "config-observation.json" => record("config-observation"),
         "max-diff-lines-warned" => record("config-warning"),

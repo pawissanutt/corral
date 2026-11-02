@@ -45,7 +45,10 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
 }
 
 pub fn run(root: &Path, args: MigrateArgs) -> Result<()> {
-    let migrate = Migrate::new(root).wait(Duration::from_secs(args.wait));
+    let mut migrate = Migrate::new(root).wait(Duration::from_secs(args.wait));
+    if args.dry_run || args.apply {
+        migrate = migrate.runtime_probe(corral_ops::migration_runtime_probe(root)?);
+    }
     if args.status {
         let status = migrate.status()?;
         return if args.json {

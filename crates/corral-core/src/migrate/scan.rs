@@ -331,7 +331,8 @@ pub(crate) fn classify_all(manifest: &Manifest) -> (Vec<Classified>, Vec<String>
     (known, unknown)
 }
 
-pub(crate) fn dry_run(corral: &Path) -> Result<DryRun> {
+pub(crate) fn dry_run(m: &super::Migrate) -> Result<DryRun> {
+    let corral = m.corral_dir();
     let journal = Journal::read(corral)?;
     let mut out = DryRun {
         state: journal
@@ -384,7 +385,7 @@ pub(crate) fn dry_run(corral: &Path) -> Result<DryRun> {
         out.plan_runs += task.task.plan_runs.len() as u64;
         out.artifacts_raw_bytes += task.task.artifacts.iter().map(|a| a.bytes).sum::<u64>();
     }
-    let (live, history) = legacy.blockers(corral)?;
+    let (live, history) = legacy.blockers(corral, m.runtime_probe.as_ref())?;
     out.blockers = live;
     out.history = history;
     out.missing_artifacts = legacy.missing_snapshots(corral);

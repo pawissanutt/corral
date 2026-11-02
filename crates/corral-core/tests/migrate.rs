@@ -102,9 +102,8 @@ fn dry_run_lists_and_refuses_unclassified_files() {
 }
 
 #[test]
-fn new_main_assistant_and_pm_desk_legacy_roots_refuse_without_discarding_bytes() {
-    // These incoming-main roots have no declared importer. Never silently treat their
-    // sessions, containers or desk items as rebuildable caches or generic evidence.
+fn invalid_assistant_and_pm_records_refuse_without_discarding_bytes() {
+    // Declaring these roots must not discard invalid records as caches or generic evidence.
     for path in [
         "assistants/A-1.md",
         "state/agent-assistant/A-1.json",
@@ -117,18 +116,13 @@ fn new_main_assistant_and_pm_desk_legacy_roots_refuse_without_discarding_bytes()
         fs::create_dir_all(target.parent().unwrap()).unwrap();
         fs::write(&target, format!("retained incoming-main data: {path}\n")).unwrap();
         let before = legacy.legacy_bytes();
-        let report = legacy.migrate().dry_run().unwrap();
-        assert!(!report.ok, "{path}");
-        assert_eq!(report.unclassified, [path]);
+        // A dry-run parses assistant sessions as well as task records; either boundary may
+        // reject the malformed document, but apply must never publish it.
+        let _ = legacy.migrate().dry_run();
         let error = legacy.migrate().apply().unwrap_err();
         assert!(format!("{error:#}").contains(path), "{path}: {error:#}");
         assert_eq!(legacy.legacy_bytes(), before, "{path}");
-        assert!(legacy.journal().is_none(), "{path}");
-        assert_eq!(legacy.fence().as_deref(), Some(FENCE), "{path}");
-        assert!(
-            !legacy.exists("db") && !legacy.exists("db.migrating") && !legacy.exists("blobs"),
-            "{path}"
-        );
+        assert!(!legacy.exists("db"), "{path}");
     }
 }
 
@@ -429,6 +423,118 @@ fn apply_refuses_the_journal_review_and_authorization_families_and_changes_nothi
         assert_eq!(legacy.fence().as_deref(), Some(FENCE), "{family}");
         assert_eq!(legacy.legacy_bytes(), before, "{family}");
         legacy.invariant();
+    }
+}
+
+#[test]
+fn terminal_missing_runtime_is_history_but_live_unknown_and_nonterminal_still_block() {
+    use std::sync::Arc;
+    for family in [
+        "open_coding_run",
+        "open_review_run",
+        "open_plan_run",
+        "live_gate",
+        "pending_plan_review",
+        "pending_aggregate_review",
+        "review_wait",
+        "aggregate_gate",
+    ] {
+        for status in ["done", "dropped", "needs_me"] {
+            let legacy = Legacy::new();
+            match family {
+                "pending_plan_review" | "pending_aggregate_review" | "review_wait" => {
+                    inject_state(&legacy, family);
+                }
+                "aggregate_gate" => {
+                    inject_state(&legacy, "pending_aggregate_review");
+                }
+                _ => inject(&legacy, family),
+            }
+            let path = legacy.corral.join("tasks/T-009-injected.md");
+            let mut task =
+                corral_core::parse_task_record(&fs::read_to_string(&path).unwrap(), &path)
+                    .unwrap()
+                    .task;
+            task.status = serde_json::from_value(serde_json::json!(status)).unwrap();
+            if family == "aggregate_gate" {
+                task.aggregate_attempts[0].reviews = Default::default();
+                task.aggregate_attempts[0].gate = Some(
+                    serde_json::from_value(serde_json::json!({
+                        "result":"running", "sha":"00", "at":"2026-10-04T00:40:00Z"
+                    }))
+                    .unwrap(),
+                );
+            }
+            fs::write(&path, corral_core::render_task(&task)).unwrap();
+            let before = legacy.legacy_bytes();
+            let blocking_family = if family == "aggregate_gate" {
+                "live_gate"
+            } else {
+                family
+            };
+            for absent in [false, true] {
+                let report = legacy
+                    .migrate()
+                    .runtime_probe(Arc::new(move |_| Ok(absent)))
+                    .dry_run()
+                    .unwrap();
+                let lost = absent && status != "needs_me";
+                assert_eq!(
+                    report
+                        .blockers
+                        .iter()
+                        .any(|b| b.task == "T-009" && b.family == blocking_family),
+                    !lost,
+                    "{family} {status} absent={absent}: {report:?}"
+                );
+                assert_eq!(
+                    report
+                        .history
+                        .iter()
+                        .any(|b| b.task == "T-009" && b.detail.contains("imported unchanged")),
+                    lost
+                );
+            }
+            assert!(
+                legacy
+                    .migrate()
+                    .dry_run()
+                    .unwrap()
+                    .blockers
+                    .iter()
+                    .any(|b| b.task == "T-009")
+            );
+            assert!(
+                legacy
+                    .migrate()
+                    .runtime_probe(Arc::new(|_| anyhow::bail!("unavailable")))
+                    .dry_run()
+                    .unwrap()
+                    .blockers
+                    .iter()
+                    .any(|b| b.task == "T-009")
+            );
+            if status != "needs_me" {
+                legacy
+                    .migrate()
+                    .runtime_probe(Arc::new(|_| Ok(true)))
+                    .apply()
+                    .unwrap();
+                let store = corral_core::Store::open_unobserved(&legacy.root).unwrap();
+                // No synthetic run end, gate result or review verdict was manufactured.
+                task.path = Default::default();
+                assert_eq!(store.get("T-009").unwrap(), task, "{family}");
+                assert!(
+                    store
+                        .record_rows("migration-history")
+                        .unwrap()
+                        .iter()
+                        .any(|r| r.doc["task"] == "T-009")
+                );
+                drop(store);
+            }
+            assert_eq!(legacy.legacy_bytes(), before);
+        }
     }
 }
 

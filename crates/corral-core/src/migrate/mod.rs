@@ -20,6 +20,7 @@ mod locks;
 mod rollback;
 mod scan;
 mod status;
+mod workspace;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -54,12 +55,17 @@ pub const DEFAULT_WAIT: Duration = Duration::from_secs(10);
 /// after the point runs and no cleanup happens.
 pub type Barrier = Arc<dyn Fn(&str) -> Result<()> + Send + Sync>;
 
+/// Read-only proof that every pane and associated process of a task is absent. Unknown or
+/// unavailable observations must return false (or an error), never proof of absence.
+pub type RuntimeProbe = Arc<dyn Fn(&crate::Task) -> Result<bool> + Send + Sync>;
+
 /// One maintenance session on the store under `<root>/.corral`.
 #[derive(Clone)]
 pub struct Migrate {
     corral: PathBuf,
     wait: Duration,
     barrier: Option<Barrier>,
+    runtime_probe: Option<RuntimeProbe>,
 }
 
 impl std::fmt::Debug for Migrate {
@@ -78,6 +84,7 @@ impl Migrate {
             corral: root.join(".corral"),
             wait: DEFAULT_WAIT,
             barrier: None,
+            runtime_probe: None,
         }
     }
 
@@ -92,6 +99,13 @@ impl Migrate {
     #[must_use]
     pub fn barrier(mut self, barrier: Barrier) -> Self {
         self.barrier = Some(barrier);
+        self
+    }
+
+    /// Installs the host adapter's liveness check. Without it, open work remains blocking.
+    #[must_use]
+    pub fn runtime_probe(mut self, probe: RuntimeProbe) -> Self {
+        self.runtime_probe = Some(probe);
         self
     }
 
@@ -112,7 +126,7 @@ impl Migrate {
     /// # Errors
     /// Returns read or parse errors of the legacy tree.
     pub fn dry_run(&self) -> Result<scan::DryRun> {
-        scan::dry_run(&self.corral)
+        scan::dry_run(self)
     }
 
     /// Runs (or resumes) the forward path A1-A7 to `published`.
