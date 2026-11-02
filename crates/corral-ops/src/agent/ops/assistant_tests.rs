@@ -314,6 +314,52 @@ fn resume_after_host_death_fences_generation_one_and_opens_two_in_this_pane() {
 }
 
 #[test]
+fn new_fences_the_stopped_generation_preserving_its_transcript_and_resume() {
+    let fx = assistant_fixture();
+    let mut host = HostProc::spawn(true);
+    let (id, first) = bound(&fx, PANE, &host);
+    write_session(&first, &f::session(&[], &[]));
+    let file = session_file(&first);
+    let before = std::fs::read(&file).unwrap();
+    let ctx = f::ctx_at(fx.root());
+    // A live generation cannot be suspended by this post-exit operation.
+    assert!(suspend(&ctx, &id, 1).is_err());
+    host.kill();
+    suspend(&ctx, &id, 1).unwrap();
+    assert!(ctx.store.get_assistant(&id).unwrap().ended.is_none());
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    let dir = assistant_runtime_dir(&ctx.store, &id).join("g1");
+    assert!(!dir.join(CTL_CAP_FILE).exists() && !dir.join(SOCKET_FILE).exists());
+    let payload = json!({"kind": "turn_started", "turn": 1});
+    let late = ts::send(
+        &ts_fx(&fx),
+        &ts::envelope(
+            &first,
+            "event",
+            &crate::agent::event_request_id(1, 1),
+            payload,
+            false,
+        ),
+        "event",
+    );
+    assert_eq!(ts::code(&late), Some("agent_fenced"));
+    resume(&ctx, &id, OTHER, &Overrides::default()).unwrap();
+    assert_eq!(bootstrap(&fx, &id, 2)["resume_session"], json!(file));
+    // An old supervisor must not suspend the session's resumed generation.
+    assert!(suspend(&ctx, &id, 1).is_err());
+    assert!(
+        ctx.store
+            .get_assistant_container(&id)
+            .unwrap()
+            .state
+            .generation(2)
+            .unwrap()
+            .fenced
+            .is_none()
+    );
+}
+
+#[test]
 fn resume_of_a_never_prompted_session_starts_a_fresh_pi_file_in_the_same_directory() {
     // Given A-1 bound by a host that died before Pi wrote any session file.
     let fx = assistant_fixture();

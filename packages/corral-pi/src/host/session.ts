@@ -110,6 +110,8 @@ export interface HostSessionOptions {
   readonly sessionManager: SessionManager;
   /** The pane's herdr projection; absent for a headless host or one outside its bound pane. */
   readonly herdr?: HerdrLifecycle;
+  /** Present only under the `corral pi` assistant supervisor; never switches Pi files in-process. */
+  readonly newAssistant?: () => void;
 }
 
 type TurnOrigin = { kind: "bridge" | "continuation"; idempotency_key: string } | { kind: "owner_terminal" }
@@ -730,8 +732,22 @@ export class HostSession {
       ui.notify(message, "warning");
       return { cancel: true };
     };
-    pi.on("session_before_switch", (event, ctx) =>
-      refuse(event.reason === "new" ? "a new session" : "switching or importing a session", ctx.ui));
+    pi.on("session_before_switch", (event, ctx) => {
+      if (event.reason === "new" && this.bound && this.options.identity.role === "assistant"
+          && this.options.newAssistant && ctx.mode === "tui") {
+        if (this.closing) return { cancel: true };
+        if (!ctx.isIdle() || this.open || this.session.isBashRunning) {
+          ctx.ui.notify("corral: wait for the current work to finish before /new", "warning");
+          return { cancel: true };
+        }
+        this.closing = true;
+        this.options.events.emit("assistant_new_requested", { session_id: this.boundSessionId });
+        this.options.newAssistant();
+        // The supervisor, not Pi's runtime, creates the new identity after this host exits.
+        return { cancel: true };
+      }
+      return refuse(event.reason === "new" ? "a new session" : "switching or importing a session", ctx.ui);
+    });
     pi.on("session_before_fork", (_event, ctx) => refuse("forking the session", ctx.ui));
     if (this.exportable()) {
       pi.registerCommand(EXPORT_COMMAND, {
@@ -752,6 +768,7 @@ export class HostSession {
     }
     pi.on("tool_result", (event) => this.observeQuestion(event.toolName, event.input, event.details));
     pi.on("input", async (event) => {
+      if (this.closing) return { action: "handled" as const };
       if (this.open && event.source === "interactive") this.ownerInput = true;
       else this.lastInputSource = event.source;
       // Only text the owner typed into this pane is journaled, before the model sees it.
@@ -1069,6 +1086,7 @@ export class HostSession {
 
   async submit(input: SubmitInput, requestId: string): Promise<SubmitResult> {
     if (!this.bound) return { disposition: "rejected", reason: "host_not_bound" };
+    if (this.closing) return { disposition: "rejected", reason: "host_closing" };
     try {
       await this.options.modules.delivery.accept({
         requestId, idempotencyKey: input.idempotencyKey, origin: input.origin, busyPolicy: input.busyPolicy,
@@ -1083,6 +1101,7 @@ export class HostSession {
     if (input.origin === "corral-inbox") {
       for (const { key, revision } of answeredKeys(input.text)) this.options.herdr?.resolved(key, revision);
     }
+    if (this.closing) return { disposition: "rejected", reason: "host_closing" };
     return new Promise<SubmitResult>((resolve) => {
       let settled = false;
       const settle = (result: SubmitResult) => {
