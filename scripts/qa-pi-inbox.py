@@ -27,6 +27,7 @@ parser.add_argument('--seed', type=Path, required=True)
 args = parser.parse_args()
 args.output = args.output.resolve()
 args.output.mkdir(parents=True, exist_ok=True)
+(args.output / 'result.json').unlink(missing_ok=True)
 repo = Path(__file__).resolve().parents[1]
 package = repo / 'packages/corral-pi'
 work = Path(tempfile.mkdtemp(prefix='corral-inbox-pty-'))
@@ -47,14 +48,14 @@ try:
 import { spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 const args = process.argv.slice(2);
-if (JSON.stringify(args) === JSON.stringify(["attention", "inbox", "--json"])) {
+if (JSON.stringify(args) === JSON.stringify(["--root", %s, "attention", "inbox", "--json"])) {
   appendFileSync(%s, JSON.stringify(args) + "\\n");
-  const result = spawnSync(%s, ["--root", %s, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const result = spawnSync(%s, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ?? ""); process.exit(result.status ?? 1);
 }
 const result = spawnSync(%s, args, { input: await Bun.stdin.text(), encoding: "utf8" });
 process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ?? ""); process.exit(result.status ?? 1);
-''' % tuple(json.dumps(str(value)) for value in [work / 'inbox-reads.jsonl', args.corral.resolve(), work, installed['corral']]))
+''' % tuple(json.dumps(str(value)) for value in [work, work / 'inbox-reads.jsonl', args.corral.resolve(), installed['corral']]))
     proxy.chmod(0o700)
     def fingerprint():
         return {str(path.relative_to(work)): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -126,8 +127,6 @@ process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ??
     until(lambda: text('Filter canonical inbox'), 'native filter dialog')
     mark = len(log); send(b'T-001/R1/Q1\r')
     until(lambda: prompt_ends() > closed and text('Keep unsent native draft', mark), 'filter closed without submitting draft')
-    mark = len(log); send(b'j')
-    until(lambda: text('> T-001', mark), 'explicit selection after filtering')
     mark = len(log); send(b'\r')
     until(lambda: text('Decision inspection', mark) and text('Revision: 1', mark), 'Enter inspects exact identity')
     frame('inbox-inspect')

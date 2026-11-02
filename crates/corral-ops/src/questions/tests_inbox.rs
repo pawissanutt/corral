@@ -5,6 +5,36 @@ use corral_core::{DecisionRequest, ObligationSource, RunOutcome, Status};
 use serde_json::json;
 
 #[test]
+fn canonical_inbox_unkeyed_conditions_have_distinct_inspection_identities() {
+    let fx = fx();
+    let task = fx
+        .ctx
+        .store
+        .create("Blocked dependencies", None, Status::Ready, "")
+        .unwrap();
+    fx.ctx
+        .store
+        .update(&task.id, |task| {
+            task.depends_on = vec!["T-998".into(), "T-999".into()];
+            Ok(())
+        })
+        .unwrap();
+    let inbox = crate::attention::inbox::list(&fx.ctx, None, jiff::Timestamp::now()).unwrap();
+    let conditions: Vec<_> = inbox
+        .items
+        .iter()
+        .filter(|item| item.state == "prerequisite")
+        .collect();
+    assert_eq!(conditions.len(), 2);
+    assert_ne!(conditions[0].key, conditions[1].key);
+    assert!(
+        conditions
+            .iter()
+            .all(|item| item.key.contains("unkeyed:") && item.response.is_none())
+    );
+}
+
+#[test]
 fn canonical_inbox_keeps_question_history_exact_and_never_mutates_any_task() {
     let fx = fx();
     let (id, host) = worker(&fx);

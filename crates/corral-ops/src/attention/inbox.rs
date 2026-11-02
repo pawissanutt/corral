@@ -207,6 +207,15 @@ pub fn list(ctx: &Ctx, project: Option<&str>, now: Timestamp) -> Result<Inbox> {
             if condition.kind.starts_with("question_") || condition.kind == "decision_pending" {
                 continue;
             }
+            let revision = digest(&(
+                condition.key.as_ref(),
+                &condition.kind,
+                &condition.reason,
+                condition.since,
+                &condition.resume,
+                &condition.next_action,
+                condition.responsible,
+            ))?;
             items.push(Item {
                 kind: "attention",
                 task: row.task.clone(),
@@ -215,13 +224,10 @@ pub fn list(ctx: &Ctx, project: Option<&str>, now: Timestamp) -> Result<Inbox> {
                     .key
                     .as_ref()
                     .map(ToString::to_string)
-                    .unwrap_or_else(|| format!("{}/{}", row.task, condition.kind)),
-                revision: digest(&(
-                    condition.key.as_ref(),
-                    &condition.kind,
-                    &condition.reason,
-                    condition.since,
-                ))?,
+                    .unwrap_or_else(|| {
+                        format!("{}/{}/unkeyed:{revision}", row.task, condition.kind)
+                    }),
+                revision,
                 revision_kind: "source_digest",
                 state: condition.kind.clone(),
                 pending: true,
@@ -229,6 +235,12 @@ pub fn list(ctx: &Ctx, project: Option<&str>, now: Timestamp) -> Result<Inbox> {
                 reason: condition.reason.clone(),
                 responsible: condition.responsible.label().into(),
                 detail: vec![
+                    if condition.key.is_some() {
+                        "Canonical condition key".into()
+                    } else {
+                        "No canonical condition key; digest identifies this inspection row only"
+                            .into()
+                    },
                     condition.next_action.description.clone(),
                     format!(
                         "Resume checks: {}",

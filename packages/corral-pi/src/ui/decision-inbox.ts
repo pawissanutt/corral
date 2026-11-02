@@ -21,6 +21,10 @@ function parse(value: unknown): InboxSnapshot {
   }
   return v as InboxSnapshot;
 }
+/** Source namespaces can legally reuse a key (e.g. portable decision id Q1). */
+export function inboxIdentity(item: InboxItem): string {
+  return JSON.stringify([item.kind, item.task, item.container, item.key]);
+}
 export class DecisionInbox {
   snapshot: InboxSnapshot | undefined; selected: string | undefined;
   history = false; query = ""; error: string | undefined; refreshing = false;
@@ -36,12 +40,12 @@ export class DecisionInbox {
     return (this.snapshot?.items ?? []).filter(item => (this.history || item.pending)
       && (!query || [item.task, item.container, item.key, item.reason, item.scope, item.state].join(" ").toLowerCase().includes(query)));
   }
-  get current(): InboxItem | undefined { return this.visible.find(item => item.key === this.selected); }
+  get current(): InboxItem | undefined { return this.visible.find(item => inboxIdentity(item) === this.selected); }
   select(key: string): void { this.selected = key; this.changed(); }
   move(delta: number): void {
-    const rows = this.visible, from = rows.findIndex(item => item.key === this.selected);
+    const rows = this.visible, from = rows.findIndex(item => inboxIdentity(item) === this.selected);
     const item = rows[Math.max(0, Math.min(rows.length - 1, from + delta))];
-    if (item) this.select(item.key);
+    if (item) this.select(inboxIdentity(item));
   }
   refresh(): Promise<void> {
     if (this.disposed) return Promise.resolve();
@@ -58,7 +62,7 @@ export class DecisionInbox {
       if (this.disposed) return;
       this.snapshot = snapshot; this.error = undefined;
       // Never silently replace a selection removed by a refresh with another task.
-      if (this.selected === undefined) this.selected = this.visible[0]?.key;
+      if (this.selected === undefined && this.visible[0]) this.selected = inboxIdentity(this.visible[0]);
     } catch (error) { if (!this.disposed) this.error = error instanceof Error ? error.message : String(error); }
     finally { this.refreshing = false; if (!this.disposed) this.changed(); }
   }
@@ -69,7 +73,7 @@ export class DecisionInbox {
     await this.refresh();
     if (this.disposed) throw new Error("Inbox closed");
     if (this.error) throw new Error(this.error);
-    const current = this.snapshot?.items.find(item => item.key === captured.key && item.container === captured.container && item.task === captured.task);
+    const current = this.snapshot?.items.find(item => inboxIdentity(item) === inboxIdentity(captured));
     if (!current || current.revision !== captured.revision) throw new Error("stale_revision: item changed; inspect the current revision");
     if (!current.pending || !current.response) throw new Error("closed/ineligible: no current answer route for this item");
     if (role === "pm" && (!current.pm_eligible || current.scope !== project)) throw new Error("owner-only/out_of_scope: use the established trusted owner answer flow");
