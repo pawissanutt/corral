@@ -66,6 +66,8 @@ pub(crate) fn likely_files<T: corral_core::TaskFieldsRef + ?Sized>(
     let Some(project) = task.project().as_deref() else {
         return Ok(vec![]);
     };
+    // The historical title scan remains FU-3 work; only full-Task expansion is removed.
+    let _followup = corral_core::work::followup("FU-3", "likely_files");
     let words = keywords(&format!("{} {}", task.title(), task.body()));
     // Similarity uses only titles/kinds, including terminal tasks. Read project-indexed
     // headers once per pinned pass, never full tasks or their accumulated histories.

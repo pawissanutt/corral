@@ -80,7 +80,8 @@ fn legacy_shortlist(fixture: &Fixture, files: Vec<String>) -> Vec<PromotionCandi
 }
 
 fn assert_likely(cells: &WorkSnapshot, fixture: &Fixture, calls: u64, similar: bool, bound: bool) {
-    let hydration = fixture.hydration_work();
+    let (headers, bytes) = fixture.title_work();
+    let title_passes = if bound { 1 } else { calls };
     let signal = if similar {
         let ctx = Ctx {
             store: if bound {
@@ -107,7 +108,9 @@ fn assert_likely(cells: &WorkSnapshot, fixture: &Fixture, calls: u64, similar: b
     for counter in Counter::ALL {
         let expected = match counter {
             Counter::ViewsOpened => (if bound { 0 } else { calls }) + signal.total(counter),
-            _ => calls * hydration.total(counter) + signal.total(counter),
+            Counter::TaskHeadDecodes => title_passes * headers + signal.total(counter),
+            Counter::DecodedDocBytes => title_passes * bytes + signal.total(counter),
+            _ => signal.total(counter),
         };
         assert_eq!(
             cells
@@ -199,22 +202,9 @@ pub(super) fn shortlist_variant(scale: usize, similar: bool) -> WorkSnapshot {
     assert_eq!(fixture.probe.samples(), 2);
     // Observe uses a live store, while PM next binds all component reads to one view.
     assert_eq!(cells.followup_calls(FU, "sample"), 2);
-    let hydrated = fixture.hydration_work();
-    assert_eq!(
-        cells.followup_hydrations(FU, "sample"),
-        2 * hydrated.full_task_hydrations()
-    );
-    assert_eq!(
-        cells.followup_rows(FU, "sample"),
-        2 * Counter::DECODES
-            .iter()
-            .map(|c| hydrated.total(*c))
-            .sum::<u64>()
-    );
-    assert_eq!(
-        cells.followup_doc_bytes(FU, "sample"),
-        2 * hydrated.decoded_doc_bytes()
-    );
+    assert_eq!(cells.followup_hydrations(FU, "sample"), 0);
+    assert_eq!(cells.followup_rows(FU, "sample"), 0);
+    assert_eq!(cells.followup_doc_bytes(FU, "sample"), 0);
     assert_eq!(cells.followup_views(FU, "sample"), 1);
     assert_eq!(
         cells.followup_stats(FU, "sample"),
