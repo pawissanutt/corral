@@ -158,6 +158,17 @@ def usage(path):
     return sum(p.stat().st_size for p in path.rglob('*') if p.is_file() and not p.is_symlink())
 
 
+def exported_task(text):
+    # A substring split truncates valid YAML at Markdown table separators or
+    # horizontal rules in an indented run summary. Only frontmatter fence LINES
+    # delimit YAML, exactly as the legacy parser does.
+    match = re.match(r'\A---[ \t]*\r?\n(.*?)^---[ \t]*\r?(?:\n|\Z)', text, re.M | re.S)
+    if not match:
+        raise ValueError('missing or unterminated exported task frontmatter')
+    doc = yaml.safe_load(match[1])
+    return doc.get('task', doc)
+
+
 def inventory(root):
     return {str(p.relative_to(root)): digest(p) for p in root.rglob('*') if p.is_file() and not p.is_symlink()}
 
@@ -284,8 +295,7 @@ def main():
     expected = rows(before)
     actual = {}
     for path in exported.glob('*.md'):
-        doc = yaml.safe_load(path.read_text().split('---', 2)[1])
-        task = doc.get('task', doc)
+        task = exported_task(path.read_text())
         actual[task['id']] = (task['status'], len(task.get('runs', [])))
     mismatches = {k: dict(before=expected.get(k), after=actual.get(k))
                   for k in expected.keys() | actual.keys() if expected.get(k) != actual.get(k)}
