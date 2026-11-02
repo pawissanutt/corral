@@ -123,6 +123,7 @@ pub struct RunHead {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(with = "crate::harness_compat::optional")]
     pub harness: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -264,6 +265,7 @@ pub struct PlanRunHead {
     pub inbox: InboxHead,
     pub id: String,
     pub profile: String,
+    #[serde(with = "crate::harness_compat::string")]
     pub harness: String,
     pub model: Option<String>,
     pub vendor: Option<String>,
@@ -419,7 +421,7 @@ impl NativeRecordCounts {
     }
 }
 
-/// Pi-native host state without its accumulated records.
+/// corral-pi host state without its accumulated records.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentHostHead {
     #[serde(default, rename = "_records")]

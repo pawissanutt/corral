@@ -237,7 +237,7 @@ pub(crate) fn advance_agent<T: TaskRef + ?Sized>(
                 Some(task.id()),
                 "needs_me",
                 json!({
-                    "from": from.as_str(), "agent_state": "pi_native", "note": reason,
+                    "from": from.as_str(), "agent_state": "corral_pi", "note": reason,
                 }),
             )?;
         }

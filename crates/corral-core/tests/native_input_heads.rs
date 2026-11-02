@@ -34,15 +34,15 @@ fn unfinished_native_owner_order_and_retirement_match_full_without_decoding_sett
         );
         task.status = Status::Done;
         for run in &mut task.runs {
-            run.harness = Some(corral_core::PI_NATIVE_HARNESS.into());
+            run.harness = Some(corral_core::CORRAL_PI_HARNESS.into());
             run.inbox.settled = Some(store_support::at(1));
             for child in &mut run.review_runs {
-                child.harness = Some(corral_core::PI_NATIVE_HARNESS.into());
+                child.harness = Some(corral_core::CORRAL_PI_HARNESS.into());
                 child.inbox.settled = Some(store_support::at(1));
             }
         }
         for run in &mut task.plan_runs {
-            run.harness = corral_core::PI_NATIVE_HARNESS.into();
+            run.harness = corral_core::CORRAL_PI_HARNESS.into();
             run.inbox.settled = Some(store_support::at(1));
         }
         for plan in &mut task.plans {

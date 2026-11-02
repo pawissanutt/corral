@@ -214,7 +214,7 @@ pub fn hold_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
         ctx.store.log_event(
             Some(task_id),
             "needs_me",
-            json!({"from": "review", "agent_state": "pi_native", "note": reason}),
+            json!({"from": "review", "agent_state": "corral_pi", "note": reason}),
         )?;
         batch = Some(crate::owner_notice::record_entry_head(
             ctx,

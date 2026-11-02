@@ -175,7 +175,7 @@ pub(super) fn review_with_origin(
     text.push_str(&crate::scratch_reclaim::prompt_section(ctx, &dir));
     // The renderer sizes the prompt to decide how `{prompt_file}` may reach the reviewer.
     std::fs::write(&prompt_file, &text).context("writing plan review prompt")?;
-    let native = crate::agent::hooks::is_pi_native(&resolved.harness) && name != "pm";
+    let native = crate::agent::hooks::is_corral_pi(&resolved.harness) && name != "pm";
     let command = prepared::command(ctx, &resolved, &task, &prompt_file, native)?;
     let receipt = crate::launch_exit::receipt(ctx, &task.id, &format!("{plan_id}-{attempt}"))?;
     let command = crate::launch_exit::arm(ctx, &command, &receipt)?;

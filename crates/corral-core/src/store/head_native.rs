@@ -282,7 +282,7 @@ impl TaskHeadMut {
             "a new native head cannot claim existing records"
         );
         self.edit_native(container, |slot, _| {
-            ensure!(slot.is_none(), "native host already initialized");
+            ensure!(slot.is_none(), "corral-pi host already initialized");
             *slot = Some(Box::new(host));
             Ok(())
         })
@@ -295,7 +295,7 @@ impl TaskHeadMut {
         edit: impl FnOnce(&mut AgentHostHead) -> Result<()>,
     ) -> Result<()> {
         self.edit_native(container, |slot, _| {
-            let head = slot.as_deref_mut().context("native host missing")?;
+            let head = slot.as_deref_mut().context("corral-pi host missing")?;
             let counts = head.records.clone();
             edit(head)?;
             ensure!(
@@ -339,7 +339,9 @@ impl TaskHeadMut {
             .map(|row| NativeRecord::from_doc(record.kind(), row.doc.clone()))
             .transpose()?;
         let append = before.is_none();
-        let head = view.agent_head(container)?.context("native host missing")?;
+        let head = view
+            .agent_head(container)?
+            .context("corral-pi host missing")?;
         let kind = super::codec::AGENT_KINDS
             .iter()
             .position(|kind| *kind == record.kind())
@@ -355,7 +357,7 @@ impl TaskHeadMut {
         let old_facts = old.as_ref().map(facts).unwrap_or_default();
         let new_facts = facts(&record);
         self.edit_native(container, |slot, facts| {
-            let head = slot.as_deref_mut().context("native host missing")?;
+            let head = slot.as_deref_mut().context("corral-pi host missing")?;
             if append {
                 head.records.counts[kind] = ordinal;
             }

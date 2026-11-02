@@ -111,7 +111,7 @@ fn launch_refused_before_start(
     run: &corral_core::RunHead,
 ) -> Result<bool> {
     if run.outcome != Some(RunOutcome::Failed)
-        || !crate::agent::hooks::run_head_is_pi_native(run)
+        || !crate::agent::hooks::run_head_is_corral_pi(run)
         || !run.blocked_excerpt.as_deref().is_some_and(|text| {
             text.lines()
                 .any(|line| line.contains("corral agent launch refused: "))

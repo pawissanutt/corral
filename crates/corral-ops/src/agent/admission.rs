@@ -707,7 +707,7 @@ pub fn fence_generation(
         }
         (None, None) => {
             let changed = pm_state::update(store, |pm| {
-                let pm = pm.as_mut().context("no Pi-native PM is bound")?;
+                let pm = pm.as_mut().context("no corral-pi PM is bound")?;
                 let changed = fence(&mut pm.state, generation, reason)?;
                 Ok((changed, changed))
             })?;
@@ -720,7 +720,7 @@ pub fn fence_generation(
             let changed = store.try_update_head(task_id, |task| {
                 let host = task
                     .agent_head(container)?
-                    .with_context(|| format!("{} has no Pi-native binding", container.key()))?;
+                    .with_context(|| format!("{} has no corral-pi binding", container.key()))?;
                 let mut entry = task
                     .agent_generation(container, generation)?
                     .with_context(|| format!("generation {generation} is unknown"))?;

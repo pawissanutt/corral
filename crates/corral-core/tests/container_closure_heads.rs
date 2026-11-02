@@ -27,7 +27,7 @@ fn worker_and_reviewer_closure_match_cold_facades_without_history_reads() {
                     parent.outcome = None;
                     parent.ended = None;
                     parent.review = None;
-                    parent.harness = Some(if native { "pi-native" } else { "omo" }.into());
+                    parent.harness = Some(if native { "corral-pi" } else { "omo" }.into());
                     for child in &mut parent.review_runs {
                         child.review = None;
                     }

@@ -36,7 +36,7 @@ pub(in crate::attention) fn conditions_ref(
             || run
                 .harness
                 .as_deref()
-                .is_some_and(corral_core::is_pi_native);
+                .is_some_and(corral_core::is_corral_pi);
         let open = if native {
             container_closure_ref(task, &container)?.is_none()
         } else {

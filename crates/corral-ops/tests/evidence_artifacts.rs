@@ -54,7 +54,7 @@ impl Fixture {
                 if t.runs.is_empty() {
                     t.runs.push(
                         serde_json::from_value(json!({
-                            "id":"R1", "agent":"pi-native", "harness":"pi-native",
+                            "id":"R1", "agent":"corral-pi", "harness":"corral-pi",
                             "worktree":"/fixture", "branch":"test", "base":"main", "base_sha":"abc",
                             "started":"2026-09-01T00:00:00Z"
                         }))

@@ -343,7 +343,7 @@ fn resume_fences_the_dead_generation_classifies_its_dangling_calls_and_relaunche
         transcript: Some(f::session_file(&bound)),
     };
     let envelope = inbox
-        .publish(&binding, "pi_native", 65536, true)
+        .publish(&binding, "corral_pi", 65536, true)
         .unwrap()
         .unwrap();
     assert_eq!(envelope.members, [notices[0].seq, queued.seq]);

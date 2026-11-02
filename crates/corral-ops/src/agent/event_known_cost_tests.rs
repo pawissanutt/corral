@@ -25,7 +25,7 @@ fn native_event_has_exact_canonical_t626_cost_and_constant_unattributed_replay_w
         );
         task.project = Some("corral".into());
         let run = task.runs.last_mut().unwrap();
-        run.harness = Some(corral_core::PI_NATIVE_HARNESS.into());
+        run.harness = Some(corral_core::CORRAL_PI_HARNESS.into());
         let mut state = native::host(AgentRole::Worker, 2 * scale);
         state.binding.store = paths::store_id(&store);
         state.binding.project = "corral".into();

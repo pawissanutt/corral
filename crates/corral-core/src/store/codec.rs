@@ -69,7 +69,7 @@ const HISTORY_VECTORS: &[&str] = &[
     "agent_pm_receipts",
 ];
 
-/// Pi-native record lists of a run's host state, each one row per record.
+/// corral-pi record lists of a run's host state, each one row per record.
 pub const AGENT_KINDS: [&str; 10] = [
     "generations",
     "receipts",

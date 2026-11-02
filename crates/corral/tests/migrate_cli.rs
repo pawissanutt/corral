@@ -389,7 +389,7 @@ fn owned_transcript_retention_after_migration_and_finalize_retires_the_blob_refe
     let store = corral_core::Store::discover(&legacy.root).unwrap();
     let task = store
         .update("T-001", |t| {
-            t.runs[0].harness = Some("pi-native".into());
+            t.runs[0].harness = Some("corral-pi".into());
             Ok(())
         })
         .unwrap();

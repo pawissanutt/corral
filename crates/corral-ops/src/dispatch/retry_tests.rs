@@ -41,7 +41,7 @@ fn refusal_bypass_reads_canonical_generations_and_requires_an_unchanged_tree() {
         .create("Refused launch", None, Status::NeedsMe, "")
         .unwrap();
     let mut run: corral_core::Run = serde_json::from_value(json!({
-        "id":"R1", "agent":"fixture", "harness":"pi-native", "worktree":repo,
+        "id":"R1", "agent":"fixture", "harness":"corral-pi", "worktree":repo,
         "branch":"fixture", "base":"main", "base_sha":base,
         "started":"2026-11-02T00:00:00Z", "outcome":"failed",
         "blocked_excerpt":"corral agent launch refused: memory_contract_unavailable: fixture",

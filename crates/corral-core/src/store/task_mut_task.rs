@@ -184,7 +184,7 @@ impl TaskMut for Task {
         );
         let slot = crate::agent::container_host_mut(self, container)
             .context("native container missing")?;
-        ensure!(slot.is_none(), "native host already initialized");
+        ensure!(slot.is_none(), "corral-pi host already initialized");
         *slot = Some(Box::new(serde_json::from_value(serde_json::to_value(
             head,
         )?)?));
@@ -196,7 +196,7 @@ impl TaskMut for Task {
         edit: impl FnOnce(&mut crate::AgentHostHead) -> Result<()>,
     ) -> Result<()> {
         let state =
-            crate::agent::container_state_mut(self, container).context("native host missing")?;
+            crate::agent::container_state_mut(self, container).context("corral-pi host missing")?;
         let mut head = crate::AgentHostHead::of(state);
         let counts = head.records.clone();
         edit(&mut head)?;
@@ -216,7 +216,7 @@ impl TaskMut for Task {
         record: crate::agent::NativeRecord,
     ) -> Result<bool> {
         Ok(record.put(
-            crate::agent::container_state_mut(self, container).context("native host missing")?,
+            crate::agent::container_state_mut(self, container).context("corral-pi host missing")?,
         ))
     }
 

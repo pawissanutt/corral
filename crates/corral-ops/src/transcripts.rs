@@ -118,7 +118,7 @@ pub(crate) fn sessions(ctx: &Ctx, owner: ContainerRef) -> Result<()> {
 
 /// Legacy provider transcripts are copied, never removed from the provider's directory.
 pub(crate) fn worker(ctx: &Ctx, task: &str, run: &Run, final_capture: bool) -> Result<()> {
-    if crate::agent::hooks::run_is_pi_native(run) {
+    if crate::agent::hooks::run_is_corral_pi(run) {
         return sessions(
             ctx,
             ContainerRef::Worker {
@@ -177,7 +177,7 @@ pub(crate) fn run_end(ctx: &Ctx, task: &Task) -> Result<()> {
                 run: run.id.clone(),
                 review: child.id.clone(),
             };
-            if crate::agent::hooks::run_is_pi_native(child)
+            if crate::agent::hooks::run_is_corral_pi(child)
                 && child.inbox.settled.is_none()
                 && (terminal || corral_core::agent::container_closure(task, &owner).is_some())
             {
