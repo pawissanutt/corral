@@ -224,6 +224,24 @@ pub(super) fn conditions(
                 ));
             }
             if task.status == Status::NeedsMe {
+                if let Some(run) = task.current_run()
+                    && run.outcome == Some(corral_core::RunOutcome::Failed)
+                    && let Some(reason) = run.blocked_excerpt.as_ref().filter(|text| {
+                        text.contains("corral agent launch refused: memory_contract_unavailable:")
+                    })
+                {
+                    let mut condition = keyed_status(
+                        task,
+                        now,
+                        "launch_failed",
+                        WaitClass::OwnerDecision,
+                        reason.clone(),
+                    );
+                    condition
+                        .resume
+                        .push(check("launch_repaired", &task.id, None, false));
+                    assessment.conditions.push(condition);
+                }
                 escalation(task, now, &mut assessment.conditions);
                 if assessment.conditions.is_empty() {
                     let mut condition = keyed_status(
