@@ -150,6 +150,8 @@ test("the main view bar keeps its focused hints and click targets at the minimum
     const graph = width < 64 ? " G " : " Graph ", timeline = width < 64 ? " L " : " Timeline ";
     const click = (label: string): TuiMouseEvent => ({ type: "click", button: "left", x: bar.indexOf(label) + 1, y: 0,
       screenX: bar.indexOf(label) + 1, screenY: 0, width, height: 24, shift: false, alt: false, ctrl: false, clickCount: 1 });
+    root.handleMouse?.(click(width < 64 ? " U " : " Usage "));
+    expect(native.workbench.view).toBe("usage");
     root.handleMouse?.(click(graph));
     expect(native.workbench.view).toBe("graph");
     root.handleMouse?.(click(timeline));

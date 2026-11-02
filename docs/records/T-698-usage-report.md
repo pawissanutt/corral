@@ -51,3 +51,14 @@ Transcript-reported costs are not independently verified invoices. No paid calls
 checks, load generation or owner/PM-pane QA were performed. Physical-terminal interaction,
 full accessibility certification and provider invoice reconciliation are not verified here.
 The assigned receipted quick gate is reported separately by Corral after commit and rebase.
+
+## Gate correction
+
+The first quick gate passed formatting, size limits, Clippy and all 2,907 selected Rust tests,
+then caught a narrow navigation regression: the new Usage tab caused the Enter hint to be
+ellipsized at 34 columns. Shortened compact focus hints without hiding any navigation target.
+The existing 34/52/104-column test now also clicks Usage before Graph/Timeline, preserving its
+no-ellipsis and full Esc/Enter assertions. Targeted rerun: 26 TS tests passed across usage-view,
+inspection, workbench and panel-shell. Typecheck passed separately (the first combined shell
+hit its timeout during typecheck). Actual-input source and viewport captures were regenerated
+after the hint correction. No visual screenshot PASS or physical-terminal QA is claimed.

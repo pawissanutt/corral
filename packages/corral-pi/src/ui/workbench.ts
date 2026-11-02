@@ -117,7 +117,7 @@ export class NativeWorkbench {
         let x = 0;
         hits = labels.map(([view, label]) => ({ view, to: x += label.length }));
         return [PANEL_BG + pad(labels.map(([view, label]) => (this.view === view || view === "activity" && this.view === "agents" ? PANEL_BLUE : PANEL_MUTED) + label).join("") + PANEL_MUTED +
-          (this.focused ? compact ? "· Esc · Enter" : "· Esc chat · Enter compose" : ""), width) + RESET,
+          (this.focused ? compact ? "Esc Enter" : "· Esc chat · Enter compose" : ""), width) + RESET,
         PANEL_BG + PANEL_TEXT + pad(`Files: ${plainLabel(this.scopeLabel)} · ` + PANEL_MUTED + `${this.options.identity.role.toUpperCase()} ${target(this.options.identity)} · g${this.options.identity.generation} · ${!this.ui ? "Initializing editor…" : this.options.snapshot()?.bound ? "Bound to Corral" : "Unbound"}`, width) + RESET];
       },
       handleMouse: event => {
