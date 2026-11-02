@@ -618,7 +618,6 @@ pub(crate) fn auto_retry(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 // Only a recognizable pre-exec Pi refusal with no bound host and an unchanged tree can
 // bypass the portable handoff. A crash after hello is not evidence of an unstarted agent.
 fn launch_refused_before_start(run: &Run) -> Result<bool> {
@@ -641,6 +640,7 @@ fn launch_refused_before_start(run: &Run) -> Result<bool> {
         && corral_git::rev_sha(&run.worktree, "HEAD")? == run.base_sha)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn retry_with(
     ctx: &Ctx,
     id: &str,
