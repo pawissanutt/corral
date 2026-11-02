@@ -28,6 +28,41 @@ fn task(status: Status) -> Task {
     task
 }
 
+#[test]
+fn actual_job_monitor_is_not_manual_attention() {
+    let mut task = task(Status::Running);
+    let run = &mut task.runs[0];
+    let mut host = AgentRunState::new(AgentBinding {
+        role: AgentRole::Worker,
+        store: "fixture".into(),
+        project: "fixture".into(),
+        generation: 1,
+        health: HostHealth::Healthy,
+        callback: None,
+        closing: false,
+    });
+    host.jobs.push(
+        serde_json::from_value(json!({
+            "id":"123", "generation":1, "command":"fixture", "state":"running",
+            "prepared_at":"2026-10-29T07:00:00Z",
+            "monitors":[{"wait":"W1", "on":"exit", "request_id":"rq", "at":"2026-10-29T07:00:00Z"}]
+        }))
+        .unwrap(),
+    );
+    run.agent_host = Some(Box::new(host));
+    run.obligations.waits.push(serde_json::from_value(json!({
+        "request":{"version":1,"id":"W1","run":"R1","condition":"job exits","owner":"worker","source":"worker",
+            "handle":{"kind":"channel","channel_id":"job:123","capability":"wait_v1"}},
+        "registered_at":"2026-10-29T07:00:00Z",
+        "observation":{"at":"2026-10-29T07:00:00Z","state":"pending","detail":"waiting"}
+    })).unwrap());
+    let mut conditions = Vec::new();
+    obligation_conditions(&task, &task.runs[0], at(), &mut conditions);
+    assert_eq!(conditions.len(), 1);
+    assert_eq!(conditions[0].responsible, Responsible::Executor);
+    assert_ne!(conditions[0].reason_code, "manual_wait_overdue");
+}
+
 fn reviewer(health: HostHealth, blocking: Option<bool>) -> Task {
     let mut task = task(Status::Review);
     let parent = &mut task.runs[0];
