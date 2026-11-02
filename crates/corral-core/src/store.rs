@@ -379,7 +379,7 @@ impl Store {
         });
         if result.is_err() || self.skew_reported.load(Ordering::Relaxed) {
             if !self.skew_reported.swap(true, Ordering::Relaxed) {
-                self.log_event(
+                let event = self.attributed_event(
                     None,
                     "version_skew",
                     serde_json::json!({
@@ -388,6 +388,7 @@ impl Store {
                         "message": crate::UPDATE_NOTICE,
                     }),
                 )?;
+                self.append_event_immediate(events::new_event(event)?)?;
             }
             bail!("{}", crate::UPDATE_NOTICE);
         }

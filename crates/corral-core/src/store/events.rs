@@ -464,6 +464,11 @@ impl Store {
             unit.events.borrow_mut().push(event);
             return Ok(());
         }
+        self.append_event_immediate(event)
+    }
+
+    // Runtime fencing must survive the surrounding unit being aborted.
+    pub(super) fn append_event_immediate(&self, event: NewEvent) -> Result<()> {
         self.db
             .backend
             .apply(Operation::AppendEvents(AppendEvents {
