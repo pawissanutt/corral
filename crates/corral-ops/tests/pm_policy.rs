@@ -106,7 +106,11 @@ impl Fx {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("index.ts"), "export {}").unwrap();
         }
-        std::fs::write(assets.join("compat.json"), r#"{"verdict":"GO"}"#).unwrap();
+        std::fs::write(
+            assets.join("compat.json"),
+            r#"{"verdict":"GO","memory_projection":1}"#,
+        )
+        .unwrap();
         self.ctx.store.config.agent.assets_dir = Some(assets);
         self.ctx.store.config.profiles.insert(
             "pm-pi".into(),
