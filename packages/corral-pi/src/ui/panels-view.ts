@@ -4,6 +4,7 @@ import type { ContextUsage, Theme } from "@earendil-works/pi-coding-agent";
 import type { HostIdentity } from "../roles/types.ts";
 import type { TodoProgress } from "./todo-widget.ts";
 import { inspectorActivity, inspectorContext, type InspectorSnapshot } from "./inspector.ts";
+import { ansi, PACKAGED, type Appearance } from "./appearance.ts";
 
 export const PANEL_TABS = ["Context", "Files", "Plan"] as const;
 export type PanelTab = typeof PANEL_TABS[number];
@@ -43,13 +44,19 @@ export interface PanelLine {
   readonly continuationIndent?: number;
   readonly action?: { readonly kind: "diff"; readonly path: string } | { readonly kind: "files" } | { readonly kind: "scope" } | { readonly kind: "helpers" } | { readonly kind: "helper"; readonly request: string } | { readonly kind: "job"; readonly job: string } | { readonly kind: "history" };
 }
-export const PANEL_BG = "\x1b[48;2;25;27;32m";
-export const PANEL_TEXT = "\x1b[38;2;224;227;233m";
-export const PANEL_MUTED = "\x1b[38;2;155;162;176m";
-export const PANEL_BLUE = "\x1b[38;2;131;168;239m";
-export const PANEL_RULE = "\x1b[38;2;65;71;82m";
-export const PANEL_SUCCESS = "\x1b[38;2;148;196;166m";
-export const PANEL_WARNING = "\x1b[38;2;226;189;126m";
+export let PANEL_BG = ansi(PACKAGED.dark.background, true);
+export let PANEL_TEXT = ansi(PACKAGED.dark.text);
+export let PANEL_MUTED = ansi(PACKAGED.dark.muted);
+export let PANEL_BLUE = ansi(PACKAGED.dark.accent);
+export let PANEL_RULE = ansi(PACKAGED.dark.rule);
+export let PANEL_SUCCESS = ansi(PACKAGED.dark.success);
+export let PANEL_WARNING = ansi(PACKAGED.dark.warning);
+/** One native host per process; live bindings keep every panel on the same packaged palette. */
+export function setPanelAppearance(appearance: Appearance): void {
+  const p = PACKAGED[appearance];
+  PANEL_BG = ansi(p.background, true); PANEL_TEXT = ansi(p.text); PANEL_MUTED = ansi(p.muted);
+  PANEL_BLUE = ansi(p.accent); PANEL_RULE = ansi(p.rule); PANEL_SUCCESS = ansi(p.success); PANEL_WARNING = ansi(p.warning);
+}
 export function styledPanelLine(row: PanelLine): string {
   const color = row.tone === "muted" ? PANEL_MUTED : row.tone === "success" ? PANEL_SUCCESS
     : row.tone === "warning" ? PANEL_WARNING : row.tone === "accent" ? PANEL_BLUE : PANEL_TEXT;
