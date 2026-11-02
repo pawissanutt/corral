@@ -19,6 +19,27 @@ pub(super) fn planner_owns_stop(task: &Task, run: &corral_core::PlanRun) -> bool
             })
 }
 
+pub(super) fn launch_refusal(task: &Task, now: Timestamp, conditions: &mut Vec<Condition>) {
+    if let Some(run) = task.current_run()
+        && run.outcome == Some(corral_core::RunOutcome::Failed)
+        && let Some(reason) = run.blocked_excerpt.as_ref().filter(|text| {
+            text.contains("corral agent launch refused: memory_contract_unavailable:")
+        })
+    {
+        let mut condition = keyed_status(
+            task,
+            now,
+            "launch_failed",
+            WaitClass::OwnerDecision,
+            reason.clone(),
+        );
+        condition
+            .resume
+            .push(check("launch_repaired", &task.id, None, false));
+        conditions.push(condition);
+    }
+}
+
 pub(super) fn load(ctx: &Ctx, n: &mut Neighborhood<'_>) -> Result<()> {
     n.missing_reviewers = crate::pane_liveness::recorded_missing(ctx)?;
     n.queue_refusals = crate::queue_drain::attention_refusals(ctx)?;
