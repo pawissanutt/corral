@@ -5,11 +5,16 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use corral_core::work::{self, Counter, HotScope, WorkSnapshot};
+use corral_core::backend::{PageReq, TaskOrder, TaskQuery};
+use corral_core::work::{Counter, WorkSnapshot};
 use corral_core::{ResourceSnapshot, Status, Store};
 
 use super::hot_budget::Cells;
 use super::hot_budget_fixture::Fixture;
+
+#[cfg(test)]
+#[path = "hot_budget_checks_tests.rs"]
+mod tests;
 
 /// Resource samples each measured path takes on its normal branch, the same at every size:
 /// Main d0782aa5 replaced the workset's duplicate scoped-admission fallback with canonical
@@ -35,10 +40,11 @@ fn expected_shortlists(path: &str) -> u64 {
     }
 }
 
-/// What one variant's walks are expected to cost, computed from its own stored rows and layout.
+/// V2 per-call header-read bounds and exact probe work, from the variant's stored rows/layout.
 #[derive(Debug, Clone)]
 pub(super) struct Expected {
     pub(super) tasks: u64,
+    /// One header per task, never its full history. Samples need no task decodes at all.
     pub(super) walk_rows: u64,
     pub(super) walk_bytes: u64,
     /// One existence probe per coding run of every task, plus each walk-only path's
@@ -47,8 +53,7 @@ pub(super) struct Expected {
     /// `likely_files` calls per shortlist: the Idea and every compared active task.
     pub(super) likely_per_shortlist: u64,
     pub(super) volumes: BTreeSet<PathBuf>,
-    /// The walks' stored bytes after a write the measured pass itself commits: each walk then
-    /// reads the store before or after it, and only the bytes differ.
+    /// Header bytes after the measured pass's own write; either version bounds a later read.
     pub(super) walk_bytes_after: Option<u64>,
 }
 
@@ -113,17 +118,26 @@ fn path_stats(path: &Path) -> u64 {
 pub(super) fn expected(fx: &Fixture) -> Expected {
     let store = &fx.ctx.store;
     let tasks = store.list().unwrap();
+    // Bound title scans by stored headers, not the v1 full-Task hydration cost. Compute
+    // payload sizes outside the measured scope, independently of the pass's work counters.
+    let view = store.view().unwrap();
+    let query = TaskQuery {
+        statuses: Vec::new(),
+        project: None,
+        order: TaskOrder::IdAsc,
+    };
+    let mut page = PageReq::first(500);
     let (mut walk_rows, mut walk_bytes) = (0, 0);
-    for task in &tasks {
-        let _hot = HotScope::enter();
-        let before = work::snapshot();
-        store.get(&task.id).unwrap();
-        let delta = work::snapshot().since(&before);
-        walk_rows += Counter::DECODES
-            .iter()
-            .map(|c| delta.total(*c))
-            .sum::<u64>();
-        walk_bytes += delta.decoded_doc_bytes();
+    loop {
+        let found = view.tasks(&query, page.clone()).unwrap();
+        for header in &found.items {
+            walk_rows += 1;
+            walk_bytes += serde_json::to_vec(header).unwrap().len() as u64;
+        }
+        match found.next {
+            Some(next) => page.after = Some(next),
+            None => break,
+        }
     }
     let fixed = fixed_volumes(store);
     let mut volumes = fixed.clone();
@@ -207,7 +221,9 @@ pub(super) fn preconditions(
     failures
 }
 
-/// Every FU-3 cell of one measured pass against its expected work.
+/// FU-3 may read at most one header walk per likely-files call (a pass can reuse it).
+/// V2 samples read scalar worktree locations, so neither site may hydrate full Tasks and
+/// samples may not decode task documents. Probe counts and all non-read bounds stay strict.
 pub(super) fn followup_failures(
     variant: &str,
     key: &str,
@@ -226,33 +242,34 @@ pub(super) fn followup_failures(
         let calls = get(&format!("calls.FU-3.{site}"));
         let cell = |counter: &str| get(&format!("{counter}.followup.FU-3.{site}"));
         let rows: u64 = Counter::DECODES.iter().map(|c| cell(c.name())).sum();
-        let mut expect = |what: &str, got: u64, want: u64| {
-            if got != want {
+        let mut bound = |what: &str, got: u64, max: u64| {
+            if got > max {
                 failures.push(format!(
-                    "{variant}/{key}: FU-3 {site} {what} = {got}, expected {want} ({calls} calls)"
+                    "{variant}/{key}: FU-3 {site} {what} = {got}, maximum {max} ({calls} calls)"
                 ));
             }
         };
-        expect(
-            "hydrations",
-            cell("full_task_hydrations"),
-            calls * exp.tasks,
-        );
-        expect("rows", rows, calls * exp.walk_rows);
-        let bytes = cell("decoded_doc_bytes");
-        let split = exp.walk_bytes_after.is_some_and(|after| {
-            (0..=calls).any(|k| k * exp.walk_bytes + (calls - k) * after == bytes)
-        });
-        if !split {
-            expect("doc bytes", bytes, calls * exp.walk_bytes);
-        }
-        expect("processes", cell("processes"), 0);
+        bound("hydrations", cell("full_task_hydrations"), 0);
+        let (max_rows, max_bytes) = if site == "likely_files" {
+            let bytes = exp.walk_bytes.max(exp.walk_bytes_after.unwrap_or(0));
+            (calls * exp.walk_rows, calls * bytes)
+        } else {
+            (0, 0)
+        };
+        bound("rows", rows, max_rows);
+        bound("doc bytes", cell("decoded_doc_bytes"), max_bytes);
+        bound("processes", cell("processes"), 0);
         let stats = if site == "sample" {
             calls * exp.sample_stats
         } else {
             0
         };
-        expect("stats", cell("file_stats"), stats);
+        if cell("file_stats") != stats {
+            failures.push(format!(
+                "{variant}/{key}: FU-3 {site} stats = {}, expected {stats} ({calls} calls)",
+                cell("file_stats")
+            ));
+        }
         let views = cell("views_opened");
         if views != 0 && views != calls {
             failures.push(format!(
