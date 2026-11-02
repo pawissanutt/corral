@@ -463,6 +463,8 @@ fn budget(path: &str, counter: &str) -> Option<Limit> {
             // (89; 103 severe) T-329: the board snapshot evaluates on its own read view
             ("config_parses", Fixed(110)),
             ("task_lists", Fixed(44)), // (38) 24 listings + 14 read-only snapshots
+            // Sync task lookups are budgeted independently from task listings.
+            ("task_gets", PerTask(6)),
             // (46) one check per file per listing or lookup; the tick that raises the resource
             // alert lists tasks twice more (escalation reads the board, then updates one task).
             (
