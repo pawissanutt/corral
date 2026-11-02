@@ -314,6 +314,29 @@ pub fn resume(ctx: &Ctx, id: &str, pane: &str, overrides: &Overrides) -> Result<
     Ok((fenced, prepared))
 }
 
+/// `/new` leaves the outgoing conversation open, but its stopped host has no remaining authority.
+/// Only the supervisor calls this, after waiting for the child to exit.
+pub(crate) fn suspend(ctx: &Ctx, id: &str, generation: u32) -> Result<()> {
+    let container = ctx.store.get_assistant_container(id)?;
+    anyhow::ensure!(
+        container.state.binding.generation == generation && !host_alive(&container.state)?,
+        "assistant_changed: {id} no longer has the stopped generation {generation}"
+    );
+    fence_generation(
+        &ctx.store,
+        &ContainerRef::Assistant { session: id.into() },
+        generation,
+        "new assistant",
+    )?;
+    remove_control(&ctx.store, id, generation)?;
+    ctx.store.log_event(
+        None,
+        "assistant_suspended",
+        json!({"session": id, "generation": generation, "reason": "new assistant"}),
+    )?;
+    Ok(())
+}
+
 /// A fenced generation's control credential and socket go: nobody reaches it again.
 fn remove_control(store: &Store, id: &str, generation: u32) -> Result<()> {
     let dir = launch::assistant_runtime_dir(store, id).join(format!("g{generation}"));
@@ -377,6 +400,8 @@ pub fn run_host(prepared: &Prepared) -> Result<std::process::ExitStatus> {
     let secrets = launch::Secrets::generate()?;
     launch::write_ctl_cap(&ready.generation_dir, &secrets.ctl_cap)?;
     let (mut command, inherited) = launch::host_command(&bootstrap, &ready, &secrets)?;
+    // This child has a `corral pi` supervisor capable of handling /new's reserved exit code.
+    command.arg("--assistant-new");
     let mut child = command
         .spawn()
         .with_context(|| format!("starting {}", ready.bun.display()))?;

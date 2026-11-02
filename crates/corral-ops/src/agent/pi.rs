@@ -182,12 +182,7 @@ pub fn assistant_focused(
         "corral pi: assistant {} (role assistant) in pane {pane}; `corral pi --pm` opens the PM",
         session.id
     );
-    // A host that never started leaves no half-open session behind.
-    let status = super::ops::assistant::run_host(&prepared).or_else(|error| {
-        ctx.store.end_assistant(&session.id)?;
-        Err(error)
-    })?;
-    finish(ctx, &session.id, status)
+    supervise_assistant(ctx, &pane, session.id, prepared, overrides, over_cap)
 }
 
 /// `corral pi --resume A-<n>`: fence the session's generation and open the next in this pane.
@@ -200,7 +195,78 @@ pub fn resume_assistant(ctx: &Ctx, id: &str, overrides: &Overrides) -> Result<()
          generation {} opened)",
         fenced + 1
     );
-    finish(ctx, id, super::ops::assistant::run_host(&prepared)?)
+    supervise_assistant(ctx, &pane, id.into(), prepared, overrides, false)
+}
+
+/// Matched by the managed host's /new handoff; ordinary quit still exits 0.
+const NEW_ASSISTANT_EXIT: i32 = 75;
+
+fn supervise_assistant(
+    ctx: &Ctx,
+    pane: &str,
+    id: String,
+    prepared: Prepared,
+    overrides: &Overrides,
+    over_cap: bool,
+) -> Result<()> {
+    supervise_with(
+        ctx,
+        pane,
+        id,
+        prepared,
+        overrides,
+        over_cap,
+        super::ops::assistant::run_host,
+    )
+}
+
+/// A /new transition happens between hosts, never by replacing the bound Pi file in-process.
+fn supervise_with(
+    ctx: &Ctx,
+    pane: &str,
+    mut id: String,
+    mut prepared: Prepared,
+    overrides: &Overrides,
+    over_cap: bool,
+    mut run: impl FnMut(&Prepared) -> Result<std::process::ExitStatus>,
+) -> Result<()> {
+    loop {
+        let generation = ctx
+            .store
+            .get_assistant_container(&id)?
+            .state
+            .binding
+            .generation;
+        let status = run(&prepared).or_else(|error| {
+            // A fresh host that could not start is not left half-open. A resumed conversation
+            // remains recoverable, including when /new failed while shutting it down.
+            if generation == 1 {
+                ctx.store.end_assistant(&id)?;
+            }
+            Err(error)
+        })?;
+        if status.code() != Some(NEW_ASSISTANT_EXIT) {
+            return finish(ctx, &id, status);
+        }
+        super::ops::assistant::suspend(ctx, &id, generation)?;
+        eprintln!("corral pi: assistant {id} suspended; `corral pi --resume {id}` resumes it");
+        // Admission runs again after the old child stopped, so /new also works at the live cap.
+        let (next, next_prepared, warning) =
+            super::ops::assistant::open(ctx, pane, overrides, over_cap).with_context(|| {
+                format!(
+                    "/new could not open an assistant; resume {id} with `corral pi --resume {id}`"
+                )
+            })?;
+        if let Some(warning) = warning {
+            eprintln!("corral pi: {warning}");
+        }
+        eprintln!(
+            "corral pi: assistant {} (role assistant) in pane {pane}",
+            next.id
+        );
+        id = next.id;
+        prepared = next_prepared;
+    }
 }
 
 /// A clean host exit (Pi's `/quit`) ends the session; any other exit leaves it resumable.
@@ -347,3 +413,7 @@ pub fn bare(_args: &BareArgs) -> Result<()> {
 #[cfg(all(test, target_os = "linux"))]
 #[path = "pi_tests.rs"]
 mod tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "pi_assistant_tests.rs"]
+mod assistant_tests;
