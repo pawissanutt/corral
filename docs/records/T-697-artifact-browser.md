@@ -74,5 +74,8 @@ required.
 - `test/corral-client.test.ts`: both viewer modes with Unicode, space and `:` names as exact argv;
   malformed references refused before spawning.
 - Live read-only projection of real board tasks with the worktree-built binary.
-- Known flake outside this change: the Pi host sometimes fails startup with EADDRINUSE on
-  `host.sock` (2 of 5 kitty-mode runs, both before session binding); filed as T-767.
+- Review round 2: the real-store harness had launched the host twice on one runtime directory,
+  which caused the earlier startup EADDRINUSE on `host.sock` (it is not a host defect; T-767
+  was filed in error). The harness now owns exactly one host (asserted with one `hello`) and
+  audits `/proc` for leftover processes on success and failure (`cleanup.json`, and
+  `--fail-after <scene>` exercises the failure path).
