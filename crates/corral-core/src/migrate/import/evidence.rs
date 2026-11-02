@@ -54,6 +54,16 @@ pub(crate) fn registrations(board: &LegacyBoard) -> BTreeMap<&str, Vec<Registrat
                 });
         }
     }
+    for session in &board.assistants {
+        for artifact in &session.artifacts {
+            out.entry(artifact.path.as_str())
+                .or_default()
+                .push(Registration {
+                    task: &session.id,
+                    artifact,
+                });
+        }
+    }
     out
 }
 
@@ -80,6 +90,9 @@ pub(super) fn import(
         let path = corral.join(&item.path);
         let meta = std::fs::symlink_metadata(&path)
             .with_context(|| format!("inspecting {}", path.display()))?;
+        if item.area.disposition == Disposition::Runtime {
+            super::super::workspace::copy_runtime(corral, &item.path)?;
+        }
         let sha = hashes.get(item.path.as_str()).copied();
         let kind = item.area.name;
         let copy = meta.is_file()
@@ -196,6 +209,7 @@ fn reconcile(board: &LegacyBoard, report: &ImportReport) -> Result<()> {
 /// Every live registration is imported and decodes to its recorded sha256, and every stored
 /// legacy file decodes to its hash.
 pub(super) fn verify(
+    corral: &Path,
     backend: &SqliteBackend,
     store: &FsBlobStore,
     board: &LegacyBoard,
@@ -222,6 +236,14 @@ pub(super) fn verify(
             listed.contains_key(entry.path.as_str()),
             "legacy file {} is not recorded in the imported database",
             entry.path
+        );
+    }
+    for row in rows.iter().filter(|r| r.kind == "role-sessions") {
+        let path = super::super::workspace::runtime_path(corral, &row.path)?;
+        ensure!(
+            Some(super::super::scan::sha256_file(&path)?) == row.sha256,
+            "runtime copy differs: {}",
+            row.path
         );
     }
     for row in rows.iter().filter(|r| r.blob.is_some()) {

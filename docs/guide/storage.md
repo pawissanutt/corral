@@ -366,8 +366,30 @@ corral migrate --rollback [--discard-v2-changes N] [--wait SECS]
 corral migrate --finalize --yes [--wait SECS]
 ```
 
-`--apply` refuses a board with open work. `--wait` (default 10 s) bounds how long a maintenance
-command waits for the exclusive store gate.
+`--apply` refuses a board with open work. On Done/Dropped tasks only, open run, gate, review
+and review-wait markers are reported as lost history when the owning herdr inventory confirms
+all recorded panes absent and no associated host, executor, job or detached task command remains.
+A missing/foreign server or an unreadable process observation keeps the blocker. Non-terminal
+tasks and launch/submission reservations still block. The import retains the original markers
+(no synthetic end, verdict, pass or fail) and records the observations in `migration-history`.
+The locked apply drain check takes fresh observations; it never trusts a previous dry run.
+`--wait` (default 10 s) bounds how long a maintenance command waits for the exclusive store gate.
+
+The post-rehearsal workspace families have explicit mappings:
+
+| Legacy family | v2 disposition |
+|---|---|
+| `assistants/A-*.md`, `state/agent-assistant/A-*.json` | assistant session/body and container records, with the live-session index |
+| `artifacts/assistant/A-*/...` | registered artifact content and `artifact-blobs` ownership; unregistered supporting files are preserved evidence |
+| `pm-inbox/PMI-*.md`, assistant/PM counters and assistant inbox state | canonical item/body, counter and inbox records, including owed-notice and wake indexes |
+| `state/agent-pm.json`, `state/queue-refusals.json` | the runtime's PM and versioned queue-refusal record areas |
+| `state/role-sessions/T-*/R*/...` | exact evidence blobs plus runtime copies under `agent/sessions/legacy-role/`; imported physical session paths point to those copies |
+| role-session `*.lease`, launch-exit `*.owner` and `*.exited` | rebuildable temporary state, inventoried but not imported |
+| launch-exit `*.log`, `pm/...` handoffs, patches and cutover reports | legacy-preserved evidence blobs |
+
+Legacy bytes stay untouched until finalize. Runtime copies never overwrite an existing different
+file. New Pi sessions use `agent/sessions` directly, assistant artifacts read their blob mappings,
+and new launch-exit markers use the configured scratch root; none depend on finalized legacy state.
 
 ### Journal states
 

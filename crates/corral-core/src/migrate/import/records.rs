@@ -96,6 +96,80 @@ pub(super) fn import(
 fn record(c: &mut Collected, rel: &str, area: &str, path: &Path, events: &[u8]) -> Result<()> {
     let name = rel.rsplit('/').next().unwrap_or(rel);
     match area {
+        "assistant-sessions" => {
+            let (mut session, body): (crate::assistant::AssistantSession, _) =
+                super::super::workspace::markdown(path)?;
+            crate::assistant::validate_id(&session.id)?;
+            anyhow::ensure!(
+                session.version == crate::assistant::ASSISTANT_VERSION
+                    && stem(name, "", ".md")? == session.id,
+                "assistant identity mismatch"
+            );
+            session.body = body.clone();
+            if session.ended.is_none() {
+                c.raw("assistant-live", &session.id, json!(true));
+            }
+            c.raw(area, &session.id, json!({"session": session, "body": body}));
+        }
+        "pm-inbox-items" => {
+            use crate::pm_inbox::{ItemState, NoticeState, PM_INBOX_VERSION, PmInboxItem};
+            let (item, body): (PmInboxItem, _) = super::super::workspace::markdown(path)?;
+            anyhow::ensure!(
+                item.version == PM_INBOX_VERSION && stem(name, "", ".md")? == item.id,
+                "PM inbox identity mismatch"
+            );
+            if item.pending() {
+                c.raw("pm-inbox-active", &item.id, json!(true));
+            }
+            if item
+                .notice
+                .as_ref()
+                .is_some_and(|n| n.state == NoticeState::Pending)
+            {
+                c.raw("pm-inbox-notices", &item.id, json!(true));
+            }
+            if item.state == ItemState::Open && item.pm_wake.is_none() {
+                c.raw("pm-inbox-wakes", &item.id, json!(true));
+            }
+            c.raw(area, &item.id, json!({"item": item, "body": body}));
+        }
+        "assistant-containers" => {
+            let mut doc = read_json(path)?;
+            super::super::workspace::relocate_workspace_host(
+                path.parent()
+                    .and_then(Path::parent)
+                    .and_then(Path::parent)
+                    .context("corral directory")?,
+                &mut doc,
+            );
+            let container: crate::assistant::AssistantContainer =
+                serde_json::from_value(doc.clone())?;
+            anyhow::ensure!(
+                container.version == crate::assistant::ASSISTANT_VERSION
+                    && container.state.binding.role == crate::agent::AgentRole::Assistant,
+                "invalid assistant container"
+            );
+            c.raw(area, stem(name, "", ".json")?, doc);
+        }
+        "assistant-inbox" => c.raw(area, stem(name, "", ".json")?, read_json(path)?),
+        "assistant-counter" | "pm-inbox-counter" => {
+            let counter: u64 = std::fs::read_to_string(path)?
+                .trim()
+                .parse()
+                .context("parsing counter")?;
+            c.raw(area, "current", json!(counter));
+        }
+        "agent-pm" => {
+            let mut doc = read_json(path)?;
+            super::super::workspace::relocate_workspace_host(
+                path.parent()
+                    .and_then(Path::parent)
+                    .context("corral directory")?,
+                &mut doc,
+            );
+            c.raw(area, "current", doc);
+        }
+        "queue-refusals" => c.typed(area, "state", read_json(path)?),
         "session" => {
             let binding = read_json(path)?;
             let socket = binding

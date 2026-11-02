@@ -55,6 +55,7 @@ pub struct LegacyBoard {
     /// Each task with its declared schema (`flat`, `2` or `3`), ordered by task number.
     pub tasks: Vec<(LegacyTask, String)>,
     pub event_lines: u64,
+    pub assistants: Vec<crate::assistant::AssistantSession>,
 }
 
 fn schema_of(text: &str) -> &'static str {
@@ -89,7 +90,8 @@ impl LegacyBoard {
         for file in files {
             let text =
                 fs::read_to_string(&file).with_context(|| format!("reading {}", file.display()))?;
-            let record = crate::legacy::parse_task_record(&text, &file)?;
+            let mut record = crate::legacy::parse_task_record(&text, &file)?;
+            super::workspace::relocate_task(corral, &mut record.task);
             let schema = schema_of(&text).to_owned();
             board.tasks.push((LegacyTask { file, record }, schema));
         }
@@ -105,6 +107,7 @@ impl LegacyBoard {
                 pair[1].0.file.display()
             );
         }
+        board.assistants = super::workspace::assistants(corral)?;
         board.event_lines = count_lines(&corral.join("events.jsonl"))?;
         Ok(board)
     }
@@ -115,21 +118,68 @@ impl LegacyBoard {
         self.tasks
             .iter()
             .flat_map(|(t, _)| t.task.artifacts.iter().map(move |a| (t, a)))
+            .map(|(t, a)| (t.task.id.as_str(), a))
+            .chain(
+                self.assistants
+                    .iter()
+                    .flat_map(|s| s.artifacts.iter().map(move |a| (s.id.as_str(), a))),
+            )
             .filter(|(_, a)| a.purged_at.is_none() && !corral.join(&a.path).is_file())
-            .map(|(t, a)| {
-                format!(
-                    "{} {} artifact {:?} ({})",
-                    t.task.id, a.run, a.title, a.path
-                )
-            })
+            .map(|(t, a)| format!("{} {} artifact {:?} ({})", t, a.run, a.title, a.path))
             .collect()
     }
 
-    pub fn blockers(&self, corral: &Path) -> Result<(Vec<Blocker>, Vec<Blocker>)> {
+    pub fn blockers(
+        &self,
+        corral: &Path,
+        probe: Option<&super::RuntimeProbe>,
+    ) -> Result<(Vec<Blocker>, Vec<Blocker>)> {
         let mut live = Vec::new();
         let mut history = Vec::new();
         for (task, _) in &self.tasks {
+            let start = live.len();
             task_blockers(task, &mut live, &mut history);
+            let absent = if live.len() > start
+                && matches!(
+                    task.task.status,
+                    crate::Status::Done | crate::Status::Dropped
+                )
+                && let Some(probe) = probe
+            {
+                match probe(&task.task) {
+                    Ok(absent) => absent,
+                    Err(error) => {
+                        for blocker in &mut live[start..] {
+                            blocker
+                                .detail
+                                .push_str(&format!("; runtime absence unconfirmed: {error:#}"));
+                        }
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+            if absent {
+                let pending = live.split_off(start);
+                for mut blocker in pending {
+                    if matches!(
+                        blocker.family,
+                        "open_coding_run"
+                            | "open_review_run"
+                            | "open_plan_run"
+                            | "pending_plan_review"
+                            | "pending_aggregate_review"
+                            | "live_gate"
+                            | "review_wait"
+                    ) {
+                        blocker.detail.push_str("; terminal task, panes and processes absent; lost history imported unchanged");
+                        history.push(blocker);
+                    } else {
+                        live.push(blocker);
+                    }
+                }
+            }
         }
         self.state_blockers(corral, &mut live)?;
         Ok((live, history))

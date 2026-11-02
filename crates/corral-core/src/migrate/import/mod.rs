@@ -160,6 +160,18 @@ pub(crate) fn run(
     let mut blobs = Blobs::new(store);
     let mut collected = Collected::default();
     let mut report = ImportReport::default();
+    let (live, history) = board.blockers(corral, m.runtime_probe.as_ref())?;
+    anyhow::ensure!(
+        live.is_empty(),
+        "work became live during migration: {live:?}"
+    );
+    for (n, item) in history.iter().enumerate() {
+        collected.raw(
+            "migration-history",
+            &format!("{:08}", n),
+            serde_json::to_value(item)?,
+        );
+    }
     let hashes: BTreeMap<&str, &str> = m0
         .entries
         .iter()
@@ -250,7 +262,7 @@ pub(crate) fn verify(
     tasks::verify(backend, &board)?;
     gates::verify(backend, &report.gate_rows)?;
     events::verify(corral, backend)?;
-    evidence::verify(backend, store, &board, m0, report)
+    evidence::verify(corral, backend, store, &board, m0, report)
 }
 
 pub(crate) fn legacy_file(

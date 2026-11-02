@@ -46,7 +46,12 @@ fn next_seq(corral: &Path, board: &LegacyBoard, recipient: &Recipient) -> Result
             .state_mut(&mut task)
             .map_or(u64::MAX, |state| state.next_seq));
     }
-    let path = corral.join("state/pm-inbox.json");
+    let path = match recipient {
+        Recipient::Assistant { session } => corral
+            .join("state/assistant-inbox")
+            .join(format!("{session}.json")),
+        _ => corral.join("state/pm-inbox.json"),
+    };
     if !path.is_file() {
         return Ok(u64::MAX);
     }
