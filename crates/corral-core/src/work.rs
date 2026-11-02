@@ -15,6 +15,8 @@ pub enum Work {
     ConfigParse,
     /// A task directory listing (`Store::list`).
     TaskList,
+    /// A single task lookup, including cached full-task clones.
+    TaskGet,
     /// A task file's metadata checked to decide whether its cached decode is current.
     TaskStat,
     /// A task file read.
@@ -64,10 +66,11 @@ pub enum Work {
 }
 
 impl Work {
-    pub const ALL: [Work; 29] = [
+    pub const ALL: [Work; 30] = [
         Work::ConfigRead,
         Work::ConfigParse,
         Work::TaskList,
+        Work::TaskGet,
         Work::TaskStat,
         Work::TaskRead,
         Work::TaskBytes,
@@ -101,6 +104,7 @@ impl Work {
             Work::ConfigRead => "config_reads",
             Work::ConfigParse => "config_parses",
             Work::TaskList => "task_lists",
+            Work::TaskGet => "task_gets",
             Work::TaskStat => "task_stats",
             Work::TaskRead => "task_reads",
             Work::TaskBytes => "task_bytes",

@@ -169,11 +169,24 @@ fn done_with_large_history_and_evidence_scratch() {
             Ok(())
         })
         .unwrap();
-    let start = std::time::Instant::now();
+    // A full task listing clones history even when decoding is cached. It must not
+    // happen once per scratch artifact; unlike timing or cache reads, this count
+    // does not depend on host load or the file-stamp settle window.
+    use corral_core::work::{Work, count};
+    let lists = count(Work::TaskList);
+    let gets = count(Work::TaskGet);
     done(&f.ctx, &f.id, "Implemented").unwrap();
-    let elapsed = start.elapsed();
-    eprintln!("large-history done: {elapsed:?}");
-    assert!(elapsed < std::time::Duration::from_secs(60));
+    let lists = count(Work::TaskList) - lists;
+    let gets = count(Work::TaskGet) - gets;
+    eprintln!("large-history done: {lists} task listings, {gets} task lookups");
+    assert!(
+        lists < 100,
+        "task listings scaled with scratch artifacts: {lists}"
+    );
+    assert!(
+        gets < 100,
+        "task lookups scaled with scratch artifacts: {gets}"
+    );
     assert_eq!(f.task().status, Status::Review);
     assert_eq!(
         f.task()
