@@ -30,6 +30,25 @@ fn noop_sweep_reuses_snapshot_without_task_metadata_work() {
 }
 
 #[test]
+fn owner_listing_uses_portable_podman_template() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx =
+        crate::resources::FixedResourceProbe::ctx(corral_core::Store::init(tmp.path()).unwrap());
+    let shim = tmp.path().join("podman");
+    std::fs::write(
+        &shim,
+        r##"#!/bin/sh
+[ "$1" = ps ] && [ "$2" = -a ] && [ "$3" = --filter ] &&
+[ "$4" = label=corral.load-sandbox=true ] && [ "$5" = --format ] &&
+[ "$6" = '{{index .Labels "corral.run-owner"}}' ]
+"##,
+    )
+    .unwrap();
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    reap_scope_with(&ctx, "T-001", None, shim.to_str().unwrap()).unwrap();
+}
+
+#[test]
 fn only_matching_run_sandboxes_are_removed() {
     let tmp = tempfile::tempdir().unwrap();
     let shim = tmp.path().join("podman");
