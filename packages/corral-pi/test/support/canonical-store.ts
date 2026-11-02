@@ -38,6 +38,10 @@ export interface StoreMessage { readonly seq: number; readonly kind: string; rea
 export interface StoreReceipt { readonly via: string; readonly detail: Record<string, unknown>; readonly binding: { readonly session: string } }
 interface StoreEntry { readonly message: { readonly seq: number }; readonly observed?: StoreReceipt | null; readonly admitted?: StoreReceipt | null }
 export interface StoreEnvelope { readonly number: number; readonly members: number[]; readonly idempotency_key: string; readonly adapter: string; readonly payload: string; readonly payload_sha256: string; readonly binding: { readonly session: string; readonly endpoint?: string; readonly transcript?: string } }
+/** Send through the real bridge but leave canonical observation to a later sync. */
+export function admitInbox(root: string, recipient: string): void {
+  snapshot(root, "admit", { recipient });
+}
 export function inboxEnvelopes(root: string, recipient: string): StoreEnvelope[] {
   const envelopes = snapshot(root, "inbox", { recipient }).envelopes;
   if (!envelopes) throw new Error("canonical probe returned no envelopes");
