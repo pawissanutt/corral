@@ -180,15 +180,21 @@ begin_step "800-SLOC Rust ceiling"
 python3 scripts/check-candidate.py --worktree-sloc
 end_step
 
-# Reuse installed Darwin standard libraries; checking needs neither a Mac nor
-# an Apple linker/SDK. Do not download targets during an ordinary review gate.
+# Reuse installed Darwin standard libraries; this checks all Rust (including macOS
+# cfg paths), not native linking. Do not download targets during a review gate.
+# Skip only the bundled C work: SQLite's linked path still copies its bundled Rust
+# bindings, and zstd has checked-in bindings so Cargo can override its build script.
+# These command-local overrides must never reach a build/test command: real builds
+# still compile and link the bundled C libraries with the platform's toolchain.
 if command -v rustup >/dev/null 2>&1; then
   step="listing installed Rust targets"
   installed_targets=$(rustup target list --installed)
   for target in aarch64-apple-darwin x86_64-apple-darwin; do
     if [[ $'\n'"$installed_targets"$'\n' == *$'\n'"$target"$'\n'* ]]; then
       begin_step "cargo check --workspace --all-targets --target $target"
-      cargo check --workspace --all-targets --target "$target"
+      printf 'Rust-only check: skipping SQLite/zstd C compilation (no Apple SDK required).\n'
+      LIBSQLITE3_SYS_USE_PKG_CONFIG=1 cargo check --workspace --all-targets --target "$target" \
+        --config "target.$target.zstd.rustc-link-lib=[]"
       end_step
     else
       printf '\nSkipping %s check (install with: rustup target add %s).\n' "$target" "$target"
