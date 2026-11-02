@@ -10,6 +10,7 @@ export type PanelTab = typeof PANEL_TABS[number];
 export interface PanelJob { readonly job: string; readonly state: string; readonly detail?: import("../extensions/jobs/runtime.ts").JobInspection }
 export interface PanelSnapshot {
   readonly inspector?: InspectorSnapshot;
+  readonly agents?: readonly import("./agent-view.ts").AgentObservation[];
   readonly bound: boolean;
   readonly model: string | null;
   readonly effort: string;
@@ -120,6 +121,8 @@ export function panelLines(tab: PanelTab, identity: HostIdentity, snapshot: Pane
       add(identity.task ?? identity.assistant ?? identity.project, true);
       add(`${snapshot.streaming ? "Working" : "Idle"} · ${snapshot.bound ? "Bound to Corral" : "Disconnected/unbound · may be stale"}`);
       add(`${identity.role.replaceAll("_", " ")} · generation ${identity.generation}`);
+      add(`Task ${identity.task ?? "unavailable"} / run ${identity.run ?? "unavailable"} / assistant ${identity.assistant ?? "unavailable"}`);
+      add("F8 jobs · a scoped agents · t transcript in main inspector");
       add(identity.project ? `Bound project: ${identity.project}` : "Workspace session · no bound project");
       add(`${snapshot.model ?? "Model unavailable"}`);
       add(`Reasoning: ${snapshot.effort}`);
