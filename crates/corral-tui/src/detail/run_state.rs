@@ -178,6 +178,15 @@ fn wait_lines(w: &WaitRecord, width: usize) -> Vec<Line<'static>> {
     out.extend(field("condition", &q.condition, width, Style::new().fg(FG)));
     let handle = match &q.handle {
         WaitHandle::Gate { sha, pane } => format!("gate {sha} · pane {pane}"),
+        WaitHandle::TaskStatus { task, status } => {
+            format!(
+                "task {task} · {}",
+                match status {
+                    corral_core::TaskWaitStatus::Done => "done",
+                    corral_core::TaskWaitStatus::Dropped => "dropped",
+                }
+            )
+        }
         WaitHandle::Channel {
             channel_id,
             capability,
