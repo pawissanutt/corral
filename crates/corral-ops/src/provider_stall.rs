@@ -534,7 +534,7 @@ pub(crate) fn advance_agent(
         .current_run
         .as_deref()
         .filter(|run| run.outcome.is_none())
-        && crate::agent::hooks::run_head_is_pi_native(run)
+        && crate::agent::hooks::run_head_is_corral_pi(run)
     {
         return crate::agent::hooks::stall::advance_agent(ctx, head, run, now);
     }

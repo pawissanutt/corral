@@ -12,7 +12,7 @@ fn reviewer_reuses_exact_native_conversation_over_decoy_and_retained_history() {
         let (_tmp, ctx, mut task, mut parent, _) = super::tests::fixture("omo");
         let mut previous = parent.clone();
         previous.id = "R1-review-live".into();
-        previous.harness = Some(corral_core::PI_NATIVE_HARNESS.into());
+        previous.harness = Some(corral_core::CORRAL_PI_HARNESS.into());
         previous.outcome = Some(RunOutcome::Done);
         previous.session = Some(fresh(&ctx, &task, &previous, true).unwrap());
         let directory = &previous.session.as_ref().unwrap().directory;

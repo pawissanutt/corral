@@ -21,7 +21,7 @@ fn fx(pi: bool) -> Fx {
     ctx.store
         .update(&task, |t| {
             let run: Run = serde_json::from_value(json!({
-                "id":"R1", "agent":"omo", "harness": if pi {"pi-native"} else {"omo"},
+                "id":"R1", "agent":"omo", "harness": if pi {"corral-pi"} else {"omo"},
                 "worktree":"/fixture/project", "branch":"test", "base":"main", "base_sha":"abc",
                 "started":"2026-09-01T00:00:00Z", "ended":"2026-11-01T00:00:00Z"
             }))

@@ -127,9 +127,9 @@ pub enum TaskPart {
     /// A checkpoint's canonical payload, keyed by its digest and shared by every meta row
     /// that references it.
     CheckpointPayload,
-    /// One Pi-native record (generation, receipt, question, turn, wake or report) of a run.
+    /// One corral-pi record (generation, receipt, question, turn, wake or report) of a run.
     AgentRecord,
-    /// One receipt of a Pi-native PM operation targeting the task.
+    /// One receipt of a corral-pi PM operation targeting the task.
     PmReceipt,
     /// One superseded revision of a member gate.
     MemberGateHistory,

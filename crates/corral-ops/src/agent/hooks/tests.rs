@@ -181,6 +181,12 @@ effort = "high"
     let task = task_with(&fx, "pi-native");
     let loaded = fx.ctx.store.get(&task.id).unwrap();
     assert_eq!(loaded.runs[0].harness.as_deref(), Some("corral-pi"));
+    let head = fx.ctx.store.head(&task.id).unwrap();
+    let mut legacy_head = serde_json::to_value(head.current_run.as_deref().unwrap()).unwrap();
+    legacy_head["harness"] = json!("pi-native");
+    let head: corral_core::RunHead = serde_json::from_value(legacy_head).unwrap();
+    assert_eq!(head.harness.as_deref(), Some("corral-pi"));
+    assert_eq!(serde_json::to_value(head).unwrap()["harness"], "corral-pi");
     let consulted = exercise(&fx, &loaded, &pi);
     assert!(consulted.contains(&"preflight"));
     assert!(consulted.contains(&"delivery"));

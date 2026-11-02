@@ -19,10 +19,10 @@ fn runtime_cleanup_is_indexed_ordered_and_stops_after_settlement_without_touchin
         );
         task.status = Status::Done;
         for run in &mut task.runs {
-            run.harness = Some(corral_core::PI_NATIVE_HARNESS.into());
+            run.harness = Some(corral_core::CORRAL_PI_HARNESS.into());
             run.inbox.settled = Some(data::at(0));
             for child in &mut run.review_runs {
-                child.harness = Some(corral_core::PI_NATIVE_HARNESS.into());
+                child.harness = Some(corral_core::CORRAL_PI_HARNESS.into());
                 child.inbox.settled = Some(data::at(0));
             }
         }

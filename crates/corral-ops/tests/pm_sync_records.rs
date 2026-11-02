@@ -3,7 +3,7 @@ use corral_ops::{Ctx, agent::hooks::sync};
 
 #[test]
 fn pm_sync_skips_an_absent_record() {
-    // Given a store without a Pi-native PM record.
+    // Given a store without a corral-pi PM record.
     let temp = tempfile::tempdir().unwrap();
     let ctx = Ctx::from_store(Store::init(temp.path()).unwrap());
 

@@ -1,4 +1,4 @@
-//! Terminal tasks that still owe container settlement, without a board scan: a Pi-native
+//! Terminal tasks that still owe container settlement, without a board scan: a corral-pi
 //! container that is open or owes run-end duties, or an inbox container with unfinished
 //! messages, must be visited once more after its task ends. The set follows the change feed
 //! from a persisted cursor, so a pass reads only the tasks changed since the last one plus the

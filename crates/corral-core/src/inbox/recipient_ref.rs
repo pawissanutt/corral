@@ -17,7 +17,7 @@ impl Inbox<'_> {
                 let current = task.current_run_head()?;
                 if current.as_ref().is_some_and(|record| {
                     record.agent_host.is_some()
-                        || record.harness.as_deref().is_some_and(crate::is_pi_native)
+                        || record.harness.as_deref().is_some_and(crate::is_corral_pi)
                 }) {
                     Ok(container_closure_ref(
                         task,

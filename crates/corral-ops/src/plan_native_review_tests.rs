@@ -36,7 +36,7 @@ fn real_plan_review_service_binds_native_generation_and_bootstrap_before_submit(
     ctx.store.config.agent.assets_dir = Some(assets.clone());
     ctx.store.config.review.reviewer = Some("gpt-review".into());
     let profile = ctx.store.config.profiles.get_mut("gpt-review").unwrap();
-    profile.harness = corral_core::PI_NATIVE_HARNESS.into();
+    profile.harness = corral_core::CORRAL_PI_HARNESS.into();
     profile.model = Some("gpt-6.1-sol".into());
     profile.vendor = Some("openai".into());
     ctx.store.save_config().unwrap();

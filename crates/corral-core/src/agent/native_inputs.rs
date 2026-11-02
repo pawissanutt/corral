@@ -59,7 +59,7 @@ pub(crate) fn unfinished(task: &Task) -> Vec<ContainerRef> {
     let mut out = Vec::new();
     for run in &task.runs {
         if owes(
-            run.agent_host.is_some() || run.harness.as_deref().is_some_and(crate::is_pi_native),
+            run.agent_host.is_some() || run.harness.as_deref().is_some_and(crate::is_corral_pi),
             run.inbox.settled,
             run.agent_host.as_deref(),
         ) {
@@ -71,7 +71,7 @@ pub(crate) fn unfinished(task: &Task) -> Vec<ContainerRef> {
         for child in &run.review_runs {
             if owes(
                 child.agent_host.is_some()
-                    || child.harness.as_deref().is_some_and(crate::is_pi_native),
+                    || child.harness.as_deref().is_some_and(crate::is_corral_pi),
                 child.inbox.settled,
                 child.agent_host.as_deref(),
             ) {
@@ -85,7 +85,7 @@ pub(crate) fn unfinished(task: &Task) -> Vec<ContainerRef> {
     }
     for run in &task.plan_runs {
         if owes(
-            run.agent_host.is_some() || crate::is_pi_native(&run.harness),
+            run.agent_host.is_some() || crate::is_corral_pi(&run.harness),
             run.inbox.settled,
             run.agent_host.as_deref(),
         ) {

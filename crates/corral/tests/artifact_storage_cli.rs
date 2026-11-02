@@ -72,7 +72,7 @@ fn storage_gc_previews_and_applies_owned_transcript_retention() {
         .update(&id, |t| {
             t.runs.push(
                 serde_json::from_value(serde_json::json!({
-                    "id":"R1", "agent":"pi-native", "harness":"pi-native",
+                    "id":"R1", "agent":"corral-pi", "harness":"corral-pi",
                     "worktree":"/fixture", "branch":"test", "base":"main", "base_sha":"abc",
                     "started":"2026-09-01T00:00:00Z"
                 }))

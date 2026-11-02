@@ -46,7 +46,7 @@ pub(super) fn decorate_native(row: &mut HistoryRow) {
             .doc
             .get("harness")
             .and_then(Value::as_str)
-            .is_some_and(crate::is_pi_native);
+            .is_some_and(crate::is_corral_pi);
     let unsettled = native && row.doc.pointer("/inbox/settled").is_none_or(Value::is_null);
     let pending = row
         .doc

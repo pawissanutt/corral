@@ -534,7 +534,7 @@ pub trait TaskRef: TaskFieldsRef {
     fn active_agent_wakes(&self, container: &ContainerRef) -> Result<Vec<WakeSubscription>>;
     /// Every report of `container`: its own records, for resume and output only.
     fn agent_reports(&self, container: &ContainerRef) -> Result<Vec<AgentReport>>;
-    /// The receipt of a Pi-native PM operation `request_id` that targeted this task.
+    /// The receipt of a corral-pi PM operation `request_id` that targeted this task.
     fn pm_receipt(&self, request_id: &str) -> Result<Option<RequestReceipt>>;
     /// Task-held PM receipts still owing settlement or post-commit work, in append order.
     fn pending_pm_receipts(&self) -> Result<Vec<RequestReceipt>>;
