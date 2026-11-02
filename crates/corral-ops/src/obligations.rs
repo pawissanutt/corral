@@ -75,6 +75,10 @@ fn wait_inner(
         "wait condition is empty"
     );
     ensure!(!request.owner.trim().is_empty(), "wait owner is empty");
+    if let WaitHandle::TaskStatus { task, .. } = &request.handle {
+        ensure!(task != id, "a run cannot wait on its own task status");
+        ctx.store.get(task)?;
+    }
     let detail = json!({"run":request.run,"wait":request.id,"condition":request.condition});
     let mut receipt = None;
     if origin.is_some() {
@@ -134,6 +138,9 @@ fn wait_inner(
             let commit = effects::Commit {
                 result: json!({
                     "wait": request.id, "registered": true,
+                    "warning": if matches!(request.handle, WaitHandle::Channel { .. }) {
+                        Some("Free-text channel waits resolve only by manual receipt or deadline; use task_status for task waits.")
+                    } else { None },
                     "event": effects::event("wait_registered", detail.clone(), origin),
                 }),
                 effect: Some(("wait", request.id.clone())),

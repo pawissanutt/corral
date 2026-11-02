@@ -673,7 +673,13 @@ names the exact current run ID (`R1`, `R2`, ...); old retry-run receipts are rej
 `mismatched_run`. Registration time is assigned by corral. Repeating identical registrations or
 receipts is a no-op; conflicting stable IDs fail without replacing data.
 
-A channel wait declaration looks like this:
+For another task, use `"handle": {"kind":"task_status", "task":"T-512", "status":"done"}`
+(or `"dropped"`). Sync resolves the wait if the task already has that status or a matching
+status event arrives after registration, and posts the worker wake through the normal durable path.
+Pi-native workers should use `corral_wait` with `task_id` and `task_status` for this case.
+
+Free-text channel waits require a manual receipt; they do not detect the condition automatically.
+Pending manual waits appear in PM attention after 30 minutes. A channel wait declaration looks like this:
 
 ```json
 {

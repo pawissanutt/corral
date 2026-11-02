@@ -47,7 +47,26 @@ pub(crate) fn reconcile_head(
     let mut next = open.clone();
     let mut transitions = Vec::new();
     for wait in &mut next.waits {
-        let (state, detail, receipt) = observe(ctx, &head.id, run, wait, now, panes);
+        let (state, detail, receipt) = if wait.receipt.is_none()
+            && wait.observation.state == WaitState::Pending
+            && wait.request.run == run.id
+            && task_status_ready(ctx, wait)?
+        {
+            let receipt = ResumeReceipt {
+                version: 1,
+                id: format!("task-status:{}", wait.request.id),
+                run: run.id.clone(),
+                outcome: ReceiptOutcome::Ready,
+                delivery: ResumeDelivery::Acknowledged,
+                observed_at: now,
+                answer: None,
+                data: json!({"handle": wait.request.handle}),
+            };
+            let observation = receipt_observation(&receipt, now);
+            (observation.state, observation.detail, Some(receipt))
+        } else {
+            observe(ctx, &head.id, run, wait, now, panes)
+        };
         if let Some(receipt) = receipt {
             wait.receipt = Some(receipt);
         }
@@ -138,6 +157,43 @@ pub(crate) fn reconcile_head(
     }))
 }
 
+fn task_status_ready(ctx: &Ctx, wait: &WaitRecord) -> Result<bool> {
+    use corral_core::{Status, TaskWaitStatus};
+    let WaitHandle::TaskStatus { task, status } = &wait.request.handle else {
+        return Ok(false);
+    };
+    let target = match status {
+        TaskWaitStatus::Done => Status::Done,
+        TaskWaitStatus::Dropped => Status::Dropped,
+    };
+    if ctx.store.get(task)?.status == target {
+        return Ok(true);
+    }
+    Ok(ctx.store.events_shared()?.iter().any(|event| {
+        if event.task.as_deref() != Some(task.as_str()) || event.ts <= wait.registered_at {
+            return false;
+        }
+        match target {
+            Status::Done => {
+                matches!(
+                    event.kind.as_str(),
+                    "approved" | "plan_accepted" | "tracker_completed"
+                ) || (event.detail["to"] == "done" && event.detail["from"] != "done")
+            }
+            Status::Dropped => {
+                event.kind == "discarded"
+                    || (event.kind == "idea_decided"
+                        && matches!(
+                            event.detail["action"].as_str(),
+                            Some("drop" | "decline" | "merge")
+                        ))
+                    || (event.detail["to"] == "dropped" && event.detail["from"] != "dropped")
+            }
+            _ => false,
+        }
+    }))
+}
+
 fn observe(
     ctx: &Ctx,
     task: &str,
@@ -158,6 +214,7 @@ fn observe(
         return state(WaitState::Expired, "declared wait deadline expired");
     }
     match &wait.request.handle {
+        WaitHandle::TaskStatus { .. } => state(WaitState::Pending, "awaiting task status event"),
         WaitHandle::Channel {
             channel_id,
             capability,

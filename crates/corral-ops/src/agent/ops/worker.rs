@@ -120,6 +120,7 @@ const WAIT_CAPABILITY: &str = "wait_v1";
 /// `wait_v1` for every channel wait, because its deadline wake is the one corral guarantees.
 fn wait_request(payload: WaitPayload, run: &str) -> Result<WaitRequest> {
     let handle = match payload.handle {
+        WaitHandle::TaskStatus { task, status } => WaitHandle::TaskStatus { task, status },
         WaitHandle::Gate { .. } => {
             return Err(bad(
                 "gate waits are armed by corral_gate itself; wait on a channel instead",

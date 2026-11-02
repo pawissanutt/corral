@@ -11,20 +11,24 @@ type Params = Record<string, unknown>;
 export const waitTool: CorralToolSpec = {
   name: "corral_wait",
   label: "Wait for an external event",
-  description: "Declare that this run waits on an external event (another task landing, CI, a person) with a "
-    + "deadline. corral wakes you with a message when the wait is satisfied, fails or reaches its deadline; end "
-    + "your turn after declaring it. Gate results need no wait: corral_gate arms its own wake.",
+  description: "For another task use task_id and task_status (done or dropped): corral resolves it automatically. "
+    + "For other events use channel_id; free-text channel waits resolve only by manual receipt or deadline. "
+    + "End your turn after declaring a wait. Gate results need no wait: corral_gate arms its own wake.",
   op: "wait",
   parameters: Type.Object({
     id: Type.String({ pattern: "^[A-Za-z0-9._-]+$", description: "A wait ID unique within this run, [A-Za-z0-9._-]" }),
     condition: Type.String({ description: "What must become true" }),
-    channel_id: Type.String({ description: "Where the event is observed, for example a task ID or CI run" }),
+    channel_id: Type.Optional(Type.String({ description: "Manual-only channel, for example a CI run; omit for a task status" })),
+    task_id: Type.Optional(Type.String({ description: "Task to watch automatically; use with task_status instead of channel_id" })),
+    task_status: Type.Optional(Type.Union([Type.Literal("done"), Type.Literal("dropped")], { description: "Terminal status to watch automatically" })),
     deadline: Type.String({ format: "date-time", description: "RFC 3339 time after which the wait expires and wakes you" }),
     owner: Type.Optional(Type.String({ description: "Who resolves the wait (default worker)" })),
   }),
   payload: (params: Params) => ({
     ...pick(params, ["id", "condition", "owner", "deadline"]),
-    handle: { kind: "channel", ...pick(params, ["channel_id"]) },
+    handle: params.task_id !== undefined || params.task_status !== undefined
+      ? { kind: "task_status", task: params.task_id, status: params.task_status }
+      : { kind: "channel", ...pick(params, ["channel_id"]) },
   }),
 };
 

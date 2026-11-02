@@ -24,12 +24,13 @@ pub fn red_main<T: crate::TaskFieldsRef + ?Sized>(task: &T) -> bool {
 
 /// The task a channel handle names (`task:T-512:landed`, `worker:T-512-landed`), if any.
 pub fn awaited_task(handle: &WaitHandle) -> Option<&str> {
-    let WaitHandle::Channel { channel_id, .. } = handle else {
-        return None;
-    };
-    channel_id
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
-        .find_map(task_token)
+    match handle {
+        WaitHandle::TaskStatus { task, .. } => Some(task),
+        WaitHandle::Channel { channel_id, .. } => channel_id
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+            .find_map(task_token),
+        WaitHandle::Gate { .. } => None,
+    }
 }
 
 fn task_token(segment: &str) -> Option<&str> {

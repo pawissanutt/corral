@@ -624,6 +624,55 @@ fn the_gate_section_hash_is_of_the_section_rendered_into_the_run_prompt_and_no_m
 }
 
 #[test]
+fn task_status_event_wakes_once_after_dependency_moves_away() {
+    let w = worker(false);
+    let dependency = w
+        .ctx()
+        .store
+        .create("dependency", Some("corral"), Status::Ready, "")
+        .unwrap();
+    let payload = json!({"id":"dep", "condition":"dependency lands", "handle": {
+        "kind":"task_status", "task":dependency.id, "status":"done"
+    }});
+    committed(&w.op(None, "status-wait", "wait", payload));
+    crate::move_task(w.ctx(), &dependency.id, Status::Done, true).unwrap();
+    crate::move_task(w.ctx(), &dependency.id, Status::Ready, true).unwrap();
+    let now = Timestamp::now();
+    for _ in 0..2 {
+        crate::obligations_sync::reconcile_one(w.ctx(), &w.id, now, None).unwrap();
+        w.sync(now);
+    }
+    assert_eq!(
+        w.task().runs[0].obligations.waits[0].observation.state,
+        WaitState::Ready
+    );
+    assert_eq!(w.messages("wait_wake").len(), 1);
+}
+
+#[test]
+fn task_status_wait_resolves_when_already_dropped() {
+    let w = worker(false);
+    let dependency = w
+        .ctx()
+        .store
+        .create("dependency", Some("corral"), Status::Dropped, "")
+        .unwrap();
+    let payload = json!({"id":"dep", "condition":"dependency dropped", "handle": {
+        "kind":"task_status", "task":dependency.id, "status":"dropped"
+    }});
+    committed(&w.op(None, "status-wait", "wait", payload));
+    let now = Timestamp::now();
+    crate::obligations_sync::reconcile_one(w.ctx(), &w.id, now, None).unwrap();
+    w.sync(now);
+    w.sync(now);
+    assert_eq!(
+        w.task().runs[0].obligations.waits[0].observation.state,
+        WaitState::Ready
+    );
+    assert_eq!(w.messages("wait_wake").len(), 1);
+}
+
+#[test]
 fn the_tool_wait_payload_stays_pending_until_its_deadline_then_wakes_once() {
     let w = worker(false);
     let channel = json!({"kind": "channel", "channel_id": "CI-1"});
