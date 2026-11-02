@@ -175,15 +175,21 @@ try:
     def on_screen(text): return text in '\n'.join(screen.lines())
 
     captures = []
+    # Replay the actual PTY output with its original geometry changes, preserving SGR colors.
+    # A screenshot renderer must not feed old 140-column frames into a 52-column terminal.
+    resizes = [dict(offset=0, columns=140, rows=46)]
+    candidate = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, stdin=subprocess.DEVNULL, text=True).strip()
     checks = []
     def send(value): os.write(master, value.encode() if isinstance(value, str) else value)
     def save(name):
         until(lambda: log.endswith(b'\x1b[?2026l'), 'complete frame')
         (args.output / (name + '.ansi')).write_bytes(log)
         (args.output / (name + '.txt')).write_text('\n'.join(screen.lines()) + '\n')
-        captures.append(dict(name=name, cols=screen.columns, rows=screen.rows))
+        captures.append(dict(name=name, cols=screen.columns, rows=screen.rows, candidate=candidate,
+                             bytes=len(log), resizes=list(resizes)))
         assert screen.overflow == 0, ('cell overflow', name, screen.overflowed)
     def resize(columns, rows):
+        resizes.append(dict(offset=len(log), columns=columns, rows=rows))
         fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
         screen.resize(columns, rows)
         os.kill(host.pid, signal.SIGWINCH)
@@ -238,7 +244,9 @@ try:
     checks.append('Ctrl+D exits cleanly and leaves the alternate screen')
     (args.output / 'pty-session.ansi').write_bytes(log)
     (args.output / 'captures.json').write_text(json.dumps(captures, indent=2))
-    result = dict(status='PASS', production_entrypoint='src/host/main.ts', input='real PTY keyboard input',
+    result = dict(status='PASS', candidate=candidate, initial_size=dict(columns=140, rows=46), resizes=resizes,
+                  scenes=[dict(name=c['name'], columns=c['cols'], rows=c['rows'], bytes=c['bytes']) for c in captures],
+                  production_entrypoint='src/host/main.ts', input='real PTY keyboard input',
                   provider='offline fixture transport and fake control plane', checks=checks)
     (args.output / 'result.json').write_text(json.dumps(result, indent=2)); print(json.dumps(result, indent=2))
 finally:

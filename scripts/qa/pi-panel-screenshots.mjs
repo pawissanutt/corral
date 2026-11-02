@@ -1,5 +1,5 @@
 // Rasterize the owned production-host PTY proof, preserving its actual resize/input output.
-// Usage: bun scripts/qa/pi-panel-screenshots.mjs <qa-pi-panel-proof.py output directory>
+// Usage: bun scripts/qa/pi-panel-screenshots.mjs <owned PTY QA output directory> [--lifecycle|--usage|--appearance]
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -15,6 +15,11 @@ const requested = process.argv.includes("--usage") ? new Map([
   ["wide-source-restored", "Scope │ Input"], ["wide-budget", "Budget accounting unavailable"],
   ["compact-chart-top", "Token bars"], ["compact-budget", "Budget accounting unavailable"],
   ["draft-usage-top", "RETAINED_USAGE_DRAFT"], ["draft-return", "RETAINED_USAGE_DRAFT"],
+]) : process.argv.includes("--appearance") ? new Map([
+  ["dark-140x46", "Bound to Corral"], ["light-selected-140x46", "Bound to Corral"],
+  ["contrast-selected-140x46", "Bound to Corral"], ["dark-selected-140x46", "Bound to Corral"],
+  ["compact-140x46", "Bound to Corral"], ["role-disabled-140x46", "Role worker cannot answer"],
+  ["effort-52x24", "Cycle effort"], ["native-model-selector-52x24", "Only showing models"],
 ]) : process.argv.includes("--lifecycle") ? new Map([
   ["wide-graph", "Task graph:"], ["wide-selected-missing", "Inspect canonical task T-999"],
   ["compact-list", "Dependency list"], ["compact-selected-prerequisite", "Inspect canonical task T-002"],
@@ -78,6 +83,11 @@ try {
     if (scene.name === "draft-usage-top") assert(visible.includes("Measured usage"), "Draft must remain while Usage is open");
     if (scene.name === "wide-source-restored") assert(!visible.includes("Token bars"), "Chart off restores source-only presentation");
     await writeFile(join(directory, scene.name + ".screen.txt"), visible + "\n");
+    if (process.argv.includes("--appearance") && scene.name.includes("selected-140x46")) {
+      const expected = scene.name.startsWith("light") ? 0xffffff : scene.name.startsWith("contrast") ? 0 : 0x0f1012;
+      const background = await browser.evaluate("term.buffer.active.getLine(term.buffer.active.viewportY+20).getCell(2).getBgColor()");
+      assert.equal(background, expected, `${scene.name}: erased blank canvas retains the previous appearance`);
+    }
     const cell = await browser.evaluate("term._core._renderService.dimensions.css.cell");
     const width = Math.ceil(cell.width * scene.columns) + 32, height = Math.ceil(cell.height * scene.rows) + 32;
     await browser.evaluate(`Object.assign(document.getElementById("terminal").style,{width:"${width - 32}px",height:"${height - 32}px"})`);

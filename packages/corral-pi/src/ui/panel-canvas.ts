@@ -42,6 +42,7 @@ function defaultColors(body: string): string {
 }
 
 export class PanelCanvas {
+  private paintedStyle = CANVAS_STYLE;
   private state: State = "text";
   private sequence: string | null = "";
   private stringEscape = false;
@@ -52,7 +53,10 @@ export class PanelCanvas {
     this.state = "text"; this.sequence = ""; this.stringEscape = false; this.active = false;
   }
   write(data: string): { data: string; screen: boolean | undefined; wrap: boolean | undefined } {
-    let output = "", start = 0;
+    // A full redraw starts with erase commands, before Pi emits any new text/SGR. Seed the
+    // new defaults first so erased blank cells change appearance too. Never enter a payload.
+    let output = this.active && this.atBoundary && this.paintedStyle !== CANVAS_STYLE ? CANVAS_STYLE : "", start = 0;
+    if (output) this.paintedStyle = CANVAS_STYLE;
     let screen: boolean | undefined, wrap: boolean | undefined;
     for (let at = 0; at < data.length; at++) {
       const char = data[at];
