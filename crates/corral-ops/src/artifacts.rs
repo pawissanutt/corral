@@ -461,6 +461,7 @@ fn attach_to_head(
         .as_ref()
         .filter(|r| r.id == run)
         .map(|_| t.head().summary.current_artifacts.accepted_proof.clone());
+    let batch = cached.is_some();
     let mut loaded;
     let rows = match cached {
         Some(rows) => rows,
@@ -497,7 +498,7 @@ fn attach_to_head(
                 &existing,
                 before.as_ref(),
             )?;
-        } else {
+        } else if !batch {
             crate::pm_next::observe::load_checks::published_rows(ctx, &t.id, rows, index, false)?;
         }
         return Ok(existing);
@@ -541,7 +542,7 @@ fn attach_to_head(
             &artifact,
             before.as_ref(),
         )?;
-    } else {
+    } else if !batch {
         crate::pm_next::observe::load_checks::published_rows(ctx, &t.id, rows, index, true)?;
     }
     buffer_artifact_event(ctx, &t.id, &artifact)?;

@@ -31,8 +31,7 @@ test("assistant edit and write reach the session's scratch, never the main check
     mkdirSync(dir, { recursive: true });
   }
   writeFileSync(join(cwd, "README.md"), "main\n");
-  writeFileSync(join(cwd, ".corral", "assistants", "A-1.md"),
-    `---\nversion: 1\nid: A-1\nscratch:\n- slug: spike\n  project: corral\n  path: ${spike}\n---\n`);
+
   const originalFetch = globalThis.fetch;
   const originalTemp = process.env.TMPDIR;
   let host: HostSession | undefined;
@@ -49,6 +48,7 @@ test("assistant edit and write reach the session's scratch, never the main check
     const identity: HostIdentity = { store: "st-demo", project: "", role: "assistant", assistant: "A-1", generation: 1 };
     const events = new EventLog(1);
     const corral = writeFakeCorral(work);
+    corral.snapshot({ session: { id: "A-1", scratch: [{ slug: "spike", project: "corral", path: spike }] } });
     const client = new CorralClient({
       corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "",
     });

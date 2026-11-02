@@ -24,7 +24,7 @@ pub(crate) use tests::{ARTIFACT_EXTRACTIONS, SNAPSHOTS};
 
 const VERSION: u32 = 1;
 pub(crate) const DOCUMENT_BYTES: usize = 256 * 1024;
-const TEXT_BUDGET: usize = 8 * 1024 * 1024;
+pub(crate) const TEXT_BUDGET: usize = 8 * 1024 * 1024;
 pub(crate) const INDEX_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -231,6 +231,33 @@ fn sources(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Record>> {
     Ok(records)
 }
 
+#[derive(Clone)]
+pub(crate) struct ExtractedText {
+    pub text: String,
+    complete: bool,
+    binary: bool,
+}
+
+/// Apply the same bounded extraction to bytes already frozen by an artifact scan.
+pub(crate) fn extract_bytes(bytes: &[u8]) -> ExtractedText {
+    let binary = bytes.iter().take(8192).any(|b| *b == 0);
+    ExtractedText {
+        text: if binary {
+            String::new()
+        } else {
+            String::from_utf8_lossy(&bytes[..bytes.len().min(DOCUMENT_BYTES)]).into_owned()
+        },
+        complete: binary || bytes.len() <= DOCUMENT_BYTES,
+        binary,
+    }
+}
+
+fn apply_text(record: &mut Record, text: ExtractedText) {
+    record.document.complete = text.complete;
+    record.document.binary = text.binary;
+    record.document.text = text.text;
+}
+
 fn extract(ctx: &Ctx, record: &mut Record) -> Result<()> {
     let mut bytes = Vec::new();
     match &record.source {
@@ -252,16 +279,7 @@ fn extract(ctx: &Ctx, record: &mut Record) -> Result<()> {
                 .context("extracting search text")?;
         }
     }
-    record.document.complete = bytes.len() <= DOCUMENT_BYTES;
-    record.document.binary = bytes.iter().take(8192).any(|b| *b == 0);
-    bytes.truncate(DOCUMENT_BYTES);
-    // A byte limit may split the final UTF-8 code point.
-    record.document.text = if record.document.binary {
-        record.document.complete = true;
-        String::new()
-    } else {
-        String::from_utf8_lossy(&bytes).into_owned()
-    };
+    apply_text(record, extract_bytes(&bytes));
     Ok(())
 }
 
@@ -329,11 +347,16 @@ fn lock_index(dir: &std::path::Path) -> Result<File> {
 /// index follows each attach rather than re-snapshotting every task. Whatever does not fit
 /// (a full index or text budget) is left to the next refresh.
 pub(crate) fn index_artifact(ctx: &Ctx, task: &str, artifact: &Artifact) -> Result<()> {
-    index_artifacts(ctx, task, std::slice::from_ref(artifact))
+    index_artifacts(ctx, task, std::slice::from_ref(artifact), &BTreeMap::new())
 }
 
 /// Index one automatically scanned set with one cache read and publication.
-pub(crate) fn index_artifacts(ctx: &Ctx, task: &str, artifacts: &[Artifact]) -> Result<()> {
+pub(crate) fn index_artifacts(
+    ctx: &Ctx,
+    task: &str,
+    artifacts: &[Artifact],
+    prepared: &BTreeMap<String, ExtractedText>,
+) -> Result<()> {
     let dir = ctx.store.cache_root()?;
     let lock = index_lock(ctx)?;
     match lock.try_lock() {
@@ -370,7 +393,11 @@ pub(crate) fn index_artifacts(ctx: &Ctx, task: &str, artifacts: &[Artifact]) -> 
             break;
         }
         let mut record = Record::artifact(task, artifact);
-        extract(ctx, &mut record)?;
+        if let Some(text) = prepared.get(&artifact.sha256) {
+            apply_text(&mut record, text.clone());
+        } else {
+            extract(ctx, &mut record)?;
+        }
         let id = record.document.reference.clone();
         if cache.documents.get(&id) == Some(&record.document) {
             continue;
