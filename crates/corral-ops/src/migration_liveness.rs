@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 pub fn migration_runtime_probe(root: &Path) -> Result<RuntimeProbe> {
     let config = corral_core::Config::load(&root.join(".corral/corral.toml"))?;
+    let owner_dirs = launch_owner_dirs(root, &config)?;
     let session = std::env::var("CORRAL_HERDR_SESSION")
         .ok()
         .filter(|s| !s.is_empty())
@@ -42,10 +43,37 @@ pub fn migration_runtime_probe(root: &Path) -> Result<RuntimeProbe> {
             return Ok(false);
         }
         // Descendants can outlive a pane and recorded parent, and can change cwd/argv.
-        // The legacy issuer persists their inherited random ownership token beside receipts.
-        let owners = LaunchOwners::read(&root.join(".corral/state/launch-exits"))?;
+        // Both legacy and v2 issuers persist the inherited token beside launch receipts.
+        let owners = LaunchOwners::read_all(&owner_dirs)?;
         processes_absent(Path::new("/proc"), task, &owners)
     }))
+}
+
+/// The same scratch layout as Store::scratch_path, resolved without opening a Store or
+/// creating directories. Migration also needs the old issuer's retained markers.
+fn launch_owner_dirs(root: &Path, config: &corral_core::Config) -> Result<[PathBuf; 2]> {
+    let layout = corral_core::StorageLayout::resolve(
+        root,
+        &config.storage,
+        &config.projects,
+        &corral_core::StorageEnv::from_process(),
+    )
+    .map_err(|errors| {
+        anyhow::anyhow!(
+            "{}",
+            errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
+    })?;
+    Ok([
+        corral_core::migrate::Migrate::new(layout.workspace())
+            .corral_dir()
+            .join("state/launch-exits"),
+        layout.scratch_root().join("tmp").join("launch-exits"),
+    ])
 }
 
 #[derive(Default)]
@@ -168,6 +196,18 @@ fn task_token(text: &str, task: &str) -> bool {
 struct LaunchOwners(BTreeMap<Vec<u8>, String>);
 
 impl LaunchOwners {
+    fn read_all(dirs: &[PathBuf]) -> Result<Self> {
+        let mut owners = Self::default();
+        for dir in dirs {
+            for (marker, task) in Self::read(dir)?.0 {
+                if let Some(previous) = owners.0.insert(marker, task.clone()) {
+                    ensure!(previous == task, "launch owner belongs to multiple tasks");
+                }
+            }
+        }
+        Ok(owners)
+    }
+
     fn read(dir: &Path) -> Result<Self> {
         let entries = match std::fs::read_dir(dir) {
             Ok(entries) => entries,
