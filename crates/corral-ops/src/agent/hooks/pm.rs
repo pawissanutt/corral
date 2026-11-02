@@ -255,7 +255,11 @@ pub(crate) mod tests {
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("index.ts"), "export {}").unwrap();
         }
-        std::fs::write(assets.join("compat.json"), r#"{"verdict":"GO"}"#).unwrap();
+        std::fs::write(
+            assets.join("compat.json"),
+            r#"{"verdict":"GO","memory_projection":1}"#,
+        )
+        .unwrap();
         fx.ctx.store.save_config().unwrap();
         let selection = OperatingSelection {
             tasks: [fx.id.clone()].into(),

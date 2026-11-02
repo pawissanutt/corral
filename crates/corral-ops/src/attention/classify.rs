@@ -247,6 +247,12 @@ pub(super) fn conditions_with_runs(
                 ));
             }
             if task.status == Status::NeedsMe {
+                super::stopping::launch_refusal(
+                    task,
+                    phases.run.as_ref(),
+                    now,
+                    &mut assessment.conditions,
+                );
                 escalation(task, phases.run.as_ref(), now, &mut assessment.conditions);
                 if assessment.conditions.is_empty() {
                     let mut condition = keyed_status(

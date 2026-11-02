@@ -1,4 +1,5 @@
 import { resolve, basename } from "node:path";
+import { realpath } from "node:fs/promises";
 import type { Inspection } from "./inspection.ts";
 import { parseChangedPaths, readCandidateDiff } from "./candidate-git.ts";
 import { gitFailure, panelGit, repositoryRoot, parseStatus, parseNumstat, comparisonArgs, relevantFile, readPanelDiff, FILE_LIMIT, type Comparison } from "./panels-git.ts";
@@ -31,9 +32,11 @@ export class ReviewStore {
   checkedAt: number | undefined; refreshing = false; revision = 0;
   stats: ReadonlyMap<string, FileStat> = new Map();
   private epoch = 0; private patchEpoch = 0; private disposed = false;
+  private explicitScope = false;
+  get comparisons(): readonly Comparison[] { return this.explicitScope || !this.candidate ? COMPARISONS.filter(value => value !== "candidate") : COMPARISONS; }
   private readonly abort = new AbortController();
   private active: Promise<void> | undefined;
-  constructor(cwd: string, private readonly changed: () => void, private readonly candidate?: () => Promise<Inspection>) {
+  constructor(cwd: string, private readonly changed: () => void, private readonly candidate?: () => Promise<Inspection>, public scopeRequired = false, private strictRoot = false) {
     this.root = resolve(cwd); if (candidate) this.comparison = "candidate";
   }
   get name(): string { return basename(this.root); }
@@ -43,16 +46,22 @@ export class ReviewStore {
   }
   get current(): PanelFile | undefined { return this.visible.find(file => file.path === this.selected); }
   async setRepository(path: string): Promise<void> {
-    this.epoch++; this.patchEpoch++; this.root = resolve(this.root, path); this.comparison = "all"; this.candidateBase = undefined;
+    this.explicitScope = true; this.strictRoot = true;
+    this.epoch++; this.patchEpoch++; this.root = resolve(this.root, path); this.scopeRequired = false; this.comparison = "all"; this.candidateBase = undefined;
+    this.head = undefined; this.branch = "unknown"; this.error = undefined; this.stats = new Map(); this.query = ""; this.patchSnapshot = undefined;
     this.files = []; this.selected = undefined; this.patchPath = undefined; this.checkedAt = undefined; this.patch = "Loading repository…";
+    this.changed();
     // Wait for an old read before refreshing the newly selected scope.
     await this.active; await this.refresh();
   }
   async setComparison(value: Comparison): Promise<void> {
-    this.comparison = value; this.selected = undefined; this.epoch++; await this.active; await this.refresh();
+    if (!this.comparisons.includes(value)) { this.error = "Candidate comparison belongs to the bound task, not this Files scope."; this.changed(); return; }
+    this.comparison = value; this.selected = undefined; this.epoch++; this.patchEpoch++;
+    this.patchSnapshot = undefined; this.patchPath = undefined; this.error = undefined;
+    await this.active; await this.refresh();
   }
   refresh(): Promise<void> {
-    if (this.disposed) return Promise.resolve();
+    if (this.disposed || this.scopeRequired) return Promise.resolve();
     if (this.active) return this.active;
     const operation = this.read(); this.active = operation;
     void operation.finally(() => { if (this.active === operation) this.active = undefined; });
@@ -64,6 +73,9 @@ export class ReviewStore {
     try {
       if (comparison === "candidate") { await this.readCandidate(epoch); return; }
       const root = await repositoryRoot(cwd, this.abort.signal);
+      if (this.strictRoot && await realpath(cwd) !== await realpath(root)) {
+        throw new Error("Choose a project repository root or worktree; parent workspace changes are not shown.");
+      }
       const [status, branch, head] = await Promise.all([
         panelGit(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], this.abort.signal),
         panelGit(root, ["rev-parse", "--abbrev-ref", "HEAD"], this.abort.signal).catch(() => "unborn"),
@@ -109,7 +121,7 @@ export class ReviewStore {
         this.patchSnapshot = { ...metadata, root, path: file.path, comparison, head, ...(comparison === "candidate" && base ? { base } : {}), at: this.patchAt, text: patch }; this.changed();
       }
     } catch (error) {
-      if (!this.disposed && epoch === this.patchEpoch) { this.patchSnapshot = undefined; this.patchPath = file.path; this.patchComparison = comparison; this.patchAt = Date.now(); this.patch = "Diff unavailable: " + gitFailure(error); this.changed(); }
+      if (!this.disposed && epoch === this.patchEpoch && root === this.root && comparison === this.comparison && file.path === this.selected) { this.patchSnapshot = undefined; this.patchPath = file.path; this.patchComparison = comparison; this.patchAt = Date.now(); this.patch = "Diff unavailable: " + gitFailure(error); this.changed(); }
     }
   }
   get limitNotice(): string { return this.files.length === FILE_LIMIT ? `First ${FILE_LIMIT} paths; narrow repository scope to inspect more.` : ""; }

@@ -32,6 +32,7 @@ mod dependency_tests;
 mod handling;
 #[cfg(test)]
 mod heads_tests;
+pub mod inbox;
 pub mod metrics;
 mod outbox;
 mod phase_inputs;

@@ -89,7 +89,7 @@ fn provider_only_anthropic_launch_writes_an_anthropic_model() {
     owner_pane(&fx);
     std::fs::write(
         fx.root().join("assets/compat.json"),
-        r#"{"verdict":"GO","providers":["openai","anthropic"]}"#,
+        r#"{"verdict":"GO","memory_projection":1,"providers":["openai","anthropic"]}"#,
     )
     .unwrap();
     let prepared = adopt(

@@ -3,8 +3,8 @@
 //! Owner: T-252 child host-install.
 //!
 //! An installation copies only what a host runs (`package.json`, `bun.lock`, `compat.json`,
-//! `src/` without `*.test.ts`, and `assets/`), never `test/` or `fixture.json`, runs
-//! `bun install --frozen-lockfile` inside the copy and renames it to its asset digest. The
+//! `src/` without `*.test.ts`, `assets/`, and dependency `patches/`), never `test/` or
+//! `fixture.json`, runs `bun install --frozen-lockfile` inside the copy and renames it to its asset digest. The
 //! record `installed.json` names that digest; dispatch uses it when `[agent] assets_dir` is
 //! unset, so a run never references the developer checkout it was installed from.
 use std::ffi::OsString;
@@ -29,7 +29,7 @@ pub const OWNER: &str = "host-install";
 pub const RECORD_FILE: &str = "installed.json";
 pub const RECORD_VERSION: u32 = 1;
 const SHIPPED_FILES: [&str; 3] = ["package.json", "bun.lock", "compat.json"];
-const SHIPPED_TREES: [&str; 2] = ["src", "assets"];
+const SHIPPED_TREES: [&str; 3] = ["src", "assets", "patches"];
 const OUTPUT_TAIL_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -605,6 +605,30 @@ pub(crate) mod tests {
             Path::new("/home/u/.local/share/corral/pi-native")
         );
         assert!(root(None, None).is_err());
+    }
+
+    #[test]
+    fn staging_includes_declared_dependency_patches() {
+        let source = package();
+        let staging = tempfile::tempdir().unwrap();
+        copy_shipped(&source, staging.path()).unwrap();
+        let manifest: Value =
+            serde_json::from_slice(&std::fs::read(source.join("package.json")).unwrap()).unwrap();
+        let patches = manifest["patchedDependencies"].as_object().unwrap();
+        assert!(!patches.is_empty());
+        let digest = asset_digest(staging.path()).unwrap();
+        for patch in patches.values() {
+            let path = patch.as_str().unwrap();
+            assert_eq!(
+                std::fs::read(staging.path().join(path))
+                    .unwrap_or_else(|error| panic!("staged patch {path}: {error}")),
+                std::fs::read(source.join(path)).unwrap(),
+                "staged patch {path} differs from source"
+            );
+        }
+        let patch = patches.values().next().unwrap().as_str().unwrap();
+        std::fs::write(staging.path().join(patch), "changed patch").unwrap();
+        assert_ne!(asset_digest(staging.path()).unwrap(), digest);
     }
 
     #[test]

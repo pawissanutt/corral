@@ -27,8 +27,37 @@ pub(super) fn planner_owns_stop(
             })
 }
 
+pub(super) fn launch_refusal(
+    task: &TaskHeadFields,
+    run: Option<&super::phase_inputs::RunPhase>,
+    now: Timestamp,
+    conditions: &mut Vec<Condition>,
+) {
+    if let Some(run) = run
+        && run.outcome == Some(corral_core::RunOutcome::Failed)
+        && let Some(reason) = run.blocked_excerpt.as_ref().filter(|text| {
+            text.contains("corral agent launch refused: memory_contract_unavailable:")
+        })
+    {
+        let reason = if reason.contains("corral agent install") {
+            reason.clone()
+        } else {
+            format!(
+                "{reason}\nFix: run `corral agent install` or update the configured Pi assets, then retry."
+            )
+        };
+        let mut condition =
+            keyed_status(task, now, "launch_failed", WaitClass::OwnerDecision, reason);
+        condition
+            .resume
+            .push(check("launch_repaired", &task.id, None, false));
+        conditions.push(condition);
+    }
+}
+
 pub(super) fn load(ctx: &Ctx, n: &mut Neighborhood<'_>) -> Result<()> {
     n.missing_reviewers = crate::pane_liveness::recorded_missing(ctx)?;
+    n.queue_refusals = crate::queue_drain::attention_refusals(ctx)?;
     for task in n
         .tasks
         .iter()
@@ -68,6 +97,27 @@ pub(super) fn project(
         return;
     }
     native_waits(inputs, n, a);
+    if task.status == Status::Ready
+        && let Some((at, reason)) = n.queue_refusals.get(&task.id)
+    {
+        let mut condition = row(
+            task,
+            now,
+            "launch_failed",
+            WaitClass::OwnerDecision,
+            Responsible::Owner,
+            (
+                Some(crate::verification::digest(reason.as_bytes())),
+                Some(*at),
+            ),
+            reason.clone(),
+        );
+        condition
+            .resume
+            .push(check("launch_repaired", &task.id, None, false));
+        a.conditions.push(condition);
+        a.progress = None;
+    }
     if let Some((at, reason)) = n.prepared_refusals.get(&task.id) {
         let mut condition = row(
             task,

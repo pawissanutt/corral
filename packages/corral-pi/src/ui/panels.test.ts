@@ -204,11 +204,12 @@ for (const [kind, payload] of Object.entries({
     terminal.write("\x1b[?1049h");
     expect(physical.writes.join("")).not.toContain(payload);
     // Click the rendered rail file row through the public terminal input boundary.
-    const fileRow = rows.findIndex(row => row.action === action);
+    const fileRow = native.renderSidebar(34, 20).findIndex(line => stripTerminalSequences(line).includes("› "));
+    expect(fileRow).toBeGreaterThan(0);
     review.selected = undefined;
-    physical.send(`\x1b[<0;109;${fileRow + 4}M`);
+    physical.send(`\x1b[<0;109;${fileRow + 1}M`);
     expect(review.selected).toBe(path);
-    physical.send(`\x1b[<0;109;${fileRow + 4}m`);
+    physical.send(`\x1b[<0;109;${fileRow + 1}m`);
     // Narrow output uses the same actions and never passes controls to the SDK renderer.
     physical.resize(80, 24); native.focused = true;
     safe(native.renderInline(80, 24));

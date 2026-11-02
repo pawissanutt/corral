@@ -84,6 +84,14 @@ pub fn check(ctx: &Ctx, role: AgentRole, resolved: &ResolvedProfile) -> Result<(
         })?,
     };
     assets(&dir, role, explicit.is_some())?;
+    super::memory::compatible(&dir, role).map_err(|error| {
+        refuse(
+            "memory_contract_unavailable",
+            format!(
+                "{error:#}; run `corral agent install` or update the configured assets directory"
+            ),
+        )
+    })?;
     host_provider(&dir, resolved.vendor.as_deref())?;
     // A development or fixture `[agent] assets_dir` brings its own auth module; only the managed
     // installation reads the corral-owned login, so only it is checked here.

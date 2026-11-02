@@ -227,6 +227,17 @@ fn preflight_names_the_missing_piece_and_its_owner() {
     write(&dir, "src/delivery/index.ts", "");
     assert!(check(&fx, AgentRole::Pm).starts_with("credentials_unavailable: owner host-install"));
     write(&dir, "src/auth/index.ts", "");
+    let mismatch = check(&fx, AgentRole::Worker);
+    assert!(
+        mismatch.starts_with("memory_contract_unavailable:"),
+        "{mismatch}"
+    );
+    assert!(mismatch.contains("corral agent install"), "{mismatch}");
+    write(
+        &dir,
+        "compat.json",
+        r#"{"verdict":"GO","memory_projection":1}"#,
+    );
     for role in [AgentRole::Worker, AgentRole::Reviewer, AgentRole::Pm] {
         assert_eq!(check(&fx, role), "");
     }
@@ -262,7 +273,7 @@ fn preflight_names_the_missing_piece_and_its_owner() {
     write(
         &dir,
         "compat.json",
-        r#"{"verdict":"GO","providers":["openai"]}"#,
+        r#"{"verdict":"GO","memory_projection":1,"providers":["openai"]}"#,
     );
     assert!(refused(&fx).starts_with("provider_unsupported_by_host"));
     // Setup reports only what the installed host declares, never the bare allowlist.
@@ -270,7 +281,7 @@ fn preflight_names_the_missing_piece_and_its_owner() {
     write(
         &dir,
         "compat.json",
-        r#"{"verdict":"GO","providers":["openai","anthropic"]}"#,
+        r#"{"verdict":"GO","memory_projection":1,"providers":["openai","anthropic"]}"#,
     );
     assert_eq!(refused(&fx), "");
     assert_eq!(
