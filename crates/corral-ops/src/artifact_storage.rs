@@ -530,7 +530,19 @@ pub(crate) fn snapshot(
     bytes: &[u8],
     artifact: &Artifact,
 ) -> Result<Option<u64>> {
-    for task in ctx.store.artifact_owners()? {
+    let owners = ctx.store.artifact_owners()?;
+    snapshot_with_owners(ctx, dest, bytes, artifact, &owners)
+}
+
+/// Reuse one owner snapshot for a batch protected by the artifact storage lock.
+pub(crate) fn snapshot_with_owners(
+    ctx: &Ctx,
+    dest: &Path,
+    bytes: &[u8],
+    artifact: &Artifact,
+    owners: &[corral_core::Task],
+) -> Result<Option<u64>> {
+    for task in owners {
         if let Some(a) = task.artifacts.iter().find(|a| {
             a.sha256 == artifact.sha256
                 && a.purged_at.is_none()

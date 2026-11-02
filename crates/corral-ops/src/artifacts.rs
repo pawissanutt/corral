@@ -335,6 +335,7 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
     let mut added = Vec::new();
     let mut published = Vec::new();
     let storage = crate::artifact_storage::storage_lock(ctx)?;
+    let owners = ctx.store.artifact_owners()?;
     ctx.store.update(id, |t| {
         let current = t
             .current_run()
@@ -364,11 +365,12 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
                 .find(|a| a.run == run.id && a.sha256 == sha)
             {
                 if existing.purged_at.is_some() {
-                    existing.compressed_bytes = crate::artifact_storage::snapshot(
+                    existing.compressed_bytes = crate::artifact_storage::snapshot_with_owners(
                         ctx,
                         &ctx.store.dir().join(&existing.path),
                         &bytes,
                         existing,
+                        &owners,
                     )?;
                     existing.purged_at = None;
                     published.push(existing.clone());
@@ -397,8 +399,13 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
                 compressed_bytes: None,
                 purged_at: None,
             };
-            artifact.compressed_bytes =
-                crate::artifact_storage::snapshot(ctx, &dir.join(&snap_name), &bytes, &artifact)?;
+            artifact.compressed_bytes = crate::artifact_storage::snapshot_with_owners(
+                ctx,
+                &dir.join(&snap_name),
+                &bytes,
+                &artifact,
+                &owners,
+            )?;
             effects::failpoint("artifact_scan_snapshot");
             if artifact.kind == ArtifactKind::Diff {
                 for previous in t.artifacts.iter_mut().filter(|a| {
