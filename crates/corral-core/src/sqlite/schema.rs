@@ -163,6 +163,9 @@ CREATE INDEX task_rows_open ON task_rows(task, part, key) WHERE open = 1;
 -- Last active children across older containers: neither settled current rows nor replaced
 -- pending children belong to this output-sized set (attention's pending plan reviewers).
 CREATE INDEX task_rows_current_open ON task_rows(task, part, key) WHERE current = 1 AND open = 1;
+CREATE INDEX IF NOT EXISTS task_rows_worktrees ON task_rows(
+    current, task, key, json_extract(doc, '$.id'), json_extract(doc, '$.worktree')
+) WHERE part = 'run';
 -- Secondary lookup tokens of each row (keyed child reads by an indexed attribute).
 CREATE TABLE task_row_index(task INTEGER NOT NULL, part TEXT NOT NULL, token TEXT NOT NULL, key TEXT NOT NULL,
   PRIMARY KEY(task, part, token, key)) STRICT;

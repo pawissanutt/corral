@@ -9,11 +9,11 @@ worktree belonging to another task, or fixture archive was modified.
 
 | Command | A / pinned 0.3.0 median | B / candidate median | B bound |
 | --- | ---: | ---: | ---: |
-| list --json | 1.571862 s | **0.165046 s** | 0.200 s |
-| pm next --json | 3.324690 s | **0.114769 s** | 0.500 s |
-| automation status | 3.527878 s | **0.164997 s** | 0.500 s |
+| list --json | 0.967490 s | **0.114742 s** | 0.200 s |
+| pm next --json | 4.690298 s | **0.165009 s** | 0.500 s |
+| automation status | 3.325530 s | **0.164945 s** | 0.500 s |
 
-`cutover-accounting-repeat/PASS` exists; every measurement exits zero. B's six separate syscall/exec
+`cutover-schema-final/PASS` exists; every measurement exits zero. B's six separate syscall/exec
 traces count zero git/diff processes. A's PM and automation exec traces each count
 400 git processes, all diffs. These traces are outside the timed samples.
 
@@ -63,9 +63,9 @@ Built locally, never installed:
 
 ```sh
 cargo build --release -p corral </dev/null
-cp target/release/corral .evidence/corral-accounting-final
-scripts/storage-bench.sh --after .evidence/corral-accounting-final \
-  --out .evidence/cutover-accounting-repeat --projects /home/pawis/miti-workspace </dev/null
+cp target/release/corral .evidence/corral-schema-final
+scripts/storage-bench.sh --after .evidence/corral-schema-final \
+  --out .evidence/cutover-schema-final --projects /home/pawis/miti-workspace </dev/null
 ```
 
 The harness itself is unchanged: independent A/B extractions, B dry-run/apply/check,
@@ -80,29 +80,32 @@ Hash-bound inputs and executable (full hashes also in `identity.json`):
 - Prepared archive: `0a8d23ffb0a40f366f633c39d59fcd14aa87d7894072f61ea6e48623ef2837f0`
 - Prepared content: `33edcd5506fcf4475242b75af2554fd383b226a14aeb2e65efff947a7a92eaff`
 - A: `aba46287e1c97797341abf3e8ed6add6643a7b1ea54366e842edcfa53e572fff`
-- B: `e66f865f308bf63464dc71f687b3c66e1190009c0d9f3996380b4342cb5ee4bc`
+- B: `5fd1f933bcbcd21ec2f69f1ec93f7d6ac3efa00e254cdf073559831967f22544`
 
 The harness records `/proc/loadavg` before **every** invocation in `commands.jsonl`.
 No artificial load or load generators were used. Timed samples' one-minute host loads:
 
 | Command | A loads in sample order | B loads in sample order |
 | --- | --- | --- |
-| list | 24.50, 24.50, 24.46, 24.46, 24.10 | 24.50, 24.46, 24.46, 24.10, 24.10 |
-| pm next | 17.83, 16.80, 16.57, 16.57, 15.89 | 16.80, 16.80, 16.57, 15.89, 15.02 |
-| automation status | 11.96, 11.81, 11.90, 11.90, 11.43 | 11.81, 11.90, 11.90, 11.43, 11.31 |
+| list | 18.11, 18.11, 17.46, 17.46, 17.46 | 18.11, 17.46, 17.46, 17.46, 17.46 |
+| pm next | 14.20, 13.70, 13.24, 15.23, 17.37 | 13.70, 13.24, 15.23, 17.37, 17.02 |
+| automation status | 17.15, 17.06, 16.49, 16.49, 15.57 | 17.06, 16.49, 16.49, 15.57, 15.53 |
 
 The raw evidence bundles retain baseline and intermediate failures as well as final
 stdout/stderr, commands/loads, medians, hashes, equivalence, all exported task documents,
 traces and PASS. The first candidate passed at 0.114827/0.164883/0.114823 s. After the
 accounting-only repair, the first fresh run missed list (0.265276 s) while PM/status
 passed (0.114734/0.114784 s). That failure is retained, not excused or relabeled. The
-unchanged full protocol was then repeated on fresh copies; the table above is that run. Reviewers can independently recalculate medians and parse the exports.
+unchanged full protocol was then repeated on fresh copies and passed at
+0.165046/0.114769/0.164997 s. The table above is a further complete passing rerun after
+synchronizing the canonical fresh-schema declaration with the same already-used index. Reviewers can independently recalculate medians and parse the exports.
 Final database + blobs: **776,790,681 bytes** (161,828,864 + 614,961,817), below 1 GB.
 
 ## Focused validation
 
 - SQLite scalar-index tests: **3 passed** (replacement/deletion/current flags, covering
   access and identical 1x/10x VM work, existing-database backfill).
+- `cargo test -p corral-core --test backend_conformance_sqlite eight_processes_open_a_fresh_database_ten_times`: **passed** (80 fresh concurrent opens). The second quick gate exposed a deterministic canonical-schema mismatch: the additive index was missing from `BACKEND_TABLES`. Its declaration is now included; the strict schema equality assertion is unchanged.
 - `cargo test -p corral-core --test run_worktrees`: **1 passed**, exercising both fake and
   SQLite, canonical full/head writes, deletion and a pinned view across a later write.
 - `cargo test -p corral-ops --lib resources::tests`: **12 passed**, including historical
