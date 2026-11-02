@@ -91,6 +91,9 @@ pub trait ReadView {
     fn tasks(&self, q: &TaskQuery, page: PageReq) -> Result<Page<TaskHeader>, ViewError>;
     /// The highest stored task number, read without enumerating the tasks.
     fn last_task_num(&self) -> Result<Option<TaskNum>, ViewError>;
+    /// Scalar coding-run locations, without task/container documents or nested history.
+    /// Current-only reads exclude historical runs before reading their payloads.
+    fn run_worktrees(&self, current_only: bool) -> Result<Vec<RunWorktree>, ViewError>;
     fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError>;
     fn conditions(
         &self,
@@ -101,6 +104,14 @@ pub trait ReadView {
     fn aggregates(&self, names: &[AggregateName]) -> Result<Aggregates, ViewError>;
     fn blobs(&self, q: &BlobQuery, page: PageReq) -> Result<Page<BlobRow>, ViewError>;
     fn storage_rows(&self, q: &StorageQuery, page: PageReq) -> Result<Page<StorageRow>, ViewError>;
+}
+
+/// A coding run location. Historical locations remain relevant to disk admission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunWorktree {
+    pub task: TaskNum,
+    pub run: String,
+    pub worktree: PathBuf,
 }
 
 /// Content-addressed evidence bytes (plan section 7).

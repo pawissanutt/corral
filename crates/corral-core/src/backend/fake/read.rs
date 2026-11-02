@@ -312,6 +312,27 @@ impl ReadView for FakeView {
         }
     }
 
+    fn run_worktrees(&self, current_only: bool) -> Result<Vec<RunWorktree>, ViewError> {
+        self.fresh()?;
+        Ok(self
+            .state
+            .tasks
+            .iter()
+            .flat_map(|(num, task)| {
+                task.rows
+                    .values()
+                    .filter(move |row| row.part == TaskPart::Run && (!current_only || row.current))
+                    .filter_map(|row| {
+                        Some(RunWorktree {
+                            task: *num,
+                            run: row.doc.get("id")?.as_str()?.to_owned(),
+                            worktree: row.doc.get("worktree")?.as_str()?.into(),
+                        })
+                    })
+            })
+            .collect())
+    }
+
     fn last_task_num(&self) -> Result<Option<TaskNum>, ViewError> {
         self.fresh()?;
         Ok(self.state.tasks.keys().next_back().copied())

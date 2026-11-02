@@ -230,6 +230,9 @@ impl ReadView for View {
     fn tasks(&self, q: &TaskQuery, page: PageReq) -> Result<Page<TaskHeader>, ViewError> {
         self.0.tasks(q, page)
     }
+    fn run_worktrees(&self, current_only: bool) -> Result<Vec<RunWorktree>, ViewError> {
+        self.0.run_worktrees(current_only)
+    }
     fn last_task_num(&self) -> Result<Option<TaskNum>, ViewError> {
         self.0.last_task_num()
     }

@@ -89,14 +89,13 @@ impl ResourceProbe for SystemResourceProbe {
         }
         let mut walk_paths = BTreeSet::new();
         let mut disks = {
-            let _followup = work::followup("FU-3", "sample");
-            for task in store.list_shared()?.iter() {
-                for run in &task.runs {
-                    work::counted(Counter::FileStats, 1);
-                    if run.worktree.exists() {
-                        walk_paths.insert(run.worktree.join("target"));
-                        walk_paths.insert(run.worktree.clone());
-                    }
+            // Every historical coding worktree still matters to admission, but none of its
+            // task, usage, artifact or nested run history is needed to inspect the volume.
+            for run in store.view()?.run_worktrees(false)? {
+                work::counted(Counter::FileStats, 1);
+                if run.worktree.exists() {
+                    walk_paths.insert(run.worktree.join("target"));
+                    walk_paths.insert(run.worktree);
                 }
             }
             walk_paths

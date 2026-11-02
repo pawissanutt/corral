@@ -199,13 +199,13 @@ fn run_from_cwd(store: &Store, cwd: &Path) -> Result<Option<String>> {
         return Ok(None);
     }
     Ok(store
-        .list()?
+        .view()?
+        .run_worktrees(true)?
         .into_iter()
-        .filter_map(|task| task.current_run().cloned())
         .filter_map(|run| {
             let worktree = run.worktree.canonicalize().ok()?;
             cwd.starts_with(&worktree)
-                .then_some((worktree.components().count(), run.id))
+                .then_some((worktree.components().count(), run.run))
         })
         .max_by_key(|(depth, _)| *depth)
         .map(|(_, id)| id))

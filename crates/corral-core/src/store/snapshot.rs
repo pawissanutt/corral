@@ -152,6 +152,9 @@ impl ReadView for SharedView {
     fn tasks(&self, q: &TaskQuery, page: PageReq) -> Result<Page<TaskHeader>, ViewError> {
         self.view().tasks(q, page)
     }
+    fn run_worktrees(&self, current_only: bool) -> Result<Vec<RunWorktree>, ViewError> {
+        self.view().run_worktrees(current_only)
+    }
     fn last_task_num(&self) -> Result<Option<TaskNum>, ViewError> {
         self.view().last_task_num()
     }

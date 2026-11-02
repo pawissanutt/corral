@@ -24,6 +24,7 @@ mod load;
 pub mod migrate;
 mod plans;
 mod row_indexes;
+mod run_worktrees;
 mod schema;
 mod tx;
 mod tx_blobs;

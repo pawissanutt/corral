@@ -242,6 +242,9 @@ impl ReadView for CountingView {
             .push((TaskPart::Comment, TASKS_PAGE.into()));
         self.inner.tasks(q, page)
     }
+    fn run_worktrees(&self, current_only: bool) -> Result<Vec<RunWorktree>, ViewError> {
+        self.inner.run_worktrees(current_only)
+    }
     fn last_task_num(&self) -> Result<Option<TaskNum>, ViewError> {
         self.inner.last_task_num()
     }

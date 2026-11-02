@@ -1,6 +1,59 @@
 use super::*;
 
 #[test]
+fn historical_worktree_inventory_never_hydrates_tasks() {
+    use corral_core::{Run, Status, work};
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let old = tmp.path().join("old");
+    let current = tmp.path().join("current");
+    fs::create_dir(&old).unwrap();
+    fs::create_dir(&current).unwrap();
+    let task = store.create("Terminal", None, Status::Done, "").unwrap();
+    store.update(&task.id, |task| {
+        for (id, path) in [("R1", &old), ("R2", &current), ("R3", &tmp.path().join("missing"))] {
+            let run: Run = serde_json::from_value(serde_json::json!({
+                "id":id,"agent":"generic","worktree":path,"branch":"main",
+                "base":"main","base_sha":"fixture","started":"2026-01-01T00:00:00Z","outcome":"done"
+            }))?;
+            task.runs.push(run);
+        }
+        Ok(())
+    }).unwrap();
+    let before = work::snapshot();
+    let hot = work::HotScope::enter();
+    let snapshot = SystemResourceProbe.sample(&store).unwrap();
+    drop(hot);
+    let work = work::snapshot().since(&before);
+    assert_eq!(work.full_task_hydrations(), 0);
+    assert_eq!(work.total(work::Counter::HistoryRowDecodes), 0);
+    let mut expected: std::collections::BTreeSet<_> = [
+        store.dir().to_owned(),
+        old.join("target"),
+        old,
+        current.join("target"),
+        current,
+    ]
+    .into();
+    if let Some(target) = std::env::var_os("CARGO_TARGET_DIR").filter(|v| !v.is_empty()) {
+        let target = PathBuf::from(target);
+        expected.insert(if target.is_absolute() {
+            target
+        } else {
+            std::env::current_dir().unwrap().join(target)
+        });
+    }
+    assert_eq!(
+        snapshot
+            .disks
+            .iter()
+            .map(|d| d.path.clone())
+            .collect::<std::collections::BTreeSet<_>>(),
+        expected
+    );
+}
+
+#[test]
 fn pinned_readings_preserve_inventory_and_count_real_walks() {
     // Given a real store, project directories and the validated default thresholds.
     let tmp = tempfile::tempdir().unwrap();

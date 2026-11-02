@@ -66,16 +66,44 @@ pub(crate) fn likely_files<T: corral_core::TaskFieldsRef + ?Sized>(
     let Some(project) = task.project().as_deref() else {
         return Ok(vec![]);
     };
-    let _followup = corral_core::work::followup("FU-3", "likely_files");
     let words = keywords(&format!("{} {}", task.title(), task.body()));
-    let similar: BTreeSet<_> = ctx
+    // Similarity uses only titles/kinds, including terminal tasks. Read project-indexed
+    // headers once per pinned pass, never full tasks or their accumulated histories.
+    let titles = ctx
         .store
-        .list_shared()?
+        .pass_derived(&format!("lesson-path-titles\0{project}"), || {
+            use corral_core::backend::{PageReq, TaskOrder, TaskQuery};
+            let view = ctx.store.view()?;
+            let query = TaskQuery {
+                project: Some(project.to_owned()),
+                statuses: Vec::new(),
+                order: TaskOrder::IdAsc,
+            };
+            let mut page = PageReq::first(500);
+            let mut titles = Vec::new();
+            loop {
+                let found = view.tasks(&query, page.clone())?;
+                for header in &found.items {
+                    corral_core::work::decoded(
+                        corral_core::work::Counter::TaskHeadDecodes,
+                        u64::try_from(serde_json::to_vec(header)?.len())?,
+                        corral_core::work::Subject::Plain,
+                    );
+                }
+                titles.extend(found.items);
+                match found.next {
+                    Some(next) => page.after = Some(next),
+                    None => return Ok(titles),
+                }
+            }
+        })?;
+    let similar: BTreeSet<_> = titles
         .iter()
-        .filter(|t| t.id != *task.id() && t.project == *task.project())
+        .filter(|t| t.id != *task.id())
         .filter(|t| {
-            let overlap = keywords(&t.title).intersection(&words).count();
-            overlap >= 2 || (overlap > 0 && t.kind.is_some() && t.kind == *task.kind())
+            let overlap = keywords(&t.fields.title).intersection(&words).count();
+            overlap >= 2
+                || (overlap > 0 && t.fields.kind.is_some() && t.fields.kind == *task.kind())
         })
         .map(|t| t.id.clone())
         .collect();
