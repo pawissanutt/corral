@@ -183,6 +183,49 @@ fn owned_detached_process_outside_task_cwd_must_block() {
 }
 
 #[test]
+fn launch_owner_paths_resolve_read_only_and_cover_legacy_and_configured_scratch() {
+    let fixture = tempfile::tempdir().unwrap();
+    let canonical = fixture.path().canonicalize().unwrap();
+    let root = canonical.as_path();
+    let mut config = corral_core::Config::default_for(root);
+    config.projects.clear();
+    config.storage.cache_root = Some(root.join("cache"));
+    config.storage.scratch_root = Some(root.join("custom-scratch"));
+    let dirs = launch_owner_dirs(root, &config).unwrap();
+    assert_eq!(
+        dirs,
+        [
+            root.join(".corral/state/launch-exits"),
+            root.join("custom-scratch/tmp/launch-exits")
+        ]
+    );
+    assert!(LaunchOwners::read_all(&dirs).unwrap().0.is_empty());
+    assert_eq!(
+        std::fs::read_dir(root).unwrap().count(),
+        0,
+        "path resolution and inspection must create nothing"
+    );
+    for (dir, marker) in dirs.iter().zip(["a".repeat(64), "b".repeat(64)]) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("T-297-R1.owner"), marker).unwrap();
+    }
+    let owners = LaunchOwners::read_all(&dirs).unwrap();
+    for marker in ["a".repeat(64), "b".repeat(64)] {
+        assert!(
+            owners
+                .owns_environment(
+                    format!("CORRAL_PROCESS_OWNER={marker}\0").as_bytes(),
+                    "T-297"
+                )
+                .unwrap()
+        );
+    }
+    // A conflicting issuer across roots cannot provide an absence proof.
+    std::fs::write(dirs[1].join("T-298-R1.owner"), "a".repeat(64)).unwrap();
+    assert!(LaunchOwners::read_all(&dirs).is_err());
+}
+
+#[test]
 fn invalid_launch_ownership_inventory_cannot_confirm_absence() {
     let fixture = tempfile::tempdir().unwrap();
     let root = fixture.path();
