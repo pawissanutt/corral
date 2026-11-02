@@ -1,7 +1,7 @@
 //! Shared run condition rules over scalar state and active question/obligation rows.
 use super::{Condition, Responsible, Timestamp, WaitClass, check, question, row};
 use anyhow::{Result, bail};
-use corral_core::agent::{AgentQuestion, ContainerRef, HostHealth};
+use corral_core::agent::{AgentQuestion, ContainerRef, HostHealth, JobRecord};
 use corral_core::{
     Run, RunHead, RunObligations, Status, StuckProcess, Task, TaskFieldsRef, TaskRef,
 };
@@ -10,6 +10,7 @@ struct Inputs<'a> {
     id: &'a str,
     questions: &'a [AgentQuestion],
     obligations: &'a RunObligations,
+    jobs: &'a [JobRecord],
     lost: bool,
     idle_no_report: bool,
     idle_since: Option<Timestamp>,
@@ -32,6 +33,10 @@ pub(super) fn run_conditions(
             .as_ref()
             .map_or(&[][..], |host| host.questions.as_slice()),
         obligations: &run.obligations,
+        jobs: run
+            .agent_host
+            .as_ref()
+            .map_or(&[], |host| host.jobs.as_slice()),
         lost: super::lost(run),
         idle_no_report: run.idle_no_report,
         idle_since: run.idle_since,
@@ -71,6 +76,15 @@ fn one_ref(
             bail!("run conditions need a coding container")
         }
     };
+    let mut jobs = Vec::new();
+    for wait in &obligations.waits {
+        if let corral_core::WaitHandle::Channel { channel_id, .. } = &wait.request.handle
+            && let Some(id) = channel_id.strip_prefix("job:")
+            && let Some(job) = task.agent_job(container, id)?
+        {
+            jobs.push(job);
+        }
+    }
     let parked = run.outcome.is_none()
         && !run
             .gate
@@ -85,6 +99,7 @@ fn one_ref(
         id: &run.id,
         questions: &questions,
         obligations: &obligations,
+        jobs: &jobs,
         lost: run.agent_state.as_deref() == Some("gone")
             || run.agent_host.as_ref().is_some_and(|host| {
                 matches!(host.binding.health, HostHealth::Lost | HostHealth::Fenced)
@@ -193,16 +208,54 @@ fn project(
         .iter()
         .filter(|wait| wait.receipt.is_none() && !wait.settled_job_exit())
     {
+        let monitored_job = match &obligation.request.handle {
+            corral_core::WaitHandle::Channel { channel_id, .. } => run.jobs.iter().any(|job| {
+                channel_id.strip_prefix("job:") == Some(job.id.as_str())
+                    && job
+                        .monitors
+                        .iter()
+                        .any(|monitor| monitor.wait == obligation.request.id)
+            }),
+            _ => false,
+        };
+        let overdue = matches!(
+            &obligation.request.handle,
+            corral_core::WaitHandle::Channel { .. }
+        ) && !monitored_job
+            && matches!(
+                obligation.observation.state,
+                corral_core::WaitState::Pending
+                    | corral_core::WaitState::Unsupported
+                    | corral_core::WaitState::Unverifiable
+            )
+            && now.duration_since(obligation.registered_at).as_secs() >= 1800;
         let mut condition = row(
             task,
             now,
             "obligation_wait",
-            WaitClass::ExternalOperation,
-            Responsible::Executor,
-            (None, Some(obligation.registered_at)),
+            if overdue {
+                WaitClass::PmAction
+            } else {
+                WaitClass::ExternalOperation
+            },
+            if overdue {
+                Responsible::Pm
+            } else {
+                Responsible::Executor
+            },
+            (
+                overdue.then(|| format!("{}/{}", run.id, obligation.request.id)),
+                Some(obligation.registered_at),
+            ),
             obligation.request.condition.clone(),
         );
-        condition.reason_code = format!("wait_{}", obligation.observation.state.as_str());
+        if overdue {
+            condition.reason_code = "manual_wait_overdue".into();
+            condition.next_action.description =
+                "Review this manually resolved wait and provide a receipt".into();
+        } else {
+            condition.reason_code = format!("wait_{}", obligation.observation.state.as_str());
+        }
         condition
             .resume
             .push(check("wait_receipt", &obligation.request.id, None, false));
