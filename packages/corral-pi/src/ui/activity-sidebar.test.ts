@@ -6,6 +6,7 @@ import { createChatViewport } from "../../node_modules/@earendil-works/pi-coding
 import { NativePanels } from "./panels.ts";
 import { activitySidebar } from "./activity-sidebar.ts";
 import { overviewLines } from "./panels-chrome.ts";
+import { activityLines } from "./activity-view.ts";
 import { PANEL_TABS, type PanelSnapshot, type PanelJob } from "./panels-view.ts";
 import type { HelperInspection } from "../extensions/subagent/inspection.ts";
 import { RecordingTerminal } from "../../test/support/panel-terminal.ts";
@@ -105,6 +106,15 @@ test("main navigation has no duplicate Agents or Jobs tab in any view or width",
     h.physical.send("\r");
     expect(h.native.workbench.selectedActivity).toEqual({ kind: "helper", request: "first" });
   } finally { h.stop(); }
+});
+
+test("merged job guards suppress retained output for disconnected hosts and lost jobs", () => {
+  const disconnected = activityLines({ ...base, bound: false }, 0).join("\n");
+  expect(disconnected).toContain("Output unavailable: stale/disconnected");
+  expect(disconnected).not.toContain("OUTPUT_build");
+  const lost = activityLines({ ...base, jobs: [{ ...job("build"), state: "lost" }] }, 0).join("\n");
+  expect(lost).toContain("Detailed output unavailable");
+  expect(lost).not.toContain("OUTPUT_build");
 });
 
 test("Jobs open output, keep stable identity through insertion, and never steal the selected agent view", () => {

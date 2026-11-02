@@ -87,7 +87,9 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
       const beforeInspection = requestCount;
       workbench.openHelpers(reference);
       expect(screen()).toContain("oracle advice"); expect(screen()).toContain("consult only");
-      workbench.handleInput("j");
+      const exploreReference = corral.calls().filter(call => call.envelope.payload.usage_kind === "explore" && call.envelope.payload.action === "prepare").at(-1)?.envelope.payload.request;
+      if (typeof exploreReference !== "string") throw new Error("Explore reference missing");
+      workbench.openHelpers(exploreReference); // Selection is sidebar-owned; j/k now scroll the open conversation.
       expect(screen()).toContain("child findings"); expect(screen()).toContain("research only");
       expect(screen()).toContain("Tool write not found");
       workbench.handleInput("\x0f");

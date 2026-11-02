@@ -110,7 +110,9 @@ test("live runtime inspection retains prompt, partials and result; queued cancel
   expect(runtime.inspections().find(value => value.prompt === "Second prompt")?.phase).toBe("queued");
   expect(runtime.inspections().find(value => value.prompt === "First prompt")?.messages[0]?.text).toBe("Live partial");
   cancel.abort(); await rejected;
-  expect(runtime.inspections().find(value => value.prompt === "Second prompt")?.phase).toBe("not_started");
+  const cancelled = runtime.inspections().find(value => value.prompt === "Second prompt");
+  expect(cancelled?.phase).toBe("not_started");
+  expect(runtime.inspection().find(value => value.request === cancelled?.request)?.state).toBe("not_started");
   release.resolve(); await first;
   invocation.observe?.({ type: "assistant_delta", text: "Late callback" });
   expect(runtime.inspections().find(value => value.prompt === "First prompt")?.result).toBe("Final answer");
@@ -126,5 +128,6 @@ test("a failed terminal record remains uncertain, not a successful helper or tas
   });
   await expect(runtime.run("oracle", "one", "Question")).rejects.toThrow("record unavailable");
   expect(runtime.inspections()[0]?.phase).toBe("uncertain"); expect(runtime.inspections()[0]?.error).toBe("record unavailable");
+  expect(runtime.inspection()[0]).toMatchObject({ state: "uncertain", parent: "parent", sessionFile: "/unused/reference" });
   await runtime.close();
 });
