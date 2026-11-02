@@ -12,6 +12,96 @@ use crate::agent::hooks::metered_tests::{
 use crate::agent::launch::{Secrets, check, consume_bootstrap, host_command, write_ctl_cap};
 
 #[test]
+fn post_launch_refusal_reconciles_attention_and_retries_after_repair() {
+    isolated("dispatch::metered_tests::post_launch_refusal_child");
+}
+
+#[test]
+#[ignore = "driven with private HOME/XDG by the parent test"]
+fn post_launch_refusal_child() {
+    let (mut fx, _) = fixture();
+    fx.ctx.store.config.dispatch.paused = false;
+    fx.ctx.store.config.defaults.profile = Some("bedrock".into());
+    fx.ctx.store.save_config().unwrap();
+    let task = fx
+        .ctx
+        .store
+        .create("Launch refusal", Some("corral"), Status::Ready, "Fixture")
+        .unwrap();
+    crate::dispatch(&fx.ctx, &task.id, &crate::DispatchOpts::default()).unwrap();
+    let launched = fx.ctx.store.get(&task.id).unwrap();
+    let run = launched.current_run().unwrap();
+    assert_eq!(run.id, "R1");
+    assert!(run.checkpoint_required);
+    let compat = fx
+        .ctx
+        .store
+        .config
+        .agent
+        .assets_dir
+        .as_ref()
+        .unwrap()
+        .join("compat.json");
+    let repaired = std::fs::read_to_string(&compat).unwrap();
+    write(
+        &compat,
+        r#"{"verdict":"GO","providers":["amazon-bedrock"]}"#,
+    );
+    let bin = fx.root().join("herdr");
+    let script = std::fs::read_to_string(&bin).unwrap();
+    write(&bin, &script.replace(
+        "\"pane read\") ok '{\"text\":\"pane\"}' ;;",
+        "\"pane read\") ok '{\"text\":\"corral agent launch refused: memory_contract_unavailable: installed host lacks memory projection v1\"}' ;;",
+    ));
+    let receipt = crate::launch_exit::receipt(&fx.ctx, &task.id, &run.id);
+    write(&receipt, "1\n");
+    let now = jiff::Timestamp::now();
+    crate::sync::sync_at(&fx.ctx, now).unwrap();
+    let closed = fx.ctx.store.get(&task.id).unwrap();
+    let old = closed.current_run().unwrap();
+    assert_eq!(closed.status, Status::NeedsMe);
+    assert_eq!(old.outcome, Some(corral_core::RunOutcome::Failed));
+    assert!(old.ended.is_some());
+    assert!(old.checkpoints.is_empty());
+    let board = crate::attention::board(&fx.ctx, now).unwrap();
+    let item = board
+        .tasks
+        .iter()
+        .find(|item| item.task == task.id)
+        .unwrap();
+    assert!(
+        item.assessment
+            .conditions
+            .iter()
+            .any(|c| c.kind == "launch_failed" && c.reason.contains("corral agent install")),
+        "{:?}",
+        item.assessment.conditions
+    );
+    // Runs closed by older sync versions retain only the original launcher text.
+    fx.ctx.store.update(&task.id, |task| {
+        task.current_run_mut().unwrap().blocked_excerpt = Some("corral agent launch refused: memory_contract_unavailable: installed host lacks memory projection v1".into());
+        Ok(())
+    }).unwrap();
+    let board = crate::attention::board(&fx.ctx, now).unwrap();
+    let item = board
+        .tasks
+        .iter()
+        .find(|item| item.task == task.id)
+        .unwrap();
+    assert!(
+        item.assessment
+            .conditions
+            .iter()
+            .any(|c| c.kind == "launch_failed" && c.reason.contains("corral agent install"))
+    );
+    write(&compat, &repaired);
+    crate::retry(&fx.ctx, &task.id, &corral_core::ProfileChoice::default()).unwrap();
+    let retried = fx.ctx.store.get(&task.id).unwrap();
+    assert_eq!(retried.current_run().unwrap().id, "R2");
+    assert!(retried.runs[0].checkpoints.is_empty());
+}
+
+#[test]
 fn incompatible_host_queue_exposes_attention_and_retries_after_repair() {
     isolated("dispatch::metered_tests::incompatible_host_queue_child");
 }
