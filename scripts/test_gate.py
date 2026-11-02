@@ -45,6 +45,7 @@ class CommandEntry(TypedDict):
     context: dict[str, str | None]
     session: str | None
     stdin: str
+    sqlite_pkg_config: str | None
 
 
 def receipt_valid(log: bytes, start: int, end: int, exit_code: int, result: str,
@@ -138,6 +139,7 @@ entry = {{
     "context": {{key: os.environ.get(key) for key in {list(CONTEXT)!r}}},
     "session": os.environ.get("CORRAL_HERDR_SESSION"),
     "stdin": sys.stdin.read(),
+    "sqlite_pkg_config": os.environ.get("LIBSQLITE3_SYS_USE_PKG_CONFIG"),
 }}
 with open("commands.jsonl", "a") as log:
     log.write(json.dumps(entry) + "\\n")
@@ -218,7 +220,8 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
             (2, (steps[1], 1), {}, "const _: () = ();\n" * 801),
             (2, ("listing installed Rust targets", 41), {"RUSTUP_STATUS": "41"}, ""),
             (4, (steps[3], 23),
-             fail("cargo:check --workspace --all-targets --target " + targets[1]), ""),
+             fail("cargo:check --workspace --all-targets --target " + targets[1]
+                  + f" --config target.{targets[1]}.zstd.rustc-link-lib=[]"), ""),
             (5, (steps[4], 23), fail("cargo:clippy --workspace --all-targets -- -D warnings"), ""),
             (6, (steps[5], 23), fail("cargo:nextest run --workspace"), ""),
             (7, (steps[6], 23), fail("cargo:test --workspace --doc"), ""),
@@ -266,8 +269,19 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
             ("cargo", ["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]),
             ("cargo", ["nextest", "run", "--workspace"]),
             ("cargo", ["test", "--workspace", "--doc"]),
-            ("cargo", ["test", "-p", "corral-tui", "--lib", "--", "--ignored", "--exact",
-                       "app::work_budget::board_work_stays_within_budget_and_independent_of_history"]),
+            *[("cargo", ["test", "-p", "corral-tui", "--lib", "--", "--ignored", "--exact", test])
+              for test in (
+                  "app::work_budget::board_work_stays_within_budget_and_independent_of_history",
+                  "app::hot_budget::hot_reads_work_stays_independent_of_history",
+                  "app::sync_budget::sync_tick_work_stays_independent_of_history",
+              )],
+            *[("cargo", ["test", "-p", "corral-ops", "--lib", "--", "--exact", test])
+              for test in (
+                  "submission_paths_tests::action_budget::"
+                  "action_budget_actions_launch_kinds_do_not_follow_history",
+                  "submission_paths_tests::action_budget::"
+                  "action_budget_hot_actions_kinds_do_not_follow_history",
+              )],
             ("cargo", ["build", "-p", "corral"]),
             ("check-docs.sh", ["target/debug/corral"]),
         ])
@@ -276,8 +290,7 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
             self.assertEqual(entry["stdin"], "")
         self.assertEqual([e["session"] for e in entries],
                          ["not-the-test-session", "not-the-test-session", "corral-test", "corral-test",
-                          "not-the-test-session", "not-the-test-session",
-                          "not-the-test-session"])
+                          *(["not-the-test-session"] * 7)])
         self.assertIn("maximum 800 (limit 800)", result.stdout)
 
     def install_bun_recorder(self) -> None:
@@ -379,12 +392,35 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
                 ]
                 checks = [e for e in entries if e["args"][0] == "check"]
                 self.assertEqual([e["args"] for e in checks], [
-                    ["check", "--workspace", "--all-targets", "--target", target]
+                    ["check", "--workspace", "--all-targets", "--target", target,
+                     "--config", f"target.{target}.zstd.rustc-link-lib=[]"]
                     for target in installed
                 ])
                 for entry in checks:
                     self.assertEqual(entry["context"], CONTEXT)
                     self.assertEqual(entry["stdin"], "")
+
+    def test_darwin_native_c_bypass_is_check_only(self) -> None:
+        # Given both targets and a caller explicitly requesting bundled SQLite:
+        path = self.install_command_recorder()
+        targets = ("aarch64-apple-darwin", "x86_64-apple-darwin")
+        # When the full orchestration runs with fake cargo (no native toolchain):
+        result = self.gate(PATH=path, INSTALLED_TARGETS="\n".join(targets),
+                           LIBSQLITE3_SYS_USE_PKG_CONFIG="0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        entries = self.recorded()
+        for entry in entries:
+            if entry["args"][0] == "check":
+                target = entry["args"][entry["args"].index("--target") + 1]
+                # SQLite still copies bundled bindings in its linked build path;
+                # zstd's checked-in bindings need no generated build-script output.
+                self.assertEqual(entry["sqlite_pkg_config"], "1")
+                self.assertEqual(entry["args"][-2:],
+                                 ["--config", f"target.{target}.zstd.rustc-link-lib=[]"])
+            else:
+                # No override may reach native lint/test/build or docs commands.
+                self.assertEqual(entry["sqlite_pkg_config"], "0")
+                self.assertNotIn("--config", entry["args"])
 
     def test_darwin_check_failure_stops_gate(self) -> None:
         # Given both targets installed and either target's compilation fails:
@@ -393,7 +429,8 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
         for target in targets:
             with self.subTest(target=target):
                 (self.repo / "commands.jsonl").unlink(missing_ok=True)
-                command = f"check --workspace --all-targets --target {target}"
+                command = (f"check --workspace --all-targets --target {target}"
+                           + f" --config target.{target}.zstd.rustc-link-lib=[]")
                 # When the gate reaches the failed cross-check:
                 result = self.gate(PATH=path, INSTALLED_TARGETS="\n".join(targets),
                                    FAIL_COMMAND="cargo:" + command)
@@ -412,8 +449,8 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
             ("cargo:clippy --workspace --all-targets -- -D warnings", 2),
             ("cargo:nextest run --workspace", 3),
             ("cargo:test --workspace --doc", 4),
-            ("cargo:build -p corral", 6),
-            ("check-docs.sh:target/debug/corral", 7),
+            ("cargo:build -p corral", 10),
+            ("check-docs.sh:target/debug/corral", 11),
         ):
             with self.subTest(command=command):
                 (self.repo / "commands.jsonl").unlink(missing_ok=True)
