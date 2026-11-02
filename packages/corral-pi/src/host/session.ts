@@ -314,6 +314,7 @@ export class HostSession {
         ? { projectDir: options.guidance.projectDir } : {}),
       readProjects: signal => options.client.projectScopes(signal),
       inspection: () => options.client.inspectionSnapshot(),
+      lifecycle: () => options.client.inspectionSnapshot(true),
       readInbox: signal => options.client.attentionSnapshot(signal),
       readTranscript: id => this.readAgentTranscript(id),
     });

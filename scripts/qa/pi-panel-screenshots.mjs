@@ -10,7 +10,13 @@ const directory = resolve(process.argv[2]);
 const result = JSON.parse(await readFile(join(directory, "result.json"), "utf8"));
 assert.equal(result.status, "PASS");
 assert.equal(result.candidate, execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(), "Capture must match the current candidate");
-const requested = new Map([
+const requested = process.argv.includes("--lifecycle") ? new Map([
+  ["wide-graph", "Task graph:"], ["wide-selected-missing", "Inspect canonical task T-999"],
+  ["compact-list", "Dependency list"], ["compact-selected-prerequisite", "Inspect canonical task T-002"],
+  ["compact-timeline", "Lifecycle timeline"], ["wide-timeline", "Lifecycle timeline"],
+  ["stale-disconnected-retained", "STALE / disconnected"],
+  ["wide-session-event-selected", "Inspect session"],
+]) : new Map([
   ["scoped-agents-wide", "Scoped agents"], ["scoped-agents-narrow", "Scoped agents"],
   ["existing-transcript-wide", "Transcript"], ["existing-transcript-narrow", "Transcript"],
   ["real-job-running", "armed locally"], ["real-job-line-match", "match observed"], ["real-job-exited", "exit 7"],
