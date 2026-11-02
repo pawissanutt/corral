@@ -494,10 +494,17 @@ pub fn settle_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
         let Some(run) = task.current_run_mut() else {
             return Ok(false);
         };
-        let held = run
-            .blocked_excerpt
-            .as_deref()
-            .is_some_and(|e| e.starts_with(LOST_PREFIX) || e.starts_with(AUTH_PREFIX));
+        let held = run.blocked_excerpt.as_deref().is_some_and(|e| {
+            // Older binaries persisted these excerpts as machine-readable holds.
+            [
+                LOST_PREFIX,
+                AUTH_PREFIX,
+                "Pi-native host lost: ",
+                "Pi-native provider authentication failed: ",
+            ]
+            .iter()
+            .any(|prefix| e.starts_with(prefix))
+        });
         if !held || run.facts.pending_decision.is_some() {
             return Ok(false);
         }

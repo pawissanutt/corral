@@ -250,10 +250,12 @@ pub fn release_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
         else {
             return Ok(false);
         };
-        let held = run
-            .blocked_excerpt
-            .as_deref()
-            .is_some_and(|e| e.starts_with(LOST_PREFIX));
+        let held = run.blocked_excerpt.as_deref().is_some_and(|e| {
+            // Read legacy persisted holds; newly generated excerpts use LOST_PREFIX only.
+            [LOST_PREFIX, "Pi-native reviewer host lost: "]
+                .iter()
+                .any(|prefix| e.starts_with(prefix))
+        });
         let Some(child) = run.current_child.as_deref().filter(|_| held) else {
             return Ok(false);
         };

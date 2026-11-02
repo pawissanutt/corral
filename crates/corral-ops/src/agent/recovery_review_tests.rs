@@ -74,6 +74,105 @@ fn reviewing(fx: &Fx, host: &HostProc, since: Timestamp) -> (ContainerRef, ts::H
 }
 
 #[test]
+fn legacy_pi_native_worker_loss_and_auth_holds_settle_after_recovery() {
+    let fx = f::fixture(false, 5);
+    let host = HostProc::spawn(true);
+    fx.bind(&fx.worker_target(), "w0:p1", &host);
+    for (excerpt, released) in [
+        ("Pi-native host lost: old generation", true),
+        ("Pi-native provider authentication failed: old turn", true),
+        ("corral-pi host lost: old generation", true),
+        ("corral-pi provider authentication failed: old turn", true),
+        ("Owner decision still pending", false),
+    ] {
+        fx.ctx
+            .store
+            .update(&fx.id, |task| {
+                task.status = Status::NeedsMe;
+                task.runs[0].blocked_excerpt = Some(excerpt.into());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            crate::agent::hooks::sync::settle_lost(&fx.ctx, &fx.id).unwrap(),
+            released,
+            "{excerpt}"
+        );
+        let task = fx.task();
+        assert_eq!(
+            task.status,
+            if released {
+                Status::Running
+            } else {
+                Status::NeedsMe
+            }
+        );
+        assert_eq!(
+            task.runs[0].blocked_excerpt.as_deref(),
+            if released { None } else { Some(excerpt) }
+        );
+    }
+}
+
+#[test]
+fn legacy_pi_native_reviewer_loss_hold_releases_only_after_recovery() {
+    let fx = f::fixture(false, 5);
+    let host = HostProc::spawn(true);
+    reviewing(&fx, &host, Timestamp::now());
+    for (excerpt, released) in [
+        ("Pi-native reviewer host lost: old generation", true),
+        ("corral-pi reviewer host lost: old generation", true),
+        ("Owner decision still pending", false),
+    ] {
+        fx.ctx
+            .store
+            .update(&fx.id, |task| {
+                task.status = Status::NeedsMe;
+                task.runs[0].blocked_excerpt = Some(excerpt.into());
+                task.runs[0].review_runs[0]
+                    .agent_host
+                    .as_mut()
+                    .unwrap()
+                    .binding
+                    .health = HostHealth::Lost;
+                Ok(())
+            })
+            .unwrap();
+        assert!(!crate::agent::hooks::review::release_lost(&fx.ctx, &fx.id).unwrap());
+        fx.ctx
+            .store
+            .update(&fx.id, |task| {
+                task.runs[0].review_runs[0]
+                    .agent_host
+                    .as_mut()
+                    .unwrap()
+                    .binding
+                    .health = HostHealth::Healthy;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            crate::agent::hooks::review::release_lost(&fx.ctx, &fx.id).unwrap(),
+            released,
+            "{excerpt}"
+        );
+        let task = fx.task();
+        assert_eq!(
+            task.status,
+            if released {
+                Status::Review
+            } else {
+                Status::NeedsMe
+            }
+        );
+        assert_eq!(
+            task.runs[0].blocked_excerpt.as_deref(),
+            if released { None } else { Some(excerpt) }
+        );
+    }
+}
+
+#[test]
 fn a_lost_reviewer_waits_in_needs_me_for_resume_and_its_next_generation_is_admitted() {
     // Given a reviewer killed inside its first turn while its pane stays:
     let fx = f::fixture(false, 5);

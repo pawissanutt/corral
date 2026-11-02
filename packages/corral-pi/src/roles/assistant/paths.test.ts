@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { PermissionBroker } from "./permissions.ts";
-import { resolveToolPath, scratchRoots, writeRefusal } from "./paths.ts";
+import { classifyWrite, resolveToolPath, scratchRoots, writeRefusal } from "./paths.ts";
 
 const snapshot = (session: string, paths: readonly string[]) => ({ session: { id: session, scratch: paths.map(path => ({ path })) } });
 
@@ -76,6 +76,38 @@ test("the guard refreshes canonical scratch roots with permissions off and ignor
     roots = [];
     expect((await write())?.block).toBeTrue();
   } finally { rmSync(workspace, { recursive: true, force: true }); }
+});
+
+test("both rollout data roots stay fixed-protected independently of existence or configured allow", () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "corral-rollout-protection-")));
+  const oldData = process.env.XDG_DATA_HOME;
+  try {
+    const home = join(base, "home"), data = join(base, "data"), workspace = join(home, "work");
+    process.env.XDG_DATA_HOME = data;
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(data);
+    const roots = [join(data, "corral/pi-native"), join(data, "corral/corral-pi"),
+      join(home, ".local/share/corral/pi-native"), join(home, ".local/share/corral/corral-pi")];
+    const context = { workspace, home, session: "A-1", temp: join(base, "scratch"), enabled: true,
+      settings: { allow: [data, join(home, ".local/share")], deny: [] } };
+    for (const present of [[], [0], [1], [0, 1, 2, 3]]) {
+      roots.forEach((root, i) => {
+        rmSync(root, { recursive: true, force: true });
+        if (present.includes(i)) mkdirSync(root, { recursive: true });
+      });
+      roots.forEach((root, i) => {
+        const alias = join(workspace, `alias-${i}`);
+        rmSync(alias, { force: true });
+        symlinkSync(root, alias);
+        for (const target of [join(root, "auth/auth.json"), join(alias, "auth/auth.json")]) {
+          expect(classifyWrite(target, context)).toMatchObject({ decision: "refuse", rule: "fixed_rule" });
+        }
+      });
+    }
+  } finally {
+    if (oldData === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = oldData;
+    rmSync(base, { recursive: true, force: true });
+  }
 });
 
 test("tool paths resolve like Pi's edit and write tools", () => {
