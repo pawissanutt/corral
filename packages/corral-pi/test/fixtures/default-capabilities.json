@@ -1,7 +1,7 @@
 {
   "assistant": {
     "catalog": 9,
-    "digest": "3fb42241c4a1c9a5de853a59527ba3088c4835b753e2b80c60d5859bbcb7bcb3",
+    "digest": "d8b475e98ba8a3a124cea0d8ba362e145b7534a0124aa02cf4482d374e904caa",
     "features": {
       "ask_user": {
         "enabled": true,
@@ -122,7 +122,7 @@
   },
   "pm": {
     "catalog": 9,
-    "digest": "07cbefb5fd2b13a106daa944d49ecb60ab05f2de81338fe2a9bad519fa161b68",
+    "digest": "3c0b2d042d5fd67f0471964ebf3366b69987bea49be211617ad61f3d069558c0",
     "features": {
       "ask_user": {
         "enabled": true,
