@@ -12,13 +12,14 @@ import { LifecycleView } from "./lifecycle-view.ts";
 import { activityRows } from "./activity-view.ts";
 import { agentRows } from "./agent-view.ts";
 import { InspectionStore, evidenceLines } from "./inspection.ts";
+import { usageLines } from "./usage-view.ts";
 import { DecisionInbox, inboxIdentity } from "./decision-inbox.ts";
 import { InboxView } from "./inbox-view.ts";
 import { pad, plainLabel, diffLine, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, PANEL_BG, RESET, type PanelSnapshot, type PanelLine } from "./panels-view.ts";
 export function plainClick(event: TuiMouseEvent): boolean {
   return event.type === "click" && event.button === "left" && !event.shift && !event.alt && !event.ctrl && (event.clickCount ?? 1) === 1;
 }
-export type MainView = "conversation" | "changes" | "activity" | "agents" | "evidence" | "inbox" | "graph" | "timeline";
+export type MainView = "conversation" | "changes" | "activity" | "agents" | "evidence" | "inbox" | "graph" | "timeline" | "usage";
 export interface WorkbenchOptions {
   readonly identity: HostIdentity;
   readonly inspection?: () => Promise<unknown>;
@@ -37,6 +38,7 @@ export class NativeWorkbench {
   readonly inspection: InspectionStore;
   readonly lifecycle: LifecycleView;
   private lifecycleScroll: ScrollView | undefined;
+  private usageScroll: ScrollView | undefined; private usageChart = false;
   private evidenceScroll: ScrollView | undefined; private criterionIndex = 0; private criterionHits = new Map<number, number>();
   readonly images: NativeImageViewer;
   readonly inbox: DecisionInbox; private readonly inboxView: InboxView;
@@ -85,14 +87,14 @@ export class NativeWorkbench {
     this.timer = undefined;
     if (view !== "conversation") {
       if (view === "changes") void this.review.refresh();
-      if (view === "evidence") void this.inspection.refresh();
+      if (view === "evidence" || view === "usage") void this.inspection.refresh();
       if (view === "inbox") void this.inbox.refresh();
       if (view === "graph" || view === "timeline") { this.lifecycle.mode = view; void this.lifecycle.refresh(); }
       let ticks = 0;
       this.timer = setInterval(() => {
         ticks++;
         if (this.view === "changes" && ticks % 2 === 0) void this.review.refresh();
-        if (this.view === "evidence" && ticks % 10 === 0) void this.inspection.refresh();
+        if ((this.view === "evidence" || this.view === "usage") && ticks % 10 === 0) void this.inspection.refresh();
         if (this.view === "inbox" && ticks % 5 === 0) void this.inbox.refresh();
         this.options.changed();
       }, 1000); this.timer.unref();
@@ -111,7 +113,7 @@ export class NativeWorkbench {
         const labels: readonly [MainView, string][] = [["conversation", minimum ? " C " : compact ? " Chat " : " Conversation F9 "],
           ["changes", minimum ? " D " : compact ? " Diff " : " Changes F7 "], ["activity", minimum ? " J " : compact ? " Jobs " : " Activity F8 "],
           ["evidence", minimum ? " E " : compact ? " Proof " : " Evidence F10 "], ["inbox", minimum ? " I " : compact ? " Inbox " : " Inbox F11 "],
-          ["graph", width < 64 ? " G " : " Graph "], ["timeline", width < 64 ? " L " : " Timeline "]];
+          ["usage", width < 64 ? " U " : " Usage "], ["graph", width < 64 ? " G " : " Graph "], ["timeline", width < 64 ? " L " : " Timeline "]];
         let x = 0;
         hits = labels.map(([view, label]) => ({ view, to: x += label.length }));
         return [PANEL_BG + pad(labels.map(([view, label]) => (this.view === view || view === "activity" && this.view === "agents" ? PANEL_BLUE : PANEL_MUTED) + label).join("") + PANEL_MUTED +
@@ -162,6 +164,11 @@ export class NativeWorkbench {
       if (result?.handled) { this.focused = true; this.options.changed(); }
       return result;
     }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
+    this.usageScroll = new ScrollView({ render: width => {
+      const snapshot = this.options.snapshot();
+      return usageLines(this.inspection, snapshot?.budget, snapshot?.bound ?? false, width, this.usageChart)
+        .flatMap(row => new Text((row.heading ? PANEL_BLUE : PANEL_TEXT) + row.text, 0, 0).render(width));
+    }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
     this.inboxScroll = new ScrollView(this.inboxView, { primary: true, follow: "none", scrollbar: "auto" });
     return new VStack([
       { component: this.nav(), basis: 2, shrink: 0 },
@@ -171,6 +178,7 @@ export class NativeWorkbench {
       { component: this.activityScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "activity" },
       { component: this.agentsScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "agents" },
       { component: this.evidenceScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "evidence" },
+      { component: this.usageScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "usage" },
       { component: this.lifecycleScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "graph" || this.view === "timeline" },
       { component: this.inboxScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "inbox" },
     ]);
@@ -400,7 +408,8 @@ export class NativeWorkbench {
     if (this.view === "activity" && data === "a") { this.setView("agents"); return true; }
     if (this.view === "agents" && data === "b") { this.setView("activity"); return true; }
     if (this.view === "agents" && data === "t") { void this.openAgentTranscript(); return true; }
-    const scroll = this.view === "graph" || this.view === "timeline" ? this.lifecycleScroll : this.view === "agents" ? this.agentsScroll : this.view === "changes" ? this.changesScroll : this.view === "evidence" ? this.evidenceScroll : this.view === "inbox" ? this.inboxScroll : this.activityScroll;
+    if (this.view === "usage" && data === "c") { this.usageChart = !this.usageChart; this.options.changed(); return true; }
+    const scroll = this.view === "usage" ? this.usageScroll : this.view === "graph" || this.view === "timeline" ? this.lifecycleScroll : this.view === "agents" ? this.agentsScroll : this.view === "changes" ? this.changesScroll : this.view === "evidence" ? this.evidenceScroll : this.view === "inbox" ? this.inboxScroll : this.activityScroll;
     if (this.view === "inbox" && (data === "j" || data === "k" || matchesKey(data, "up") || matchesKey(data, "down"))) {
       this.inbox.move(data === "j" || matchesKey(data, "down") ? 1 : -1);
       const row = this.inbox.current && this.inboxView.rows.get(inboxIdentity(this.inbox.current));
@@ -423,7 +432,7 @@ export class NativeWorkbench {
       }
       this.options.changed(); return true;
     }
-    if (this.view === "evidence" && data === "r") { void this.inspection.refresh(true); return true; }
+    if ((this.view === "evidence" || this.view === "usage") && data === "r") { void this.inspection.refresh(true); return true; }
     if (this.view === "changes") {
       if (data === "/") { void this.search(); return true; }
       if (data === "o") { void this.repository(); return true; }

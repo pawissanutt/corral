@@ -1156,6 +1156,7 @@ export class HostSession {
     if (leaf !== this.panelTokenLeaf) { this.panelTokenLeaf = leaf; this.panelTokens = undefined; }
     const jobs: PanelJob[] | null = this.jobs ? this.jobs.inspection().map(detail => ({ job: detail.job, state: detail.state, detail })) : null;
     return {
+      budget: (this.options.capabilities?.catalog ?? 0) >= 7 ? this.budget.state() : undefined,
       bound: this.bound, model: session.model ? `${session.model.provider}/${session.model.id}` : null,
       effort: session.thinkingLevel, effortAvailable: session.supportsThinking(),
       ...(this.terminalInput ? { input: this.terminalInput } : {}),

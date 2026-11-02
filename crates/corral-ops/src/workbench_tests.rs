@@ -263,6 +263,89 @@ fn failed_gate_legacy_approval_and_superseded_findings_never_become_criterion_ac
 }
 
 #[test]
+fn usage_projection_preserves_missing_coverage_prices_and_timing_without_mutation() {
+    let f = Fixture::new();
+    assert!(f.inspect().usage.rows[1].usage.is_none());
+    f.ctx
+        .store
+        .update(&f.id, |t| {
+            let entries = vec![
+                corral_core::UsageEntry {
+                    model: Some("subscription".into()),
+                    input: 20,
+                    estimated_usd: Some(0.2),
+                    latency_ms: Some(123),
+                    price_source: Some("config".into()),
+                    ..Default::default()
+                },
+                corral_core::UsageEntry {
+                    model: Some("metered".into()),
+                    input: 10,
+                    reported_usd: Some(0.1),
+                    ..Default::default()
+                },
+                corral_core::UsageEntry {
+                    model: Some("unknown".into()),
+                    input: 50,
+                    unpriced_tokens: 50,
+                    ..Default::default()
+                },
+            ];
+            t.runs[0].usage = Some(corral_core::Usage::from_entries(entries));
+            let mut missing = t.runs[0].clone();
+            missing.id = "R2".into();
+            missing.usage = None;
+            t.runs.push(missing);
+            Ok(())
+        })
+        .unwrap();
+    let before = f.task();
+    let panel = f.inspect().usage;
+    assert_eq!(panel.rows[0].known_runs, 1);
+    assert_eq!(panel.rows[0].runs, 2);
+    assert!(panel.rows[1].wall_seconds.is_none());
+    let usage = panel.rows[1].usage.as_ref().unwrap();
+    assert_eq!(usage.input, 80);
+    assert_eq!(usage.reported_usd, None); // Partial reported cost is not a full bill.
+    assert_eq!(usage.estimated_usd, Some(0.2));
+    assert_eq!(usage.unpriced_tokens, 50);
+    assert!(usage.entries.is_empty());
+    assert!(panel.rows.iter().any(|r| {
+        r.scope
+            .contains("1/1 response latencies known · mean 123 ms · prices config")
+    }));
+    assert!(panel.rows.iter().any(|r| {
+        r.scope
+            .contains("0/1 response latencies known · mean unavailable")
+    }));
+    assert_eq!(before, f.task());
+}
+
+#[test]
+fn usage_model_projection_is_bounded_and_explicit_about_omissions() {
+    let f = Fixture::new();
+    f.ctx
+        .store
+        .update(&f.id, |t| {
+            t.runs[0].usage = Some(corral_core::Usage::from_entries(
+                (0..103)
+                    .map(|n| corral_core::UsageEntry {
+                        model: Some(format!("model-{n:03}")),
+                        input: 1,
+                        ..Default::default()
+                    })
+                    .collect(),
+            ));
+            Ok(())
+        })
+        .unwrap();
+    let panel = f.inspect().usage;
+    assert_eq!(panel.rows.len(), 102);
+    assert_eq!(panel.models_omitted, 3);
+    assert_eq!(panel.rows[1].usage.as_ref().unwrap().input, 103);
+}
+
+#[test]
 fn oversize_inputs_are_unavailable_not_empty_success() {
     let f = Fixture::new();
     f.register(true);

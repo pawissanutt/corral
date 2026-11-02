@@ -10,6 +10,7 @@ export type PanelTab = typeof PANEL_TABS[number];
 export interface PanelJob { readonly job: string; readonly state: string; readonly detail?: import("../extensions/jobs/runtime.ts").JobInspection }
 export interface PanelSnapshot {
   readonly inspector?: InspectorSnapshot;
+  readonly budget?: unknown;
   readonly agents?: readonly import("./agent-view.ts").AgentObservation[];
   readonly bound: boolean;
   readonly model: string | null;

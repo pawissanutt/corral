@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { UsagePanelSchema } from "./usage-view.ts";
 import type { HostIdentity } from "../roles/types.ts";
 import { plainLabel, type PanelLine } from "./panels-view.ts";
 
@@ -6,6 +7,7 @@ const Text = z.string().max(16_384);
 const Sha = z.string().regex(/^[a-f0-9]{40,64}$/);
 const InspectionSchema = z.object({
   version: z.literal(1), task: Text, run: Text, root: Text, base: Sha, head: Sha, dirty: z.boolean(),
+  usage: UsagePanelSchema.optional(),
   manifest_digest: Text.nullable(), audited: z.boolean(), manifest_failures: z.array(Text).max(100),
   task_status: Text,
   criteria: z.array(z.object({

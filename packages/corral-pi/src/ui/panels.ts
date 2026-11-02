@@ -417,13 +417,14 @@ export class NativePanels implements PanelSurface {
     pi.on("thinking_level_select", () => { this.refresh(); });
     pi.on("tool_result", () => { this.workbench.invalidateFiles(); this.refresh(); });
     pi.registerCommand("panels", {
-      description: "Native session inspector: context, files, agents, jobs, plan, evidence, inbox, refresh or toggle",
+      description: "Native session inspector: context, files, agents, jobs, plan, evidence, usage, inbox, refresh or toggle",
       handler: async (args, ctx) => {
         if (ctx.mode !== "tui" || !this.terminal) { ctx.ui.notify("Native panels require the interactive Corral host.", "warning"); return; }
         const value = args.trim().toLowerCase();
         if (value === "project") { await this.workbench.repository(); this.refresh(); return; }
         if (value === "agents") { this.choose("Agents"); this.focused = false; this.refresh(); return; }
         if (value === "jobs") { this.focused = false; this.workbench.setView("activity"); this.refresh(); return; }
+        if (value === "usage") { this.focused = false; this.workbench.setView("usage"); return; }
         if (value === "evidence") { this.focused = false; this.workbench.setView("evidence"); return; }
         if (value === "inbox") { this.focused = false; this.workbench.setView("inbox"); this.refresh(); return; }
         if (value === "refresh") { await this.workbench.inspection.refresh(true); await this.loadFiles(); if (this.workbench.view === "inbox") await this.workbench.inbox.refresh(); return; }
