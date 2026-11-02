@@ -479,6 +479,7 @@ impl Store {
     /// Accepts "T-042", "t-42", "42". Error "task T-042 not found" when missing.
     #[track_caller]
     pub fn get(&self, id: &str) -> Result<Task> {
+        crate::work::record(crate::work::Work::TaskGet, 1);
         let id = Self::normalize_id(id)?;
         let location = std::panic::Location::caller();
         match self.read_task(&id, location)? {
