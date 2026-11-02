@@ -33,6 +33,7 @@ pub(crate) mod gate_queue;
 pub mod herdr_status;
 pub mod hooks;
 pub mod install;
+mod install_source;
 pub mod jobs;
 #[cfg(all(test, target_os = "linux"))]
 mod jobs_tests;

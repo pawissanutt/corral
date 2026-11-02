@@ -6,6 +6,7 @@ The candidate retains storage-v2 base `5874e2493a8133c2fec6331bcc275de7df09733f`
 
 - `ff08794f`: two-parent merge of main `0111c28104e116d7002edfbcbf29636145209745`.
 - `6d55a599`: two-parent merge of subsequently landed main `f3d3e6bacfe0f5dcb377d8bb5e5cdfc5f789c3e5` (T-693 inspectors and terminal evidence).
+- A further two-parent merge brings in main `1c5c69c4faab43811bb4379ab0afab2b201fa2fe` (T-736 source host rebuild and installation validation), which advanced while the quick gate ran.
 
 Incoming behavior includes the canonical inbox, launch-refusal retry and attention, inline image delivery, approval event ordering, dependency patches in source installations, project-aware inspection, and scoped agent/transcript/job inspection.
 
@@ -31,7 +32,7 @@ Storage-v2 remains authoritative. No `corral-core` file, schema, storage API, ga
 - `python3 scripts/qa-pi-panel-proof.py .evidence/panel-qa`: PASS on `6d55a599`. Owned production-host PTY with offline control-plane/provider fixture; scoped agent/transcript/job navigation, bounded transcript at wide/narrow widths, real owned job running/line-match/exit 7, unchanged session/generation, and clean terminal exit.
 - `cargo fmt --all` and `git diff --check`: clean.
 
-The first receipted quick gate (`ag-d3421ad04bfde9db`) failed solely at the SLOC check before Clippy/tests. After the helper extraction, the required receipted quick gate runs again after the final commit and merge-preserving rebase onto current storage-v2. Its log and exact candidate receipt are separate canonical artifacts. The attached ancestry proof records current main, both merge parents, storage-v2 ancestry, and unchanged core storage blobs.
+The first receipted quick gate (`ag-d3421ad04bfde9db`) failed solely at the SLOC check before Clippy/tests. After the helper extraction, quick gate `ag-93eca73a2b500442` **passed** on `75ea6763`: formatting, SLOC, Clippy, **3520 Rust tests** and the Pi lane. That is historical evidence, not the final receipt: main advanced to `1c5c69c4` during that gate. Its source-install changes then merged cleanly; all **8 install tests** passed on the merged source, including actual source-rebuild replacement and changed-HEAD refusal. The initial 300-second compilation budget expired without a test result; the longer foreground rerun completed successfully. A fresh assigned quick gate must follow the final main merge/commit and merge-preserving rebase. Its log and exact candidate receipt are separate canonical artifacts. The attached ancestry proof records current main, both merge parents, storage-v2 ancestry, and unchanged core storage blobs.
 
 ## Limits / handoff
 
