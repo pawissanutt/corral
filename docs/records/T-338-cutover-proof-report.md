@@ -1,149 +1,180 @@
-# T-338 R1: offline cutover proof — blocked, not acceptance
+# T-338 R1: offline cutover proof — latency failures assigned to follow-up
 
-Candidate source: `00ecdc2199b8a2e00a44535d09a71278e5a28711` (the dispatch
-storage-v2 base). No production Rust changes were made. This run adds
-`scripts/storage-bench.sh`, `scripts/storage-stress.sh` and the owner runbook
-`docs/guide/storage-cutover.md`.
+**This report supersedes the earlier R1 report and its false export-loss finding.**
+The complete prepared-fixture rehearsal now passes equivalence, footprint, published
+rollback, B6 pre-publication recovery and raw refusal. Every benchmark measurement
+exits zero, but all three absolute B latency bounds still fail. Under the owner's
+Q2 scope split these bounds move out of T-338's acceptance to a PM-filed storage-v2
+hot-path repair/benchmark task. They remain failing measurements, not relaxed bounds.
+No live cutover readiness or gate success is claimed by these measurements.
 
-**Do not cut over based on this report.** Workload export equivalence and all
-three timing bounds fail. The B6 fixture rehearsal is incomplete. No gate has
-been requested yet; the run is awaiting PM scope/repair decisions Q1 and Q2.
-The Plan target has advanced since measurement, so these observations must be
-rechecked after the final rebase, not carried as current-tree acceptance.
+## Scope and root cause correction
 
-## Method and identities
+The owner expanded scope in Q1 to migration/import and export paths and tests.
+Investigation did **not** demonstrate a storage defect: v2 show and correctly parsed
+export both preserve every run. The defect was in the new benchmark harness:
+`text.split('---', 2)` truncated valid frontmatter at a Markdown table separator
+inside an indented run summary. T-205's R2 summary contains `| --- | --- | ...`;
+this left valid but partial YAML, hiding R3/R4 from the comparison. Sixteen tasks
+were falsely reported as mismatches.
 
-Pinned prepared/raw archive and v1 binary SHA-256 checks passed. Exact expected
-hashes and candidate executable hashes are in `cutover-4/identity.json` in the
-raw-log artifact. The prepared archive hash binds content identity
-`33edcd5506fcf4475242b75af2554fd383b226a14aeb2e65efff947a7a92eaff`.
+The source fix is `exported_task` in `scripts/storage-bench.sh`: delimit YAML only
+by whole-line frontmatter fences, just as the legacy parser does. No production
+migration/export Rust needed changing. `scripts/test_storage_bench.py` exercises
+both the parser and real v1 → v2 migration of four terminal multi-retry fixtures
+(T-205 four runs; T-093, T-178 and T-230 three each), with Markdown separators in
+run summaries. It compares the complete ordered run ids, every legacy run field,
+and statuses against the hash-verified 0.3.0 binary, not a hand-counted oracle.
+New v2 default fields aren't treated as lost legacy fields; YAML timestamps are
+normalized to their JSON string representation. No run is excluded.
 
-Commands (all with null stdin):
+The original substring parser fails the regression (red log); all four tests pass
+with the fix (green log). Re-parsing the original prepared export also yields **zero
+mismatches across all 259 tasks**, superseding the earlier attached mismatch JSON.
+
+## Rebased candidate and method
+
+Rebased on storage-v2 `c2b281de29c9ecf1d32ea9da98a43f63fb6af2b6`.
+Both candidate executables were built from `a7d912d7` with unchanged production
+Rust. Exact executable/archive hashes are in `cutover-5/identity.json`. The normal
+release binary is preserved separately from an optimized corral-core build with
+debug assertions enabled for the B6 hook:
 
 ```sh
-cargo build -p corral
-cargo build --release -p corral
-scripts/storage-stress.sh .evidence/storage-stress
-scripts/storage-bench.sh --after target/release/corral \
-  --barrier-binary target/debug/corral --out .evidence/cutover-4 \
+cargo build --release -p corral </dev/null
+cp target/release/corral .evidence/corral-measure
+cargo build --release -p corral \
+  --config 'profile.release.package.corral-core.debug-assertions=true' </dev/null
+cp target/release/corral .evidence/corral-barrier
+python3 -I scripts/test_storage_bench.py --after .evidence/corral-measure
+scripts/storage-bench.sh --after .evidence/corral-measure \
+  --barrier-binary .evidence/corral-barrier --out .evidence/cutover-5 \
   --projects /home/pawis/miti-workspace --rehearse
-scripts/storage-bench.sh --after target/release/corral \
-  --out .evidence/raw-proof-3 --rehearsal-only raw
+scripts/storage-stress.sh .evidence/stress-rebased
 scripts/check-docs.sh
 bash -n scripts/storage-bench.sh scripts/storage-stress.sh
+python3 -I -m py_compile scripts/test_storage_bench.py
 ```
 
-The embedded benchmark Python also passes `compile()`. The stress runner builds
-three test binaries normally, then runs them in the mandatory load sandbox with
-2 CPUs, 2 GiB, 256 PIDs and two container-only burners. No intentional load ran
-on the shared host. The benchmark inherits no credentials, Corral/Herdr overrides
-or live socket. Private HOME/XDG/cache/scratch are outside repository containers.
-Only offline board copies are changed. Project symlinks permit read-only Git
-probes; no agent, pane, watcher or board process was launched.
+Inputs are the plan's hash-bound prepared/raw archives and pinned 0.3.0 binary,
+never live board copies. HOME/XDG/cache/scratch are private, outside repository
+containers; the fixture socket is nonexistent. No credentials, Corral/Herdr
+overrides, board, sync watcher, pane or worker is used. No binary is installed.
+Only offline copies are mutated. The stress workload runs in the mandated capped
+container; no intentional host load is generated.
 
-`cxm context` failed at its 128 MiB Corral output limit; required Corral search
-attempts timed out. These failures were not treated as evidence about storage.
+Project links serve read-only benchmark probes. The first GC run reported real
+linked worktrees as unmanaged/retained and reclaimed **none**. The runner now
+replaces these links with empty fixture-local directories during GC, restoring
+them afterwards, so destructive GC cannot traverse linked real projects. That
+isolated dry-run/yes rerun also passed; its command/output receipts are retained.
+The expected empty project directories satisfy normal configuration validation.
+
+`cxm context` hit its 128 MiB Corral output limit; required Corral search attempts
+timed out. Neither failure is evidence about the storage implementation.
 
 ## Acceptance observations
 
-### Benchmark: measured, fails bounds
+### Strict alternating benchmark: measured, fails bounds
 
-One warm-up each; five timed A/B alternating runs each; separate syscall-summary
-and exec traces each side. Every measurement command exited zero. Starting load,
-argv, elapsed time and exit status are retained per command. `MEASURED` exists;
-**PASS does not**.
+One warm-up each, five timed A/B alternating samples each, with stdout/stderr,
+argv, exit, elapsed time and load recorded; separate syscall-total/exec traces
+exclude strace overhead from medians. Every measurement exits zero. `MEASURED`
+and `REHEARSED` exist; **PASS does not**. Overall runner exits one only for latency.
 
 | Command | A / 0.3.0 median | B / v2 median | B bound |
 |---|---:|---:|---:|
-| list --json | 0.979 s | 0.781 s | 0.200 s |
-| pm next --json | 4.027 s | 6.546 s | 0.500 s |
-| automation status | 1.526 s | 1.574 s | 0.500 s |
+| list --json | 2.995 s | 2.482 s | 0.200 s |
+| pm next --json | 1.634 s | 0.926 s | 0.500 s |
+| automation status | 1.732 s | 2.307 s | 0.500 s |
 
-Exec traces count 400 Git processes, all diff, for A's PM/status probes and zero
-for B. Both list probes count zero Git processes. These counts don't compensate
-for failed absolute latency bounds. Machine load was recorded, not generated;
-no claim is made about the cause of the latency.
+All six exec traces count zero Git/diff processes in this run; earlier R1 traces
+counted 400 diffs on A's PM/status paths. Recorded machine load and admission state
+can change which branches execute; no causal performance claim is inferred.
+The absolute latency failures are not excused by machine load. Syscall receipts
+include B list 31,066 total calls, PM 18,534 and status 266,022; they remain evidence
+for any authorized production follow-up, not permission to widen this patch.
 
-### Workload equivalence: export defect, not demonstrated import loss
+### Workload: passes
 
-All 259 ids/statuses match, but exported run counts differ on 16 tasks.
-Examples: T-205 A R1–R4 versus exported R1–R2; T-230 A three versus export one;
-T-093 A three versus export two. Empty run vectors are normalized to zero.
-**An additional v2 `show T-205 --json` returns all R1–R4.** This narrows the
-observed blocker to export/readback rather than proving migration lost runs.
-`equivalence.json` lists every mismatch; the raw artifact includes full A/B lists.
-Do not change the check to ignore these differences. The first question described
-this before the additional show probe; this report supersedes any implication
-that migration itself was shown to lose the rows.
+A's pinned full list, B's exported task Markdown and B's all-task list agree on
+all **259 ids/statuses/run counts**. `equivalence.json` has an empty mismatch map.
+The migration regression separately preserves the synthetic retry vectors and
+all their legacy run fields against actual 0.3.0 output.
 
 ### Footprint: passes
 
-After successful apply, storage check and GC (dry-run and yes both exit zero):
+After apply/check/GC, logical bytes (not allocated disk blocks):
 
-| Category | Logical bytes |
+| Category | Bytes |
 |---|---:|
 | db | 161,804,288 |
 | blobs | 614,961,817 |
 | **db + blobs** | **776,766,105** |
-| GC reclaimed | 0 |
+| reclaimed | 0 |
+| compressed-into-blobs (GC total) | 614,961,817 |
 | artifact original metadata total | 988,645,626 |
 | artifact stored metadata total | 978,410,496 |
 | artifact compression difference | 10,235,130 |
-| private outside-root cache/scratch | 8,544,469 |
-| legacy awaiting finalize | 2,873,375,811 |
+| outside-root cache/scratch (GC moved-outside category) | 8,544,469 |
+| legacy awaiting finalize (directory sum) | 2,873,375,811 |
 | B rollback archive | 0 |
+| C rollback archives after both rollbacks | 323,608,983 |
 
-Artifact metadata totals aren't unique physical blob bytes and don't replace the
-measured db+blob footprint. Outside-root bytes are reported separately, not called
-reclaimed. The C rollback archives are retained but not yet included in a separate
-post-rehearsal archive-size receipt.
+Artifact metadata totals aren't unique physical blob bytes; they do not replace
+the db+blob measurement. Outside-root bytes aren't called reclaimed or dedup
+savings. `rehearsal-footprint.json` separately records C's retained blobs and
+outside roots. GC's legacy bucket differs by tens of bytes because its accounting
+also includes class-root metadata; no finalize was run.
 
-### Stress: passes, actually executed in container
+### Stress: passes, actually executed after rebase
 
-- 30/30 randomized SIGKILL rounds, seed `1793577018782634651`.
-- Eight-way claim race, four consistent backups during writes.
-- 80/80 first opens: WAL, synchronous FULL, foreign keys and schema version.
-- Pinned view through 1,000 commits: no busy waits, WAL 44,310,632 → 0 bytes.
-- All 19 blob-GC tests pass (fake+filesystem and SQLite+filesystem barriers,
-  process-death proof and killed unlink recovery included).
+The sandbox uses 2 CPUs, 2 GiB, 256 PIDs, two container-only burners. New seed
+`1793583140254402297`: 30/30 SIGKILL rounds; 8-way claim race; four consistent
+backups during writes; 80/80 concurrent first opens; pinned view through 1,000
+commits with no busy waits and successful WAL truncation; all 19 blob-GC tests
+(fake+filesystem and SQLite+filesystem barriers included). No skips/retries/host
+fallback. All child tests and the generated argv manifest are attached.
 
-The raw test output and generated test-command manifest remain in `.evidence`;
-the attached log records every non-skipped result. No stress retries or host
-fallback were used.
+### Published C rehearsal: passes
 
-### Published rollback rehearsal C: passes through v1-after
+Pause fixture admission → drain → preserve v1/copy candidate privately → dry-run
+→ apply → storage check → read-only measurements → rollback at zero → original
+fence/no journal/D/M/Q → reapply → comment → unacknowledged rollback refused
+(exit 1) → status N=1 → exact discard rollback → original fence/no journal/D/M/Q
+→ v1 list succeeds. Every other expected-success command exits zero.
 
-Pause → drain → private v1 preservation/candidate copy → dry-run → apply → storage
-check → read-only measurements → rollback at zero → original fence/no D/M/Q/journal
-→ reapply → comment → rollback refusal → status N=1 → exact discard rollback →
-original fence/no D/M/Q/journal → v1 list. All expected successful commands exit
-zero; rollback without acknowledgment after the write exits one. Each argv,
-status and output is in `cutover-4/commands.jsonl` and its per-command files.
-The “installation” is deliberately a private fixture copy, not a live install.
+### Fourth-copy B6 rehearsal: passes
 
-### Pre-publish D/B6: incomplete
+Optimized assertion-enabled build announces **B6**; SIGKILL exits -9. Status is
+`verified`, candidate `db`, no directory-state problems. Rollback succeeds;
+original fence, no journal and absent D/M/Q are asserted. V1 list equals its
+pre-apply output; a v1 comment succeeds. Reapply/check succeeds, the newly added
+comment appears in v2 show, and only D exists. Every command's argv, status and
+output, including the barrier announcement, is in the raw-log bundle. This
+supersedes the earlier unoptimized debug import timeout; no timeout was raised
+inside the test hook and no sleep-based kill was used.
 
-The overall foreground benchmark invocation reached its 1,800-second harness
-deadline while the debug migration was still importing D, before B6 was observed.
-The process group was terminated; no background fixture process remains. D is a
-retained interrupted-import fixture, not a successful B6 proof. The new independent
-`storage-bench.sh --rehearsal-only prepublish` mode allows this check to be rerun
-without repeating A/B and C. No recovery success is claimed here.
+### Raw refusal: passes
 
-### Raw blocker refusal: passes
+Exactly T-125 R1, T-203 R1 and T-251/T-252/T-253 D1 are blockers. Dry-run/apply
+exit one as expected. Every legacy byte and the fence remain unchanged, no journal
+or D/M/Q appears. One empty advisory `lock/migrate.lock` may be created. The
+extracted copy's socket was normalized **before** the byte baseline; the raw
+archive remains untouched.
 
-The independent raw-copy invocation exits zero after asserting exactly the five
-specified blockers, nonzero dry-run/apply, unchanged legacy file contents, original
-fence and absent db/db.migrating/db.discard/journal. The only permitted new file is
-empty `lock/migrate.lock`, the maintenance advisory-lock inode. The extracted raw
-copy's socket was normalized before the baseline byte snapshot; the pinned raw
-archive was not changed. `raw-invariant.json` and both command outputs are attached
-in the raw-log bundle.
+## Owner scope split and remaining limitations
 
-## Remaining work
+Q2 was answered by the owner at 2026-11-02T00:45:21.470220527Z (read back with
+`corral question show T-338/R1/Q2 --json`): do not park; T-338 delivers the harness,
+runbook, corrected loss finding/regression and full offline evidence. The three
+latency bounds move to a new PM-filed storage-v2 task, which repairs hot paths and
+reruns this benchmark. No follow-up task ID was supplied in the answer. Bounds
+are unchanged and still failing; this split is not evidence that they passed.
 
-PM decisions Q1/Q2: route export equivalence and production latency repairs without
-silently widening this task's four-file implementation scope. Then rebase on current
-storage-v2, rebuild, rerun strict proof (including B6), complete footprint reporting,
-commit and request the run's single quick gate. No full gate, live migration,
-installation, dispatch draining or finalization was performed.
+Q1's suspected data loss is resolved at its actual source (the harness parser),
+with strict comparison intact and no excluded runs. This report precedes the
+run's one quick gate; its separate Corral receipt is the authority for that result.
+No full gate, live migration, installation, board drain or finalize was performed.
+The existing SQLite stress suite was reused unchanged and explicitly executed,
+not merely counted as covered by the quick gate.

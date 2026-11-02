@@ -24,15 +24,21 @@ Keep the pinned inputs outside `.corral`, normally at
 | `corpus.tar.zst` (raw blockers) | `f3109055997851a2b70882f769ce3062b1e0972b3724fa17f8a53e8ef79a3f72` |
 | `corral-0.3.0` | `aba46287e1c97797341abf3e8ed6add6643a7b1ea54366e842edcfa53e572fff` |
 
-Build both variants from the same committed revision. Only the debug build exposes
-the B6 test hook. Use the worktree's actual Cargo target directory; never accidentally
-measure a binary from another checkout.
+Build both variants from the same committed revision. The B6 test hook requires
+debug assertions in corral-core; an optimized barrier build avoids doing the full
+prepared-fixture import with every dependency unoptimized. Use the worktree's actual
+Cargo target directory; never accidentally measure a binary from another checkout.
 
 ```sh
+mkdir -p .evidence
 cargo build --release -p corral </dev/null
-cargo build -p corral </dev/null
-scripts/storage-bench.sh --after target/release/corral \
-  --barrier-binary target/debug/corral --rehearse \
+cp target/release/corral .evidence/corral-measure
+cargo build --release -p corral \
+  --config 'profile.release.package.corral-core.debug-assertions=true' </dev/null
+cp target/release/corral .evidence/corral-barrier
+python3 -I scripts/test_storage_bench.py --after .evidence/corral-measure
+scripts/storage-bench.sh --after .evidence/corral-measure \
+  --barrier-binary .evidence/corral-barrier --rehearse \
   --projects /path/to/project-container --out /path/to/new-proof-directory
 scripts/storage-stress.sh .evidence/storage-stress
 scripts/check-docs.sh
@@ -51,7 +57,11 @@ The runner verifies archive/binary hashes before use, then:
 
 1. Restores identical A/B copies; migrates B and checks its blobs/database.
 2. Compares A's full legacy list with B's exported Markdown (including run counts)
-   and B's list ids/statuses. Empty run collections count as zero.
+   and B's list ids/statuses. Empty run collections count as zero. Frontmatter ends
+   only at a whole-line fence, not at a Markdown table separator inside a run
+   summary. The regression suite also migrates terminal multi-retry fixtures and
+   compares their complete ordered run ids and legacy run fields against the pinned
+   0.3.0 binary.
 3. Warms each command once per side, then alternates A/B five times each for
    `list --json`, `pm next --json`, `automation status`. Each sample keeps stdout,
    stderr, exit, elapsed time and starting load. Separate successful strace runs

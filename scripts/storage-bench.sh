@@ -16,6 +16,7 @@ import subprocess
 import tarfile
 import time
 import tempfile
+import tomllib
 import yaml
 
 PREPARED = '0a8d23ffb0a40f366f633c39d59fcd14aa87d7894072f61ea6e48623ef2837f0'
@@ -102,10 +103,17 @@ def restore(name, archive, expected):
         binding['socket'] = '/nonexistent/t253-herdr.sock'
         binding_path.write_text(json.dumps(binding)+'\n')
     assert binding['socket'] == '/nonexistent/t253-herdr.sock'
-    if a.projects:
-        for project in sorted(a.projects.iterdir()):
-            if project.is_dir() and (project/'.git').exists():
-                (root/project.name).symlink_to(project.resolve(), target_is_directory=True)
+    config = tomllib.loads((root/'.corral/corral.toml').read_text())
+    for project in config.get('projects', {}).values():
+        rel = Path(project['path'])
+        assert not rel.is_absolute() and '..' not in rel.parts, rel
+        path = root/rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        source = a.projects/rel if a.projects else None
+        if source and source.is_dir() and (source/'.git').exists():
+            path.symlink_to(source.resolve(), target_is_directory=True)
+        else:
+            path.mkdir(exist_ok=True)
     return root
 
 
@@ -130,6 +138,7 @@ def measure(sides):
             trace = a.out/f'{side}-{name}.execve'
             cmd = ['strace', '-f', '-qq', '-e', 'trace=execve', '-o', str(trace),
                    str(binary), '--root', str(root), *args]
+            load = Path('/proc/loadavg').read_text().strip()
             start = time.monotonic()
             result = subprocess.run(cmd, stdin=subprocess.DEVNULL, env=env(root), cwd=root,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
@@ -137,7 +146,7 @@ def measure(sides):
             (a.out/f'{side}-{name}-exec.stderr').write_bytes(result.stderr)
             with log.open('a') as f:
                 f.write(json.dumps(dict(label=f'{side}-{name}-exec', argv=cmd, exit=result.returncode,
-                                        seconds=time.monotonic()-start, load=Path('/proc/loadavg').read_text().strip()))+'\n')
+                                        seconds=time.monotonic()-start, load=load))+'\n')
             assert result.returncode == 0
             lines = trace.read_text().splitlines()
             git = [line for line in lines if re.search(r'execve\("[^\"]*/git",', line) and '= 0' in line]
@@ -204,6 +213,9 @@ def rehearse_published():
     run(candidate, C, ['migrate', '--rollback', '--discard-v2-changes', str(n), '--json'], 'C-discard')
     legacy_invariant(C, fence)
     run(a.out/'corral-v1', C, ['list', '--all', '--json'], 'C-v1-after')
+    (a.out/'rehearsal-footprint.json').write_text(json.dumps(dict(
+        rollback_archive=usage(C/'.corral/rollback'), retained_blobs=usage(C/'.corral/blobs'),
+        outside_roots=usage(homes/'C'/'cache')), indent=2)+'\n')
 
 def rehearse_prepublish():
     assert a.barrier_binary, '--rehearse requires --barrier-binary (same-source debug build)'
@@ -211,6 +223,8 @@ def rehearse_prepublish():
     original = run(a.before, D, ['list', '--all', '--json'], 'D-v1-before')
     fence = (D/'.corral/state/schema-version').read_bytes()
     cmd = [str(a.barrier_binary.resolve()), '--root', str(D), 'migrate', '--apply']
+    load = Path('/proc/loadavg').read_text().strip()
+    start = time.monotonic()
     with (a.out/'D-kill.stdout').open('wb') as stdout:
         child = subprocess.Popen(cmd, env={**env(D), 'CORRAL_MIGRATE_BARRIER': 'B6'},
                                  stdin=subprocess.DEVNULL, stdout=stdout, stderr=subprocess.PIPE)
@@ -230,7 +244,8 @@ def rehearse_prepublish():
             assert child.wait(timeout=10) == -9
             (a.out/'D-kill.stderr').write_bytes(captured)
             with log.open('a') as f:
-                f.write(json.dumps(dict(label='D-kill-B6', argv=cmd, exit=-9, barrier='B6'))+'\n')
+                f.write(json.dumps(dict(label='D-kill-B6', argv=cmd, exit=-9, barrier='B6',
+                                       seconds=time.monotonic()-start, load=load))+'\n')
         finally:
             if child.poll() is None:
                 child.kill()
@@ -306,8 +321,20 @@ def main():
     measure([('A', a.before, A), ('B', a.after, B)])
     c = B/'.corral'
     pre_gc = usage(c)
-    run(a.after, B, ['storage', 'gc', '--dry-run', '--json'], 'B-gc-dry')
-    run(a.after, B, ['storage', 'gc', '--yes', '--json'], 'B-gc')
+    # Repository links are only for read-only benchmark probes. Never let the
+    # destructive GC walk any linked real project's worktrees, even when the
+    # immutable fixture's absolute run paths cannot match their copy-relative paths.
+    links = [(p, p.readlink()) for p in B.iterdir() if p.is_symlink()]
+    for link, _ in links:
+        link.unlink()
+        link.mkdir()  # config requires a directory; it need not contain a repo
+    try:
+        run(a.after, B, ['storage', 'gc', '--dry-run', '--json'], 'B-gc-dry')
+        run(a.after, B, ['storage', 'gc', '--yes', '--json'], 'B-gc')
+    finally:
+        for link, target in links:
+            link.rmdir()  # refuses unexpected content instead of deleting it
+            link.symlink_to(target, target_is_directory=True)
     stats = json.loads(run(a.after, B, ['stats', '--storage', '--json'], 'B-storage-stats'))
     footprint = dict(db=usage(c/'db'), blobs=usage(c/'blobs'), reclaimed=pre_gc-usage(c),
                      artifacts_original=stats['original_bytes'], artifacts_stored=stats['stored_bytes'],
