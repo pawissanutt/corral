@@ -8,6 +8,7 @@ import type { HostIdentity } from "../roles/types.ts";
 import { PanelTerminal, PANEL_WIDTH, type PanelSurface } from "./panel-terminal.ts";
 import { NativeWorkbench, plainClick } from "./workbench.ts";
 import { activityKey, activitySidebar } from "./activity-sidebar.ts";
+import type { HistoryRead } from "./history.ts";
 import { panelTheme } from "./panels-theme.ts";
 import { type Appearance, type Density, PACKAGED } from "./appearance.ts";
 import { ActionPalette, type HostAction } from "./action-palette.ts";
@@ -28,6 +29,7 @@ export interface NativePanelsOptions {
   readonly readTranscript?: (id: string) => Promise<string>;
   readonly snapshot: () => PanelSnapshot | null;
   readonly readInbox?: (signal: AbortSignal) => Promise<unknown>;
+  readonly readHistory?: HistoryRead;
   readonly projectDir?: string;
   readonly readProjects?: (signal: AbortSignal) => Promise<unknown>;
   readonly canRenderTool?: (name: string) => boolean;
@@ -489,7 +491,7 @@ export class NativePanels implements PanelSurface {
     pi.on("thinking_level_select", () => { this.refresh(); });
     pi.on("tool_result", () => { this.workbench.invalidateFiles(); this.refresh(); });
     pi.registerCommand("panels", {
-      description: "Native session inspector: context, files, plan, evidence, usage, inbox, project, refresh or toggle (agents/helpers/jobs focus Context activity)",
+      description: "Native session inspector: context, files, plan, evidence, usage, inbox, history, project, refresh or toggle (agents/helpers/jobs focus Context activity)",
       handler: async (args, ctx) => {
         if (ctx.mode !== "tui" || !this.terminal) { ctx.ui.notify("Native panels require the interactive Corral host.", "warning"); return; }
         await this.panelCommand(args);
@@ -505,6 +507,7 @@ export class NativePanels implements PanelSurface {
   }
   private async panelCommand(args: string): Promise<void> {
     const value = args.trim().toLowerCase();
+    if (value === "history") { await this.workbench.openHistory(); return; }
     if (value === "project") { await this.workbench.repository(); this.refresh(); return; }
     if (value === "helpers" || value === "agents" || value === "jobs") { this.browseActivity(); return; }
     if (value === "usage") { this.focused = false; this.workbench.setView("usage"); return; }

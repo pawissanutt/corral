@@ -68,6 +68,16 @@ Filename clicks in the overview or Files inspector select that path in Changes. 
 
 Refreshes are coalesced after tool results and every two seconds only while Changes is open. Failed reads retain explicit stale/unavailable state. Refresh does not reorder selection. A changed selected patch shows an update indicator rather than silently replacing the inspected hunk; `r` applies it. Captured root/path/comparison/HEAD and patch text form one immutable provenance snapshot. Draft references include that captured scope, observation time and diff SHA256.
 
+## Read-only history
+
+Click **History** in the main view bar, or use **/panels history**. Choose Tasks / runs or Assistant sessions, search recorded records, then select a subject. This is inspection, not Pi's `/resume` picker: the bound session, generation, role, tools and unsent draft remain unchanged.
+
+Task/run recaps label the recorded outcome, effective pending questions, and checkpoint next action (or first in-progress/pending ledger step) with provenance. Historical steps are context, not instructions or proof of checkpoint compatibility. Assistant recaps use the saved summary, questions and ledger; an ended assistant has no effective pending questions. Missing outcome, ledger, checkpoint or generation facts remain explicitly unknown.
+
+In a task/run recap, **t** opens bounded raw JSONL transcript pages. **n/p** read next/previous pages; byte-limit continuation uses the backend's exact resume record, not a guessed offset. Each backend page is at most 200 records and 24 KiB. **c** reads available native checkpoint/rewind history. Legacy or missing locators report unavailable. Assistant transcripts are explicitly unavailable in this navigator because the existing pageable endpoint supports task runs only. There are no restore controls or impact previews.
+
+Reads stay at the launcher's workspace root, independently of Files scope. Task details use `corral show T-001 --json --recorded`, which does not refresh session, usage or gate state. Each read has a deadline and 4 MiB response bound; oversized/unavailable reads fail visibly. Selectors show at most 200 returned entities, with counts; refine the search rather than treating the slice as exhaustive. Detail displays are capped at 64 KiB with an explicit truncation marker. Esc closes inspection without submitting the draft. Native new/resume/fork/import replacement guards are unchanged.
+
 ## Click-to-expand images
 
 Click an inline image to fit it into the main work area. Click again, press Esc or F9 to close it. The same transcript/reading position returns and the real draft is preserved. The expanded image is bounded by the actual remaining viewport, including a tall composer. Uses existing bytes only: no new download, external viewer, file write or model call. Native image rendering requires a supported graphics terminal (Kitty in the current fullscreen SDK); this does not add graphics support to text-only terminals.
