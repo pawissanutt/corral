@@ -135,8 +135,8 @@ if [[ $tier == quick ]]; then
   end_step
 
   if ((${#scope[@]})); then
-    begin_step "cargo clippy --profile test ${scope[*]} --all-targets -- -D warnings"
-    cargo clippy --profile test "${scope[@]}" --all-targets -- -D warnings
+    begin_step "cargo clippy ${scope[*]} --all-targets -- -D warnings"
+    cargo clippy "${scope[@]}" --all-targets -- -D warnings
     end_step
   fi
 
@@ -226,8 +226,8 @@ else
   printf '\nSkipping Darwin checks (rustup unavailable).\n'
 fi
 
-begin_step "cargo clippy --profile test --workspace --all-targets -- -D warnings"
-cargo clippy --profile test --workspace --all-targets -- -D warnings
+begin_step "cargo clippy --workspace --all-targets -- -D warnings"
+cargo clippy --workspace --all-targets -- -D warnings
 end_step
 
 nextest_args=(--workspace)
