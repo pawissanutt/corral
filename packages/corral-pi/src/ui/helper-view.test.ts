@@ -1,7 +1,8 @@
 import { beforeAll, expect, test } from "bun:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { Text, TuiAltScreen, getKeybindings, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { getLayoutBoxesAt, renderLayoutFrame, type LayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
+import { KeybindingsManager } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
+import { Text, TuiAltScreen, getKeybindings, setKeybindings, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
 import { createChatViewport } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/chat-viewport.js";
 import { helperRows } from "./helper-view.ts";
 import { HelperChat } from "./helper-chat.ts";
@@ -28,50 +29,37 @@ test("helper view distinguishes unavailable, empty, stale, queued and uncertain 
   expect(text([helper("new", "New question")], "evicted")).toContain("no longer retained");
 });
 
-function click(frame: LayoutFrame, needle: string): void {
-  const y = frame.lines.findIndex(line => stripTerminalSequences(line).includes(needle));
-  expect(y).toBeGreaterThanOrEqual(0);
-  const box = getLayoutBoxesAt(frame, 2, y).find(box => box.component.handleMouse !== undefined);
-  if (!box?.component.handleMouse) throw new Error("No component mouse route");
-  expect(box.component.handleMouse({ type: "click", button: "left", x: 2 - box.rect.x, y: y - box.rect.y + (box.lineOffset ?? 0),
-    screenX: 2, screenY: y, width: box.rect.width, height: box.rect.height, shift: false, alt: false, ctrl: false, clickCount: 1 })?.handled).toBeTrue();
-}
-
-test("keyboard and pointer select stable helper identities without changing draft, parent session or calling a provider", () => {
+test("selected helper details remain stable without embedding another selector", () => {
   let snapshot: PanelSnapshot = { ...base, helpers: [helper("first", "First question"), helper("second", "Second question")] };
-  const identity = { store: "s", role: "assistant" as const, project: "", assistant: "A-22", generation: 1 };
-  const wb = new NativeWorkbench({ identity, cwd: "/tmp", snapshot: () => snapshot, changed() {}, canInteract: () => true });
+  const wb = new NativeWorkbench({ identity: { store: "s", role: "assistant", project: "", assistant: "A-test", generation: 1 },
+    cwd: "/tmp", snapshot: () => snapshot, changed() {}, canInteract: () => true });
   const viewport = createChatViewport({ document: new Text("PARENT_TRANSCRIPT", 0, 0), pendingMessages: new Text("", 0, 0), status: new Text("", 0, 0),
-    editor: new Text("REAL_EDITOR_DRAFT", 0, 0), footer: new Text("REAL_FOOTER", 0, 0), mainView: transcript => wb.mount(transcript) });
-  const frame = (width = 80) => renderLayoutFrame(viewport.root, width, 42, () => {});
-  const text = () => stripTerminalSequences(frame().lines.join("\n"));
+    editor: new Text("REAL_EDITOR_DRAFT", 0, 0), footer: new Text("", 0, 0), mainView: transcript => wb.mount(transcript) });
   try {
-    wb.setView("activity"); click(frame(), "Helper conversations");
-    expect(text()).toContain("Visible response for First question"); expect(text()).toContain("REAL_EDITOR_DRAFT");
-    expect(wb.handleInput("j")).toBeTrue(); expect(text()).toContain("Visible response for Second question");
+    wb.openHelpers("second");
     snapshot = { ...snapshot, helpers: [helper("new", "Newest question"), ...(snapshot.helpers ?? [])] };
-    expect(text()).toContain("Visible response for Second question");
-    click(frame(), "Research first"); expect(text()).toContain("Visible response for First question");
     for (const width of [52, 80, 140]) {
-      const lines = frame(width).lines;
+      const lines = renderLayoutFrame(viewport.root, width, 42, () => {}).lines;
       for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-      expect(stripTerminalSequences(lines.join("\n"))).toContain("REAL_EDITOR_DRAFT");
+      const text = stripTerminalSequences(lines.join("\n"));
+      expect(text).toContain("Visible response for Second question"); expect(text).toContain("REAL_EDITOR_DRAFT");
+      expect(text).not.toContain("First question"); expect(text).not.toContain("Newest question");
+      expect(text).not.toContain("switches jobs/helpers");
     }
-    expect(wb.handleInput("h")).toBeTrue(); expect(text()).toContain("No background jobs");
-    wb.handleInput("\x1b[20~"); expect(text()).toContain("PARENT_TRANSCRIPT");
-    expect(identity.generation).toBe(1);
+    wb.handleInput("\x1b[20~");
+    expect(stripTerminalSequences(renderLayoutFrame(viewport.root, 80, 42, () => {}).lines.join("\n"))).toContain("PARENT_TRANSCRIPT");
   } finally { wb.dispose(); }
 });
 
 test("helper tool expansion and hints use Pi's configured shortcut", () => {
-  const keys = getKeybindings(), previous = keys.getUserBindings();
+  const previous = getKeybindings(), keys = new KeybindingsManager({ "app.tools.expand": "alt+o" });
   const wb = new NativeWorkbench({ cwd: "/tmp", identity: { store: "s", project: "", role: "assistant", assistant: "A-test", generation: 1 },
     snapshot: () => null, changed() {}, canInteract: () => true });
   try {
-    keys.setUserBindings({ ...previous, "app.tools.expand": "alt+o" });
+    setKeybindings(keys);
     wb.openHelpers(); expect(wb.handleInput("\x1bo")).toBe(true);
     expect(helperRows([], undefined, true).map(row => row.text).join("\n").toLowerCase()).toContain("alt+o");
-  } finally { keys.setUserBindings(previous); wb.dispose(); }
+  } finally { setKeybindings(previous); wb.dispose(); }
 });
 
 test("native transcript retains returned result while selector metadata retains observed errors", () => {

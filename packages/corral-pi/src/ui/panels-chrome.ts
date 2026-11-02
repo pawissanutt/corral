@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import { stripTerminalSequences, visibleWidth, Text } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
 import { STATUS_BINDING, STATUS_ALERTS, target } from "./chrome.ts";
+import { activitySidebar } from "./activity-sidebar.ts";
 import {
   pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_MUTED, PANEL_TEXT, RESET,
   type PanelSnapshot, type FilesState, type PanelLine,
@@ -71,7 +72,8 @@ export function panelFooter(snapshot: PanelSnapshot | null, contextInRail: boole
   }
   return lines;
 }
-export function overviewLines(snapshot: PanelSnapshot | null, files: FilesState, scope?: { readonly name: string; readonly required: boolean }): PanelLine[] {
+export function overviewLines(snapshot: PanelSnapshot | null, files: FilesState, scope?: { readonly name: string; readonly required: boolean },
+  selected?: string, history = false): PanelLine[] {
   if (!snapshot) return [{ text: "Session state unavailable" }];
   const rows: PanelLine[] = [{ text: "Context", heading: true }, { text: contextLabel(snapshot) },
     { text: "" }, { text: "Changed files", heading: true }];
@@ -87,19 +89,6 @@ export function overviewLines(snapshot: PanelSnapshot | null, files: FilesState,
       if (files.files.length > 4) rows.push({ text: `${files.files.length - 4} more in Files`, action: { kind: "files" } });
       break;
   }
-  rows.push({ text: "" }, { text: "Agents & jobs", heading: true });
-  if (snapshot.auxiliary) rows.push({ text: `Helper slots: research ${snapshot.auxiliary.explore.running} · oracle ${snapshot.auxiliary.oracle.running} occupied` });
-  if (snapshot.jobs === null) rows.push({ text: "Background jobs unavailable" });
-  else if (!snapshot.jobs.length) rows.push({ text: "No background jobs" });
-  else for (const job of snapshot.jobs.slice(0, 3)) rows.push({ text: plainLabel(`${job.job} · ${job.state}`) });
-  rows.push({ text: "" }, { text: "Plan", heading: true });
-  const steps = snapshot.ledger?.phases.flatMap(phase => phase.steps);
-  if (!steps?.length) rows.push({ text: snapshot.ledgerStale ? "Canonical plan unavailable" : "No plan recorded" });
-  else {
-    rows.push({ text: `${steps.filter(step => step.status.state === "done").length}/${steps.length} steps${snapshot.ledgerStale ? " · stale" : ""}` });
-    for (const step of steps.filter(step => step.status.state === "in_progress" || step.status.state === "pending").slice(0, 3)) {
-      rows.push({ text: plainLabel(`${step.status.state === "in_progress" ? "●" : "○"} ${step.label}`) });
-    }
-  }
+  rows.push({ text: "" }, ...activitySidebar(snapshot, selected, history));
   return rows;
 }
