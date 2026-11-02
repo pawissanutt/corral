@@ -18,7 +18,9 @@ pub use client::*;
 /// The T-252 child that lands the bridge client.
 pub const OWNER: &str = "host-bridge";
 
-#[cfg(all(test, target_os = "linux"))]
+// Store/fake-engine setup is also used by Unix head-read tests. Process-recovery
+// tests keep their own Linux guards; the shared fixture only requires Unix APIs.
+#[cfg(all(test, unix))]
 pub(crate) mod fixture;
 #[cfg(all(test, target_os = "linux"))]
 mod fixture_store_probe;
