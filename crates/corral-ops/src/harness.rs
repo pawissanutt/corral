@@ -58,6 +58,7 @@ pub enum ModelSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HarnessInfo {
     /// Config key (`[harnesses.<key>]` or legacy `[agents.<key>]`).
+    #[serde(with = "corral_core::harness_compat::string")]
     pub key: String,
     /// Program the command template launches, when it names one.
     pub program: Option<String>,
@@ -440,7 +441,9 @@ pub(crate) fn parse_omp_models(text: &str) -> Result<Vec<String>> {
 /// The cached report when it parses and still covers exactly the configured harnesses and programs.
 fn read_cache(path: &Path, config: &Config) -> Option<HarnessReport> {
     let text = std::fs::read_to_string(path).ok()?;
-    let report: HarnessReport = serde_json::from_str(&text).ok()?;
+    let mut report: HarnessReport = serde_json::from_str(&text).ok()?;
+    // Canonicalizing a legacy key changes its sort position in an otherwise valid cache.
+    report.harnesses.sort_by(|a, b| a.key.cmp(&b.key));
     let cached: Vec<(&str, Option<String>)> = report
         .harnesses
         .iter()

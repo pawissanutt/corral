@@ -403,6 +403,38 @@ fn detects_fake_harnesses_degrades_and_caches() {
 }
 
 #[test]
+fn legacy_pi_native_cache_keeps_models_after_its_key_changes_sort_position() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config: Config = serde_json::from_value(serde_json::json!({
+        "harnesses": {"fixture": {"command": "fixture"}},
+        "profiles": {"pi-sol": {"harness": "pi-native"}}
+    }))
+    .unwrap();
+    let path = tmp.path().join("harnesses.json");
+    let cache = serde_json::json!({
+        "detected_at": "2026-11-01T00:00:00Z",
+        "harnesses": [
+            {"key": "fixture", "program": "fixture", "models": [],
+             "model_source": "none", "efforts": [], "takes_effort": false},
+            {"key": "pi-native", "models": ["openai-codex/gpt-6.1-sol"],
+             "model_source": "listed", "efforts": [], "takes_effort": true}
+        ]
+    });
+    std::fs::write(&path, serde_json::to_vec(&cache).unwrap()).unwrap();
+    let report = read_cache(&path, &config).expect("legacy cache remains usable");
+    assert_eq!(report.harnesses[0].key, "corral-pi");
+    assert_eq!(
+        report.get("corral-pi").unwrap().models,
+        ["openai-codex/gpt-6.1-sol"]
+    );
+    assert!(
+        !serde_json::to_string(&report)
+            .unwrap()
+            .contains("pi-native")
+    );
+}
+
+#[test]
 fn real_harness_binaries_are_never_resolved_from_path() {
     // Given: unit tests are hermetic, whatever omp/omo/claude the owner has on PATH.
     // When / Then: bare harness names do not resolve, so no catalog command can run.
