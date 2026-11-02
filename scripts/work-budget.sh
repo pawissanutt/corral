@@ -23,5 +23,7 @@ for test in \
   app::sync_budget::sync_tick_work_stays_independent_of_history; do
   args=(--ignored --exact "$test")
   if [[ -n "${WORK_BUDGET_REPORT:-}" ]]; then args+=(--nocapture); fi
-  cargo test -p corral-tui --lib -- "${args[@]}"
+  # Match the workspace gate's dev-dependency feature union; otherwise this step
+  # rebuilds core/ops/TUI just to disable test-clock after nextest enabled it.
+  cargo test -p corral-tui --lib --features corral-core/test-clock -- "${args[@]}"
 done

@@ -334,6 +334,12 @@ def path_terms(changed: str, directory: Path, package: Package) -> tuple[list[tu
         description = f"test targets {', '.join(owners)}"
         # The library may share a test helper through #[path]; it is then a library module too.
         if module := package.lib_tree.get(resolved):
+            # A private library fixture with no tests of its own serves its enclosing
+            # test module. Do not inflate that known scope to every test of the crate.
+            assert package.lib is not None
+            while "::" in module and not any(
+                    test.startswith(module + "::") for test in package.lib["testcases"]):
+                module = module.rsplit("::", 1)[0]
             shared, _ = package.module_terms([module])
             terms += [term for term in shared if term not in terms]
             description += f" and library module {module}"

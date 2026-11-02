@@ -61,6 +61,14 @@ step="repository setup"
 step_active=0
 trap on_error ERR
 cd "$(dirname "$0")/.."
+# Linked task worktrees share the primary checkout's Cargo cache, as AGENTS.md promises.
+# Keep an explicit caller override. Cargo still fingerprints each candidate's sources.
+if [[ -z ${CARGO_TARGET_DIR:-} && -f .git ]]; then
+  common_dir=$(git rev-parse --path-format=absolute --git-common-dir)
+  export CARGO_TARGET_DIR="$(dirname "$common_dir")/target"
+  printf 'Shared Cargo target: %s\n' "$CARGO_TARGET_DIR"
+fi
+docs_binary="${CARGO_TARGET_DIR:-target}/debug/corral"
 pi_tests=()
 python3 scripts/test_cost.py count
 
@@ -127,8 +135,8 @@ if [[ $tier == quick ]]; then
   end_step
 
   if ((${#scope[@]})); then
-    begin_step "cargo clippy ${scope[*]} --all-targets -- -D warnings"
-    cargo clippy "${scope[@]}" --all-targets -- -D warnings
+    begin_step "cargo clippy --profile test ${scope[*]} --all-targets -- -D warnings"
+    cargo clippy --profile test "${scope[@]}" --all-targets -- -D warnings
     end_step
   fi
 
@@ -218,8 +226,8 @@ else
   printf '\nSkipping Darwin checks (rustup unavailable).\n'
 fi
 
-begin_step "cargo clippy --workspace --all-targets -- -D warnings"
-cargo clippy --workspace --all-targets -- -D warnings
+begin_step "cargo clippy --profile test --workspace --all-targets -- -D warnings"
+cargo clippy --profile test --workspace --all-targets -- -D warnings
 end_step
 
 nextest_args=(--workspace)
@@ -247,9 +255,9 @@ else
   printf '\nSkipping scripts/pi-lane.sh (Pi package and contracts untouched).\n'
 fi
 
-begin_step "cargo build -p corral && scripts/check-docs.sh target/debug/corral"
+begin_step "cargo build -p corral && scripts/check-docs.sh $docs_binary"
 cargo build -p corral
-scripts/check-docs.sh target/debug/corral
+scripts/check-docs.sh "$docs_binary"
 end_step
 
 finish

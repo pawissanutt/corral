@@ -158,6 +158,20 @@ class SelectTests(unittest.TestCase):
                 self.assertEqual((int(values["selected"]), int(values["remaining"])),
                                  (selected, remaining))
 
+    def test_private_library_fixture_selects_its_enclosing_cases_not_the_whole_crate(self) -> None:
+        root = self.repo / "crates/alpha/src/lib.rs"
+        _ = root.write_text(root.read_text() + '#[cfg(test)]\n#[path = "../tests/private/mod.rs"]\nmod private_cases;\n')
+        directory = self.repo / "crates/alpha/tests/private"
+        directory.mkdir()
+        _ = (directory / "mod.rs").write_text('mod helper;\n#[test]\nfn checks() {}\n')
+        _ = (directory / "helper.rs").write_text('pub fn setup() {}\n')
+        statuses = {**SUITES, ("alpha", "lib"): {**SUITES[("alpha", "lib")],
+                                               "private_cases::checks": "matches"}}
+        values, _ = self.select(["crates/alpha/tests/private/helper.rs"], statuses=statuses)
+        self.assertEqual(values["selected"], "1")
+        self.assertEqual(values["run_filter"],
+                         "(binary_id(=alpha) and (test(/^private_cases::/) or test(/^private_cases_tests::/)))")
+
     def test_paths_the_mapping_cannot_decide_fall_back_to_the_whole_crate(self) -> None:
         for changed, reason in (
             ("crates/alpha/tests/fixtures/data.json", "not part of any test target's module tree"),
