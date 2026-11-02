@@ -2,8 +2,7 @@
 import { expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { stripTerminalSequences, Text } from "@earendil-works/pi-tui";
-import { renderLayoutFrame } from "../node_modules/@earendil-works/pi-tui/dist/layout.js";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { codeHost } from "./support/code-host.ts";
 
 const progress = (revision: number) => ({ revision, spec_revision: "spec", phases: [{ id: "p", label: "Implementation", steps: [
@@ -17,9 +16,9 @@ test("authenticated Code Mode children expose all receipt states and reconcile t
   const panels = fx.host.panels;
   if (!panels) throw new Error("rich fixture must provide native panels");
   const captured: string[] = [];
-  const render = (tab: "Agents" | "Plan") => {
+  const render = (tab: "Context" | "Plan") => {
     panels.tab = tab; panels.focused = true; panels.offset = 0;
-    const wide = stripTerminalSequences(panels.renderSidebar(110, 50).join("\n"));
+    const wide = stripTerminalSequences(panels.renderSidebar(110, 200).join("\n"));
     captured.push(`WIDE ${tab}`, wide, `INLINE ${tab} (successive scroll positions)`);
     for (let offset = 0; offset < 32; offset += 2) {
       panels.offset = offset;
@@ -44,15 +43,10 @@ test("authenticated Code Mode children expose all receipt states and reconcile t
       await tools.corral_progress({ update: ${JSON.stringify(update(2))} });
       await Promise.allSettled(["commit", "replay", "reject", "uncertain"].map(text => tools.corral_ask({kind: "clarification", text})));
     `);
-    const agents = render("Agents");
-    for (const outcome of ["committed", "replayed", "rejected", "uncertain"]) expect(agents).toContain(outcome);
-    expect(agents).toContain("Code Mode child");
-    expect(agents).not.toContain("No tool receipt observed");
-    const body = panels.workbench.mount(new Text("", 0, 0));
-    panels.workbench.setView("activity");
-    const background = stripTerminalSequences(renderLayoutFrame(body, 110, 80, () => {}).lines.join("\n"));
-    for (const outcome of ["committed", "replayed", "rejected", "uncertain"]) expect(background).toContain(outcome);
-    captured.push("BACKGROUND ACTIVITY", background);
+    const context = render("Context");
+    for (const outcome of ["committed", "replayed", "rejected", "uncertain"]) expect(context).toContain(outcome);
+    expect(context).toContain("Code Mode child");
+    expect(context).not.toContain("No tool receipt observed");
     const plan = render("Plan");
     expect(plan).toContain("revision 2"); expect(plan).toContain("Criterion: C1");
     expect(plan).not.toContain("stale");
@@ -74,7 +68,7 @@ test("authenticated Code Mode children expose all receipt states and reconcile t
     fx.corral.rules({ todo: { receipt: { state: "committed", result: {} } } });
     await child("reconcile-todo", 'await tools.corral_todo({ op: "done", step: "s" });');
     expect(render("Plan")).toContain("revision 3"); expect(render("Plan")).not.toContain("stale");
-    render("Agents");
+    render("Context");
     const evidence = resolve(import.meta.dirname, "../../../.evidence");
     mkdirSync(evidence, { recursive: true });
     writeFileSync(resolve(evidence, "T-689-nested-host-render.txt"), captured.join("\n"));
