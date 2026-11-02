@@ -369,8 +369,11 @@ corral migrate --finalize --yes [--wait SECS]
 `--apply` refuses a board with open work. On Done/Dropped tasks only, open run, gate, review
 and review-wait markers are reported as lost history when the owning herdr inventory confirms
 all recorded panes absent and no associated host, executor, job or detached task command remains.
-A missing/foreign server or an unreadable process observation keeps the blocker. Non-terminal
-tasks and launch/submission reservations still block. The import retains the original markers
+Detached commands are also identified by inherited launch ownership tokens matched to legacy
+`state/launch-exits/*.owner` files, or the task's sandbox identity, even after changing cwd or
+losing their recorded parent. A retained token without a resident is not a live blocker.
+A missing/foreign server, unknown launch ownership or an unreadable process observation keeps
+the blocker. Non-terminal tasks and launch/submission reservations still block. The import retains the original markers
 (no synthetic end, verdict, pass or fail) and records the observations in `migration-history`.
 The locked apply drain check takes fresh observations; it never trusts a previous dry run.
 `--wait` (default 10 s) bounds how long a maintenance command waits for the exclusive store gate.
