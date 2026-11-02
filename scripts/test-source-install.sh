@@ -53,7 +53,7 @@ esac
 EOF
 chmod +x "$tmp/bin/corral-pi-host"
 cli="$tmp/bin/corral"
-record="$tmp/data/corral/pi-native/installed.json"
+record="$tmp/data/corral/corral-pi/installed.json"
 digest() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["digest"])' "$record"; }
 "$cli" agent install --no-build </dev/null
 old=$(digest)
@@ -89,7 +89,7 @@ grep -q "$head" "$tmp/error"; grep -q "$built" "$tmp/error"; grep -q -- '--from'
 # With the checkout gone, the sibling remains usable as in releases.
 rm "$tmp/bin/corral-pi-host"
 # Recover the installed host before removing the checkout (fixture references compat there).
-cp "$tmp/data/corral/pi-native/assets/$fresh/corral-pi-host" "$tmp/bin/corral-pi-host"
+cp "$tmp/data/corral/corral-pi/assets/$fresh/corral-pi-host" "$tmp/bin/corral-pi-host"
 # Give the fixture host its own retained compat file outside the checkout.
 cp "$compat" "$tmp/compat.json"
 python3 - "$tmp/bin/corral-pi-host" "$compat" "$tmp/compat.json" <<'PY'
