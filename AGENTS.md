@@ -40,7 +40,10 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
 ## Build and test
 
 - Always build with the repo's `.cargo/config.toml` (it disables the crashing global sccache wrapper). If a build fails with an sccache error, prefix the command with `RUSTC_WRAPPER=`.
-- One shared target dir (`corral/target`); cargo serializes concurrent builds on its lock, which is expected.
+- Gates in linked worktrees derive the shared primary-checkout `corral/target` from Git
+  unless `CARGO_TARGET_DIR` is explicit; Cargo serializes builds on its lock, which is expected.
+  Set the same `CARGO_TARGET_DIR` for targeted worktree checks when reusing that cache.
+  Keep the gate/work-budget test-clock feature union aligned to avoid a redundant rebuild.
 - Check one crate: `cargo check -p <crate>`; test one crate: `cargo test -p <crate>`.
 - Before `corral done`, run the gate your run contract names. In a tiered run that is `corral gate <id> --wait`, exactly once after the final rebase: corral selects the tier (quick during review rounds and for Plan-target members), records the receipt, and autopilot reuses it. Audited tasks then capture evidence, record it against the attempt that gate printed, run `corral done <id> --check`, then `corral done`. Evidence recorded for a quick receipt follows the candidate only through corral's authorized carries (tier promotion, clean replay); any other change needs fresh evidence. Legacy and untiered runs keep the gate commands their contract lists.
 - `scripts/gate.sh` without `--tier` is the full landing tier: formatting, the exact

@@ -4,27 +4,33 @@
 
 Baseline is the passing T-745 full gate on this host, log SHA-256
 `a53e3c27486144b0643a8634a7e80dbfc55df7335b042db0d8dea8d79255a75d`.
-No baseline suite was rerun. R1 is authorized for exactly one receipted **quick** gate
-after the final rebase, not a manual full gate. The after-full column must be populated
+No baseline suite was rerun. R1 is authorized for one receipted **quick** gate per round after the final rebase,
+not a manual full gate. A failed round is fixed/committed/rebased before another attempt. The after-full column must be populated
 from the automatic landing full gate; no estimate below is a measured full-tier result.
 
 ## Every gate step (seconds)
 
-| Step | Before full | After full | Change |
-|---|---:|---:|---|
-| `cargo fmt --all -- --check` | 3.883 | pending landing | Unchanged assurance |
-| `800-SLOC Rust ceiling` | 3.241 | pending landing | Unchanged assurance |
-| `cargo check --workspace --all-targets --target aarch64-apple-darwin` | 54.211 | pending landing | Platform/dependency changes only; always plan verify |
-| `cargo check --workspace --all-targets --target x86_64-apple-darwin` | 51.499 | pending landing | Platform/dependency changes only; always plan verify |
-| `cargo clippy --workspace --all-targets -- -D warnings` | 5.794 | pending landing | Unchanged assurance |
-| `CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace` | 958.953 | pending landing | Split budget cases; fixed torture catalog selected by owner changes |
-| `CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc` | 8.324 | pending landing | Unchanged assurance |
-| `scripts/work-budget.sh` | 1086.361 | pending landing | No repeat action budgets; small exact-counter board fixtures |
-| `scripts/pi-lane.sh` | 199.929 | pending landing | Package/shared-contract changes only; always plan verify |
-| `cargo build -p corral && scripts/check-docs.sh target/debug/corral` | 7.732 | pending landing | Unchanged assurance |
+| Step | Before full | After full | Estimate full (not measured) | Change |
+|---|---:|---:|---:|---|
+| `cargo fmt --all -- --check` | 3.883 | pending landing | 3–5 | Unchanged assurance |
+| `800-SLOC Rust ceiling` | 3.241 | pending landing | 3–5 | Unchanged assurance |
+| `cargo check --workspace --all-targets --target aarch64-apple-darwin` | 54.211 | pending landing | 0 for this candidate; ~50 if selected | Platform/dependency changes only; always plan verify |
+| `cargo check --workspace --all-targets --target x86_64-apple-darwin` | 51.499 | pending landing | 0 for this candidate; ~50 if selected | Platform/dependency changes only; always plan verify |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 5.794 | pending landing | 20–90 (cache-sensitive) | Same lints; `--profile test` and shared cache |
+| `CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace` | 958.953 | pending landing | 250–550 incl. compilation (unmeasured) | Split budget cases; fixed torture catalog selected by owner changes |
+| `CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc` | 8.324 | pending landing | 8–15 | Unchanged assurance |
+| `scripts/work-budget.sh` | 1086.361 | pending landing | 33–40 if feature union stays warm | No repeat action budgets; small exact-counter board fixtures |
+| `scripts/pi-lane.sh` | 199.929 | pending landing | 140–200 if selected; 0 otherwise | Package/shared-contract changes only; always plan verify |
+| `cargo build -p corral && scripts/check-docs.sh target/debug/corral` | 7.732 | pending landing | 8–20 | Unchanged assurance |
 
 Baseline timed-step sum: **2379.927s**.
-Quick gate: pending final rebase/receipt. Full <600s: **not yet measured**.
+Quick gate attempt `ag-c286ea5d1c00b6d4` failed at **180.005s**, enforcing the cap:
+fmt 3.021s, SLOC 3.834s, Clippy 86.555s, then nextest was still compiling. **No tests ran.**
+A corrected quick attempt is pending. Full <600s: **not yet measured**. Owner Q1 explicitly
+approved using the landing full gate as the after measurement; PM extracts/posts its table.
+Estimates above are planning ranges, not a promise that their sum is under 600s. The old
+per-test times were measured under substantially more simultaneous history-fixture work;
+the landing gate's <=600s cap makes an optimistic estimate a real failure, never a PASS.
 
 ## Baseline 15 slowest tests
 
@@ -112,21 +118,46 @@ changes, shared store/Git/herdr changes, and missing/old gate contexts.
 - Closed fallback cleanup history: 1/10 → 1/3, still exact decode-counter equality.
   The full 40-seed randomized cleanup differential is retained in slow.
 
+## Quick timeout investigation and corrections
+
+- Hypothesis 1: a per-worktree cold Cargo cache, contrary to the shared-cache guidance.
+  `cargo metadata --no-deps` confirms the default target was `.worktrees/T-761/target`,
+  not the primary `corral/target`. Linked gates now derive the shared target from Git;
+  explicit overrides remain intact and docs check the binary from that same target.
+  Workspace candidate fingerprints still apply; no compiled result is assumed reusable.
+- Hypothesis 2: unnecessary feature-union changes. `cargo tree` shows zero `test-clock`
+  entries for TUI-only tests versus one for the gate scope. Work budgets now explicitly
+  keep `corral-core/test-clock`, avoiding a second core/ops/TUI build just to toggle it.
+- Clippy also uses `--profile test`, matching nextest's optimized dependency profile;
+  all-target lint scope, debug assertions and overflow checks stay enabled. The temporary
+  real-Cargo quick fixture validates the flag, not just an argv recorder.
+- Separate selection defect: a known private library fixture with no own tests fell back
+  to every test of its crate. A minimal red fixture selects 17 instead of 1. The fix selects
+  its nearest enclosing test module plus any existing integration/caller terms, not unrelated
+  crate tests. Unknown paths still fall back conservatively. No assertion or cap was loosened.
+- The cold first gate and incomplete timings remain evidence, not a successful benchmark.
+  The next authorized attempt determines whether these corrections fit the 180s budget.
+
 ## Checks so far
 
 - `cargo nextest run -p corral-ops --lib -E test(submission_paths_tests::action_budget::cases::)`:
   40/40 pass, 44.154s test wall (separate initial compilation 70s); slowest case 26.955s.
 - `cargo test -p corral-tui --lib work_stays -- --ignored --test-threads=1`: 3/3 pass, 33.17s.
+  Rechecked with the gate's explicit `--features corral-core/test-clock` and shared target:
+  3/3 pass in 33.35s, after a separately reported cold compilation of 2m35s. No time
+  outside the actual receipted gate is represented as a successful gate measurement.
   A combined parallel libtest invocation initially failed because board frame cache is
   process-global; the production work-budget recipe already uses separate processes. No
   assertion was relaxed. The first shrink also exposed an unsaturated Done viewport, fixed
   by keeping the configured working set constant, not changing counter expectations.
-- `python3 scripts/test_gate.py`: 15/15 pass (temporary fake-command fixtures, no full gate),
-  most recently 24.720s, including full-branch Pi/Darwin path scope and plan-verify coverage.
-- `python3 scripts/test_gate_select.py`: 6/6 pass.
+- `python3 scripts/test_gate.py`: 16/16 pass in 29.779s (temporary fake-command fixtures, no full gate),
+  including full-branch Pi/Darwin scope, plan verification, shared linked-worktree Cargo
+  cache and checking the binary from that same target directory.
+- `python3 scripts/test_gate_select.py`: 7/7 pass in 3.169s. The new private-fixture regression
+  fails before the fix (17 tests selected instead of its one enclosing case) and passes after.
 - Targeted plan verify and checkpoint context tests each pass (4.859s / 4.195s),
   asserting that both aggregate verification paths preserve all optional lanes.
-- `python3 scripts/test_gate_policy.py`: 6/6 pass, 1.390s (path/deletion/plan/unknown-owner
+- `python3 scripts/test_gate_policy.py`: 6/6 pass, 1.670s (path/deletion/plan/unknown-owner
   selection, enforced wall timeout, >30s added-cost justification, transitive Pi consumer
   selection, and a real tiny nextest fixture proving ordinary timeout + report-only exception).
 - `python3 scripts/test_slow_lane.py`: 3/3 pass, 0.002s (busy admission before any test/board
@@ -147,5 +178,7 @@ retains logs/artifacts and deduplicates failure tasks. Its cron line is document
 installs it after landing. No actual nightly/slow tier was run by this worker. Quick Pi now
 selects transitive TS consumers/role contracts (full keeps all), avoiding the old 189s Bun
 package run for instruction-only changes. Mutation sampling and monthly gardening remain
-separate owner-requested follow-ups awaiting IDs from PM. The full-tier after timing and remaining-suite PASS require the authorized
+separate owner-requested follow-ups: **T-765** (test/m/standard mutation sampling) and
+**T-766** (backend/m/standard monthly gardening + flake triage), both P2 Backlog and PM-held
+until T-761 lands; readback proof is attached. The full-tier after timing and remaining-suite PASS require the authorized
 landing result. This report does not assert either before that receipt exists.

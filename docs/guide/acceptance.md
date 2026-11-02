@@ -137,7 +137,8 @@ lint configuration file changed). Nextest runs the declared tests, joined with
   module trees include it (counting files shared through `#[path]`), or those
   whole targets when it is their root or a fixture module. When the library
   also includes that file through `#[path]`, it is selected as a library module
-  as well.
+  as well. A nested private library fixture without tests selects its nearest
+  enclosing test module, not an unrelated whole-crate run.
 - A crate root made only of `mod` and `use` declarations adds nothing when the
   crate's other changed paths select tests.
 - Anything the mapping cannot decide selects the whole crate, and the log names
