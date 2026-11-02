@@ -12,6 +12,83 @@ use crate::agent::hooks::metered_tests::{
 use crate::agent::launch::{Secrets, check, consume_bootstrap, host_command, write_ctl_cap};
 
 #[test]
+fn incompatible_host_queue_exposes_attention_and_retries_after_repair() {
+    isolated("dispatch::metered_tests::incompatible_host_queue_child");
+}
+
+#[test]
+#[ignore = "driven with private HOME/XDG by the parent test"]
+fn incompatible_host_queue_child() {
+    let (mut fx, _) = fixture();
+    fx.ctx.store.config.dispatch.paused = false;
+    fx.ctx.store.config.defaults.profile = Some("bedrock".into());
+    fx.ctx.store.save_config().unwrap();
+    let assets = fx.ctx.store.config.agent.assets_dir.clone().unwrap();
+    let compat = assets.join("compat.json");
+    let repaired = std::fs::read_to_string(&compat).unwrap();
+    let task = fx
+        .ctx
+        .store
+        .create("Host mismatch", Some("corral"), Status::Ready, "Fixture")
+        .unwrap();
+    let preview = fx
+        .ctx
+        .store
+        .preview_operating_policy(&corral_core::OperatingSelection {
+            tasks: [task.id.clone()].into(),
+            authority: corral_core::OperatingAuthority {
+                dispatch: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    fx.ctx.store.config = fx
+        .ctx
+        .store
+        .confirm_operating_policy(&preview, "fixture owner", jiff::Timestamp::now())
+        .unwrap();
+    write(
+        &compat,
+        r#"{"verdict":"GO","providers":["amazon-bedrock"]}"#,
+    );
+    let baseline = crate::slot_usage(&fx.ctx).unwrap().total();
+    let now = jiff::Timestamp::now();
+    for _ in 0..3 {
+        crate::queue_drain::start_queued(&fx.ctx, now).unwrap();
+        let current = fx.ctx.store.get(&task.id).unwrap();
+        assert!(current.runs.is_empty());
+        assert!(current.launch.is_none());
+        assert_eq!(crate::slot_usage(&fx.ctx).unwrap().total(), baseline);
+        let board = crate::attention::board(&fx.ctx, now).unwrap();
+        let row = board.tasks.iter().find(|row| row.task == task.id).unwrap();
+        assert!(
+            row.assessment
+                .conditions
+                .iter()
+                .any(|condition| condition.reason.contains("corral agent install")),
+            "{:?}",
+            row.assessment.conditions
+        );
+    }
+    assert_eq!(fx.events("dispatch_failed").len(), 1);
+    write(&compat, &repaired);
+    crate::queue_drain::start_queued(&fx.ctx, now).unwrap();
+    let current = fx.ctx.store.get(&task.id).unwrap();
+    assert_eq!(current.status, Status::Running);
+    assert_eq!(current.runs.len(), 1);
+    assert_eq!(crate::slot_usage(&fx.ctx).unwrap().total(), baseline + 1);
+    let board = crate::attention::board(&fx.ctx, now).unwrap();
+    let row = board.tasks.iter().find(|row| row.task == task.id).unwrap();
+    assert!(
+        !row.assessment
+            .conditions
+            .iter()
+            .any(|condition| condition.reason.contains("memory_contract_unavailable"))
+    );
+}
+
+#[test]
 fn worker_dispatch_emits_one_metered_notice_despite_repeated_readiness() {
     isolated("dispatch::metered_tests::worker_dispatch_child");
 }

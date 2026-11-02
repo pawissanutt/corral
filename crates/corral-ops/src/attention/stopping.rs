@@ -21,6 +21,7 @@ pub(super) fn planner_owns_stop(task: &Task, run: &corral_core::PlanRun) -> bool
 
 pub(super) fn load(ctx: &Ctx, n: &mut Neighborhood<'_>) -> Result<()> {
     n.missing_reviewers = crate::pane_liveness::recorded_missing(ctx)?;
+    n.queue_refusals = crate::queue_drain::attention_refusals(ctx)?;
     for task in n
         .tasks
         .iter()
@@ -38,6 +39,27 @@ pub(super) fn conditions(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &
         return;
     }
     native_waits(task, n, a);
+    if task.status == Status::Ready
+        && let Some((at, reason)) = n.queue_refusals.get(&task.id)
+    {
+        let mut condition = row(
+            task,
+            now,
+            "launch_failed",
+            WaitClass::OwnerDecision,
+            Responsible::Owner,
+            (
+                Some(crate::verification::digest(reason.as_bytes())),
+                Some(*at),
+            ),
+            reason.clone(),
+        );
+        condition
+            .resume
+            .push(check("launch_repaired", &task.id, None, false));
+        a.conditions.push(condition);
+        a.progress = None;
+    }
     if let Some((at, reason)) = n.prepared_refusals.get(&task.id) {
         let mut condition = row(
             task,
