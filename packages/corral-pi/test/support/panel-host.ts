@@ -26,6 +26,7 @@ export interface PanelHost {
   readonly bound: string;
   /** The SDK's own transcript ScrollView, captured where Pi hands it to the mainView hook. */
   readonly transcript: ScrollView;
+  readonly chatPresentation: () => import("@earendil-works/pi-coding-agent").InteractiveChatPresentation;
   screen(): ScreenModel;
   resize(columns: number, rows: number): void;
   stop(): Promise<void>;
@@ -61,16 +62,18 @@ export async function startPanelHost(extend?: (...args: Parameters<Extend>) => v
     if (!panels) throw new Error("rich host did not install native panels");
     const physical = new RecordingTerminal(), terminal = panels.wrap(physical);
     let transcript: Component | undefined;
+    let chatPresentation: PanelHost["chatPresentation"] | undefined;
     mode = new sdk.InteractiveMode(host.runtime, { terminal, tuiMode: "fullscreen", readOnlyQueue: true, verbose: false,
-      mainView: view => { transcript = view; return panels.mainView(view); } });
+      mainView: (view, presentation) => { transcript = view; chatPresentation = presentation; return panels.mainView(view, presentation); } });
     await mode.init(); host.markAttached("interactive");
     void mode.run().catch(error => { throw error; });
     await physical.until("Bound to Corral");
     const view: Component | undefined = transcript;
     if (!(view instanceof ScrollView)) throw new Error("transcript is not a ScrollView");
+    if (!chatPresentation) throw new Error("Native chat presentation was not supplied");
     const model = new ScreenModel(physical.columns, physical.rows);
     return {
-      work, host, panels, physical, events, bound: host.sessionId(), transcript: view,
+      work, host, panels, physical, events, bound: host.sessionId(), transcript: view, chatPresentation,
       screen: () => model.sync(physical.writes),
       resize(columns, rows) { model.sync(physical.writes); physical.resize(columns, rows); model.resize(columns, rows); },
       stop: restore,

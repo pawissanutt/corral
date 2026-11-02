@@ -2,6 +2,13 @@
 use super::CapabilitySettings;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExploreServiceTier {
+    Default,
+    Priority,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ExploreSettings {
@@ -9,6 +16,8 @@ pub struct ExploreSettings {
     pub model: Option<String>,
     pub max_turns: u32,
     pub timeout_secs: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<ExploreServiceTier>,
 }
 impl Default for ExploreSettings {
     fn default() -> Self {
@@ -17,6 +26,7 @@ impl Default for ExploreSettings {
             model: None,
             max_turns: 12,
             timeout_secs: 120,
+            service_tier: None,
         }
     }
 }
@@ -110,6 +120,31 @@ mod tests {
         assert!(!disabled.resolve(AgentRole::Worker, None).enabled("oracle"));
         assert!(toml::from_str::<AgentCapabilities>("[pm.subagents]\nenabled = true").is_ok());
     }
+    #[test]
+    fn explore_service_tier_is_explicit_validated_and_absent_from_legacy_defaults() {
+        let defaults = explore_settings(&CapabilitySettings::new()).unwrap();
+        assert!(!defaults.contains_key("service_tier"));
+        for tier in ["default", "priority"] {
+            let settings =
+                explore_settings(&[("service_tier".into(), tier.into())].into()).unwrap();
+            assert_eq!(settings["service_tier"], tier);
+        }
+        for tier in ["fast", "flex", "bogus"] {
+            assert!(explore_settings(&[("service_tier".into(), tier.into())].into()).is_err());
+        }
+        assert!(oracle_settings(&[("service_tier".into(), "priority".into())].into()).is_err());
+        use crate::{agent::AgentRole, agent_capabilities::AgentCapabilities};
+        let config: AgentCapabilities = toml::from_str(
+            "[assistant.subagents]\nmodel = 'gpt-6-luna'\nservice_tier = 'priority'\n",
+        )
+        .unwrap();
+        let snapshot = config.resolve(AgentRole::Assistant, None);
+        assert_eq!(
+            snapshot.features["subagents"].settings["service_tier"],
+            "priority"
+        );
+    }
+
     #[test]
     fn bounded_auxiliary_settings() {
         let empty = CapabilitySettings::new();

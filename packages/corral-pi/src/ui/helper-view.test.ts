@@ -1,8 +1,12 @@
-import { expect, test } from "bun:test";
-import { Text, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { beforeAll, expect, test } from "bun:test";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import { Text, TuiAltScreen, getKeybindings, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { getLayoutBoxesAt, renderLayoutFrame, type LayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
 import { createChatViewport } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/chat-viewport.js";
 import { helperRows } from "./helper-view.ts";
+import { HelperChat } from "./helper-chat.ts";
+import { RecordingTerminal } from "../../test/support/panel-terminal.ts";
+beforeAll(() => initTheme("dark", false));
 import { NativeWorkbench } from "./workbench.ts";
 import type { PanelSnapshot } from "./panels-view.ts";
 import type { HelperInspection } from "../extensions/subagent/inspection.ts";
@@ -59,21 +63,34 @@ test("keyboard and pointer select stable helper identities without changing draf
   } finally { wb.dispose(); }
 });
 
-test("terminal result and errors remain visible after a verbose transcript exhausts its display budget", () => {
+test("helper tool expansion and hints use Pi's configured shortcut", () => {
+  const keys = getKeybindings(), previous = keys.getUserBindings();
+  const wb = new NativeWorkbench({ cwd: "/tmp", identity: { store: "s", project: "", role: "assistant", assistant: "A-test", generation: 1 },
+    snapshot: () => null, changed() {}, canInteract: () => true });
+  try {
+    keys.setUserBindings({ ...previous, "app.tools.expand": "alt+o" });
+    wb.openHelpers(); expect(wb.handleInput("\x1bo")).toBe(true);
+    expect(helperRows([], undefined, true).map(row => row.text).join("\n").toLowerCase()).toContain("alt+o");
+  } finally { keys.setUserBindings(previous); wb.dispose(); }
+});
+
+test("native transcript retains returned result while selector metadata retains observed errors", () => {
   const entry = { ...helper("r", "Question"), phase: "completed" as const, result: "\n".repeat(150) + "FINAL_RESULT_VISIBLE",
     error: "OBSERVED_ERROR_VISIBLE", inspectionError: "INSPECTOR_WARNING_VISIBLE",
     messages: Array.from({ length: 64 }, (_, index) => ({ id: String(index), kind: "assistant" as const, text: "line\n".repeat(300) })) };
-  const rows = helperRows([entry], "r", true), text = rows.map(row => row.text).join("\n");
-  expect(text).toContain("Returned result"); expect(text).toContain("FINAL_RESULT_VISIBLE");
-  expect(text).toContain("OBSERVED_ERROR_VISIBLE"); expect(text).toContain("INSPECTOR_WARNING_VISIBLE");
-  expect(text).toContain("Display truncated"); expect(rows.length).toBeLessThanOrEqual(1500);
+  const metadata = helperRows([entry], "r", true).map(row => row.text).join("\n");
+  const chat = new HelperChat(() => undefined, "/tmp");
+  const transcript = stripTerminalSequences(chat.renderHelper(entry, 80).join("\n"));
+  expect(transcript).toContain("FINAL_RESULT_VISIBLE");
+  expect(metadata).toContain("OBSERVED_ERROR_VISIBLE"); expect(metadata).toContain("INSPECTOR_WARNING_VISIBLE");
 });
 
-test("helper output treats terminal controls as data and bounds the displayed transcript", () => {
+test("native helper rendering sanitizes data before rendering, preserving only renderer-produced controls", () => {
   const entry = { ...helper("r", "Question"), messages: [{ id: "tool", kind: "tool" as const, tool: "read", phase: "completed" as const,
     text: "\x1b]52;c;EVIL\x07\x1b[2J" + "line\n".repeat(5000) }] };
-  const rows = helperRows([entry], "r", true);
-  expect(rows.length).toBeLessThanOrEqual(1001);
-  expect(rows.map(row => row.text).join("\n")).not.toContain("\x1b");
-  expect(rows.at(-1)?.text).toContain("Display truncated");
+  const tui = new TuiAltScreen(new RecordingTerminal());
+  const chat = new HelperChat(() => tui, "/tmp");
+  const rendered = chat.renderHelper(entry, 80).join("\n");
+  expect(rendered).not.toContain("\x1b]52"); expect(rendered).not.toContain("\x1b[2J");
+  expect(stripTerminalSequences(rendered)).not.toContain("EVIL");
 });

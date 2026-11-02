@@ -3,17 +3,20 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as sdk from "@earendil-works/pi-coding-agent";
-import { Text, stripTerminalSequences } from "@earendil-works/pi-tui";
+import { Text, TuiAltScreen, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { renderLayoutFrame } from "../node_modules/@earendil-works/pi-tui/dist/layout.js";
+import { z } from "zod";
 import { EventLog } from "../src/bridge/events.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch } from "../src/host/restrict.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
 import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
+import { requestBody } from "./fixtures/auth/fake-transport.ts";
 import { buildFixtureInstall } from "./support/fixture-install.ts";
 import { writeFakeCorral } from "./support/fake-corral.ts";
 import { nextEvent } from "./support/wait.ts";
+import { RecordingTerminal } from "./support/panel-terminal.ts";
 import { workerRole } from "../src/roles/worker/index.ts";
 import { PACKAGE_ROOT } from "./support/fixture-install.ts";
 
@@ -27,8 +30,10 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
     const transport = modules.auth.transport?.(authContext());
     if (!transport) throw new Error("fixture transport missing");
     let requestCount = 0;
+    const requests: { model: string; service_tier?: string }[] = [];
     let holdOnRequest: number | undefined;
     const network = guardedFetch((input, init) => {
+      requests.push(z.object({ model: z.string(), service_tier: z.string().optional() }).parse(requestBody(init)));
       if (++requestCount === holdOnRequest) fixtureTransport().holdNext();
       return transport(input, init);
     });
@@ -44,7 +49,7 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
     const client = new CorralClient({ corral: corral.path, root: cwd, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "" });
     host = await HostSession.create({ sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol", modules: { ...modules, role: workerRole(PACKAGE_ROOT) },
       client, events, network, capabilities: { catalog: 7, digest: "a".repeat(64), preset: "full", enabled: ["subagents", "oracle"] },
-      guidance: { projectText: false, settings: { subagents: { max_parallel: 3, model: null, max_turns: 12, timeout_secs: 30 },
+      guidance: { projectText: false, settings: { subagents: { max_parallel: 3, model: "gpt-6-luna", service_tier: "priority", max_turns: 12, timeout_secs: 30 },
         oracle: { model: "gpt-6.1-sol", timeout_secs: 30 } } },
       sessionManager: sdk.SessionManager.create(cwd, join(cwd, "sessions")),
     });
@@ -54,7 +59,10 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
     expect(host.loadout).toContain("oracle");
     const workbench = host.panels?.workbench;
     if (!workbench) throw new Error("Native workbench missing");
-    const root = workbench.mount(new Text("PARENT_TRANSCRIPT", 0, 0));
+    sdk.initTheme("dark", false);
+    const tui = new TuiAltScreen(new RecordingTerminal());
+    const root = workbench.mount(new Text("PARENT_TRANSCRIPT", 0, 0), () => ({ tui, outputPad: 1,
+      markdownTheme: sdk.getMarkdownTheme(), markdownTransformers: [], renderers: name => sdk.withBuiltInRenderers(name, undefined) }));
     const screen = () => stripTerminalSequences(renderLayoutFrame(root, 80, 70, () => {}).lines.join("\n"));
     workbench.openHelpers(); expect(screen()).toContain("No helper calls yet");
     for (const stage of ["startup", "reload"]) {
@@ -81,9 +89,14 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
       expect(screen()).toContain("oracle advice"); expect(screen()).toContain("consult only");
       workbench.handleInput("j");
       expect(screen()).toContain("child findings"); expect(screen()).toContain("research only");
-      expect(screen()).toContain("write"); expect(screen()).toContain("error");
+      expect(screen()).toContain("Tool write not found");
+      workbench.handleInput("\x0f");
       expect(requestCount).toBe(beforeInspection); // Inspecting never invokes a model or resumes a child.
     }
+    const researchRequests = requests.filter(request => request.model === "gpt-6-luna");
+    expect(researchRequests.length).toBeGreaterThan(0);
+    expect(researchRequests.filter(request => request.service_tier !== "priority")).toEqual([]);
+    expect(requests.filter(request => request.model !== "gpt-6-luna").every(request => request.service_tier === undefined)).toBeTrue();
     const calls = corral.calls().filter((c) => c.envelope.payload.kind === "auxiliary");
     expect(calls).toHaveLength(12);
     expect(new Set(calls.map((c) => c.envelope.payload.request)).size).toBe(4);

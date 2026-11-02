@@ -96,3 +96,56 @@ test("an unbounded subprocess lane is labelled before admission and refuses a ha
   expect(launched).toBeFalse();
   expect(result.errorMessage).toContain("unbounded transport");
 });
+
+test("Codex priority reserves and settles at the SDK tier rate without changing tokens or wire model prices", async () => {
+  for (const item of [
+    { id: "gpt-6-luna", tier: "priority", multiplier: 2, aborted: false },
+    { id: "gpt-5.5", tier: "priority", multiplier: 2.5, aborted: false },
+    { id: "gpt-6-luna", tier: undefined, multiplier: 1, aborted: false },
+    { id: "gpt-6-luna", tier: "default", multiplier: 1, aborted: false },
+    { id: "gpt-6-luna", tier: "priority", multiplier: 2, aborted: true },
+  ]) {
+    const priced: Model<Api> = { ...model, id: item.id, provider: "openai-codex", api: "openai-codex-responses", contextWindow: 1_000_000,
+      cost: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 } };
+    const records: Record<string, unknown>[] = []; let forwardedTier: unknown;
+    const budget = new RunBudget({ cancel() {}, record: async payload => { records.push(payload); return { admitted: true }; } });
+    const source: StreamFunction = (wireModel, _context, options) => {
+      expect(wireModel.cost).toEqual({ input: 1, output: 0, cacheRead: 0, cacheWrite: 0 });
+      forwardedTier = options && "serviceTier" in options ? options.serviceTier : undefined;
+      const stream = createAssistantMessageEventStream();
+      const result: AssistantMessage = { ...message("fixture-tier"), api: priced.api, provider: priced.provider, model: priced.id,
+        stopReason: item.aborted ? "aborted" : "stop", usage: { ...message("usage").usage, input: 1_000_000, output: 0, totalTokens: 1_000_000 } };
+      if (item.aborted) stream.push({ type: "error", reason: "aborted", error: result });
+      else stream.push({ type: "done", reason: "stop", message: result });
+      stream.end(result); return stream;
+    };
+    const options = { maxTokens: 5, serviceTier: item.tier };
+    const terminal: string[] = [];
+    for await (const event of budget.wrap(source)(priced, context, options)) terminal.push(event.type);
+    expect(terminal).toEqual(item.aborted ? ["error"] : ["done"]);
+    expect(forwardedTier).toBe(item.tier);
+    expect(records.map(record => record.action)).toEqual(item.aborted ? ["reserve"] : ["reserve", "settle"]);
+    expect(records[0]?.usd_nanos).toBe(1_000_000_000 * item.multiplier);
+    expect(records[0]?.tokens).toBe(1_000_005);
+    if (!item.aborted) {
+      expect(records[1]?.usd_nanos).toBe(1_000_000_000 * item.multiplier);
+      expect(records[1]?.tokens).toBe(1_000_000);
+    }
+    expect(budget.state().active).toBe(0);
+  }
+});
+
+test("a priority request exceeding the USD cap is refused before transport", async () => {
+  let launched = false; let reserved: unknown;
+  const priced: Model<Api> = { ...model, id: "gpt-6-luna", provider: "openai-codex", api: "openai-codex-responses", contextWindow: 1_000_000,
+    cost: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 } };
+  const budget = new RunBudget({ cancel() {}, record: async payload => {
+    reserved = payload.usd_nanos;
+    return { admitted: Number(payload.usd_nanos) <= 1_500_000_000, limits: { max_usd_nanos: 1_500_000_000 } };
+  } });
+  const source: StreamFunction = () => { launched = true; throw new Error("must not contact provider"); };
+  const options = { maxTokens: 5, serviceTier: "priority" };
+  const result = await budget.wrap(source)(priced, context, options).result();
+  expect(reserved).toBe(2_000_000_000); expect(launched).toBe(false);
+  expect(result.errorMessage).toContain("budget_exhausted");
+});

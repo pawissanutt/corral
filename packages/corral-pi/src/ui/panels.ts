@@ -1,6 +1,6 @@
 // First-party native panels over the existing InteractiveMode, never a second agent/editor loop.
 import type * as Sdk from "@earendil-works/pi-coding-agent";
-import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionUIContext, InteractiveChatPresentation } from "@earendil-works/pi-coding-agent";
 import {
   getKeybindings, isKeyRelease, matchesKey, Text, TuiAltScreen, visibleWidth, type Component, type Keybinding, type Terminal, type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
@@ -25,6 +25,7 @@ export interface NativePanelsOptions {
   readonly readInbox?: (signal: AbortSignal) => Promise<unknown>;
   readonly projectDir?: string;
   readonly readProjects?: (signal: AbortSignal) => Promise<unknown>;
+  readonly canRenderTool?: (name: string) => boolean;
 }
 interface TabHit { readonly from: number; readonly to: number; readonly tab: PanelTab }
 interface PagerHit { readonly y: number; readonly from: number; readonly to: number }
@@ -67,7 +68,7 @@ export class NativePanels implements PanelSurface {
       this.refresh();
     } });
   }
-  mainView(transcript: Component): Component { return this.workbench.mount(transcript); }
+  mainView(transcript: Component, presentation?: () => InteractiveChatPresentation): Component { return this.workbench.mount(transcript, presentation); }
   wrap(physical: Terminal): PanelTerminal {
     if (this.terminal) throw new Error("native panels already have a terminal");
     this.terminal = new PanelTerminal(physical, this);

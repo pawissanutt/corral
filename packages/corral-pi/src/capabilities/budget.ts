@@ -3,6 +3,7 @@
 import { randomUUID, createHash } from "node:crypto";
 import { calculateCost, type Api, type Model, type StreamFunction, type Usage } from "@earendil-works/pi-ai";
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
+import { getServiceTierCostMultiplier } from "@earendil-works/pi-ai/api/openai-codex-responses";
 
 export interface BudgetReply extends Record<string, unknown> {
   admitted?: boolean;
@@ -24,7 +25,8 @@ function nanos(value: number): number { return integer(Math.ceil(value * 1e9)); 
 // Reserve the entire model context plus a bounded output, not a tokenizer estimate. This covers
 // image inputs and provider serialization overhead. Admission may conservatively refuse a request
 // that would actually cost less. Pricing tiers and 1h cache writes are bounded at the highest rate.
-export function reservation(model: Model<Api>, output: number) {
+export function reservation(model: Model<Api>, output: number, multiplier = 1) {
+  if (!Number.isFinite(multiplier) || multiplier < 1) throw new Error("budget_unpriced: invalid request pricing multiplier");
   const input = integer(model.contextWindow);
   output = integer(output);
   if (!input || !output) throw new Error("budget_unbounded: missing context/output bound");
@@ -34,12 +36,12 @@ export function reservation(model: Model<Api>, output: number) {
   const priced = model.provider === "llama.cpp" || prices.some((v) => v > 0);
   const inputRate = Math.max(...rates.flatMap((r) => [r.input, r.cacheRead, r.cacheWrite * 2]));
   const outputRate = Math.max(...rates.map((r) => r.output));
-  return { tokens: integer(input + output), usd_nanos: nanos((input * inputRate + output * outputRate) / 1e6), priced };
+  return { tokens: integer(input + output), usd_nanos: nanos((input * inputRate + output * outputRate) / 1e6 * multiplier), priced };
 }
-function actual(model: Model<Api>, usage: Usage) {
+function actual(model: Model<Api>, usage: Usage, multiplier: number) {
   const tokens = integer(integer(usage.input) + integer(usage.output) + integer(usage.cacheRead) + integer(usage.cacheWrite));
-  // Freeze this request's model pricing, rather than repricing history on resume.
-  return { tokens, usd_nanos: nanos(calculateCost(model, structuredClone(usage)).total) };
+  // Freeze this request's model and tier pricing, rather than trusting mutable usage.cost or repricing history on resume.
+  return { tokens, usd_nanos: nanos(calculateCost(model, structuredClone(usage)).total * multiplier) };
 }
 export class RunBudget {
   private readonly active = new Set<AbortController>();
@@ -67,7 +69,10 @@ export class RunBudget {
       options?.signal?.throwIfAborted();
       const request = randomUUID();
       const output = Math.min(options?.maxTokens ?? model.maxTokens, model.maxTokens);
-      const bound = reservation(model, output);
+      const tier = options && "serviceTier" in options ? options.serviceTier : undefined;
+      const multiplier = model.api === "openai-codex-responses" && tier === "priority"
+        ? getServiceTierCostMultiplier(model, tier) : 1;
+      const bound = reservation(model, output, multiplier);
       const controller = new AbortController();
       this.active.add(controller);
       let admitted = false;
@@ -97,7 +102,7 @@ export class RunBudget {
                 const response = createHash("sha256").update(JSON.stringify([
                   model.provider, model.id, message.responseId ?? request,
                 ])).digest("hex");
-                const usage = actual(model, message.usage);
+                const usage = actual(model, message.usage, multiplier);
                 if (usage.tokens > 0) {
                   self.last = await self.options.record({ kind: "budget", action: "settle", request, response, ...usage });
                   if (self.last.exhausted) self.stop();

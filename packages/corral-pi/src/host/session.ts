@@ -70,7 +70,7 @@ import { auxiliarySettings } from "../extensions/subagent/settings.ts";
 import { exploreTool } from "../extensions/subagent/index.ts";
 import { oracleTool } from "../extensions/oracle/index.ts";
 import { runAuxiliarySession } from "../extensions/subagent/session.ts";
-import { executionRefusal, nestedCorralRead } from "../roles/common/execution.ts";
+import { executionRefusal, exploreLoadout, nestedCorralRead } from "../roles/common/execution.ts";
 import { OWNER_INPUT_TEXT_MAX, ownerInputText, utf8Prefix } from "../roles/assistant/owner-action.ts";
 import type { ConfirmUi } from "../tools/define.ts";
 import { memoryContext } from "./memory.ts";
@@ -313,6 +313,7 @@ export class HostSession {
       ...(options.identity.project && options.guidance?.projectDir && options.guidance.projectDir !== options.client.workspaceRoot
         ? { projectDir: options.guidance.projectDir } : {}),
       readProjects: signal => options.client.projectScopes(signal),
+      canRenderTool: name => exploreLoadout(this.loadout).includes(name),
       inspection: () => options.client.inspectionSnapshot(),
       lifecycle: () => options.client.inspectionSnapshot(true),
       readInbox: signal => options.client.attentionSnapshot(signal),

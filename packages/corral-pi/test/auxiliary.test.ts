@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { AuxiliaryRuntime, type AuxiliaryResult, type Invocation } from "../src/extensions/subagent/runtime.ts";
+import { ExploreSettingsSchema, OracleSettingsSchema } from "../src/extensions/subagent/settings.ts";
 import { executionRefusal, exploreLoadout } from "../src/roles/common/execution.ts";
 
 function barrier<T = void>() {
@@ -106,6 +107,29 @@ test("disabled/unconfigured auxiliary calls do not contact a provider or create 
   await expect(runtime.run("oracle", "unconfigured", "question")).rejects.toThrow("not configured");
   expect(calls).toBe(0);
   await runtime.close();
+});
+
+test("Explore priority is validated and scoped without changing Oracle or other providers", async () => {
+  const explore = { ...settings.explore, model: "gpt-6-luna", service_tier: "priority" as const };
+  expect(ExploreSettingsSchema.parse(explore).service_tier).toBe("priority");
+  expect(() => ExploreSettingsSchema.parse({ ...explore, service_tier: "fast" })).toThrow();
+  expect(() => OracleSettingsSchema.parse({ ...settings.oracle, service_tier: "priority" })).toThrow();
+  const invocations: Invocation[] = [];
+  const options = { settings: { explore, oracle: settings.oracle }, generation: 1, provider: "openai-codex", model: "parent", sessionId: () => "parent",
+    record: async (value: Record<string, unknown>) => ({ session_id: value.request, session_file: "/unused/reference" }),
+    execute: async (invocation: Invocation): Promise<AuxiliaryResult> => { invocations.push(invocation); return { outcome: "completed", text: "answer" }; },
+  };
+  const runtime = new AuxiliaryRuntime(options);
+  await runtime.run("explore", "one", "research"); await runtime.run("oracle", "two", "consult");
+  expect(invocations.map(invocation => [invocation.kind, invocation.model, invocation.serviceTier])).toEqual([
+    ["explore", "gpt-6-luna", "priority"], ["oracle", "stronger", undefined],
+  ]);
+  const other = new AuxiliaryRuntime({ ...options, provider: "anthropic" });
+  await expect(other.run("explore", "one", "research")).rejects.toThrow("requires the openai-codex provider");
+  expect(invocations).toHaveLength(2);
+  const standard = new AuxiliaryRuntime({ ...options, settings: { explore: { ...explore, service_tier: "default" } } });
+  await standard.run("explore", "one", "standard research"); expect(invocations.at(-1)?.serviceTier).toBeUndefined();
+  await Promise.all([runtime.close(), other.close(), standard.close()]);
 });
 
 test("child ceiling denies writes, shell, MCP, hooks, recursive spawn and Corral at every depth", () => {
