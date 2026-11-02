@@ -11,7 +11,7 @@ use super::action_budget_fixture::{Bench, Kind};
 
 pub(super) type Cells = BTreeMap<String, u64>;
 
-/// One full walk of the store, as the FU-3 sites read it: every task hydrated.
+/// The independent project-title and historical-location inputs of the FU-3 sites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) struct Walk {
     pub(super) tasks: u64,
@@ -60,18 +60,25 @@ pub(super) fn walk(bench: &Bench) -> (Walk, BTreeSet<PathBuf>) {
 
 pub(super) fn store_walk(store: &corral_core::Store) -> (Walk, BTreeSet<PathBuf>) {
     let tasks = store.list().unwrap();
-    let (mut rows, mut bytes) = (0, 0);
-    for task in &tasks {
-        let _hot = HotScope::enter();
-        let before = work::snapshot();
-        store.get(&task.id).unwrap();
-        let delta = work::snapshot().since(&before);
-        rows += Counter::DECODES
-            .iter()
-            .map(|c| delta.total(*c))
-            .sum::<u64>();
-        bytes += delta.decoded_doc_bytes();
-    }
+    use corral_core::backend::{PageReq, TaskOrder, TaskQuery};
+    let headers = store
+        .view()
+        .unwrap()
+        .tasks(
+            &TaskQuery {
+                project: Some("app".into()),
+                statuses: Vec::new(),
+                order: TaskOrder::IdAsc,
+            },
+            PageReq::first(u32::MAX),
+        )
+        .unwrap()
+        .items;
+    let rows = headers.len() as u64;
+    let bytes = headers
+        .iter()
+        .map(|h| serde_json::to_vec(h).unwrap().len() as u64)
+        .sum();
     let fixed = fixed_volumes(store);
     let mut volumes = fixed.clone();
     for run in tasks.iter().flat_map(|t| &t.runs) {
@@ -83,7 +90,7 @@ pub(super) fn store_walk(store: &corral_core::Store) -> (Walk, BTreeSet<PathBuf>
     let runs: u64 = tasks.iter().map(|t| t.runs.len() as u64).sum();
     let walk_only: u64 = volumes.difference(&fixed).map(|p| path_stats(p)).sum();
     let walk = Walk {
-        tasks: tasks.len() as u64,
+        tasks: 0, // neither site hydrates tasks
         rows,
         bytes,
         stats: runs + walk_only,
@@ -319,9 +326,9 @@ pub(super) fn followup_failures(
 ) -> Vec<String> {
     let mut failures = Vec::new();
     let get = |cell: &str| cells.get(cell).copied().unwrap_or(0);
-    let sampled = samples.iter().fold((0, 0, 0, 0), |a, w| {
-        (a.0 + w.tasks, a.1 + w.rows, a.2 + w.bytes, a.3 + w.stats)
-    });
+    let sampled = samples
+        .iter()
+        .fold((0, 0, 0, 0), |a, w| (0, 0, 0, a.3 + w.stats));
     for site in ["likely_files", "sample"] {
         let calls = get(&format!("calls.FU-3.{site}"));
         let cell = |counter: &str| get(&format!("{counter}.followup.FU-3.{site}"));
@@ -332,14 +339,14 @@ pub(super) fn followup_failures(
             cell("decoded_doc_bytes"),
             cell("file_stats"),
         );
-        let stats = |walk: &Walk| if site == "sample" { walk.stats } else { 0 };
+        let stats = |_: &Walk| 0;
         let fits = (site == "sample" && observed == sampled)
             || (site != "sample")
                 && (0..=calls).any(|k| {
                     let mix = |a: u64, b: u64| k * a + (calls - k) * b;
                     observed
                         == (
-                            mix(before.tasks, after.tasks),
+                            0,
                             mix(before.rows, after.rows),
                             mix(before.bytes, after.bytes),
                             mix(stats(before), stats(after)),

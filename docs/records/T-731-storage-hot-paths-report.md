@@ -9,11 +9,11 @@ worktree belonging to another task, or fixture archive was modified.
 
 | Command | A / pinned 0.3.0 median | B / candidate median | B bound |
 | --- | ---: | ---: | ---: |
-| list --json | 0.967321 s | **0.114827 s** | 0.200 s |
-| pm next --json | 3.875875 s | **0.164883 s** | 0.500 s |
-| automation status | 2.873516 s | **0.114823 s** | 0.500 s |
+| list --json | 1.571862 s | **0.165046 s** | 0.200 s |
+| pm next --json | 3.324690 s | **0.114769 s** | 0.500 s |
+| automation status | 3.527878 s | **0.164997 s** | 0.500 s |
 
-`cutover-final/PASS` exists; every measurement exits zero. B's six separate syscall/exec
+`cutover-accounting-repeat/PASS` exists; every measurement exits zero. B's six separate syscall/exec
 traces count zero git/diff processes. A's PM and automation exec traces each count
 400 git processes, all diffs. These traces are outside the timed samples.
 
@@ -52,7 +52,10 @@ locations, not in their nested payloads.
 **T-672 and T-678 were not folded in.** Historical artifact metadata and selected-action
 canonical identity remain their separate follow-ups; neither was this fixture's cause.
 This change removes the measured FU-3 resource-sample and title-inference full expansions,
-not unrelated historical consumers.
+not unrelated historical consumers. Existing FU-3 attribution remains for the required
+historical filesystem checks and historical title headers; it is not a new exemption.
+Exact work models now require zero resource-sample hydrations/document decodes and count
+the actual header rows/bytes, view opens, filesystem checks and nonce derivatives.
 
 ## Reproduction and evidence
 
@@ -60,9 +63,9 @@ Built locally, never installed:
 
 ```sh
 cargo build --release -p corral </dev/null
-cp target/release/corral .evidence/corral-final
-scripts/storage-bench.sh --after .evidence/corral-final \
-  --out .evidence/cutover-final --projects /home/pawis/miti-workspace </dev/null
+cp target/release/corral .evidence/corral-accounting-final
+scripts/storage-bench.sh --after .evidence/corral-accounting-final \
+  --out .evidence/cutover-accounting-repeat --projects /home/pawis/miti-workspace </dev/null
 ```
 
 The harness itself is unchanged: independent A/B extractions, B dry-run/apply/check,
@@ -77,20 +80,23 @@ Hash-bound inputs and executable (full hashes also in `identity.json`):
 - Prepared archive: `0a8d23ffb0a40f366f633c39d59fcd14aa87d7894072f61ea6e48623ef2837f0`
 - Prepared content: `33edcd5506fcf4475242b75af2554fd383b226a14aeb2e65efff947a7a92eaff`
 - A: `aba46287e1c97797341abf3e8ed6add6643a7b1ea54366e842edcfa53e572fff`
-- B: `cf5852fb0046c305b79abe94d501f1a0e77a49a055dbd6c30cc7df16c8213668`
+- B: `e66f865f308bf63464dc71f687b3c66e1190009c0d9f3996380b4342cb5ee4bc`
 
 The harness records `/proc/loadavg` before **every** invocation in `commands.jsonl`.
 No artificial load or load generators were used. Timed samples' one-minute host loads:
 
 | Command | A loads in sample order | B loads in sample order |
 | --- | --- | --- |
-| list | 26.43, 25.83, 25.83, 25.83, 25.83 | 25.83, 25.83, 25.83, 25.83, 25.83 |
-| pm next | 23.40, 22.89, 22.50, 21.58, 21.58 | 22.89, 22.50, 22.50, 21.58, 21.13 |
-| automation status | 20.03, 20.03, 19.15, 17.86, 19.31 | 20.03, 19.15, 17.86, 19.31, 19.04 |
+| list | 24.50, 24.50, 24.46, 24.46, 24.10 | 24.50, 24.46, 24.46, 24.10, 24.10 |
+| pm next | 17.83, 16.80, 16.57, 16.57, 15.89 | 16.80, 16.80, 16.57, 15.89, 15.02 |
+| automation status | 11.96, 11.81, 11.90, 11.90, 11.43 | 11.81, 11.90, 11.90, 11.43, 11.31 |
 
-The raw evidence bundle retains baseline and intermediate failures as well as final
+The raw evidence bundles retain baseline and intermediate failures as well as final
 stdout/stderr, commands/loads, medians, hashes, equivalence, all exported task documents,
-traces and PASS. Reviewers can independently recalculate medians and parse the exports.
+traces and PASS. The first candidate passed at 0.114827/0.164883/0.114823 s. After the
+accounting-only repair, the first fresh run missed list (0.265276 s) while PM/status
+passed (0.114734/0.114784 s). That failure is retained, not excused or relabeled. The
+unchanged full protocol was then repeated on fresh copies; the table above is that run. Reviewers can independently recalculate medians and parse the exports.
 Final database + blobs: **776,790,681 bytes** (161,828,864 + 614,961,817), below 1 GB.
 
 ## Focused validation
@@ -105,6 +111,9 @@ Final database + blobs: **776,790,681 bytes** (161,828,864 + 614,961,817), below
   historical-file inference and no full task lists in repeated title inference.
 - `cargo test -p corral --test attribution_cli`: **18 passed**, including actual retry ids,
   run cwd, explicit author, config observation and import attribution.
+- `cargo test -p corral --bin corral list_open_has_identical_counters_with_tenfold_terminal_and_nested_history`: **passed** after the first quick gate exposed lost FU-3 filesystem attribution (FileStats 5 vs 32). The historical work stayed intact; its original attribution was restored.
+- `cargo test -p corral-ops --test fu3_instrumentation`: **14 passed**; four ignored child entrypoints were executed by their fresh-process parents. Same 1x/10x outputs, exact header/resource cost cells and original busy/admitting behavior.
+- Exact action-budget tests: **5 passed**; nonce derivative **1 passed**; whole root PM/assistant sync model **2 passed**. Existing effect, volume, field/cell and fresh-process assertions remain; removed hydrations are required to be zero, not uncounted.
 - Rust-analyzer diagnostics: clean for the new scalar reader, lessons and entry modules.
 - Formatting and diff whitespace checks: clean. The separate receipted quick gate is the
   authority for the rebased tree's gate result; this report does not substitute for it.

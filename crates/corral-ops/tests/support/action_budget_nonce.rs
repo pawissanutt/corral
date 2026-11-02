@@ -78,13 +78,12 @@ fn start_attempt_width_explains_worker_and_plan_scope_byte_drift() {
                     assert_eq!(Some(value), larger.cells.get(cell), "{kind:?}: {cell}");
                 }
             }
-            // One nonce-bearing head is read by the real FU-3 sample on both paths.
+            // Scalar FU-3 locations no longer decode nonce-bearing task heads.
             // Repeated/cached authorization fetches are all charged, never subtracted.
             for (cell, value) in &base.cells {
                 let delta = match cell.as_str() {
                     "decoded_doc_bytes.unattributed" => expected * width,
-                    "decoded_doc_bytes.followup.FU-3.sample" => width,
-                    "decoded_doc_bytes.total" => (expected + 1) * width,
+                    "decoded_doc_bytes.total" => expected * width,
                     _ => 0,
                 };
                 assert_eq!(
@@ -95,7 +94,7 @@ fn start_attempt_width_explains_worker_and_plan_scope_byte_drift() {
             }
         }
         println!(
-            "{kind:?}: site model {expected} unattributed + 1 FU-3 byte per nonce byte; widths 1 and 3 match, every other cell unchanged"
+            "{kind:?}: site model {expected} unattributed + 0 FU-3 bytes per nonce byte; widths 1 and 3 match, every other cell unchanged"
         );
     }
 }

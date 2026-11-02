@@ -248,22 +248,9 @@ pub(super) fn workset_variant(scale: usize, existing: bool) -> WorkSnapshot {
     );
     assert_eq!(fixture.probe.samples(), 2);
     assert_eq!(cells.followup_calls(FU, "sample"), 2);
-    let hydrated = fixture.hydration_work();
-    assert_eq!(
-        cells.followup_hydrations(FU, "sample"),
-        2 * hydrated.full_task_hydrations()
-    );
-    assert_eq!(
-        cells.followup_rows(FU, "sample"),
-        2 * Counter::DECODES
-            .iter()
-            .map(|c| hydrated.total(*c))
-            .sum::<u64>()
-    );
-    assert_eq!(
-        cells.followup_doc_bytes(FU, "sample"),
-        2 * hydrated.decoded_doc_bytes()
-    );
+    assert_eq!(cells.followup_hydrations(FU, "sample"), 0);
+    assert_eq!(cells.followup_rows(FU, "sample"), 0);
+    assert_eq!(cells.followup_doc_bytes(FU, "sample"), 0);
     assert_eq!(cells.followup_views(FU, "sample"), 1);
     assert_eq!(
         cells.followup_stats(FU, "sample"),

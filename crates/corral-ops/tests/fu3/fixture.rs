@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use corral_core::backend::TaskParts;
+use corral_core::backend::{PageReq, TaskOrder, TaskQuery};
 use corral_core::work::{self, Counter, HotScope, WorkSnapshot};
 use corral_core::{Lesson, LessonScope, ResourceState, Run, Status, Store, Task};
 use corral_ops::Ctx;
@@ -230,37 +230,37 @@ impl Fixture {
         );
     }
 
-    /// Raw stored documents, independently cross-checked against isolated full reads.
-    pub fn hydration_work(&self) -> WorkSnapshot {
-        let store = self.ctx.store.read_only_snapshot().unwrap();
-        let view = store.view().unwrap();
-        let mut rows = 0;
-        let mut bytes = 0;
-        for task in &self.tasks {
-            let num = store.head(&task.id).unwrap().num;
-            let doc = view.task(num, &TaskParts::All).unwrap().unwrap();
-            rows += 1 + u64::try_from(doc.rows.len()).unwrap();
-            bytes += size(&doc.head.doc) + size(&doc.head.summary);
-            bytes += doc.rows.iter().map(|r| size(&r.doc)).sum::<u64>();
-        }
-        let (_, cells) = measure(|| {
-            for task in &self.tasks {
-                store.get(&task.id).unwrap();
-            }
-        });
+    /// Independent scalar-header oracle; no run, task body or nested history contributes.
+    pub fn title_work(&self) -> (u64, u64) {
+        let headers = self
+            .ctx
+            .store
+            .view()
+            .unwrap()
+            .tasks(
+                &TaskQuery {
+                    project: Some("app".into()),
+                    statuses: Vec::new(),
+                    order: TaskOrder::IdAsc,
+                },
+                PageReq::first(u32::MAX),
+            )
+            .unwrap()
+            .items;
         assert_eq!(
-            Counter::DECODES
+            headers.len(),
+            self.tasks
                 .iter()
-                .map(|c| cells.total(*c))
-                .sum::<u64>(),
-            rows
+                .filter(|t| t.project.as_deref() == Some("app"))
+                .count()
         );
-        assert_eq!(cells.decoded_doc_bytes(), bytes);
-        assert_eq!(
-            cells.full_task_hydrations(),
-            u64::try_from(self.tasks.len()).unwrap()
-        );
-        cells
+        (
+            headers.len() as u64,
+            headers
+                .iter()
+                .map(|h| serde_json::to_vec(h).unwrap().len() as u64)
+                .sum(),
+        )
     }
 
     pub fn sample_stats(&self) -> u64 {
@@ -290,10 +290,6 @@ pub fn pin_task_times(store: &Store) {
         task.updated = NOW.parse().unwrap();
         store.fixture_put_task(&task).unwrap();
     }
-}
-
-fn size(value: &serde_json::Value) -> u64 {
-    u64::try_from(serde_json::to_vec(value).unwrap().len()).unwrap()
 }
 
 pub fn fixed_paths(store: &Store) -> BTreeSet<PathBuf> {
@@ -346,23 +342,9 @@ pub fn measure_evaluation<T>(call: impl FnOnce() -> T) -> (T, WorkSnapshot) {
 pub fn assert_sample(cells: &WorkSnapshot, fixture: &Fixture, calls: u64, bound: bool) {
     assert_eq!(fixture.probe.samples(), calls);
     assert_eq!(cells.followup_calls(FU, "sample"), calls);
-    let hydrated = fixture.hydration_work();
-    assert_eq!(
-        cells.followup_hydrations(FU, "sample"),
-        calls * hydrated.full_task_hydrations()
-    );
-    assert_eq!(
-        cells.followup_rows(FU, "sample"),
-        calls
-            * Counter::DECODES
-                .iter()
-                .map(|c| hydrated.total(*c))
-                .sum::<u64>()
-    );
-    assert_eq!(
-        cells.followup_doc_bytes(FU, "sample"),
-        calls * hydrated.decoded_doc_bytes()
-    );
+    assert_eq!(cells.followup_hydrations(FU, "sample"), 0);
+    assert_eq!(cells.followup_rows(FU, "sample"), 0);
+    assert_eq!(cells.followup_doc_bytes(FU, "sample"), 0);
     assert_eq!(
         cells.followup_views(FU, "sample"),
         if bound { 0 } else { calls }

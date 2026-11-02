@@ -1,8 +1,6 @@
 //! Independent source/canonical-document cost model for the whole app's root sync pass.
-use crate::agent::native_test_support as native;
 use corral_core::{
     Store,
-    backend::{TaskNum, TaskParts},
     work::{Counter, WorkSnapshot},
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -53,16 +51,9 @@ impl Model {
         model.opaque("T-671", "assistant_container_load", 2, bytes[3], 1);
         model.opaque("T-671", "assistant_container_save", 1, bytes[3], 0);
         let tasks = store.list().unwrap();
-        let view = store.view().unwrap();
+        // The scalar location projection reads no canonical documents; only its one
+        // view and the unchanged per-location filesystem walk contribute to this scope.
         let mut full: BTreeMap<Counter, u64> = Counter::ALL.into_iter().map(|c| (c, 0)).collect();
-        for task in &tasks {
-            let num = TaskNum(task.id.trim_start_matches("T-").parse().unwrap());
-            let doc = view.task(num, &TaskParts::All).unwrap().unwrap();
-            for (counter, n) in native::full_read_cost(&doc) {
-                *full.get_mut(&counter).unwrap() += n;
-            }
-        }
-        // list_on uses one view for all headers and canonical task bodies, not one per task.
         full.insert(Counter::ViewsOpened, 1);
         let mut fixed = BTreeSet::from([store.dir().to_path_buf()]);
         for name in store.config.projects.keys() {

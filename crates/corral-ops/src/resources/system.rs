@@ -89,6 +89,8 @@ impl ResourceProbe for SystemResourceProbe {
         }
         let mut walk_paths = BTreeSet::new();
         let mut disks = {
+            // FU-3 still owns historical filesystem probes, not Task hydration.
+            let _followup = work::followup("FU-3", "sample");
             // Every historical coding worktree still matters to admission, but none of its
             // task, usage, artifact or nested run history is needed to inspect the volume.
             for run in store.view()?.run_worktrees(false)? {
