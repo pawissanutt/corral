@@ -123,7 +123,7 @@ fn check_binding_metadata(dir: &Path, path: &Path) -> Result<()> {
 
 #[cfg(not(unix))]
 fn check_binding_metadata(_dir: &Path, _path: &Path) -> Result<()> {
-    bail!("the Pi-native host runs on Unix only")
+    bail!("the corral-pi host runs on Unix only")
 }
 
 fn write_binding(root: &Path, binding: AwsBinding) -> Result<()> {

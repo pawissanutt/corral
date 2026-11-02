@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package the built native binary (plus the compiled Pi-native host on Unix) and its SHA-256 sidecar."""
+"""Package the built native binary (plus the compiled corral-pi host on Unix) and its SHA-256 sidecar."""
 from __future__ import annotations
 
 import hashlib
@@ -26,7 +26,7 @@ def package(target: str) -> None:
     archive = dist / f"corral-{target}{'.zip' if windows else '.tar.gz'}"
     files = [(binary, binary_name), (Path("LICENSE"), "LICENSE"), (Path("README.md"), "README.md")]
     if not windows:
-        # Pi-native runs on Unix only; scripts/build-pi-host.sh writes the host beside corral.
+        # corral-pi runs on Unix only; scripts/build-pi-host.sh writes the host beside corral.
         host = release / "corral-pi-host"
         if not host.is_file():
             sys.exit(f"missing {host}: run scripts/build-pi-host.sh {host} before packaging")

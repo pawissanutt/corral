@@ -7,7 +7,7 @@ fn retry_unstarted_pi_refusal_without_checkpoint() {
     fx.ctx.store.update(&fx.id, |task| {
         task.status = Status::NeedsMe;
         let run = task.current_run_mut().unwrap();
-        run.harness = Some("pi-native".into());
+        run.harness = Some("corral-pi".into());
         run.checkpoint_required = true;
         run.outcome = Some(corral_core::RunOutcome::Failed);
         run.ended = Some(now());

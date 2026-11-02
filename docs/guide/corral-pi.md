@@ -1,21 +1,30 @@
-# Pi-native agents (opt-in, in progress)
+# corral-pi agents (opt-in, in progress)
 
 corral is gaining an opt-in agent host that runs the Pi coding agent under Bun in a run pane
 and talks to corral through authenticated, idempotent calls instead of screen or idle
 detection. OmO stays the default worker, reviewer and PM. Nothing changes unless you configure
-a profile whose harness is `pi-native`.
+a profile whose harness is `corral-pi`.
 
 The host lands in stages. This page states what works today; the stages that are not yet
 installed refuse explicitly rather than half-working.
 
+## Compatibility during rollout
+
+The former harness identifier remains a read-only configuration/history alias; new
+records use `corral-pi`. Profile names such as `pi-sol` stay unchanged. New installs use
+`$XDG_DATA_HOME/corral/corral-pi` (or `~/.local/share/corral/corral-pi`) and the bundled
+skills directory `~/.corral/skills/corral-pi`. When the new directory is absent, existing
+legacy installations are read in place, without moving or merging directories, so old
+and new binaries can coexist. No reinstall is required.
+
 ## Configuring a profile
 
-`pi-native` is a built-in harness: you do not declare a `[harnesses.pi-native]` table. A
+`corral-pi` is a built-in harness: you do not declare a `[harnesses.corral-pi]` table. A
 profile selects it like any other harness:
 
 ```toml
 [profiles.pi]
-harness = "pi-native"
+harness = "corral-pi"
 model = "gpt-6.1-sol"
 vendor = "openai"
 effort = "high"
@@ -26,16 +35,16 @@ assets_dir = "/path/to/pi-assets"
 ```
 
 Model and effort travel in the host's one-shot bootstrap, not on the command line, so a
-pi-native profile takes no `args`. The `openai`, `anthropic`, `amazon-bedrock` and `llama.cpp` vendors are allowed (for
+corral-pi profile takes no `args`. The `openai`, `anthropic`, `amazon-bedrock` and `llama.cpp` vendors are allowed (for
 example `model = "claude-opus-5-5"` with `vendor = "anthropic"`); any other vendor is refused
 when you dispatch, before a worktree exists.
 
-Other `[agent]` settings apply only to pi-native runs: `question_unattended_secs` (default
+Other `[agent]` settings apply only to corral-pi runs: `question_unattended_secs` (default
 600), `gate_start_uncertain_secs` (default 300) and `drain_secs` (default 60).
 
 ### Retained memory
 
-Bound Pi-native PMs, assistants and workers have `corral_memory_list`,
+Bound corral-pi PMs, assistants and workers have `corral_memory_list`,
 `corral_memory_read`, `corral_memory_put` and `corral_memory_remove`. All four use
 authenticated operations and receipts; selectors cannot choose a workspace root or author.
 List pages contain at most 20 entries; body reads contain at most 4096 UTF-8 bytes.
@@ -95,7 +104,7 @@ unknown because server startup can have effects, including for built-in servers.
 
 ### Capabilities
 
-Optional Pi-native features are selected per role by one shared catalog:
+Optional corral-pi features are selected per role by one shared catalog:
 
 ```toml
 [agent.capabilities]
@@ -151,7 +160,7 @@ A compound key also takes a table with an optional `enabled` and its settings:
 trusted_projects = ["*"]        # default: every registered project; [] trusts none
 
 [agent.capabilities.worker.skills]
-user_dirs = ["~/.agents/skills", "~/.corral/skills/pi-native", "/opt/team-skills"] # [] loads no home skills
+user_dirs = ["~/.agents/skills", "~/.corral/skills/corral-pi", "/opt/team-skills"] # [] loads no home skills
 
 [agent.capabilities.reviewer.prompt_templates]
 user_dirs = []                   # default ["~/.agents/prompts"]
@@ -169,7 +178,7 @@ branch_summary = { reserve_tokens = 16384, skip_prompt = false }
 its own `[agent.capabilities.<role>.web]` table (below).
 
 `role_enabled` switches a native planning role itself. With it off (preset `strict`, or
-`role_enabled = false` under `planner` or `plan_reviewer`), launching that native host refuses
+`role_enabled = false` under `planner` or `plan_reviewer`), launching that corral-pi host refuses
 with `role_disabled` before any binding is recorded; corral never substitutes another harness.
 An installed host older than the planning roles is refused with `role_unavailable` until
 `corral agent install` updates it. See [the planner and plan reviewer roles](#the-planner-and-plan-reviewer-roles).
@@ -179,7 +188,7 @@ An installed host older than the planning roles is refused with `role_unavailabl
 Under standard and full every role loads, as text only:
 
 - Agent Skills from its `skills.user_dirs` (by default `~/.agents/skills` and
-  `~/.corral/skills/pi-native`), plus the
+  `~/.corral/skills/corral-pi`), plus the
   project's `.agents/skills` directories from the working directory up to the repository root;
 - prompt templates from its `prompt_templates.user_dirs` (by default `~/.agents/prompts`), plus
   the project's `.agents/prompts`, as `/name` commands; skills also expand with `/skill:name`;
@@ -199,7 +208,7 @@ ambient extension, MCP server or theme loads. The worker keeps its packaged corr
 preset; a home or repository skill with the same name is skipped (the pane shows the conflict). `corral agent state` lists the selected paths under `guidance`.
 
 `lessons` is the dispatch prompt's existing project-lessons section; turning it off for the
-worker drops that section, and its exposure record, from pi-native worker prompts only. Lesson
+worker drops that section, and its exposure record, from corral-pi worker prompts only. Lesson
 storage is unchanged, and the PM keeps its `read_lessons` tool.
 
 `compaction` passes its settings to Pi's automatic compaction and `/tree` branch summaries.
@@ -223,12 +232,12 @@ settings against the installed host: a default the host does not implement is sh
 unavailable and left off, while an explicit `true` for it refuses the launch until you run
 `corral agent install` or remove the override. Capabilities never grant Corral authority;
 Corral tools also refuse to run from inside another tool. See
-[the capability record](../records/pi-native-capabilities.md).
+[the capability record](../records/corral-pi-capabilities.md).
 
-### Curated Pi-native skill pack
+### Curated corral-pi skill pack
 
 `corral agent install` also installs six lean, Pi-compatible Agent Skills. To install or refresh
-just the pack, run `corral skill install --harness pi-native`. Worker dispatch also ensures the
+just the pack, run `corral skill install --harness corral-pi`. Worker dispatch also ensures the
 pack is current. A fresh standard/full session lists these skills and can load them by reading
 its listed `SKILL.md` or with `/skill:name`:
 
@@ -247,7 +256,7 @@ existing edit permissions. The skill prefers existing checks, adds tests only fo
 behavioral risks, and skips changes that need substantial new testing to establish safety. It does
 not waive required gates or review, and making no edits is a valid outcome.
 
-The pack lives only in `~/.corral/skills/pi-native/<name>/SKILL.md`, outside OmO's bundled,
+The pack lives only in `~/.corral/skills/corral-pi/<name>/SKILL.md`, outside OmO's bundled,
 `.omo` and shared `.agents` discovery roots, so it does not duplicate OmO's own skills. Do not
 copy it into shared roots if you also use OmO. Each managed file carries corral's version and
 content digest; reinstall refreshes managed files. Local edits inside managed `SKILL.md` files
@@ -374,7 +383,7 @@ install a runtime, download weights, or enable Pi's model-management extension:
 
 ```toml
 [profiles.local]
-harness = "pi-native"
+harness = "corral-pi"
 vendor = "llama.cpp"
 model = "my-model.gguf"  # endpoint-owned ID; names containing "/" are supported
 effort = "off"
@@ -871,7 +880,7 @@ installation (`fixture_assets_not_allowed`) and a Bun outside the package's `com
 range (`bun_unavailable`, `bun_version_unsupported`), then copies only what a host runs:
 `package.json`, `bun.lock`, `compat.json`, `src/` (without `*.test.ts`), `assets/` and dependency
 `patches/`, never `test/` or `fixture.json`. It runs `bun install --frozen-lockfile` in that copy
-and stores it as `$XDG_DATA_HOME/corral/pi-native/assets/<digest>/` (`~/.local/share/corral/pi-native/...`
+and stores it as `$XDG_DATA_HOME/corral/corral-pi/assets/<digest>/` (`~/.local/share/corral/corral-pi/...`
 without an absolute `XDG_DATA_HOME`), recording the digest in `installed.json` beside it.
 Reinstalling an unchanged package reuses the same directory.
 
@@ -886,7 +895,7 @@ and PM roles. Reinstall to include a newly added role in an older managed instal
 terminal it first shows a picker:
 
 ```
-Log in a model provider for pi-native
+Log in a model provider for corral-pi
 > OpenAI Codex (ChatGPT Plus/Pro)   [logged in]
   Anthropic Claude (Pro/Max)        [not logged in]
 ↑/↓ move · Enter select · q cancel
@@ -901,7 +910,7 @@ of prompting.
 The selected provider's Pi subscription OAuth flow then runs from the installed
 `src/auth/login.ts`: for OpenAI Codex (ChatGPT Plus/Pro) a browser or device-code login, for
 Anthropic Claude (Pro/Max) a browser login or a copy-code login for a headless pane. Each
-provider's credential is its own file in `$XDG_DATA_HOME/corral/pi-native/auth/`:
+provider's credential is its own file in `$XDG_DATA_HOME/corral/corral-pi/auth/`:
 `openai-codex.json` or `anthropic.json`. The directory is 0700 and every file 0600. Logging in
 again replaces that provider's file atomically. A Codex login made before per-provider files keeps
 working without a new login: it stays in the shared `auth.json` until its first refresh moves it
@@ -968,7 +977,7 @@ spending bound and a Bedrock candidate must declare metered cost.
 
 ```toml
 [profiles.bedrock]
-harness = "pi-native"
+harness = "corral-pi"
 vendor = "amazon-bedrock"
 model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 ```
@@ -1014,7 +1023,7 @@ The guard permits only these destinations for the bound profile:
 
 OIDC token endpoints, other regions, models and methods, FIPS, dual-stack, VPC and custom
 endpoints, GovCloud and China endpoints are not allowed. Raw TCP Node connections are refused;
-Unix sockets remain available. See [the Bedrock route record](../records/pi-native-bedrock-route.md).
+Unix sockets remain available. See [the Bedrock route record](../records/corral-pi-bedrock-route.md).
 For a live check with AWS access, run `scripts/bedrock-smoke.sh --aws-profile dev --region
 us-west-2 --model us.anthropic.claude-sonnet-4-5-20250929-v1:0`; it refuses to send without
 the --yes-metered opt-in and prints the intended endpoint, model and token cap first.
@@ -1027,16 +1036,16 @@ review is required. `routing.reviewer_by_vendor` retains its name but its keys s
 
 ## Readback
 
-`corral agent doctor [--json]` reports, and `corral doctor` adds when a pi-native profile is
+`corral agent doctor [--json]` reports, and `corral doctor` adds when a corral-pi profile is
 configured:
 
 | Check | Reports |
 |---|---|
-| `pi_native_bun` | The Bun on PATH, its version and whether it is inside the GO range. |
-| `pi_native` | The asset directory and its source (installed or `[agent] assets_dir`), its digest, the GO verdict, the auth module (`corral-pi`, `fixture` or `missing`), the installed roles and each role's readiness with the refusal it would get. |
-| `pi_native_credentials` | Provider login states and file permissions; Bedrock reports its bound profile, region, mechanism and metered status without secrets. |
-| `pi_native_bedrock` | Offline readiness of the binding and named profile, including SSO token expiry or a fix hint; shown for a binding or Bedrock profile. |
-| `pi_native_question_wake` | Where a new question's wake goes: the bound Pi-native PM's inbox, the OmO PM push (when `pm.push_kinds` includes `question_opened`), or nowhere, in which case a waiting question reaches Blocked after `question_unattended_secs`. |
+| `corral_pi_bun` | The Bun on PATH, its version and whether it is inside the GO range. |
+| `corral_pi` | The asset directory and its source (installed or `[agent] assets_dir`), its digest, the GO verdict, the auth module (`corral-pi`, `fixture` or `missing`), the installed roles and each role's readiness with the refusal it would get. |
+| `corral_pi_credentials` | Provider login states and file permissions; Bedrock reports its bound profile, region, mechanism and metered status without secrets. |
+| `corral_pi_bedrock` | Offline readiness of the binding and named profile, including SSO token expiry or a fix hint; shown for a binding or Bedrock profile. |
+| `corral_pi_question_wake` | Where a new question's wake goes: the bound corral-pi PM's inbox, the OmO PM push (when `pm.push_kinds` includes `question_opened`), or nowhere, in which case a waiting question reaches Blocked after `question_unattended_secs`. |
 
 `corral agent state <task> [--run <id>] [--review <id>] [--json]` (or `--pm`) shows one
 container's binding: harness, role, mode (`interactive` or `headless`), host health, current
@@ -1113,12 +1122,12 @@ report at all.
 
 ## What is checked before a run starts
 
-Dispatch, `corral review-run` and opening the PM check a pi-native profile before any worktree,
+Dispatch, `corral review-run` and opening the PM check a corral-pi profile before any worktree,
 pane or prompt exists, and refuse with a stable code naming what is missing:
 
 | Code | Meaning |
 |---|---|
-| `vendor_refused` | The profile's vendor is not on the pi-native allowlist (`openai`, `anthropic`, `amazon-bedrock`, `llama.cpp`). |
+| `vendor_refused` | The profile's vendor is not on the corral-pi allowlist (`openai`, `anthropic`, `amazon-bedrock`, `llama.cpp`). |
 | `metered_vendor_not_explicit` | A metered vendor was inferred rather than explicitly set on the profile. Set `vendor = "amazon-bedrock"`. |
 | `provider_unsupported_by_host` | The vendor is on the allowlist but the installed host's `compat.json` `providers` list does not include it. A `compat.json` without `providers` declares `openai` only. |
 | `assets_unavailable` | No asset installation: `[agent] assets_dir` is unset and `corral agent install` has not run, or the directory does not exist. |
@@ -1128,13 +1137,13 @@ pane or prompt exists, and refuse with a stable code naming what is missing:
 | `delivery_unavailable` | The assets lack `src/delivery/index.ts`. |
 | `credentials_unavailable` | Auth is missing or the provider is not ready. For Bedrock this includes a missing binding or AWS profile, unsupported mechanism, or missing or expired SSO token; the reason names a fix. |
 
-Until every stage has landed, a pi-native dispatch therefore stops at one of these refusals.
-`corral doctor` reports the same readback for each role when a pi-native profile is configured,
+Until every stage has landed, a corral-pi dispatch therefore stops at one of these refusals.
+`corral doctor` reports the same readback for each role when a corral-pi profile is configured,
 and says nothing about Pi otherwise.
 
 ## How a worker host starts
 
-When a pi-native worker run reaches its pane, dispatch opens the run's next host generation and
+When a corral-pi worker run reaches its pane, dispatch opens the run's next host generation and
 writes a one-shot bootstrap file, mode 0600, into that generation's runtime directory, mode 0700:
 `$XDG_RUNTIME_DIR/corral/<store>/<container>/g<n>/`, or `/tmp/corral-<uid>/...` without
 `XDG_RUNTIME_DIR`. The pane then runs `corral agent launch --bootstrap <path>`, plus
@@ -1188,8 +1197,8 @@ after the session is replaced.
 ### Model catalog
 
 Cloud launch and model listing share a corral-owned catalog, including models added in
-`$XDG_DATA_HOME/corral/pi-native/models.json`, or
-`~/.local/share/corral/pi-native/models.json` when `XDG_DATA_HOME` is unset or relative.
+`$XDG_DATA_HOME/corral/corral-pi/models.json`, or
+`~/.local/share/corral/corral-pi/models.json` when `XDG_DATA_HOME` is unset or relative.
 Ambient Pi configuration (`~/.pi/agent` and `PI_CODING_AGENT_DIR`) is not loaded.
 Add a model under an existing subscription provider with that provider's model API;
 no corral source change is needed. Pi's model refresh reloads this file offline.
@@ -1240,7 +1249,7 @@ only inside the private server of `scripts/test-herdr.sh`.
 
 ## The worker role
 
-A pi-native worker run gets Pi's read, edit, write, bash, grep, find and ls tools, plus nine
+A corral-pi worker run gets Pi's read, edit, write, bash, grep, find and ls tools, plus nine
 corral tools. Each corral tool call is one authenticated `corral agent call` whose request ID
 comes from the Pi session and the tool call, so a retried call returns its stored receipt instead
 of running twice:
@@ -1312,7 +1321,7 @@ auth directory (`corral agent login --provider anthropic`); see
 
 ## The reviewer role
 
-`corral review-run <task> <profile>` with a pi-native reviewer profile opens the review pane
+`corral review-run <task> <profile>` with a corral-pi reviewer profile opens the review pane
 first, then the review child's next host generation in that pane, and runs
 `corral agent launch --bootstrap <path>` there. The bootstrap, not the model, binds the parent
 run, the review child and the review's callback token, so every request is checked against the
@@ -1364,7 +1373,7 @@ Blocked at once with `turn_ended_without_report`, as the idle watchdog would aft
 
 ## The PM role
 
-OmO remains the default PM; explicitly select a `pi-native` profile as `pm.agent` to opt in.
+OmO remains the default PM; explicitly select a `corral-pi` profile as `pm.agent` to opt in.
 Opening a Pi PM requires an approved operating scope selecting one or more projects. Its
 `AgentPm` binding is workspace-level, separate from task runs, with null task and run and an
 empty project identity. Mutations check that binding and the current approved project set again
@@ -1395,7 +1404,7 @@ Blocked after `question_unattended_secs`. See [the PM loop](pm.md) for authority
 
 ## The planner and plan reviewer roles
 
-A `pi-native` planning profile runs the planner of a [plan run](plans.md) and its independent
+A `corral-pi` planning profile runs the planner of a [plan run](plans.md) and its independent
 plan review in their own planning containers (`<task>/plan-D1`, `<task>/plan-P1/PR1`), never
 as a worker or the PM. Both roles have upstream read, grep, find and ls only: no shell, edit
 or write tool, so the source tree stays read-only even beyond the planner's read-only sandbox.
@@ -1432,7 +1441,7 @@ hosts relaunch through the plan pipeline, not `corral agent resume`.
 
 ## Starting Pi yourself: `corral pi`
 
-`corral pi` starts the Pi-native host from your own shell, the way `pi` starts plain Pi. Which
+`corral pi` starts the corral-pi host from your own shell, the way `pi` starts plain Pi. Which
 host it starts depends on where it runs and its flags:
 
 | Command | Opens |
@@ -1449,7 +1458,7 @@ in [assistant sessions](assistants.md).
 
 **Bound PM in this pane.** `corral pi --pm [--model M] [--provider P] [--effort E]`, run in a
 herdr pane inside a corral workspace, makes that pane the PM pane. corral resolves `pm.agent` through
-the same checks as `corral pm` and `corral agent resume --pm` (a pi-native profile, an
+the same checks as `corral pm` and `corral agent resume --pm` (a corral-pi profile, an
 approved scope with one or more projects, the asset installation, the provider's login); the
 flags replace the profile's model, provider (`openai-codex` or `anthropic`) and effort for this
 launch. It then opens the PM's next generation in this pane, writes the one-shot bootstrap and
@@ -1463,7 +1472,7 @@ It refuses, before writing anything, with:
 |---|---|
 | `not_in_herdr` | `HERDR_PANE_ID` is unset; run it in a herdr pane, or use `--bare`. |
 | `pane_unknown` | The pane is not on this store's herdr server. |
-| `pm_alive` | A live Pi-native PM is bound (the message names its pane; `corral agent resume --pm --replace` replaces it), or a non-Pi PM session is open in another pane. |
+| `pm_alive` | A live corral-pi PM is bound (the message names its pane; `corral agent resume --pm --replace` replaces it), or a non-Pi PM session is open in another pane. |
 | `pm_scope_unapproved`, `pm_scope_ambiguous`, `assets_unavailable`, `credentials_unavailable`, `role_unavailable`, ... | The profile, scope or asset checks of `corral pm`. |
 | `unsupported_platform` | Not Unix. |
 
@@ -1494,9 +1503,9 @@ and Claude in the same session. Missing optional logins are explained at startup
 restart to include them. Bound runs retain the provider selected by their run contract.
 Bare mode uses the same guarded fetch, restrictions and model lanes as the
 bound host: Anthropic runs through the Claude Agent SDK lane, with Claude Code's private config
-directory in `$XDG_DATA_HOME/corral/pi-native/bare/agent/claude-code/`. `--model` defaults to
+directory in `$XDG_DATA_HOME/corral/corral-pi/bare/agent/claude-code/`. `--model` defaults to
 Pi's own default for the provider. Sessions are kept in
-`$XDG_DATA_HOME/corral/pi-native/bare/sessions/` (Pi's agent directory beside it), and nothing
+`$XDG_DATA_HOME/corral/corral-pi/bare/sessions/` (Pi's agent directory beside it), and nothing
 is written to `.corral/`. It refuses `assets_unavailable` without an installation,
 `bare_unavailable` when a source installation predates `corral pi` (reinstall with `corral
 agent install`), and `credentials_unavailable` without the provider's login.
@@ -1552,19 +1561,19 @@ These are in-process children, not Corral runs, worker dispatches or new role au
   `AgentRunState.usage_sessions` with parent generation and launcher-selected session references.
   Explore and oracle use this seam before launching billable work; it does not provide a
   PM/planning cost CLI.
-  See [the early checkpoint](../records/pi-native-capabilities.md#early-usage-checkpoint-t-570).
-- **Messages.** Messages to a pi-native run or review child use inbox delivery through the
-  `pi_native` adapter, and every sync gives each open one a delivery pass. They are never typed
+  See [the early checkpoint](../records/corral-pi-capabilities.md#early-usage-checkpoint-t-570).
+- **Messages.** Messages to a corral-pi run or review child use inbox delivery through the
+  `corral_pi` adapter, and every sync gives each open one a delivery pass. They are never typed
   into the pane.
-- **Questions that need you.** While a Pi-native question is escalated or marked unattended,
+- **Questions that need you.** While a corral-pi question is escalated or marked unattended,
   the task stays in Blocked with the question as its excerpt, even if the agent keeps working
   on something else, until the question is answered, cancelled or withdrawn. A reviewer's
   question does the same for a task in Review: its review stays open and the reviewer stays
   live, and the task returns to Review once the question is settled.
-- **Idle and stall detection.** A pi-native run whose host binding is healthy is never marked
+- **Idle and stall detection.** A corral-pi run whose host binding is healthy is never marked
   idle without a report, and its pane is never scanned for provider stalls; the host reports
   its turns and provider errors itself.
-- **Cleanup.** When a pi-native run or review child ends, only its runtime directory (socket and
+- **Cleanup.** When a corral-pi run or review child ends, only its runtime directory (socket and
   control credential) is removed. Its Pi session files under `.corral/agent/sessions/` are kept
   as a terminal transcript, recorded once by an `agent_session_reclassified` event, and its
   undelivered Pi messages are cancelled. This happens once per run or review child. A run whose
@@ -1575,7 +1584,7 @@ Every `corral agent` subcommand is implemented: `launch`, `install`, `login`, `d
 
 ## Host loss and recovery
 
-**Detection.** On every sync, corral probes the host of each open pi-native run and review child
+**Detection.** On every sync, corral probes the host of each open corral-pi run and review child
 whose binding is healthy. The process hello recorded (its pid and kernel start time) must still
 run, the generation's `ctl.cap` and socket must exist, and `get_state` must answer for the bound
 generation and session. corral then continues `events_since` from the sequence it saved last, so
@@ -1595,10 +1604,10 @@ A lost host never ends its run. The run keeps its questions, messages and receip
 for it stay queued, unsent, for the next generation. A worker or reviewer host that exits to its
 pane shell after hello is such a loss (`host_exited`): sync consumes the pane wrapper's exit
 record, so it is never treated as a launch failure or a closed review. A live worker's task moves to Blocked with
-an excerpt that starts `Pi-native host lost:` and names the three ways on: `corral agent resume`,
+an excerpt that starts `corral-pi host lost:` and names the three ways on: `corral agent resume`,
 `corral retry` or `corral discard`. A lost reviewer whose pane stays keeps its review open and
 its child live: the review watchdog never times it out on its idle pane, and the task moves to
-Blocked with an excerpt that starts `Pi-native reviewer host lost:` and names
+Blocked with an excerpt that starts `corral-pi reviewer host lost:` and names
 `corral agent resume <task> --review <id>`. A reviewer whose pane is gone is left to the existing
 process-lost path, which closes the child; retry the review as a new review child. That holds
 when the pane goes away while the reviewer waits for resume too: once the process-lost path
@@ -1692,7 +1701,7 @@ instead.
 is kept as a terminal transcript.
 
 **Provider errors.** The host reports each provider error with a class. An `auth` failure puts
-the task in Blocked with an excerpt that starts `Pi-native provider authentication failed:` and
+the task in Blocked with an excerpt that starts `corral-pi provider authentication failed:` and
 asks you to run `corral agent login`; for a worker it clears when another turn starts, and a
 reviewer's review is escalated by the review watchdog (`provider_escalated`, class `auth`), to be
 restarted after the login. There is no automatic paid fallback outside the configured availability policy. A transient failure (`overload`,
@@ -1743,17 +1752,17 @@ The offline usage collector remains separate and can report historical usage wit
 
 ## Rollback
 
-Pi-native is opt-in, so rolling back means removing what you opted into. Nothing else changes:
-OmO runs never consult a pi-native hook.
+corral-pi is opt-in, so rolling back means removing what you opted into. Nothing else changes:
+OmO runs never consult a corral-pi hook.
 
 1. Select OmO profiles for worker, reviewer and `pm.agent` defaults, close the old PM pane,
    then open a fresh PM with `corral pm` (a live pane is otherwise reused). The new OmO
    launch fences the old Pi generation without deleting its records.
-   Remove unused `pi-native` profiles and `[agent] assets_dir` from the
+   Remove unused `corral-pi` profiles and `[agent] assets_dir` from the
    configuration. New work then uses the selected OmO profiles.
-2. End any live pi-native run as you would any other run (discard, retry or drop). Run-end
+2. End any live corral-pi run as you would any other run (discard, retry or drop). Run-end
    cleanup removes only that run's runtime directory (socket and `ctl.cap`).
-3. Optionally delete the owned host files: `$XDG_DATA_HOME/corral/pi-native/assets/`,
+3. Optionally delete the owned host files: `$XDG_DATA_HOME/corral/corral-pi/assets/`,
    `installed.json` and, to revoke the login, `auth/`.
 
 Keep `.corral/`. Tasks, request receipts, questions and the Pi sessions under

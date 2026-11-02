@@ -9,7 +9,7 @@ import { FORBIDDEN_STORE_SEGMENTS } from "./policy.mjs";
  * @param {NodeJS.ProcessEnv} env */
 export function defaultStoreDir(env = process.env) {
   const data = env.XDG_DATA_HOME || join(env.HOME || homedir(), ".local/share");
-  return join(data, "corral", "pi-native-probe", "claude");
+  return join(data, "corral", "corral-pi-probe", "claude");
 }
 
 /** Refuse any directory that belongs to another harness's credential store.

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build the release Pi-native host: packages/corral-pi compiled by Bun into one executable that
+# Build the release corral-pi host: packages/corral-pi compiled by Bun into one executable that
 # embeds Bun, every dependency from the frozen lock, and the role, delivery and auth modules.
 # It never autoloads .env or bunfig.toml at runtime. Run on the target platform (no cross build:
 # native add-ons ship per platform).

@@ -49,7 +49,7 @@ fn focused_assistant_c11_setup() {
     store.config.profiles.insert(
         "c11".into(),
         serde_json::from_value(
-            json!({"harness":"pi-native", "model":"gpt-6.1-sol", "vendor":"openai"}),
+            json!({"harness":"corral-pi", "model":"gpt-6.1-sol", "vendor":"openai"}),
         )
         .unwrap(),
     );
@@ -91,9 +91,9 @@ fn focused_assistant_c11_setup() {
         .update(&task.id, |task| {
             task.runs.push(source("R1", "omo", &paths[0], &cwd));
             task.runs.push(source("R2", "claude", &paths[1], &cwd));
-            let mut pi = source("R3", "pi-native", &paths[2], &cwd);
+            let mut pi = source("R3", "corral-pi", &paths[2], &cwd);
             pi.agent_host = Some(native(&paths[2], AgentRole::Worker));
-            let mut review = source("R3-review1", "pi-native", &paths[3], &cwd);
+            let mut review = source("R3-review1", "corral-pi", &paths[3], &cwd);
             review.agent_host = Some(native(&paths[3], AgentRole::Reviewer));
             pi.review_runs.push(review);
             task.runs.push(pi);

@@ -76,7 +76,7 @@ fn review(fx: &Fx, id: &str, producer: &str) {
                 "branch":"corral/T","base":"main","base_sha":"abc","started":at(0)
             }))?;
             if native {
-                child.harness = Some("pi-native".into());
+                child.harness = Some("corral-pi".into());
                 child.agent_host = Some(Box::new(serde_json::from_value(json!({
                     "version":1,
                     "binding":{"role":"reviewer","store":"store","project":"app","generation":1,

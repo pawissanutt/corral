@@ -1,4 +1,4 @@
-//! Integrated `sync_at` regressions for the Pi-native seams, against a scripted terminal engine:
+//! Integrated `sync_at` regressions for the corral-pi seams, against a scripted terminal engine:
 //! owner attention survives pane reconciliation (round-1 F1), open review children get a
 //! delivery pass (F2), and closed containers settle their residual inbox and runtime once (F3).
 use std::os::unix::fs::PermissionsExt;
@@ -74,7 +74,7 @@ fn run(ctx: &Ctx, id: &str, harness: &str) -> Run {
         "seen_pane": true, "seen_working": true
     }))
     .unwrap();
-    if corral_core::is_pi_native(harness) {
+    if corral_core::is_corral_pi(harness) {
         run.delivery = DeliveryMode::Inbox;
     }
     run
@@ -91,7 +91,7 @@ fn question(container: &str, state: &str) -> AgentQuestion {
     .unwrap()
 }
 
-/// A Running task whose working pi-native worker holds one question in `state`.
+/// A Running task whose working corral-pi worker holds one question in `state`.
 fn asking_worker(fx: &Fx, state: &str, wait: bool) -> String {
     let task = fx
         .ctx
@@ -101,7 +101,7 @@ fn asking_worker(fx: &Fx, state: &str, wait: bool) -> String {
     fx.ctx
         .store
         .update(&task.id, |t| {
-            let mut r = run(&fx.ctx, "R1", "pi-native");
+            let mut r = run(&fx.ctx, "R1", "corral-pi");
             let mut state_ = host(&fx.ctx.store, AgentRole::Worker);
             state_
                 .questions
@@ -139,7 +139,7 @@ fn status(fx: &Fx, id: &str) -> Status {
 
 #[test]
 fn owner_attention_on_a_pi_question_survives_pane_reconciliation() {
-    // Given a working pi-native worker whose blocking question has waited past
+    // Given a working corral-pi worker whose blocking question has waited past
     // question_unattended_secs:
     let fx = fx();
     let unattended = asking_worker(&fx, "open", false);
@@ -184,7 +184,7 @@ fn post(inbox: &Inbox) -> u64 {
         .seq
 }
 
-/// A Review task: an OmO parent run with one open pi-native review child bound to a host.
+/// A Review task: an OmO parent run with one open corral-pi review child bound to a host.
 fn reviewed(fx: &Fx) -> Task {
     let task = fx
         .ctx
@@ -196,7 +196,7 @@ fn reviewed(fx: &Fx) -> Task {
         .update(&task.id, |t| {
             let mut parent = run(&fx.ctx, "R1", "omo");
             parent.outcome = Some(RunOutcome::Done);
-            let mut child = run(&fx.ctx, "R1-review1", "pi-native");
+            let mut child = run(&fx.ctx, "R1-review1", "corral-pi");
             child.agent_host = Some(host(&fx.ctx.store, AgentRole::Reviewer));
             parent.review_runs.push(child);
             t.runs.push(parent);
@@ -207,7 +207,7 @@ fn reviewed(fx: &Fx) -> Task {
 
 #[test]
 fn review_children_get_delivery_while_open_and_settle_once_closed() {
-    // Given an open pi-native review child with a queued message, a runtime directory and a
+    // Given an open corral-pi review child with a queued message, a runtime directory and a
     // session transcript:
     let fx = fx();
     let task = reviewed(&fx);
@@ -230,7 +230,7 @@ fn review_children_get_delivery_while_open_and_settle_once_closed() {
     std::fs::write(sessions.join("session.jsonl"), "{}\n").unwrap();
     // When sync runs while it is open:
     crate::sync_at(&fx.ctx, at("2026-10-15T00:01:00Z")).unwrap();
-    // Then the registered pi-native adapter was reached (it records its refusal), the message
+    // Then the registered corral-pi adapter was reached (it records its refusal), the message
     // stays queued, and the open child keeps its runtime.
     assert!(
         inbox
@@ -272,7 +272,7 @@ fn review_children_get_delivery_while_open_and_settle_once_closed() {
 
 #[test]
 fn a_closed_worker_with_only_runtime_left_is_settled_once() {
-    // Given a dropped task whose pi-native worker left only a runtime directory:
+    // Given a dropped task whose corral-pi worker left only a runtime directory:
     let fx = fx();
     let task = fx
         .ctx
@@ -282,7 +282,7 @@ fn a_closed_worker_with_only_runtime_left_is_settled_once() {
     fx.ctx
         .store
         .update(&task.id, |t| {
-            t.runs.push(run(&fx.ctx, "R1", "pi-native"));
+            t.runs.push(run(&fx.ctx, "R1", "corral-pi"));
             Ok(())
         })
         .unwrap();
@@ -378,7 +378,7 @@ fn a_pi_worker_done_in_review_keeps_its_messages_until_it_ends() {
     fx.ctx
         .store
         .update(&task.id, |t| {
-            let mut r = run(&fx.ctx, "R1", "pi-native");
+            let mut r = run(&fx.ctx, "R1", "corral-pi");
             r.outcome = Some(RunOutcome::Done);
             r.agent_host = Some(host(&fx.ctx.store, AgentRole::Worker));
             t.runs.push(r);
@@ -411,7 +411,7 @@ fn a_pi_worker_done_in_review_keeps_its_messages_until_it_ends() {
             transcript: None,
         };
         let mut envelope = inbox
-            .publish(&binding, "pi_native", MAX_PAYLOAD, false)
+            .publish(&binding, "corral_pi", MAX_PAYLOAD, false)
             .unwrap()
             .unwrap();
         inbox
@@ -468,14 +468,14 @@ fn settled_history_is_never_revisited_while_another_container_is_live() {
     fx.ctx
         .store
         .update(&task.id, |t| {
-            let mut old = run(&fx.ctx, "R1", "pi-native");
+            let mut old = run(&fx.ctx, "R1", "corral-pi");
             old.outcome = Some(RunOutcome::Superseded);
             old.agent_host = Some(host(&fx.ctx.store, AgentRole::Worker));
-            let mut child = run(&fx.ctx, "R1-review1", "pi-native");
+            let mut child = run(&fx.ctx, "R1-review1", "corral-pi");
             child.agent_host = Some(host(&fx.ctx.store, AgentRole::Reviewer));
             old.review_runs.push(child);
             t.runs.push(old);
-            let mut live = run(&fx.ctx, "R2", "pi-native");
+            let mut live = run(&fx.ctx, "R2", "corral-pi");
             live.agent_host = Some(host(&fx.ctx.store, AgentRole::Worker));
             t.runs.push(live);
             Ok(())

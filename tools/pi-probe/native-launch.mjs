@@ -47,7 +47,7 @@ async function herdr(args) {
 // Offline uses a synthetic credential that only the fake transport accepts.
 const codexPath = live ? /** @type {string} */ (process.env.PI_PROBE_CODEX_AUTH) : join(root, "synthetic-codex-auth.json");
 if (!live) writeSyntheticAuth(codexPath, Date.now());
-const created = JSON.parse(await herdr(["workspace", "create", "--cwd", root, "--label", "pi-native-probe", "--no-focus",
+const created = JSON.parse(await herdr(["workspace", "create", "--cwd", root, "--label", "corral-pi-probe", "--no-focus",
   "--env", "CORRAL_TEST_HERDR_ROOT=" + root,
   "--env", "PI_CODING_AGENT_DIR=" + join(root, "home/.pi/agent"),
   "--env", "PI_OFFLINE=1", "--env", "PI_SKIP_VERSION_CHECK=1", "--env", "PI_TELEMETRY=0",

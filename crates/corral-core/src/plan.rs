@@ -283,6 +283,7 @@ pub struct PlanRun {
     pub inbox: crate::inbox::InboxState,
     pub id: String,
     pub profile: String,
+    #[serde(with = "crate::harness_compat::string")]
     pub harness: String,
     pub model: Option<String>,
     pub vendor: Option<String>,

@@ -2,7 +2,7 @@
 //! owner post for the PM, one Markdown record each at `.corral/pm-inbox/PMI-<n>.md`.
 //!
 //! It is separate from the corral-to-agent inbox (`.corral/inbox/`), which is reused only for
-//! the outcome notice to the author session and the Pi-native PM's wake. Nothing here types
+//! the outcome notice to the author session and the corral-pi PM's wake. Nothing here types
 //! into a pane. Every transition names the revision it expects:
 //! `open -> claimed -> resolved(done | declined | escalated_to_owner)`, and
 //! `open | claimed -> withdrawn` by the author or the owner.
@@ -27,11 +27,11 @@ pub const QUOTE_MAX: usize = 16 * 1024;
 const SUBJECT_MAX: usize = 200;
 const TOKEN_MAX: usize = 200;
 const LIST_MAX: usize = 32;
-/// The Pi-native host refuses inputs over 8 KiB (`INPUT_MAX_BYTES` in the bridge protocol).
+/// The corral-pi host refuses inputs over 8 KiB (`INPUT_MAX_BYTES` in the bridge protocol).
 const NATIVE_INPUT_MAX: usize = 8 * 1024;
 /// The message kind of the outcome notice to an author session.
 pub const NOTICE_KIND: &str = "pm_inbox_outcome";
-/// The message kind of the Pi-native PM's wake for an open item.
+/// The message kind of the corral-pi PM's wake for an open item.
 pub const WAKE_KIND: &str = "pm_inbox_wake";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,7 +223,7 @@ pub struct PmInboxItem {
     pub history: Vec<Transition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notice: Option<Notice>,
-    /// The Pi-native PM's wake for revision 0, by agent-inbox message ID.
+    /// The corral-pi PM's wake for revision 0, by agent-inbox message ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pm_wake: Option<String>,
     #[serde(skip)]
@@ -724,7 +724,7 @@ impl Store {
         Ok(message)
     }
 
-    /// Publishes the Pi-native PM's wake for an item still open at revision 0, once: an
+    /// Publishes the corral-pi PM's wake for an item still open at revision 0, once: an
     /// earlier wake with key `pmi:<id>:0` is reused. The caller checks the PM is healthy.
     pub fn pm_inbox_publish_wake(&self, id: &str) -> Result<Option<Message>> {
         let _lock = self.lock("pm-inbox")?;

@@ -97,7 +97,7 @@ exit "${TEST_ENGINE_EXIT:-0}"
 SH
 chmod +x "$suite/bin/uname" "$suite/bin/curl" "$suite/fixtures/herdr" "$suite/fixtures/corral" \
     "$suite/fixtures/corral-pi-host"
-# release: corral with its compiled Pi-native host (0.4.0+); legacy: corral alone (earlier).
+# release: corral with its compiled corral-pi host (0.4.0+); legacy: corral alone (earlier).
 tar -czf "$suite/fixtures/release.tar.gz" -C "$suite/fixtures" corral corral-pi-host
 tar -czf "$suite/fixtures/legacy.tar.gz" -C "$suite/fixtures" corral
 for archive in release legacy; do

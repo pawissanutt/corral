@@ -1,10 +1,10 @@
-//! Pi-native agent host request path (T-252). request-receipts owns the envelope, admission,
+//! corral-pi agent host request path (T-252). request-receipts owns the envelope, admission,
 //! single-phase receipts, the generation binding primitives, the hello, event and
 //! receipt_lookup ops and the complete v1 `corral agent` surface; later children land the
 //! remaining op and subcommand handlers that `call.rs` and `cli.rs` name as unavailable.
 //! op-receipts owns `effects`: receipts inside the swept operations and the two-phase gate.
 //! integration-seams declares every later module below, each documenting its owning child, and
-//! owns `hooks`, the only path from existing corral code into the Pi-native host. Later
+//! owns `hooks`, the only path from existing corral code into the corral-pi host. Later
 //! children fill these modules and never edit this file.
 mod admission;
 #[cfg(test)]

@@ -176,7 +176,7 @@ pub fn verdict_with_evidence(
     .map(|(r, _)| r)
 }
 
-/// The Pi-native `verdict` op on the bound review child: the receipt and VerdictReport commit
+/// The corral-pi `verdict` op on the bound review child: the receipt and VerdictReport commit
 /// in `record_verdict`'s update. A dirty worktree's recorded escalation is the committed result.
 pub fn verdict_request(
     ctx: &Ctx,

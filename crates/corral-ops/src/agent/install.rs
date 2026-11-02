@@ -1,5 +1,5 @@
 //! `corral agent install`, `doctor` and `state`: the managed asset installation under
-//! `$XDG_DATA_HOME/corral/pi-native/assets/<digest>/` and its readback.
+//! `$XDG_DATA_HOME/corral/corral-pi/assets/<digest>/` and its readback.
 //! Owner: T-252 child host-install.
 //!
 //! An installation copies only what a host runs (`package.json`, `bun.lock`, `compat.json`,
@@ -42,8 +42,8 @@ pub struct InstallRecord {
     pub installed_at: jiff::Timestamp,
 }
 
-/// `$XDG_DATA_HOME/corral/pi-native` (an absolute XDG_DATA_HOME only), else
-/// `$HOME/.local/share/corral/pi-native`; `src/auth/paths.ts` resolves the same directory.
+/// `$XDG_DATA_HOME/corral/corral-pi` (an absolute XDG_DATA_HOME only), else
+/// `$HOME/.local/share/corral/corral-pi`; `src/auth/paths.ts` resolves the same directory.
 pub fn data_root() -> Result<PathBuf> {
     #[cfg(test)]
     if let Some(root) = super::test_support::data_root_override() {
@@ -55,8 +55,12 @@ pub fn data_root() -> Result<PathBuf> {
 fn data_root_from(xdg: Option<OsString>, home: Option<OsString>) -> Result<PathBuf> {
     let absolute = |value: Option<OsString>| value.map(PathBuf::from).filter(|p| p.is_absolute());
     match (absolute(xdg), absolute(home)) {
-        (Some(data), _) => Ok(data.join("corral/pi-native")),
-        (None, Some(home)) => Ok(home.join(".local/share/corral/pi-native")),
+        (Some(data), _) => Ok(corral_core::harness_compat::directory(
+            &data.join("corral/corral-pi"),
+        )),
+        (None, Some(home)) => Ok(corral_core::harness_compat::directory(
+            &home.join(".local/share/corral/corral-pi"),
+        )),
         (None, None) => bail!("neither XDG_DATA_HOME nor HOME is an absolute path"),
     }
 }
@@ -75,12 +79,12 @@ pub fn install(_start: &Path, args: &InstallArgs) -> Result<()> {
         )?,
     };
     let home = std::env::var_os("HOME").context("HOME is unset; cannot install Pi skills")?;
-    crate::skill::install_harness_skills(Path::new(&home), "pi-native", false)?;
+    crate::skill::install_harness_skills(Path::new(&home), "corral-pi", false)?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&record)?);
     } else {
         println!(
-            "Installed pi-native assets sha256 {} at {} (bun {}, pi {})",
+            "Installed corral-pi assets sha256 {} at {} (bun {}, pi {})",
             record.digest,
             record.path.display(),
             record.bun,
@@ -386,7 +390,7 @@ pub fn installed_in(root: &Path) -> Result<Option<PathBuf>> {
 }
 
 /// The managed installation dispatch uses when `[agent] assets_dir` is unset. `None` until
-/// `corral agent install` records one, so a pi-native dispatch refuses `assets_unavailable`.
+/// `corral agent install` records one, so a corral-pi dispatch refuses `assets_unavailable`.
 pub fn installed_assets(_ctx: &Ctx) -> Result<Option<PathBuf>> {
     installed_in(&data_root()?)
 }

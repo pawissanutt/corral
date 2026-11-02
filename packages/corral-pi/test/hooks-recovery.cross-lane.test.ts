@@ -1,4 +1,4 @@
-// Hook interruption cross-lane fixture (T-572): the real corral binary dispatches a pi-native run
+// Hook interruption cross-lane fixture (T-572): the real corral binary dispatches a corral-pi run
 // onto the production worker role with full-preset hooks, in the private plugin-free herdr server
 // of scripts/test-herdr.sh, with the fixture provider scripted from a steps file. Each mutating
 // hook (pre-tool around a read, post-tool around a grep, turn-end) blocks on a FIFO, so the host
@@ -190,7 +190,7 @@ export default {
   const config = join(workspace, ".corral/corral.toml");
   writeFileSync(config, `${readFileSync(config, "utf8")}
 [profiles.pi]
-harness = "pi-native"
+harness = "corral-pi"
 model = "gpt-6.1-sol"
 vendor = "openai"
 effort = "high"

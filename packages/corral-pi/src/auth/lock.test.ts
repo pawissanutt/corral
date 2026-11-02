@@ -173,7 +173,7 @@ describe("the credential lock across processes", () => {
   test("two Pi refresh callers refresh an expired credential exactly once", async () => {
     // Given an expired credential and two hosts that both need a token:
     const root = temp();
-    const dir = join(root, "corral/pi-native/auth");
+    const dir = join(root, "corral/corral-pi/auth");
     const seeded = new FileCredentialStore(dir);
     await seeded.modify("openai-codex", async () => ({
       type: "oauth", access: "access-old", refresh: "refresh-old", expires: Date.now() - 1000,

@@ -1,4 +1,4 @@
-//! Launch and bootstrap seam: the pane command of a pi-native worker run.
+//! Launch and bootstrap seam: the pane command of a corral-pi worker run.
 //! Owner: T-252 child host-bridge (writes the bootstrap and renders `{corral} agent launch
 //! {delivery_args}`).
 use anyhow::{Context, Result};
@@ -26,7 +26,7 @@ pub fn worker_command(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     let pane = &run.herdr.as_ref().context("launch pane missing")?.pane_id;
     let spec = HostSpec {
         cwd: run.worktree.clone(),
-        model: run.model.clone().context("a pi-native run needs a model")?,
+        model: run.model.clone().context("a corral-pi run needs a model")?,
         provider: run
             .model
             .as_deref()
@@ -55,7 +55,7 @@ pub fn plan_command(
     let model = resolved
         .model
         .clone()
-        .context("a pi-native planner needs a model")?;
+        .context("a corral-pi planner needs a model")?;
     let spec = HostSpec {
         cwd: cwd.to_path_buf(),
         provider: host_provider(resolved.vendor.as_deref(), &model),

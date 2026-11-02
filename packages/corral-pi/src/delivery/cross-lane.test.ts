@@ -1,4 +1,4 @@
-// Cross-lane fixture for the inbox adapter: the real corral binary dispatches a pi-native run
+// Cross-lane fixture for the inbox adapter: the real corral binary dispatches a corral-pi run
 // whose fixture installation keeps the package's real delivery module, in the private
 // plugin-free herdr server of scripts/test-herdr.sh. `corral reply` reaches the pane host by
 // bridge submit_input, the module writes the corral_delivery entry, and corral observes the
@@ -44,7 +44,7 @@ beforeAll(async () => {
   const config = join(workspace, ".corral/corral.toml");
   writeFileSync(config, `${readFileSync(config, "utf8")}
 [profiles.pi]
-harness = "pi-native"
+harness = "corral-pi"
 model = "gpt-6.1-sol"
 vendor = "openai"
 effort = "high"
@@ -65,7 +65,7 @@ afterAll(() => {
   }
 });
 
-test("corral reply reaches the live pi-native worker by submit_input and is observed only from its corral_delivery entry", async () => {
+test("corral reply reaches the live corral-pi worker by submit_input and is observed only from its corral_delivery entry", async () => {
   if (!isolated) return;
   const bound = events!.next((event) => event.kind === "agent_bound" && event.task === "T-001");
   cli("dispatch", "T-001", "--profile", "pi", "--force");
@@ -89,11 +89,11 @@ test("corral reply reaches the live pi-native worker by submit_input and is obse
   const replies = envelopes.filter((candidate) => candidate.idempotency_key === "T-001_R1@env1");
   expect(replies).toHaveLength(1);
   const envelope = replies[0]!;
-  expect(envelope.adapter).toBe("pi_native");
+  expect(envelope.adapter).toBe("corral_pi");
   expect(envelope.binding.endpoint).toBe(join(generationDir(workspace, "T-001", "R1", 1), "host.sock"));
   const receipt = requireReceipt(workspace, "T-001_R1", 1);
   expect(receipt).toBeDefined();
-  expect(receipt.via).toBe("pi_native");
+  expect(receipt.via).toBe("corral_pi");
 
   const session = readFileSync(envelope.binding.transcript!, "utf8").trim().split("\n").map((line) => JSON.parse(line));
   const written = session.filter((entry) => entry.customType === ENTRY_TYPE

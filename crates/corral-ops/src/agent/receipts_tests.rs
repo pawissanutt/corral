@@ -19,7 +19,7 @@ fn continued_reviewer_hello_keeps_the_session_but_not_old_callback_authority() {
     host.sessions = selected.clone();
     fx.ctx.store.update(&id, |task| {
         task.runs[0].review_runs[0].session = Some(serde_json::from_value(json!({
-            "policy":"reuse", "directory":selected, "harness":"pi-native",
+            "policy":"reuse", "directory":selected, "harness":"corral-pi",
             "id":"continued-session", "transcript":selected.join("session.jsonl"), "action":"resumed"
         }))?);
         Ok(())
@@ -54,7 +54,7 @@ fn continued_reviewer_hello_refuses_a_different_session_id() {
     let host = bind(&fx, &target, "p2", "empty-replacement");
     fx.ctx.store.update(&id, |task| {
         task.runs[0].review_runs[0].session = Some(serde_json::from_value(json!({
-            "policy":"reuse", "directory":host.sessions, "harness":"pi-native",
+            "policy":"reuse", "directory":host.sessions, "harness":"corral-pi",
             "id":"recorded-session", "transcript":host.sessions.join("session.jsonl"), "action":"resumed"
         }))?);
         Ok(())

@@ -22,7 +22,7 @@ fn main() -> Result<()> {
     )?;
     store.update(&task.id, |task| {
         let mut run: Run = serde_json::from_value(json!({
-            "id":"R1", "agent":"fixture", "harness":"pi-native", "worktree":root,
+            "id":"R1", "agent":"fixture", "harness":"corral-pi", "worktree":root,
             "branch":"fixture", "base":"main", "base_sha":"fixture", "started":"2026-11-02T00:00:00Z"
         }))?;
         let mut host = AgentRunState::new(AgentBinding {

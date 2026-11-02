@@ -1,4 +1,4 @@
-//! Provider-stall seam. A pi-native host reports provider errors as `agent_provider_error`
+//! Provider-stall seam. A corral-pi host reports provider errors as `agent_provider_error`
 //! events that feed provider_stall directly, so no screen or session-log scan runs for it: the
 //! stall is the latest turn of the current generation when that turn ended `provider_failed`
 //! with a transient class. provider_stall's own backoff state machine and state file drive it,
@@ -156,7 +156,7 @@ fn retry<T: TaskRef + ?Sized>(
     attempt: u32,
     message: &str,
 ) -> Result<()> {
-    let recipient = crate::questions::recipient(container).context("a Pi-native recipient")?;
+    let recipient = crate::questions::recipient(container).context("a corral-pi recipient")?;
     let inbox = Inbox::new(&ctx.store, recipient)?;
     let _posting = inbox.lock()?;
     let body = format!(

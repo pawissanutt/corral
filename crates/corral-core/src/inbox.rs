@@ -59,14 +59,14 @@ pub enum Recipient {
         plan: String,
         review: String,
     },
-    /// A Pi-native review child (T-252), keyed `<task>_<run>_rv-<review>`.
+    /// A corral-pi review child (T-252), keyed `<task>_<run>_rv-<review>`.
     ReviewRun {
         task: String,
         run: String,
         review: String,
     },
     Pm,
-    /// A Pi-native assistant session, keyed `assistant_<id>`: PM inbox outcome notices only.
+    /// A corral-pi assistant session, keyed `assistant_<id>`: PM inbox outcome notices only.
     Assistant {
         session: String,
     },
@@ -168,6 +168,7 @@ pub struct ObserveCursor {
 /// Durable progress for one adapter reading one concrete session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionCursor {
+    #[serde(with = "crate::harness_compat::string")]
     pub adapter: String,
     pub binding: SessionBinding,
     pub cursor: ObserveCursor,
@@ -203,7 +204,7 @@ pub struct InboxState {
     pub observe_cursor: ObserveCursor,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub observe_cursors: Vec<SessionCursor>,
-    /// When a closed Pi-native container's run-end duties settled (its messages terminalized and
+    /// When a closed corral-pi container's run-end duties settled (its messages terminalized and
     /// its runtime removed); sync never revisits a settled container.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub settled: Option<jiff::Timestamp>,
@@ -285,6 +286,7 @@ pub struct Receipt {
     pub envelope: Option<u64>,
     pub binding: Option<SessionBinding>,
     pub observed_at: Timestamp,
+    #[serde(with = "crate::harness_compat::string")]
     pub via: String,
     pub detail: Value,
 }
@@ -367,6 +369,7 @@ pub struct Envelope {
     pub number: u64,
     pub members: Vec<u64>,
     pub binding: SessionBinding,
+    #[serde(with = "crate::harness_compat::string")]
     pub adapter: String,
     pub mode: String,
     pub payload_sha256: String,

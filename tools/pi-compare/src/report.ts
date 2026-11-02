@@ -2,7 +2,7 @@ import type { Report } from "./compare.ts";
 
 export function markdown(report: Report): string {
   const lines = [
-    "# Pi-native worker comparison",
+    "# corral-pi worker comparison",
     "",
     `Data: ${report.data_kind}. Outcome: ${report.outcome}. Complete: ${report.complete}.`,
     "The PM was not evaluated. No default is changed.",
@@ -11,7 +11,7 @@ export function markdown(report: Report): string {
     "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: |",
   ];
   for (const pair of report.pairs) {
-    for (const [arm, m] of [["OmO", pair.omo], ["Pi", pair.pi_native]] as const) {
+    for (const [arm, m] of [["OmO", pair.omo], ["Pi", pair.corral_pi]] as const) {
       lines.push(`| ${pair.id} | ${arm} | ${m.review_rounds} | ${m.rescues} | ${m.needs_me} | ${m.needs_me_seconds} | ${m.turns_ended_without_report} | ${m.pm_answers} / ${m.owner_answers} | ${m.gates_passed} / ${m.gate_count} | ${m.gate_seconds} | ${m.api_equivalent_usd ?? "UNPRICED"} | ${m.total_tokens} | ${m.wall_seconds} |`);
     }
     if (pair.invalid.length) lines.push("", `${pair.id} INVALID: ${pair.invalid.join("; ")}.`);

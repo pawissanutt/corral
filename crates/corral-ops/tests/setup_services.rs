@@ -4,12 +4,12 @@ use std::fs;
 use corral_core::*;
 use corral_ops::*;
 
+#[path = "setup_services/corral_pi.rs"]
+mod corral_pi;
 #[path = "setup_services/independence.rs"]
 mod independence;
 #[path = "setup_services/journeys.rs"]
 mod journeys;
-#[path = "setup_services/pi_native.rs"]
-mod pi_native;
 #[path = "setup_services/rejections.rs"]
 mod rejections;
 #[path = "setup_services/support_persistence.rs"]

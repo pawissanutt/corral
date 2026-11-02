@@ -9,7 +9,7 @@ use crate::agent::{
     LlamaCppSettings, McpSettings, McpToolAccess, SnapshotPreset, WebSettings,
 };
 
-/// `[agent]`: Pi-native host settings. Every value applies only to pi-native runs.
+/// `[agent]`: corral-pi host settings. Every value applies only to corral-pi runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AgentCfg {
@@ -781,7 +781,7 @@ pub(crate) fn job_settings(table: &CapabilitySettings) -> Result<CapabilitySetti
 }
 
 pub(crate) fn skill_settings(table: &CapabilitySettings) -> Result<CapabilitySettings, String> {
-    user_dirs(table, &["~/.agents/skills", "~/.corral/skills/pi-native"])
+    user_dirs(table, &["~/.agents/skills", "~/.corral/skills/corral-pi"])
 }
 
 pub(crate) fn template_settings(table: &CapabilitySettings) -> Result<CapabilitySettings, String> {

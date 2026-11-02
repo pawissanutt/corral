@@ -82,11 +82,11 @@ pub enum Cmd {
     Inbox(inbox_cmd::InboxArgs),
     /// Inspect current task conditions and progress without changing state
     Attention(attention_cmd::AttentionArgs),
-    /// Pi-native agent host: authenticated host calls, launch, install and recovery
+    /// corral-pi agent host: authenticated host calls, launch, install and recovery
     Agent(agent_cmd::AgentArgs),
-    /// Start Pi-native here: an assistant in this herdr pane, the PM with --pm, or plain Pi with --bare
+    /// Start corral-pi here: an assistant in this herdr pane, the PM with --pm, or plain Pi with --bare
     Pi(pi_cmd::PiArgs),
-    /// Triage Pi-native agent questions by key and revision: list, show, answer, escalate, cancel, deadline
+    /// Triage corral-pi agent questions by key and revision: list, show, answer, escalate, cancel, deadline
     Question(question_cmd::QuestionArgs),
     /// Preview, explicitly confirm, or inspect finite operating authority
     Automation(automation_cmd::AutomationArgs),

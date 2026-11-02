@@ -33,7 +33,7 @@ test("the bare entry takes argv only: a launch fd is refused and the provider de
   const env = { XDG_DATA_HOME: join(work, "data") };
   const options = parseBareArgs(["--cwd", cwd, "--provider", "anthropic"], assets.dir, env);
   expect(options.model).toBe(BARE_DEFAULT_MODEL.anthropic);
-  expect(options.dataRoot).toBe(join(work, "data", "corral", "pi-native"));
+  expect(options.dataRoot).toBe(join(work, "data", "corral", "corral-pi"));
   expect(parseBareArgs(["--cwd", cwd], assets.dir, env).provider).toBe("openai-codex");
   expect(() => parseBareArgs(["--cwd", cwd, "--launch-fd", "3"], assets.dir, env)).toThrow(BareArgsInvalid);
   expect(() => parseBareArgs(["--cwd", "relative"], assets.dir, env)).toThrow(BareArgsInvalid);
@@ -41,7 +41,7 @@ test("the bare entry takes argv only: a launch fd is refused and the provider de
 });
 
 test("bare Pi starts unbound with only Pi's own tools, guarded, and writes no corral state", async () => {
-  const dataRoot = join(work, "data", "corral", "pi-native");
+  const dataRoot = join(work, "data", "corral", "corral-pi");
   const options = parseBareArgs(["--cwd", cwd, "--model", "gpt-6.1-sol"], assets.dir, { XDG_DATA_HOME: join(work, "data") });
   const bare = await openBare(options, () => import("@earendil-works/pi-coding-agent"));
   const session = bare.runtime.session;

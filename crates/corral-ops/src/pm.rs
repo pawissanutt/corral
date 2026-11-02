@@ -97,7 +97,7 @@ fn open_pm_with(
     ctx: &Ctx,
     bootstrap: Option<(&SetupConnection, ResolvedProfile)>,
 ) -> Result<String> {
-    // Validate a pi-native PM before any policy delivery, workspace or pane.
+    // Validate a corral-pi PM before any policy delivery, workspace or pane.
     crate::agent::hooks::pm::preflight(ctx, bootstrap.as_ref().map(|(_, r)| r))?;
     let _delivery = ctx
         .store
@@ -144,7 +144,7 @@ fn open_pm_with(
     };
     let agent = resolved.profile.clone();
     crate::agent::hooks::pm::preflight(ctx, Some(&resolved))?;
-    let command = if corral_core::is_pi_native(&resolved.harness) {
+    let command = if corral_core::is_corral_pi(&resolved.harness) {
         None
     } else {
         Some(render_template(
@@ -165,7 +165,7 @@ fn open_pm_with(
     };
     // A fresh non-Pi PM replaces the old host's mutation authority, not its records.
     // Fencing owns the dispatch boundary; do it before startup takes that boundary.
-    if !corral_core::is_pi_native(&resolved.harness)
+    if !corral_core::is_corral_pi(&resolved.harness)
         && let Some(pm) = corral_core::agent::pm_state::load(&ctx.store)?
         && pm.state.binding.generation > 0
     {
@@ -259,13 +259,13 @@ pub(crate) fn adopt_pm<T>(
         && state.pane_id != pane
         && !state
             .execution
-            .is_some_and(|e| corral_core::is_pi_native(&e.harness))
+            .is_some_and(|e| corral_core::is_corral_pi(&e.harness))
         && live_pm_pane(ctx)?.is_some()
     {
         return Err(crate::agent::pi::refuse(
             "pm_alive",
             format!(
-                "a non-Pi-native PM session is open in pane {}; close it before `corral pi`",
+                "a non-corral-pi PM session is open in pane {}; close it before `corral pi`",
                 state.pane_id
             ),
         ));

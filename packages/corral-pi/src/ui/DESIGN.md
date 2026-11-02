@@ -1,5 +1,5 @@
 ---
-name: Corral Pi native workbench
+name: Corral corral-pi workbench
 description: Native panel presentation over the real bound Pi session
 colors:
   canvas: "#0f1012"
@@ -21,7 +21,7 @@ typography:
     fontWeight: 700
 ---
 
-# Design System: Corral Pi native workbench
+# Design System: Corral corral-pi workbench
 
 ## Overview
 
@@ -52,7 +52,7 @@ Fullscreen main width reserves a 34-column rail plus one separator at 105 physic
 
 ## Elevation & Depth
 
-Explicit canvas and raised panel cell backgrounds plus one-cell rules create depth. The alternate-screen adapter supplies default foreground/background through SGR, not terminal-palette/default-color setters; the surrounding terminal and normal screen retain their theme. Read-only details and existing prompts are native Pi overlays/selectors, not extra browser windows.
+Explicit canvas and raised panel cell backgrounds plus one-cell rules create depth. The alternate-screen adapter supplies default foreground/background through SGR, not terminal-palette/default-color setters; the surrounding terminal and normal screen retain their theme. Read-only details and existing prompts are corral-pi overlays/selectors, not extra browser windows.
 
 ## Shapes
 

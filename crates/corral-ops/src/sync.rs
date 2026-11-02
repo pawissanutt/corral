@@ -342,7 +342,7 @@ fn sync_scoped(
         {
             changes.push(change);
         }
-        // One hook call per task holding live pi-native work; other tasks never reach it.
+        // One hook call per task holding live corral-pi work; other tasks never reach it.
         let (head, agent) = if native.remove(&head.id).is_some() {
             let synced = crate::agent::hooks::sync::task_id(ctx, &head.id, now)?;
             (ctx.store.head(&head.id)?, synced)
@@ -599,7 +599,7 @@ fn reconcile(
     };
     let waiting = facts.pending_waits > 0;
     let obligations_rev = facts.obligations_rev;
-    // A Pi-native question that waits on the owner holds Needs me like an owner decision.
+    // A corral-pi question that waits on the owner holds Needs me like an owner decision.
     let (to, note) =
         if decision.is_some() || harness_question.is_some() || agent_attention.is_some() {
             (Status::NeedsMe, "owner decision pending")
@@ -632,7 +632,7 @@ fn reconcile(
         .changes_round
         .as_ref()
         .is_some_and(|round| now.duration_since(round.at) >= startup_grace);
-    // A healthy pi-native binding classifies its turns causally; idleness is not a report gap.
+    // A healthy corral-pi binding classifies its turns causally; idleness is not a report gap.
     let (idle_since, idle_no_report) =
         if to != Status::Running || working || waiting || agent_healthy {
             (None, false)

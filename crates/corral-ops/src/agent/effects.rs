@@ -238,7 +238,7 @@ pub fn recheck(store: &Store, task: &Task, origin: &RequestOrigin, home: &Home) 
                 return Err(Replayed(Box::new(stored)).into());
             }
             let pm = pm_state::load(store)?
-                .ok_or_else(|| reject(RejectCode::ContainerNotFound, "no Pi-native PM is bound"))?;
+                .ok_or_else(|| reject(RejectCode::ContainerNotFound, "no corral-pi PM is bound"))?;
             if let Some(stored) = pm.state.receipt(id) {
                 admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
                 if stored.state != ReceiptState::Reserved {
@@ -751,7 +751,7 @@ pub fn pm_reserve(
     pm_state::update(store, |pm| {
         let pm = pm
             .as_mut()
-            .ok_or_else(|| reject(RejectCode::ContainerNotFound, "no Pi-native PM is bound"))?;
+            .ok_or_else(|| reject(RejectCode::ContainerNotFound, "no corral-pi PM is bound"))?;
         if let Some(stored) = pm.state.receipt(&origin.request_id) {
             admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
             let receipt = stored.clone();
@@ -800,7 +800,7 @@ fn pm_write(
     source: &str,
 ) -> Result<RequestReceipt> {
     pm_state::update(store, |pm| {
-        let pm = pm.as_mut().context("no Pi-native PM is bound")?;
+        let pm = pm.as_mut().context("no corral-pi PM is bound")?;
         let stored = pm
             .state
             .receipts
@@ -840,7 +840,7 @@ pub fn pm_settle(
 /// does (creation and marker are one write); a legacy pane reply has no marker and stays
 /// uncertain. While the executor lives the reservation is unchanged. Nothing re-executes.
 pub fn reconcile_pm(ctx: &Ctx, request: &str) -> Result<RequestReceipt> {
-    let pm = pm_state::load(&ctx.store)?.context("no Pi-native PM is bound")?;
+    let pm = pm_state::load(&ctx.store)?.context("no corral-pi PM is bound")?;
     let receipt = pm
         .state
         .receipt(request)

@@ -1,4 +1,4 @@
-//! Fixtures for question tests: a temp store, Pi-native hosts bound through the public agent
+//! Fixtures for question tests: a temp store, corral-pi hosts bound through the public agent
 //! API, and helpers that drive `corral agent call` and the PM and owner operations.
 use std::path::PathBuf;
 
@@ -189,7 +189,7 @@ fn task_with_run(fx: &Fx, project: &str, pane: &str) -> String {
     task.id
 }
 
-/// A Running task whose run R1 is bound to a healthy Pi-native worker.
+/// A Running task whose run R1 is bound to a healthy corral-pi worker.
 pub(super) fn worker(fx: &Fx) -> (String, Host) {
     worker_in(fx, "corral")
 }
@@ -204,7 +204,7 @@ pub(super) fn worker_in(fx: &Fx, project: &str) -> (String, Host) {
     (id, host)
 }
 
-/// A Review task whose open review child R1-review1 is bound to a Pi-native reviewer.
+/// A Review task whose open review child R1-review1 is bound to a corral-pi reviewer.
 pub(super) fn reviewer(fx: &Fx) -> (String, Host) {
     let id = task_with_run(fx, "corral", "p1");
     fx.ctx

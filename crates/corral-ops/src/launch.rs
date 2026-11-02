@@ -335,7 +335,7 @@ fn advance(
     ctx.herdr
         .pane_report_metadata(pane, &name, &[("task", &task.id), ("run", &run.id)])?;
     let prompt = crate::prompt::run_prompt_file(ctx, &task.id, &run.id)?;
-    let command = if crate::agent::hooks::run_is_pi_native(&run) {
+    let command = if crate::agent::hooks::run_is_corral_pi(&run) {
         crate::agent::hooks::launch::worker_command(ctx, &view, &run)?
     } else {
         crate::render_command(ctx, &run.agent, &view, &run, &prompt)?

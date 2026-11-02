@@ -2,7 +2,7 @@
 
 Question: does upstream Pi (pinned 1.3.0, hosted by Bun) reach Claude through the owner's Anthropic
 Pro/Max OAuth login, and does that usage bill the **subscription** or **extra usage**? GO only with
-positive evidence of subscription coverage. NO-GO keeps the refusal of anthropic-vendor pi-native
+positive evidence of subscription coverage. NO-GO keeps the refusal of anthropic-vendor corral-pi
 profiles. The result is recorded in `docs/records/pi-native-claude-route.md`.
 
 Budget (recorded on T-306 by the owner): at most 20 requests and 50K output tokens, $0 API. The probe
@@ -20,7 +20,7 @@ request at 256 tokens.
   `anthropic-ratelimit-unified-overage-in-use: true` is extra usage and vetoes the rest; anything else, or a
   billing/permission error, is NO-GO. GO also needs a completed tool-call round trip.
 - `store.mjs`: Pi's `CredentialStore` over a 0600 `auth.json` in a 0700 probe-owned directory
-  (`$XDG_DATA_HOME/corral/pi-native-probe/claude`). Directories named `.claude`, `.codex`, `.omo`, `.pi`
+  (`$XDG_DATA_HOME/corral/corral-pi-probe/claude`). Directories named `.claude`, `.codex`, `.omo`, `.pi`
   or `.opencode` are refused, so no other harness's credentials are read or written.
 - `login.mjs`: the one interactive owner login through Pi's own Anthropic OAuth flow (copy-code by
   default, `PI_PROBE_CLAUDE_LOGIN_METHOD=browser` for the loopback callback). Makes no model request.

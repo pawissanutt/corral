@@ -1,7 +1,7 @@
 // `corral pi --bare`: plain unbound Pi, exec'd by corral with argv only and no launch message.
 // It loads the asset root's pinned Pi SDK and only the auth module, guards the network exactly as
 // the bound host does, and opens InteractiveMode in --cwd with sessions under the corral-owned
-// data root (`$XDG_DATA_HOME/corral/pi-native/bare/`). There is no store, bootstrap, generation,
+// data root (`$XDG_DATA_HOME/corral/corral-pi/bare/`). There is no store, bootstrap, generation,
 // nonce, bridge socket, hello, role or delivery module here, and no corral_* tool.
 import { mkdirSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { AgentSessionRuntime, CreateAgentSessionRuntimeFactory } from "@earendil-works/pi-coding-agent";
 
-import { piNativeRoot } from "../auth/paths.ts";
+import { corralPiRoot } from "../auth/paths.ts";
 import { PROVIDERS, type ProviderId, isProviderId } from "../auth/providers.ts";
 import { UPSTREAM_TOOLS } from "../roles/types.ts";
 import { loadAuth } from "./modules.ts";
@@ -37,7 +37,7 @@ export interface BareOptions {
   readonly provider: ProviderId;
   readonly model: string;
   readonly effort?: string;
-  /** The corral-owned pi-native data root; sessions and Pi's agent directory live below it. */
+  /** The corral-owned corral-pi data root; sessions and Pi's agent directory live below it. */
   readonly dataRoot: string;
 }
 
@@ -75,7 +75,7 @@ export function parseBareArgs(argv: readonly string[], assets: string, env: Node
   return {
     assets, cwd, provider, model: flags.get("--model") ?? BARE_DEFAULT_MODEL[provider],
     ...(effort ? { effort } : {}),
-    dataRoot: piNativeRoot(env),
+    dataRoot: corralPiRoot(env),
   };
 }
 

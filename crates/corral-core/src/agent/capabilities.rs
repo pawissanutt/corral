@@ -1,4 +1,4 @@
-//! The shared Pi-native capability catalog and its per-generation snapshot (T-563).
+//! The shared corral-pi capability catalog and its per-generation snapshot (T-563).
 //!
 //! One catalog owns every optional capability's key and per-role defaults; the resolver in
 //! `config::agent_capabilities` turns configuration into a `CapabilitySnapshot`, which each

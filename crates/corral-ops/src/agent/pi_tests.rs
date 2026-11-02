@@ -41,7 +41,7 @@ fn bound_mode_refuses_outside_herdr() {
 
 #[test]
 fn bound_mode_refuses_a_live_bound_pm_naming_its_pane_and_changes_nothing() {
-    // Given a live Pi-native PM bound in its own pane.
+    // Given a live corral-pi PM bound in its own pane.
     let fx = fixture();
     owner_pane(&fx);
     let host = HostProc::spawn(true);

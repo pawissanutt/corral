@@ -212,7 +212,7 @@ impl Continuation {
         let active = saved
             .current_run()
             .context("worker disappeared after pane creation")?;
-        let command = if crate::agent::hooks::run_is_pi_native(active) {
+        let command = if crate::agent::hooks::run_is_corral_pi(active) {
             crate::agent::hooks::launch::worker_command(ctx, &saved, active)?
         } else {
             crate::render_command(ctx, &active.agent, &saved, active, &prompt)?

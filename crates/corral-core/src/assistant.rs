@@ -25,7 +25,7 @@ pub const OWNER_INPUT_TEXT_MAX: usize = 16 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AssistantCfg {
-    /// The pi-native profile assistants run; unset means the PM's profile (`pm.agent`).
+    /// The corral-pi profile assistants run; unset means the PM's profile (`pm.agent`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
     /// Live assistant hosts a plain `corral pi` may reach before it needs `--over-cap`.

@@ -55,7 +55,7 @@ fn brief_questions_cover_effectively_pending_worker_reviewer_and_planning_contai
         worker.review_runs.push(run(AgentRole::Reviewer, "review-child"));
         task.runs.push(worker);
         task.plan_runs.push(serde_json::from_value(json!({
-            "id":"D1", "profile":"pi", "harness":"pi-native", "spec_revision":"spec", "started":"2026-10-01T00:00:00Z",
+            "id":"D1", "profile":"pi", "harness":"corral-pi", "spec_revision":"spec", "started":"2026-10-01T00:00:00Z",
             "output_dir":"/fixture", "rounds":0, "state":"planning", "agent_host":state(AgentRole::Planner, "planner")
         })).unwrap());
         task.plans.push(serde_json::from_value(json!({

@@ -39,7 +39,7 @@ async function sixPairs(): Promise<{ manifest: Manifest; root: string }> {
     await writeFile(join(root, selectionPath), JSON.stringify(selection));
     pairs.push({ ...pair, id, source_task: task, selection: selectionPath,
       omo: { ...pair.omo, start_show: showPath, show: showPath, events: eventsPath },
-      pi_native: { ...pair.pi_native, start_show: showPath, show: showPath, events: eventsPath },
+      corral_pi: { ...pair.corral_pi, start_show: showPath, show: showPath, events: eventsPath },
     });
   }
   return { manifest: manifestSchema.parse({ ...manifest, pairs }), root };
@@ -69,8 +69,8 @@ test("six synthetic pairs aggregate correctly without pretending to be live evid
   expect(actual.valid).toBe(true);
   expect(actual.outcome).toBe("not_evaluated");
   expect(actual.aggregates.omo.review_rounds).toBe(6);
-  expect(actual.aggregates.pi_native.total_tokens).toBe(1290);
-  expect(actual.aggregates.pi_native.api_equivalent_usd).toBeCloseTo(7.2);
+  expect(actual.aggregates.corral_pi.total_tokens).toBe(1290);
+  expect(actual.aggregates.corral_pi.api_equivalent_usd).toBeCloseTo(7.2);
   expect(Object.values(actual.thresholds)).toEqual([true, true, true, true, true]);
 });
 
@@ -79,7 +79,7 @@ test("owner cost threshold fails even when subscription reports zero", async () 
   const input = await sixPairs();
   const nativePath = join(input.root, "0-show.json");
   const data = showSchema.parse(JSON.parse(await readFile(nativePath, "utf8")));
-  const more = { ...data, runs: data.runs.map((run) => run.harness === "pi-native"
+  const more = { ...data, runs: data.runs.map((run) => run.harness === "corral-pi"
     ? { ...run, usage: { input: 100, output: 20, cache_read: 30, cache_write: 10,
       estimated_usd: 10, reported_usd: 0, unpriced_tokens: 0 } } : run) };
   await writeFile(nativePath, JSON.stringify(more));
@@ -91,8 +91,8 @@ test("owner cost threshold fails even when subscription reports zero", async () 
 
 test("binary or config drift invalidates a pair before thresholds can endorse it", () => {
   // Given an after snapshot with a different installed binary digest.
-  const changed = { ...pair, pi_native: { ...pair.pi_native,
-    after: { ...pair.pi_native.after, binary_sha256: "c".repeat(64) } } };
+  const changed = { ...pair, corral_pi: { ...pair.corral_pi,
+    after: { ...pair.corral_pi.after, binary_sha256: "c".repeat(64) } } };
   // When pair controls are validated.
   const actual = validatePair(changed, manifest.seed, show, show, show, show);
   // Then the pair is invalid rather than a failed worker result.
@@ -101,10 +101,10 @@ test("binary or config drift invalidates a pair before thresholds can endorse it
 
 test("isolated cards can share a run number but cannot reuse one physical execution", () => {
   // Given two private copies of the same frozen logical source specification.
-  const nativeRun = show.runs.find((run) => run.harness === "pi-native");
+  const nativeRun = show.runs.find((run) => run.harness === "corral-pi");
   if (!nativeRun) throw new TypeError("native fixture missing");
   const copy = { ...show, id: "T-private-copy", runs: [{ ...nativeRun, id: "R1" }] };
-  const controls = { ...pair, pi_native: { ...pair.pi_native, run: "R1" } };
+  const controls = { ...pair, corral_pi: { ...pair.corral_pi, run: "R1" } };
   // When each arm has its own task/run tuple, private ordinal equality is harmless.
   expect(validatePair(controls, manifest.seed, show, copy, show, copy)).toEqual([]);
   // Then reusing the original task/run is still rejected.
@@ -115,15 +115,15 @@ test("isolated cards can share a run number but cannot reuse one physical execut
 test("effort, base, gate contract and independent reviewer mismatches are rejected", () => {
   // Given a native arm changing each frozen field.
   const changed = { ...show, gate_contract: { tier: "full" }, runs: show.runs.map((run) =>
-    run.harness === "pi-native" ? { ...run, base_sha: "other", effort: "high",
+    run.harness === "corral-pi" ? { ...run, base_sha: "other", effort: "high",
       review: { reviewer: "owner", verdict: "approve" } } : run) };
   // When controls are validated.
   const actual = validatePair(pair, manifest.seed, show, changed, show, show);
   // Then every distinct source of invalidity is retained.
   expect(actual).toContain("base differs");
   expect(actual).toContain("effort differs");
-  expect(actual).toContain("pi-native: gate contract digest mismatch");
-  expect(actual).toContain("pi-native: independent reviewer profile mismatch");
+  expect(actual).toContain("corral-pi: gate contract digest mismatch");
+  expect(actual).toContain("corral-pi: independent reviewer profile mismatch");
 });
 
 test("review-to-landing promotion preserves frozen controls and binds both raw stages", () => {
@@ -143,8 +143,8 @@ test("review-to-landing promotion preserves frozen controls and binds both raw s
   const controls = { ...pair,
     omo: { ...pair.omo, before: { ...pair.omo.before, gate_contract_sha256: sha256(canonical(gate)) },
       after: { ...pair.omo.after, gate_contract_sha256: sha256(canonical(landing)) } },
-    pi_native: { ...pair.pi_native, before: { ...pair.pi_native.before, gate_contract_sha256: sha256(canonical(gate)) },
-      after: { ...pair.pi_native.after, gate_contract_sha256: sha256(canonical(landing)) } },
+    corral_pi: { ...pair.corral_pi, before: { ...pair.corral_pi.before, gate_contract_sha256: sha256(canonical(gate)) },
+      after: { ...pair.corral_pi.after, gate_contract_sha256: sha256(canonical(landing)) } },
   };
   // When approval selects the already-frozen landing tier.
   expect(validatePair(controls, manifest.seed, end, end, start, start)).toEqual([]);
@@ -152,7 +152,7 @@ test("review-to-landing promotion preserves frozen controls and binds both raw s
   const changed = { ...end, gate_contract: { ...landing, scope: ["other"] } };
   const altered = { ...controls,
     omo: { ...controls.omo, after: { ...controls.omo.after, gate_contract_sha256: sha256(canonical(changed.gate_contract)) } },
-    pi_native: { ...controls.pi_native, after: { ...controls.pi_native.after, gate_contract_sha256: sha256(canonical(changed.gate_contract)) } },
+    corral_pi: { ...controls.corral_pi, after: { ...controls.corral_pi.after, gate_contract_sha256: sha256(canonical(changed.gate_contract)) } },
   };
   expect(validatePair(altered, manifest.seed, changed, changed, start, start))
     .toContain("omo: gate selection changed outside review-to-landing promotion");
@@ -173,7 +173,7 @@ test("twice-expected token budget stops an otherwise valid pair", async () => {
 test("PM host is structurally required to remain OmO", () => {
   // Given a manifest attempting to evaluate a Pi PM as part of this comparison.
   const changed = { ...manifest, pairs: [{ ...pair, omo: { ...pair.omo,
-    before: { ...pair.omo.before, pm_harness: "pi-native" } } }] };
+    before: { ...pair.omo.before, pm_harness: "corral-pi" } } }] };
   // When boundary parsing runs.
   const actual = manifestSchema.safeParse(changed);
   // Then the unsupported PM evaluation cannot enter measurement.
@@ -202,7 +202,7 @@ test("an extra native needs-me and silent ending each fail their own threshold",
   const showPath = join(input.root, "0-show.json");
   const data = showSchema.parse(JSON.parse(await readFile(showPath, "utf8")));
   await writeFile(showPath, JSON.stringify({ ...data, runs: data.runs.map((run) =>
-    run.harness === "pi-native" ? { ...run, agent_host: { turns: [
+    run.harness === "corral-pi" ? { ...run, agent_host: { turns: [
       ...(run.agent_host?.turns ?? []),
       { generation: 1, seq: 3, ended: "2026-10-24T01:00:38Z", class: "no_report" },
     ] } } : run) }));
@@ -219,7 +219,7 @@ test("more than three independent review rounds triggers a budget invalidation",
   const path = join(input.root, "0-show.json");
   const data = showSchema.parse(JSON.parse(await readFile(path, "utf8")));
   await writeFile(path, JSON.stringify({ ...data, runs: data.runs.map((run) => {
-    if (run.harness !== "pi-native") return run;
+    if (run.harness !== "corral-pi") return run;
     const child = run.review_runs[0];
     if (!child) throw new TypeError("fixture child missing");
     return { ...run, review_runs: Array.from({ length: 4 }, (_, index) => ({

@@ -1,4 +1,4 @@
-//! Doctor seam: pi-native readback, consulted only when the configuration names the pi-native
+//! Doctor seam: corral-pi readback, consulted only when the configuration names the corral-pi
 //! harness. Owner: T-252 child host-install (adds the Bun version, installed digest,
 //! credential presence and wake route).
 //!
@@ -116,10 +116,10 @@ pub(crate) fn checks_with(
     let summary = found["summary"].as_str().unwrap_or_default();
     let assets = match found["dir"].as_str() {
         None => line(
-            "pi_native",
+            "corral_pi",
             false,
-            format!("pi-native: {summary}"),
-            "Pi-native profiles are opt-in; remove them, or run `corral agent install`.",
+            format!("corral-pi: {summary}"),
+            "corral-pi profiles are opt-in; remove them, or run `corral agent install`.",
         ),
         Some(dir) => {
             let readiness: Vec<String> = ROLES
@@ -134,10 +134,10 @@ pub(crate) fn checks_with(
                 )
                 .collect();
             line(
-                "pi_native",
+                "corral_pi",
                 readiness.iter().all(|r| r.ends_with(" ready")),
-                format!("pi-native assets {summary}; {}", readiness.join("; ")),
-                "Pi-native profiles are opt-in; remove them, or install the missing modules \
+                format!("corral-pi assets {summary}; {}", readiness.join("; ")),
+                "corral-pi profiles are opt-in; remove them, or install the missing modules \
                  named above.",
             )
         }
@@ -150,35 +150,35 @@ pub(crate) fn checks_with(
         (Some(host), _) => (
             true,
             format!(
-                "pi-native bun embedded in {host} (GO range {})",
+                "corral-pi bun embedded in {host} (GO range {})",
                 range.unwrap_or("unknown")
             ),
         ),
         (None, runtime) => match runtime {
             None => (
                 false,
-                "pi-native bun: no executable `bun` on PATH".to_owned(),
+                "corral-pi bun: no executable `bun` on PATH".to_owned(),
             ),
-            Some((_, Err(refusal))) => (false, format!("pi-native bun: {refusal}")),
+            Some((_, Err(refusal))) => (false, format!("corral-pi bun: {refusal}")),
             Some((path, Ok(version))) => match range {
                 Some(range) if !version_satisfies(&version, range) => (
                     false,
                     format!(
-                        "pi-native bun {version} at {} is outside the GO range {range}",
+                        "corral-pi bun {version} at {} is outside the GO range {range}",
                         path.display()
                     ),
                 ),
                 Some(range) => (
                     true,
                     format!(
-                        "pi-native bun {version} at {} (GO range {range})",
+                        "corral-pi bun {version} at {} (GO range {range})",
                         path.display()
                     ),
                 ),
                 None => (
                     true,
                     format!(
-                        "pi-native bun {version} at {} (no GO range to compare)",
+                        "corral-pi bun {version} at {} (no GO range to compare)",
                         path.display()
                     ),
                 ),
@@ -213,23 +213,23 @@ pub(crate) fn checks_with(
         (credentials::status_in(root), each)
     });
     let credential = match &stored {
-        None => (false, "pi-native credentials: no data directory".to_owned()),
+        None => (false, "corral-pi credentials: no data directory".to_owned()),
         Some((status, each)) => match (&status.problem, status.present) {
             (Some(problem), _) => (
                 false,
-                format!("pi-native credentials unsafe: {problem} ({each})"),
+                format!("corral-pi credentials unsafe: {problem} ({each})"),
             ),
             (None, true) => (
                 true,
                 format!(
-                    "pi-native credentials present in {} ({each})",
+                    "corral-pi credentials present in {} ({each})",
                     status.dir.display()
                 ),
             ),
             (None, false) => (
                 false,
                 format!(
-                    "pi-native credentials absent from {} ({each})",
+                    "corral-pi credentials absent from {} ({each})",
                     status.dir.display()
                 ),
             ),
@@ -237,14 +237,14 @@ pub(crate) fn checks_with(
     };
     let wake = match crate::questions::wake_route(ctx)? {
         QuestionWakeRoute::PmInbox => {
-            "pi-native question wakes go to the bound Pi-native PM's inbox".to_owned()
+            "corral-pi question wakes go to the bound corral-pi PM's inbox".to_owned()
         }
         QuestionWakeRoute::OmoPush => {
-            "pi-native question wakes go to the OmO PM push (pm.push_kinds includes question_opened)"
+            "corral-pi question wakes go to the OmO PM push (pm.push_kinds includes question_opened)"
                 .to_owned()
         }
         QuestionWakeRoute::None => format!(
-            "pi-native question wakes have no push route (no Pi-native PM bound, no OmO PM push of \
+            "corral-pi question wakes have no push route (no corral-pi PM bound, no OmO PM push of \
              question_opened); OmO PM watchers wake through `corral wait` on question_opened, and \
              a blocking question reaches Blocked after {}s (agent.question_unattended_secs, 600 \
              by default)",
@@ -253,23 +253,23 @@ pub(crate) fn checks_with(
     };
     let mut checks = vec![
         line(
-            "pi_native_bun",
+            "corral_pi_bun",
             runtime.0,
             runtime.1,
             "Install a Bun inside the GO manifest's tested range on the pane's PATH.",
         ),
         assets,
         line(
-            "pi_native_credentials",
+            "corral_pi_credentials",
             credential.0,
             credential.1,
-            "Run `corral agent login` in a pane to log in each provider your pi-native profiles use.",
+            "Run `corral agent login` in a pane to log in each provider your corral-pi profiles use.",
         ),
-        line("pi_native_question_wake", true, wake, ""),
+        line("corral_pi_question_wake", true, wake, ""),
         capabilities_check(ctx, found["dir"].as_str().map(Path::new)),
     ];
     let bedrock_configured = ctx.store.config.profiles.values().any(|profile| {
-        corral_core::is_pi_native(&profile.harness)
+        corral_core::is_corral_pi(&profile.harness)
             && profile
                 .vendor
                 .clone()
@@ -323,9 +323,9 @@ fn capabilities_check(ctx: &Ctx, assets: Option<&Path>) -> DoctorCheck {
         .map(|snapshot| snapshot.summary())
         .collect();
     line(
-        "pi_native_capabilities",
+        "corral_pi_capabilities",
         refused.is_none(),
-        format!("pi-native capabilities: {}", summaries.join("; ")),
+        format!("corral-pi capabilities: {}", summaries.join("; ")),
         &match refused {
             Some((role, key)) => format!(
                 "Run `corral agent install` to update the host, or remove \
@@ -352,9 +352,9 @@ pub(crate) fn bedrock_check(root: Option<&Path>, home: Option<&Path>) -> DoctorC
         ))
     };
     match readiness() {
-        Ok(message) => line("pi_native_bedrock", true, message, ""),
+        Ok(message) => line("corral_pi_bedrock", true, message, ""),
         Err(error) => line(
-            "pi_native_bedrock",
+            "corral_pi_bedrock",
             false,
             format!("amazon-bedrock: {error:#}"),
             &format!("{error:#}"),
@@ -392,7 +392,7 @@ mod tests {
 
         // Then it names the Bun, digest, GO verdict, real auth module, the worker and reviewer roles and no login:
         assert!(
-            report.contains("pi_native_bun true pi-native bun 1.4.2"),
+            report.contains("corral_pi_bun true corral-pi bun 1.4.2"),
             "{report}"
         );
         assert!(
@@ -408,15 +408,15 @@ mod tests {
             json!(["worker", "reviewer", "pm"])
         );
         assert!(
-            before.iter().find(|c| c.id == "pi_native").unwrap().ok,
+            before.iter().find(|c| c.id == "corral_pi").unwrap().ok,
             "{report}"
         );
-        assert!(report.contains("pi_native_credentials false pi-native credentials absent"));
+        assert!(report.contains("corral_pi_credentials false corral-pi credentials absent"));
         // And with no Pi PM bound and pm.push_events false, the wake line names both fallbacks:
         assert!(!fx.ctx.store.config.pm.push_events);
         let wake = before
             .iter()
-            .find(|c| c.id == "pi_native_question_wake")
+            .find(|c| c.id == "corral_pi_question_wake")
             .unwrap();
         for part in [
             "have no push route",
@@ -438,7 +438,7 @@ mod tests {
         .unwrap();
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
         let after = text(&checks_with(&fx.ctx, Some(root.clone()), Some(bun)).unwrap());
-        assert!(after.contains("pi_native_credentials true pi-native credentials present"));
+        assert!(after.contains("corral_pi_credentials true corral-pi credentials present"));
         assert!(!after.contains("SYNTHETIC-SECRET-BYTES"), "{after}");
         let state = installation(&fx.ctx, Some(root));
         assert!(!state.to_string().contains("SYNTHETIC-SECRET-BYTES"));

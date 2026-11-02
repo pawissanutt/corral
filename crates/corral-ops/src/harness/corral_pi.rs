@@ -1,4 +1,4 @@
-//! pi-native model discovery: the installed host lists Pi's built-in catalog through
+//! corral-pi model discovery: the installed host lists Pi's built-in catalog through
 //! `bun --no-env-file <assets>/src/auth/models.ts --provider <id>...` (a compiled installation:
 //! `<assets>/corral-pi-host models --provider <id>...`, no Bun needed), for the providers whose
 //! corral-owned login `corral agent doctor` sees (file metadata only) and that the host and the
@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::anyhow;
-use corral_core::{Config, PI_NATIVE_HARNESS, is_pi_native};
+use corral_core::{CORRAL_PI_HARNESS, Config, is_corral_pi};
 
 use super::{
     HarnessInfo, MODELS_TIMEOUT, ModelSource, apply_efforts, parse_omp_models, run_capture,
@@ -21,7 +21,7 @@ use crate::agent::install;
 /// The listing entry point inside an asset installation.
 pub const MODELS_ENTRY: &str = "src/auth/models.ts";
 
-/// The discovered models a profile can run. A pi-native profile runs on one provider (its
+/// The discovered models a profile can run. A corral-pi profile runs on one provider (its
 /// vendor's, else its model's, as launch binds it), so it sees only that provider's selectors;
 /// any other harness, or a profile with no recognizable provider, sees the whole list.
 pub fn models_for_profile(
@@ -43,7 +43,7 @@ pub fn models_for_profile(
     }
 }
 
-/// The discovered selector `model` names for this profile: the host accepts a bare pi-native id
+/// The discovered selector `model` names for this profile: the host accepts a bare corral-pi id
 /// for its bound provider, so it is qualified with that provider before a catalog lookup.
 pub(crate) fn catalog_selector(harness: &str, vendor: Option<&str>, model: &str) -> String {
     match profile_provider(harness, vendor, Some(model)) {
@@ -52,7 +52,7 @@ pub(crate) fn catalog_selector(harness: &str, vendor: Option<&str>, model: &str)
     }
 }
 
-/// Whether a pi-native profile names a model qualified with a provider other than the one its
+/// Whether a corral-pi profile names a model qualified with a provider other than the one its
 /// host binds; the host strips only its own provider's prefix, so such a model never runs.
 pub(crate) fn foreign_selector(harness: &str, vendor: Option<&str>, model: &str) -> bool {
     match (
@@ -65,7 +65,7 @@ pub(crate) fn foreign_selector(harness: &str, vendor: Option<&str>, model: &str)
 }
 
 fn profile_provider(harness: &str, vendor: Option<&str>, model: Option<&str>) -> Option<String> {
-    if !is_pi_native(harness) {
+    if !is_corral_pi(harness) {
         return None;
     }
     crate::agent::launch::host_provider(vendor, model.unwrap_or_default())
@@ -81,7 +81,7 @@ pub(crate) fn detect_with(
     bun: Option<PathBuf>,
 ) -> HarnessInfo {
     let mut info = HarnessInfo {
-        key: PI_NATIVE_HARNESS.into(),
+        key: CORRAL_PI_HARNESS.into(),
         program: None,
         path: None,
         version: None,
@@ -113,7 +113,7 @@ fn list(
     let dir = match assets {
         Ok(Some(dir)) => dir,
         Ok(None) => {
-            return Err("no pi-native asset installation; run `corral agent install`".into());
+            return Err("no corral-pi asset installation; run `corral agent install`".into());
         }
         Err(error) => return Err(format!("{error:#}; run `corral agent install`")),
     };
@@ -145,7 +145,7 @@ fn list(
     };
     info.path = Some(program.clone());
     info.version = install::compat_pi_version(&dir).ok();
-    let root = root.ok_or("no data directory for pi-native credentials")?;
+    let root = root.ok_or("no data directory for corral-pi credentials")?;
     let vendors = preflight::host_vendors(&dir);
     let providers: Vec<&str> = credentials::PROVIDERS
         .iter()
@@ -161,7 +161,7 @@ fn list(
         .map(|p| p.id)
         .collect();
     if providers.is_empty() {
-        return Err("no pi-native provider is logged in; run `corral agent login`".into());
+        return Err("no corral-pi provider is logged in; run `corral agent login`".into());
     }
     for provider in &providers {
         args.extend(["--provider".to_owned(), (*provider).to_owned()]);
@@ -185,5 +185,5 @@ fn list(
 }
 
 #[cfg(all(test, unix))]
-#[path = "pi_native_tests.rs"]
+#[path = "corral_pi_tests.rs"]
 mod tests;

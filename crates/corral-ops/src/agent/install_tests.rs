@@ -53,13 +53,29 @@ fn the_data_root_follows_xdg_then_home() {
     };
     assert_eq!(
         root(Some("/data"), Some("/home/u")).unwrap(),
-        Path::new("/data/corral/pi-native")
+        Path::new("/data/corral/corral-pi")
     );
     assert_eq!(
         root(Some("rel"), Some("/home/u")).unwrap(),
-        Path::new("/home/u/.local/share/corral/pi-native")
+        Path::new("/home/u/.local/share/corral/corral-pi")
     );
     assert!(root(None, None).is_err());
+}
+
+#[test]
+fn legacy_pi_native_install_is_read_in_place_without_moving() {
+    let tmp = tempfile::tempdir().unwrap();
+    let legacy = tmp.path().join("corral/pi-native");
+    std::fs::create_dir_all(legacy.join("assets")).unwrap();
+    std::fs::write(legacy.join("installed.json"), "retained").unwrap();
+    let selected = data_root_from(Some(tmp.path().as_os_str().into()), None).unwrap();
+    assert_eq!(selected, legacy);
+    assert_eq!(
+        std::fs::read_to_string(selected.join("installed.json")).unwrap(),
+        "retained"
+    );
+    assert!(legacy.join("assets").is_dir());
+    assert!(!tmp.path().join("corral/corral-pi").exists());
 }
 
 #[test]

@@ -78,7 +78,7 @@ pub fn validate_ask(payload: &AskPayload) -> Result<(), QuestionRefusal> {
     Ok(())
 }
 
-/// A bound, healthy Pi-native PM receives a question wake through its outbox; an OmO PM gets the
+/// A bound, healthy corral-pi PM receives a question wake through its outbox; an OmO PM gets the
 /// existing push only when the owner enabled `question_opened`; otherwise there is no route.
 pub fn wake_route(ctx: &Ctx) -> Result<QuestionWakeRoute> {
     let pm_live = pm_state::load(&ctx.store)?.is_some_and(|pm| {

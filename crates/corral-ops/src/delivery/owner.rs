@@ -19,7 +19,7 @@ pub(crate) const OWNER: &str = "owner";
 
 /// Fixed at launch: only harnesses with an enabled adapter get inbox delivery (phase 2: OmO).
 pub(crate) fn launch_mode(harness: &str) -> DeliveryMode {
-    if corral_core::is_pi_native(harness) {
+    if corral_core::is_corral_pi(harness) {
         crate::agent::hooks::delivery::launch_mode()
     } else if harness == super::adapters::omo::HARNESS {
         DeliveryMode::Inbox
@@ -28,9 +28,9 @@ pub(crate) fn launch_mode(harness: &str) -> DeliveryMode {
     }
 }
 
-/// A review child's delivery: legacy (the pane prompt) unless the harness is pi-native.
+/// A review child's delivery: legacy (the pane prompt) unless the harness is corral-pi.
 pub(crate) fn review_launch_mode(harness: &str) -> DeliveryMode {
-    if corral_core::is_pi_native(harness) {
+    if corral_core::is_corral_pi(harness) {
         crate::agent::hooks::delivery::launch_mode()
     } else {
         DeliveryMode::Legacy
@@ -100,20 +100,20 @@ pub(crate) fn adapter() -> OmoAdapter {
 /// One delivery pass plus effects. A failure is recorded and returned, never lost: the
 /// message stays in the inbox for the next sync.
 pub(crate) fn kick(ctx: &Ctx, recipient: &Recipient) -> Result<DeliveryStatus, String> {
-    match pi_native_adapter(ctx, recipient) {
+    match corral_pi_adapter(ctx, recipient) {
         Some(adapter) => kick_with(ctx, recipient, adapter.as_ref()),
         None => kick_with(ctx, recipient, &adapter()),
     }
 }
 
-/// The registered adapter when the recipient is a pi-native run or review child.
-fn pi_native_adapter(ctx: &Ctx, recipient: &Recipient) -> Option<Box<dyn DeliveryAdapter>> {
+/// The registered adapter when the recipient is a corral-pi run or review child.
+fn corral_pi_adapter(ctx: &Ctx, recipient: &Recipient) -> Option<Box<dyn DeliveryAdapter>> {
     // The recipient's projection is read by key, never by hydrating task history.
     let task = ctx.store.head(recipient.task()?).ok()?;
     let native_plan = match recipient {
         Recipient::PlanRun { plan_run, .. } => {
             task.plan_run_head(plan_run).ok()?.is_some_and(|r| {
-                r.agent_host.is_some() || crate::agent::hooks::is_pi_native(&r.harness)
+                r.agent_host.is_some() || crate::agent::hooks::is_corral_pi(&r.harness)
             })
         }
         Recipient::PlanReview { plan, review, .. } => task
@@ -137,7 +137,7 @@ fn pi_native_adapter(ctx: &Ctx, recipient: &Recipient) -> Option<Box<dyn Deliver
         || run
             .harness
             .as_deref()
-            .is_some_and(corral_core::is_pi_native))
+            .is_some_and(corral_core::is_corral_pi))
     .then(crate::agent::hooks::delivery::adapter)
 }
 
@@ -369,12 +369,12 @@ pub(crate) fn retire(ctx: &Ctx, recipient: &Recipient, reason: &str) -> Result<(
 
 pub(crate) fn ended(task: &Task, recipient: &Recipient) -> bool {
     match recipient {
-        // F4: a Pi-native worker done in Review stays open until landing, discard, retry or drop.
+        // F4: a corral-pi worker done in Review stays open until landing, discard, retry or drop.
         Recipient::Run { task: id, run }
             if task
                 .runs
                 .iter()
-                .any(|r| &r.id == run && crate::agent::hooks::run_is_pi_native(r)) =>
+                .any(|r| &r.id == run && crate::agent::hooks::run_is_corral_pi(r)) =>
         {
             let worker = corral_core::agent::ContainerRef::Worker {
                 task: id.clone(),
@@ -503,7 +503,7 @@ pub(crate) fn reconcile_all_with(ctx: &Ctx, adapter: &dyn DeliveryAdapter) -> Re
                 task: task.id.clone(),
                 run: run.id.clone(),
             };
-            match super::adapters::pi_native(run) {
+            match super::adapters::corral_pi(run) {
                 Some(own) => registered.push((recipient, own)),
                 None => recipients.push(recipient),
             }
@@ -519,7 +519,7 @@ pub(crate) fn reconcile_all_with(ctx: &Ctx, adapter: &dyn DeliveryAdapter) -> Re
                     run: run.id.clone(),
                     review: child.id.clone(),
                 };
-                match super::adapters::pi_native(child) {
+                match super::adapters::corral_pi(child) {
                     Some(own) => registered.push((recipient, own)),
                     None => recipients.push(recipient),
                 }
@@ -534,7 +534,7 @@ pub(crate) fn reconcile_all_with(ctx: &Ctx, adapter: &dyn DeliveryAdapter) -> Re
                 task: task.id.clone(),
                 plan_run: run.id.clone(),
             };
-            match pi_native_adapter(ctx, &recipient) {
+            match corral_pi_adapter(ctx, &recipient) {
                 Some(own) => registered.push((recipient, own)),
                 None => recipients.push(recipient),
             }
@@ -550,7 +550,7 @@ pub(crate) fn reconcile_all_with(ctx: &Ctx, adapter: &dyn DeliveryAdapter) -> Re
                     plan: plan.id.clone(),
                     review: review.id.clone(),
                 };
-                match pi_native_adapter(ctx, &recipient) {
+                match corral_pi_adapter(ctx, &recipient) {
                     Some(own) => registered.push((recipient, own)),
                     None => recipients.push(recipient),
                 }

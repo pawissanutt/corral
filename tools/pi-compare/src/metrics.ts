@@ -76,13 +76,13 @@ export function measure(show: Show, run: Run, input: readonly Event[]) {
       throw new ComparisonError("turn_history_truncated", `${show.id}/${hostRun.id}`);
     }
   }
-  if (run.harness === "pi-native" && !run.agent_host) {
+  if (run.harness === "corral-pi" && !run.agent_host) {
     throw new ComparisonError("turn_history_missing", `${show.id}/${run.id}`);
   }
-  if (run.harness === "pi-native" && !run.agent_host?.turns.length) {
+  if (run.harness === "corral-pi" && !run.agent_host?.turns.length) {
     throw new ComparisonError("turn_history_missing", `${show.id}/${run.id}`);
   }
-  const noReport = run.harness === "pi-native"
+  const noReport = run.harness === "corral-pi"
     ? hostRuns.flatMap((item) => item.agent_host?.turns ?? []).filter((turn) =>
       turn.ended != null && Date.parse(turn.ended) <= end
         && (turn.class === "no_report" || turn.class === "no_verdict")).length
@@ -98,7 +98,7 @@ export function measure(show: Show, run: Run, input: readonly Event[]) {
     review_rounds: verdicts.length,
     ...interventions(window, end),
     turns_ended_without_report: noReport,
-    no_report_source: run.harness === "pi-native" ? "canonical_turn_class" : "idle_no_report_event",
+    no_report_source: run.harness === "corral-pi" ? "canonical_turn_class" : "idle_no_report_event",
     gate_count: gateRows.length, gates_passed: passed,
     gate_pass_rate: passed / gateRows.length,
     gate_seconds: gateRows.reduce((total, row) => total + row.seconds, 0),

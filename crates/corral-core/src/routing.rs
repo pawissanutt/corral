@@ -277,6 +277,7 @@ impl RouteSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RouteDecision {
     pub profile: String,
+    #[serde(with = "crate::harness_compat::string")]
     pub harness: String,
     pub model: Option<String>,
     pub effort: Option<String>,

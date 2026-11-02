@@ -28,20 +28,20 @@ corral pi                      # in a herdr pane inside a workspace: a new assis
 corral pi --over-cap           # one more than assistant.max_live
 corral pi --resume A-1         # A-1's next generation, in this pane
 corral pi --task T-42          # new assistant with read-only task context
-corral pi --pm                 # the PM instead (see the Pi-native guide)
+corral pi --pm                 # the PM instead (see the corral-pi guide)
 corral pi --bare               # plain Pi; also what `corral pi` does outside a workspace
 ```
 
 `corral pi` in a herdr pane inside a corral workspace allocates the next session, opens its
-generation 1 in that pane and runs the Pi-native host there with the `assistant` role. The
+generation 1 in that pane and runs the corral-pi host there with the `assistant` role. The
 launch line names the session (`corral pi: assistant A-1 (role assistant) in pane ...`). A
 second `corral pi` in another pane opens `A-2` with its own record. The pane stays the
 owner's: corral never closes it or types into it ([session ownership](../session-ownership.md)).
 `--model`, `--provider` and `--effort` replace the profile's values for this launch.
 
 The profile is `assistant.agent`, or the PM's `pm.agent` when that is unset. It must be
-pi-native and name a model (`assistant_profile` otherwise), and it passes the same asset,
-vendor and login preflight as any Pi-native launch. The assistant needs no approved operating
+corral-pi and name a model (`assistant_profile` otherwise), and it passes the same asset,
+vendor and login preflight as any corral-pi launch. The assistant needs no approved operating
 scope: it is not bound to a project and has no board authority of its own.
 
 Outside a workspace, `corral pi` prints a one-line notice that no corral workspace was found
@@ -65,7 +65,7 @@ left behind.
 
 ```toml
 [assistant]
-# agent = "pi"   # a pi-native profile; unset uses pm.agent
+# agent = "pi"   # a corral-pi profile; unset uses pm.agent
 max_live = 4     # soft: `corral pi --over-cap` exceeds it
 ```
 
@@ -113,7 +113,7 @@ Because it is fenced, it can no longer change anything.
 Each generation resolves the `assistant` column of the shared capability catalog
 (`[agent.capabilities.assistant]`, the same presets and overrides as every other role) and
 records its snapshot and digest on the generation. `corral doctor` shows the resolved column
-and its digest in its `pi_native_capabilities` line, beside the other roles. A resumed
+and its digest in its `corral_pi_capabilities` line, beside the other roles. A resumed
 generation records a transition when its snapshot differs from the previous one.
 
 | Key | strict / standard / full |
@@ -473,7 +473,7 @@ corral run transcript T-42 R1 --review 1 --lines 1-200
 corral run transcript T-42 R1 --lines 201-400
 ```
 
-This read command returns raw JSONL text for OmO, Claude and Pi-native worker runs and
+This read command returns raw JSONL text for OmO, Claude and corral-pi worker runs and
 review children. `--review` selects the one-based child in the run's `review_runs` list.
 The default range is `1-200`; ranges are inclusive and limited to 200 records and 24 KiB
 of output. A byte-limited page names the next line to request. Line numbers count matching
@@ -670,7 +670,7 @@ authorizes nothing. Older generations without that tool use plain chat.
 Three versions meet in an assistant session:
 
 - **Source**: the corral repository. A change there reaches no session until it is installed.
-- **Installed**: the `corral` binary and the pi-native assets `corral agent install` records
+- **Installed**: the `corral` binary and the corral-pi assets `corral agent install` records
   (or `[agent] assets_dir`). The binary decides at every call which owner-action kinds exist
   and how each command behaves; the assets hold the contract and tool descriptions.
 - **Generation**: what a running host loaded when it started. Its contract and tool

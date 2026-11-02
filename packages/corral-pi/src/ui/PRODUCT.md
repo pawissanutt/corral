@@ -1,4 +1,4 @@
-# Corral Pi native workbench
+# Corral corral-pi workbench
 
 Platform: terminal UI. Production rich sessions run the existing Pi InteractiveMode and HostSession; there is no browser runtime or web service.
 

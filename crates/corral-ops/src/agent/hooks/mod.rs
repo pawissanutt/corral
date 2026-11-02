@@ -1,5 +1,5 @@
 //! Integration seams (T-252 child integration-seams): the only places existing corral code
-//! consults the Pi-native host. Every seam first asks `run_is_pi_native` or `is_pi_native`, a
+//! consults the corral-pi host. Every seam first asks `run_is_corral_pi` or `is_corral_pi`, a
 //! pure read of the run's harness or binding, so runs of every other harness never reach a
 //! hook. Each submodule names the child that fills its body; later children edit only their
 //! hook module and the agent modules behind it, never the call sites.
@@ -23,33 +23,33 @@ pub(crate) mod metered_tests;
 
 use corral_core::{Config, Run, Task};
 
-pub use corral_core::{PI_NATIVE_HARNESS, is_pi_native};
+pub use corral_core::{CORRAL_PI_HARNESS, is_corral_pi};
 
-/// A worker run or review child the Pi-native host owns: launched with the pi-native harness,
+/// A worker run or review child the corral-pi host owns: launched with the corral-pi harness,
 /// or carrying a host binding.
-pub fn run_is_pi_native(run: &Run) -> bool {
+pub fn run_is_corral_pi(run: &Run) -> bool {
     native_ownership(run.harness.as_deref(), run.agent_host.is_some())
 }
 
-pub(crate) fn run_head_is_pi_native(run: &corral_core::RunHead) -> bool {
+pub(crate) fn run_head_is_corral_pi(run: &corral_core::RunHead) -> bool {
     native_ownership(run.harness.as_deref(), run.agent_host.is_some())
 }
 
 fn native_ownership(harness: Option<&str>, bound: bool) -> bool {
-    bound || harness.is_some_and(is_pi_native)
+    bound || harness.is_some_and(is_corral_pi)
 }
 
-/// Whether any run or review child of the task is pi-native.
-pub fn task_is_pi_native(task: &Task) -> bool {
+/// Whether any run or review child of the task is corral-pi.
+pub fn task_is_corral_pi(task: &Task) -> bool {
     task.runs
         .iter()
-        .any(|run| run_is_pi_native(run) || run.review_runs.iter().any(run_is_pi_native))
+        .any(|run| run_is_corral_pi(run) || run.review_runs.iter().any(run_is_corral_pi))
 }
 
-/// Whether the configuration names the pi-native harness at all (doctor's gate).
+/// Whether the configuration names the corral-pi harness at all (doctor's gate).
 pub fn configured(config: &Config) -> bool {
-    config.harnesses.keys().any(|key| is_pi_native(key))
-        || config.profiles.values().any(|p| is_pi_native(&p.harness))
+    config.harnesses.keys().any(|key| is_corral_pi(key))
+        || config.profiles.values().any(|p| is_corral_pi(&p.harness))
 }
 
 #[cfg(test)]

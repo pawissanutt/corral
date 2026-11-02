@@ -1,9 +1,9 @@
-// Headless cross-lane fixture (T-577): the real corral binary dispatches a pi-native worker whose
+// Headless cross-lane fixture (T-577): the real corral binary dispatches a corral-pi worker whose
 // configuration enables `headless`, onto the package's production worker role and delivery module
 // with the fixture provider scripted from a steps file, in the private plugin-free herdr server of
 // scripts/test-herdr.sh. Its kickoff asks a real question; the host is killed and explicitly
 // resumed; the owner's answer then reaches it through the bridge and inbox alone, and it reports
-// done. A headless pi-native reviewer of that run then does the same and commits its verdict.
+// done. A headless corral-pi reviewer of that run then does the same and commits its verdict.
 // Nothing is ever typed into either pane.
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -96,7 +96,7 @@ export default {
   // review-run has no --force, so the shared host's load must not hold this fixture's reviewer.
   writeFileSync(config, `${readFileSync(config, "utf8")}
 [profiles.pi]
-harness = "pi-native"
+harness = "corral-pi"
 model = "gpt-6.1-sol"
 vendor = "openai"
 effort = "high"
@@ -198,10 +198,10 @@ test("a headless worker asks, survives host loss through explicit resume and com
   // Then the answer was observed from the bound transcript, and done committed from generation 2:
   const [container, seq] = String(answered.message_id).split("#");
   const receipt = requireReceipt(workspace, container ?? "", Number(seq));
-  expect(receipt.via).toBe("pi_native");
+  expect(receipt.via).toBe("corral_pi");
   const envelopes = inboxEnvelopes(workspace, container ?? "");
   const carried = envelopes.find(envelope => envelope.payload.includes("Use the inbox adapter."));
-  expect([carried?.adapter, carried?.binding.transcript]).toEqual(["pi_native", first.session_file]);
+  expect([carried?.adapter, carried?.binding.transcript]).toEqual(["corral_pi", first.session_file]);
   const finished = show("T-001").runs.at(-1);
   expect(finished.outcome).toBe("done");
   const report = finished.agent_host.receipts.find((r: any) => r.op === "done");
@@ -219,7 +219,7 @@ function reviewDir(generation: number): string {
 
 test("a headless reviewer asks, survives host loss through explicit resume and commits its verdict", async () => {
   if (!isolated) return;
-  // Given the worker's done run in Review and a headless pi-native reviewer whose kickoff asks:
+  // Given the worker's done run in Review and a headless corral-pi reviewer whose kickoff asks:
   expect(show("T-001").status).toBe("review");
   writeFileSync(steps, JSON.stringify([
     { toolCalls: [{ callId: "call_review_ask", name: "corral_ask", arguments: {
@@ -298,7 +298,7 @@ test("a headless reviewer asks, survives host loss through explicit resume and c
   // generation 2 under the same review child and callback, with no terminal-origin turn:
   const [container, seq] = String(answered.message_id).split("#");
   const receipt = requireReceipt(workspace, container ?? "", Number(seq));
-  expect(receipt.via).toBe("pi_native");
+  expect(receipt.via).toBe("corral_pi");
   const host = child().agent_host;
   const committed = host.receipts.find((r: any) => r.op === "verdict");
   expect([committed.state, committed.identity.generation, committed.identity.review, committed.identity.callback])

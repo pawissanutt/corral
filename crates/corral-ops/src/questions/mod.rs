@@ -1,4 +1,4 @@
-//! Pi-native agent questions (T-252 question-lifecycle). An AgentQuestion lives on the asking
+//! corral-pi agent questions (T-252 question-lifecycle). An AgentQuestion lives on the asking
 //! worker run's or review child's `AgentRunState`, keyed `<task>/<run>[/<review-child>]/Q<n>`.
 //! The asking agent opens and withdraws it through `corral agent call`; the PM and the owner
 //! triage it by key and revision; `terminalize`, `expire_deadlines` and `unattended` are the
@@ -50,8 +50,8 @@ pub use triage::{hold_owner_attention, settle_needs_me};
 
 use crate::Ctx;
 
-/// Inbox message kinds of the Pi-native adapter that a closed container never receives.
-pub const PI_NATIVE_MESSAGE_KINDS: [&str; 7] = [
+/// Inbox message kinds of the corral-pi adapter that a closed container never receives.
+pub const CORRAL_PI_MESSAGE_KINDS: [&str; 7] = [
     "question_answer",
     "question_correction",
     "turn_nudge",
@@ -195,7 +195,7 @@ pub fn question_key(container: &ContainerRef, n: usize) -> String {
     format!("{}/Q{n}", container.key())
 }
 
-/// Every Pi-native worker run, review child, planner run and plan review of a task, current or
+/// Every corral-pi worker run, review child, planner run and plan review of a task, current or
 /// historical.
 pub fn containers(task: &Task) -> Vec<ContainerRef> {
     let mut out = crate::agent::ops::planning::containers(task);

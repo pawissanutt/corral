@@ -185,7 +185,7 @@ fn c7_resolve_starts_one_native_turn_in_the_live_author_and_sync_never_repeats_i
     );
     let notice = fx.ctx.store.pm_inbox_item("PMI-1").unwrap().notice.unwrap();
     assert_eq!(notice.state, NoticeState::Posted);
-    // And nothing was queued for the PM: no Pi-native PM is bound.
+    // And nothing was queued for the PM: no corral-pi PM is bound.
     assert!(
         Inbox::new(&fx.ctx.store, Recipient::Pm)
             .unwrap()
@@ -230,8 +230,8 @@ fn bound_pm(fx: &Fx) -> AgentPm {
 }
 
 #[test]
-fn a_healthy_pi_native_pm_gets_one_wake_per_open_item_and_none_after_a_claim() {
-    // Given a healthy Pi-native PM and two owner items, one already claimed.
+fn a_healthy_corral_pi_pm_gets_one_wake_per_open_item_and_none_after_a_claim() {
+    // Given a healthy corral-pi PM and two owner items, one already claimed.
     let fx = ts::fx();
     bound_pm(&fx);
     post(&fx, "owner");
@@ -251,8 +251,8 @@ fn a_healthy_pi_native_pm_gets_one_wake_per_open_item_and_none_after_a_claim() {
 }
 
 #[test]
-fn without_a_pi_native_pm_the_sweep_posts_no_wake() {
-    // Given an OmO-style workspace: no Pi-native PM record, one open item.
+fn without_a_corral_pi_pm_the_sweep_posts_no_wake() {
+    // Given an OmO-style workspace: no corral-pi PM record, one open item.
     let fx = ts::fx();
     post(&fx, "owner");
     // When sync passes run.

@@ -115,8 +115,8 @@ pub(super) fn answer(receipted: Receipted) -> CallResponse {
 /// The bounded-observation capability the shared wait reconciler requires of a channel.
 const WAIT_CAPABILITY: &str = "wait_v1";
 
-/// Pi-native waits must be observable: a gate already wakes the worker through corral_gate, and
-/// a channel without a deadline has no guaranteed wake (F5). The Pi-native host declares
+/// corral-pi waits must be observable: a gate already wakes the worker through corral_gate, and
+/// a channel without a deadline has no guaranteed wake (F5). The corral-pi host declares
 /// `wait_v1` for every channel wait, because its deadline wake is the one corral guarantees.
 fn wait_request(payload: WaitPayload, run: &str) -> Result<WaitRequest> {
     let handle = match payload.handle {
@@ -137,7 +137,7 @@ fn wait_request(payload: WaitPayload, run: &str) -> Result<WaitRequest> {
             ..
         } if other != WAIT_CAPABILITY => {
             return Err(bad(format!(
-                "pi-native channel waits declare {WAIT_CAPABILITY}, not {other}"
+                "corral-pi channel waits declare {WAIT_CAPABILITY}, not {other}"
             )));
         }
         WaitHandle::Channel { channel_id, .. } => WaitHandle::Channel {

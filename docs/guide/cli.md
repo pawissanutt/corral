@@ -15,9 +15,9 @@ Commands:
   mode            Select Assist or explicitly confirm scoped Autopilot for this workspace
   inbox           Inspect and durably manage agent inbox messages without delivering them
   attention       Inspect current task conditions and progress without changing state
-  agent           Pi-native agent host: authenticated host calls, launch, install and recovery
-  pi              Start Pi-native here: an assistant in this herdr pane, the PM with --pm, or plain Pi with --bare
-  question        Triage Pi-native agent questions by key and revision: list, show, answer, escalate, cancel, deadline
+  agent           corral-pi agent host: authenticated host calls, launch, install and recovery
+  pi              Start corral-pi here: an assistant in this herdr pane, the PM with --pm, or plain Pi with --bare
+  question        Triage corral-pi agent questions by key and revision: list, show, answer, escalate, cancel, deadline
   automation      Preview, explicitly confirm, or inspect finite operating authority
   selection       Read current selection guidance or save a validated Auto receipt; JSON output
   setup           Review and apply owner-approved profile setup; JSON output by default
@@ -716,19 +716,19 @@ Options:
 ## `corral agent`
 
 ```text
-Pi-native agent host: authenticated host calls, launch, install and recovery
+corral-pi agent host: authenticated host calls, launch, install and recovery
 
 Usage: corral agent [OPTIONS] <COMMAND>
 
 Commands:
-  call     Run one Pi-native host request: a JSON envelope on stdin, one JSON receipt on stdout
-  launch   Start the Pi-native host in this pane from a one-shot bootstrap (run by corral)
-  install  Install the Pi-native host assets into the user data directory
+  call     Run one corral-pi host request: a JSON envelope on stdin, one JSON receipt on stdout
+  launch   Start the corral-pi host in this pane from a one-shot bootstrap (run by corral)
+  install  Install the corral-pi host assets into the user data directory
   login    Provision the corral-owned Pi credentials with one interactive owner login
   doctor   Report the Bun runtime, installed assets, GO manifest, roles and credential presence
-  state    Show a Pi-native binding: generations, host health, receipts, questions and turns
-  cancel   Cancel a Pi-native host turn; the run, its questions and receipts stay live
-  resume   Fence a lost Pi-native generation and start the next one in the same pane
+  state    Show a corral-pi binding: generations, host health, receipts, questions and turns
+  cancel   Cancel a corral-pi host turn; the run, its questions and receipts stay live
+  resume   Fence a lost corral-pi generation and start the next one in the same pane
   rewind   Rewind a worker's isolated worktree and Pi session to the start of an earlier turn
   help     Print this message or the help of the given subcommand(s)
 
@@ -740,7 +740,7 @@ Options:
 ### `corral agent call`
 
 ```text
-Run one Pi-native host request: a JSON envelope on stdin, one JSON receipt on stdout
+Run one corral-pi host request: a JSON envelope on stdin, one JSON receipt on stdout
 
 Usage: corral agent call [OPTIONS] --op <OP>
 
@@ -753,7 +753,7 @@ Options:
 ### `corral agent launch`
 
 ```text
-Start the Pi-native host in this pane from a one-shot bootstrap (run by corral)
+Start the corral-pi host in this pane from a one-shot bootstrap (run by corral)
 
 Usage: corral agent launch [OPTIONS] --bootstrap <BOOTSTRAP>
 
@@ -767,7 +767,7 @@ Options:
 ### `corral agent install`
 
 ```text
-Install the Pi-native host assets into the user data directory
+Install the corral-pi host assets into the user data directory
 
 Usage: corral agent install [OPTIONS]
 
@@ -810,7 +810,7 @@ Options:
 ### `corral agent state`
 
 ```text
-Show a Pi-native binding: generations, host health, receipts, questions and turns
+Show a corral-pi binding: generations, host health, receipts, questions and turns
 
 Usage: corral agent state [OPTIONS] [TASK]
 
@@ -821,7 +821,7 @@ Options:
       --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
       --run <RUN>        Run ID (default: the task's current run)
       --review <REVIEW>  Review child ID of the run (default: the worker run itself)
-      --pm               The bound Pi-native PM instead of a task
+      --pm               The bound corral-pi PM instead of a task
       --json             
   -h, --help             Print help
 ```
@@ -829,7 +829,7 @@ Options:
 ### `corral agent cancel`
 
 ```text
-Cancel a Pi-native host turn; the run, its questions and receipts stay live
+Cancel a corral-pi host turn; the run, its questions and receipts stay live
 
 Usage: corral agent cancel [OPTIONS] [TASK]
 
@@ -840,7 +840,7 @@ Options:
       --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
       --run <RUN>        Run ID (default: the task's current run)
       --review <REVIEW>  Review child ID of the run (default: the worker run itself)
-      --pm               The bound Pi-native PM instead of a task
+      --pm               The bound corral-pi PM instead of a task
       --turn <TURN>      Turn sequence to cancel (default: the current turn)
   -h, --help             Print help
 ```
@@ -848,7 +848,7 @@ Options:
 ### `corral agent resume`
 
 ```text
-Fence a lost Pi-native generation and start the next one in the same pane
+Fence a lost corral-pi generation and start the next one in the same pane
 
 Usage: corral agent resume [OPTIONS] [TASK]
 
@@ -859,7 +859,7 @@ Options:
       --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
       --run <RUN>        Run ID (default: the task's current run)
       --review <REVIEW>  Review child ID of the run (default: the worker run itself)
-      --pm               The bound Pi-native PM instead of a task
+      --pm               The bound corral-pi PM instead of a task
       --replace          Replace a host that is still alive after verifying its pid, start time and command
   -h, --help             Print help
 ```
@@ -887,7 +887,7 @@ Options:
 ## `corral pi`
 
 ```text
-Start Pi-native here: an assistant in this herdr pane, the PM with --pm, or plain Pi with --bare
+Start corral-pi here: an assistant in this herdr pane, the PM with --pm, or plain Pi with --bare
 
 Usage: corral pi [OPTIONS]
 
@@ -907,12 +907,12 @@ Options:
 ## `corral question`
 
 ```text
-Triage Pi-native agent questions by key and revision: list, show, answer, escalate, cancel, deadline
+Triage corral-pi agent questions by key and revision: list, show, answer, escalate, cancel, deadline
 
 Usage: corral question [OPTIONS] <COMMAND>
 
 Commands:
-  list      List Pi-native agent questions; pending ones (open or escalated) by default
+  list      List corral-pi agent questions; pending ones (open or escalated) by default
   show      Show one question with its effective state, triage, answer and deadline
   answer    Answer at the current revision; a PM answer needs --basis refs and --scope-note
   escalate  Escalate an open question to the owner, optionally reclassifying it upward
@@ -928,7 +928,7 @@ Options:
 ### `corral question list`
 
 ```text
-List Pi-native agent questions; pending ones (open or escalated) by default
+List corral-pi agent questions; pending ones (open or escalated) by default
 
 Usage: corral question list [OPTIONS]
 
@@ -3779,7 +3779,7 @@ Write or refresh every corral role skill in agent skill dirs (default: every har
 Usage: corral skill install [OPTIONS]
 
 Options:
-      --harness <HARNESS>  Harness to install for; repeatable [possible values: omo, omp, claude, agents, pi-native]
+      --harness <HARNESS>  Harness to install for; repeatable [possible values: omo, omp, claude, agents, corral-pi]
       --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
       --dir <DIR>          Install into this skills directory instead
       --force              Replace role skill files that corral did not write

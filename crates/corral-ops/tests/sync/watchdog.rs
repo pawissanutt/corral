@@ -142,10 +142,10 @@ fn harness_and_known_helpers_are_never_stuck() {
     assert!(fx.notifications().is_empty());
 }
 
-/// A pi-native launch as herdr reports it when the pane shell (bash, 10) starts a nested
+/// A corral-pi launch as herdr reports it when the pane shell (bash, 10) starts a nested
 /// interactive shell (fish, 20) that runs corral's wrapper (42), the template shell (43), the
 /// compiled host (44) and the agent the host drives (45), plus any `extra` foreground processes.
-fn pi_native_pane(fx: &Fx, processes: &Processes, extra: &[(u32, u32, &[&str])]) {
+fn corral_pi_pane(fx: &Fx, processes: &Processes, extra: &[(u32, u32, &[&str])]) {
     const SCRIPT: &str = "/bin/sh -c \"$1\" corral-launch; corral_launch_exit=$?; printf '%s\\n' \"$corral_launch_exit\" > '/s/T-001-R1.exited'";
     const LAUNCH: &str = "/opt/corral agent launch --bootstrap /s/bootstrap.json";
     let mut tree: Vec<(u32, u32, &[&str])> = vec![
@@ -177,11 +177,11 @@ fn pi_native_pane(fx: &Fx, processes: &Processes, extra: &[(u32, u32, &[&str])])
 }
 
 #[test]
-fn pi_native_launch_wrapper_under_a_nested_shell_is_never_stuck() {
-    // Given a long-idle pi-native run whose foreground is corral's own launch tree.
-    let fx = Fx::new("pi-native");
+fn corral_pi_launch_wrapper_under_a_nested_shell_is_never_stuck() {
+    // Given a long-idle corral-pi run whose foreground is corral's own launch tree.
+    let fx = Fx::new("corral-pi");
     let processes = Processes::default();
-    pi_native_pane(&fx, &processes, &[]);
+    corral_pi_pane(&fx, &processes, &[]);
     fx.herdr_says("idle");
     sync(&fx, &processes, 0);
     // When the idle threshold is exceeded.
@@ -208,9 +208,9 @@ fn pi_native_launch_wrapper_under_a_nested_shell_is_never_stuck() {
 
 #[test]
 fn registered_pi_capability_does_not_raise_stuck() {
-    let fx = Fx::new("pi-native");
+    let fx = Fx::new("corral-pi");
     let processes = Processes::default();
-    pi_native_pane(
+    corral_pi_pane(
         &fx,
         &processes,
         &[
@@ -251,7 +251,7 @@ fn registered_pi_capability_does_not_raise_stuck() {
         .to_string(),
     )
     .unwrap();
-    pi_native_pane(
+    corral_pi_pane(
         &fx,
         &processes,
         &[(46, 44, &["rust-analyzer"]), (48, 44, &["supervisor"])],
@@ -264,7 +264,7 @@ fn registered_pi_capability_does_not_raise_stuck() {
             .is_none()
     );
     assert_eq!(fx.events("stuck"), 0);
-    pi_native_pane(
+    corral_pi_pane(
         &fx,
         &processes,
         &[
@@ -297,9 +297,9 @@ fn worker_interpreter_language_servers_are_exempt_but_unrelated_commands_are_not
             "--stdio",
         ][..],
     ] {
-        let fx = Fx::new("pi-native");
+        let fx = Fx::new("corral-pi");
         let processes = Processes::default();
-        pi_native_pane(&fx, &processes, &[(46, 45, argv)]);
+        corral_pi_pane(&fx, &processes, &[(46, 45, argv)]);
         fx.herdr_says("idle");
         sync(&fx, &processes, 0);
         assert!(
@@ -320,9 +320,9 @@ fn worker_interpreter_language_servers_are_exempt_but_unrelated_commands_are_not
             &["node", "/opt/typescript-language-server/lib/cli.js"][..],
         ),
     ] {
-        let fx = Fx::new("pi-native");
+        let fx = Fx::new("corral-pi");
         let processes = Processes::default();
-        pi_native_pane(&fx, &processes, &[(46, parent, argv)]);
+        corral_pi_pane(&fx, &processes, &[(46, parent, argv)]);
         fx.herdr_says("idle");
         sync(&fx, &processes, 0);
         assert_eq!(
@@ -339,12 +339,12 @@ fn worker_interpreter_language_servers_are_exempt_but_unrelated_commands_are_not
 }
 
 #[test]
-fn foreign_processes_in_a_pi_native_pane_are_still_stuck() {
+fn foreign_processes_in_a_corral_pi_pane_are_still_stuck() {
     // Given a command the host spawned, and one typed into the nested shell.
     for (pid, parent) in [(46, 44), (47, 20)] {
-        let fx = Fx::new("pi-native");
+        let fx = Fx::new("corral-pi");
         let processes = Processes::default();
-        pi_native_pane(&fx, &processes, &[(pid, parent, &["sleep", "9999"])]);
+        corral_pi_pane(&fx, &processes, &[(pid, parent, &["sleep", "9999"])]);
         fx.herdr_says("idle");
         sync(&fx, &processes, 0);
         // When the idle threshold is exceeded.

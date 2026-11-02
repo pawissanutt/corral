@@ -509,6 +509,7 @@ pub struct Run {
     pub profile: Option<String>,
     /// Resolved harness key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(with = "crate::harness_compat::optional")]
     pub harness: Option<String>,
     /// Resolved model passed to the harness, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -613,7 +614,7 @@ pub struct Run {
     /// Review autopilot sub-state; None until the autopilot picks the finished run up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autopilot: Option<AutopilotState>,
-    /// Pi-native host binding and receipts (docs/records/pi-native-records.md); also on review children.
+    /// corral-pi host binding and receipts (docs/records/pi-native-records.md); also on review children.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_host: Option<Box<crate::agent::AgentRunState>>,
 }
@@ -863,10 +864,10 @@ pub struct Task {
     pub runs: Vec<Run>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<Artifact>,
-    /// Set atomically with creation by a Pi-native PM capture.
+    /// Set atomically with creation by a corral-pi PM capture.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_origin: Option<crate::agent::AgentOrigin>,
-    /// Receipts of Pi-native PM operations whose target is this task.
+    /// Receipts of corral-pi PM operations whose target is this task.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_pm_receipts: Vec<crate::agent::RequestReceipt>,
     /// Markdown body after the frontmatter (spec, acceptance, notes).
@@ -977,8 +978,10 @@ pub struct Event {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor: Option<crate::Actor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(with = "crate::harness_compat::optional")]
     pub via: Option<String>,
     #[serde(default)]
+    #[serde(with = "crate::harness_compat::event_detail")]
     pub detail: serde_json::Value,
 }
 

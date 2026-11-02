@@ -52,7 +52,7 @@ fi
 
 if [ "$dry_run" = true ]; then
     echo "would download $url into $bin_dir"
-    echo "would install corral-pi-host (the Pi-native agent host) beside corral when the archive has it, then run: corral agent install"
+    echo "would install corral-pi-host (the corral-pi agent host) beside corral when the archive has it, then run: corral agent install"
     echo "would check for herdr >= $min_herdr_version, corral's terminal engine"
     echo "if needed, would offer: curl -fsSL $herdr_installer | sh"
     exit 0
@@ -149,7 +149,7 @@ tar -xzf "$tmp/$asset" -C "$tmp/archive" || fail "invalid archive: $asset"
 if [ ! -f "$tmp/archive/corral" ] || [ -L "$tmp/archive/corral" ]; then
     fail "archive has no regular corral binary"
 fi
-# Releases before 0.4.0 ship corral alone; Pi-native then needs a source install.
+# Releases before 0.4.0 ship corral alone; corral-pi then needs a source install.
 host=false
 if [ -e "$tmp/archive/corral-pi-host" ] || [ -L "$tmp/archive/corral-pi-host" ]; then
     if [ ! -f "$tmp/archive/corral-pi-host" ] || [ -L "$tmp/archive/corral-pi-host" ]; then
@@ -193,11 +193,11 @@ staged=
 echo "installed $installed_version to $bin_dir/corral"
 if [ "$host" = true ]; then
     echo "installed $host_version to $bin_dir/corral-pi-host"
-    # Registers the host for Pi-native profiles; corral itself works without it.
+    # Registers the host for corral-pi profiles; corral itself works without it.
     if "$bin_dir/corral" agent install </dev/null >"$tmp/agent-install.log" 2>&1; then
-        echo "set up the Pi-native agent host (corral agent install)"
+        echo "set up the corral-pi agent host (corral agent install)"
     else
-        echo "note: 'corral agent install' failed; Pi-native profiles need it. Output:"
+        echo "note: 'corral agent install' failed; corral-pi profiles need it. Output:"
         awk '{ print "  " $0 }' "$tmp/agent-install.log"
     fi
 fi

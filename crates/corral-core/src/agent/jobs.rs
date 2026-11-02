@@ -1,4 +1,4 @@
-//! Background jobs of a Pi-native worker (T-565): the durable identity of each process the host
+//! Background jobs of a corral-pi worker (T-565): the durable identity of each process the host
 //! started and the monitors registered on it. Output files are runtime caches; these records
 //! are what recovery, fencing and run end use to find and reap owned process groups.
 use jiff::Timestamp;

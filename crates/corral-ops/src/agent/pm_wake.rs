@@ -1,4 +1,4 @@
-//! The keyed PM wake outbox: one `question_wake` per question transition into the Pi-native PM
+//! The keyed PM wake outbox: one `question_wake` per question transition into the corral-pi PM
 //! inbox, reposted after a crash and deduplicated by key. Owner: T-252 child pm-role.
 use anyhow::{Context, Result, ensure};
 use corral_core::TaskRef;
@@ -16,7 +16,7 @@ use crate::delivery::{
     BindOutcome, Capabilities, DeliveryAdapter, Observation, Readiness, RecipientRef,
 };
 
-use super::delivery::PiNativeAdapter;
+use super::delivery::CorralPiAdapter;
 
 /// The T-252 child that lands the outbox.
 pub const OWNER: &str = "pm-role";
@@ -224,10 +224,10 @@ fn in_scope(ctx: &Ctx, message: &Message, project: &str) -> Result<bool> {
 
 impl DeliveryAdapter for ScopedPm {
     fn harness(&self) -> &'static str {
-        PiNativeAdapter.harness()
+        CorralPiAdapter.harness()
     }
     fn capabilities(&self) -> Capabilities {
-        PiNativeAdapter.capabilities()
+        CorralPiAdapter.capabilities()
     }
     fn readiness(&self, ctx: &Ctx, recipient: &RecipientRef) -> Result<Readiness> {
         // Retire stale members before the delivery engine packs frozen bytes. Its existing
@@ -235,7 +235,7 @@ impl DeliveryAdapter for ScopedPm {
         let inbox = Inbox::new(&ctx.store, Recipient::Pm)?;
         let posting = inbox.lock()?;
         pm_state::update(&ctx.store, |pm| {
-            let current = pm.as_ref().context("Pi-native PM is no longer bound")?;
+            let current = pm.as_ref().context("corral-pi PM is no longer bound")?;
             ensure!(
                 healthy(current) && same_pm(&self.0, current),
                 "PM binding changed"
@@ -252,17 +252,17 @@ impl DeliveryAdapter for ScopedPm {
                         message.seq,
                         TerminalState::Cancelled,
                         "question wake is outside the current PM project",
-                        PiNativeAdapter.harness(),
+                        CorralPiAdapter.harness(),
                     )?;
                 }
             }
             Ok(((), false))
         })?;
         drop(posting);
-        PiNativeAdapter.readiness(ctx, recipient)
+        CorralPiAdapter.readiness(ctx, recipient)
     }
     fn bind(&self, ctx: &Ctx, recipient: &RecipientRef) -> Result<BindOutcome> {
-        PiNativeAdapter.bind(ctx, recipient)
+        CorralPiAdapter.bind(ctx, recipient)
     }
     fn observe(
         &self,
@@ -270,16 +270,16 @@ impl DeliveryAdapter for ScopedPm {
         binding: &SessionBinding,
         cursor: &mut ObserveCursor,
     ) -> Result<Vec<Observation>> {
-        PiNativeAdapter.observe(ctx, binding, cursor)
+        CorralPiAdapter.observe(ctx, binding, cursor)
     }
     fn send(&self, ctx: &Ctx, binding: &SessionBinding, envelope: &Envelope) -> SendOutcome {
         let checked = pm_state::update(&ctx.store, |pm| {
-            let current = pm.as_ref().context("Pi-native PM is no longer bound")?;
+            let current = pm.as_ref().context("corral-pi PM is no longer bound")?;
             ensure!(
                 healthy(current) && same_pm(&self.0, current),
                 "PM binding changed"
             );
-            let BindOutcome::Bound(expected) = PiNativeAdapter.bind(ctx, &Recipient::Pm)? else {
+            let BindOutcome::Bound(expected) = CorralPiAdapter.bind(ctx, &Recipient::Pm)? else {
                 anyhow::bail!("PM session is no longer bound");
             };
             ensure!(*binding == expected, "PM delivery session changed");
@@ -291,7 +291,7 @@ impl DeliveryAdapter for ScopedPm {
                     "question wake is out of scope"
                 );
             }
-            Ok((PiNativeAdapter.send(ctx, binding, envelope), false))
+            Ok((CorralPiAdapter.send(ctx, binding, envelope), false))
         });
         match checked {
             Ok(outcome) => outcome,
@@ -748,15 +748,15 @@ mod tests {
             let mut bridge = Host::start(&fx, &host);
             if frozen {
                 let BindOutcome::Bound(binding) =
-                    PiNativeAdapter.bind(&fx.ctx, &Recipient::Pm).unwrap()
+                    CorralPiAdapter.bind(&fx.ctx, &Recipient::Pm).unwrap()
                 else {
                     panic!("fixture unbound")
                 };
                 inbox
                     .publish(
                         &binding,
-                        PiNativeAdapter.harness(),
-                        PiNativeAdapter.capabilities().max_payload,
+                        CorralPiAdapter.harness(),
+                        CorralPiAdapter.capabilities().max_payload,
                         false,
                     )
                     .unwrap()

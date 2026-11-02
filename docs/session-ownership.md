@@ -86,7 +86,7 @@ dispatch and local-only gate collection still work.
 
 ## Panes adopted by `corral pi`
 
-`corral pi --pm` (bound mode) makes the herdr pane it runs in, the owner's own pane, the Pi-native
+`corral pi --pm` (bound mode) makes the herdr pane it runs in, the owner's own pane, the corral-pi
 PM pane. The adoption is recorded in `.corral/state/agent-pm.json` as `adopted_pane`, in the
 same commit that opens the generation moving the PM there. A refused or failed `corral pi --pm`
 therefore leaves the previous pane's adoption untouched. Relaunching the PM in the same pane keeps
@@ -110,7 +110,7 @@ it, and ending the session asks only the session's own host to stop over its bri
 
 ## herdr agent status of a bound host
 
-A bound Pi-native host, in its own run pane or an adopted one, holds herdr's lifecycle authority
+A bound corral-pi host, in its own run pane or an adopted one, holds herdr's lifecycle authority
 for that pane as source `custom:corral-pi` while it runs (see the guide's "herdr status"). The
 host reports with sequence numbers from its generation's own range. Corral allocates that range's
 epoch at hello above every epoch it allocated before for the user, whatever the wall clock says,

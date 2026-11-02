@@ -35,7 +35,7 @@ fn planning_task(fx: &ts::Fx) -> String {
             task.runs.clear();
             let revision = crate::plan_spec_revision(task)?;
             task.plan_runs.push(serde_json::from_value(json!({
-                "id":"D1", "profile":"pi", "harness":"pi-native", "delivery":"inbox",
+                "id":"D1", "profile":"pi", "harness":"corral-pi", "delivery":"inbox",
                 "spec_revision":revision, "started":"2026-10-29T00:00:00Z",
                 "output_dir":output, "rounds":0, "state":"planning",
                 "herdr":{"workspace_id":"w1","pane_id":"p1","socket":socket}
@@ -601,7 +601,7 @@ fn normal_sync_abandons_a_dead_plan_reviewer_reservation_that_recorded_nothing()
     assert!(fx.ctx.store.get(&id).unwrap().plans[0].approval.is_none());
 }
 
-/// One pass of the per-task hook ordinary sync runs for Pi-native work, behind its own
+/// One pass of the per-task hook ordinary sync runs for corral-pi work, behind its own
 /// `wants` predicate. The full sync loop also observes the herdr engine, absent here.
 fn sync_agent(fx: &ts::Fx, id: &str, now: jiff::Timestamp) {
     let task = fx.ctx.store.get(id).unwrap();

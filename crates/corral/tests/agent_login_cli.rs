@@ -32,7 +32,7 @@ fn without_a_terminal_and_without_provider_login_exits_with_usage_and_no_prompt(
     );
     assert!(!stderr.contains("Log in a model provider"), "{stderr}");
     assert!(output.stdout.is_empty());
-    assert!(!home.path().join("data/corral/pi-native/auth").exists());
+    assert!(!home.path().join("data/corral/corral-pi/auth").exists());
 }
 
 /// Whether this machine can run the pseudo-terminal driver at all. This is the only check that
@@ -154,7 +154,7 @@ fn on_a_terminal_q_cancels_with_130_and_arrow_down_enter_selects_anthropic() {
     assert!(screen.contains("> Anthropic Claude (Pro/Max)"), "{screen}");
     assert!(screen.contains("login cancelled"), "{screen}");
     assert_eq!(code, 130, "{screen}");
-    assert!(!home.path().join("data/corral/pi-native/auth").exists());
+    assert!(!home.path().join("data/corral/corral-pi/auth").exists());
 
     // When the owner presses arrow-down then Enter, Anthropic is selected and login proceeds to
     // the installation check (absent here), so nothing is written either:
@@ -162,7 +162,7 @@ fn on_a_terminal_q_cancels_with_130_and_arrow_down_enter_selects_anthropic() {
     assert!(screen.contains("assets_unavailable"), "{screen}");
     assert!(!screen.contains("login cancelled"), "{screen}");
     assert_eq!(code, 1, "{screen}");
-    assert!(!home.path().join("data/corral/pi-native/auth").exists());
+    assert!(!home.path().join("data/corral/corral-pi/auth").exists());
 }
 
 #[test]
@@ -177,7 +177,7 @@ fn a_hung_pty_scenario_is_a_failure_and_its_child_is_reaped() {
     assert!(error.contains("DRIVER_FAILED timed out"), "{error}");
     assert!(error.contains("killed and reaped"), "{error}");
     assert!(
-        error.contains("Log in a model provider for pi-native"),
+        error.contains("Log in a model provider for corral-pi"),
         "{error}"
     );
 }

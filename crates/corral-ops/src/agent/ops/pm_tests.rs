@@ -108,7 +108,7 @@ fn inbox_limits_distinguish_items_from_body_characters_without_mutating() {
 
 #[test]
 fn inbox_tools_claim_and_resolve_at_revisions_and_refuse_a_stale_claim() {
-    // Given a bound Pi-native PM and owner item PMI-1 at revision 0.
+    // Given a bound corral-pi PM and owner item PMI-1 at revision 0.
     let (fx, host) = fixture();
     fx.ctx
         .store

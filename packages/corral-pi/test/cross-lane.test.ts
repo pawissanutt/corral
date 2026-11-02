@@ -1,4 +1,4 @@
-// Cross-lane fixture: the real corral binary dispatches a pi-native run whose [agent] assets_dir
+// Cross-lane fixture: the real corral binary dispatches a corral-pi run whose [agent] assets_dir
 // is a fixture installation, in the private plugin-free herdr server of scripts/test-herdr.sh.
 // The pane runs `corral agent launch`, the Bun host binds generation 1 with hello and serves the
 // bridge; a fresh corral process (the corral-ops probe) reconnects through ctl.cap alone.
@@ -60,7 +60,7 @@ beforeAll(async () => {
   cli("init");
   writeFileSync(join(workspace, ".corral/corral.toml"), `${readFileSync(join(workspace, ".corral/corral.toml"), "utf8")}
 [profiles.pi]
-harness = "pi-native"
+harness = "corral-pi"
 model = "gpt-6.1-sol"
 vendor = "openai"
 effort = "high"
@@ -98,7 +98,7 @@ test("dispatch launches the host in the run pane and hello binds generation 1 wi
   cli("dispatch", "T-001", "--profile", "pi", "--force");
   const dispatched = show("T-001").runs.at(-1);
   workspaces.push(dispatched.herdr.workspace_id);
-  expect(dispatched.harness).toBe("pi-native");
+  expect(dispatched.harness).toBe("corral-pi");
   await bound;
   const runRecord = show("T-001").runs.at(-1);
   const host = runRecord.agent_host;

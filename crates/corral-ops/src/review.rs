@@ -105,7 +105,7 @@ pub fn done_with_result(ctx: &Ctx, id: &str, summary: &str, result: Option<&str>
     done_inner(ctx, id, summary, result, None).map(|(task, _)| task)
 }
 
-/// The Pi-native `done` op: the receipt and AgentReport commit in done's final update.
+/// The corral-pi `done` op: the receipt and AgentReport commit in done's final update.
 pub fn done_request(
     ctx: &Ctx,
     id: &str,

@@ -729,7 +729,7 @@ Sync reconciles these records under the task lock and notifies once per recorded
 transition. Recording a new receipt with `corral run resume` wakes the worker: corral delivers
 one prompt to the run's session naming the wait or answered decision, so an idle or parked
 worker continues without anyone typing into its pane. A run still queued for a slot is told to
-wait for `slot_reacquired` first; a Pi-native wait with an armed wake gets that wake instead.
+wait for `slot_reacquired` first; a corral-pi wait with an armed wake gets that wake instead.
 A replayed receipt prompts nothing, and a failed delivery keeps the receipt and is reported.
 Receipt delivery uncertainty survives terminal activity and restart; corral never resends a
 command or launches another worker because a wait completed. Receipts are immutable.
@@ -755,7 +755,7 @@ is at its `per_project` cap reserves nothing, so it never blocks another project
 grant is logged as a `slot_reacquired` event. A woken worker waits with
 `corral wait --for slot_reacquired --task T-042 --since <slot_wait.since>`, which replays from
 the queue time, so a grant logged before the wait starts still releases it; no other event
-does. Pi-native wake messages for a run's waits stay owed while the run holds no slot and are
+does. corral-pi wake messages for a run's waits stay owed while the run holds no slot and are
 delivered after the grant. `corral queue list` lists woken runs first and parked runs last, each with the tasks it
 waits on and the slot it released; the board's Running card says `parked on ...` or `woken ...`,
 and the slot badge counts parked runs as uncounted.

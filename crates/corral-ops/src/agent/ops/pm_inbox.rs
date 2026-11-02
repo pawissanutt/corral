@@ -1,4 +1,4 @@
-//! The Pi-native PM's PM inbox operations (T-544 pm-inbox): `inbox_read` pages open items or
+//! The corral-pi PM's PM inbox operations (T-544 pm-inbox): `inbox_read` pages open items or
 //! reads one, and `inbox_resolve` claims or resolves one at its current revision through the
 //! same store transitions as `corral pm inbox`. Items are workspace-wide, not project-bound.
 use anyhow::Result;

@@ -78,7 +78,7 @@ pub fn comment(ctx: &Ctx, id: &str, text: &str, author: CommentAuthor, send: boo
     Ok(task)
 }
 
-/// The Pi-native PM `comment` op (send=false): the PM receipt commits in the target task's
+/// The corral-pi PM `comment` op (send=false): the PM receipt commits in the target task's
 /// `agent_pm_receipts`, with the PM's liveness and project scope checked in the same update.
 pub fn comment_request(
     ctx: &Ctx,

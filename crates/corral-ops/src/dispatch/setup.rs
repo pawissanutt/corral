@@ -12,7 +12,7 @@ pub(crate) fn metered_notice(
     role: &str,
     resolved: &corral_core::ResolvedProfile,
 ) -> Result<()> {
-    if !corral_core::is_pi_native(&resolved.harness)
+    if !corral_core::is_corral_pi(&resolved.harness)
         || resolved.vendor.as_deref() != Some("amazon-bedrock")
     {
         return Ok(());

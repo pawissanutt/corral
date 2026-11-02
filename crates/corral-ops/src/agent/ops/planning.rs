@@ -418,7 +418,7 @@ fn reconcile_one(
     )
 }
 
-/// Every planning container of the task that ever bound a Pi-native host, with its state.
+/// Every planning container of the task that ever bound a corral-pi host, with its state.
 fn hosts(task: &Task) -> Vec<(ContainerRef, &AgentRunState)> {
     let planners = task.plan_runs.iter().filter_map(|run| {
         let container = ContainerRef::Planner {

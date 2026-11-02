@@ -12,7 +12,7 @@ import type { AuthInteraction } from "@earendil-works/pi-ai";
 
 import auth from "./index.ts";
 import { LOGIN_DESTINATIONS, login, loginFetch } from "./login.ts";
-import { authDir, piNativeRoot } from "./paths.ts";
+import { authDir, corralPiRoot } from "./paths.ts";
 import { PROVIDERS } from "./providers.ts";
 import { FileCredentialStore } from "./store.ts";
 
@@ -82,8 +82,8 @@ function mode(path: string): number {
 
 describe("auth paths", () => {
   test("XDG_DATA_HOME wins when absolute; a relative one falls back to HOME", () => {
-    expect(authDir({ XDG_DATA_HOME: "/data", HOME: "/home/u" })).toBe("/data/corral/pi-native/auth");
-    expect(piNativeRoot({ XDG_DATA_HOME: "rel", HOME: "/home/u" })).toBe("/home/u/.local/share/corral/pi-native");
+    expect(authDir({ XDG_DATA_HOME: "/data", HOME: "/home/u" })).toBe("/data/corral/corral-pi/auth");
+    expect(corralPiRoot({ XDG_DATA_HOME: "rel", HOME: "/home/u" })).toBe("/home/u/.local/share/corral/corral-pi");
     expect(() => authDir({})).toThrow(/credentials_unavailable/);
   });
 });
@@ -305,7 +305,7 @@ describe("sentinel HOME", () => {
     const code = await new Promise<number | null>((resolve) => child.on("close", resolve));
     expect({ code, out: out.trim(), err: code === 0 ? "" : err }).toEqual({ code: 0, out: "TRACED_OK", err: "" });
     const trace = readFileSync(log, "utf8");
-    expect(trace).toContain(join(data, "corral/pi-native/auth/openai-codex.json"));
+    expect(trace).toContain(join(data, "corral/corral-pi/auth/openai-codex.json"));
     const opened = stores.filter((store) => trace.includes(join(home, store)));
     expect(opened).toEqual([]);
   }, 60_000);

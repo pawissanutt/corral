@@ -11,7 +11,7 @@
 {"ts":"2026-10-24T00:00:35Z","task":"T-synthetic","kind":"done","detail":{"run":"R1"}}
 {"ts":"2026-10-24T00:00:40Z","task":"T-synthetic","kind":"review_started","detail":{"run":"R1","reviewer":"independent"}}
 {"ts":"2026-10-24T00:01:00Z","task":"T-synthetic","kind":"verdict","detail":{"run":"R1","reviewer":"independent","verdict":"approve"}}
-{"ts":"2026-10-24T01:00:00Z","task":"T-synthetic","kind":"dispatched","detail":{"run":"R2","harness":"pi-native"}}
+{"ts":"2026-10-24T01:00:00Z","task":"T-synthetic","kind":"dispatched","detail":{"run":"R2","harness":"corral-pi"}}
 {"ts":"2026-10-24T01:00:10Z","task":"T-synthetic","kind":"needs_me","detail":{"run":"R2","decision":"D2"}}
 {"ts":"2026-10-24T01:00:12Z","task":"T-synthetic","kind":"replied","detail":{"run":"R2","submitted":true}}
 {"ts":"2026-10-24T01:00:15Z","task":"T-synthetic","kind":"run_resumed","detail":{"run":"R2","decision":"D2","outcome":"answered"}}

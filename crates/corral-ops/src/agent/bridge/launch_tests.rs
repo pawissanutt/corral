@@ -233,12 +233,12 @@ fn a_new_review_child_uses_its_selected_exact_transcript_even_in_generation_one(
             .update(&fx.task, |task| {
                 // The parent's session must never be mistaken for this review child's.
                 task.runs[0].session = Some(serde_json::from_value(json!({
-                    "policy": "reuse", "directory": "/parent/session", "harness": "pi-native",
+                    "policy": "reuse", "directory": "/parent/session", "harness": "corral-pi",
                     "transcript": "/parent/session/wrong.jsonl", "action": "reused",
                 }))?);
                 let mut child = run("R1-review2", "p2");
                 child.session = Some(serde_json::from_value(json!({
-                    "policy": "reuse", "directory": directory, "harness": "pi-native",
+                    "policy": "reuse", "directory": directory, "harness": "corral-pi",
                     "transcript": transcript, "action": action,
                 }))?);
                 task.runs[0].review_runs.push(child);
@@ -320,7 +320,7 @@ fn host_recovery_carries_the_latest_bound_exact_file_without_a_role_session() {
             .store
             .update(&fx.task, |task| {
                 task.runs[0].session = Some(serde_json::from_value(json!({
-                    "policy": policy, "directory": fresh_directory, "harness": "pi-native",
+                    "policy": policy, "directory": fresh_directory, "harness": "corral-pi",
                     "transcript": transcript, "action": action,
                 }))?);
                 Ok(())
@@ -346,7 +346,7 @@ fn host_recovery_keeps_a_new_rounds_conversation_after_it_has_bound() {
         let transcript = directory.join("exact.jsonl");
         fx.ctx.store.update(&fx.task, |task| {
             task.runs[0].session = Some(serde_json::from_value(json!({
-                "policy":policy, "directory":directory, "harness":"pi-native", "action":"new"
+                "policy":policy, "directory":directory, "harness":"corral-pi", "action":"new"
             }))?);
             task.runs[0].agent_host.as_mut().unwrap().generations[0].bound =
                 Some(serde_json::from_value(json!({

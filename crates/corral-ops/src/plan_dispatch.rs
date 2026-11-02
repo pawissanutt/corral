@@ -400,7 +400,7 @@ fn render_command<T: corral_core::TaskRef + ?Sized>(
             None,
         )?,
     };
-    if crate::agent::hooks::is_pi_native(&resolved.harness) {
+    if crate::agent::hooks::is_corral_pi(&resolved.harness) {
         crate::agent::hooks::preflight::check(
             ctx,
             corral_core::agent::AgentRole::Planner,

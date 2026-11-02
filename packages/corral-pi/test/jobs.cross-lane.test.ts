@@ -91,7 +91,7 @@ beforeAll(async () => {
   assets = buildFixtureInstall({ parent: workspace, isolatePiState: true, overlays: false });
   cpSync(join(PACKAGE_ROOT, "assets"), join(assets.dir, "assets"), { recursive: true });
   const data = join(workspace, "data");
-  const auth = join(data, "corral/pi-native/auth");
+  const auth = join(data, "corral/corral-pi/auth");
   mkdirSync(auth, { recursive: true, mode: 0o700 });
   writeFileSync(join(auth, "auth.json"), JSON.stringify({ "openai-codex": {
     type: "oauth", access: syntheticAccess(), refresh: "synthetic-refresh", expires: Date.now() + 3_600_000,

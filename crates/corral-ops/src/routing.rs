@@ -514,7 +514,7 @@ fn discovered_catalog(ctx: &Ctx, key: &str) -> ModelCatalog {
 }
 
 /// Whether `model` is outside the discovered catalog of a profile on `harness` bound to `vendor`.
-/// A pi-native profile is checked against its own provider's models only, with a bare id
+/// A corral-pi profile is checked against its own provider's models only, with a bare id
 /// qualified by that provider. A selector naming another provider never runs on its host; when
 /// discovery listed none of the profile provider's models (it is not logged in), the catalog is
 /// no evidence about any other id.

@@ -143,7 +143,7 @@ impl Fx {
         self.ctx.store.config.profiles.insert(
             "pm-pi".into(),
             serde_json::from_value(json!({
-                "harness":"pi-native", "model":"gpt-fixture", "vendor":"openai"
+                "harness":"corral-pi", "model":"gpt-fixture", "vendor":"openai"
             }))
             .unwrap(),
         );

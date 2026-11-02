@@ -1,4 +1,4 @@
-// Background jobs of a Pi-native worker (T-565). A job is its whole process group, led by a
+// Background jobs of a corral-pi worker (T-565). A job is its whole process group, led by a
 // launcher whose pid and kernel start time are committed to corral before the command runs: the
 // launcher waits on its stdin for "run", so a host that dies first leaves no executable work. The
 // launcher then stays the group's leader while the command runs as its child, so the recorded

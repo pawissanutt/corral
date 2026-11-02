@@ -28,7 +28,7 @@ const review = z.object({
   agent: z.string(), usage: usage.nullish(), agent_host: host.nullish(),
 });
 export const runSchema = z.object({
-  id: z.string(), harness: z.enum(["omo", "pi-native"]),
+  id: z.string(), harness: z.enum(["omo", "corral-pi"]),
   model: z.string(), effort: z.string(), base_sha: z.string().min(1),
   started: timestamp, usage: usage.nullish(),
   review: z.object({ reviewer: z.string(), verdict: z.string().nullish() }).nullish(),
@@ -65,8 +65,8 @@ export const pairSchema = z.object({
   id: z.string().min(1), expected_tokens: count.positive(),
   source_task: z.string().min(1),
   selection: z.string().min(1),
-  order: z.array(z.enum(["omo", "pi-native"])).length(2),
-  omo: arm, pi_native: arm,
+  order: z.array(z.enum(["omo", "corral-pi"])).length(2),
+  omo: arm, corral_pi: arm,
 }).strict();
 export const manifestSchema = z.object({
   version: z.literal(1), seed: z.string().min(1),
@@ -94,7 +94,7 @@ export function sha256(value: string | Uint8Array): string {
 }
 export function assignedOrder(seed: string, id: string): readonly string[] {
   const first = Number.parseInt(sha256(`${seed}\n${id}`).slice(0, 2), 16) % 2;
-  return first === 0 ? ["omo", "pi-native"] : ["pi-native", "omo"];
+  return first === 0 ? ["omo", "corral-pi"] : ["corral-pi", "omo"];
 }
 export function text(detail: Readonly<Record<string, unknown>>, key: string): string | undefined {
   const value = detail[key];

@@ -430,7 +430,7 @@ fn container_readback_keeps_pm_and_planning_usage_separate() {
     write_session(&planner_file, &fixture_lines().0);
     state.generations[0].bound.as_mut().unwrap().session_file = planner_file;
     let planner = serde_json::from_value(serde_json::json!({
-        "agent_host": state, "id": "D1", "profile": "planner", "harness": "pi-native",
+        "agent_host": state, "id": "D1", "profile": "planner", "harness": "corral-pi",
         "spec_revision": "fixture", "started": "2026-10-29T00:00:00Z",
         "output_dir": "/fixture/output", "rounds": 0, "state": "planning"
     }))

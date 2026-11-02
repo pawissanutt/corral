@@ -144,7 +144,7 @@ impl Fixture {
         super::hooks::doctor::checks_with(&self.ctx, None, None)
             .unwrap()
             .into_iter()
-            .find(|check| check.id == "pi_native_capabilities")
+            .find(|check| check.id == "corral_pi_capabilities")
             .unwrap()
     }
 }

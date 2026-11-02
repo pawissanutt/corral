@@ -10,6 +10,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
 
 import type { CapabilitySet } from "../roles/types.ts";
+import { corralPiDirectory } from "../auth/paths.ts";
 
 /** The generation's settings and project-text trust, as `corral agent launch` sent them. */
 export interface CapabilityGuidance {
@@ -63,6 +64,12 @@ function userDirs(settings: Readonly<Record<string, unknown>> | undefined, home:
   return dirs
     .filter((dir): dir is string => typeof dir === "string")
     .map((dir) => (dir.startsWith("~/") ? join(home, dir.slice(2)) : dir))
+    .map((dir) => {
+      // Older recorded snapshots still name the legacy bundled skill directory.
+      const target = join(home, ".corral/skills/corral-pi");
+      return dir === target || dir === join(home, ".corral/skills/pi-native")
+        ? corralPiDirectory(target) : dir;
+    })
     .filter(isDir);
 }
 

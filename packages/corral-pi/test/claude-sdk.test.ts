@@ -129,7 +129,7 @@ test("the system prompt keeps Claude Code's preset and appends only corral's sec
     sections: {
       preamble: "You are an expert coding assistant operating inside pi, a coding agent harness.",
       tools: "<tools>- read</tools>", rules: "<rules>- Use read</rules>", docs: "<docs>Pi documentation</docs>",
-      addendum: "<addendum>\n# corral worker contract (Pi-native)\nRun the gate.\n</addendum>", cwd: "<cwd>\n/w\n</cwd>",
+      addendum: "<addendum>\n# corral worker contract (corral-pi)\nRun the gate.\n</addendum>", cwd: "<cwd>\n/w\n</cwd>",
     },
   };
   expect(claudeSystemPrompt([system])).toEqual({

@@ -206,10 +206,10 @@ pub fn launch(_start: &Path, args: &LaunchArgs) -> Result<()> {
 
 #[cfg(not(unix))]
 pub fn launch(_start: &Path, _args: &LaunchArgs) -> Result<()> {
-    bail!("corral agent launch refused: unsupported_platform: the Pi-native host runs on Unix")
+    bail!("corral agent launch refused: unsupported_platform: the corral-pi host runs on Unix")
 }
 
-/// The pane command for a pi-native reviewer or PM: their launches land with reviewer-role
+/// The pane command for a corral-pi reviewer or PM: their launches land with reviewer-role
 /// and pm-role, which call `prepare`.
 pub fn command(recipient: &Recipient) -> Result<String> {
     let owner = match recipient {
@@ -218,7 +218,7 @@ pub fn command(recipient: &Recipient) -> Result<String> {
         _ => "worker-role",
     };
     bail!(
-        "op_unavailable: the pi-native launch command for {} lands with T-252 child {owner}",
+        "op_unavailable: the corral-pi launch command for {} lands with T-252 child {owner}",
         recipient.key()?
     )
 }
@@ -294,7 +294,7 @@ pub fn prepare_bootstrap(
             refuse(
                 "assets_unavailable",
                 format!(
-                    "no pi-native asset installation (owner {})",
+                    "no corral-pi asset installation (owner {})",
                     super::install::OWNER
                 ),
             )
@@ -355,7 +355,7 @@ pub fn prepare_bootstrap(
             (
                 task.project
                     .clone()
-                    .context("a Pi-native container needs a task project")?,
+                    .context("a corral-pi container needs a task project")?,
                 run.agent_host.as_deref().and_then(latest_bound),
             )
         }
@@ -366,7 +366,7 @@ pub fn prepare_bootstrap(
             (
                 task.project
                     .clone()
-                    .context("a Pi-native planner needs a task project")?,
+                    .context("a corral-pi planner needs a task project")?,
                 agent::container_state(&task, &container).and_then(latest_bound),
             )
         }
@@ -583,7 +583,7 @@ pub fn write_bootstrap(dir: &Path, bootstrap: &Bootstrap) -> Result<PathBuf> {
 
 #[cfg(not(unix))]
 pub fn write_bootstrap(_dir: &Path, _bootstrap: &Bootstrap) -> Result<PathBuf> {
-    bail!("the Pi-native host runs on Unix only")
+    bail!("the corral-pi host runs on Unix only")
 }
 
 /// Reads and unlinks the bootstrap. It must be a 0600 regular file of this user inside the

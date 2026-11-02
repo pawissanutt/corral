@@ -60,7 +60,7 @@ fn lists_only_logged_in_providers_from_the_installed_host() {
     assert!(record.path.join(MODELS_ENTRY).is_file());
     login(&root, "openai-codex");
 
-    // When pi-native is detected:
+    // When corral-pi is detected:
     let info = detect_with(&config(), Some(root), Some(bun.clone()));
 
     // Then its models are the listed openai-codex selectors, and only that provider was asked for:
@@ -150,7 +150,7 @@ fn a_compiled_installation_lists_through_its_host_without_bun() {
     let record = install::install_compiled(&host, &root).unwrap();
     login(&root, "openai-codex");
 
-    // When pi-native is detected:
+    // When corral-pi is detected:
     let info = detect_with(&config(), Some(root), None);
 
     // Then the installed host listed the openai-codex models through its `models` mode:
@@ -170,7 +170,7 @@ fn a_profile_sees_and_accepts_only_its_own_providers_models() {
     let models: Vec<String> = ["openai-codex/gpt-6.1-sol", "anthropic/claude-opus-5-5"]
         .map(String::from)
         .to_vec();
-    let scoped = |vendor, model| models_for_profile("pi-native", vendor, model, &models);
+    let scoped = |vendor, model| models_for_profile("corral-pi", vendor, model, &models);
     // Then each profile sees only its provider, from its vendor or else its model:
     assert_eq!(scoped(Some("openai"), None), ["openai-codex/gpt-6.1-sol"]);
     assert_eq!(
@@ -184,11 +184,11 @@ fn a_profile_sees_and_accepts_only_its_own_providers_models() {
     );
     // And a bare id is looked up qualified by the bound provider, a qualified one as is:
     assert_eq!(
-        catalog_selector("pi-native", Some("openai"), "gpt-6.1-sol"),
+        catalog_selector("corral-pi", Some("openai"), "gpt-6.1-sol"),
         "openai-codex/gpt-6.1-sol"
     );
     assert_eq!(
-        catalog_selector("pi-native", None, "claude-opus-5-5"),
+        catalog_selector("corral-pi", None, "claude-opus-5-5"),
         "anthropic/claude-opus-5-5"
     );
     assert_eq!(
@@ -197,22 +197,22 @@ fn a_profile_sees_and_accepts_only_its_own_providers_models() {
     );
     // And another provider's selector is foreign to a profile bound elsewhere:
     assert!(foreign_selector(
-        "pi-native",
+        "corral-pi",
         Some("openai"),
         "anthropic/claude-opus-5-5"
     ));
     assert!(foreign_selector(
-        "pi-native",
+        "corral-pi",
         Some("anthropic"),
         "openai-codex/gpt-6.1-sol"
     ));
     assert!(!foreign_selector(
-        "pi-native",
+        "corral-pi",
         Some("openai"),
         "openai-codex/gpt-6.1-sol"
     ));
     assert!(!foreign_selector(
-        "pi-native",
+        "corral-pi",
         None,
         "anthropic/claude-opus-5-5"
     ));
@@ -245,7 +245,7 @@ fn bedrock_listing_requires_a_valid_named_profile_binding() {
         assert_eq!(info.model_source, ModelSource::Listed, "{:?}", info.notes);
         let argv = std::fs::read_to_string(tmp.path().join("release/listing-argv")).unwrap();
         assert_eq!(argv.contains("--provider amazon-bedrock"), bound, "{argv}");
-        let scoped = models_for_profile("pi-native", Some("amazon-bedrock"), None, &info.models);
+        let scoped = models_for_profile("corral-pi", Some("amazon-bedrock"), None, &info.models);
         assert_eq!(
             scoped,
             if bound {
@@ -265,20 +265,20 @@ fn bedrock_selectors_bind_to_bedrock_even_for_anthropic_models() {
     let models = vec![selector.clone(), "anthropic/claude-sonnet-4-5".into()];
     // When catalog selection runs, then it uses the transport vendor, not the publisher.
     assert_eq!(
-        models_for_profile("pi-native", None, Some(model), &models),
+        models_for_profile("corral-pi", None, Some(model), &models),
         [selector.as_str()]
     );
     assert_eq!(
-        catalog_selector("pi-native", Some("amazon-bedrock"), model),
+        catalog_selector("corral-pi", Some("amazon-bedrock"), model),
         selector
     );
     assert!(!foreign_selector(
-        "pi-native",
+        "corral-pi",
         Some("amazon-bedrock"),
         &selector
     ));
     assert!(foreign_selector(
-        "pi-native",
+        "corral-pi",
         Some("amazon-bedrock"),
         "anthropic/claude-sonnet-4-5"
     ));

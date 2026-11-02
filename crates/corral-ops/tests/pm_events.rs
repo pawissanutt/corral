@@ -123,7 +123,7 @@ impl Fx {
         corral_ops::sync(&self.ctx).unwrap();
     }
 
-    /// Opens one blocking question through `corral agent call` from a Pi-native worker bound to
+    /// Opens one blocking question through `corral agent call` from a corral-pi worker bound to
     /// a Running fixture run on the inventory's worker pane; returns the task ID.
     fn open_question(&self) -> String {
         let store = &self.ctx.store;

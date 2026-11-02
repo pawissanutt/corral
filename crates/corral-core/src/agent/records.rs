@@ -189,7 +189,7 @@ pub struct AgentGeneration {
     /// How these settings differ from the previous generation's, when they do.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability_transition: Option<super::CapabilityTransition>,
-    /// The pi-native asset digest its bootstrap named: the contract and tool descriptions this
+    /// The corral-pi asset digest its bootstrap named: the contract and tool descriptions this
     /// generation runs with. Recorded for assistant generations (T-653); absent before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assets_sha256: Option<String>,
@@ -515,7 +515,7 @@ pub struct AgentReport {
     pub at: Timestamp,
 }
 
-/// `Task.agent_origin`: set atomically with creation by a Pi-native PM capture.
+/// `Task.agent_origin`: set atomically with creation by a corral-pi PM capture.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentOrigin {
     pub request_id: String,

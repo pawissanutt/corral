@@ -1,4 +1,4 @@
-//! `corral question`: PM and owner operations on Pi-native agent questions, by key and revision.
+//! `corral question`: PM and owner operations on corral-pi agent questions, by key and revision.
 //! `answer --owner` and `deadline` are absent from every Pi role loadout.
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
@@ -33,7 +33,7 @@ impl From<Kind> for QuestionKind {
 
 #[derive(Subcommand)]
 pub(crate) enum QuestionCmd {
-    /// List Pi-native agent questions; pending ones (open or escalated) by default
+    /// List corral-pi agent questions; pending ones (open or escalated) by default
     List {
         /// Only this task's questions
         #[arg(long)]

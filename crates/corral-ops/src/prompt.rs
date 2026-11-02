@@ -21,9 +21,9 @@ const RUN_TEMPLATE: &str = include_str!("../assets/run.md");
 /// A tiered run's `{{gate}}` points to the one authoritative Gate contract section that is always
 /// appended after the template, whether or not the template contains `{{gate}}`.
 /// Whether the run's prompt carries project lessons: always for other harnesses; for a
-/// pi-native worker, the `lessons` capability (on in every preset, disableable per role).
+/// corral-pi worker, the `lessons` capability (on in every preset, disableable per role).
 pub(crate) fn lessons_included(ctx: &Ctx, task: &Task, run: &Run) -> bool {
-    !crate::agent::hooks::run_is_pi_native(run)
+    !crate::agent::hooks::run_is_corral_pi(run)
         || ctx
             .store
             .config

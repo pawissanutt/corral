@@ -17,7 +17,7 @@ use crate::Ctx;
 #[path = "cleanup_head_tests.rs"]
 mod head_tests;
 
-/// The pi-native containers of `task` that ended and are not yet settled: removable runtime,
+/// The corral-pi containers of `task` that ended and are not yet settled: removable runtime,
 /// kept sessions. A settled container never costs another filesystem call.
 fn ended<T: TaskRef + ?Sized>(task: &T) -> Result<Vec<Recipient>> {
     let terminal = matches!(task.status(), Status::Done | Status::Dropped);

@@ -120,7 +120,7 @@ fn resolve(store: &Store, container: &ContainerRef) -> Result<Resolved> {
     let Some(id) = container.task() else {
         return pm_state::load(store)?
             .map(|pm| Resolved::Pm(Box::new(pm)))
-            .ok_or_else(|| reject(RejectCode::ContainerNotFound, "no Pi-native PM is bound"));
+            .ok_or_else(|| reject(RejectCode::ContainerNotFound, "no corral-pi PM is bound"));
     };
     let task = match store.head(id) {
         Ok(task) => task,
@@ -135,7 +135,7 @@ fn resolve(store: &Store, container: &ContainerRef) -> Result<Resolved> {
     if task.agent_head(container)?.is_none() {
         return Err(reject(
             RejectCode::ContainerNotFound,
-            format!("{} has no Pi-native binding", container.key()),
+            format!("{} has no corral-pi binding", container.key()),
         ));
     }
     Ok(Resolved::Task(Box::new(task)))
@@ -622,11 +622,11 @@ pub fn open_generation_with(
                 let project = task
                     .project
                     .clone()
-                    .context("a Pi-native container needs a task project")?;
+                    .context("a corral-pi container needs a task project")?;
                 if let ContainerRef::Worker { run, .. } = &container
                     && task.current_run().map(|r| r.id.as_str()) != Some(run.as_str())
                 {
-                    bail!("only the current run can bind a Pi-native worker");
+                    bail!("only the current run can bind a corral-pi worker");
                 }
                 if matches!(
                     container,
@@ -634,7 +634,7 @@ pub fn open_generation_with(
                 ) {
                     ensure!(
                         agent::container_closure(task, &container).is_none(),
-                        "only a current open planning container can bind a Pi-native host"
+                        "only a current open planning container can bind a corral-pi host"
                     );
                 }
                 let host = agent::container_host_mut(task, &container)

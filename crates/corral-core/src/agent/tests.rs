@@ -351,7 +351,7 @@ fn planning_task() -> (Task, RequestBinding, RequestBinding) {
     let mut task = task(Status::Ready);
     let revision = crate::plan_contract_revision(&task).unwrap();
     let mut planner: crate::PlanRun = serde_json::from_value(json!({
-        "id": "D1", "profile": "pi", "harness": "pi-native",
+        "id": "D1", "profile": "pi", "harness": "corral-pi",
         "spec_revision": revision, "started": "2026-10-23T00:00:00Z",
         "output_dir": "/tmp/plan", "rounds": 0, "state": "planning",
         "herdr": {"workspace_id": "w1", "pane_id": "p1"}

@@ -45,7 +45,7 @@ runtime tests before building the packaged binary.
 Package basename: `corral-<target>`. Each archive contains the executable,
 `LICENSE`, and `README.md`, and has a sidecar `<archive>.sha256` containing
 SHA-256 and the exact archive basename. The four Unix archives also contain
-`corral-pi-host`, the Pi-native agent host compiled by
+`corral-pi-host`, the corral-pi agent host compiled by
 `scripts/build-pi-host.sh` on the same native runner with the Bun version the
 GO manifest pins (`oven-sh/setup-bun`); packaging refuses a Unix archive
 without it. Bun is a build dependency only, like Rust.

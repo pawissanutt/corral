@@ -3,14 +3,14 @@ import { join } from "node:path";
 import type { CredentialStore, Provider } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
-import { piNativeRoot } from "../auth/paths.ts";
+import { corralPiRoot } from "../auth/paths.ts";
 import { PROVIDERS, type ProviderId, isProviderId } from "../auth/providers.ts";
 import { SUPPLEMENTAL_MODELS } from "./supplemental-models.ts";
 
 export interface CatalogPolicy {
   /** Only these subscription providers can expose models or resolve credentials. */
   readonly providers: readonly ProviderId[];
-  /** Omit for corral's pi-native/models.json; null disables that file. */
+  /** Omit for corral's corral-pi/models.json; null disables that file. */
   readonly modelsPath?: string | null;
 }
 
@@ -42,7 +42,7 @@ export async function createModelCatalog(
 ): Promise<ModelRuntime> {
   const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
   const { InMemoryModelsStore } = await import("@earendil-works/pi-ai");
-  const modelsPath = policy.modelsPath === undefined ? join(piNativeRoot(), "models.json") : policy.modelsPath;
+  const modelsPath = policy.modelsPath === undefined ? join(corralPiRoot(), "models.json") : policy.modelsPath;
   const approved = new Set(policy.providers);
   const scopedCredentials: CredentialStore = {
     read: async (id, options) => {

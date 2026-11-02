@@ -1,4 +1,4 @@
-//! The pi_native adapter against a scripted bridge host that keeps the real host's contract:
+//! The corral_pi adapter against a scripted bridge host that keeps the real host's contract:
 //! one outcome per idempotency key per generation, and one `corral_delivery` entry written by
 //! its delivery module for each new key. The real module and host are exercised by
 //! packages/corral-pi/src/delivery/delivery.test.ts and its cross-lane fixture.
@@ -201,12 +201,12 @@ fn bound(fx: &Fx, target: &BindTarget, pane: &str, session: &str) -> ts::Host {
     host
 }
 
-fn pi_native_worker(fx: &Fx) -> (String, Recipient, BindTarget) {
+fn corral_pi_worker(fx: &Fx) -> (String, Recipient, BindTarget) {
     let id = ts::worker_task(fx, "p1");
     fx.ctx
         .store
         .update(&id, |t| {
-            t.runs[0].harness = Some("pi-native".into());
+            t.runs[0].harness = Some("corral-pi".into());
             t.runs[0].delivery = DeliveryMode::Inbox;
             Ok(())
         })
@@ -276,7 +276,7 @@ fn wire_keys_round_trip_and_pass_the_host_key_charset() {
 #[test]
 fn owner_reply_changes_and_answer_reach_a_live_worker_and_done_waits_for_the_entry() {
     let fx = ts::fx();
-    let (id, recipient, target) = pi_native_worker(&fx);
+    let (id, recipient, target) = corral_pi_worker(&fx);
     let _runtime = runtime(&fx, &[&recipient]);
     let host = bound(&fx, &target, "p1", "s-worker");
     let fake = FakeHost::start(&fx, &recipient, &host);
@@ -292,7 +292,7 @@ fn owner_reply_changes_and_answer_reach_a_live_worker_and_done_waits_for_the_ent
         post(&fx, &recipient, "question_answer", "Q1: yes."),
     ];
 
-    // The registered adapter for a pi-native run is this one, through the owner kick.
+    // The registered adapter for a corral-pi run is this one, through the owner kick.
     let status = owner::kick(&fx.ctx, &recipient).unwrap();
     assert!(
         matches!(
@@ -362,11 +362,11 @@ fn a_reviewer_and_a_bound_pm_receive_through_the_same_adapter() {
         "question_answer",
         "Q1: the cited plan says yes.",
     );
-    deliver(&fx.ctx, &reviewer, &PiNativeAdapter, None).unwrap();
+    deliver(&fx.ctx, &reviewer, &CorralPiAdapter, None).unwrap();
     assert_eq!(fake.submits()[0]["busy_policy"], json!("follow_up"));
     assert!(!observed(&fx, &reviewer, answer));
     fake.flush();
-    deliver(&fx.ctx, &reviewer, &PiNativeAdapter, None).unwrap();
+    deliver(&fx.ctx, &reviewer, &CorralPiAdapter, None).unwrap();
     assert!(observed(&fx, &reviewer, answer));
 
     let pm = bound(
@@ -379,8 +379,8 @@ fn a_reviewer_and_a_bound_pm_receive_through_the_same_adapter() {
     );
     let pm_host = FakeHost::start(&fx, &Recipient::Pm, &pm);
     let wake = post(&fx, &Recipient::Pm, "question_wake", "T-001/R1/Q1 is open.");
-    deliver(&fx.ctx, &Recipient::Pm, &PiNativeAdapter, None).unwrap();
-    deliver(&fx.ctx, &Recipient::Pm, &PiNativeAdapter, None).unwrap();
+    deliver(&fx.ctx, &Recipient::Pm, &CorralPiAdapter, None).unwrap();
+    deliver(&fx.ctx, &Recipient::Pm, &CorralPiAdapter, None).unwrap();
     assert!(observed(&fx, &Recipient::Pm, wake));
     assert_eq!(pm_host.submits()[0]["busy_policy"], json!("follow_up"));
     assert!(
@@ -394,7 +394,7 @@ fn a_reviewer_and_a_bound_pm_receive_through_the_same_adapter() {
 #[test]
 fn an_uncertain_send_resends_the_identical_key_and_the_host_writes_one_entry() {
     let fx = ts::fx();
-    let (_, recipient, target) = pi_native_worker(&fx);
+    let (_, recipient, target) = corral_pi_worker(&fx);
     let _runtime = runtime(&fx, &[&recipient]);
     let host = bound(&fx, &target, "p1", "s-worker");
     let fake = FakeHost::start(&fx, &recipient, &host);
@@ -405,7 +405,7 @@ fn an_uncertain_send_resends_the_identical_key_and_the_host_writes_one_entry() {
     }
     let seq = post(&fx, &recipient, "owner_reply", "Continue.");
 
-    deliver(&fx.ctx, &recipient, &PiNativeAdapter, None).unwrap();
+    deliver(&fx.ctx, &recipient, &CorralPiAdapter, None).unwrap();
     let inbox = Inbox::new(&fx.ctx.store, recipient.clone()).unwrap();
     let first = inbox.envelopes().unwrap().remove(0);
     assert!(
@@ -413,7 +413,7 @@ fn an_uncertain_send_resends_the_identical_key_and_the_host_writes_one_entry() {
         "{:?}",
         first.outcome
     );
-    deliver(&fx.ctx, &recipient, &PiNativeAdapter, None).unwrap();
+    deliver(&fx.ctx, &recipient, &CorralPiAdapter, None).unwrap();
     let submits = fake.submits();
     assert_eq!(submits.len(), 2, "the uncertain attempt is retried");
     assert_eq!(submits[0], submits[1], "identical payload, key and policy");
@@ -422,7 +422,7 @@ fn an_uncertain_send_resends_the_identical_key_and_the_host_writes_one_entry() {
         "the replayed key writes no second entry"
     );
     fake.flush();
-    deliver(&fx.ctx, &recipient, &PiNativeAdapter, None).unwrap();
+    deliver(&fx.ctx, &recipient, &CorralPiAdapter, None).unwrap();
     assert!(observed(&fx, &recipient, seq));
     assert_eq!(fake.entries().len(), 1);
     assert_eq!(inbox.envelopes().unwrap().len(), 1, "one envelope, one key");
@@ -431,13 +431,13 @@ fn an_uncertain_send_resends_the_identical_key_and_the_host_writes_one_entry() {
 #[test]
 fn a_lost_host_keeps_a_never_sent_message_pending_for_the_next_generation() {
     let fx = ts::fx();
-    let (_, recipient, target) = pi_native_worker(&fx);
+    let (_, recipient, target) = corral_pi_worker(&fx);
     let _runtime = runtime(&fx, &[&recipient]);
     let first = bound(&fx, &target, "p1", "s-g1");
     FakeHost::start(&fx, &recipient, &first).kill();
     let seq = post(&fx, &recipient, "owner_reply", "Pick up where you stopped.");
 
-    let status = deliver(&fx.ctx, &recipient, &PiNativeAdapter, None).unwrap();
+    let status = deliver(&fx.ctx, &recipient, &CorralPiAdapter, None).unwrap();
     assert!(
         matches!(&status, DeliveryStatus::Blocked { reason } if reason.starts_with("host_unreachable")),
         "{status:?}"
@@ -453,8 +453,8 @@ fn a_lost_host_keeps_a_never_sent_message_pending_for_the_next_generation() {
     let second = bound(&fx, &target, "p1", "s-g2");
     assert_eq!(second.identity.generation, 2);
     let fake = FakeHost::start(&fx, &recipient, &second);
-    deliver(&fx.ctx, &recipient, &PiNativeAdapter, None).unwrap();
-    deliver(&fx.ctx, &recipient, &PiNativeAdapter, None).unwrap();
+    deliver(&fx.ctx, &recipient, &CorralPiAdapter, None).unwrap();
+    deliver(&fx.ctx, &recipient, &CorralPiAdapter, None).unwrap();
     assert!(observed(&fx, &recipient, seq));
     assert_eq!(fake.submits().len(), 1);
     let receipt = inbox.receipt(seq, ReceiptLevel::Observed).unwrap().unwrap();
@@ -464,7 +464,7 @@ fn a_lost_host_keeps_a_never_sent_message_pending_for_the_next_generation() {
 #[test]
 fn an_uncertain_delivery_across_a_replacement_still_needs_the_owner_recover_decision() {
     let fx = ts::fx();
-    let (_, recipient, target) = pi_native_worker(&fx);
+    let (_, recipient, target) = corral_pi_worker(&fx);
     let _runtime = runtime(&fx, &[&recipient]);
     let first = bound(&fx, &target, "p1", "s-g1");
     let old = FakeHost::start(&fx, &recipient, &first);
@@ -474,12 +474,12 @@ fn an_uncertain_delivery_across_a_replacement_still_needs_the_owner_recover_deci
         script.hold_entries = true;
     }
     let seq = post(&fx, &recipient, "owner_reply", "Rebase first.");
-    deliver(&fx.ctx, &recipient, &PiNativeAdapter, None).unwrap();
+    deliver(&fx.ctx, &recipient, &CorralPiAdapter, None).unwrap();
     old.kill();
 
     let second = bound(&fx, &target, "p1", "s-g2");
     let fake = FakeHost::start(&fx, &recipient, &second);
-    let status = deliver(&fx.ctx, &recipient, &PiNativeAdapter, None).unwrap();
+    let status = deliver(&fx.ctx, &recipient, &CorralPiAdapter, None).unwrap();
     assert_eq!(status, DeliveryStatus::Orphaned);
     assert!(
         fake.submits().is_empty(),
@@ -489,8 +489,8 @@ fn an_uncertain_delivery_across_a_replacement_still_needs_the_owner_recover_deci
 
     let inbox = Inbox::new(&fx.ctx.store, recipient.clone()).unwrap();
     inbox.recover(corral_core::inbox::Recovery::Resend).unwrap();
-    deliver(&fx.ctx, &recipient, &PiNativeAdapter, None).unwrap();
-    deliver(&fx.ctx, &recipient, &PiNativeAdapter, None).unwrap();
+    deliver(&fx.ctx, &recipient, &CorralPiAdapter, None).unwrap();
+    deliver(&fx.ctx, &recipient, &CorralPiAdapter, None).unwrap();
     assert_eq!(fake.submits().len(), 1);
     assert!(observed(&fx, &recipient, seq));
 }
@@ -523,12 +523,12 @@ fn a_closed_review_child_is_never_sent_its_messages_are_cancelled_recipient_clos
         Some(TerminalState::Cancelled)
     );
 
-    let readiness = PiNativeAdapter.readiness(&fx.ctx, &reviewer).unwrap();
+    let readiness = CorralPiAdapter.readiness(&fx.ctx, &reviewer).unwrap();
     assert!(
         matches!(&readiness, Readiness::Unavailable { reason } if reason.starts_with("recipient_closed")),
         "{readiness:?}"
     );
-    let status = deliver(&fx.ctx, &reviewer, &PiNativeAdapter, None).unwrap();
+    let status = deliver(&fx.ctx, &reviewer, &CorralPiAdapter, None).unwrap();
     assert!(
         matches!(&status, DeliveryStatus::Blocked { reason } if reason.starts_with("recipient_closed")),
         "{status:?}"
@@ -549,12 +549,12 @@ fn omo_and_legacy_harnesses_keep_their_launch_mode_and_never_reach_this_adapter(
     assert_eq!(owner::review_launch_mode("omo"), DeliveryMode::Legacy);
     let mut omo = ts::run("R1", "p1");
     omo.harness = Some("omo".into());
-    assert!(crate::delivery::adapters::pi_native(&omo).is_none());
+    assert!(crate::delivery::adapters::corral_pi(&omo).is_none());
     assert!(crate::agent::hooks::take_consulted().is_empty());
 
-    assert_eq!(owner::launch_mode("pi-native"), DeliveryMode::Inbox);
-    omo.harness = Some("pi-native".into());
-    let adapter = crate::delivery::adapters::pi_native(&omo).unwrap();
+    assert_eq!(owner::launch_mode("corral-pi"), DeliveryMode::Inbox);
+    omo.harness = Some("corral-pi".into());
+    let adapter = crate::delivery::adapters::corral_pi(&omo).unwrap();
     assert_eq!(adapter.harness(), ADAPTER);
     assert!(adapter.capabilities().idempotent_retry);
     assert_eq!(adapter.capabilities().max_payload, INPUT_MAX_BYTES);
@@ -610,8 +610,8 @@ fn answer_message(fx: &Fx, recipient: &Recipient) -> corral_core::inbox::Message
 /// One bridge submit carries the answer and the host's own entry observes it.
 fn assert_answer_submitted(fx: &Fx, recipient: &Recipient, fake: &FakeHost, generation: u64) {
     let message = answer_message(fx, recipient);
-    deliver(&fx.ctx, recipient, &PiNativeAdapter, None).unwrap();
-    deliver(&fx.ctx, recipient, &PiNativeAdapter, None).unwrap();
+    deliver(&fx.ctx, recipient, &CorralPiAdapter, None).unwrap();
+    deliver(&fx.ctx, recipient, &CorralPiAdapter, None).unwrap();
     let submits = fake.submits();
     assert_eq!(submits.len(), 1, "exactly one submit_input");
     assert!(
@@ -639,7 +639,7 @@ fn assert_answer_submitted(fx: &Fx, recipient: &Recipient, fake: &FakeHost, gene
 fn a_pm_or_owner_answer_to_a_worker_question_is_submitted_to_the_host() {
     for pm in [true, false] {
         let fx = ts::fx();
-        let (id, recipient, target) = pi_native_worker(&fx);
+        let (id, recipient, target) = corral_pi_worker(&fx);
         let _runtime = runtime(&fx, &[&recipient]);
         let host = bound(&fx, &target, "p1", "s-worker");
         let fake = FakeHost::start(&fx, &recipient, &host);
@@ -669,14 +669,14 @@ fn an_owner_answer_to_a_review_child_question_is_submitted_to_the_host() {
 #[test]
 fn an_answer_queued_while_the_host_is_lost_is_delivered_to_the_resumed_generation() {
     let fx = ts::fx();
-    let (id, recipient, target) = pi_native_worker(&fx);
+    let (id, recipient, target) = corral_pi_worker(&fx);
     let _runtime = runtime(&fx, &[&recipient]);
     let first = bound(&fx, &target, "p1", "s-g1");
     let key = ask(&fx, &first, "call-ask");
     FakeHost::start(&fx, &recipient, &first).kill();
     triage_answer(&fx, &id, &key, true);
 
-    let status = deliver(&fx.ctx, &recipient, &PiNativeAdapter, None).unwrap();
+    let status = deliver(&fx.ctx, &recipient, &CorralPiAdapter, None).unwrap();
     assert!(
         matches!(&status, DeliveryStatus::Blocked { reason } if reason.starts_with("host_unreachable")),
         "{status:?}"
