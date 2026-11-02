@@ -3,7 +3,8 @@ use anyhow::{Context, Result, ensure};
 use corral_core::{Task, blob::ProcessIdentity, migrate::RuntimeProbe};
 use corral_herdr::Herdr;
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -40,9 +41,10 @@ pub fn migration_runtime_probe(root: &Path) -> Result<RuntimeProbe> {
         if !handles.absent(&selected, binding.as_deref(), &panes)? {
             return Ok(false);
         }
-        // Legacy gates had neither a PID nor a pane. Also catch detached descendants left
-        // behind by a closed pane: argv task identity or a task-scoped working directory.
-        processes_absent(Path::new("/proc"), task)
+        // Descendants can outlive a pane and recorded parent, and can change cwd/argv.
+        // The legacy issuer persists their inherited random ownership token beside receipts.
+        let owners = LaunchOwners::read(&root.join(".corral/state/launch-exits"))?;
+        processes_absent(Path::new("/proc"), task, &owners)
     }))
 }
 
@@ -160,8 +162,99 @@ fn task_token(text: &str, task: &str) -> bool {
     })
 }
 
+/// Legacy launch markers cover coding/review/planning and gate descendants alike. A retained
+/// marker alone is history; only a live process carrying it proves associated work is present.
+#[derive(Default)]
+struct LaunchOwners(BTreeMap<Vec<u8>, String>);
+
+impl LaunchOwners {
+    fn read(dir: &Path) -> Result<Self> {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
+            Err(error) => return Err(error).with_context(|| format!("reading {}", dir.display())),
+        };
+        let mut owners = Self::default();
+        for entry in entries {
+            let entry = entry.context("reading legacy process owner entry")?;
+            let name = entry.file_name();
+            let Some(stem) = name.to_str().and_then(|s| s.strip_suffix(".owner")) else {
+                continue;
+            };
+            // PM shells use the same issuer with PM-<pane>. They are known workspace
+            // owners, not descendants of any task, so don't confuse them with unknown tokens.
+            let task = if stem
+                .strip_prefix("PM-")
+                .is_some_and(|pane| !pane.is_empty())
+            {
+                "PM".to_owned()
+            } else {
+                let (number, attempt) = stem
+                    .strip_prefix("T-")
+                    .and_then(|s| s.split_once('-'))
+                    .with_context(|| {
+                        format!(
+                            "invalid legacy process owner filename: {}",
+                            entry.path().display()
+                        )
+                    })?;
+                ensure!(
+                    !number.is_empty()
+                        && number.bytes().all(|b| b.is_ascii_digit())
+                        && !attempt.is_empty(),
+                    "invalid legacy process owner filename"
+                );
+                format!("T-{number}")
+            };
+            let meta = std::fs::symlink_metadata(entry.path())
+                .context("inspecting legacy process owner")?;
+            ensure!(
+                meta.is_file() && meta.len() == 64,
+                "invalid legacy process owner file: {}",
+                entry.path().display()
+            );
+            let mut marker = Vec::new();
+            std::fs::File::open(entry.path())
+                .context("opening legacy process owner")?
+                .take(65)
+                .read_to_end(&mut marker)
+                .context("reading legacy process owner")?;
+            ensure!(
+                marker.len() == 64 && marker.iter().all(u8::is_ascii_hexdigit),
+                "invalid legacy process owner marker"
+            );
+            if let Some(previous) = owners.0.insert(marker, task.clone()) {
+                ensure!(
+                    previous == task,
+                    "legacy process owner belongs to multiple tasks"
+                );
+            }
+        }
+        Ok(owners)
+    }
+
+    fn owns_environment(&self, env: &[u8], task: &str) -> Result<bool> {
+        let mut owned = false;
+        for value in env.split(|byte| *byte == 0) {
+            if let Some(id) = value.strip_prefix(b"CORRAL_SANDBOX_TASK=") {
+                owned |= id == task.as_bytes();
+            }
+            if let Some(marker) = value.strip_prefix(b"CORRAL_PROCESS_OWNER=") {
+                let owner = self
+                    .0
+                    .get(marker)
+                    .context("live process has unconfirmed launch ownership")?;
+                owned |= owner == task;
+            }
+        }
+        Ok(owned)
+    }
+}
+
 #[cfg(target_os = "linux")]
-fn processes_absent(proc: &Path, task: &Task) -> Result<bool> {
+fn processes_absent(proc: &Path, task: &Task, owners: &LaunchOwners) -> Result<bool> {
     use std::os::unix::fs::MetadataExt;
     let uid = std::fs::metadata(proc.join("self"))?.uid();
     let stat = std::fs::read_to_string(proc.join("stat"))?;
@@ -203,6 +296,19 @@ fn processes_absent(proc: &Path, task: &Task) -> Result<bool> {
             ) {
                 return Ok(true);
             }
+            // Inspect inherited ownership before the birth-time/cwd heuristics: an exec can
+            // retain an older PID start time, and a descendant may have left the task tree.
+            let mut environment = Vec::new();
+            std::fs::File::open(path.join("environ"))?
+                .take(4 * 1024 * 1024 + 1)
+                .read_to_end(&mut environment)?;
+            ensure!(
+                environment.len() <= 4 * 1024 * 1024,
+                "process environment exceeds inspection cap"
+            );
+            if owners.owns_environment(&environment, &task.id)? {
+                return Ok(false);
+            }
             let stat = std::fs::read_to_string(path.join("stat"))?;
             let start: f64 = stat
                 .rsplit_once(')')
@@ -232,7 +338,7 @@ fn processes_absent(proc: &Path, task: &Task) -> Result<bool> {
     Ok(true)
 }
 #[cfg(not(target_os = "linux"))]
-fn processes_absent(_proc: &Path, _task: &Task) -> Result<bool> {
+fn processes_absent(_proc: &Path, _task: &Task, _owners: &LaunchOwners) -> Result<bool> {
     Ok(false)
 }
 

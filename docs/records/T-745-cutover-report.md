@@ -2,6 +2,10 @@
 
 ## Outcome
 
+This initial-candidate report is supplemented by [the review correction](T-745-review1-descendants.md).
+That correction closes a live detached-descendant ownership gap and supersedes the initial
+Part B liveness proof; the storage mappings and historical fixture results below are unchanged.
+
 The candidate's read-only live migration scan has **zero unclassified files and zero missing
 artifact snapshots**. The eight terminal-task leftovers from the original blocker list are
 reported as lost history: T-203/R1, T-297/A1, T-314/A2-R1, T-404/R1, T-528/R1, T-628/R1,
