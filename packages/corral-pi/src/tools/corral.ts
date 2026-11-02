@@ -140,6 +140,20 @@ export class CorralClient {
     });
   }
 
+  /** Fixed read-only inbox command at the launcher-bound workspace root, never the Git inspector scope. */
+  attentionSnapshot(signal?: AbortSignal): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const child = execFile(this.options.corral, ["attention", "inbox", "--json"], {
+        cwd: this.options.root, timeout: CALL_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, signal,
+      }, (error, stdout) => {
+        if (error) { reject(new CorralCallError("inbox_read", error.message)); return; }
+        try { resolve(JSON.parse(stdout)); }
+        catch (error) { reject(new CorralCallError("inbox_read", error instanceof Error ? error.message : String(error))); }
+      });
+      child.stdin?.end();
+    });
+  }
+
   envelope(op: CorralOp, call: CorralCall): string {
     const { identity } = this.options;
     const text = JSON.stringify({

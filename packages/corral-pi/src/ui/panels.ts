@@ -20,6 +20,7 @@ export interface NativePanelsOptions {
   readonly cwd: string;
   readonly inspection?: () => Promise<unknown>;
   readonly snapshot: () => PanelSnapshot | null;
+  readonly readInbox?: (signal: AbortSignal) => Promise<unknown>;
 }
 interface TabHit { readonly from: number; readonly to: number; readonly tab: PanelTab }
 interface PagerHit { readonly y: number; readonly from: number; readonly to: number }
@@ -288,7 +289,7 @@ export class NativePanels implements PanelSurface {
       }
     }
     if (!this.canInteract || mouse) return false;
-    if (matchesKey(data, "f7") || matchesKey(data, "f8") || matchesKey(data, "f9") || matchesKey(data, "f10")) {
+    if (matchesKey(data, "f7") || matchesKey(data, "f8") || matchesKey(data, "f9") || matchesKey(data, "f10") || matchesKey(data, "f11")) {
       this.focused = false;
       if (matchesKey(data, "f7")) this.tab = "Files";
       if (matchesKey(data, "f8")) this.tab = "Agents";
@@ -402,12 +403,13 @@ export class NativePanels implements PanelSurface {
     pi.on("thinking_level_select", () => { this.refresh(); });
     pi.on("tool_result", () => { this.workbench.invalidateFiles(); this.refresh(); });
     pi.registerCommand("panels", {
-      description: "Native session inspector: context, files, agents, plan, evidence, refresh or toggle",
+      description: "Native session inspector: context, files, agents, plan, evidence, inbox, refresh or toggle",
       handler: async (args, ctx) => {
         if (ctx.mode !== "tui" || !this.terminal) { ctx.ui.notify("Native panels require the interactive Corral host.", "warning"); return; }
         const value = args.trim().toLowerCase();
         if (value === "evidence") { this.focused = false; this.workbench.setView("evidence"); return; }
-        if (value === "refresh") { await this.workbench.inspection.refresh(true); await this.loadFiles(); return; }
+        if (value === "inbox") { this.focused = false; this.workbench.setView("inbox"); this.refresh(); return; }
+        if (value === "refresh") { await this.workbench.inspection.refresh(true); await this.loadFiles(); if (this.workbench.view === "inbox") await this.workbench.inbox.refresh(); return; }
         if (value === "toggle") { this.sidebarEnabled = !this.sidebarEnabled; this.terminal.refreshLayout(); return; }
         const tab = PANEL_TABS.find(tab => tab.toLowerCase() === value);
         if (tab) this.choose(tab);

@@ -80,6 +80,9 @@ F10 (Proof on compact navigation) and `/panels evidence` show the canonical read
 
 The adapter returns a versioned projection, not full task/history JSON. Refreshes coalesce and cache for five seconds, never run from render, and fail closed at input/output bounds. A tool outcome invalidates the cache but does not grant freshness; only a new canonical read reconciles it. Failed/overlapping reads cannot relabel retained proof as current. No annotation editing, receipt mutations or acceptance toggles are exposed.
 
+### Attention and decision inbox
+F11 Inbox and `/panels inbox` read the launch-bound workspace, independently of the Changes repository selector. Exact task/container/key/revision, state, scope and reason remain visible; `h` reveals retained history. Enter opens read-only detail. `a` revalidates and opens the existing answer-flow instructions, never a new response or owner-input path. Closed/stale/ineligible requests and failed reads stay explicit; removed selections never silently become another task. F10 Evidence retains its existing binding. See `docs/guide/pi-inbox.md`.
+
 ### Images
 Click an inline terminal image to fit its existing bytes into the main reading area. Click again (including a quick second click), Esc or F9 restores Conversation. Draft and transcript instance remain intact. Image placement is bounded by the actual main viewport, not guessed composer height. This uses the optional packaged SDK image activation hook; no fetch, external viewer or model call. Native rendering still requires a supported graphics terminal. Do not layer expanded images in SDK overlays: captions over existing inline graphics are not reliably composited.
 

@@ -13,6 +13,8 @@ mod tests;
 #[cfg(test)]
 mod tests_durability;
 #[cfg(test)]
+mod tests_inbox;
+#[cfg(test)]
 mod tests_lifecycle;
 #[cfg(test)]
 mod tests_support;
