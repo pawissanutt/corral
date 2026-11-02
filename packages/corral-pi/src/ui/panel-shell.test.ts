@@ -86,10 +86,10 @@ test("relocation keeps the first visible inspector item, whether headings are sh
   const total = pagerOf(native.renderInline(80, 9)[0] ?? "")?.total ?? 0;
   for (let row = 0; row < total; row++) {
     item = plain(native.renderInline(80, 9))[1]?.trim() ?? "";
-    if (item.includes("g3")) break;
+    if (item.includes("generation 3")) break;
     native.handleInput(KEY.down);
   }
-  expect(item).toContain("g3");
+  expect(item).toContain("generation 3");
   physical.resize(140, 9);
   const rail = plain(native.renderSidebar(34, 9)).map(line => line.replace(/^│\s?|\s?│$/g, "").trim());
   expect(rail[3]).toBe(item);

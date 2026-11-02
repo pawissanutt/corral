@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
+import { basename, dirname } from "node:path";
+import { chooseProject, projectScopes } from "./project-scopes.ts";
 import type { HostIdentity } from "../roles/types.ts";
 import { target } from "./chrome.ts";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { VStack, ScrollView, Text, matchesKey, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { anchoredRow } from "./reading-anchor.ts";
 import { NativeImageViewer } from "./image-viewer.ts";
-import { ReviewStore, COMPARISONS, comparisonLabel, fileStatus, type PatchSnapshot } from "./review-store.ts";
+import { ReviewStore, comparisonLabel, fileStatus, type PatchSnapshot } from "./review-store.ts";
 import { activityRows } from "./activity-view.ts";
 import { InspectionStore, evidenceLines } from "./inspection.ts";
 import { DecisionInbox, inboxIdentity } from "./decision-inbox.ts";
@@ -21,6 +23,8 @@ export interface WorkbenchOptions {
   readonly cwd: string; readonly snapshot: () => PanelSnapshot | null;
   readonly changed: () => void; readonly canInteract: () => boolean;
   readonly readInbox?: (signal: AbortSignal) => Promise<unknown>;
+  readonly projectDir?: string;
+  readonly readProjects?: (signal: AbortSignal) => Promise<unknown>;
 }
 /** Main-area composition via the packaged SDK's public mainView hook; editor stays SDK-owned. */
 export class NativeWorkbench {
@@ -42,14 +46,19 @@ export class NativeWorkbench {
   private displayedBase: string | undefined;
   private displayedMetadata: Pick<PatchSnapshot, "file" | "stat"> | undefined;
   private displayedAt: number | undefined; private displayedHead: string | undefined; private displayedComparison = "";
+  private projectName: string | undefined;
+  private choosingScope = false;
+  private readonly scopeAbort = new AbortController();
+  get scopeLabel(): string { return this.review.scopeRequired ? "Choose project" : this.projectName ?? this.review.name; }
   constructor(private readonly options: WorkbenchOptions) {
     this.images = new NativeImageViewer(() => options.canInteract(), () => { this.focused = this.images.isOpen; options.changed(); });
     this.inspection = new InspectionStore(options.identity, options.inspection, () => options.changed());
-    this.review = new ReviewStore(options.cwd, () => options.changed(), options.inspection && options.identity.task && options.identity.run ? async () => {
+    this.projectName = options.identity.project || undefined;
+    this.review = new ReviewStore(options.projectDir ?? options.cwd, () => options.changed(), options.inspection && options.identity.task && options.identity.run ? async () => {
       await this.inspection.refresh();
       if (this.inspection.stale || !this.inspection.current) throw new Error(this.inspection.error ?? "Canonical candidate unavailable; r to reconcile");
       return this.inspection.current;
-    } : undefined);
+    } : undefined, !!options.readProjects && !options.identity.task && !options.projectDir, !!options.projectDir);
     this.inbox = new DecisionInbox(options.readInbox, options.changed);
     this.inboxView = new InboxView(this.inbox, options.identity.role, options.identity.project, options.canInteract, options.changed, () => { this.focused = true; });
   }
@@ -96,7 +105,7 @@ export class NativeWorkbench {
         hits = labels.map(([view, label]) => ({ view, to: x += label.length }));
         return [PANEL_BG + pad(labels.map(([view, label]) => (this.view === view ? PANEL_BLUE : PANEL_MUTED) + label).join("") + PANEL_MUTED +
           (this.focused ? compact ? "· Esc · Enter" : "· Esc chat · Enter compose" : ""), width) + RESET,
-        PANEL_BG + PANEL_MUTED + pad(`${this.options.identity.role.toUpperCase()} ${target(this.options.identity)} · g${this.options.identity.generation} · ${!this.ui ? "Initializing editor…" : this.options.snapshot()?.bound ? "Bound to Corral" : "Unbound"}`, width) + RESET];
+        PANEL_BG + PANEL_TEXT + pad(`Files: ${plainLabel(this.scopeLabel)} · ` + PANEL_MUTED + `${this.options.identity.role.toUpperCase()} ${target(this.options.identity)} · g${this.options.identity.generation} · ${!this.ui ? "Initializing editor…" : this.options.snapshot()?.bound ? "Bound to Corral" : "Unbound"}`, width) + RESET];
       },
       handleMouse: event => {
         if (!this.options.canInteract() || !plainClick(event) || event.y !== 0) return undefined;
@@ -178,7 +187,10 @@ export class NativeWorkbench {
     const sameScope = this.displayedRoot === r.root && this.displayedPath === r.selected && this.displayedComparison === label;
     const base = sameScope ? this.displayedHead : r.head;
     const state = r.error ? "STALE / unavailable: " + plainLabel(r.error) : r.refreshing ? "Checking Git…" : r.checkedAt ? "Updated " + new Date(r.checkedAt).toLocaleTimeString() : "Not loaded";
-    const head = [PANEL_BLUE + `${plainLabel(r.name)} (${plainLabel(r.branch)})` + PANEL_TEXT,
+    if (r.scopeRequired) return [PANEL_TEXT + "Choose a project", "", PANEL_MUTED + "Workspace-wide changes are not shown.",
+      PANEL_MUTED + "Press o to choose a project or your scratch worktree.", PANEL_MUTED + "This is a read-only view; your session stays bound to Corral."]
+      .flatMap(line => new Text(line, 0, 0).render(width));
+    const head = [PANEL_BLUE + `${plainLabel(this.scopeLabel)} (${plainLabel(r.branch)})` + PANEL_TEXT,
       ...(width >= 90 ? [PANEL_MUTED + plainLabel(r.root)] : []), PANEL_MUTED + label + (width >= 90 && r.comparison !== "candidate" ? ` · base ${base?.slice(0, 10) ?? "unborn/unavailable"}` : ""),
       ...(r.comparison === "candidate" ? [PANEL_MUTED + `Comparison base ${sameScope ? this.displayedBase ?? "unavailable" : r.candidateBase ?? "unavailable"}`,
         PANEL_MUTED + `Candidate HEAD ${base ?? r.head ?? "unavailable"} · committed only; uncommitted edits excluded`] : []),
@@ -226,14 +238,25 @@ export class NativeWorkbench {
   }
   files(): PanelLine[] {
     const r = this.review;
-    const rows: PanelLine[] = [{ text: `${r.name} · ${r.branch}`, heading: true },
+    if (r.scopeRequired) return [{ text: "Choose project or scratch", heading: true, action: { kind: "scope" } },
+      { text: "No project selected", tone: "muted" }, { text: "" },
+      { text: "Workspace changes are hidden." }, { text: "o choose project", tone: "accent", action: { kind: "scope" } }];
+    const rows: PanelLine[] = [{ text: this.scopeLabel, heading: true, action: { kind: "scope" } },
+      { text: r.branch, tone: "muted" },
+      { text: "o project / worktree", tone: "accent", action: { kind: "scope" } },
       ...(r.comparison === "candidate" ? [{ text: `Base ${r.candidateBase ?? "unavailable"}` }, { text: `HEAD ${r.head ?? "unavailable"}` }] : []),
-      { text: `${r.checkedAt ? r.visible.length + " matching" : "Loading / unavailable"} · ${r.comparison}${r.query ? " · /" + r.query : ""}` }];
+      { text: "" },
+      { text: `${r.checkedAt ? r.visible.length + " matching" : "Loading / unavailable"} · ${r.comparison}${r.query ? " · /" + r.query : ""}`, tone: "muted" }];
     if (r.error) rows.push({ text: "STALE: " + plainLabel(r.error) });
     for (const file of r.visible) {
       const stat = r.stats.get(file.path);
-      const delta = stat ? stat.added === null ? " · binary" : ` +${stat.added} −${stat.removed}` : "";
-      rows.push({ text: `${file.path === r.selected ? ">" : " "}${delta} ${file.path} · ${fileStatus(file)}`, action: { kind: "diff", path: file.path } });
+      const delta = stat ? stat.added === null ? " · binary" : ` · +${stat.added} −${stat.removed}` : "";
+      const selected = file.path === r.selected;
+      const action = { kind: "diff" as const, path: file.path };
+      rows.push({ text: "" },
+        { text: `${selected ? "›" : "·"} ${basename(file.path)}`, continuationIndent: 2, tone: selected ? "accent" : "text", action },
+        { text: `${fileStatus(file)}${delta}`, indent: 2, tone: fileStatus(file) === "Conflict" ? "warning" : "muted", action });
+      if (dirname(file.path) !== ".") rows.push({ text: dirname(file.path) + "/", indent: 2, tone: "muted", action });
     }
     if (!r.visible.length) rows.push({ text: r.error ? "Git unavailable · r to retry" : r.refreshing ? "Reading Git…" : r.files.length ? "No matching files · / to search" : r.comparison === "candidate" ? "No committed candidate changes" : "Working tree clean" });
     if (r.limitNotice) rows.push({ text: r.limitNotice });
@@ -254,9 +277,28 @@ export class NativeWorkbench {
     }
     this.options.changed();
   }
-  private async repository(): Promise<void> {
-    const value = await this.ui?.input("Read-only repository scope (does not rebind this session)", this.review.root);
-    if (value) { this.lastPatch = ""; this.displayedPath = undefined; await this.review.setRepository(value); this.changesScroll?.scrollToStart(); }
+  async repository(): Promise<void> {
+    const ui = this.ui;
+    if (!ui || this.choosingScope || this.scopeAbort.signal.aborted) return;
+    this.choosingScope = true;
+    try {
+      let path: string | undefined;
+      let name: string | undefined;
+      if (this.options.readProjects) {
+        const listed = projectScopes(await this.options.readProjects(this.scopeAbort.signal));
+        const scopes = this.options.identity.task ? [{ label: `${this.options.identity.project} / bound worktree`, path: this.options.cwd }, ...listed] : listed;
+        if (this.scopeAbort.signal.aborted) return;
+        if (!scopes.length) { ui.notify("No configured projects. Add a project in Corral settings.", "warning"); return; }
+        const scope = await chooseProject(scopes, (title, choices) => ui.select(title, choices));
+        path = scope?.path; name = scope?.label;
+      } else path = await ui.input("Read-only repository scope (does not rebind this session)", this.review.root);
+      if (path && !this.scopeAbort.signal.aborted) {
+        this.lastPatch = ""; this.displayedPath = undefined; this.projectName = name;
+        await this.review.setRepository(path); this.changesScroll?.scrollToStart(); this.options.changed();
+      }
+    } catch (error) {
+      if (!this.scopeAbort.signal.aborted) ui.notify(`Projects unavailable: ${plainLabel(error instanceof Error ? error.message : String(error))}`, "error");
+    } finally { this.choosingScope = false; }
   }
   private moveHunk(delta: number): void {
     this.hunk = Math.max(0, Math.min(this.hunkRows.length - 1, this.hunk + delta));
@@ -307,7 +349,7 @@ export class NativeWorkbench {
     if (this.view === "changes") {
       if (data === "/") { void this.search(); return true; }
       if (data === "o") { void this.repository(); return true; }
-      if (data === "c") { const next = COMPARISONS[(COMPARISONS.indexOf(this.review.comparison) + 1) % COMPARISONS.length]; if (next) { this.lastPatch = ""; void this.review.setComparison(next); } return true; }
+      if (data === "c") { const choices = this.review.comparisons; const next = choices[(choices.indexOf(this.review.comparison) + 1) % choices.length]; if (next) { this.lastPatch = ""; void this.review.setComparison(next); } return true; }
       if (data === "r") { this.inspection.invalidate(); void this.review.refresh().then(() => this.acceptPatch()); return true; }
       if (data === "n" || data === "p") { this.moveHunk(data === "n" ? 1 : -1); return true; }
       if (data === "a") { this.askHunk(); return true; }
@@ -317,6 +359,6 @@ export class NativeWorkbench {
   }
   dispose(): void {
     if (this.timer) clearInterval(this.timer); if (this.debounce) clearTimeout(this.debounce);
-    this.images.dispose(); this.review.dispose(); this.inspection.dispose(); this.inboxView.dispose(); this.ui = undefined;
+    this.scopeAbort.abort(); this.images.dispose(); this.review.dispose(); this.inspection.dispose(); this.inboxView.dispose(); this.ui = undefined;
   }
 }

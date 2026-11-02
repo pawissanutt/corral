@@ -71,11 +71,13 @@ export function panelFooter(snapshot: PanelSnapshot | null, contextInRail: boole
   }
   return lines;
 }
-export function overviewLines(snapshot: PanelSnapshot | null, files: FilesState): PanelLine[] {
+export function overviewLines(snapshot: PanelSnapshot | null, files: FilesState, scope?: { readonly name: string; readonly required: boolean }): PanelLine[] {
   if (!snapshot) return [{ text: "Session state unavailable" }];
   const rows: PanelLine[] = [{ text: "Context", heading: true }, { text: contextLabel(snapshot) },
     { text: "" }, { text: "Changed files", heading: true }];
-  switch (files.kind) {
+  if (scope) rows.push({ text: scope.required ? "Choose project · /panels project" : plainLabel(scope.name), tone: "muted", action: { kind: "scope" } });
+  if (scope?.required) rows.push({ text: "Workspace changes are hidden", tone: "muted" });
+  else switch (files.kind) {
     case "unread": rows.push({ text: "Open Files to read Git changes" }); break;
     case "loading": rows.push({ text: "Reading Git status…" }); break;
     case "error": rows.push({ text: files.reason }); break;

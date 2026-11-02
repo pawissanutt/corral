@@ -96,7 +96,8 @@ test("panel layout streams a held reply and tool output, keeps one binding throu
     mark = physical.writes.length;
     physical.send("\x1b[17~"); physical.send("\x1b[D"); physical.send("\x1b[D");
     expect(panels.tab).toBe("Agents");
-    await physical.until("g1 · Working", mark);
+    await physical.until("generation 1", mark);
+    await physical.until("Working · Bound to Corral", mark);
     physical.send("\r");
     await physical.until("Agents · Esc close", mark);
     physical.send("\x1b");

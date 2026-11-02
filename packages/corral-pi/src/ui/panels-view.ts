@@ -35,13 +35,23 @@ export type FilesState = { readonly kind: "unread" | "loading" } |
 export interface PanelLine {
   readonly text: string;
   readonly heading?: boolean;
-  readonly action?: { readonly kind: "diff"; readonly path: string } | { readonly kind: "files" };
+  readonly tone?: "text" | "muted" | "accent" | "success" | "warning";
+  readonly indent?: number;
+  readonly continuationIndent?: number;
+  readonly action?: { readonly kind: "diff"; readonly path: string } | { readonly kind: "files" } | { readonly kind: "scope" };
 }
 export const PANEL_BG = "\x1b[48;2;25;27;32m";
 export const PANEL_TEXT = "\x1b[38;2;224;227;233m";
 export const PANEL_MUTED = "\x1b[38;2;155;162;176m";
 export const PANEL_BLUE = "\x1b[38;2;131;168;239m";
 export const PANEL_RULE = "\x1b[38;2;65;71;82m";
+export const PANEL_SUCCESS = "\x1b[38;2;148;196;166m";
+export const PANEL_WARNING = "\x1b[38;2;226;189;126m";
+export function styledPanelLine(row: PanelLine): string {
+  const color = row.tone === "muted" ? PANEL_MUTED : row.tone === "success" ? PANEL_SUCCESS
+    : row.tone === "warning" ? PANEL_WARNING : row.tone === "accent" ? PANEL_BLUE : PANEL_TEXT;
+  return color + (row.heading ? "\x1b[1m" : "") + " ".repeat(row.indent ?? 0) + row.text + "\x1b[22m" + PANEL_TEXT;
+}
 export const RESET = "\x1b[0m";
 
 export function plainLabel(text: string): string {
@@ -107,44 +117,54 @@ export function panelLines(tab: PanelTab, identity: HostIdentity, snapshot: Pane
       }
       break;
     case "Agents": {
-      add("Current bound session", true);
-      add(`${snapshot.model ?? "Model unavailable"} · ${snapshot.effort}`);
-      add(`${identity.role} · ${identity.task ?? identity.assistant ?? identity.project}`);
-      add(`${identity.review ?? identity.run ?? ""} · g${identity.generation} · ${snapshot.streaming ? "Working" : "Idle"}`);
-      add(snapshot.bound ? "Bound" : "Disconnected/unbound · observations may be stale");
+      add(identity.task ?? identity.assistant ?? identity.project, true);
+      add(`${snapshot.streaming ? "Working" : "Idle"} · ${snapshot.bound ? "Bound to Corral" : "Disconnected/unbound · may be stale"}`);
+      add(`${identity.role.replaceAll("_", " ")} · generation ${identity.generation}`);
+      add(identity.project ? `Bound project: ${identity.project}` : "Workspace session · no bound project");
+      add(`${snapshot.model ?? "Model unavailable"}`);
+      add(`Reasoning: ${snapshot.effort}`);
+      add("");
+      add("Activity", true);
       if (snapshot.inspector) {
         add(`Session ${snapshot.inspector.session} · bound ${snapshot.inspector.boundSession ?? "unavailable"}`);
         add(`Turn ${snapshot.inspector.turn} · ${snapshot.inspector.turnOpen ? "open" : "settled"} · ${snapshot.streaming ? "streaming" : "not streaming"}`);
         for (const line of inspectorActivity(snapshot.inspector)) add(line);
       }
       else add("Receipt/event history unavailable · legacy snapshot");
-      add("Read-only auxiliary activity", true);
+      add("");
+      add("Helpers", true);
       if (!snapshot.auxiliary) add("Auxiliary telemetry unavailable");
       else {
-        add(`Research: ${snapshot.auxiliary.explore.running} slots occupied · ${snapshot.auxiliary.explore.queued} queued`);
-        add(`Oracle: ${snapshot.auxiliary.oracle.running} slots occupied · ${snapshot.auxiliary.oracle.queued} queued`);
+        add(`Research  ${snapshot.auxiliary.explore.running} running · ${snapshot.auxiliary.explore.queued} queued`);
+        add(`Oracle    ${snapshot.auxiliary.oracle.running} running · ${snapshot.auxiliary.oracle.queued} queued`);
       }
       add("Inspection does not resume agents");
       break;
     }
     case "Plan": {
       const ledger = snapshot.ledger;
-      add("Canonical plan", true);
+      add(`Session plan · ${identity.task ?? identity.assistant ?? identity.role}`, true);
+      add("Files scope does not filter this plan");
       if (snapshot.ledgerStale && ledger) add("Canonical plan stale · refresh to reconcile unconfirmed state");
       if (!snapshot.bound) add("Disconnected/unbound · retained ledger may be stale");
       if (!ledger) { add(snapshot.ledgerStale ? "Canonical plan unavailable" : "No canonical plan recorded"); break; }
+      const steps = ledger.phases.flatMap(phase => phase.steps);
+      const done = steps.filter(step => step.status.state === "done").length;
+      const dropped = steps.filter(step => step.status.state === "dropped").length;
       add(`${ledger.plan ?? "Progress"} · revision ${ledger.revision}`);
+      add(`${done} done · ${steps.length - done - dropped} open${dropped ? ` · ${dropped} dropped` : ""}`);
       for (const phase of ledger.phases) {
+        add("");
         add(phase.label, true);
         for (const step of phase.steps) {
           const state = step.status;
           const mark = { pending: "○", in_progress: "●", done: "✓", dropped: "–" }[state.state];
-          add(`${mark} ${step.label}`);
-          if (state.state === "dropped") add(`Reason: ${state.reason}`);
-          for (const criterion of step.criteria) add(`  Criterion: ${criterion}`);
-          for (const wait of ledger.waits?.filter(wait => wait.step === step.id) ?? []) {
-            add(wait.on.kind === "owner" ? `Waits on owner: ${wait.on.question}` : `Waits on event: ${wait.on.event}`);
-          }
+          const waits = ledger.waits?.filter(wait => wait.step === step.id) ?? [];
+          rows.push({ text: plainLabel(`${mark} ${step.label}`), continuationIndent: 2, tone: waits.length ? "warning"
+            : state.state === "done" || state.state === "dropped" ? "muted" : state.state === "in_progress" ? "accent" : "text" });
+          if (state.state === "dropped") rows.push({ text: plainLabel(`Reason: ${state.reason}`), indent: 2, tone: "muted" });
+          for (const criterion of step.criteria) rows.push({ text: plainLabel(`Criterion: ${criterion}`), indent: 2, tone: "muted" });
+          for (const wait of waits) rows.push({ text: plainLabel(wait.on.kind === "owner" ? `Owner: ${wait.on.question}` : `Waiting: ${wait.on.event}`), indent: 2, tone: "warning" });
         }
       }
       add("Self-reported progress, not gate evidence");

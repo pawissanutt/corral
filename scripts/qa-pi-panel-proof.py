@@ -172,7 +172,7 @@ try:
     mark = len(log); send(b'Draft survives')
     until(lambda: text('Draft survives', mark), 'unsent draft during the held stream')
     mark = len(log); send(b'\x1b[17~\x1b[D\x1b[D')
-    until(lambda: text('g1 · Working', mark), 'Agents inspector on the bound generation')
+    until(lambda: text('generation 1', mark) and text('Working · Bound to Corral', mark), 'Agents inspector on the bound generation')
     mark = len(log); send(b'\r')
     until(lambda: text('Agents · Esc close', mark), 'inspector detail overlay')
     save_frame('inspect-agents', mark)
