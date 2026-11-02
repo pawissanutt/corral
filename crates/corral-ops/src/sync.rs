@@ -9,6 +9,10 @@ use serde_json::json;
 
 use crate::{Ctx, ProcessControl, SystemProcesses, omo};
 
+#[path = "sync_excerpt.rs"]
+mod excerpt;
+use excerpt::read_excerpt;
+
 #[cfg(test)]
 #[path = "sync_held_tests.rs"]
 mod held_tests;
@@ -677,13 +681,7 @@ fn reconcile(
     } else {
         None
     };
-    let excerpt = excerpt.or(refreshed).map(|text| {
-        if text.contains("corral agent launch refused: memory_contract_unavailable:") {
-            format!("{text}\nFix: run `corral agent install` or update the configured Pi assets, then retry.")
-        } else {
-            text
-        }
-    });
+    let excerpt = excerpt.or(refreshed).map(excerpt::launch_refusal_hint);
 
     let unchanged = to == task.status
         && run.agent_state.as_deref() == Some(state.as_str())
@@ -886,16 +884,6 @@ fn omo_recently_active(ctx: &Ctx, run: &Run, now: Timestamp, window: SignedDurat
     let agent = omo::agent_dir(ctx.store.config.sync.omo_agent_dir.as_deref());
     omo::last_activity(&agent, &run.worktree)
         .is_some_and(|t| t >= run.started && now.duration_since(t) < window)
-}
-
-fn read_excerpt(ctx: &Ctx, pane_id: &str) -> String {
-    match ctx.herdr.pane_read(pane_id, 80) {
-        Ok(text) => {
-            let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
-            lines[lines.len().saturating_sub(12)..].join("\n")
-        }
-        Err(err) => format!("(could not read agent pane: {err:#})"),
-    }
 }
 
 #[cfg(test)]
