@@ -85,7 +85,7 @@ test("short narrow inspector pages every item; keyboard and pointer move it iden
 test("relocation preserves the selected activity through narrow drawer and wide rail", () => {
   const { native, physical } = panels(80, 14);
   native.handleInput("\x1b[19~");
-  expect(native.tab).toBe("Agents");
+  expect(native.tab).toBe("Context");
   native.handleInput(KEY.down);
   expect(plain(native.renderInline(80, 14)).join("\n")).toContain("› job-2");
   physical.resize(140, 14);

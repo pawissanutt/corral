@@ -6,7 +6,7 @@ import { createChatViewport } from "../../node_modules/@earendil-works/pi-coding
 import { NativePanels } from "./panels.ts";
 import { activitySidebar } from "./activity-sidebar.ts";
 import { overviewLines } from "./panels-chrome.ts";
-import type { PanelSnapshot, PanelJob } from "./panels-view.ts";
+import { PANEL_TABS, type PanelSnapshot, type PanelJob } from "./panels-view.ts";
 import type { HelperInspection } from "../extensions/subagent/inspection.ts";
 import { RecordingTerminal } from "../../test/support/panel-terminal.ts";
 
@@ -80,6 +80,7 @@ test("rail mouse and F8/Enter open the same native agent chat directly, leaving 
 });
 
 test("main navigation has no duplicate Agents or Jobs tab in any view or width", () => {
+  expect(PANEL_TABS).toEqual(["Context", "Files", "Plan"]);
   const h = fixture();
   try {
     for (const select of [() => h.native.workbench.setView("conversation"),
@@ -94,8 +95,13 @@ test("main navigation has no duplicate Agents or Jobs tab in any view or width",
     }
     h.physical.send("\x1b[19~");
     expect(h.native.focused).toBeTrue();
-    expect(h.native.tab).toBe("Agents");
-    expect(plain(h.native.renderSidebar(34, 34))).toContain("Agents · 2 active");
+    expect(h.native.tab).toBe("Context");
+    const rail = h.native.renderSidebar(34, 34);
+    expect(stripTerminalSequences(rail[1] ?? "")).toContain("Context Files Plan");
+    expect(stripTerminalSequences(rail[1] ?? "")).not.toContain("Agents");
+    expect(plain(rail)).toContain("Agents · 2 active");
+    expect(plain(rail)).toContain("Jobs · 1 running");
+    expect(plain(rail)).toContain("24% context");
     h.physical.send("\r");
     expect(h.native.workbench.selectedActivity).toEqual({ kind: "helper", request: "first" });
   } finally { h.stop(); }

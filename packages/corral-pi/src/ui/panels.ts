@@ -61,6 +61,8 @@ export class NativePanels implements PanelSurface {
   private activityStart = 0;
   private activityCursor: string | undefined;
   private historyExpanded = false;
+  private activityFocused = false;
+  private get navigatingActivity(): boolean { return this.tab === "Context" && this.focused && this.activityFocused; }
   private railPager: PagerHit | undefined;
   private inlinePager: PagerHit | undefined;
 
@@ -112,10 +114,9 @@ export class NativePanels implements PanelSurface {
   }
   private lines() { return panelLines(this.tab, this.options.identity, this.options.snapshot(), this.files); }
   private choose(tab: PanelTab): void {
-    this.tab = tab;
+    this.tab = tab; this.activityFocused = false;
     this.offset = 0;
     if (tab === "Files") { this.workbench.setView("changes"); if (this.files.kind === "unread") void this.loadFiles(); }
-    if (tab === "Agents") this.selectActivity();
     this.refresh();
   }
   private activityRows(): PanelLine[] {
@@ -129,20 +130,21 @@ export class NativePanels implements PanelSurface {
     if (this.activityCursor === undefined || !keys.includes(this.activityCursor)) this.activityCursor = keys[0];
   }
   private browseActivity(): void {
-    this.tab = "Agents"; this.focused = true; this.workbench.focused = false;
+    this.tab = "Context"; this.focused = true; this.activityFocused = true; this.workbench.focused = false;
     this.sidebarEnabled = true; this.selectActivity();
     this.terminal?.refreshLayout(); this.refresh();
   }
   async loadFiles(): Promise<void> { await this.workbench.review.refresh(); }
   private displayed(): { readonly rows: readonly PanelLine[]; readonly overview: boolean } {
-    if (this.wide && this.tab === "Context" && !this.focused) return { rows: overviewLines(this.options.snapshot(), this.files,
+    if (this.navigatingActivity && !this.wide) return { rows: this.activityRows(), overview: false };
+    if (this.tab === "Context" && (this.wide && !this.focused || this.navigatingActivity)) return { rows: overviewLines(this.options.snapshot(), this.files,
       { name: this.workbench.scopeLabel, required: this.workbench.review.scopeRequired },
-      this.workbench.selectedActivity && activityKey(this.workbench.selectedActivity), this.historyExpanded), overview: true };
-    const rows = this.tab === "Files" ? this.workbench.files() : this.tab === "Agents" ? this.activityRows() : this.lines();
-    return { rows: this.wide || this.tab === "Agents" ? rows : rows.filter(line => !line.heading), overview: false };
+      this.navigatingActivity ? this.activityCursor : this.workbench.selectedActivity && activityKey(this.workbench.selectedActivity), this.historyExpanded), overview: true };
+    const rows = this.tab === "Files" ? this.workbench.files() : this.lines();
+    return { rows: this.wide ? rows : rows.filter(line => !line.heading), overview: false };
   }
   private inlineCapacity(rows: number): number {
-    if (this.tab === "Agents" && this.focused) return Math.max(2, Math.min(12, Math.floor(rows / 2) - 2));
+    if (this.navigatingActivity) return Math.max(2, Math.min(12, Math.floor(rows / 2) - 2));
     return this.focused || this.expanded ? Math.min(this.expanded ? 4 : 2, Math.max(1, Math.floor(rows / 8))) : 0;
   }
   private get capacity(): number {
@@ -156,10 +158,10 @@ export class NativePanels implements PanelSurface {
         .map((text, index) => ({ ...row, text, indent: (row.indent ?? 0) + (index ? row.continuationIndent ?? 0 : 0) }))) };
   }
   private page(capacity: number, width: number): { readonly window: PageWindow; readonly pager: string } {
+    if (this.navigatingActivity) this.selectActivity();
     const { rows, overview } = this.wrapped(width);
     let window: PageWindow;
-    if (this.tab === "Agents") {
-      this.selectActivity();
+    if (this.navigatingActivity) {
       const selected = rows.findIndex(row => this.actionKey(row.action) === this.activityCursor && row.action !== undefined);
       window = selectionWindow(rows, capacity, selected, this.activityStart);
       if (capacity > 0) this.activityStart = window.start;
@@ -198,7 +200,7 @@ export class NativePanels implements PanelSurface {
       ...this.styled(window.rows).map(line => PANEL_BG + pad("  " + line, width) + RESET)];
   }
   private move(delta: number): void {
-    if (this.tab === "Agents") {
+    if (this.navigatingActivity) {
       this.selectActivity();
       const keys = [...new Set(this.activityRows().map(row => this.actionKey(row.action)).filter(key => key !== undefined))];
       this.activityCursor = keys[Math.max(0, Math.min(keys.length - 1, keys.indexOf(this.activityCursor ?? "") + delta))];
@@ -217,7 +219,7 @@ export class NativePanels implements PanelSurface {
   }
   async inspect(): Promise<void> {
     if (!this.canInteract) return;
-    if (this.tab === "Agents") {
+    if (this.navigatingActivity) {
       this.selectActivity();
       const action = this.activityRows().find(row => row.action && this.actionKey(row.action) === this.activityCursor)?.action;
       if (action) this.activate(action);
@@ -363,14 +365,14 @@ export class NativePanels implements PanelSurface {
       else this.expanded = !this.expanded;
       this.terminal?.refreshLayout(); return true;
     }
-    if (matchesKey(data, "f6")) { this.focused = !this.focused; this.refresh(); return true; }
+    if (matchesKey(data, "f6")) { this.activityFocused = false; this.focused = !this.focused; this.refresh(); return true; }
     if (!this.focused) return false;
     if (matchesKey(data, "escape")) { this.focused = false; this.refresh(); return true; }
     if (matchesKey(data, "left") || matchesKey(data, "right")) {
       const index = (PANEL_TABS.indexOf(this.tab) + (matchesKey(data, "right") ? 1 : PANEL_TABS.length - 1)) % PANEL_TABS.length;
       const tab = PANEL_TABS[index]; if (tab) this.choose(tab); return true;
     }
-    if (matchesKey(data, "up") || matchesKey(data, "down") || this.tab === "Agents" && (data === "j" || data === "k")) { this.move(matchesKey(data, "down") || data === "j" ? 1 : -1); return true; }
+    if (matchesKey(data, "up") || matchesKey(data, "down") || this.navigatingActivity && (data === "j" || data === "k")) { this.move(matchesKey(data, "down") || data === "j" ? 1 : -1); return true; }
     if (data === "o") { void this.workbench.repository(); return true; }
     if (matchesKey(data, "enter")) { void this.inspect(); return true; }
     const keys = getKeybindings();
@@ -446,7 +448,7 @@ export class NativePanels implements PanelSurface {
           invalidate() {},
         }));
         return {
-          render: width => panelFooter(this.options.snapshot(), this.wide && this.tab === "Context" && !this.focused,
+          render: width => panelFooter(this.options.snapshot(), this.wide && this.tab === "Context" && (!this.focused || this.navigatingActivity),
             data.getExtensionStatuses(), width),
           invalidate() {}, dispose: unsubscribe,
         };
@@ -466,14 +468,12 @@ export class NativePanels implements PanelSurface {
     pi.on("thinking_level_select", () => { this.refresh(); });
     pi.on("tool_result", () => { this.workbench.invalidateFiles(); this.refresh(); });
     pi.registerCommand("panels", {
-      description: "Native session inspector: context, files, agents, jobs, helpers, plan, evidence, usage, inbox, project, refresh or toggle",
+      description: "Native session inspector: context, files, plan, evidence, usage, inbox, project, refresh or toggle (agents/helpers/jobs focus Context activity)",
       handler: async (args, ctx) => {
         if (ctx.mode !== "tui" || !this.terminal) { ctx.ui.notify("Native panels require the interactive Corral host.", "warning"); return; }
         const value = args.trim().toLowerCase();
         if (value === "helpers" || value === "agents" || value === "jobs") { this.browseActivity(); return; }
         if (value === "project") { await this.workbench.repository(); this.refresh(); return; }
-        if (value === "agents") { this.choose("Agents"); this.focused = false; this.refresh(); return; }
-        if (value === "jobs") { this.focused = false; this.workbench.setView("activity"); this.refresh(); return; }
         if (value === "usage") { this.focused = false; this.workbench.setView("usage"); return; }
         if (value === "evidence") { this.focused = false; this.workbench.setView("evidence"); return; }
         if (value === "inbox") { this.focused = false; this.workbench.setView("inbox"); this.refresh(); return; }

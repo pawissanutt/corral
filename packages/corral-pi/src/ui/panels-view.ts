@@ -4,9 +4,8 @@ import type { ContextUsage, Theme } from "@earendil-works/pi-coding-agent";
 import type { HostIdentity } from "../roles/types.ts";
 import type { TodoProgress } from "./todo-widget.ts";
 import { inspectorActivity, inspectorContext, type InspectorSnapshot } from "./inspector.ts";
-import { activitySidebar } from "./activity-sidebar.ts";
 
-export const PANEL_TABS = ["Context", "Files", "Agents", "Plan"] as const;
+export const PANEL_TABS = ["Context", "Files", "Plan"] as const;
 export type PanelTab = typeof PANEL_TABS[number];
 export interface PanelJob { readonly job: string; readonly state: string; readonly detail?: import("../extensions/jobs/runtime.ts").JobInspection }
 export interface PanelSnapshot {
@@ -104,6 +103,8 @@ export function panelLines(tab: PanelTab, identity: HostIdentity, snapshot: Pane
       if (snapshot.inspector) {
         for (const line of inspectorContext(snapshot.inspector)) add(line);
         add("Session activity", true);
+        add(`Session ${snapshot.inspector.session} · bound ${snapshot.inspector.boundSession ?? "unavailable"}`);
+        add(`Turn ${snapshot.inspector.turn} · ${snapshot.inspector.turnOpen ? "open" : "settled"}`);
         for (const line of inspectorActivity(snapshot.inspector)) add(line);
       }
       add("Jobs", true);
@@ -126,7 +127,6 @@ export function panelLines(tab: PanelTab, identity: HostIdentity, snapshot: Pane
           break;
       }
       break;
-    case "Agents": return activitySidebar(snapshot);
     case "Plan": {
       const ledger = snapshot.ledger;
       add(`Session plan · ${identity.task ?? identity.assistant ?? identity.role}`, true);

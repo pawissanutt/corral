@@ -101,7 +101,7 @@ test("disconnected/legacy inspectors and activity never present unknown as succe
     tokens: 0, tools: [], contextFiles: [], skills: [], ledger: ledger.current, ledgerStale: true, jobs: null,
     auxiliary: null, steering: 0, followUps: 0, inspector: info };
   expect(inspectorContext(info).join("\n")).toContain("legacy launch");
-  expect(panelLines("Agents", identity, snapshot, { kind: "unread" }).map(row => row.text).join("\n")).toContain("Disconnected/unbound");
+  expect(panelLines("Context", identity, snapshot, { kind: "unread" }).map(row => row.text).join("\n")).toContain("Disconnected/unbound");
   const plan = panelLines("Plan", identity, snapshot, { kind: "unread" }).map(row => row.text).join("\n");
   expect(plan).toContain("stale"); expect(plan).toContain("Criterion: C1"); expect(plan).toContain("not gate evidence");
   expect(panelLines("Context", identity, snapshot, { kind: "unread" }).map(row => row.text).join("\n")).toContain("No tool receipt observed");

@@ -70,13 +70,12 @@ function captureInspector(bound: boolean): void {
   if (!panels) throw new Error("rich host supplies native panels");
   panels.focused = true;
   const output: string[] = [];
-  for (const tab of ["Context", "Agents", "Plan"] as const) {
+  for (const tab of ["Context", "Plan"] as const) {
     panels.tab = tab;
-    output.push(`WIDE · ${tab}`, ...panels.renderSidebar(100, 50), `INLINE · ${tab}`, ...panels.renderInline(80, 34));
+    output.push(`WIDE · ${tab}`, ...panels.renderSidebar(100, 200), `INLINE · ${tab}`, ...panels.renderInline(80, 34));
   }
   const text = stripTerminalSequences(output.join("\n"));
-  const state = host.state();
-  expect(text).toContain(String(state.model));
+  expect(host.session.model?.id).toBe("gpt-6.1-sol"); // The model label belongs to the real composer, not Context.
   expect(text).toContain(host.sessionId());
   expect(text).toContain("Budget unavailable");
   expect(text).toContain(bound ? "Bound" : "Disconnected/unbound");
