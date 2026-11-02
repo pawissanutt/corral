@@ -25,13 +25,33 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
 - No `unwrap()`/`expect()` outside tests. No `todo!()` left in shipped code.
 - Subprocesses (herdr, git) are invoked with argv, never through a shell, except agent launch commands which are sent to a herdr pane's shell by design.
 
+## Test cost and placement
+
+- Judge tests by the named defect they catch, not their count. Use the lowest layer that
+  can fail and at most one end-to-end test per user journey; variants belong in cheaper tests.
+- Bug fix: one failing-first regression. Refactor: no new tests. Prose/docs: no tests,
+  especially no wording pins. Attached logs/command output count as evidence, not test debt.
+- Use the smallest fixture that proves it. History independence uses exact work counters
+  at two small sizes, never large histories. Never relax a failing test to go green.
+- Reviewers flag duplicates, prose pins, oversized fixtures and unclassified slow tests.
+  Request tests only for a named defect, never for evidence volume. Review the gate's added
+  count/seconds; >30s needs a `Test-cost justification:` in the change report.
+
 ## Build and test
 
 - Always build with the repo's `.cargo/config.toml` (it disables the crashing global sccache wrapper). If a build fails with an sccache error, prefix the command with `RUSTC_WRAPPER=`.
 - One shared target dir (`corral/target`); cargo serializes concurrent builds on its lock, which is expected.
 - Check one crate: `cargo check -p <crate>`; test one crate: `cargo test -p <crate>`.
 - Before `corral done`, run the gate your run contract names. In a tiered run that is `corral gate <id> --wait`, exactly once after the final rebase: corral selects the tier (quick during review rounds and for Plan-target members), records the receipt, and autopilot reuses it. Audited tasks then capture evidence, record it against the attempt that gate printed, run `corral done <id> --check`, then `corral done`. Evidence recorded for a quick receipt follows the candidate only through corral's authorized carries (tier promotion, clean replay); any other change needs fresh evidence. Legacy and untiered runs keep the gate commands their contract lists.
-- `scripts/gate.sh` without `--tier` is the full tier, which corral runs for every landing on main and for plan verify: formatting, the exact 800-SLOC Rust ceiling, Clippy, `cargo nextest run --workspace` in `corral-test`, separate workspace doctests, and a candidate build plus docs checks. `scripts/gate.sh --tier quick` is the tier command corral runs with its gate context; it lints the touched crates and tests only the touched modules (`scripts/gate_select.py`, crate-wide when it cannot decide) or the declared tests, leaving out the slow group in `.config/nextest.toml`'s `quick` profile, which only the full tier runs.
+- `scripts/gate.sh` without `--tier` is the full landing tier: formatting, the exact
+  800-SLOC Rust ceiling, Clippy, workspace nextest in `corral-test`, doctests, small work
+  budgets, and a candidate build/docs check. Quick checks touched crates/modules (or declared
+  tests), with crate-wide fallback when selection cannot decide. Slow has fixed membership
+  in `.config/nextest.toml`: race/crash/torture/restart matrices, with reasons. Full excludes
+  slow except on owning-module changes (`scripts/gate_lanes.py`); plan verify keeps all suites.
+  Quick leaves slow out unless explicitly declared. Pi runs on package/shared-contract
+  changes; Darwin runs on platform/dependency changes; plan verify keeps both lanes.
+  Missing/legacy context is conservative: all suites and optional lanes.
 - Install cargo-nextest before running the gate. `.config/nextest.toml` caps tests at 12 slots, serializes live herdr fixtures, reports tests over 30 seconds, and disables retries. Keep new shared-server tests in its `herdr` group; fake-engine tests remain parallel.
 - The script uses null stdin and preserves gate identity exports; tests isolate their own subprocess environments. Run its temporary-fixture regression checks with `python3 scripts/test_gate.py` and `python3 scripts/test_gate_select.py`.
 - The Linux concurrent-dequeue regression requires `python3` and `strace`. It traces only disposable fixture processes and synchronizes on lock syscalls, never timing sleeps.

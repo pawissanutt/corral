@@ -3,8 +3,8 @@
 //! `pm next`, `automation status` and a board frame are measured through their production
 //! scopes: the CLI evaluation (snapshot, derivation preparation, then `HotScope`) and the
 //! board's own frame scope, so preparation and recovery stay outside the measured work. Each
-//! runs on the base store, the grown store (10x terminal tasks and 10x history on every active
-//! task, artifacts included) and the nested store (10x nested history inside every current
+//! runs on the base store, the grown store (2 vs 5 terminal tasks/history rows per active
+//! task, artifacts included) and the nested store (1 vs 3 nested rows inside every current
 //! container), warm in this process and cold in a fresh one, and again after a real
 //! current-run mutation, an unrelated record write and deletion of the cache root. Between the
 //! base and each larger variant every unattributed cell is unchanged, the unattributed

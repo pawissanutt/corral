@@ -183,7 +183,7 @@ class SelectTests(unittest.TestCase):
                          f"{UNIT_A} or {CALLS_A} or (binary_id(=alpha::one)) or (package(=tool))")
         self.assertIn("Test selection: module (crate-wide fallback: tool)", report)
         self.assertIn("Tests: 16 in scope, 7 selected, 9 skipped by selection, 1 slow skipped "
-                      "(full tier only), 0 expected failures excluded; 6 to run", report)
+                      "(slow tier or owning-module full gate), 0 expected failures excluded; 6 to run", report)
 
     def test_a_declaration_only_crate_root_defers_to_the_other_changed_paths(self) -> None:
         values, report = self.select(["crates/alpha/src/lib.rs", "crates/alpha/src/a.rs"])

@@ -504,7 +504,7 @@ fn fallback_gate(world: &mut World) -> (String, String) {
 fn repeated_round_cleanup_releases_closed_fallback_panes() {
     use corral_core::work::{self, Counter, HotScope};
     let mut measured = Vec::new();
-    for n in [1, 10] {
+    for n in [1, 3] {
         // Given a current run whose n earlier fallback gates were each cleaned by a Round.
         let mut world = World::new();
         start_run(&mut world);

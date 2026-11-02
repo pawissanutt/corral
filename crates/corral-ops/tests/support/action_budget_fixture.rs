@@ -1,10 +1,10 @@
 //! Stores of the actions-launch action budget (plan T-253 section 4, "Action budget" and the
 //! budget fixture rules). Every variant of a kind shares the acted task's current inputs, its
-//! named relations' heads and the selected action. Grown adds 10x earlier history on the acted
-//! task and its relations, nested growth inside their current containers, 10x terminal tasks
-//! and 10x history on every other task. Emitted adds 10x owner comments, non-approve findings
+//! named relations' heads and the selected action. Grown adds earlier history on the acted
+//! task and its relations, nested growth inside their current containers, terminal tasks
+//! and history on every other task. Emitted adds owner comments, non-approve findings
 //! with notes and, on worker launch, the source run's obligations and a larger newest payload.
-//! Ordinal families start at 9 or 90 earlier rows so new ids keep one width, filler events keep
+//! Two and five earlier rows suffice for exact counter comparisons; filler events keep
 //! event sequence numbers at one width, the clock is pinned, and the probe pins machine
 //! readings over the real resource walk.
 use std::path::{Path as FsPath, PathBuf};
@@ -134,18 +134,18 @@ impl Variant {
         }
     }
 
-    /// Earlier rows per ordinal family: 9 and 90 keep new ids at one width.
+    /// Two small, distinct histories: exact counters detect even a single extra read.
     fn scale(self) -> usize {
         match self {
-            Variant::Grown => 90,
-            _ => 9,
+            Variant::Grown => 5,
+            _ => 2,
         }
     }
 
     fn terminal(self) -> usize {
         match self {
-            Variant::Grown => 100,
-            _ => 10,
+            Variant::Grown => 5,
+            _ => 2,
         }
     }
 }
@@ -445,7 +445,7 @@ fn relations(store: &Store, id: &str) -> Vec<String> {
 /// Task-less events nothing reads, padding every variant's event log to one sequence width.
 fn filler(store: &Store) {
     let count = store.events().unwrap().len();
-    let target = 10_000;
+    let target = 1000;
     assert!(count < target, "the fixture outgrew the filler width");
     let event = corral_core::Event {
         seq: 0,
@@ -545,7 +545,7 @@ pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
             &store,
             &root,
             &task.id,
-            if variant == Variant::Grown { 10 } else { 1 },
+            if variant == Variant::Grown { 2 } else { 1 },
             false,
             true,
         );

@@ -157,21 +157,29 @@ selected remains to run, the run is skipped; a declared selection that matches
 no test at all still fails as an empty nextest run. Darwin checks, doctests,
 the work budget and the docs build are skipped.
 
-The slow group is the `default-filter` of `[profile.quick]` in
-`.config/nextest.toml`: tests whose 75th-percentile duration across recent gate
-logs is at least 40 s. They run only in the full tier, so every landing on main
-and every `plan verify` still runs them. To review membership, list the current
-tests and measure the gate logs:
+The explicit slow catalog is the `default-filter` of `[profile.slow]` in
+`.config/nextest.toml`, mirrored in the quick exclusions. It retains race/crash/torture
+and cross-restart matrices, with reasons beside the catalog. Full landings exclude
+these unless an owning module changes (`scripts/gate_lanes.py`); plan verification
+runs all tests. Missing or older context is conservative and runs everything.
+Membership is fixed, not automatically changed by a timing percentile. To inspect
+candidates for future gardening, list the current tests and measure the gate logs:
 
 ```text
 cargo nextest list --workspace --message-format json >/tmp/tests.json
 python3 scripts/slow-tests.py --list /tmp/tests.json <workspace>/.corral/state/gates/*.log
 ```
 
-It prints `enter` for a current test at p75 of 40 s or more outside the group,
-`leave` for a member below 30 s or no longer seen, and `keep` otherwise. Edit
-the filter's `binary_id(=..) & test(=..)` terms to match, and remove a term
-when its test is renamed or deleted.
+The historical timing helper prints `enter`/`leave`/`keep` suggestions. They are
+advisory, not permission to reclassify tests or weaken a failure. Catalog changes
+need a defect-catching/cost reason and an owner-module trigger; remove stale terms
+when tests are renamed or deleted. Pi is path-scoped to its package/shared contracts;
+Darwin checks are path-scoped to platform code and dependencies. Both always run
+in plan verification. `.config/gate.toml` enforces 180s quick and 600s full wall
+budgets around the complete recipe, including compilation. Each gate reports
+candidate-added Rust test count and measured added suite seconds; over 30s needs
+a `Test-cost justification:` in the candidate report. Unselected additions are
+reported as unmeasured, not zero-cost evidence.
 
 A tiered worker's sequence after its last commit is:
 

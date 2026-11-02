@@ -24,6 +24,8 @@ struct ContextFile<'a> {
     expected_failures: &'a [ExpectedFailure],
     destination: &'a GateDestination,
     integration_base: &'a str,
+    /// Plan aggregate/checkpoint gates keep all optional lanes, irrespective of paths.
+    plan_verify: bool,
     /// `merge-base(head, integration_base)..head`.
     changed_paths: Vec<String>,
 }
@@ -60,6 +62,10 @@ pub(crate) fn write(
         expected_failures: &contract.expected_failures,
         destination: &contract.destination,
         integration_base: &identity.integration_base,
+        plan_verify: matches!(
+            identity.run.as_str(),
+            corral_core::AGGREGATE_RUN | "checkpoint"
+        ),
         changed_paths,
     })?;
     std::fs::write(path, &bytes)

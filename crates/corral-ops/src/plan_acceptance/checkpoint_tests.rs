@@ -130,6 +130,7 @@ fn checkpoint_runs_full_on_the_target_head_and_records_an_advisory_attempt() {
     let context: serde_json::Value =
         serde_json::from_slice(&std::fs::read(dir.join("seen.json")).unwrap()).unwrap();
     assert_eq!(context["tier"], "full");
+    assert_eq!(context["plan_verify"], true);
     assert_eq!(context["expected_failures"], serde_json::json!([]));
     assert_eq!(attempt.gate.tier.as_ref().unwrap().tier, "full");
     // And the checkpoint's row records the full tier under the checkpoint scope.

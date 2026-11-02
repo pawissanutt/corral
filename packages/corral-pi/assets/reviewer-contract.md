@@ -15,6 +15,17 @@ it on exit or interrupt. If unavailable, report the blocked check; never fall ba
 to host load. See `docs/guide/load-sandbox.md`. This does not authorize an extra gate
 or a different tier. Keep the reviewed worktree unchanged.
 
+## Test cost
+
+Review tests by defect-catching value, not count or evidence volume. Duplicated journeys,
+prose-pinning assertions, oversized fixtures, and unclassified slow tests are findings.
+Check lowest-layer placement, one e2e per journey, and exact work counters on two small
+histories. Check the gate's added-test count and added suite seconds; over 30 seconds
+requires a `Test-cost justification:` naming the defect and cheaper alternatives considered.
+Request a new test only when you can name the defect it would catch; attached logs can
+satisfy required evidence without another committed test. Refactors and prose/docs need no
+new tests. Never relax a failing test to go green.
+
 ## Tools
 
 You have the upstream tools read, grep, find, ls and bash, and no edit or write tool. Do not

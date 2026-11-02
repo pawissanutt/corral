@@ -16,7 +16,7 @@ use super::action_budget_checks::{
     Cells, Walk, effect_failures, followup_failures, preconditions, section_cells, sections,
     submitted, walk,
 };
-use super::action_budget_fixture::{Bench, KINDS, Kind, Variant, build, reopen, settle};
+use super::action_budget_fixture::{Bench, Kind, Variant, build, reopen, settle};
 use super::fixture;
 
 const COLD_ROOT: &str = "CORRAL_ACTION_BUDGET_ROOT";
@@ -753,47 +753,11 @@ fn report(m: &Measured) -> String {
     line.join(" ")
 }
 
-#[test]
-fn action_budget_repair_inbox_submits_one_real_action() {
-    let bench = super::action_budget_fixture::build(Kind::RepairInbox, Variant::Base);
-    super::action_budget_fixture::settle(&bench);
-    let measured = measure(&bench, Kind::RepairInbox);
-    assert!(
-        measured.failures.is_empty(),
-        "{:?}\n{}",
-        measured.failures,
-        measured.output
-    );
-}
+// Separate cases let nextest schedule bounded work, instead of two multi-minute tests.
+#[path = "action_budget_cases.rs"]
+mod cases;
 
-#[test]
-fn action_budget_worker_uses_fixed_inputs_without_output_masks() {
-    budget(&[Kind::Worker]);
-}
-
-#[test]
-fn action_budget_repair_direct_and_tick_keep_exact_cells_and_submit() {
-    budget(&[
-        Kind::RepairLegacy,
-        Kind::RepairInbox,
-        Kind::RepairTickLegacy,
-        Kind::RepairTickInbox,
-    ]);
-}
-
-#[test]
-fn action_budget_actions_launch_kinds_do_not_follow_history() {
-    budget(&KINDS);
-}
-
-/// The hot-actions kinds (gate, reviewer, recovered reviewer, Land, Carry), each taken by a
-/// real sync tick's autopilot.
-#[test]
-fn action_budget_hot_actions_kinds_do_not_follow_history() {
-    budget(&super::action_budget_hot::HOT_KINDS);
-}
-
-fn budget(kinds: &[Kind]) {
+fn budget(kinds: &[Kind], cold_mode: bool) {
     let only = std::env::var("ACTION_BUDGET_KIND").ok();
     let mut failures = Vec::new();
     let mut text = String::new();
@@ -802,19 +766,12 @@ fn budget(kinds: &[Kind]) {
         .copied()
         .filter(|k| only.as_deref().is_none_or(|o| o == k.name()))
     {
-        // ACTION_BUDGET_WARM=1 skips the fresh-process variants while iterating on one kind.
-        let modes = if std::env::var_os("ACTION_BUDGET_WARM").is_some() {
-            1
+        let measurements: [(&str, fn(Kind, Variant) -> Measured); 1] = if cold_mode {
+            [("cold", cold)]
         } else {
-            2
+            [("warm", warm)]
         };
-        for (mode, measure) in [
-            ("warm", warm as fn(Kind, Variant) -> Measured),
-            ("cold", cold),
-        ]
-        .into_iter()
-        .take(modes)
-        {
+        for (mode, measure) in measurements {
             let [base, grown, emitted] =
                 [Variant::Base, Variant::Grown, Variant::Emitted].map(|v| measure(kind, v));
             for (m, variant) in [(&base, "base"), (&grown, "grown"), (&emitted, "emitted")] {

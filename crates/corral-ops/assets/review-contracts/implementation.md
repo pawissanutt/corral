@@ -29,7 +29,8 @@ Evidence-led review of a concrete candidate against its approved spec or plan.
   concrete failure or the specific missing observation, and (c) whether it is new or continues
   a prior finding, citing the prior finding id. A finding that cannot name all three is a
   non-blocking note.
-- New behavior is covered by tests that can fail; nothing is skipped, suppressed or weakened.
+- New behavior is covered at the lowest layer by a test that can fail for a named defect;
+  reuse existing coverage rather than duplicate it. Never relax a failing test to go green.
 - The change is minimal and in scope, and the project's conventions hold.
 - `behavior_unchanged` (refactor): confirm observable behavior and public contracts are
   unchanged; any behavior change is a finding.

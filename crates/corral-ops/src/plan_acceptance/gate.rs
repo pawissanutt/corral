@@ -310,6 +310,7 @@ mod tests {
         let bytes = std::fs::read(dir.join("seen.json")).unwrap();
         let context: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(context["tier"], "full");
+        assert_eq!(context["plan_verify"], true);
         assert_eq!(context["tests"], serde_json::json!([]));
         assert_eq!(context["expected_failures"], serde_json::json!([]));
         let tier = record.tier.unwrap();
