@@ -38,6 +38,8 @@ test("four explore requests queue at three, preserve attribution and fence activ
   await three.promise;
   expect(fx.runtime.state().explore).toEqual({ running: 3, queued: 1 });
   expect(invocations).toHaveLength(3);
+  expect(fx.runtime.inspection().map(child => child.state)).toEqual(["running", "running", "running", "queued"]);
+  expect(fx.runtime.inspection().every(child => child.parent === "parent" && child.sessionFile?.endsWith(`${child.request}.jsonl`))).toBeTrue();
   first.resolve();
   await four.promise;
   expect((await requests[0])?.generation).toBe(7);
@@ -47,6 +49,7 @@ test("four explore requests queue at three, preserve attribution and fence activ
   expect(fx.records.filter((r) => r.action === "prepare")).toHaveLength(4);
   expect(fx.records.filter((r) => r.action === "finish" && r.outcome === "uncertain")).toHaveLength(3);
   expect(fx.runtime.state().explore).toEqual({ running: 0, queued: 0 });
+  expect(fx.runtime.inspection().map(child => child.state)).toEqual(["completed", "uncertain", "uncertain", "uncertain"]);
   await expect(fx.runtime.run("explore", "new", "no")).rejects.toThrow("fenced/closed");
   console.log("explore: 3 running + 1 queued; completion admits fourth; fencing cancels remaining children; generation=7");
 });
@@ -66,6 +69,7 @@ test("queued cancellation never executes and close rejects queued children", asy
   await fx.runtime.close();
   expect((await settled)[3]?.status).toBe("rejected");
   expect(count).toBe(3);
+  expect(fx.runtime.inspection()[3]?.state).toBe("not_started");
   expect(fx.records.filter((r) => r.outcome === "not_started")).toHaveLength(1);
 });
 

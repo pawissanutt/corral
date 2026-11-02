@@ -6,16 +6,24 @@ export function activityRows(snapshot: PanelSnapshot | null, selected: number, n
   if (!snapshot) return [{ text: "Activity unavailable: session snapshot disconnected." }];
   const rows: ActivityRow[] = [];
   const add = (...texts: string[]) => rows.push(...texts.map(text => ({ text })));
-  add("Background activity · read-only", "j/k or click selects job · PgUp/PgDn scroll · Enter compose · F9 conversation",
+  add("Background activity · read-only", "a scoped agents · j/k or click selects job · PgUp/PgDn scroll · Enter compose · F9 conversation",
     snapshot.bound ? "Bound host observations · not canonical task/run settlement" : "Disconnected/unbound · observations may be stale", "");
-  if (snapshot.inspector) add(...inspectorActivity(snapshot.inspector), "");
-  else add("Receipt/event history unavailable · legacy snapshot", "");
+  // Keep jobs inspectable before potentially long receipt/event history.
+  const finish = () => {
+    add("", "Host receipt/event history");
+    if (snapshot.inspector) add(...inspectorActivity(snapshot.inspector));
+    else add("Receipt/event history unavailable · legacy snapshot");
+    return rows;
+  };
   const auxiliary = snapshot.auxiliary;
   add(auxiliary ? `Helper slots occupied / queued: research ${auxiliary.explore.running}/${auxiliary.explore.queued} · oracle ${auxiliary.oracle.running}/${auxiliary.oracle.queued}` : "Helper telemetry unavailable");
   add("Board task/run monitoring is separate; no task completion inferred here.", "");
-  if (snapshot.jobs === null) { add("Background-job runtime unavailable for this role."); return rows; }
-  if (!snapshot.jobs.length) { add("No background jobs in this host.", "Jobs started by the agent appear here automatically."); return rows; }
-  add(`${snapshot.jobs.filter(job => job.state === "running").length} running · ${snapshot.jobs.filter(job => job.state === "exited").length} exited`, "");
+  if (snapshot.jobs === null) { add("Background-job runtime unavailable for this role."); return finish(); }
+  if (!snapshot.jobs.length) { add("No background jobs in this host.", "Jobs started by the agent appear here automatically."); return finish(); }
+  const lost = snapshot.jobs.filter(job => job.state === "lost").length;
+  add(`${snapshot.jobs.filter(job => job.state === "running").length} running · ${snapshot.jobs.filter(job => job.state === "exited").length} exited · ${lost ? lost + " lost" : "lost status unavailable"}`,
+    "Source: this host runtime only; missing jobs are not completed. No stop/restart controls.",
+    "Readiness unavailable unless a retained line match is observed; a match is not service health.", "");
   snapshot.jobs.forEach((job, index) => {
     const d = job.detail;
     const elapsed = d?.startedAt === undefined ? "elapsed unavailable" : `${Math.max(0, Math.floor(((d.endedAt ?? now) - d.startedAt) / 1000))}s elapsed`;
@@ -25,7 +33,9 @@ export function activityRows(snapshot: PanelSnapshot | null, selected: number, n
     if (d) add(`  [${d.startedAt === undefined ? "not launched" : "launched"}] → [${d.state}] → [${d.groupClear ? "group clear" : "group cleanup unconfirmed"}]`,
       "  " + stripTerminalSequences(d.command).replace(/[\u0000-\u001f\u007f-\u009f]/g, " "));
   });
-  const job = snapshot.jobs[selected]; if (!job?.detail) { add("", "Detailed output unavailable."); return rows; }
+  const job = snapshot.jobs[selected]; if (!snapshot.bound || !job?.detail || job.state === "lost") {
+    add("", !snapshot.bound ? "Output unavailable: stale/disconnected host" : !job ? "Selected job missing / observation lost" : "Detailed output unavailable for this job source."); return finish();
+  }
   const d = job.detail;
   add("", `${d.job} · ${d.bytes} output bytes${d.truncated ? " · stored output truncated" : ""}`, `Process group ${d.groupClear ? "observed clear" : "not confirmed clear"}; exit does not imply gate PASS.`, "", `Monitoring · ${d.monitorAttempts} attempts (not active-wait count)`);
   if (!d.watches.length) add("No retained line-monitor observations. Exit waits/settlement require canonical receipts.");
@@ -35,7 +45,7 @@ export function activityRows(snapshot: PanelSnapshot | null, selected: number, n
     if (w.matched !== undefined) add("Matched: " + w.matched);
   }
   add("", "Recent captured output (bounded tail)", ...stripTerminalSequences(d.tail).split("\n").slice(-120));
-  return rows;
+  return finish();
 }
 export function activityLines(snapshot: PanelSnapshot | null, selected: number, now = Date.now()): string[] {
   return activityRows(snapshot, selected, now).map(row => row.text);
