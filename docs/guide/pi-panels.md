@@ -80,11 +80,24 @@ Open **F8**, then **h** to switch between Jobs and Helper conversations, click t
 
 The inspector shows the supplied prompt, live visible response text, requested/running tools, finalized text tool results, returned result, model, generation and locally observed outcome. Queued/not-started calls are distinct from running calls; interruptions and failed terminal accounting remain uncertain. Inspecting never calls a model, resumes/cancels a child, changes its loadout, or alters the parent identity. Private reasoning, signatures, image bytes and tool-specific details are excluded.
 
-History belongs only to this running parent host: at most 32 recent helpers, 64 message blocks and 32,768 transcript characters per helper, with individual prompt/result/message fields capped at 4096 characters. Long display sections preserve their start/end and mark omissions; errors and returned result remain separately accessible even after transcript display truncation. Selection stays on the same request when newer helpers arrive; evicted selections are explicitly unavailable. History is not restored from disk after restarting the host and never reads another parent's session files. Unavailable telemetry is not reported as an empty successful history. Subscription search can show its prompt/result, but does not expose live internal tool activity through this adapter.
+The conversation body reuses Pi's `UserMessageComponent`, `AssistantMessageComponent` and `ToolExecutionComponent`, not flattened text rows. Its presentation comes from the same `InteractiveMode` instance as the parent: the active Markdown theme, code indentation, output padding, Markdown/Mermaid transformers and native tool renderer resolution. Click a tool card or use **Ctrl+O** to expand/collapse it. Only read-only tool renderers are resolved; executable tool definitions are not passed to this view. A returned result already represented by the assistant transcript is not repeated.
+
+History belongs only to this running parent host: at most 32 recent helpers, 64 message blocks and 32,768 logical transcript characters per helper, with individual prompt/result/message fields capped at 4096 characters. Assistant text retains up to 16 text-block boundaries within its character cap. Native tool cards retain Pi's collapse/expansion behavior; history omissions are explicitly marked, and observed errors and unrepresented returned results remain accessible. Selection stays on the same request when newer helpers arrive; evicted selections are explicitly unavailable. History is not restored from disk after restarting the host and never reads another parent's session files. Unavailable telemetry is not reported as an empty successful history. Subscription search can show its prompt/result, but does not expose live internal tool activity through this adapter.
+
+### Explore Fast tier
+
+After upgrading Corral and the Pi host, Codex Explore can use:
+
+```toml
+agent.capabilities.assistant.subagents.model = "gpt-6-luna"
+agent.capabilities.assistant.subagents.service_tier = "priority"
+```
+
+The optional tier accepts `default` or `priority`; leaving it unset preserves existing behavior. Priority is supported only for `openai-codex` Explore, not the parent, Oracle or subscription search. Fast is a request tier, not a `-fast` model alias. The SDK's own priority rate multiplier applies to conservative USD reservations and settlement; token counts are unchanged, and interrupted requests retain their tier-priced reservation. Settings bind on the next host generation.
 
 ## Native integration seam
 
-`patches/@earendil-works%2Fpi-coding-agent@1.3.0.patch` adds an optional typed `InteractiveModeOptions.mainView(transcript)` hook to the pinned SDK's fullscreen layout factory. The original transcript instance is supplied to the host's public-component composition; the original fixed input dock remains outside it. An optional `readOnlyQueue` mode renders pending counts and prevents raw queued input being restored into the owner editor; the rich host enables it. Defaults are unchanged when these options are absent. The patch is tracked through Bun patchedDependencies/frozen lock and compat lock digest. The additional pi-tui@1.3.0 patch supplies removable image activation registration; unregistered images retain stock behavior. No runtime private-field casts, root discovery/reparenting, replacement editor loop or second agent runtime.
+`patches/@earendil-works%2Fpi-coding-agent@1.3.0.patch` adds an optional typed `InteractiveModeOptions.mainView(transcript, presentation)` hook to the pinned SDK's fullscreen layout factory. The original transcript instance is supplied to the host's public-component composition; the original fixed input dock remains outside it. The live presentation getter delegates to Pi's existing theme/transformer/tool-renderer methods and supplies its existing TUI, so chat presentation changes carry over without a parallel styling implementation. The assistant renderer accepts presentation-only content/stop/error fields; the inspector does not fabricate model or usage metadata. An optional `readOnlyQueue` mode renders pending counts and prevents raw queued input being restored into the owner editor; the rich host enables it. Defaults are unchanged when these options are absent. The patch is tracked through Bun patchedDependencies/frozen lock and compat lock digest. The additional pi-tui@1.3.0 patch supplies removable image activation registration; unregistered images retain stock behavior. No runtime private-field casts, root discovery/reparenting, replacement editor loop or second agent runtime.
 
 The Terminal adapter supplies default cell colors only in the alternate screen, without OSC palette/default-color setters. Explicit widget/selection colors and opaque clipboard/image protocols are retained. Foreground prompts and active selection suppress background interactions.
 
@@ -93,7 +106,7 @@ The Terminal adapter supplies default cell colors only in the alternate screen, 
 ```sh
 cd packages/corral-pi
 bun run typecheck
-bun test test/helper-history.test.ts test/auxiliary.test.ts test/auxiliary-host.test.ts src/ui/helper-view.test.ts
+bun test test/helper-history.test.ts test/helper-chat-host.test.ts test/auxiliary.test.ts test/auxiliary-host.test.ts test/budget.test.ts src/ui/helper-view.test.ts src/ui/helper-chat.test.ts
 bun test test/panel-composer.test.ts test/host-session.test.ts test/bridge.test.ts test/subscriptions-host.test.ts src/ui/image-viewer.test.ts src/ui/workbench.test.ts src/ui/panels.test.ts src/ui/panel-shell.test.ts src/ui/panel-canvas.test.ts test/native-panels.test.ts test/panel-host-proof.test.ts test/panel-shell.test.ts test/jobs.test.ts test/jobs-host.test.ts test/package.test.ts
 cd ../..
 python3 scripts/qa-pi-workbench.py /tmp/corral-native-workbench-evidence

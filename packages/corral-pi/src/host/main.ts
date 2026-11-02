@@ -162,7 +162,7 @@ async function main(): Promise<void> {
   const physicalTerminal = new ProcessTerminal();
   terminal = new sdk.InteractiveMode(session.runtime, {
     verbose: false, terminal: panels ? panels.wrap(physicalTerminal) : physicalTerminal,
-    ...(panels ? { tuiMode: "fullscreen" as const, readOnlyQueue: true, mainView: transcript => panels.mainView(transcript) } : {}),
+    ...(panels ? { tuiMode: "fullscreen" as const, readOnlyQueue: true, mainView: (transcript, presentation) => panels.mainView(transcript, presentation) } : {}),
   });
   guardTerminalStop(terminal, process.stdin);
   await terminal.init();

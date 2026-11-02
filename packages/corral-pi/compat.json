@@ -31,7 +31,7 @@
   },
   "lock": {
     "file": "bun.lock",
-    "sha256": "f5294aa82f6949242c0f7239370fcc5d644b722892bb1213e892fb782ab010c6"
+    "sha256": "dd96605b593c645cf0658e74eb8bb2304630e1ff610b0f027d4883779542ee42"
   },
   "claude": {
     "task": "T-493",

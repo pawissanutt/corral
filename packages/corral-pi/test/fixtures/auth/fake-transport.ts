@@ -51,7 +51,7 @@ function lastUserText(body: unknown): string {
   return "";
 }
 
-function requestBody(init: RequestInit | undefined): unknown {
+export function requestBody(init: RequestInit | undefined): unknown {
   let bytes: Buffer;
   if (typeof init?.body === "string") bytes = Buffer.from(init.body);
   else if (init?.body instanceof Uint8Array) bytes = Buffer.from(init.body);

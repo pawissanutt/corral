@@ -34,6 +34,29 @@ test("SDK projection includes visible text and tool output, never thinking, sign
   expect(before[0]?.messages[0]?.text).toBe("Visible partial");
 });
 
+test("native text boundaries and response errors are projected safely, bounded, and replaced by final content", () => {
+  const history = new AuxiliaryHistory(); history.begin("r", "explore", "fixture/model", 1, "Question");
+  const emit = (event: Parameters<AuxiliaryHistory["observe"]>[1]) => history.observe("r", event);
+  const partial: AssistantMessage = { ...assistant, stopReason: "pending", content: [...assistant.content, { type: "text", text: "Second block" }] };
+  observeHelperEvent({ type: "message_start", message: partial }, emit);
+  observeHelperEvent({ type: "message_update", message: partial,
+    assistantMessageEvent: { type: "text_delta", contentIndex: 2, delta: "Second block", partial } }, emit);
+  const before = history.snapshot(); expect(before[0]?.messages[0]?.textBlocks).toEqual(["Visible answer", "Second block"]);
+  observeHelperEvent({ type: "message_end", message: { ...assistant, stopReason: "error", errorMessage: "Provider interrupted" } }, emit);
+  const final = history.snapshot()[0]?.messages[0];
+  expect(final?.textBlocks).toBeUndefined(); expect(final?.text).toBe("Visible answer");
+  expect(final?.stopReason).toBe("error"); expect(final?.errorMessage).toBe("Provider interrupted");
+  expect(before[0]?.messages[0]?.textBlocks).toEqual(["Visible answer", "Second block"]);
+  history.begin("cap", "oracle", "fixture/model", 1, "Question");
+  observeHelperEvent({ type: "message_end", message: { ...assistant, content: [...assistant.content,
+    ...Array.from({ length: 20 }, () => ({ type: "text" as const, text: "x".repeat(5000) }))] } }, event => history.observe("cap", event));
+  const capped = history.snapshot()[0];
+  expect(capped?.truncated).toBe(true);
+  expect(capped?.messages[0]?.textBlocks?.length).toBeLessThanOrEqual(16);
+  expect(capped?.messages[0]?.textBlocks?.reduce((sum, text) => sum + text.length, 0)).toBeLessThanOrEqual(HELPER_TEXT_LIMIT);
+  expect(JSON.stringify(history.snapshot())).not.toContain("PRIVATE_");
+});
+
 test("broken UI observers cannot abort projection, change canonical accounting, or retain a slot", async () => {
   expect(() => observeHelperEvent({ type: "message_end", message: assistant }, () => { throw new Error("observer failed"); })).not.toThrow();
   const terminal: unknown[] = [];

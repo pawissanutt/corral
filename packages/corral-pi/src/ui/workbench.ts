@@ -3,14 +3,15 @@ import { basename, dirname } from "node:path";
 import { chooseProject, projectScopes } from "./project-scopes.ts";
 import type { HostIdentity } from "../roles/types.ts";
 import { target } from "./chrome.ts";
-import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { VStack, ScrollView, Text, matchesKey, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { getMarkdownTheme, type ExtensionUIContext, type InteractiveChatPresentation } from "@earendil-works/pi-coding-agent";
+import { VStack, ScrollView, Text, getKeybindings, matchesKey, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { anchoredRow } from "./reading-anchor.ts";
 import { NativeImageViewer } from "./image-viewer.ts";
 import { ReviewStore, comparisonLabel, fileStatus, type PatchSnapshot } from "./review-store.ts";
 import { LifecycleView } from "./lifecycle-view.ts";
 import { activityRows, type ActivityMode } from "./activity-view.ts";
 import { agentRows } from "./agent-view.ts";
+import { HelperChat } from "./helper-chat.ts";
 import { InspectionStore, evidenceLines } from "./inspection.ts";
 import { usageLines } from "./usage-view.ts";
 import { DecisionInbox, inboxIdentity } from "./decision-inbox.ts";
@@ -30,6 +31,7 @@ export interface WorkbenchOptions {
   readonly readInbox?: (signal: AbortSignal) => Promise<unknown>;
   readonly projectDir?: string;
   readonly readProjects?: (signal: AbortSignal) => Promise<unknown>;
+  readonly canRenderTool?: (name: string) => boolean;
 }
 /** Main-area composition via the packaged SDK's public mainView hook; editor stays SDK-owned. */
 export class NativeWorkbench {
@@ -53,6 +55,9 @@ export class NativeWorkbench {
   private jobId: string | undefined; private jobHits = new Map<number, string>();
   private activityMode: ActivityMode = "jobs"; private helperRequest: string | undefined;
   private helperHits = new Map<number, string>(); private activityModes = new Map<number, ActivityMode>();
+  private chatPresentation: (() => InteractiveChatPresentation) | undefined;
+  private chatStart = -1; private readonly helperChat: HelperChat;
+  private toolsExpanded = false;
   private hunk = 0; private hunkRows: number[] = [];
   private hunkSources: number[] = []; private lastPatch = ""; private displayedPath: string | undefined;
   private displayedRoot: string | undefined;
@@ -64,6 +69,12 @@ export class NativeWorkbench {
   private readonly scopeAbort = new AbortController();
   get scopeLabel(): string { return this.review.scopeRequired ? "Choose project" : this.projectName ?? this.review.name; }
   constructor(private readonly options: WorkbenchOptions) {
+    this.helperChat = new HelperChat(() => this.chatPresentation?.().tui, options.cwd, () => {
+      const native = this.chatPresentation?.();
+      return { outputPad: native?.outputPad ?? 1, markdownTheme: native?.markdownTheme ?? getMarkdownTheme(),
+        markdownTransformers: native?.markdownTransformers ?? [],
+        renderers: name => options.canRenderTool?.(name) ? native?.renderers(name) : undefined };
+    });
     this.images = new NativeImageViewer(() => options.canInteract(), () => { this.focused = this.images.isOpen; options.changed(); });
     this.lifecycle = new LifecycleView(options.identity, options.lifecycle, () => options.snapshot()?.agents, () => options.snapshot()?.bound ?? false, options.changed, options.canInteract, () => options.snapshot()?.inspector);
     this.inspection = new InspectionStore(options.identity, options.inspection, () => options.changed());
@@ -154,19 +165,24 @@ export class NativeWorkbench {
     transcript.updateLayout(after.length, transcript.viewportHeight, () => {});
     transcript.scrollTo(top, { disableFollow: true });
   }
-  mount(transcript: Component): Component {
+  mount(transcript: Component, presentation?: () => InteractiveChatPresentation): Component {
+    this.chatPresentation = presentation; this.helperChat.clear();
     if (transcript instanceof ScrollView) this.transcript = transcript;
     this.changesScroll = new ScrollView({ render: width => this.renderChanges(width), handleMouse: event => this.diffMouse(event), invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
     this.activityScroll = new ScrollView({ render: width => this.renderActivity(width), handleMouse: event => {
       if (this.options.canInteract() && plainClick(event)) {
         this.focused = true;
         const mode = this.activityModes.get(event.y), helper = this.helperHits.get(event.y), job = this.jobHits.get(event.y);
+        if (mode === undefined && helper === undefined && job === undefined && this.chatStart >= 0 && event.y >= this.chatStart) {
+          const handled = this.helperChat.handleMouse({ ...event, y: event.y - this.chatStart });
+          if (handled) { this.options.changed(); return handled; }
+        }
         if (mode !== undefined) this.switchActivity(mode);
         if (helper !== undefined) this.helperRequest = helper;
         if (job !== undefined) this.jobId = job;
         this.options.changed(); return { handled: true };
       } return undefined;
-    }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
+    }, invalidate: () => this.helperChat.invalidate() }, { primary: true, follow: "none", scrollbar: "auto" });
     this.agentsScroll = new ScrollView({ render: width => this.renderAgents(width), handleMouse: event => {
       if (!this.options.canInteract() || !plainClick(event)) return undefined;
       const id = this.agentHits.get(event.y); if (id) this.agentId = id;
@@ -252,7 +268,7 @@ export class NativeWorkbench {
     } finally { this.readingTranscript = false; this.options.changed(); }
   }
   private renderActivity(width: number): string[] {
-    this.jobHits.clear(); this.helperHits.clear(); this.activityModes.clear(); const rows: string[] = [];
+    this.jobHits.clear(); this.helperHits.clear(); this.activityModes.clear(); this.chatStart = -1; const rows: string[] = [];
     const snapshot = this.options.snapshot();
     this.jobId ??= snapshot?.jobs?.[0]?.job;
     const selected = snapshot?.jobs?.findIndex(job => job.job === this.jobId) ?? -1;
@@ -267,6 +283,12 @@ export class NativeWorkbench {
         if (row.mode !== undefined) this.activityModes.set(rows.length + i, row.mode);
       }
       rows.push(...wrapped);
+    }
+    const helper = this.activityMode === "helpers" ? snapshot?.helpers?.find(helper => helper.request === this.helperRequest) : undefined;
+    if (helper) {
+      this.chatStart = rows.length;
+      // Preserve ANSI/OSC emitted by Pi itself; untrusted data is sanitized before native rendering.
+      rows.push(...this.helperChat.renderHelper(helper, width));
     }
     return rows;
   }
@@ -428,6 +450,9 @@ export class NativeWorkbench {
     if (this.view === "activity" && (data === "g" || data === "l")) { this.setView(data === "g" ? "graph" : "timeline"); return true; }
     if ((this.view === "graph" || this.view === "timeline") && this.lifecycle.handleInput(data)) { this.lifecycleScroll?.scrollTo(0, { disableFollow: true }); return true; }
     if (this.view === "inbox" && this.inboxView.handleInput(data)) return true;
+    if (this.view === "activity" && this.activityMode === "helpers" && getKeybindings().matches(data, "app.tools.expand")) {
+      this.toolsExpanded = !this.toolsExpanded; this.helperChat.expandTools(this.toolsExpanded); this.options.changed(); return true;
+    }
     if (this.view === "activity" && data === "h") { this.switchActivity(this.activityMode === "jobs" ? "helpers" : "jobs"); return true; }
     if (matchesKey(data, "enter") || matchesKey(data, "tab")) { this.focused = false; this.options.changed(); return true; }
     if (this.view === "activity" && data === "a") { this.setView("agents"); return true; }
@@ -476,6 +501,7 @@ export class NativeWorkbench {
   }
   dispose(): void {
     if (this.timer) clearInterval(this.timer); if (this.debounce) clearTimeout(this.debounce);
+    this.helperChat.clear(); this.chatPresentation = undefined;
     this.scopeAbort.abort(); this.images.dispose(); this.review.dispose(); this.inspection.dispose(); this.inboxView.dispose(); this.lifecycle.dispose(); this.ui = undefined;
   }
 }

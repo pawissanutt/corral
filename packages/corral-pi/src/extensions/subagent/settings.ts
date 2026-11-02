@@ -6,6 +6,7 @@ const timeout_secs = z.number().int().min(1).max(600);
 export const ExploreSettingsSchema = z.object({
   max_parallel: z.number().int().min(1).max(16), model,
   max_turns: z.number().int().min(1).max(64), timeout_secs,
+  service_tier: z.enum(["default", "priority"]).optional(),
 }).strict();
 export const OracleSettingsSchema = z.object({ model, timeout_secs }).strict();
 export type ExploreSettings = z.infer<typeof ExploreSettingsSchema>;

@@ -21,7 +21,8 @@ export function observeHelperEvent(event: Sdk.AgentSessionEvent, emit: (event: H
 function projectHelperEvent(event: Sdk.AgentSessionEvent, emit: (event: HelperEvent) => void): void {
   if (event.type === "message_start" && event.message.role === "assistant") emit({ type: "assistant_start" });
   else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-    emit({ type: "assistant_delta", text: event.assistantMessageEvent.delta });
+    const blocks = event.assistantMessageEvent.partial.content.filter(block => block.type === "text").map(block => block.text);
+    emit({ type: "assistant_delta", text: event.assistantMessageEvent.delta, ...(blocks.length > 1 ? { textBlocks: blocks } : {}) });
   } else if (event.type === "tool_execution_start") {
     emit({ type: "tool", id: event.toolCallId, name: event.toolName, phase: "running" });
   } else if (event.type === "tool_execution_end") {
@@ -29,7 +30,9 @@ function projectHelperEvent(event: Sdk.AgentSessionEvent, emit: (event: HelperEv
   } else if (event.type === "message_end") {
     const message = event.message;
     if (message.role === "assistant") {
-      emit({ type: "assistant_end", text: message.content.filter(block => block.type === "text").map(block => block.text).join("\n") });
+      const blocks = message.content.filter(block => block.type === "text").map(block => block.text);
+      emit({ type: "assistant_end", text: blocks.join("\n"), ...(blocks.length > 1 ? { textBlocks: blocks } : {}), errorMessage: message.errorMessage,
+        stopReason: message.stopReason, hasToolCalls: message.content.some(block => block.type === "toolCall") });
       for (const block of message.content) if (block.type === "toolCall") {
         emit({ type: "tool", id: block.id, name: block.name, phase: "requested", arguments: JSON.stringify(block.arguments) });
       }
@@ -53,6 +56,9 @@ export interface AuxiliarySessionOptions {
 export async function runAuxiliarySession(options: AuxiliarySessionOptions, invocation: Invocation, signal: AbortSignal): Promise<AuxiliaryResult> {
   signal.throwIfAborted();
   const { sdk } = options;
+  if (invocation.serviceTier && (invocation.kind !== "explore" || options.provider !== "openai-codex")) {
+    throw new Error("Priority service tier is restricted to openai-codex Explore sessions");
+  }
   const model = options.models.getModel(options.provider, invocation.model);
   if (!model) throw new Error(`model_unavailable: ${options.provider}/${invocation.model}`);
   const loadout = invocation.kind === "explore" ? exploreLoadout(options.parentLoadout) : [];
@@ -88,6 +94,14 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
   });
   const { session } = await sdk.createAgentSessionFromServices({ services, sessionManager: manager, model,
     tools: loadout, scopedModels: [{ model, thinkingLevel: "off" }], thinkingLevel: "off" });
+  if (invocation.serviceTier) {
+    // Keep the SDK stream, guarded provider and budget wrapper; scope the option to this child.
+    const stream = session.agent.streamFunction;
+    session.agent.streamFunction = (current, context, streamOptions) => {
+      const requestOptions = { ...streamOptions, serviceTier: invocation.serviceTier };
+      return stream(current, context, requestOptions);
+    };
+  }
   const observe = invocation.observe;
   const unsubscribe = observe ? session.subscribe(event => observeHelperEvent(event, observe)) : () => {};
   const abort = () => { void session.abort(); };

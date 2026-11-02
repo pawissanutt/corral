@@ -15,6 +15,7 @@ export interface Invocation {
   readonly sessionFile: string;
   readonly sessionId: string;
   readonly maxTurns: number;
+  readonly serviceTier?: "priority";
   readonly observe?: (event: HelperEvent) => void;
 }
 export interface AuxiliaryResult { readonly text: string; readonly outcome: "completed" | "uncertain" }
@@ -105,9 +106,11 @@ export class AuxiliaryRuntime {
     if (!configured) throw new Error("Oracle is not configured: set agent.capabilities.<role>.oracle.model to a model in the bound provider");
     // A second provider would need another explicit credential/transport binding. Never borrow
     // ambient auth or create a fresh unrestricted ModelRuntime for an auxiliary request.
+    const serviceTier = kind === "explore" && options.settings.explore?.service_tier === "priority" ? "priority" : undefined;
+    if (serviceTier && provider !== "openai-codex") throw new Error("Explore priority service tier requires the openai-codex provider");
     const prefix = `${provider}/`;
     const model = configured.startsWith(prefix) ? configured.slice(prefix.length) : configured;
-    this.history.begin(request, kind, `${provider}/${model}`, options.generation, prompt);
+    this.history.begin(request, kind, `${provider}/${model}`, options.generation, prompt, serviceTier);
     const controller = new AbortController();
     this.controllers.add(controller);
     const timeout = AbortSignal.timeout(settings.timeout_secs * 1000);
@@ -140,6 +143,7 @@ export class AuxiliaryRuntime {
       result = await options.execute({ request, kind, provider, model, prompt,
         sessionFile: reference.session_file, sessionId: request,
         maxTurns: kind === "explore" ? options.settings.explore?.max_turns ?? 1 : 1,
+        ...(serviceTier ? { serviceTier } : {}),
         observe: event => { if (!signal.aborted) this.history.observe(request, event); } }, signal);
       outcome = result.outcome;
     } catch (error) {
