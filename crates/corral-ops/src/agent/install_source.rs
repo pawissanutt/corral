@@ -4,8 +4,8 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 
-use super::bridge::assets::find_bun;
-use super::install::{InstallRecord, install_compiled};
+use super::bridge::assets::{asset_digest, find_bun, read_compat};
+use super::install::{InstallRecord, install_compiled, parse_host_version, run_host};
 
 pub(super) fn rebuild(
     source: &Path,
@@ -56,9 +56,16 @@ pub(super) fn rebuild(
             String::from_utf8_lossy(&output.stdout)
         );
     }
-    // Validate and install the staged executable before replacing the sibling.
-    let record = install_compiled(&host, root)?;
+    // Validate the executable and its emitted assets without publishing an installation.
+    let version = run_host(&host, &["--version".as_ref()])?;
+    parse_host_version(&version).context("built host has an invalid version")?;
+    let assets = staging.path().join("assets-check");
+    std::fs::create_dir(&assets).context("creating host validation directory")?;
+    run_host(&host, &["--write-install".as_ref(), assets.as_os_str()])?;
+    read_compat(&assets)?;
+    asset_digest(&assets)?;
     std::fs::rename(&host, sibling).with_context(|| format!("replacing {}", sibling.display()))?;
+    let record = install_compiled(sibling, root)?;
     eprintln!(
         "Built Pi host commit {built} at {} (assets sha256 {})",
         sibling.display(),
