@@ -67,9 +67,12 @@ Malformed applicable entries fail launch rather than silently disappearing.
 ## PM-led OmO curation and cutover
 
 This is explicit curation, not an automatic import, sync service, or source deletion.
-The coding child supplies synthetic rehearsal and a sanitized report only. The PM
-performs private workspace writes through the new memory service. Do not declare
-cutover complete on rehearsal or a green gate alone.
+The coding child supplies synthetic rehearsal, an inventory template and a sanitized
+report only. Per the owner answer to T-647/R2/Q1 (revision 2), real inventory/import,
+projection checks and umbrella memory commits are a separate owner-approved PM
+operational step after this task lands, not evidence for this implementation run.
+The PM performs private workspace writes through the new memory service. Do not
+declare operational cutover complete on rehearsal or a green gate alone.
 
 1. Select the current workspace and corral OmO memory repositories explicitly.
    Record private paths, revisions, dirty status and SHA-256 hashes of selected files.
@@ -107,6 +110,22 @@ cutover complete on rehearsal or a green gate alone.
    IDs and a sanitized completion attestation with source hash manifest/artifact ref,
    category dispositions/counts, fresh-session evidence, source comparison, and any
    limitations. Keep personal content and private paths out of Corral source reports.
+
+### Private inventory template
+
+Copy this table into the private workspace record, not Corral source. One row per
+selected topic; merged/superseded rows point to the surviving destination. Preserve
+source revision plus dirty-byte SHA-256 so a clean Git revision alone cannot mask
+local source changes.
+
+| Source path / section / revision / SHA-256 | Topic | Disposition | Reason | Destination scope / ID | Provenance / exact quote reference | Projected? | Lesson / task / inbox link | Verification |
+|---|---|---|---|---|---|---|---|---|
+| … | … | kept / merged / superseded / excluded | … | … | … | yes / no | … | … |
+
+Record source hashes before import and after the later Corral edit; record fresh
+session roles/generations, inspected examples, long-note page offsets, complete
+projection byte counts, no-fallback checks, umbrella commit IDs and limitations.
+Publish only sanitized counts and evidence references in the operational attestation.
 
 Rollback preserves both data trees: revert the integration/code and explicitly return
 to the prior harness if needed. There is no reverse sync or automatic writeback.
