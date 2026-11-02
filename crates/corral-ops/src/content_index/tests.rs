@@ -13,6 +13,48 @@ thread_local! {
     pub(crate) static ARTIFACT_EXTRACTIONS: Cell<usize> = const { Cell::new(0) };
 }
 
+#[test]
+fn scan_prepared_text_matches_canonical_blob_extraction_without_rereading_sources() {
+    use super::{DOCUMENT_BYTES, extract_bytes, index_artifact, index_artifacts};
+    let dir = tempfile::tempdir().unwrap();
+    let ctx =
+        crate::resources::FixedResourceProbe::ctx(corral_core::Store::init(dir.path()).unwrap());
+    let task = ctx
+        .store
+        .create("index fixture", None, corral_core::Status::Ready, "")
+        .unwrap();
+    let mut split_utf8 = vec![b'x'; DOCUMENT_BYTES - 1];
+    split_utf8.extend_from_slice("é".as_bytes());
+    for bytes in [
+        b"needle\n".to_vec(),
+        vec![0; 9000],
+        split_utf8,
+        vec![b'a'; DOCUMENT_BYTES + 10],
+    ] {
+        let source = dir.path().join("proof.log");
+        std::fs::write(&source, &bytes).unwrap();
+        let artifact = crate::add_artifact(&ctx, &task.id, &source, None, None).unwrap();
+        let path = ctx.store.cache_root().unwrap().join("content-search.json");
+        // Start both cache paths from the same empty state.
+        if path.exists() {
+            std::fs::remove_file(&path).unwrap();
+        }
+        index_artifact(&ctx, &task.id, &artifact).unwrap();
+        let regular = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&source, "source changed after its snapshot").unwrap();
+        let prepared = BTreeMap::from([(artifact.sha256.clone(), extract_bytes(&bytes))]);
+        let before = ARTIFACT_EXTRACTIONS.get();
+        index_artifacts(&ctx, &task.id, &[artifact], &prepared).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), regular);
+        assert_eq!(
+            ARTIFACT_EXTRACTIONS.get(),
+            before,
+            "prepared bytes must not reopen blobs"
+        );
+    }
+}
+
 struct CountedFile<'a> {
     file: File,
     reads: &'a Cell<usize>,

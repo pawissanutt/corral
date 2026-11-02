@@ -83,12 +83,22 @@ fn killed_done_reconciles_before_and_after_completion_commit() {
                         .store
                         .record(crate::artifact_storage::ARTIFACT_BLOBS, &key)
                         .unwrap();
-                    record.is_some_and(|record| {
-                        let blob = serde_json::from_value(record["blob"].clone()).unwrap();
-                        fx.ctx.store.blob_bytes(&blob).unwrap() == Some(bytes.to_vec())
-                    })
+                    assert!(
+                        record.is_none(),
+                        "the reference must commit with registration"
+                    );
+                    let hash = corral_core::blob_ref::BlobHash::parse(&sha).unwrap();
+                    let blobs = fx.ctx.store.blob_store().unwrap();
+                    if !blobs.path_of(&hash).is_file() {
+                        return false;
+                    }
+                    use corral_core::backend::BlobStore;
+                    use std::io::Read;
+                    let mut found = Vec::new();
+                    blobs.get(&hash).unwrap().read_to_end(&mut found).unwrap();
+                    found == *bytes
                 }),
-                "the killed scan had already published a v2 blob snapshot"
+                "the killed scan had already published a reserved v2 blob snapshot"
             );
         }
 
