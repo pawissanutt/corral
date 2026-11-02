@@ -227,5 +227,7 @@ pub(super) fn init(conn: &mut Connection, workspace_id: &str) -> Result<()> {
         "CREATE INDEX IF NOT EXISTS tasks_project_updated ON tasks(project, updated DESC, id DESC);",
     )
     .context("create project updated index")?;
+    tx.execute_batch(super::run_worktrees::INDEX)
+        .context("create run worktree projection index")?;
     tx.commit().context("commit schema transaction")
 }

@@ -179,6 +179,10 @@ fn head_query(db: &Connection, row: &Row<'_>) -> anyhow::Result<TaskHeadDoc> {
 }
 
 impl ReadView for SqliteView {
+    fn run_worktrees(&self, current_only: bool) -> Result<Vec<RunWorktree>, ViewError> {
+        super::run_worktrees::read(self.fresh()?, current_only).or_view()
+    }
+
     fn seq(&self) -> ChangeSeq {
         self.seq
     }

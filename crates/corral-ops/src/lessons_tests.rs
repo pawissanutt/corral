@@ -537,6 +537,7 @@ fn likely_files_derive_lesson_signals_once_per_read_only_pass() {
     };
     let scans = || count(Work::LessonSignalScan);
     // When a live store and one read-only pass each infer every task's likely files.
+    let lists = count(Work::TaskList);
     let start = scans();
     let live: Vec<_> = tasks
         .iter()
@@ -552,6 +553,11 @@ fn likely_files_derive_lesson_signals_once_per_read_only_pass() {
     assert_eq!(live_scans, 3);
     assert_eq!(scans() - start, 1);
     assert_eq!(frozen, live);
+    assert_eq!(
+        count(Work::TaskList),
+        lists,
+        "title inference must not hydrate the board"
+    );
 }
 
 /// The run projection a converted helper takes.
