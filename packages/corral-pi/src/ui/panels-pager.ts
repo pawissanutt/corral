@@ -34,7 +34,11 @@ export function scrollWindow(all: readonly PanelLine[], capacity: number, offset
 
 /** Selection lists keep the selected row visible with the least movement from the previous start. */
 export function selectionWindow(all: readonly PanelLine[], capacity: number, selected: number, previous: number): PageWindow {
-  const items = all.flatMap((row, index) => row.action?.kind === "diff" ? [index] : []);
+  const paths = new Set<string>();
+  const items = all.flatMap((row, index) => {
+    if (row.action?.kind !== "diff" || paths.has(row.action.path)) return [];
+    paths.add(row.action.path); return [index];
+  });
   let start = clamp(previous, 0, Math.max(0, all.length - capacity));
   if (selected >= 0) start = clamp(Math.max(Math.min(start, selected), selected - capacity + 1), 0, Math.max(0, all.length - capacity));
   const window = finish(all, items, start, capacity);

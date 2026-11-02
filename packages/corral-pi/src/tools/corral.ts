@@ -2,6 +2,7 @@
 // envelope v1 on stdin and one JSON receipt on stdout. Secrets travel only on stdin.
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
+import { TOML } from "bun";
 
 import type { CodeParent } from "../extensions/codemode/child.ts";
 import type { CorralOp, HostIdentity } from "../roles/types.ts";
@@ -96,9 +97,10 @@ export interface CorralClientOptions {
 
 export class CorralClient {
   constructor(private readonly options: CorralClientOptions) {}
+  get workspaceRoot(): string { return this.options.root; }
 
   /** Read the bound ledger on startup/resume without creating a mutation receipt. */
-  todoSnapshot(): Promise<unknown> {
+  todoSnapshot(signal?: AbortSignal): Promise<unknown> {
     const { identity, corral, root } = this.options;
     const args = identity.role === "pm"
       ? ["agent", "state", "--pm", "--json"]
@@ -107,7 +109,7 @@ export class CorralClient {
         : ["show", identity.task ?? "", "--json"];
     return new Promise((resolve, reject) => {
       const child = execFile(corral, args, {
-        cwd: root, timeout: CALL_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024,
+        cwd: root, timeout: CALL_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, signal,
       }, (error, stdout) => {
         if (error) {
           reject(new CorralCallError("todo_read", error.message));
@@ -152,6 +154,24 @@ export class CorralClient {
       });
       child.stdin?.end();
     });
+  }
+
+  /** Read-only project/worktree choices; never infer a project from a workspace Git root. */
+  async projectScopes(signal?: AbortSignal): Promise<unknown> {
+    const { corral, root, identity } = this.options;
+    const projects = await new Promise<unknown>((resolve, reject) => {
+      const child = execFile(corral, ["--root", root, "config", "get", "projects"], {
+        cwd: root, timeout: CALL_TIMEOUT_MS, maxBuffer: 256 * 1024, signal,
+      }, (error, stdout) => {
+        if (error) { reject(new CorralCallError("projects_read", error.message)); return; }
+        try { resolve(TOML.parse(stdout)); }
+        catch { reject(new CorralCallError("projects_read", "Invalid project configuration response")); }
+      });
+      child.stdin?.end();
+    });
+    const session = identity.role === "assistant" ? await this.todoSnapshot(signal) : undefined;
+    return { workspace: root, projects,
+      session: session && typeof session === "object" && "session" in session ? session.session : null };
   }
 
   envelope(op: CorralOp, call: CorralCall): string {

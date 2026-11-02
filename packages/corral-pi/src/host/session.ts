@@ -309,6 +309,9 @@ export class HostSession {
     this.provider = options.provider ?? "openai-codex";
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
       identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
+      ...(options.identity.project && options.guidance?.projectDir && options.guidance.projectDir !== options.client.workspaceRoot
+        ? { projectDir: options.guidance.projectDir } : {}),
+      readProjects: signal => options.client.projectScopes(signal),
       inspection: () => options.client.inspectionSnapshot(),
       readInbox: signal => options.client.attentionSnapshot(signal),
     });
