@@ -35,10 +35,12 @@ pub(crate) enum AgentCmd {
     },
     /// Install the Pi-native host assets into the user data directory
     Install {
-        /// Package directory, or a compiled corral-pi-host, to install from (default: the
-        /// corral-pi-host beside this corral, else this build's checkout)
+        /// Package directory or compiled corral-pi-host to install from
         #[arg(long)]
         from: Option<PathBuf>,
+        /// Use the sibling host instead of rebuilding from the source checkout
+        #[arg(long)]
+        no_build: bool,
         #[arg(long)]
         json: bool,
     },
@@ -156,7 +158,18 @@ pub fn run(start: &Path, args: AgentArgs, entry: &Entry) -> Result<()> {
         AgentCmd::Launch { bootstrap, assets } => {
             cli::launch(start, &cli::LaunchArgs { bootstrap, assets })
         }
-        AgentCmd::Install { from, json } => cli::install(start, &cli::InstallArgs { from, json }),
+        AgentCmd::Install {
+            from,
+            no_build,
+            json,
+        } => cli::install(
+            start,
+            &cli::InstallArgs {
+                from,
+                no_build,
+                json,
+            },
+        ),
         AgentCmd::Login {
             provider,
             aws_profile,

@@ -66,10 +66,13 @@ pub fn install(_start: &Path, args: &InstallArgs) -> Result<()> {
     let record = match &args.from {
         Some(host) if host.is_file() => install_compiled(host, &root)?,
         Some(dir) => install_into(dir, &root, find_bun())?,
-        None => match sibling_host() {
-            Some(host) => install_compiled(&host, &root)?,
-            None => install_into(&default_source()?, &root, find_bun())?,
-        },
+        None => install_default(
+            &root,
+            default_source().ok().as_deref(),
+            &sibling_path()?,
+            args.no_build,
+            option_env!("CORRAL_SOURCE_SHA"),
+        )?,
     };
     let home = std::env::var_os("HOME").context("HOME is unset; cannot install Pi skills")?;
     crate::skill::install_harness_skills(Path::new(&home), "pi-native", false)?;
@@ -87,11 +90,33 @@ pub fn install(_start: &Path, args: &InstallArgs) -> Result<()> {
     Ok(())
 }
 
-/// The compiled host a release archive installs beside the `corral` executable.
-fn sibling_host() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let host = exe.parent()?.join(HOST_BINARY);
-    host.is_file().then_some(host)
+fn install_default(
+    root: &Path,
+    source: Option<&Path>,
+    sibling: &Path,
+    no_build: bool,
+    built: Option<&str>,
+) -> Result<InstallRecord> {
+    if !no_build && let Some(source) = source {
+        return super::install_source::rebuild(source, sibling, root, built);
+    }
+    if sibling.is_file() {
+        install_compiled(sibling, root)
+    } else {
+        install_into(
+            source.context("no corral-pi checkout or sibling host; pass `--from`")?,
+            root,
+            find_bun(),
+        )
+    }
+}
+
+fn sibling_path() -> Result<PathBuf> {
+    let exe = std::env::current_exe().context("locating corral executable")?;
+    Ok(exe
+        .parent()
+        .context("corral executable has no parent")?
+        .join(HOST_BINARY))
 }
 
 fn default_source() -> Result<PathBuf> {
@@ -793,6 +818,79 @@ pub(crate) mod tests {
                 .unwrap_err()
                 .to_string()
                 .starts_with("installed_assets_changed")
+        );
+    }
+
+    #[test]
+    fn source_rebuild_replaces_stale_host_and_rejects_changed_head() {
+        let tmp = tempfile::tempdir().unwrap();
+        let checkout = tmp.path().join("checkout");
+        let source = checkout.join("packages/corral-pi");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(checkout.join("scripts")).unwrap();
+        std::fs::write(source.join("compat.json"), "{}").unwrap();
+        let new = fake_host(&tmp.path().join("new"), "corral-pi-host pi 2.0 bun 1.4.2");
+        let script = checkout.join("scripts/build-pi-host.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ncp '{}' \"$1\"\nchmod +x \"$1\"\n",
+                new.display()
+            ),
+        )
+        .unwrap();
+        set_executable(&script).unwrap();
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "test@example.com"],
+            &["config", "user.name", "Test"],
+            &["add", "."],
+            &["commit", "-qm", "fixture"],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .args(args)
+                    .current_dir(&checkout)
+                    .stdin(std::process::Stdio::null())
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let sha = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&checkout)
+            .output()
+            .unwrap();
+        let sha = String::from_utf8(sha.stdout).unwrap();
+        let sibling = fake_host(&tmp.path().join("bin"), "corral-pi-host pi 1.0 bun 1.4.2");
+        let root = tmp.path().join("data");
+        let old = install_compiled(&sibling, &root).unwrap();
+        let fresh =
+            install_default(&root, Some(&source), &sibling, false, Some(sha.trim())).unwrap();
+        assert_ne!(old.digest, fresh.digest);
+        let before = std::fs::read(&sibling).unwrap();
+        let record = std::fs::read(root.join(RECORD_FILE)).unwrap();
+        let error = install_default(&root, Some(&source), &sibling, false, Some("wrong-build"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(sha.trim()) && error.contains("wrong-build") && error.contains("--from"),
+            "{error}"
+        );
+        assert_eq!(before, std::fs::read(&sibling).unwrap());
+        assert_eq!(record, std::fs::read(root.join(RECORD_FILE)).unwrap());
+        assert_eq!(
+            install_default(&root, None, &sibling, false, None)
+                .unwrap()
+                .digest,
+            fresh.digest
+        );
+        assert_eq!(
+            install_default(&root, Some(&source), &sibling, true, Some("wrong-build"))
+                .unwrap()
+                .digest,
+            fresh.digest
         );
     }
 

@@ -863,9 +863,10 @@ login (`corral-pi-host login`), model listing (`corral-pi-host models`, which fe
 doctor` reports its Bun as embedded. Anthropic profiles in a compiled host use the `claude`
 CLI on PATH, because the per-platform Claude Code binary the SDK ships is not bundled.
 
-Without a sibling `corral-pi-host`, `corral agent install [--from <dir>] [--json]` installs the
-host from the `packages/corral-pi` package (by default the one in the checkout the binary was
-built from). It refuses a fixture
+When its build checkout is present, `corral agent install` rebuilds the compiled host there,
+checks its HEAD against the binary's build commit, and replaces the sibling host. Bun is required.
+`--no-build` uses the sibling first; `--from <dir>` explicitly installs source from a package.
+Source installation refuses a fixture
 installation (`fixture_assets_not_allowed`) and a Bun outside the package's `compat.json`
 range (`bun_unavailable`, `bun_version_unsupported`), then copies only what a host runs:
 `package.json`, `bun.lock`, `compat.json`, `src/` (without `*.test.ts`), `assets/` and dependency
