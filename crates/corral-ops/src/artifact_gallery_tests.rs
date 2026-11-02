@@ -156,3 +156,63 @@ fn catalog_reads_one_bounded_page() {
             .ends_with(&format!("a{MAX_ARTIFACTS}.txt"))
     );
 }
+
+/// Builds a disposable real store for `scripts/qa-pi-artifacts.py --store real` through the
+/// production registration APIs; never runs in the suite.
+#[test]
+#[ignore = "QA fixture builder; run explicitly with CORRAL_GALLERY_QA_ROOT"]
+fn qa_real_store() {
+    let Ok(root) = std::env::var("CORRAL_GALLERY_QA_ROOT") else {
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    let worktree = std::path::PathBuf::from(std::env::var("CORRAL_GALLERY_QA_WORKTREE").unwrap());
+    let head = std::env::var("CORRAL_GALLERY_QA_HEAD").unwrap();
+    let inputs = root.join("inputs");
+    let ctx = crate::resources::FixedResourceProbe::ctx(Store::init(&root).unwrap());
+    let task = ctx
+        .store
+        .create("real gallery QA", None, Status::Running, "")
+        .unwrap();
+    ctx.store
+        .update(&task.id, |t| {
+            t.runs.push(run("R1", &worktree));
+            t.runs.push(run("R2", &worktree));
+            Ok(())
+        })
+        .unwrap();
+    let add = |run: &str, name: &str, kind| {
+        crate::artifacts::add_artifact_to_run(
+            &ctx,
+            &task.id,
+            run,
+            &inputs.join(name),
+            Some(kind),
+            None,
+        )
+        .unwrap()
+    };
+    let image = add("R1", "résumé.png", ArtifactKind::Screenshot);
+    let report = add("R1", "my report.md", ArtifactKind::Report);
+    add("R1", "page.html", ArtifactKind::Report);
+    let gone = add("R1", "gone.log", ArtifactKind::Log);
+    add("R2", "other.md", ArtifactKind::Report);
+    let blob = corral_core::blob_ref::BlobHash::parse(&gone.sha256).unwrap();
+    std::fs::remove_file(ctx.store.blob_store().unwrap().path_of(&blob)).unwrap();
+    ctx.store
+        .update(&task.id, |t| {
+            let r1 = t.runs.iter_mut().find(|r| r.id == "R1").unwrap();
+            let mut current = evidence("C1", &image.path, &image.sha256);
+            current.identity.head = head.clone();
+            r1.completion.evidence.push(current);
+            r1.completion
+                .evidence
+                .push(evidence("C2", &report.path, &report.sha256));
+            Ok(())
+        })
+        .unwrap();
+    println!(
+        "CORRAL_GALLERY_QA {}",
+        serde_json::json!({"task": task.id, "store": ctx.store.dir(), "image": image, "report": report})
+    );
+}

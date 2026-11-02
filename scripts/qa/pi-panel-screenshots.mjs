@@ -20,6 +20,10 @@ const requested = process.argv.includes("--usage") ? new Map([
   ["contrast-selected-140x46", "Bound to Corral"], ["dark-selected-140x46", "Bound to Corral"],
   ["compact-140x46", "Bound to Corral"], ["role-disabled-140x46", "Role worker cannot answer"],
   ["effort-52x24", "Cycle effort"], ["native-model-selector-52x24", "Only showing models"],
+]) : process.argv.includes("--artifacts-real") ? new Map([
+  ["real-artifacts", "Evidence: unknown"], ["real-absent-open", "Unavailable · not opened"], ["real-html-browser", "Browser requested"],
+  ["real-report-opened", "REAL_REPORT_BODY"], ["real-image-fallback", "Graphics unavailable"], ["real-image-viewer", "Esc close"],
+  ["real-compare", "Registered bytes differ"], ["real-compact-compare", "Comparison"],
 ]) : process.argv.includes("--artifacts") ? new Map([
   ["wide-artifacts", "Artifacts · read-only catalog"], ["wide-image-fallback", "Graphics unavailable"], ["wide-image-viewer", "Esc close"],
   ["wide-report-opened", "FIXTURE_REPORT_BODY"], ["wide-absent-open", "Unavailable · not opened"], ["wide-html-browser", "Browser requested"],
@@ -36,7 +40,7 @@ const requested = process.argv.includes("--usage") ? new Map([
   ["existing-transcript-wide", "Transcript"], ["existing-transcript-narrow", "Transcript"],
   ["real-job-running", "armed locally"], ["real-job-line-match", "match observed"], ["real-job-exited", "exit 7"],
 ]);
-if (result.graphics) requested.delete(result.graphics === "kitty" ? "wide-image-fallback" : "wide-image-viewer");
+if (result.graphics) for (const name of result.graphics === "kitty" ? ["wide-image-fallback", "real-image-fallback"] : ["wide-image-viewer", "real-image-viewer"]) requested.delete(name);
 const [js, css] = await Promise.all([
   fetch("https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"),
   fetch("https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css"),

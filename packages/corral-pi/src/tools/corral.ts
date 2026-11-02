@@ -152,7 +152,7 @@ export class CorralClient {
    * invoke `serve` only on an explicit owner action.
    */
   artifactViewer(reference: string, viewer: "show" | "serve"): Promise<string> {
-    if (!/^(?:T-\d+:[A-Za-z0-9._-]+|A-\d+):[A-Za-z0-9._-]+$/.test(reference)) {
+    if (!artifactReference(reference)) {
       return Promise.reject(new CorralCallError("artifact_viewer", "Invalid artifact reference"));
     }
     return new Promise((resolve, reject) => {
@@ -327,4 +327,17 @@ function parseReceipt(text: string): CorralReceipt {
     throw new CorralCallError("call_output", "the response is not a v1 Corral receipt");
   }
   return receipt;
+}
+
+/**
+ * Corral's artifact reference grammar (`PinRef::parse`): `T-<n>:<run>:<file>` or `A-<n>:<file>`. Stored
+ * file names keep their source spelling (spaces, Unicode, `:` after the run), so only structure is
+ * checked; the reference is passed as one argv element, never through a shell. Control characters,
+ * path separators and names `PinRef::parse` would trim are refused.
+ */
+export function artifactReference(reference: string): boolean {
+  const match = /^(?:T-\d+:[A-Za-z0-9]+|A-\d+):(.+)$/su.exec(reference);
+  const file = match?.[1];
+  if (file === undefined || file !== file.trim() || file.length > 1024 || /[\u0000-\u001f\u007f/\\]/u.test(file)) return false;
+  return reference.startsWith("T-") || !file.includes(":");
 }

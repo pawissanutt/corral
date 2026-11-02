@@ -35,7 +35,9 @@ the selected identity:
 - Enter on text/reports: the existing `corral artifact show` viewer, bounded to 400 lines,
   control characters stripped.
 - Enter on HTML/SVG: path only. `o` (any artifact) opens the browser through the existing
-  loopback `corral artifact serve`, invoked with argv and a validated reference.
+  loopback `corral artifact serve`. References are passed as one argv element and checked only
+  structurally against corral's reference grammar, so stored names with spaces, Unicode or `:`
+  open (review round 1); control characters, path separators and untrimmed names are refused.
 - `m` selects up to two artifacts, `c` compares them as A/B in selection order: registered
   hash equality and side-by-side provenance. No before/after, candidate order or freshness
   relation is inferred.
@@ -62,4 +64,15 @@ required.
 - `scripts/qa-pi-artifacts.py --graphics none|kitty`: owned production-host PTY with real
   keyboard input and resize (140x46 and 52x30), fixture corral recording viewer argv.
   Screenshots are rendered by `scripts/qa/pi-panel-screenshots.mjs --artifacts`.
+- `scripts/qa-pi-artifacts-real.py --graphics none|kitty` (review round 1): a disposable real
+  store built through `add_artifact_to_run` by the ignored `qa_real_store` builder; the candidate
+  `corral` binary serves the catalog and viewers (`run inspect --artifacts`, `artifact show|serve`
+  with `CORRAL_OPENER` recording the browser launch), and only host-binding calls use the fixture.
+  It opens a real `my report.md`, a blob-backed `résumé.png` from the decoded copy with its hash
+  verified, an absent blob, HTML in the browser, and an A/B comparison. Screenshots come from
+  `scripts/qa/pi-panel-screenshots.mjs --artifacts-real`.
+- `test/corral-client.test.ts`: both viewer modes with Unicode, space and `:` names as exact argv;
+  malformed references refused before spawning.
 - Live read-only projection of real board tasks with the worktree-built binary.
+- Known flake outside this change: the Pi host sometimes fails startup with EADDRINUSE on
+  `host.sock` (2 of 5 kitty-mode runs, both before session binding); filed as T-767.

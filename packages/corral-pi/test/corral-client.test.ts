@@ -1,10 +1,10 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  CorralCallError, CorralClient, canonicalJson, eventRequestId, sha256Hex, toolRequestId,
+  CorralCallError, CorralClient, artifactReference, canonicalJson, eventRequestId, sha256Hex, toolRequestId,
 } from "../src/tools/corral.ts";
 import { writeFakeCorral } from "./support/fake-corral.ts";
 
@@ -126,4 +126,24 @@ test("receipt lookup returns the original receipt plus canonical lookup identity
     payload: { request_id: mutation.requestId, task: "T-001" } });
   expect(receipt.request_id).toBe(mutation.requestId);
   expect(receipt.lookup).toMatchObject({ found: true });
+});
+
+test("artifact viewers accept canonical stored names as one argv element and refuse malformed references", async () => {
+  const work = mkdtempSync(join(dir, "viewer-"));
+  const fake = writeFakeCorral(work);
+  writeFileSync(join(work, "artifact-show.txt"), "shown\n");
+  const client = new CorralClient({ corral: fake.path, root: work, identity, hostCap: HOST_CAP, sessionId: () => "s-1" });
+  const names = ["T-001:R1:12345678-my report.md", "T-001:R1:12345678-résumé.png", "T-001:R1:12345678-a:b $(touch x).md", "A-7:12345678-notes 📝.md"];
+  for (const name of names) {
+    expect(await client.artifactViewer(name, "show")).toBe("shown\n");
+    expect(await client.artifactViewer(name, "serve")).toBe("http://127.0.0.1:9/fixture\n");
+  }
+  const argv = readFileSync(join(work, "viewer-calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
+  expect(argv).toEqual(names.flatMap(name => [["--root", work, "artifact", "show", name], ["--root", work, "artifact", "serve", name]]));
+  expect(existsSync(join(work, "x"))).toBeFalse();
+  for (const bad of ["T-001:R1:", "T-001:R1: padded.md", "T-001:R1:a/b.md", "T-001:R1:a\\b.md", "T-001:R1:a\nb.md", "--root", "T-001", "A-7:a:b.md", "X-1:R1:a.md"]) {
+    expect(artifactReference(bad)).toBeFalse();
+    await expect(client.artifactViewer(bad, "show")).rejects.toThrow("Invalid artifact reference");
+  }
+  expect(readFileSync(join(work, "viewer-calls.jsonl"), "utf8").trim().split("\n").length).toBe(names.length * 2);
 });
