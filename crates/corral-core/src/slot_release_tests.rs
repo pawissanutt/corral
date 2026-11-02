@@ -34,6 +34,7 @@ fn wait(id: &str, handle: WaitHandle) -> WaitRecord {
             detail: String::new(),
         },
         receipt: None,
+        wake_message: None,
     }
 }
 

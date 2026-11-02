@@ -1,7 +1,7 @@
 //! Restart-safe reconciliation of declared handles and actual corral gate results.
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use corral_core::{
     GateResult, ReceiptOutcome, ResumeDelivery, ResumeReceipt, Run, TaskHead, WaitHandle,
     WaitObservation, WaitRecord, WaitState,
@@ -46,6 +46,7 @@ pub(crate) fn reconcile_head(
     let open = head.open_obligations(&run.id)?;
     let mut next = open.clone();
     let mut transitions = Vec::new();
+    let mut task_wakes = Vec::new();
     for wait in &mut next.waits {
         let (state, detail, receipt) = if wait.receipt.is_none()
             && wait.observation.state == WaitState::Pending
@@ -68,6 +69,9 @@ pub(crate) fn reconcile_head(
             observe(ctx, &head.id, run, wait, now, panes)
         };
         if let Some(receipt) = receipt {
+            if matches!(wait.request.handle, WaitHandle::TaskStatus { .. }) {
+                task_wakes.push((wait.request.id.clone(), receipt.clone()));
+            }
             wait.receipt = Some(receipt);
         }
         if wait.observation.state != state || wait.observation.detail != detail {
@@ -99,6 +103,7 @@ pub(crate) fn reconcile_head(
     }
     next.settle_parking(&open.parked_on(&head.id), &head.id, now);
     if next == open {
+        post_inbox_wakes(ctx, &head.id)?;
         return Ok(None);
     }
     let (status, rev) = (head.status, current.facts.obligations_rev);
@@ -148,6 +153,22 @@ pub(crate) fn reconcile_head(
         transition(ctx, &task.id, "wait_transition", detail)?;
     }
     crate::parked::reacquire(ctx, &task.id)?;
+    if !task_wakes.is_empty() {
+        let current = ctx.store.get(&task.id)?;
+        if current.current_run().is_some_and(|run| {
+            run.delivery == corral_core::inbox::DeliveryMode::Legacy && run.agent_host.is_none()
+        }) {
+            for (wait, receipt) in &task_wakes {
+                crate::obligations::wake_worker(
+                    ctx,
+                    &current,
+                    crate::obligations::ResumeTarget::Wait(wait),
+                    receipt,
+                );
+            }
+        }
+    }
+    post_inbox_wakes(ctx, &task.id)?;
     Ok(Some(Change {
         task: task.id.clone(),
         from: task.status,
@@ -155,6 +176,105 @@ pub(crate) fn reconcile_head(
         note: next.lines().join("; "),
         stage: None,
     }))
+}
+
+fn post_inbox_wakes(ctx: &Ctx, id: &str) -> Result<()> {
+    use corral_core::inbox::{
+        DeliveryMode, Inbox, MAX_PAYLOAD, MessageBinding, Post, Recipient, Urgency,
+    };
+    let task = ctx.store.get(id)?;
+    let Some(run) = task.current_run().filter(|r| {
+        r.outcome.is_none()
+            && r.agent_host.is_none()
+            && r.delivery == DeliveryMode::Inbox
+            && !r.releases_slot(id)
+    }) else {
+        return Ok(());
+    };
+    let run_id = run.id.clone();
+    let waits: Vec<_> = run
+        .obligations
+        .waits
+        .iter()
+        .filter(|w| {
+            matches!(w.request.handle, WaitHandle::TaskStatus { .. })
+                && w.receipt
+                    .as_ref()
+                    .is_some_and(|r| r.id == format!("task-status:{}", w.request.id))
+                && w.wake_message.is_none()
+        })
+        .map(|w| w.request.id.clone())
+        .collect();
+    if waits.is_empty() {
+        return Ok(());
+    }
+    let inbox = Inbox::new(
+        &ctx.store,
+        Recipient::Run {
+            task: id.into(),
+            run: run_id.clone(),
+        },
+    )?;
+    for wait in waits {
+        let _lock = inbox.lock()?;
+        let mut message = None;
+        ctx.store.try_update(id, |task| {
+            let Some(run) = task.current_run().filter(|r| {
+                r.id == run_id
+                    && r.outcome.is_none()
+                    && r.agent_host.is_none()
+                    && r.delivery == DeliveryMode::Inbox
+                    && !r.releases_slot(id)
+            }) else {
+                return Ok(false);
+            };
+            let Some(record) = run.obligations.waits.iter().find(|w| {
+                w.request.id == wait
+                    && w.wake_message.is_none()
+                    && w.receipt
+                        .as_ref()
+                        .is_some_and(|r| r.id == format!("task-status:{wait}"))
+            }) else {
+                return Ok(false);
+            };
+            let body = format!(
+                "Wait {wait} ({}) reached ready: {}",
+                record.request.condition, record.observation.detail
+            );
+            let key = format!("wake:{id}/{run_id}/{wait}/ready");
+            let posted = inbox.reserve_in(
+                task,
+                Post {
+                    kind: "wait_wake",
+                    urgency: Urgency::Wake,
+                    author: "corral",
+                    body: &body,
+                    binding: MessageBinding {
+                        run: Some(run_id.clone()),
+                        ..MessageBinding::default()
+                    },
+                    subject: Some(json!({"key":key,"target":wait,"state":"ready"})),
+                    max_payload: MAX_PAYLOAD,
+                },
+            )?;
+            let run = task
+                .current_run_mut()
+                .context("run disappeared while posting wait wake")?;
+            let record = run
+                .obligations
+                .waits
+                .iter_mut()
+                .find(|w| w.request.id == wait)
+                .context("wait disappeared while posting wake")?;
+            record.wake_message = Some(posted.id.clone());
+            message = Some(posted);
+            Ok(true)
+        })?;
+        if let Some(message) = message {
+            inbox.announce(&message)?;
+        }
+    }
+    Ok(())
 }
 
 fn task_status_ready(ctx: &Ctx, wait: &WaitRecord) -> Result<bool> {

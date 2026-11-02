@@ -132,8 +132,12 @@ fn wait_inner(
                 detail: "registered; reconciliation pending".into(),
             },
             receipt: None,
+            wake_message: None,
         });
         run.obligations.settle_parking(&parked, &own, now);
+        if origin.is_none() && matches!(request.handle, WaitHandle::TaskStatus { .. }) {
+            effects::subscribe_cli_wait(run, &request.id);
+        }
         if let Some(origin) = origin {
             let commit = effects::Commit {
                 result: json!({
@@ -255,7 +259,12 @@ pub fn resume_run(
 
 /// Prompts the worker of a still-running run; one queued for a coding slot is told to wait for it.
 /// A failed delivery keeps the receipt and is reported.
-fn wake_worker(ctx: &Ctx, task: &Task, target: ResumeTarget<'_>, receipt: &ResumeReceipt) {
+pub(crate) fn wake_worker(
+    ctx: &Ctx,
+    task: &Task,
+    target: ResumeTarget<'_>,
+    receipt: &ResumeReceipt,
+) {
     let Some(run) = task
         .current_run()
         .filter(|r| task.status == Status::Running && r.id == receipt.run && r.outcome.is_none())
