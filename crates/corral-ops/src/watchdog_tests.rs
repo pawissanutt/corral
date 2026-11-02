@@ -98,6 +98,44 @@ fn system_killer_rejects_a_changed_identity_without_signalling() {
     assert!(target.process.try_wait().unwrap().is_none());
 }
 
+#[test]
+fn language_server_interpreter_invocations_do_not_exempt_arbitrary_commands() {
+    for args in [
+        vec![
+            "node",
+            "/opt/typescript-language-server/lib/cli.js",
+            "--stdio",
+        ],
+        vec![
+            "node",
+            "/opt/pyright-internal/langserver.index.js",
+            "--stdio",
+        ],
+        vec![
+            "node",
+            "/opt/svelte-language-server/bin/server.js",
+            "--stdio",
+        ],
+        vec!["/opt/custom-language-server", "--stdio"],
+    ] {
+        assert!(
+            language_server_command(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+            "{args:?}"
+        );
+    }
+    for args in [
+        vec!["node", "/opt/build.js", "typescript-language-server"],
+        vec!["node", "-e", "language-server"],
+        vec!["python3", "-c", "language-server"],
+        vec!["sleep", "9999"],
+    ] {
+        assert!(
+            !language_server_command(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+            "{args:?}"
+        );
+    }
+}
+
 struct Tree(std::collections::HashMap<u32, ProcessSnapshot>);
 
 impl ProcessControl for Tree {

@@ -104,9 +104,9 @@ test("both planning roles are read-only and call only their own planning operati
   expect([...planner.upstreamTools]).toEqual(READ_ONLY);
   expect([...planReviewer.upstreamTools]).toEqual(READ_ONLY);
   expect(planner.tools(context("planner")).map((tool) => tool.name))
-    .toEqual(["corral_ask", "corral_withdraw", "corral_plan_write", "corral_plan_submit"]);
+    .toEqual(["corral_receipt_lookup", "corral_ask", "corral_withdraw", "corral_plan_write", "corral_plan_submit"]);
   expect(planReviewer.tools(context("plan_reviewer")).map((tool) => tool.name))
-    .toEqual(["corral_ask", "corral_withdraw", "corral_plan_write", "corral_plan_verdict"]);
+    .toEqual(["corral_receipt_lookup", "corral_ask", "corral_withdraw", "corral_plan_write", "corral_plan_verdict"]);
   expect([...planner.corralOps].sort())
     .toEqual(["ask", "event", "hello", "plan_submit", "plan_write", "receipt_lookup", "withdraw"]);
   expect([...planReviewer.corralOps].sort())
@@ -144,7 +144,7 @@ test("a planning role launches only with an enabled role_enabled capability", ()
 test("a planner session activates exactly its loadout, refuses source writes and sends typed plan ops", async () => {
   const bound = await bind("planner");
   expect([...bound.host.loadout])
-    .toEqual([...READ_ONLY, "corral_ask", "corral_withdraw", "corral_plan_write", "corral_plan_submit"]);
+    .toEqual([...READ_ONLY, "corral_receipt_lookup", "corral_ask", "corral_withdraw", "corral_plan_write", "corral_plan_submit"]);
   const target = join(bound.cwd, "edited.txt");
   await turn(bound, 1, [
     { callId: "call-write", name: "write", arguments: { path: target, content: "x" } },

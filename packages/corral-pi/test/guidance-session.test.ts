@@ -5,7 +5,8 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import { EventLog } from "../src/bridge/events.ts";
 import type { CapabilityGuidance } from "../src/capabilities/guidance.ts";
@@ -174,6 +175,22 @@ test("every role loads home skills, trusted project text and templates, never am
       expect(found.extensions.some((path) => path.includes(".pi"))).toBeFalse();
       const state = started.host.state().guidance as { project_text: boolean; export: boolean };
       expect([state.project_text, state.export]).toEqual([true, role !== "pm"]);
+      const panels = started.host.panels;
+      if (!panels) throw new Error("rich host supplies inspector");
+      panels.tab = "Context"; panels.focused = true;
+      const wide = stripTerminalSequences(panels.renderSidebar(120, 60).join("\n"));
+      expect(wide).toContain("Preset standard");
+      expect(wide).toContain("Project-text trust: enabled");
+      expect(wide).toContain(join(cwd, "AGENTS.md"));
+      expect(wide).toContain("home-review");
+      const inline: string[] = [];
+      for (let offset = 0; offset < 34; offset += 2) {
+        panels.offset = offset;
+        inline.push(...panels.renderInline(80, 34));
+      }
+      const evidence = resolve(import.meta.dirname, "../../../.evidence");
+      mkdirSync(evidence, { recursive: true });
+      writeFileSync(join(evidence, `T-689-${role}-guidance-render.txt`), wide + "\nINLINE (successive scroll positions)\n" + stripTerminalSequences(inline.join("\n")));
     } finally {
       started.host.session.dispose();
     }
@@ -197,10 +214,10 @@ test("every role loads home skills, trusted project text and templates, never am
   }
 }, 120_000);
 
-test("Pi pack lists and loads all five skills in a standard worker without OmO roots", async () => {
+test("Pi pack lists and loads all six skills in a standard worker without OmO roots", async () => {
   const packHome = join(work, "pack-home");
   const pack = join(packHome, ".corral/skills/pi-native");
-  const names = ["frontend", "visual-qa", "programming", "debugging", "git-master"];
+  const names = ["frontend", "visual-qa", "programming", "debugging", "git-master", "simplify-and-cleanup"];
   cpSync(join(PACKAGE_ROOT, "../../crates/corral-ops/assets/skills/pi-native"), pack, { recursive: true });
   const started = await start("worker", STANDARD, {
     settings: { skills: { user_dirs: ["~/.agents/skills", "~/.corral/skills/pi-native"] } },

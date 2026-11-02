@@ -26,7 +26,7 @@ const identity = {
   review: "R2-review1", callback: "g1:c1", generation: 1,
 };
 const UPSTREAM = ["read", "grep", "find", "ls", "bash"];
-const CORRAL_TOOLS = ["corral_ask", "corral_withdraw", "corral_evidence", "corral_artifact", "corral_verdict"];
+const CORRAL_TOOLS = ["corral_receipt_lookup", "corral_ask", "corral_withdraw", "corral_evidence", "corral_artifact", "corral_verdict"];
 const originalFetch = globalThis.fetch;
 
 let assets: FixtureInstall;

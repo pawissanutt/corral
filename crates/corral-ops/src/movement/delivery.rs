@@ -37,7 +37,10 @@ pub(super) fn record(
         ctx.store
             .clear_condition(Some(&notice.target.task), "main_movement_notice")?;
     }
-    if notice.state != DeliveryState::Delivered && notice.state != DeliveryState::Sending {
+    if !matches!(
+        notice.state,
+        DeliveryState::Queued | DeliveryState::Delivered | DeliveryState::Sending
+    ) {
         crate::messages::report(
             Some(&notice.target.task),
             "main movement",
@@ -69,7 +72,7 @@ pub(super) fn deliver(
             state,
             i,
             DeliveryState::Uncertain,
-            "interrupted submission; inspect pane before any manual delivery",
+            "interrupted submission; inspect inbox and pane before any manual delivery",
         );
     }
     let target = state.notices[i].target.clone();
@@ -129,6 +132,7 @@ pub(super) fn deliver(
     }
     // Hold the record lock through the external send, so done/retry cannot replace this run
     // between its final identity check and submission. No task fields are changed here.
+    let mut structured = false;
     ctx.store.read_locked(&target.task, |task| {
         if !target.matches(task) {
             record(
@@ -256,6 +260,15 @@ pub(super) fn deliver(
             DeliveryState::Sending,
             "submitting informational notice",
         )?;
+        if run.agent_host.is_some()
+            || run
+                .harness
+                .as_deref()
+                .is_some_and(corral_core::is_pi_native)
+        {
+            structured = true;
+            return Ok(());
+        }
         let text = state.notices[i]
             .message
             .as_deref()
@@ -292,5 +305,74 @@ pub(super) fn deliver(
         }
         Ok(())
     })?;
+    if structured {
+        enqueue(ctx, receipt, state, i)?;
+    }
     Ok(())
+}
+
+/// Sending is persisted before posting. A crash at either side of the inbox commit is
+/// uncertain, never permission to create another message. Once queued, the inbox owns
+/// transport recovery (including Pi's exact-envelope idempotent retry), not this producer.
+fn enqueue(ctx: &Ctx, receipt: &StateRecord<'_>, state: &mut State, i: usize) -> Result<()> {
+    use corral_core::inbox::{Inbox, MAX_PAYLOAD, MessageBinding, Post, Recipient, Urgency};
+    let notice = &state.notices[i];
+    let recipient = Recipient::Run {
+        task: notice.target.task.clone(),
+        run: notice.target.run.clone(),
+    };
+    let result = Inbox::new(&ctx.store, recipient.clone())?.post_with(
+        Post {
+            kind: "main_movement",
+            urgency: Urgency::Wake,
+            author: "corral",
+            body: notice.message.as_deref().context("notice has no message")?,
+            binding: MessageBinding {
+                run: Some(notice.target.run.clone()),
+                ..Default::default()
+            },
+            subject: Some(json!({"notice": notice.id, "context": notice.artifact})),
+            max_payload: MAX_PAYLOAD,
+        },
+        |task, _| {
+            anyhow::ensure!(
+                notice.target.matches(task),
+                "movement target changed before enqueue"
+            );
+            anyhow::ensure!(
+                corral_git::current_branch(&notice.target.worktree)? == notice.target.branch,
+                "movement branch changed before enqueue"
+            );
+            Ok(())
+        },
+    );
+    match result {
+        Ok(message) => {
+            record(
+                ctx,
+                receipt,
+                state,
+                i,
+                DeliveryState::Queued,
+                &format!(
+                    "queued structured inbox message {}; transport receipts are in the inbox",
+                    message.id
+                ),
+            )?;
+            // No fallback. A blocked/failed/uncertain kick retains its inbox evidence and
+            // never returns this logical notice to the producer's retry queue.
+            let _ = crate::delivery::owner::kick(ctx, &recipient);
+            Ok(())
+        }
+        Err(error) => record(
+            ctx,
+            receipt,
+            state,
+            i,
+            DeliveryState::Uncertain,
+            &format!(
+                "inbox enqueue outcome unknown: {error:#}; inspect inbox before manual delivery"
+            ),
+        ),
+    }
 }

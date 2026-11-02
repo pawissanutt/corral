@@ -45,6 +45,10 @@ struct EventPayload {
     /// classifies `cancelled` in the transaction that ends it, whenever corral's own mark lands.
     #[serde(default)]
     cancelled: bool,
+    /// turn_ended only, PM and assistant: the run was aborted in the pane (Escape), so corral
+    /// never continues its plan automatically.
+    #[serde(default)]
+    aborted: bool,
 }
 
 fn bad(reason: &str) -> anyhow::Error {
@@ -92,8 +96,8 @@ fn validate(envelope: &Envelope, payload: &EventPayload) -> Result<()> {
     if payload.budget.is_some() && payload.kind != EventKind::BudgetExhausted {
         return Err(bad("only budget_exhausted carries budget state"));
     }
-    if payload.cancelled && payload.kind != EventKind::TurnEnded {
-        return Err(bad("only turn_ended carries cancelled"));
+    if (payload.cancelled || payload.aborted) && payload.kind != EventKind::TurnEnded {
+        return Err(bad("only turn_ended carries cancelled or aborted"));
     }
     let key = payload
         .origin
@@ -103,6 +107,13 @@ fn validate(envelope: &Envelope, payload: &EventPayload) -> Result<()> {
         return Err(bad(
             "origin.idempotency_key must be 1-128 characters of [A-Za-z0-9._:-]",
         ));
+    }
+    if payload
+        .origin
+        .as_ref()
+        .is_some_and(|o| o.kind == TurnOriginKind::Continuation && key.is_none())
+    {
+        return Err(bad("a continuation origin names its continuation key"));
     }
     match (&payload.class, payload.kind) {
         (Some(class), EventKind::ProviderError) if word(class, 64) => Ok(()),
@@ -153,7 +164,7 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     }
     let payload: EventPayload = super::payload(
         envelope,
-        "kind, turn, origin?, class?, owner_input?, cancelled?",
+        "kind, turn, origin?, class?, owner_input?, cancelled?, aborted?",
     )?;
     validate(envelope, &payload)?;
     let container = admission::container_of(&envelope.identity);
@@ -174,6 +185,7 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         budget,
         owner_input,
         cancelled,
+        aborted,
     } = payload;
     // T-626: keep native event/replay/retention behavior intact. Only the retained
     // mutation is attributed; admission and post-commit effects remain bounded work.
@@ -184,6 +196,7 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             .iter()
             .position(|t| t.generation == n && t.seq == seq);
         let mut post_pending = Vec::new();
+        let mut request = None;
         match (kind, index) {
             (EventKind::TurnStarted, Some(_)) => return Err(bad("the turn already started")),
             (EventKind::TurnStarted, None) => {
@@ -208,6 +221,14 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 }
                 crate::agent::turns::classify_ended(state, closure, i);
                 post_pending.push("event:agent_turn_ended".into());
+                if let Some((value, stopped)) =
+                    crate::agent::requests::turn_ended(state, i, aborted, now)
+                {
+                    if stopped {
+                        post_pending.push("event:todo_continuation_stopped".into());
+                    }
+                    request = Some(value);
+                }
             }
             (EventKind::TurnEnded, _) => {
                 return Err(bad(
@@ -246,7 +267,7 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             result: json!({
                 "kind": kind_name, "turn": seq, "generation": n,
                 "class": if kind == EventKind::BudgetExhausted { Some("budget_exhausted") } else { class.as_deref() }, "fenced": closes,
-                "budget": budget, "provider": provider, "model": model,
+                "budget": budget, "provider": provider, "model": model, "request": request,
             }),
             effect: Some(ReceiptEffect {
                 kind: "turn".into(),

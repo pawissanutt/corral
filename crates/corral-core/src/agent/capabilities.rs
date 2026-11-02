@@ -8,11 +8,11 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::AgentRole;
 use super::browser::{browser_defaults, browser_settings};
 use super::local_controls::{bash_rule_settings, hook_settings};
 use super::lsp::{lsp_defaults, lsp_settings};
 use super::paths::sha256_hex;
+use super::{AgentRole, WebSettings};
 use crate::config::agent_capabilities::{
     compaction_settings, job_settings, skill_settings, template_settings,
 };
@@ -24,7 +24,7 @@ pub type CapabilitySettings = BTreeMap<String, Value>;
 pub type SettingsFn = fn(&CapabilitySettings) -> Result<CapabilitySettings, String>;
 
 /// Bumped when a catalog entry's meaning or the snapshot's canonical form changes.
-pub const CAPABILITY_CATALOG_VERSION: u32 = 8;
+pub const CAPABILITY_CATALOG_VERSION: u32 = 9;
 
 /// One catalog entry. `defaults` returns `[strict, standard, full]` for a role, or `None` where
 /// the role's ceiling disallows the capability; a configured override can never cross it.
@@ -55,6 +55,13 @@ pub const CATALOG: &[CapabilityDef] = &[
         settings: None,
     },
     CapabilityDef {
+        key: "write_permissions",
+        summary: "scoped owner permission for assistant writes",
+        defaults: |role| (role == AgentRole::Assistant).then_some([false, true, true]),
+        host: true,
+        settings: Some(super::write_permissions::write_permission_settings),
+    },
+    CapabilityDef {
         key: "ask_user",
         summary: "interactive owner question dialog",
         defaults: |role| {
@@ -65,7 +72,7 @@ pub const CATALOG: &[CapabilityDef] = &[
     },
     CapabilityDef {
         key: "web.enabled",
-        summary: "GET-only web fetch and search",
+        summary: "public web fetch and configured search",
         defaults: web_defaults,
         host: true,
         settings: None,
@@ -127,13 +134,13 @@ pub const CATALOG: &[CapabilityDef] = &[
     CapabilityDef {
         key: "mcp.enabled",
         summary: "explicit project-scoped MCP servers",
-        defaults: mcp_defaults,
+        defaults: optional_text,
         host: true,
         settings: None,
     },
     CapabilityDef {
         key: "codemode",
-        summary: "QuickJS parallel tool calls and result filtering (no non-LLM models)",
+        summary: "persistent Bun kernel: batched, chained and filtered tool calls",
         defaults: |_| Some([false, true, true]),
         host: true,
         settings: None,
@@ -141,7 +148,7 @@ pub const CATALOG: &[CapabilityDef] = &[
     CapabilityDef {
         key: "tool_search",
         summary: "local cached tool discovery",
-        defaults: mcp_defaults,
+        defaults: optional_text,
         host: true,
         settings: None,
     },
@@ -258,17 +265,6 @@ fn optional_text(_: AgentRole) -> Option<[bool; 3]> {
     Some([false, true, true])
 }
 
-fn mcp_defaults(role: AgentRole) -> Option<[bool; 3]> {
-    match role {
-        AgentRole::Worker
-        | AgentRole::Reviewer
-        | AgentRole::Pm
-        | AgentRole::Planner
-        | AgentRole::PlanReviewer
-        | AgentRole::Assistant => Some([false, true, true]),
-    }
-}
-
 fn llama_cpp_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
         AgentRole::Worker
@@ -312,30 +308,6 @@ fn web_defaults(role: AgentRole) -> Option<[bool; 3]> {
         | AgentRole::PlanReviewer
         | AgentRole::Assistant
         | AgentRole::Pm => Some([false, true, true]),
-    }
-}
-
-/// Resolved GET-only web policy, shared by snapshots and the host launch payload.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct WebSettings {
-    pub hosts: Vec<String>,
-    pub max_bytes: u64,
-    pub timeout_ms: u32,
-    pub max_redirects: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub searxng_url: Option<String>,
-}
-
-impl Default for WebSettings {
-    fn default() -> Self {
-        Self {
-            hosts: vec!["*".into()],
-            max_bytes: 1_048_576,
-            timeout_ms: 15_000,
-            max_redirects: 5,
-            searxng_url: None,
-        }
     }
 }
 
@@ -720,12 +692,13 @@ impl CapabilitySnapshot {
             .collect();
         if let Some(web) = &self.web {
             features.push(format!(
-                "web hosts={:?}, max_bytes={}, timeout_ms={}, max_redirects={}, searxng={}",
+                "web hosts={:?}, max_bytes={}, timeout_ms={}, max_redirects={}, searxng={}, search_provider={:?}",
                 web.hosts,
                 web.max_bytes,
                 web.timeout_ms,
                 web.max_redirects,
-                web.searxng_url.as_deref().unwrap_or("not configured")
+                web.searxng_url.as_deref().unwrap_or("not configured"),
+                web.search_provider
             ));
         }
         if let Some(mcp) = &self.mcp {
@@ -856,11 +829,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pm_catalog_matches_assistant_for_every_key() {
+    fn pm_catalog_matches_assistant_except_write_permissions() {
         for def in CATALOG {
             assert_eq!(
                 (def.defaults)(AgentRole::Pm),
-                (def.defaults)(AgentRole::Assistant),
+                match def.key {
+                    "write_permissions" => None,
+                    _ => (def.defaults)(AgentRole::Assistant),
+                },
                 "{}",
                 def.key
             );

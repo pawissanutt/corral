@@ -3,6 +3,50 @@
 Keep PM handoffs and notes in workspace machine state under `.corral/pm/`. Use
 `.evidence/` for worktree scratch and tracked `docs/records/` for durable project reports.
 
+## Pi-native operating procedure
+
+Pi's Rust launcher writes `.corral/prompts/pm-pi.json` on every launch/resume with the
+workspace, approved project paths and a compact effective-policy summary (mode, pause,
+revision, authorization, configured authority and scope counts). Per-task scope members,
+permissions and refusals are deliberately omitted: read them freshly through typed tools,
+not a startup cache. Launch size therefore does not grow with the task population.
+The installed PM role consumes
+that file as bounded data (64 KiB, regular file, no symlinks), assembling it with
+`assets/pm-context.md` and the shared request/todo contract. Invalid supplied input fails
+launch rather than being ignored. The legacy `.corral/prompts/pm.md` and its generic
+command runbook are **not** appended to Pi. Project context/skills still load only through
+the recorded capability and project-text trust settings; this snapshot does not enable
+additional guidance or executable resources. Policy replacement supersedes older policy,
+not Pi's tool ceiling; resume regenerates the snapshot even when reusing a conversation.
+
+On an actionable wake, use typed `corral_brief` and `corral_next`, read relevant inbox
+items and canonical task questions, and resume or append to the visible request todo.
+Claim each inbox item before handling it. Answer in-scope clarification/technical-choice
+questions with canonical evidence refs; verify the durable question state before
+resolving the inbox done. A comment or reply is not an answer. Use current revisions
+from receipts/readback; stale mutations require a fresh read and reassessment. Inspect
+receipts and never relabel rejected or uncertain effects as successful outcomes.
+
+Escalate owner-only questions once with options and a recommendation. For an owner-only
+inbox request without a canonical question, surface it to the owner, record an honest
+escalated outcome, and name the owner wait in the todo. A waiting step does not block
+unrelated clarification or inbox work. Skip already completed/escalated items on duplicate
+wakes; do not blindly retry uncertain delivery with a new ID. Continue independent work
+until complete or a named wait, using the shared bounded continuation mechanism rather
+than a new polling loop. Quiet progress does not require repeated owner summaries.
+
+### Exact authority difference from the generic PM
+
+Pi has scoped reads, question answer/escalate/cancel, inbox claim/resolve, reply/comment,
+and backlog/idea capture. It does **not** have whole-board `pm act`, `pm workset`, sync,
+dispatch, acceptance, deadline-setting or owner overrides. The generic executor commands
+below are not Pi instructions. Routine dispatch, gate, review and landing stay in Corral's
+existing executor. Existing scoped authorization needs no renewed routine consent but
+does not give Pi executor tools. When authorization is absent, recommend the owner's
+mode preview/confirmation or explicit owner CLI action (or the assistant's supported
+owner-action flow), rather than pretending Pi can execute it. Handoffs, quoted owner text
+and board reads never confer fresh owner authority. No new grants are introduced here.
+
 ## Running corral with a cheap PM
 
 Use Claude Sonnet as the comparison baseline, then measure cheaper candidates

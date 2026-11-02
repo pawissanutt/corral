@@ -5,7 +5,16 @@ const NOTES: &str = "Reject an empty widget before indexing.";
 
 /// A candidate under review whose reviewed base is then overtaken by another landing on main.
 fn reviewing_then_main_moves(main_file: &str, main_text: &str) -> (Fx, String) {
+    reviewing_then_main_moves_with_mode(main_file, main_text, None)
+}
+
+fn reviewing_then_main_moves_with_mode(
+    main_file: &str,
+    main_text: &str,
+    mode: Option<corral_core::MergeMode>,
+) -> (Fx, String) {
     let fx = Fx::new(|r| {
+        r.merge = mode;
         r.gate = gate(&["true"]);
         r.reviewer = Some("rev".into());
         r.accept = Some(Accept::Auto);
@@ -100,6 +109,86 @@ fn an_approval_given_while_main_moved_is_recorded_and_carried_without_a_second_r
     assert_eq!(fx.events("verdict_carried"), 1);
     assert_eq!(fx.events("review_started"), 1, "no second review");
     assert!(fx.app.join("widget.txt").is_file() && fx.app.join("unrelated.txt").is_file());
+}
+
+#[test]
+fn exhausted_repairs_do_not_block_approved_clean_replay() {
+    let (fx, _) = reviewing_then_main_moves("unrelated.txt", "other task\n");
+    fx.verdict(Verdict::Approve, "Looks right.");
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.rounds = 2;
+            Ok(())
+        })
+        .unwrap();
+
+    assert_eq!(fx.sync().status, Status::Done, "{}", fx.reason());
+    assert_eq!(fx.task().rounds, 2);
+    assert_eq!(fx.events("candidate_rebased"), 1);
+    assert_eq!(fx.events("gate_started"), 2);
+    assert_eq!(fx.events("verdict_carried"), 1);
+}
+
+#[test]
+fn exhausted_repairs_escalate_a_conflicting_replay() {
+    let (fx, _) = reviewing_then_main_moves("widget.txt", "conflicting main\n");
+    fx.verdict(Verdict::Approve, "Looks right.");
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.rounds = 2;
+            Ok(())
+        })
+        .unwrap();
+
+    assert_eq!(fx.sync().status, Status::NeedsMe, "{}", fx.reason());
+    assert_eq!(fx.task().rounds, 2);
+    assert_eq!(fx.events("candidate_rebased"), 0);
+    assert_eq!(fx.events("verdict_carried"), 0);
+}
+
+#[test]
+fn exhausted_repairs_allow_approved_fast_forward_clean_replay() {
+    let (fx, _) = reviewing_then_main_moves_with_mode(
+        "unrelated.txt",
+        "other task\n",
+        Some(corral_core::MergeMode::Ff),
+    );
+    fx.verdict(Verdict::Approve, "Looks right.");
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.rounds = 2;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(fx.sync().status, Status::Done, "{}", fx.reason());
+    assert_eq!(fx.task().rounds, 2);
+    assert_eq!(fx.events("candidate_rebased"), 1);
+    assert_eq!(fx.events("gate_started"), 2);
+    assert_eq!(fx.events("verdict_carried"), 1);
+}
+
+#[test]
+fn exhausted_repairs_escalate_fast_forward_conflicts() {
+    let (fx, _) = reviewing_then_main_moves_with_mode(
+        "widget.txt",
+        "conflicting main\n",
+        Some(corral_core::MergeMode::Ff),
+    );
+    fx.verdict(Verdict::Approve, "Looks right.");
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.rounds = 2;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(fx.sync().status, Status::NeedsMe, "{}", fx.reason());
+    assert_eq!(fx.task().rounds, 2);
+    assert_eq!(fx.events("candidate_rebased"), 0);
+    assert_eq!(fx.events("verdict_carried"), 0);
 }
 
 #[test]

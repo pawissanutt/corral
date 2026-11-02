@@ -24,6 +24,7 @@ import pm, { CONTEXT_ASSET, pmRole } from "./index.ts";
 const identity = { store: "st-0123456789abcdef", project: "demo", role: "pm" as const, generation: 1 };
 const context = { identity, cwd: "/tmp", model: "m" };
 const cases = [
+  { name: "receipt_lookup", op: "receipt_lookup", payload: { request_id: `rq-${"a".repeat(32)}`, task: "T-007" } },
   { name: "brief", op: "read_brief", payload: {} },
   { name: "next", op: "read_next", payload: {} },
   { name: "show", op: "read_show", payload: { task: "T-007" } },
@@ -52,7 +53,8 @@ const cases = [
     project: "demo", title: "Follow-up", body: "Investigate the adapter.", status: "backlog",
   } },
 ] as const;
-const names = cases.map(({ name }) => `corral_${name}`);
+const memoryOps = ["memory_list", "memory_read", "memory_put", "memory_remove"];
+const names = [...cases.map(({ name }) => `corral_${name}`), ...memoryOps.map((op) => `corral_${op}`)];
 const originalFetch = globalThis.fetch;
 let assets: FixtureInstall;
 let work: string;
@@ -92,8 +94,11 @@ beforeAll(async () => {
     corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host.sessionId(),
   });
   const sdk = await import("@earendil-works/pi-coding-agent");
+  const promptFile = join(work, "pm-pi.json");
+  writeFileSync(promptFile, JSON.stringify({ version: 1, workspace: cwd, projects: { demo: cwd },
+    policy: { revision: "launch-policy", authorization: "approved" } }));
   host = await HostSession.create({
-    sdk, identity, cwd, agentDir: join(work, "pi-agent"), model: "gpt-6.1-sol", modules, client, events, network,
+    sdk, identity, cwd, promptFile, agentDir: join(work, "pi-agent"), model: "gpt-6.1-sol", modules, client, events, network,
     sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
   });
   await host.session.bindExtensions({});
@@ -208,7 +213,7 @@ test("the PM exposes only its scoped operations and requires the installed conte
   // Then neither lifecycle-only operations nor owner authority become model tools.
   expect(pm.upstreamTools).toEqual(["read", "edit", "write", "grep", "find", "ls", "bash"]);
   expect(tools.map((item) => item.name)).toEqual(names);
-  expect([...pm.corralOps].sort()).toEqual(["hello", "event", "receipt_lookup", ...cases.map(({ op }) => op), "todo"].sort());
+  expect([...pm.corralOps].sort()).toEqual(["hello", "event", ...cases.map(({ op }) => op), ...memoryOps, "todo"].sort());
   const empty = mkdtempSync(join(tmpdir(), "corral-pi-pm-noassets-"));
   try {
     expect(() => pmRole(empty).contract(context)).toThrow(`role_asset_missing: ${CONTEXT_ASSET}`);
@@ -227,6 +232,39 @@ for (const { name, payload } of cases) test(`the ${name} schema and payload pres
   expect(Check(tool.parameters, { ...payload, generation: 99 })).toBeFalse();
   expect(tool.payload({ ...payload, owner: true, generation: 99 })).toEqual(payload);
 });
+
+test("policy wake keeps the native ceiling while independent coordination crosses the host wire", async () => {
+  const call = (callId: string, name: string, args: Record<string, unknown>) =>
+    ({ toolCalls: [{ callId, name: `corral_${name}`, arguments: args }] });
+  // Scripted offline model: no paid call, no prose grading. Rust tests verify the effects.
+  fixtureTransport().script([
+    call("wake-brief", "brief", {}), call("wake-next", "next", {}),
+    call("wake-inbox", "inbox_read", { id: "PMI-1" }),
+    call("wake-owner", "question_escalate", { key: "T-007/R2/Q2", rev: 1,
+      note: "Keep scope (recommended) or expand; owner must decide." }),
+    call("wake-claim", "inbox_resolve", { id: "PMI-1", expected_revision: 0, action: "claim" }),
+    call("wake-question", "show", { task: "T-007", section: "questions" }),
+    call("wake-answer", "question_answer", { key: "T-007/R2/Q1", rev: 3,
+      text: "Use the approved adapter", basis_refs: ["spec:T-007@approved"], scope_note: "Existing scope" }),
+    call("wake-verify", "show", { task: "T-007", section: "questions" }),
+    call("wake-resolve", "inbox_resolve", { id: "PMI-1", expected_revision: 1, action: "resolve",
+      outcome: "done", text: "Answered canonical question", refs: ["T-007/R2/Q1"] }),
+    call("wake-outcome", "inbox_read", { id: "PMI-1" }),
+    { text: "" },
+  ]);
+  const before = corral.calls().length;
+  const ended = nextEvent(events, (event) => event.kind === "turn_ended");
+  await host.submit({ text: "[corral-policy] Effective policy replacement: current executor scope authorized.\n"
+    + "[question_wake] T-007/R2/Q2\n[pm_inbox_wake] PMI-1", busyPolicy: "prompt",
+    idempotencyKey: "operational-wake", origin: "corral-inbox" }, "operational-wake");
+  await ended;
+  await host.drained();
+  const ops = corral.calls().slice(before).map(({ envelope }) => envelope.op).filter((op) => op !== "event");
+  expect(ops).toEqual(["read_brief", "read_next", "inbox_read", "question_escalate", "inbox_resolve",
+    "read_show", "question_answer", "read_show", "inbox_resolve", "inbox_read"]);
+  expect(host.session.getActiveToolNames()).not.toContain("corral_pm_act");
+  expect(host.session.getActiveToolNames()).not.toContain("corral_owner_action");
+}, 60_000);
 
 const invalidCases: readonly (readonly [string, Record<string, unknown>])[] = [
   ["brief", { task: "T-007" }], ["next", { project: "other" }], ["lessons", { limit: 5 }],
@@ -257,6 +295,13 @@ for (const stage of ["startup", "reload", "refused replacement"]) test(
     if (stage === "reload") await host.session.reload();
     if (stage === "refused replacement") await expectReplacementsRefused(host, events);
     const state = host.state();
+    const prompt = host.session.systemPrompt;
+    const start = prompt.indexOf('{\n  "version"');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const snapshot = JSON.parse(prompt.slice(start, prompt.indexOf('\n}', start) + 2));
+    expect(snapshot.workspace).toBe(cwd);
+    expect(snapshot.projects).toEqual({ demo: cwd });
+    expect(snapshot.policy.revision).toBe("launch-policy");
     const upstream = ["read", "edit", "write", "grep", "find", "ls", "bash"];
     expect(host.session.getActiveToolNames().sort()).toEqual([...upstream, ...names].sort());
     expect(state.loadout).toEqual([...upstream, ...names]);

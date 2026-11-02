@@ -329,6 +329,11 @@ fn lock_index(dir: &std::path::Path) -> Result<File> {
 /// index follows each attach rather than re-snapshotting every task. Whatever does not fit
 /// (a full index or text budget) is left to the next refresh.
 pub(crate) fn index_artifact(ctx: &Ctx, task: &str, artifact: &Artifact) -> Result<()> {
+    index_artifacts(ctx, task, std::slice::from_ref(artifact))
+}
+
+/// Index one automatically scanned set with one cache read and publication.
+pub(crate) fn index_artifacts(ctx: &Ctx, task: &str, artifacts: &[Artifact]) -> Result<()> {
     let dir = ctx.store.cache_root()?;
     let lock = index_lock(ctx)?;
     match lock.try_lock() {
@@ -358,29 +363,36 @@ pub(crate) fn index_artifact(ctx: &Ctx, task: &str, artifact: &Artifact) -> Resu
             ..Cache::default()
         };
     }
-    let text: usize = cache.documents.values().map(|d| d.text.len()).sum();
-    if cache.documents.len() >= 4096 || text + DOCUMENT_BYTES > TEXT_BUDGET {
+    let mut changed = false;
+    for artifact in artifacts {
+        let text: usize = cache.documents.values().map(|d| d.text.len()).sum();
+        if cache.documents.len() >= 4096 || text + DOCUMENT_BYTES > TEXT_BUDGET {
+            break;
+        }
+        let mut record = Record::artifact(task, artifact);
+        extract(ctx, &mut record)?;
+        let id = record.document.reference.clone();
+        if cache.documents.get(&id) == Some(&record.document) {
+            continue;
+        }
+        cache.postings.retain(|_, ids| {
+            ids.retain(|other| *other != id);
+            !ids.is_empty()
+        });
+        let terms: BTreeSet<_> = words(&record.document.title)
+            .chain(words(&record.document.text))
+            .collect();
+        for term in terms {
+            let ids = cache.postings.entry(term).or_default();
+            ids.push(id.clone());
+            ids.sort();
+        }
+        cache.documents.insert(id, record.document);
+        changed = true;
+    }
+    if !changed {
         return Ok(());
     }
-    let mut record = Record::artifact(task, artifact);
-    extract(ctx, &mut record)?;
-    let id = record.document.reference.clone();
-    if cache.documents.get(&id) == Some(&record.document) {
-        return Ok(());
-    }
-    cache.postings.retain(|_, ids| {
-        ids.retain(|other| *other != id);
-        !ids.is_empty()
-    });
-    let terms: BTreeSet<_> = words(&record.document.title)
-        .chain(words(&record.document.text))
-        .collect();
-    for term in terms {
-        let ids = cache.postings.entry(term).or_default();
-        ids.push(id.clone());
-        ids.sort();
-    }
-    cache.documents.insert(id, record.document);
     let bytes = serde_json::to_vec(&cache).context("serializing search index")?;
     if u64::try_from(bytes.len()).context("index size overflow")? > INDEX_BYTES {
         return Ok(());

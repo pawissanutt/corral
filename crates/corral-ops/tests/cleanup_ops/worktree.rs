@@ -126,7 +126,7 @@ fn owned_orphan_daemon_is_removed_after_landing() {
     let run = fx.run();
     let marker = fx.marker();
     let mut parent = crate::support::command("python3", &run.worktree);
-    let output = parent.current_dir(&run.worktree).env("CORRAL_PROCESS_OWNER", marker)
+    let output = parent.arg0("rust-analyzer-proc-macro-srv").current_dir(&run.worktree).env("CORRAL_PROCESS_OWNER", marker)
         .args(["-c", "import os,signal; p=os.fork(); os._exit(0) if p else None; print(os.getpid(),flush=True); signal.pause()"])
         .stdin(Stdio::null()).stdout(Stdio::piped()).spawn().unwrap();
     let mut parent = output;
@@ -149,6 +149,163 @@ fn owned_orphan_daemon_is_removed_after_landing() {
     assert!(!still_alive);
     assert!(!run.worktree.exists());
     assert!(corral_git::rev_sha(&fx.app, &run.branch).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn worker_language_server_survives_watchdog_then_is_reaped_at_landing() {
+    use corral_ops::{ProcessControl, SystemProcesses};
+    struct Aged;
+    impl ProcessControl for Aged {
+        fn inspect(&self, pid: u32) -> anyhow::Result<Option<corral_ops::ProcessSnapshot>> {
+            Ok(SystemProcesses.inspect(pid)?.map(|mut p| {
+                p.elapsed_secs = 10_000;
+                p
+            }))
+        }
+        fn terminate(&self, p: &corral_core::StuckProcess) -> anyhow::Result<()> {
+            SystemProcesses.terminate(p)
+        }
+    }
+    let fixture = tempfile::tempdir().unwrap();
+    let script = fixture.path().join("worker.py");
+    let fifo = fixture.path().join("ready");
+    let pidfile = fixture.path().join("pid");
+    std::fs::write(&script, "import os,signal,sys\np=os.fork()\nif p == 0:\n os.execv('/usr/bin/python3', ['rust-analyzer-proc-macro-srv','-c', \"import os,signal; print(os.getpid(),flush=True); signal.pause()\"])\nsignal.pause()\n").unwrap();
+    let worker = fixture.path().join("fake");
+    std::os::unix::fs::symlink("/usr/bin/python3", &worker).unwrap();
+    let command = format!(
+        "mkfifo '{0}'; '{3}' '{1}' > '{0}' & read -r pid < '{0}'; printf '%s' \"$pid\" > '{2}'; rm '{0}'",
+        fifo.display(),
+        script.display(),
+        pidfile.display(),
+        worker.display()
+    );
+    let fx = Fx::with_agent(Some(&command));
+    let pid: u32 = std::fs::read_to_string(pidfile).unwrap().parse().unwrap();
+    struct Guard(corral_core::StuckProcess);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let _ = SystemProcesses.terminate(&self.0);
+        }
+    }
+    let process = SystemProcesses.inspect(pid).unwrap().unwrap();
+    let _guard = Guard(corral_core::StuckProcess {
+        pid,
+        argv: process.argv.clone(),
+        started: process.started.clone(),
+    });
+    let parent = process.parent_pid;
+    let parent_snapshot = SystemProcesses.inspect(parent).unwrap().unwrap();
+    let _parent = Guard(corral_core::StuckProcess {
+        pid: parent,
+        argv: parent_snapshot.argv,
+        started: parent_snapshot.started,
+    });
+    assert!(
+        std::fs::read_link(format!("/proc/{pid}/cwd"))
+            .unwrap()
+            .starts_with(&fx.run().worktree)
+    );
+    fx.edit(|s| {
+        s["process_info"] =
+            json!({"shell_pid":10,"foreground_processes":[{"pid":pid,"argv":process.argv}]})
+    });
+    let start = jiff::Timestamp::now();
+    corral_ops::sync_at_with_processes(&fx.ctx, start, &Aged).unwrap();
+    corral_ops::sync_at_with_processes(
+        &fx.ctx,
+        start + jiff::SignedDuration::from_secs(10_000),
+        &Aged,
+    )
+    .unwrap();
+    assert!(fx.run().stuck.is_none());
+    let board = corral_ops::attention::board(&fx.ctx, start).unwrap();
+    assert!(
+        !board
+            .tasks
+            .iter()
+            .flat_map(|t| &t.assessment.conditions)
+            .any(|c| c.kind == "stuck_process")
+    );
+    assert!(SystemProcesses.inspect(pid).unwrap().is_some());
+    // Model the real pane close: terminate the worker shell/parent, not its LSP.
+    // The surviving marker-owned LSP must then be reaped by worktree cleanup.
+    let pane = fx.run().herdr.unwrap().pane_id;
+    fx.edit(|s| s["shells"][pane] = json!(parent));
+    fx.owner_ready();
+    let result =
+        corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
+    assert!(result.contains("worktree removed"), "{result}");
+    assert!(std::fs::read_link(format!("/proc/{pid}/cwd")).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn resolved_stuck_attention_restarts_automatic_review_after_done() {
+    use corral_ops::{ProcessControl, SystemProcesses};
+    struct Aged;
+    impl ProcessControl for Aged {
+        fn inspect(&self, pid: u32) -> anyhow::Result<Option<corral_ops::ProcessSnapshot>> {
+            Ok(SystemProcesses.inspect(pid)?.map(|mut p| {
+                p.elapsed_secs = 10_000;
+                p
+            }))
+        }
+        fn terminate(&self, p: &corral_core::StuckProcess) -> anyhow::Result<()> {
+            SystemProcesses.terminate(p)
+        }
+    }
+    let fx = Fx::new();
+    let resident = Resident::start(&fx.run().worktree, None, None);
+    let pid = resident.0.id();
+    let process = SystemProcesses.inspect(pid).unwrap().unwrap();
+    fx.edit(|s| {
+        s["process_info"] =
+            json!({"shell_pid":10,"foreground_processes":[{"pid":pid,"argv":process.argv}]})
+    });
+    let now = jiff::Timestamp::now();
+    corral_ops::sync_at_with_processes(&fx.ctx, now, &Aged).unwrap();
+    let later = now + jiff::SignedDuration::from_secs(10_000);
+    corral_ops::sync_at_with_processes(&fx.ctx, later, &Aged).unwrap();
+    let task = fx.ctx.store.get(&fx.id).unwrap();
+    assert_eq!(task.current_run().unwrap().stuck.as_ref().unwrap().pid, pid);
+    assert!(
+        task.attention
+            .records
+            .values()
+            .any(|r| r.kind == "stuck_process" && r.resolved_at.is_none())
+    );
+    fx.done();
+    // The first review pass sees the still-open record, reports a real refusal,
+    // then attention reconciliation closes it at the end of the pass.
+    corral_ops::sync_at_with_processes(&fx.ctx, later, &Aged).unwrap();
+    let events = fx.ctx.store.events().unwrap();
+    assert!(events.iter().any(|e| {
+        e.kind == "automation_blocked"
+            && e.detail["reason"]
+                .as_str()
+                .unwrap_or("")
+                .contains("process recovery")
+    }));
+    assert!(
+        fx.ctx
+            .store
+            .events()
+            .unwrap()
+            .iter()
+            .any(|e| e.kind == "attention_resolved" && e.detail["kind"] == "stuck_process")
+    );
+    corral_ops::sync_at_with_processes(&fx.ctx, later, &Aged).unwrap();
+    assert!(
+        fx.ctx
+            .store
+            .events()
+            .unwrap()
+            .iter()
+            .any(|e| e.kind == "automation_resumed")
+    );
+    assert_eq!(fx.run().autopilot.unwrap().stage, AutoStage::Reviewing);
 }
 
 #[cfg(target_os = "linux")]
@@ -181,11 +338,24 @@ fn verdict_reaps_reviewer_resident_before_landing() {
         .join(format!("{}-{}-{}.owner", fx.id, run.id, reviewer.id));
     let marker = std::fs::read_to_string(marker_path).unwrap();
     let mut resident = Resident::start(&run.worktree, None, Some(&marker));
+    let pid = rustix::process::Pid::from_raw(resident.0.id().try_into().unwrap()).unwrap();
+    let pidfd = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).unwrap();
     corral_ops::verdict(&fx.ctx, &fx.id, Verdict::Approve, "Checked.").unwrap();
-    assert!(
-        resident.0.try_wait().unwrap().is_some(),
+    // Signal delivery precedes actual exit; wait for the kernel event before reaping.
+    let mut fds = [rustix::event::PollFd::new(
+        &pidfd,
+        rustix::event::PollFlags::IN,
+    )];
+    let timeout = rustix::event::Timespec {
+        tv_sec: 10,
+        tv_nsec: 0,
+    };
+    assert_eq!(
+        rustix::event::poll(&mut fds, Some(&timeout)).unwrap(),
+        1,
         "reviewer survived verdict"
     );
+    assert!(resident.0.try_wait().unwrap().is_some());
     fx.sync();
     let result =
         corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
@@ -238,7 +408,9 @@ fn sync_waits_for_verdict_event_before_reaping_reviewer() {
         .store
         .update(&fx.id, |task| {
             let run = task.current_run_mut().unwrap();
-            let now = jiff::Timestamp::now();
+            // Simulate a backward wall-clock step before the event is written.
+            let now =
+                jiff::Timestamp::from_second(jiff::Timestamp::now().as_second() + 3600).unwrap();
             let review = run.review.as_mut().unwrap();
             review.verdict = Some(Verdict::Approve);
             review.at = now;
@@ -258,7 +430,7 @@ fn sync_waits_for_verdict_event_before_reaping_reviewer() {
         .log_event(
             Some(&fx.id),
             "verdict",
-            json!({"run":run.id,"reviewer":"rev"}),
+            json!({"run":run.id,"reviewer":"rev", "review_at": fx.run().review.unwrap().at.to_string()}),
         )
         .unwrap();
     fx.sync();

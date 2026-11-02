@@ -53,10 +53,13 @@ fn durable_verdict(
         let page = ctx
             .store
             .events_page(Some(task), &["verdict"], Some(run), after, 256)?;
-        if page
-            .iter()
-            .any(|event| event.detail["reviewer"].as_str() == Some(reviewer) && event.ts >= at)
-        {
+        if page.iter().any(|event| {
+            event.detail["reviewer"].as_str() == Some(reviewer)
+                && match event.detail["review_at"].as_str() {
+                    Some(stamp) => stamp == at.to_string(),
+                    None => event.ts >= at,
+                }
+        }) {
             return Ok(true);
         }
         let Some(last) = page.last() else {

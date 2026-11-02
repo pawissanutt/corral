@@ -58,6 +58,13 @@ fn approved_three_projects_preflight_and_authenticated_operations() {
     // The same entry point used by `corral pi --pm`, including preflight.
     super::profile(&fx.ctx).unwrap();
     assert_eq!(super::project(&fx.ctx).unwrap(), WORKSPACE);
+    let path = crate::pm::save_native_context(&fx.ctx).unwrap();
+    let input: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(input["version"], 1);
+    assert_eq!(input["workspace"], fx.root().to_str().unwrap());
+    assert_eq!(input["projects"].as_object().unwrap().len(), 3);
+    assert!(input["projects"].get("second").is_some());
+    assert!(input["policy"]["authorization"].is_string());
     let process = agent::bridge::fixture::HostProc::spawn(true);
     let host = fx.bind(
         &agent::BindTarget::Pm {

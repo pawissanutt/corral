@@ -18,6 +18,9 @@ const CALLS_MAX: usize = 256;
 const HOOKS_MAX: usize = 256;
 /// The custom session entry the host appends before, at and after each hook launch (T-572).
 pub const HOOK_ENTRY: &str = "corral_hook";
+/// The custom session entry the host appends when a Code Mode cell's nested call starts and
+/// settles (T-683). A started child without a settled entry is dangling, under its child key.
+pub const CODE_CALL_ENTRY: &str = "corral_code_call";
 const HOOK_PHASES: [&str; 3] = ["pre_tool", "post_tool", "turn_end"];
 const DETAIL_MAX_BYTES: usize = 512;
 /// Two-phase operations: without a reservation nothing ran.
@@ -29,15 +32,14 @@ const TWO_PHASE: [&str; 6] = [
     "plan_verdict",
     "owner_action",
 ];
-// Web tools are GET-only; tool_search reads only the host's local cached catalog; job_output
-// reads the host's output cache.
-const NO_EFFECT: [&str; 8] = [
+// Public fetch is GET-only; tool_search and job_output read local caches. Search may
+// spend subscription quota, so a missing result is not proof of no effect.
+const NO_EFFECT: [&str; 7] = [
     "read",
     "grep",
     "find",
     "ls",
     "web_fetch",
-    "web_search",
     "tool_search",
     "job_output",
 ];
@@ -161,6 +163,40 @@ fn observe_hook(hooks: &mut Vec<HookRecord>, limits: &mut Vec<ScanLimit>, data: 
     }
 }
 
+/// A nested call is keyed `<tool_call_id>/<call>`, the ID its request ID is derived from, so
+/// classification reads its receipt exactly as it reads a transcript call's.
+fn observe_child(open: &mut Vec<DanglingCall>, limits: &mut Vec<ScanLimit>, data: &Value) {
+    let text = |key: &str, max: usize| {
+        data["parent"][key]
+            .as_str()
+            .filter(|value| !value.is_empty() && value.len() <= max)
+    };
+    let (Some(tool_call), Some(call), Some(name)) = (
+        text("tool_call_id", 512),
+        text("call", 160),
+        data["tool"]
+            .as_str()
+            .filter(|t| !t.is_empty() && t.len() <= 128),
+    ) else {
+        return;
+    };
+    let id = format!("{tool_call}/{call}");
+    match data["phase"].as_str() {
+        Some("started") if open.iter().any(|c| c.id == id) => {}
+        Some("started") if open.len() < CALLS_MAX => open.push(DanglingCall {
+            id,
+            name: name.into(),
+        }),
+        Some("started") => {
+            if !limits.contains(&ScanLimit::Calls) {
+                limits.push(ScanLimit::Calls);
+            }
+        }
+        Some("settled") => open.retain(|c| c.id != id),
+        _ => {}
+    }
+}
+
 fn skip_line(reader: &mut impl BufRead) -> Result<()> {
     loop {
         let buf = reader.fill_buf().context("reading the Pi session")?;
@@ -250,6 +286,10 @@ pub fn dangling_calls(
         }
         if active && entry["type"] == "custom" && entry["customType"] == HOOK_ENTRY {
             observe_hook(&mut hooks, &mut limits, &entry["data"]);
+            continue;
+        }
+        if active && entry["type"] == "custom" && entry["customType"] == CODE_CALL_ENTRY {
+            observe_child(&mut open, &mut limits, &entry["data"]);
             continue;
         }
         if !active || entry["type"] != "message" {
@@ -342,7 +382,13 @@ pub fn classify_corral(
     running: bool,
 ) -> (ResumeClass, String) {
     let Some(receipt) = receipt else {
-        return if TWO_PHASE.contains(&op) {
+        return if matches!(op, "memory_put" | "memory_remove") {
+            (
+                ResumeClass::OutcomeUnknown,
+                "file effect unknown: re-read the entry; recovery did not reapply this mutation"
+                    .into(),
+            )
+        } else if TWO_PHASE.contains(&op) {
             (
                 ResumeClass::NotExecuted,
                 "no reservation was committed, so nothing ran".into(),
@@ -406,6 +452,11 @@ pub fn classify_upstream(tool: &str, snapshot: Option<&str>) -> (ResumeClass, Op
     }
     if NO_EFFECT.contains(&tool) {
         (ResumeClass::InterruptedNoEffect, None)
+    } else if tool == "web_search" {
+        (
+            ResumeClass::OutcomeUnknown,
+            Some("subscription quota may have been consumed; inspect auxiliary usage before retrying".into()),
+        )
     } else if tool == "codemode" {
         (
             ResumeClass::OutcomeUnknown,
@@ -570,17 +621,17 @@ mod tests {
 
     #[test]
     fn get_only_web_tools_are_interrupted_without_local_effects() {
-        // Given known GET-only, no-credential web tools and an unknown tool.
-        for tool in ["web_fetch", "web_search"] {
-            // When classifying their unmatched calls, then retry needs no effect reconciliation.
-            assert_eq!(
-                classify_upstream(tool, Some("saved.diff")),
-                (ResumeClass::InterruptedNoEffect, None)
-            );
-        }
+        // Public GET has no local effect; search may have consumed subscription quota.
+        assert_eq!(
+            classify_upstream("web_fetch", Some("saved.diff")),
+            (ResumeClass::InterruptedNoEffect, None)
+        );
         assert_eq!(
             classify_upstream("web_post", None).0,
             ResumeClass::OutcomeUnknown
         );
+        let (class, detail) = classify_upstream("web_search", None);
+        assert_eq!(class, ResumeClass::OutcomeUnknown);
+        assert!(detail.unwrap().contains("quota"));
     }
 }

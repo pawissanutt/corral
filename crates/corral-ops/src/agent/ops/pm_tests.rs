@@ -37,6 +37,76 @@ fn task(fx: &ts::Fx, project: &str, body: &str) -> Task {
 }
 
 #[test]
+fn inbox_limits_distinguish_items_from_body_characters_without_mutating() {
+    let (fx, host) = fixture();
+    fx.ctx
+        .store
+        .pm_inbox_post(corral_core::pm_inbox::NewPmItem {
+            from: "owner".into(),
+            kind: corral_core::pm_inbox::ItemKind::Question,
+            subject: "Bounds".into(),
+            body: "x".repeat(2048),
+            refs: vec![],
+            requested_action: None,
+            owner_words: None,
+            key: None,
+        })
+        .unwrap();
+    let before = fx.ctx.store.pm_inbox_item("PMI-1").unwrap();
+    for limit in [1, 100, 101, 1024] {
+        let response = send(
+            &fx,
+            &host,
+            "inbox_read",
+            &format!("body-{limit}"),
+            json!({"id":"PMI-1", "limit":limit}),
+        );
+        let receipt = response.receipt().unwrap();
+        assert_eq!(receipt.state, ReceiptState::Committed);
+        assert_eq!(
+            receipt.result["content_json"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
+            limit
+        );
+        assert_eq!(receipt.result["next_offset"], limit);
+    }
+    for limit in [1, 100] {
+        let response = send(
+            &fx,
+            &host,
+            "inbox_read",
+            &format!("list-{limit}"),
+            json!({"limit":limit}),
+        );
+        assert_eq!(response.receipt().unwrap().state, ReceiptState::Committed);
+    }
+    for input in [
+        json!({"limit":0}),
+        json!({"limit":101}),
+        json!({"id":"PMI-1", "limit":0}),
+        json!({"id":"PMI-1", "limit":1025}),
+        json!({"offset":-1}),
+    ] {
+        let response = send(&fx, &host, "inbox_read", "invalid-bounds", input);
+        assert_eq!(ts::code(&response), Some("bad_request"));
+    }
+    let response = send(
+        &fx,
+        &host,
+        "inbox_resolve",
+        "missing-outcome",
+        json!({"id":"PMI-1", "action":"resolve", "expected_revision":0}),
+    );
+    let receipt = response.receipt().unwrap();
+    assert_eq!(receipt.state, ReceiptState::Rejected);
+    assert_eq!(receipt.result["code"], "bad_request");
+    assert_eq!(before, fx.ctx.store.pm_inbox_item("PMI-1").unwrap());
+}
+
+#[test]
 fn inbox_tools_claim_and_resolve_at_revisions_and_refuse_a_stale_claim() {
     // Given a bound Pi-native PM and owner item PMI-1 at revision 0.
     let (fx, host) = fixture();
@@ -301,6 +371,242 @@ fn comment_rechecks_generation_in_its_commit_transaction() {
     assert_eq!(ts::code(&reply), Some("agent_fenced"));
     let saved = fx.ctx.store.get(&task.id).unwrap();
     assert!(saved.comments.is_empty() && saved.agent_pm_receipts.is_empty());
+}
+
+#[test]
+fn codemode_allowlisted_reads_leave_no_receipts_or_request_id_obligations() {
+    let (fx, host) = fixture();
+    let task = task(&fx, "corral", "finite spec");
+    fx.ctx
+        .store
+        .pm_inbox_post(corral_core::pm_inbox::NewPmItem {
+            from: "owner".into(),
+            kind: corral_core::pm_inbox::ItemKind::Question,
+            subject: "Read only".into(),
+            body: "No claim or resolution".into(),
+            refs: vec![],
+            requested_action: None,
+            owner_words: None,
+            key: None,
+        })
+        .unwrap();
+    let before = pm_state::load(&fx.ctx.store).unwrap().unwrap();
+    let bytes = ts::task_bytes(&fx, &task.id);
+    let inbox = fx.ctx.store.pm_inbox_item("PMI-1").unwrap();
+    // Mirrors NESTED_CORRAL_READ_OPS in the Pi host. Reuse one request ID for different
+    // operations/payloads: reads must not reserve it, replay a result, or store a digest.
+    for (op, payload) in [
+        ("read_brief", json!({})),
+        ("read_next", json!({})),
+        ("read_show", json!({"task":task.id})),
+        ("read_list", json!({"limit":1})),
+        ("read_search", json!({"query":"finite", "limit":1})),
+        ("read_route", json!({"task":task.id})),
+        ("read_artifacts", json!({"task":task.id})),
+        ("read_lessons", json!({})),
+        ("inbox_read", json!({"id":"PMI-1"})),
+    ] {
+        for _ in 0..2 {
+            let response = send(&fx, &host, op, "shared-read-id", payload.clone());
+            assert_eq!(ts::committed(&response).op, op, "{op}");
+            assert!(
+                matches!(
+                    response,
+                    CallResponse::Receipt {
+                        replayed: false,
+                        ..
+                    }
+                ),
+                "{op}"
+            );
+            assert_eq!(
+                before,
+                pm_state::load(&fx.ctx.store).unwrap().unwrap(),
+                "{op}"
+            );
+            assert_eq!(bytes, ts::task_bytes(&fx, &task.id), "{op}");
+            assert_eq!(inbox, fx.ctx.store.pm_inbox_item("PMI-1").unwrap(), "{op}");
+        }
+    }
+}
+
+#[test]
+fn exact_question_and_automation_reads_preserve_identity_and_state() {
+    let (fx, host) = fixture();
+    let id = ts::worker_task(&fx, "worker");
+    let worker = ts::bind(
+        &fx,
+        &BindTarget::Worker {
+            task: id.clone(),
+            run: "R1".into(),
+        },
+        "worker",
+        "worker-session",
+    );
+    ts::committed(&ts::hello(&fx, &worker));
+    let asked = send(
+        &fx,
+        &worker,
+        "ask",
+        "ask",
+        json!({"kind":"clarification","text":"Which bounded read?","blocking":false}),
+    );
+    let key = asked.receipt().unwrap().result["key"].as_str().unwrap();
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            let run = &mut task.runs[0];
+            run.autopilot = Some(corral_core::AutopilotState {
+                stage: corral_core::AutoStage::Blocked,
+                reason: Some("landing refused: dirty destination".into()),
+                sha: Some("abc123".into()),
+                at: Timestamp::now(),
+            });
+            let state = run.agent_host.as_mut().unwrap();
+            state.questions[0].revision = 3;
+            for n in 2..18 {
+                let mut historical = state.questions[0].clone();
+                historical.key = format!("{id}/R1/Q{n}");
+                historical.text = "unrelated historical question".repeat(100);
+                state.questions.push(historical);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let op: crate::PostLandOperation = serde_json::from_value(json!({
+        "version":1,"key":"pending-exact-operation","project":"corral",
+        "repo":"/tmp/repo","task":id,"run":"R1","base":"main",
+        "base_before":"old","landed_sha":"abc123","policy_digest":"policy",
+        "created":"2026-10-23T00:00:00Z","landed":false,"abandoned":false,
+        "notified":false,"hooks":[]
+    }))
+    .unwrap();
+    crate::hooks::save(&fx.ctx, &op).unwrap();
+    let operations_before =
+        serde_json::to_value(crate::post_land_operations(&fx.ctx, Some("corral")).unwrap())
+            .unwrap();
+    let before = ts::task_bytes(&fx, &id);
+    let shown = send(
+        &fx,
+        &host,
+        "read_show",
+        "exact",
+        json!({"task":id,"section":"questions","key":key,"limit":4096}),
+    );
+    let result = &shown.receipt().unwrap().result;
+    let view: Value = serde_json::from_str(result["content_json"].as_str().unwrap()).unwrap();
+    assert_eq!(view["question"]["key"], key);
+    assert_eq!(result["revision"], view["question"]["revision"]);
+    assert_eq!(result["next_offset"], Value::Null);
+    assert_eq!(result["revision"], 3);
+    assert!(
+        !result["content_json"]
+            .as_str()
+            .unwrap()
+            .contains("unrelated historical")
+    );
+    assert!(view.get("pending").is_some());
+    let missing = send(
+        &fx,
+        &host,
+        "read_show",
+        "missing",
+        json!({"task":id,"section":"questions","key":"T-999/R1/Q1"}),
+    );
+    assert_eq!(ts::code(&missing), Some("bad_request"));
+    let invalid = send(
+        &fx,
+        &host,
+        "read_show",
+        "invalid-key",
+        json!({"task":id,"key":key}),
+    );
+    assert_eq!(ts::code(&invalid), Some("bad_request"));
+    let automation = send(
+        &fx,
+        &host,
+        "read_show",
+        "automation",
+        json!({"task":id,"section":"automation","limit":4096}),
+    );
+    let content: Value = serde_json::from_str(
+        automation.receipt().unwrap().result["content_json"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(content["run"], "R1");
+    assert_eq!(content["autopilot"]["stage"], "blocked");
+    assert_eq!(
+        content["autopilot"]["reason"],
+        "landing refused: dirty destination"
+    );
+    assert!(
+        automation.receipt().unwrap().result["diagnostic"]
+            .as_str()
+            .unwrap()
+            .contains("dirty destination")
+    );
+    assert_eq!(content["operations"][0]["key"], "pending-exact-operation");
+    assert_eq!(content["operations"][0]["landed"], false);
+    assert_eq!(content["operations"][0]["ready"], false);
+    assert_eq!(
+        operations_before,
+        serde_json::to_value(crate::post_land_operations(&fx.ctx, Some("corral")).unwrap())
+            .unwrap()
+    );
+    assert_eq!(before, ts::task_bytes(&fx, &id));
+}
+
+#[test]
+fn show_pages_reassemble_escaped_unicode_within_wire_bound() {
+    let (fx, host) = fixture();
+    let task = task(&fx, "corral", &"\"\\\n😀".repeat(3000));
+    let before = ts::task_bytes(&fx, &task.id);
+    let mut offset = 0;
+    let mut content = String::new();
+    loop {
+        let response = send(
+            &fx,
+            &host,
+            "read_show",
+            &format!("page-{offset}"),
+            json!({"task":task.id,"section":"spec","offset":offset,"limit":4096}),
+        );
+        let result = &response.receipt().unwrap().result;
+        assert!(serde_json::to_vec(result).unwrap().len() <= RESULT_MAX_BYTES);
+        assert_eq!(result["offset"], offset);
+        content.push_str(result["content_json"].as_str().unwrap());
+        match result["next_offset"].as_u64() {
+            Some(next) => {
+                assert!(next > offset);
+                offset = next;
+                assert_eq!(result["truncated"], true);
+            }
+            None => break,
+        }
+    }
+    assert_eq!(
+        serde_json::from_str::<String>(&content).unwrap(),
+        fx.ctx.store.get(&task.id).unwrap().body
+    );
+    let default = send(
+        &fx,
+        &host,
+        "read_show",
+        "default",
+        json!({"task":task.id,"section":"spec"}),
+    );
+    assert_eq!(default.receipt().unwrap().result["end_offset"], 1024);
+    let bad = send(
+        &fx,
+        &host,
+        "read_show",
+        "too-large",
+        json!({"task":task.id,"section":"spec","limit":4097}),
+    );
+    assert_eq!(ts::code(&bad), Some("bad_request"));
+    assert_eq!(before, ts::task_bytes(&fx, &task.id));
 }
 
 #[test]

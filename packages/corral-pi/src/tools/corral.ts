@@ -1,8 +1,9 @@
 // Host-to-corral calls: one fresh `corral agent call --op <op>` process per request, with
 // envelope v1 on stdin and one JSON receipt on stdout. Secrets travel only on stdin.
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 
+import type { CodeParent } from "../extensions/codemode/child.ts";
 import type { CorralOp, HostIdentity } from "../roles/types.ts";
 
 export const ENVELOPE_VERSION = 1;
@@ -10,8 +11,17 @@ export const ENVELOPE_MAX_BYTES = 64 * 1024;
 const RESPONSE_MAX_BYTES = 256 * 1024;
 const CALL_TIMEOUT_MS = 60_000;
 
+export interface CallDiagnostics {
+  readonly exit_code?: number | null;
+  readonly signal?: string | null;
+  readonly timed_out?: boolean;
+  readonly diagnostic?: string;
+  /** Only a failure before spawning proves that the operation never started. */
+  readonly effect?: "not_started" | "unknown";
+}
+
 export class CorralCallError extends Error {
-  constructor(readonly code: string, message: string) {
+  constructor(readonly code: string, message: string, readonly diagnostics: CallDiagnostics = {}) {
     super(`${code}: ${message}`);
   }
 }
@@ -69,6 +79,8 @@ export interface CorralCall {
   readonly bindNonce?: string;
   /** Overrides the client's deadline for this one call. */
   readonly timeoutMs?: number;
+  /** A nested Code Mode call: corral checks that `requestId` is derived from it (T-683). */
+  readonly parent?: CodeParent;
 }
 
 export interface CorralClientOptions {
@@ -111,6 +123,23 @@ export class CorralClient {
     });
   }
 
+  /** Bounded canonical read, deliberately not read_show/full task hydration or a mutation. */
+  inspectionSnapshot(): Promise<unknown> {
+    const { identity, corral, root } = this.options;
+    const { task, run } = identity;
+    if (!task || !run) return Promise.reject(new CorralCallError("inspection_unbound", "No task/run bound to this session"));
+    return new Promise((resolve, reject) => {
+      const child = execFile(corral, ["run", "inspect", task, "--run", run], {
+        cwd: root, timeout: 30_000, maxBuffer: 128 * 1024,
+      }, (error, stdout) => {
+        if (error) { reject(new CorralCallError("inspection_read", error.message)); return; }
+        try { resolve(JSON.parse(stdout)); }
+        catch { reject(new CorralCallError("inspection_read", "Invalid inspection response")); }
+      });
+      child.stdin?.end();
+    });
+  }
+
   envelope(op: CorralOp, call: CorralCall): string {
     const { identity } = this.options;
     const text = JSON.stringify({
@@ -130,6 +159,7 @@ export class CorralClient {
         session_id: this.options.sessionId(),
         generation: identity.generation,
         turn: call.turn,
+        parent: call.parent,
       },
       auth: { host_cap: this.options.hostCap, bind_nonce: call.bindNonce },
       payload: call.payload,
@@ -140,52 +170,86 @@ export class CorralClient {
     return text;
   }
 
+  /** Narrow lifecycle seams let tests drive exit/deadline ordering without sleeps. */
+  protected spawnCall(op: CorralOp): ChildProcessWithoutNullStreams {
+    return spawn(this.options.corral, ["agent", "call", "--op", op], {
+      cwd: this.options.root, stdio: ["pipe", "pipe", "pipe"],
+    });
+  }
+
+  protected deadline(expire: () => void, ms: number): () => void {
+    const timer = setTimeout(expire, ms);
+    return () => clearTimeout(timer);
+  }
+
   call(op: CorralOp, call: CorralCall): Promise<CorralReceipt> {
     const input = this.envelope(op, call);
     return new Promise((resolve, reject) => {
-      const child = spawn(this.options.corral, ["agent", "call", "--op", op], {
-        cwd: this.options.root,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      const child = this.spawnCall(op);
       const out: Buffer[] = [];
       const err: Buffer[] = [];
       let size = 0;
       let settled = false;
+      let failure: "call_timeout" | "call_output" | undefined;
       const finish = (error: Error | undefined, receipt?: CorralReceipt) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        cancelDeadline();
         if (error) reject(error);
         else if (receipt) resolve(receipt);
       };
-      const timer = setTimeout(() => {
+      const destroyPipes = () => { child.stdout.destroy(); child.stderr.destroy(); };
+      const stop = (reason: "call_timeout" | "call_output") => {
+        failure ??= reason;
         child.kill("SIGKILL");
-        finish(new CorralCallError("call_timeout", `corral agent call --op ${op} exceeded its deadline`));
-      }, call.timeoutMs ?? this.options.timeoutMs ?? CALL_TIMEOUT_MS);
+        // Exit may have happened before this bound was reached. No second exit event
+        // will arrive in that ordering, so release descendant-held pipes here as well.
+        if (child.exitCode !== null || child.signalCode !== null) destroyPipes();
+      };
+      const cancelDeadline = this.deadline(() => stop("call_timeout"),
+        call.timeoutMs ?? this.options.timeoutMs ?? CALL_TIMEOUT_MS);
       const collect = (into: Buffer[]) => (chunk: Buffer) => {
+        const remaining = Math.max(0, RESPONSE_MAX_BYTES - size);
         size += chunk.length;
+        if (remaining > 0) into.push(chunk.subarray(0, remaining));
         if (size > RESPONSE_MAX_BYTES) {
-          child.kill("SIGKILL");
-          finish(new CorralCallError("call_output", "corral agent call output exceeds its bound"));
-          return;
+          stop("call_output");
         }
-        into.push(chunk);
       };
       child.stdout.on("data", collect(out));
       child.stderr.on("data", collect(err));
-      child.on("error", (error) => finish(new CorralCallError("call_spawn", error.message)));
-      child.on("close", (code) => {
+      const redact = (text: string) => [this.options.hostCap, call.bindNonce].reduce<string>(
+        (s, secret) => secret ? s.replaceAll(secret, "[redacted]") : s, text,
+      ).slice(-4096);
+      child.on("error", (error) => finish(new CorralCallError(
+        child.pid === undefined ? "call_spawn" : "call_failed", redact(error.message),
+        { effect: child.pid === undefined ? "not_started" : "unknown" },
+      )));
+      child.on("exit", () => {
+        // A descendant can retain the executor's pipe descriptors. Once a bounded call
+        // was killed, do not let those descriptors turn its deadline into an infinite wait.
+        if (failure) destroyPipes();
+      });
+      // EPIPE may race a process exit; the close event retains the actual status and diagnostics.
+      child.stdin.on("error", () => {});
+      child.on("close", (code, signal) => {
         const text = Buffer.concat(out).toString("utf8").trim();
-        if (code !== 0) {
-          const detail = Buffer.concat(err).toString("utf8").trim().split("\n").slice(-3).join(" ");
-          finish(new CorralCallError("call_failed", `corral agent call exited ${code}: ${detail}`));
-          return;
-        }
+        // A canonical response is stronger evidence than an exit status, including a receipt
+        // flushed before the process was killed. Never synthesize a rejection from an exit.
         try {
-          finish(undefined, parseReceipt(text));
-        } catch (error) {
-          finish(error instanceof Error ? error : new CorralCallError("call_output", String(error)));
-        }
+          const receipt = parseReceipt(text);
+          const lookup = receipt.lookup as { by?: unknown } | undefined;
+          if ((receipt.op === op && receipt.request_id === call.requestId)
+            || (op === "receipt_lookup" && lookup?.by === call.requestId)) {
+            finish(undefined, receipt);
+            return;
+          }
+        } catch { /* Report bounded transport diagnostics below, not untrusted JSON text. */ }
+        const diagnostic = redact(Buffer.concat(err).toString("utf8").trim());
+        const errorCode = failure ?? (code !== 0 || signal ? "call_failed" : "call_output");
+        finish(new CorralCallError(errorCode,
+          `corral agent call --op ${op}: exit=${code}, signal=${signal}, timed_out=${failure === "call_timeout"}; ${diagnostic}`,
+          { exit_code: code, signal, timed_out: failure === "call_timeout", diagnostic, effect: "unknown" }));
       });
       child.stdin.end(input);
     });
@@ -199,8 +263,10 @@ function parseReceipt(text: string): CorralReceipt {
     throw new CorralCallError("call_output", "the receipt is not a JSON object");
   }
   const receipt = value as CorralReceipt;
-  if (typeof receipt.state !== "string" || typeof receipt.op !== "string") {
-    throw new CorralCallError("call_output", "the receipt lacks state or op");
+  if (receipt.version !== 1 || !(typeof receipt.request_id === "string" || receipt.request_id === null)
+    || typeof receipt.op !== "string" || !Object.hasOwn(receipt, "result")
+    || !["committed", "rejected", "reserved", "queued", "uncertain", "abandoned"].includes(receipt.state)) {
+    throw new CorralCallError("call_output", "the response is not a v1 Corral receipt");
   }
   return receipt;
 }

@@ -192,6 +192,7 @@ fn launch(fx: &ts::Fx, id: &str) -> (String, Host) {
             session_id: session.clone(),
             generation: bootstrap.generation,
             turn: None,
+            parent: None,
         },
         host_cap: ts::secret(&format!("{session}-host"), generation),
         ctl_cap: ts::secret(&format!("{session}-ctl"), generation),

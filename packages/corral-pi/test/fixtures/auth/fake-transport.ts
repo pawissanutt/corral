@@ -12,6 +12,10 @@ export interface FakeToolCall {
 
 export interface FakeStep {
   readonly text?: string;
+  /** Streams the message as these text deltas instead of `text` (their concatenation). */
+  readonly chunks?: readonly string[];
+  /** Awaited after the first chunk is sent, so a partially streamed reply can be observed. */
+  readonly afterFirstChunk?: () => Promise<void>;
   readonly toolCalls?: readonly FakeToolCall[];
 }
 
@@ -26,6 +30,8 @@ export interface FakeTransport {
   readonly requests: number;
   readonly aborted: number;
   readonly failures: number;
+  /** The last user text of each request, oldest first: what the model was given to answer. */
+  readonly prompts: readonly string[];
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -63,6 +69,7 @@ export function fakeCodexTransport(): FakeTransport {
     for (const waiter of holdWaiters.splice(0)) waiter();
   };
   let requests = 0;
+  const prompts: string[] = [];
   let aborted = 0;
   let failures = 0;
   let holdNext = false;
@@ -73,6 +80,7 @@ export function fakeCodexTransport(): FakeTransport {
   const send: Fetch = async (_input, init) => {
     const sequence = ++requests;
     const body = requestBody(init);
+    prompts.push(lastUserText(body));
     if (failNext) {
       failNext = false;
       failures++;
@@ -84,9 +92,10 @@ export function fakeCodexTransport(): FakeTransport {
     holdNext = false;
     const id = `resp_fake_${sequence}`;
     const items: Record<string, unknown>[] = [];
-    if (step.text !== undefined) {
+    const text = step.chunks?.join("") ?? step.text;
+    if (text !== undefined) {
       items.push({ type: "message", id: `msg_fake_${sequence}`, role: "assistant", status: "completed",
-        content: [{ type: "output_text", text: step.text, annotations: [] }] });
+        content: [{ type: "output_text", text, annotations: [] }] });
     }
     for (const call of step.toolCalls ?? []) {
       items.push({ type: "function_call", id: `fc_fake_${sequence}_${call.callId}`, call_id: call.callId,
@@ -106,7 +115,12 @@ export function fakeCodexTransport(): FakeTransport {
             onHold();
           });
         }
-        if (item.type === "message") yield { type: "response.output_text.delta", output_index: index, delta: step.text };
+        if (item.type === "message" && step.chunks) {
+          for (const [part, delta] of step.chunks.entries()) {
+            yield { type: "response.output_text.delta", output_index: index, delta };
+            if (part === 0) await step.afterFirstChunk?.();
+          }
+        } else if (item.type === "message") yield { type: "response.output_text.delta", output_index: index, delta: text };
         yield { type: "response.output_item.done", output_index: index, item };
       }
       yield { type: "response.completed", response: { id, status: "completed", usage: {
@@ -143,5 +157,6 @@ export function fakeCodexTransport(): FakeTransport {
     get requests() { return requests; },
     get aborted() { return aborted; },
     get failures() { return failures; },
+    get prompts() { return prompts; },
   };
 }

@@ -2,6 +2,34 @@ use super::*;
 use std::os::unix::fs::PermissionsExt;
 
 #[test]
+fn noop_sweep_reuses_snapshot_without_task_metadata_work() {
+    use corral_core::{
+        Status, Store,
+        work::{Work, count},
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = crate::resources::FixedResourceProbe::ctx(Store::init(tmp.path()).unwrap());
+    for _ in 0..32 {
+        ctx.store
+            .create("Historical task", None, Status::Done, "")
+            .unwrap();
+    }
+    let dir = ctx.store.scratch_path("tmp").unwrap().join("launch-exits");
+    for phase in 0..3 {
+        if phase == 1 {
+            std::fs::create_dir_all(&dir).unwrap();
+        }
+        if phase == 2 {
+            std::fs::write(dir.join("T-001-R1.exited"), "0").unwrap();
+        }
+        let counters = [Work::TaskList, Work::TaskStat, Work::SessionBindingRead];
+        let before = counters.map(count);
+        sweep(&ctx).unwrap();
+        assert_eq!(counters.map(count), before, "no-owner phase {phase}");
+    }
+}
+
+#[test]
 fn only_matching_run_sandboxes_are_removed() {
     let tmp = tempfile::tempdir().unwrap();
     let shim = tmp.path().join("podman");

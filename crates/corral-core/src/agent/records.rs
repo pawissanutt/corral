@@ -82,6 +82,9 @@ pub struct AgentRunState {
     /// PM's own progress; workers use the existing Run.progress instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub todo: Option<crate::RunProgress>,
+    /// PM and assistant: the request lifecycle around `todo` (T-679).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub todo_requests: Option<super::request::RequestLedger>,
     /// Worker background jobs: durable process identity and monitor subscriptions (T-565).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub jobs: Vec<super::JobRecord>,
@@ -112,6 +115,7 @@ impl AgentRunState {
             wakes: Vec::new(),
             reports: Vec::new(),
             todo: None,
+            todo_requests: None,
             jobs: Vec::new(),
             question_hold: None,
             rewinds: Vec::new(),
@@ -252,6 +256,28 @@ pub struct RequestIdentity {
     pub generation: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn: Option<u64>,
+    /// Code Mode only (T-683): the model-issued call and kernel cell that made this nested call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<CallParent>,
+}
+
+/// The parent of a nested Code Mode call. Its request ID is the tool request ID of the session
+/// and `<tool_call_id>/<call>`, so a replayed child names the same receipt and a new one never does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallParent {
+    /// The transcript `codemode` call that submitted the cell.
+    pub tool_call_id: String,
+    pub cell: String,
+    /// The kernel's call ID, `<cell>.<n>`.
+    pub call: String,
+}
+
+impl CallParent {
+    /// The nested call's own tool call ID, from which its request ID is derived.
+    pub fn child_key(&self) -> String {
+        format!("{}/{}", self.tool_call_id, self.call)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -374,6 +400,8 @@ pub enum TurnOriginKind {
     Bridge,
     OwnerTerminal,
     Unknown,
+    /// A PM or assistant host continuing its plan on a due continuation receipt (T-679).
+    Continuation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

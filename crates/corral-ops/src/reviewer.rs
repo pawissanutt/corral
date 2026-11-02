@@ -163,7 +163,7 @@ pub fn verdict_with_evidence(
     expected_attempt: Option<&str>,
     evidence: &[PathBuf],
 ) -> Result<ReviewRecord> {
-    let now = Timestamp::now;
+    let now = corral_core::clock::now;
     verdict_with_clock(
         ctx,
         id,
@@ -188,7 +188,7 @@ pub fn verdict_request(
 ) -> Result<crate::agent::effects::Receipted> {
     let home = crate::agent::effects::Home::of(report.origin);
     crate::agent::effects::swept(ctx, report.origin, home, || {
-        let now = Timestamp::now;
+        let now = corral_core::clock::now;
         verdict_with_clock(
             ctx,
             id,

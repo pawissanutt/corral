@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# Test-only thread-local wall source; never enabled by production dependencies.
+test-clock = []
+
 [dependencies]
 anyhow.workspace = true
 serde.workspace = true

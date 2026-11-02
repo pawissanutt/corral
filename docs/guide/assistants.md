@@ -102,6 +102,7 @@ generation records a transition when its snapshot differs from the previous one.
 | Key | strict / standard / full |
 |---|---|
 | `context_files`, `skills`, `prompt_templates`, `todo`, `codemode`, `mcp.enabled`, `tool_search`, `web.enabled`, `lsp`, `subagents` | off / on / on |
+| `write_permissions` | off / on / on (assistant only) |
 | `compaction` | on / on / on |
 | `bash_rules`, `oracle`, `browser` | off / off / on |
 | `budget`, `llama_cpp.enabled` | off unless configured |
@@ -115,11 +116,11 @@ assistant plan add.
 The role's core tools are read, grep, find, ls and bash, plus `corral_todo` while `todo` is on.
 The host exports `CORRAL_ASSISTANT=A-<n>` and `CORRAL_ASSISTANT_GENERATION` into the session's
 shell, so its `corral` commands can be attributed to the session. The edit and write tools
-reach only the session's recorded scratch worktrees, `.corral/artifacts/assistant/A-<n>/` and
-the system temp directory. A fixed host path guard resolves each path as Pi does (`@`, `~`,
-relative to the workspace, through symlinks) and refuses anything else, such as the main
-checkout or a task worktree, before it runs, nested calls included; no preset or setting
-widens it. A scratch created during the session counts at once. The packaged role contract tells the model to
+reach the session's recorded scratch worktrees, `.corral/artifacts/assistant/A-<n>/` and
+the system temp directory without prompting (except protected paths below). External writes
+use [write permissions](#write-permissions), top-level and nested calls alike. Temp excludes
+HOME and the workspace when either lies inside it. A scratch created during the session
+counts at once. The packaged role contract tells the model to
 read the board through the CLI, file ideas and comments only on the owner's request, and act
 on clear owner instructions only.
 
@@ -139,6 +140,65 @@ other herdr commands such as `herdr pane list`, and `corral` commands, whose own
 still checked. These rules prevent an honest model's accidents. Like the rest
 of the assistant design, they are not a security boundary. A refusal is logged as
 `bash_rule_denied` with `fixed: true`.
+
+## Write permissions
+
+With `write_permissions` on (standard/full, not strict), an external edit/write pauses before
+changing the file. The pane shows the tool, full path, new file/overwrite/replacement count
+and at most 40 lines or 4 KiB of preview. The owner chooses **Allow once**, **Allow for 1 hour**,
+**Allow for this session**, or **Deny**. Hour/session grants require a directory: the target's
+directory, its parent or grandparent, plus the enclosing Git root even when farther away.
+No candidate is above that root. With no safe candidate only once and Deny are offered.
+
+Scopes cannot be `/`, a top-level directory (such as `/etc`), HOME or an ancestor of HOME,
+in either normalized lexical or symlink-resolved form. Fixed refusals win over default roots,
+settings and grants: `.git`, `.corral`, foreign `.worktrees`, corral/herdr configuration
+and corral-pi data. Only this session's own artifact and recorded scratch prefixes are exempt
+from `.corral`/`.worktrees` rules; nested protected paths remain refused.
+
+```toml
+[agent.capabilities.assistant.write_permissions]
+allow = ["~/.agents/skills"]
+deny = ["~/.agents/skills/corral"]
+```
+
+Lists contain at most 64 absolute or `~/` directory prefixes, each at most 4096 bytes; no
+globs or `..`. Deny may be broad (`/`, `~`) and wins over allow and grants, but default
+roots precede configured lists. An allow entry resolving broadly is ignored with a notice.
+Configuration changes apply to the next generation, not the running one.
+
+```sh
+corral assistant permissions A-1 --json
+corral assistant permissions revoke A-1 G-1
+corral assistant permissions revoke A-1 --all
+```
+
+The listing shows active/consumed/expired/revoked/ended records, current and saved settings,
+and ignored allow resolutions. Revocation applies to the next check; an already-authorized
+write can finish. Only the owner or the owning session can revoke; no CLI creates grants.
+Hour/session grants belong only to A-1, survive host crash and resume (announced in the pane),
+and end with the session. Hour expiry uses corral's absolute wall clock: a reading at or
+after expiry refuses. A backward clock jump can extend the grant by the size of the jump,
+including when the clock moves before grant time; a forward jump ends it early.
+
+Once means one live invocation, not a transcript call ID. A transport resend reuses its
+receipt; a repeated tool call or resumed transcript asks again. Aborted or crashed invocations
+consume committed once decisions without claiming that Pi wrote. Each explicit answer,
+including Deny, is a structured `permission` owner input and durable
+`assistant_write_permission` event. The journal keeps at most 32 permission entries without
+crowding out citable inputs; events outlive evicted grants and entries. Permission inputs
+cannot authorize board, config, landing or other owner actions.
+
+Esc, cancel, five-minute timeout, abort and missing UI write nothing and journal no input.
+Explicit Deny is journaled and suppresses re-asking for that canonical target for the turn.
+Dialogs serialize, and queued writes recheck grants after each answer. Without UI the refusal
+names the configured allow list. Strict/off keeps the old external-path refusal.
+
+Symlinks are checked at each decision and after the owner answers and corral authorizes.
+Changed destinations refuse as `target_changed`. The last-check-to-write swap race remains:
+this is an accident guard, not an OS sandbox. Shell, background-job and MCP writes are
+outside enforcement; the model must use edit/write outside its roots and never use those
+other routes to avoid prompting or a denial. Other roles and subagents gain no authority.
 
 ## Records and lifecycle
 

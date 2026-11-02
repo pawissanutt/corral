@@ -5,6 +5,7 @@
 // A Bedrock host also adopts the AWS SDK's Node handlers into the guarded fetch, arms the socket
 // tripwire and reads its named AWS profile before the SDK loads.
 import { mkdirSync } from "node:fs";
+import { ProcessTerminal } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -98,6 +99,7 @@ async function main(): Promise<void> {
     sdk, identity: config.identity, cwd: config.cwd, agentDir, model: config.model, provider, ...(aws ? { aws } : {}),
     ...(config.effort ? { effort: config.effort } : {}),
     ...(config.promptFile ? { promptFile: config.promptFile } : {}),
+    ...(config.memoryFile ? { memoryFile: config.memoryFile } : {}),
     ...(config.ui ? { ui: config.ui } : {}),
     todo: config.todo === true,
     ...(config.capabilities ? { capabilities: config.capabilities } : {}),
@@ -139,7 +141,11 @@ async function main(): Promise<void> {
     await attachHeadless(session, events, (line) => process.stdout.write(line));
     return;
   }
-  terminal = new sdk.InteractiveMode(session.runtime, { verbose: false });
+  const panels = session.panels;
+  terminal = new sdk.InteractiveMode(session.runtime, {
+    verbose: false,
+    ...(panels ? { tuiMode: "fullscreen" as const, readOnlyQueue: true, terminal: panels.wrap(new ProcessTerminal()), mainView: transcript => panels.mainView(transcript) } : {}),
+  });
   guardTerminalStop(terminal, process.stdin);
   await terminal.init();
   session.markAttached("interactive");

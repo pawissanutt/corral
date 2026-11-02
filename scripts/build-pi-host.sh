@@ -20,7 +20,8 @@ mkdir -p "$(dirname "$output")"
     cd "$package"
     bun install --frozen-lockfile
     bun build --compile --root . --no-compile-autoload-dotenv --no-compile-autoload-bunfig \
-        src/host/compiled.ts src/extensions/codemode/worker.ts --outfile "$output"
+        src/host/compiled.ts src/extensions/codemode/kernel-worker.ts \
+        --outfile "$output"
 )
 probe=$("$output" --version </dev/null)
 case "$probe" in

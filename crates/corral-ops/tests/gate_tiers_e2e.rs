@@ -147,7 +147,10 @@ impl Fx {
     }
 
     fn sync(&self) {
-        corral_ops::sync_at(&self.ctx, now()).unwrap();
+        // Sync can collect a gate and use its timestamp as the evidence window start.
+        // The fixed policy-grant date predates captures, so it cannot timestamp syncs.
+        // Share the monotonic process clock used by gates, artifacts and observations.
+        corral_ops::sync_at(&self.ctx, corral_core::clock::now()).unwrap();
     }
 
     fn full(&self) -> String {

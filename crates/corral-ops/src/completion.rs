@@ -34,7 +34,7 @@ fn valid_key(key: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
 }
 
-fn manifest_digest(manifest: &CriteriaManifest) -> Result<String> {
+pub(crate) fn manifest_digest(manifest: &CriteriaManifest) -> Result<String> {
     Ok(verification::digest(&serde_json::to_vec(manifest)?))
 }
 
@@ -210,7 +210,7 @@ pub(crate) fn snapshot_hashes_with(
     Ok(hashes)
 }
 
-fn current_identity<T: TaskRef + ?Sized>(
+pub(crate) fn current_identity<T: TaskRef + ?Sized>(
     ctx: &Ctx,
     task: &T,
     run: &RunHead,
@@ -226,7 +226,10 @@ fn current_identity<T: TaskRef + ?Sized>(
     }
 }
 
-fn manifest_failures<T: TaskRef + ?Sized>(task: &T, run: &RunHead) -> Result<Vec<String>> {
+pub(crate) fn manifest_failures<T: TaskRef + ?Sized>(
+    task: &T,
+    run: &RunHead,
+) -> Result<Vec<String>> {
     let mut failures = Vec::new();
     let Some(manifest) = &task.completion() else {
         return Ok(failures);
@@ -512,6 +515,19 @@ pub(crate) fn obligation_failures<T: TaskRef + ?Sized>(
     current: &Admission,
     carried: Option<&Admission>,
 ) -> Result<Vec<String>> {
+    inspection_failures(ctx, task, run, current, carried, false)
+}
+
+/// The same admission checks for inspection, optionally including non-obligatory criteria.
+/// This does not change completion policy or promote worker assertions to machine receipts.
+pub(crate) fn inspection_failures<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    current: &Admission,
+    carried: Option<&Admission>,
+    all: bool,
+) -> Result<Vec<String>> {
     let Some(manifest) = &task.completion() else {
         return Ok(Vec::new());
     };
@@ -525,7 +541,7 @@ pub(crate) fn obligation_failures<T: TaskRef + ?Sized>(
     for criterion in manifest
         .criteria
         .iter()
-        .filter(|c| (manifest.audited && c.required) || complete(&c.id))
+        .filter(|c| all || (manifest.audited && c.required) || complete(&c.id))
     {
         let before = failures.len();
         let Some(record) = run
@@ -590,7 +606,7 @@ fn predates_attempt(stamp: Timestamp, run: &RunHead) -> bool {
     stamp < attempt_start(run)
 }
 
-fn attempt_start(run: &RunHead) -> Timestamp {
+pub(crate) fn attempt_start(run: &RunHead) -> Timestamp {
     run.gate.as_ref().map_or(run.started, |gate| gate.at)
 }
 

@@ -531,6 +531,7 @@ fn summary(state: &AgentRunState) -> serde_json::Map<String, Value> {
         "turns": state.turns.len(),
         "todo_enabled": state.current_generation().is_some_and(|g| g.todo),
         "todo": state.todo,
+        "todo_requests": state.todo_requests,
         "capabilities": capabilities,
         "capability_change": state.current_generation().and_then(|g| g.capability_transition.as_ref()),
     });

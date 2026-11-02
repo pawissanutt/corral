@@ -64,7 +64,37 @@ pub(crate) fn pinned() -> Option<Timestamp> {
 
 /// Process-wide strictly increasing wall clock for attempt-window stamps.
 pub fn now() -> Timestamp {
-    pinned().unwrap_or_else(|| PROCESS.now())
+    if let Some(stamp) = pinned() {
+        return stamp;
+    }
+    #[cfg(feature = "test-clock")]
+    if let Some(stamp) = TEST_CLOCK.with(|clock| clock.borrow().as_ref().map(MonotonicClock::now)) {
+        return stamp;
+    }
+    PROCESS.now()
+}
+
+/// Installs a thread-local clock for a test, restoring the previous clock even on panic.
+/// Other threads and production builds continue to use the process clock.
+#[cfg(feature = "test-clock")]
+pub fn with_test_wall<T>(
+    wall: impl Fn() -> Timestamp + Send + Sync + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<MonotonicClock>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_CLOCK.with(|clock| *clock.borrow_mut() = self.0.take());
+        }
+    }
+    let previous = TEST_CLOCK.with(|clock| clock.borrow_mut().replace(MonotonicClock::new(wall)));
+    let _restore = Restore(previous);
+    f()
+}
+
+#[cfg(feature = "test-clock")]
+thread_local! {
+    static TEST_CLOCK: std::cell::RefCell<Option<MonotonicClock>> = const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]

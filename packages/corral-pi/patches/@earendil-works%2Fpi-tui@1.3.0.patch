@@ -1,0 +1,88 @@
+diff --git a/node_modules/@earendil-works/pi-tui/.bun-tag-88e57836e6a36f86 b/.bun-tag-88e57836e6a36f86
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/dist/components/image.d.ts b/dist/components/image.d.ts
+index 7223aa9097336854f5cf326a3d5c753441a68dbf..8966fc510b2fdfa69ad1c0920c8a8fb86147c17b 100644
+--- a/dist/components/image.d.ts
++++ b/dist/components/image.d.ts
+@@ -1,5 +1,5 @@
+ import { type ImageDimensions } from "../terminal-image.ts";
+-import type { Component } from "../tui.ts";
++import type { Component, TuiMouseEvent, TuiMouseEventResult } from "../tui.ts";
+ /**
+  * Converts base64 image data to base64 PNG data, or returns null if it cannot.
+  * Called synchronously during rendering.
+@@ -10,6 +10,8 @@ export type ImageTranscoder = (base64Data: string, mimeType: string) => string |
+  * Without one, such images render as text fallbacks.
+  */
+ export declare function setImageTranscoder(transcoder: ImageTranscoder | undefined): void;
++export interface ImageSource { readonly data: string; readonly mimeType: string; readonly dimensions: ImageDimensions; readonly filename?: string }
++export declare function setImageActivationHandler(handler: ((source: ImageSource) => void | boolean) | undefined): () => void;
+ export interface ImageTheme {
+     fallbackColor: (str: string) => string;
+ }
+@@ -34,6 +36,7 @@ export declare class Image implements Component {
+     constructor(base64Data: string, mimeType: string, theme: ImageTheme, options?: ImageOptions, dimensions?: ImageDimensions);
+     /** Get the Kitty image ID used by this image (if any). */
+     getImageId(): number | undefined;
++    handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
+     invalidate(): void;
+     render(width: number): string[];
+ }
+diff --git a/dist/components/image.js b/dist/components/image.js
+index 78719cdf0b8c336512256fed7054f06c8bd77c87..ae543c62186b10d7d785116cb65b465ef70d7992 100644
+--- a/dist/components/image.js
++++ b/dist/components/image.js
+@@ -1,6 +1,13 @@
+ import { allocateImageId, getCapabilities, getCellDimensions, getImageDimensions, getPngDimensions, imageFallback, renderImage, } from "../terminal-image.js";
+ import { truncateToWidth } from "../utils.js";
+ let imageTranscoder;
++const imageActivationHandlers = [];
++/** Optional host-owned, read-only activation; default image behavior is unchanged. */
++export function setImageActivationHandler(handler) {
++    const entry = { handler };
++    imageActivationHandlers.push(entry);
++    return () => { const index = imageActivationHandlers.indexOf(entry); if (index >= 0) imageActivationHandlers.splice(index, 1); };
++}
+ // Backstop for callers that recreate Image instances. Keyed by source data, least recently used first.
+ const pngCache = new Map();
+ /**
+@@ -41,6 +48,12 @@ export class Image {
+         this.dimensions = dimensions || getImageDimensions(base64Data, mimeType) || { widthPx: 800, heightPx: 600 };
+         this.imageId = options.imageId;
+     }
++    handleMouse(event) {
++        const imageActivationHandler = imageActivationHandlers.at(-1)?.handler;
++        if (!imageActivationHandler || event.type !== "click" || event.button !== "left" || event.shift || event.ctrl || event.alt || (event.clickCount ?? 1) !== 1) return undefined;
++        if (imageActivationHandler({ data: this.base64Data, mimeType: this.mimeType, dimensions: this.dimensions, filename: this.options.filename }) === false) return undefined;
++        return { handled: true };
++    }
+     /** Get the Kitty image ID used by this image (if any). */
+     getImageId() {
+         return this.imageId;
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index b241af500fe2cb38678856bebb7bad7ede092df1..683c858dce4dc1d5ef4ab52cf1d9cb6640c20fe2 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -5,7 +5,7 @@ export { Box } from "./components/box.ts";
+ export { CancellableLoader } from "./components/cancellable-loader.ts";
+ export { Editor, type EditorOptions, type EditorTheme } from "./components/editor.ts";
+ export { HStack } from "./components/h-stack.ts";
+-export { Image, type ImageOptions, type ImageTheme, type ImageTranscoder, setImageTranscoder, } from "./components/image.ts";
++export { Image, type ImageSource, setImageActivationHandler, type ImageOptions, type ImageTheme, type ImageTranscoder, setImageTranscoder, } from "./components/image.ts";
+ export { Input } from "./components/input.ts";
+ export { Loader, type LoaderIndicatorOptions } from "./components/loader.ts";
+ export { type DefaultTextStyle, Markdown, type MarkdownOptions, type MarkdownTheme } from "./components/markdown.ts";
+diff --git a/dist/index.js b/dist/index.js
+index d427a489f6fbc8052867e6bb0545baca1de7c1ae..21d646f11e5dc23a5d4789ece795c4c67da87a14 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -9,7 +9,7 @@ export { Box } from "./components/box.js";
+ export { CancellableLoader } from "./components/cancellable-loader.js";
+ export { Editor } from "./components/editor.js";
+ export { HStack } from "./components/h-stack.js";
+-export { Image, setImageTranscoder, } from "./components/image.js";
++export { Image, setImageTranscoder, setImageActivationHandler, } from "./components/image.js";
+ export { Input } from "./components/input.js";
+ export { Loader } from "./components/loader.js";
+ export { Markdown } from "./components/markdown.js";

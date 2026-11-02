@@ -154,6 +154,30 @@ fn assist_reports_blocked_review_once_and_confirmation_resumes_it() {
 }
 
 #[test]
+fn completed_run_with_pending_reply_still_blocks_automatic_review() {
+    let fx = Fx::new(|review| {
+        review.gate = gate(&["true"]);
+        review.reviewer = Some("rev".into());
+    });
+    fx.done();
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.current_run_mut().unwrap().pending_reply = Some("undelivered".into());
+            Ok(())
+        })
+        .unwrap();
+    fx.sync();
+    assert_eq!(fx.events("gate_started"), 0);
+    assert!(
+        corral_ops::automation_blocker(&fx.ctx, &fx.task())
+            .unwrap()
+            .unwrap()
+            .contains("unresolved delivery")
+    );
+}
+
+#[test]
 fn assist_collects_completed_gate_without_launching_another_process() {
     // Given an explicitly started gate that completed before authority was revoked.
     let mut fx = Fx::new(|review| {

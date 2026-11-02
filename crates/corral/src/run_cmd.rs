@@ -14,6 +14,13 @@ use serde::de::DeserializeOwned;
 
 #[derive(Subcommand)]
 pub enum RunCmd {
+    /// Bounded read-only candidate, criterion evidence and review projection for Pi
+    Inspect {
+        id: String,
+        /// Explicit bound run; never silently follows the latest run
+        #[arg(long)]
+        run: String,
+    },
     /// Read a bounded JSONL transcript page (context only, no run authority)
     Transcript {
         id: String,
@@ -76,13 +83,15 @@ impl RunCmd {
             Self::Wait { .. }
             | Self::Decision { .. }
             | Self::Resume { .. }
-            | Self::Transcript { .. } => None,
+            | Self::Transcript { .. }
+            | Self::Inspect { .. } => None,
         }
     }
 
     pub fn name(&self) -> &'static str {
         match self {
             Self::Transcript { .. } => "transcript",
+            Self::Inspect { .. } => "inspect",
             Self::Progress(_) => "progress",
             Self::Checkpoint(_) => "checkpoint",
             Self::Wait { .. } => "wait",
@@ -154,6 +163,13 @@ fn payload<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
 pub fn run(ctx: &Ctx, cmd: RunCmd) -> Result<()> {
     let now = Timestamp::now();
     let task = match cmd {
+        RunCmd::Inspect { id, run } => {
+            println!(
+                "{}",
+                serde_json::to_string(&corral_ops::workbench::inspect(ctx, &id, &run)?)?
+            );
+            return Ok(());
+        }
         RunCmd::Transcript {
             id,
             run,

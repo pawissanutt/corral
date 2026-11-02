@@ -378,6 +378,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
         Cmd::Run { cmd } => crate::run_cmd::run(&open(&root)?, cmd),
         Cmd::Plan { cmd } => crate::plan_cmd::run(&open(&root)?, cmd),
         Cmd::Lessons(args) => crate::lessons_cmd::run(&open(&root)?, args),
+        Cmd::Memory(args) => crate::memory_cmd::run(&open(&root)?, &entry, args),
         Cmd::Init => init(&root, &entry),
         Cmd::Import(args) => crate::import_cmd::run(&root, args, &entry),
         Cmd::Export { what } => crate::export_cmd::run(&open(&root)?, what),

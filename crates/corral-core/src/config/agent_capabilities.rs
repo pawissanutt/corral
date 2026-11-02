@@ -99,7 +99,7 @@ pub enum RoleSetting {
     Table(CapabilitySettings),
 }
 
-/// `[agent.capabilities.<role>.web]`: optional preset override and GET-only web policy.
+/// `[agent.capabilities.<role>.web]`: optional preset override, public fetch and search policy.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct WebCapabilities {
@@ -834,6 +834,10 @@ pub(crate) fn compaction_settings(
 #[cfg(test)]
 #[path = "agent_capabilities_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "agent_capabilities_web_search_tests.rs"]
+mod web_search_tests;
 
 #[cfg(test)]
 #[path = "agent_capabilities_headless_tests.rs"]

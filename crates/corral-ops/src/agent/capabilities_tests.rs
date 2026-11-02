@@ -39,7 +39,8 @@ fn fixture(capabilities: Option<&[&str]>) -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
     let assets = tmp.path().join("assets");
-    let mut compat = json!({"version": 1, "verdict": "GO", "bun": {"range": "1.4.2"}});
+    let mut compat =
+        json!({"version": 1, "verdict": "GO", "bun": {"range": "1.4.2"}, "memory_projection": 1});
     if let Some(keys) = capabilities {
         compat["capabilities"] = json!(keys);
     }
@@ -58,8 +59,9 @@ fn fixture(capabilities: Option<&[&str]>) -> Fixture {
     write(&assets.join("fixture.json"), "{\"fixture\": true}\n");
     let mut config = std::fs::read_to_string(store.config_path()).unwrap();
     config.push_str(&format!(
-        "\n[agent]\nassets_dir = {:?}\n",
-        assets.display().to_string()
+        "\n[agent]\nassets_dir = {:?}\n\n[projects.corral]\npath = {:?}\n",
+        assets.display().to_string(),
+        tmp.path().display().to_string()
     ));
     std::fs::write(store.config_path(), config).unwrap();
     let ctx = Ctx::from_store(Store::open(tmp.path()).unwrap());

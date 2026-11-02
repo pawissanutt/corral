@@ -12,6 +12,7 @@ use std::sync::{Mutex, MutexGuard};
 
 mod batches;
 mod growth;
+mod inbox;
 mod receipts;
 
 const HERDR: &str = r#"#!/bin/sh
@@ -557,7 +558,8 @@ fn canonical_failed_delivery_preserves_shell_identity_across_restart() {
         .unwrap()
         .unwrap();
 
-    // When restart retries against a replacement shell.
+    // Main's no-replay contract makes Failed terminal. A subsequent tick must preserve
+    // that receipt, even if the pane now has a different shell.
     delivery::deliver(
         &restarted,
         &state_record(&restarted, &fx.task.id),
@@ -567,7 +569,7 @@ fn canonical_failed_delivery_preserves_shell_identity_across_restart() {
     )
     .unwrap();
 
-    // Then the persisted identity cancels delivery rather than redirecting it.
-    assert_eq!(retained.notices[0].state, DeliveryState::Cancelled);
+    // No retry is redirected into the replacement shell.
+    assert_eq!(retained.notices[0].state, DeliveryState::Failed);
     assert!(fx.sent().is_empty());
 }

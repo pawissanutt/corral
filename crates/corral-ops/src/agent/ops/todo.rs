@@ -1,6 +1,6 @@
 //! Top-level receipted todo commands over server-selected worker, PM or assistant progress.
 use anyhow::{Context, Result};
-use corral_core::agent::{AgentRole, ReceiptEffect, TodoAction};
+use corral_core::agent::{AgentRole, ReceiptEffect, TodoAction, request};
 use corral_core::{RunProgress, TaskRef};
 use serde_json::json;
 
@@ -49,7 +49,7 @@ fn worker_progress<T: TaskRef + ?Sized>(task: &T, action: &TodoAction) -> Result
 
 pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     let action: TodoAction =
-        super::payload(envelope, "a todo init/append/start/done/drop command")?;
+        super::payload(envelope, "a todo init/append/start/done/drop/wait command")?;
     let container = admission::container_of(&envelope.identity);
     let admitted = match admission::admit(ctx, envelope, Mode::Mutation { settles_turn: None })? {
         Admission::Replay(stored) => return receipts::respond(ctx, &container, *stored, true),
@@ -81,14 +81,21 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 Some(session) => format!("assistant:{session}"),
                 None => format!("pm:{}", state.binding.project),
             };
-            let progress = action.apply(state.todo.as_ref(), &spec).map_err(bad)?;
+            let mut requests = state.todo_requests.clone().unwrap_or_default();
+            let progress = requests
+                .apply(&action, state.todo.as_ref(), &spec, jiff::Timestamp::now())
+                .map_err(bad)?;
             if progress.steps().any(|step| !step.criteria.is_empty()) {
                 return Err(bad(
                     "a PM or assistant todo cannot link task acceptance criteria",
                 ));
             }
-            let commit = committed(&progress);
+            let mut commit = committed(&progress);
+            commit.result["plan"] = json!(progress.plan);
+            commit.result["disposition"] = json!(request::disposition(Some(&progress)));
+            commit.result["closed_plans"] = json!(requests.history.len());
             state.todo = Some(progress);
+            state.todo_requests = Some(requests);
             Ok(commit)
         }),
         AgentRole::Reviewer | AgentRole::Planner | AgentRole::PlanReviewer => Err(Rejection::new(

@@ -5,7 +5,9 @@ import type { WebAccess } from "./client.ts";
 
 export const WEB_TOOL_NAMES = ["web_fetch", "web_search"] as const;
 
-export function webTools(access: WebAccess): readonly ToolDefinition[] {
+export type SubscriptionSearch = (id: string, query: string, count: number, signal?: AbortSignal) => Promise<string>;
+
+export function webTools(access: WebAccess, subscription?: SubscriptionSearch): readonly ToolDefinition[] {
   return [
     {
       name: "web_fetch",
@@ -21,15 +23,19 @@ export function webTools(access: WebAccess): readonly ToolDefinition[] {
     {
       name: "web_search",
       label: "Search web",
-      description: "Search the configured SearXNG service. Returns titles, URLs and snippets, not page bodies. "
-        + "Without a configured endpoint, returns setup instructions; public web_fetch remains available.",
+      description: subscription
+        ? "Search using the current Codex or Claude subscription. Returns a sourced answer and URLs; uses subscription quota. No paid-API fallback."
+        : "Search the configured SearXNG service. Returns titles, URLs and snippets, not page bodies. "
+          + "Without a configured endpoint, returns setup instructions; public web_fetch remains available.",
       parameters: Type.Object({
         query: Type.String({ minLength: 1, maxLength: 4096 }),
         num_results: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
       }),
-      async execute(_id, params: { query: string; num_results?: number }, signal) {
+      async execute(id, params: { query: string; num_results?: number }, signal) {
         return {
-          content: [{ type: "text", text: JSON.stringify(await access.search(params.query, params.num_results ?? 5, signal)) }],
+          content: [{ type: "text", text: subscription
+            ? await subscription(id, params.query, params.num_results ?? 5, signal)
+            : JSON.stringify(await access.search(params.query, params.num_results ?? 5, signal)) }],
           details: undefined,
         };
       },

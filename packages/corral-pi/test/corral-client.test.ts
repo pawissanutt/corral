@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,24 @@ const dir = mkdtempSync(join(tmpdir(), "corral-pi-client-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 const HOST_CAP = "h".repeat(64);
+
+function scriptedClient(body: string, timeoutMs = 2000) {
+  const work = mkdtempSync(join(dir, "script-"));
+  const path = join(work, "corral");
+  writeFileSync(path, `#!/usr/bin/env bun\nimport { readFileSync, writeFileSync } from "node:fs";\nconst input = JSON.parse(readFileSync(0, "utf8"));\n${body}`, { mode: 0o700 });
+  return { work, client: new CorralClient({ corral: path, root: work, identity, hostCap: HOST_CAP,
+    sessionId: () => "s-1", timeoutMs }) };
+}
+
+const mutation = { requestId: toolRequestId("s-1", "mutation"), payload: { task: "T-001", text: "effect" } };
+
+async function failed(client: CorralClient): Promise<CorralCallError> {
+  try { await client.call("comment", mutation); } catch (error) {
+    expect(error instanceof CorralCallError).toBeTrue();
+    return error as CorralCallError;
+  }
+  throw new Error("expected transport failure");
+}
 const NONCE = "n".repeat(64);
 const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 2 };
 
@@ -51,4 +69,61 @@ test("a failed or malformed corral call is an error, never a receipt", async () 
   expect(error instanceof CorralCallError).toBeTrue();
   expect((error as CorralCallError).code).toBe("call_failed");
   expect(String(error)).not.toContain(HOST_CAP);
+});
+
+test("nonzero exit and signal preserve bounded diagnostics, redaction and unknown effect", async () => {
+  for (const [body, exit_code, signal] of [
+    ['process.stderr.write("detail " + input.auth.host_cap); process.exit(23);', 23, null],
+    ['process.stderr.write("signal detail"); process.kill(process.pid, "SIGTERM");', null, "SIGTERM"],
+  ] as const) {
+    const { client } = scriptedClient(body);
+    const error = await failed(client);
+    expect(error.code).toBe("call_failed");
+    expect(error.diagnostics).toMatchObject({ exit_code, signal, timed_out: false, effect: "unknown" });
+    expect(error.diagnostics.diagnostic).toContain("detail");
+    expect(error.diagnostics.diagnostic!.length).toBeLessThanOrEqual(4096);
+    expect(String(error)).not.toContain(HOST_CAP);
+    expect(error.diagnostics.diagnostic).not.toContain(HOST_CAP);
+  }
+});
+
+test("deadline kills a stopped executor after its effect, without claiming not-started", async () => {
+  const { client, work } = scriptedClient('writeFileSync("effect", "committed before ack"); process.kill(process.pid, "SIGSTOP");');
+  const error = await failed(client);
+  expect(existsSync(join(work, "effect"))).toBeTrue();
+  expect(error.code).toBe("call_timeout");
+  expect(error.diagnostics).toMatchObject({ exit_code: null, signal: "SIGKILL", timed_out: true, effect: "unknown" });
+});
+
+test("a canonical receipt proves the effect even when the executor subsequently exits nonzero", async () => {
+  const { client } = scriptedClient(`process.stdout.write(JSON.stringify({version:1, request_id:input.request_id,
+    op:input.op, state:"committed", result:{effect:"recorded"}}) + "\\n"); process.exit(7);`);
+  const receipt = await client.call("comment", mutation);
+  expect(receipt.state).toBe("committed");
+  expect(receipt.request_id).toBe(mutation.requestId);
+  expect(receipt.result).toEqual({ effect: "recorded" });
+});
+
+test("malformed or foreign receipt and bounded output failure retain uncertain effect", async () => {
+  for (const body of [
+    'process.stdout.write("not JSON");',
+    'process.stdout.write(JSON.stringify({version:1, request_id:"foreign", op:input.op, state:"committed", result:{}}));',
+    'process.stderr.write("x".repeat(300000));',
+  ]) {
+    const { client } = scriptedClient(body);
+    const error = await failed(client);
+    expect(error.code).toBe("call_output");
+    expect(error.diagnostics.effect).toBe("unknown");
+    expect(error.diagnostics.diagnostic!.length).toBeLessThanOrEqual(4096);
+  }
+});
+
+test("receipt lookup returns the original receipt plus canonical lookup identity", async () => {
+  const { client } = scriptedClient(`process.stdout.write(JSON.stringify({version:1, request_id:input.payload.request_id,
+    op:"comment", state:"committed", result:{effect:"recorded"},
+    lookup:{by:input.request_id, request_id:input.payload.request_id, found:true}}));`);
+  const receipt = await client.call("receipt_lookup", { requestId: toolRequestId("s-1", "lookup"),
+    payload: { request_id: mutation.requestId, task: "T-001" } });
+  expect(receipt.request_id).toBe(mutation.requestId);
+  expect(receipt.lookup).toMatchObject({ found: true });
 });

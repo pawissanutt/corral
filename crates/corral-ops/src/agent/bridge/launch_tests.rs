@@ -78,7 +78,8 @@ fn asset_dir(root: &Path, name: &str, modules: &[&str], fixture: bool) -> PathBu
     let dir = root.join(name);
     write(&dir.join("package.json"), "{\"name\":\"corral-pi\"}\n");
     write(&dir.join("bun.lock"), "{}\n");
-    let compat = json!({"version": 1, "verdict": "GO", "bun": {"range": "1.4.2"}});
+    let compat =
+        json!({"version": 1, "verdict": "GO", "bun": {"range": "1.4.2"}, "memory_projection": 1});
     write(&dir.join("compat.json"), &compat.to_string());
     write(&dir.join(HOST_ENTRY), "// host\n");
     for module in modules {
@@ -97,8 +98,9 @@ fn fixture(modules: &[&str], fixture: bool) -> Fixture {
     let assets = asset_dir(tmp.path(), "assets", modules, fixture);
     let mut config = std::fs::read_to_string(store.config_path()).unwrap();
     config.push_str(&format!(
-        "\n[agent]\nassets_dir = {:?}\n",
-        assets.display().to_string()
+        "\n[agent]\nassets_dir = {:?}\n\n[projects.corral]\npath = {:?}\n",
+        assets.display().to_string(),
+        tmp.path().display().to_string()
     ));
     std::fs::write(store.config_path(), config).unwrap();
     let ctx = Ctx::from_store(Store::open(tmp.path()).unwrap());
