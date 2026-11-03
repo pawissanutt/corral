@@ -9,11 +9,24 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from filing_race import publication_trace, stopped_trace
 
 
 class PublicationTraceTest(unittest.TestCase):
+    def test_stop_event_does_not_depend_on_elapsed_time(self) -> None:
+        with subprocess.Popen(
+            [sys.executable, "-c", "import os; os.write(2, b'--- SIGSTOP ---\\n')"],
+            stdin=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        ) as process:
+            # Model descheduling between starting the wait and reading a ready
+            # event. No real delay or host load is needed for this regression.
+            with patch("time.monotonic", side_effect=[0, 11]):
+                self.assertIn(b"--- SIGSTOP", stopped_trace(process))
+            process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 0)
+
     def test_only_first_dispatch_close_counts(self) -> None:
         tracer = shutil.which("strace")
         self.assertIsNotNone(tracer, "this regression requires strace")

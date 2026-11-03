@@ -2,30 +2,37 @@
 
 import json
 import os
-import selectors
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 
 def stopped_trace(process: subprocess.Popen[bytes]) -> bytes:
-    """Consume the buffered syscall signal event with a bounded deadline."""
+    """Block on the traced stop event or EOF, not a scheduling deadline."""
     assert process.stderr is not None
     seen = b""
-    deadline = time.monotonic() + 10
-    with selectors.DefaultSelector() as ready:
-        ready.register(process.stderr, selectors.EVENT_READ)
+
+    def hung(signum: int, frame: object) -> None:
+        raise TimeoutError(
+            f"hung waiting for SIGSTOP (tracer status={process.poll()}): {seen.decode()}"
+        )
+
+    # This is only a last-resort hang guard for a broken tracer/fixture. Progress
+    # is driven by pipe data/EOF; elapsed time is never a readiness condition.
+    previous = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(300)
+    try:
         while b"--- SIGSTOP" not in seen:
-            remaining = deadline - time.monotonic()
-            assert remaining > 0 and ready.select(remaining), seen.decode()
             chunk = os.read(process.stderr.fileno(), 4096)
-            assert chunk, seen.decode()
+            assert chunk, f"tracer exited before SIGSTOP: {seen.decode()}"
             seen += chunk
-    return seen
+        return seen
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def publication_trace(tracer: str, lock: Path) -> list[str]:
