@@ -5,6 +5,7 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::thread::ThreadId;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
@@ -183,10 +184,11 @@ impl Store {
     /// Takes the shared session-ownership lease and begins this handle's pass under it,
     /// reading the binding once: no bind can commit while the lease is held. The view serves
     /// the rest of the pass after the lease drops; launches still re-read at their boundary.
-    /// A reader that arrives while a launch waits queues behind it, up to
-    /// `sync.launch_wait_secs`, and takes the lease once that launch is done. None while a
-    /// launch or bind holds the lease without having waited, or once the queue bound passes.
-    pub fn try_begin_session_pass(&self) -> Result<Option<StoreLock>> {
+    /// A reader that arrives while a launch waits queues behind it and takes the lease once
+    /// that launch is done; the launch's own bounded wait and claim bound the queue. None while
+    /// a launch or bind holds the lease without having waited. On a thread holding the claim,
+    /// the pass runs under that claim.
+    pub fn try_begin_session_pass(&self) -> Result<Option<SessionLease>> {
         let Some(lease) = self.session_lease()? else {
             return Ok(None);
         };
@@ -194,27 +196,28 @@ impl Store {
         Ok(Some(lease))
     }
 
-    fn session_lease(&self) -> Result<Option<StoreLock>> {
-        if UNQUEUED.with(Cell::get) > 0 {
-            return self.try_lock_shared(OWNERSHIP);
+    fn session_lease(&self) -> Result<Option<SessionLease>> {
+        // The claim already excludes binds and every other launch.
+        if holds_claim(self.dir()) {
+            return Ok(Some(SessionLease { _lock: None }));
         }
-        let deadline = deadline(self.config.sync.launch_wait_secs);
-        let mut queued = false;
+        let queue = UNQUEUED.with(Cell::get) == 0 && self.config.sync.launch_wait_secs > 0;
         loop {
-            if launch_waiting(self.dir())? {
-                queued = true;
-            } else if let Some(lease) = self.try_lock_shared(OWNERSHIP)? {
+            if !launch_waiting(self.dir())? {
+                let Some(lock) = self.try_lock_shared(OWNERSHIP)? else {
+                    return Ok(None);
+                };
                 // A launch that registered while this lease was taken still goes first.
                 if !launch_waiting(self.dir())? {
-                    return Ok(Some(lease));
+                    return Ok(Some(SessionLease { _lock: Some(lock) }));
                 }
-                queued = true;
-            } else if !queued {
+            }
+            if !queue {
                 return Ok(None);
             }
-            if !pause(deadline) {
-                return Ok(None);
-            }
+            #[cfg(test)]
+            queue_probe::note(self.dir());
+            std::thread::sleep(POLL);
         }
     }
 
@@ -223,11 +226,8 @@ impl Store {
     /// waits up to `sync.launch_wait_secs` for readers already holding the lease. None once the
     /// bound passes, as the no-wait claim was while a reader held it.
     pub fn claim_session_ownership(&self) -> Result<Option<SessionClaim>> {
-        if let Some(lock) = self.try_lock(OWNERSHIP)? {
-            return Ok(Some(SessionClaim {
-                _lock: lock,
-                _turn: None,
-            }));
+        if let Some(claim) = self.try_claim_session_ownership()? {
+            return Ok(Some(claim));
         }
         let wait = self.config.sync.launch_wait_secs;
         if wait == 0 {
@@ -237,10 +237,7 @@ impl Store {
         let turn = register_turn(self.dir())?;
         loop {
             if let Some(lock) = self.try_lock(OWNERSHIP)? {
-                return Ok(Some(SessionClaim {
-                    _lock: lock,
-                    _turn: Some(turn),
-                }));
+                return Ok(Some(SessionClaim::new(self.dir(), lock, Some(turn))));
             }
             if !pause(deadline) {
                 return Ok(None);
@@ -248,27 +245,11 @@ impl Store {
         }
     }
 
-    /// A launch's turn, taken before a lock it holds through admission so the wait never runs
-    /// under that lock. Waits as `claim_session_ownership` does, then releases the lease and
-    /// keeps later readers queued until `SessionTurn::claim` is released. Reads by the caller
-    /// while it holds that lock pass `UnqueuedReads`. Once the bound passes the turn is dropped
-    /// and the claim is the plain no-wait one.
-    pub fn session_turn(&self) -> Result<SessionTurn> {
-        let wait = self.config.sync.launch_wait_secs;
-        if wait == 0 {
-            return Ok(SessionTurn(None));
-        }
-        let deadline = deadline(wait);
-        let turn = register_turn(self.dir())?;
-        loop {
-            let free = self.try_lock(OWNERSHIP)?.is_some();
-            if free {
-                return Ok(SessionTurn(Some(turn)));
-            }
-            if !pause(deadline) {
-                return Ok(SessionTurn(None));
-            }
-        }
+    /// The claim only if it is free now: no wait and no turn.
+    pub fn try_claim_session_ownership(&self) -> Result<Option<SessionClaim>> {
+        Ok(self
+            .try_lock(OWNERSHIP)?
+            .map(|lock| SessionClaim::new(self.dir(), lock, None)))
     }
 
     /// The auxiliary-launch journal binds ownership before external pane creation.
@@ -320,29 +301,52 @@ impl Store {
     }
 }
 
+/// Claims held now, by the thread that took them and the store they claim: that thread's
+/// session passes run under its claim.
+static CLAIMS: Mutex<Vec<(ThreadId, u64, PathBuf)>> = Mutex::new(Vec::new());
+
 /// An exclusive session-ownership claim. A launch that waited keeps its turn until the claim
 /// is released; the lease goes first, so no reader finds it held with no turn to queue behind.
 pub struct SessionClaim {
+    id: u64,
     _lock: StoreLock,
     _turn: Option<Turn>,
 }
 
-/// A launch's turn from [`Store::session_turn`]; dropping it lets queued readers proceed.
-pub struct SessionTurn(Option<Turn>);
-
-impl SessionTurn {
-    /// The no-wait exclusive claim, keeping this turn until the claim is released.
-    pub fn claim(self, store: &Store) -> Result<Option<SessionClaim>> {
-        Ok(store.try_lock(OWNERSHIP)?.map(|lock| SessionClaim {
+impl SessionClaim {
+    fn new(corral: &Path, lock: StoreLock, turn: Option<Turn>) -> SessionClaim {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        guard(&CLAIMS).push((std::thread::current().id(), id, corral.to_path_buf()));
+        SessionClaim {
+            id,
             _lock: lock,
-            _turn: self.0,
-        }))
+            _turn: turn,
+        }
     }
 }
 
-/// While held, this thread's session passes take the lease at once instead of queuing behind
-/// a waiting launch, as before launches could wait: a caller holding a lock a launch needs, or
-/// its own turn, never waits under it.
+impl Drop for SessionClaim {
+    fn drop(&mut self) {
+        guard(&CLAIMS).retain(|(_, id, _)| *id != self.id);
+    }
+}
+
+fn holds_claim(corral: &Path) -> bool {
+    let thread = std::thread::current().id();
+    guard(&CLAIMS)
+        .iter()
+        .any(|(holder, _, dir)| *holder == thread && dir.as_path() == corral)
+}
+
+/// The shared session-ownership lease of one pass; none when the pass runs under this
+/// thread's own claim.
+pub struct SessionLease {
+    _lock: Option<StoreLock>,
+}
+
+/// While held, this thread's session passes never wait: they yield to a waiting launch or
+/// take the lease at once. A caller holding a lock a launch needs never waits under it.
 #[must_use]
 pub struct UnqueuedReads(PhantomData<*const ()>);
 
@@ -470,6 +474,42 @@ fn pause(deadline: Option<Instant>) -> bool {
     }
     std::thread::sleep(step);
     true
+}
+
+/// Lets a test wait, without timing, until a reader of its store has queued behind a launch.
+#[cfg(test)]
+pub(crate) mod queue_probe {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Condvar, Mutex, PoisonError};
+    use std::time::{Duration, Instant};
+
+    static QUEUED: (Mutex<Vec<PathBuf>>, Condvar) = (Mutex::new(Vec::new()), Condvar::new());
+
+    pub(crate) fn note(corral: &Path) {
+        let mut queued = QUEUED.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if !queued.iter().any(|dir| dir == corral) {
+            queued.push(corral.to_path_buf());
+            QUEUED.1.notify_all();
+        }
+    }
+
+    /// True once a reader of `corral` has queued, false if none has within `bound`.
+    pub(crate) fn wait(corral: &Path, bound: Duration) -> bool {
+        let deadline = Instant::now() + bound;
+        let mut queued = QUEUED.0.lock().unwrap_or_else(PoisonError::into_inner);
+        while !queued.iter().any(|dir| dir == corral) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            queued = QUEUED
+                .1
+                .wait_timeout(queued, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        true
+    }
 }
 
 fn check_socket(saved: Option<&Path>, socket: &Path) -> Result<()> {

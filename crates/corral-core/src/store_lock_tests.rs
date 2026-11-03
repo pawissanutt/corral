@@ -105,20 +105,35 @@ fn a_waiting_launch_claims_ahead_of_continuous_and_later_readers() {
             assert!(!launch.is_finished(), "launch gave up behind readers");
             held = next;
         }
-        // And a reader arrives after the waiting launch.
+        // And a reader that must not wait yields to the waiting launch instead of passing it.
+        let unqueued = crate::UnqueuedReads::begin();
+        assert!(
+            store.try_begin_session_pass().unwrap().is_none(),
+            "an unqueued reader passed the waiting launch"
+        );
+        drop(unqueued);
+        // And a later reader enters while the launch still waits, and queues behind it.
         let later = scope.spawn(|| store.try_begin_session_pass().unwrap());
+        let bound = std::time::Duration::from_secs(10);
+        assert!(
+            crate::session_binding::queue_probe::wait(store.dir(), bound),
+            "the later reader never queued"
+        );
+        assert!(!launch.is_finished(), "launch gave up behind readers");
 
         // Then once the reader already holding the lease finishes, the launch claims first:
-        // the later reader keeps any lease it takes, which would have refused the claim.
+        // the queued reader keeps any lease it takes, which would have refused the claim.
         drop(held);
         let claim = launch.join().unwrap();
         assert!(
             claim.is_some(),
             "a later reader got ahead of the waiting launch"
         );
+        // And no reader passes while the claim is held; the queued one is still waiting.
         assert!(readers.try_begin_session_pass().unwrap().is_none());
+        assert!(!later.is_finished(), "the queued reader passed the claim");
         drop(claim);
-        // And the later reader, queued behind the launch, proceeds after it.
+        // And the queued reader proceeds after the launch.
         assert!(
             later.join().unwrap().is_some(),
             "queued reader never proceeded"
