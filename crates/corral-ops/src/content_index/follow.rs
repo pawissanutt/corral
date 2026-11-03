@@ -47,8 +47,9 @@ pub(crate) struct Delta {
 
 /// Applies `delta` to the index, reading only through `ctx` (bound to the view whose position
 /// the caller publishes). Returns false, writing nothing, when there is no current index, the
-/// index has no durable event position, or the result exceeds the index budgets; the caller
-/// then rebuilds.
+/// index has no durable event position, or the result exceeds the index byte limit; the caller
+/// then rebuilds. A full document or text budget evicts documents instead, since a rebuild
+/// fills both budgets and could never be followed again.
 pub(crate) fn follow(ctx: &Ctx, delta: &Delta) -> Result<bool> {
     let dir = ctx.store.cache_root()?;
     let _lock = lock_index(&dir)?;
@@ -121,9 +122,13 @@ pub(crate) fn follow(ctx: &Ctx, delta: &Delta) -> Result<bool> {
         }
         documents.insert(record.document.reference.clone(), record.document);
     }
-    let text: usize = documents.values().map(|d| d.text.len()).sum();
-    if documents.len() > 4096 || text > TEXT_BUDGET.saturating_sub(DOCUMENT_BYTES) {
-        return Ok(false);
+    // Evicted documents stay in the snapshot and are streamed during search.
+    let mut text: usize = documents.values().map(|d| d.text.len()).sum();
+    while documents.len() > 4096 || text > TEXT_BUDGET.saturating_sub(DOCUMENT_BYTES) {
+        let Some((_, evicted)) = documents.pop_first() else {
+            break;
+        };
+        text -= evicted.text.len();
     }
     let mut cache: Cache = previous;
     update_postings(&mut cache, &documents);
