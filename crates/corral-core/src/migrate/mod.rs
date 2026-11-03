@@ -20,6 +20,8 @@ mod locks;
 mod rollback;
 mod scan;
 mod status;
+#[cfg(test)]
+mod view_age_tests;
 mod workspace;
 
 use std::path::{Path, PathBuf};
@@ -66,6 +68,8 @@ pub struct Migrate {
     wait: Duration,
     barrier: Option<Barrier>,
     runtime_probe: Option<RuntimeProbe>,
+    #[cfg(test)]
+    candidate_clock: Option<Arc<dyn crate::backend::Clock>>,
 }
 
 impl std::fmt::Debug for Migrate {
@@ -85,6 +89,8 @@ impl Migrate {
             wait: DEFAULT_WAIT,
             barrier: None,
             runtime_probe: None,
+            #[cfg(test)]
+            candidate_clock: None,
         }
     }
 

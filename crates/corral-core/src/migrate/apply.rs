@@ -188,7 +188,15 @@ fn import(m: &Migrate, journal: &mut Journal) -> Result<import::ImportReport> {
         ))
     );
     let db_file = candidate_dir.join(crate::sqlite::DB_FILE);
-    let backend = SqliteBackend::open_file(&db_file, SqliteOptions::default())?;
+    let mut options = SqliteOptions::default();
+    // The exclusive migration lock prevents concurrent writers to this candidate; large
+    // board verification can legitimately exceed the normal live-view staleness limit.
+    options.config.view_max_age = std::time::Duration::from_secs(24 * 60 * 60);
+    #[cfg(test)]
+    if let Some(clock) = &m.candidate_clock {
+        options.clock = std::sync::Arc::clone(clock);
+    }
+    let backend = SqliteBackend::open_file(&db_file, options)?;
     backend.mark_migration(&digest)?;
     let blobs = FsBlobStore::open(corral)?;
     let report = import::run(m, &backend, &blobs, &m0)?;
