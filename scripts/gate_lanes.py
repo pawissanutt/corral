@@ -64,7 +64,11 @@ PI_SLOW = (
     ("test/browser.test.ts", "a cancelled call stops its browser and removes its profile",
      "T-768: load-sensitive live browser cancellation"),
 )
-PI_SLOW_OWNERS = ("packages/corral-pi/src/extensions/browser/", "packages/corral-pi/test/browser.test.ts")
+# Owners include the test support files that hold its synchronization and cleanup checks.
+PI_SLOW_OWNERS = (
+    "packages/corral-pi/src/extensions/browser/", "packages/corral-pi/test/browser.test.ts",
+    "packages/corral-pi/test/support/exits.ts", "packages/corral-pi/test/support/wait.ts",
+)
 
 
 def pi_touched(paths: list[str]) -> bool:

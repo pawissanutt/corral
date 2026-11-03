@@ -109,6 +109,10 @@ class PolicyTests(unittest.TestCase):
         # The Bun slow catalog follows the same rule: only its owners restore it on a landing.
         self.assertTrue(gate_lanes.pi_slow(["packages/corral-pi/src/extensions/browser/chrome.ts"]))
         self.assertTrue(gate_lanes.pi_slow(["packages/corral-pi/test/browser.test.ts"]))
+        # Helper-only changes to its exit oracle or request wait restore it too.
+        self.assertTrue(gate_lanes.pi_slow(["packages/corral-pi/test/support/exits.ts"]))
+        self.assertTrue(gate_lanes.pi_slow(["packages/corral-pi/test/support/wait.ts"]))
+        self.assertFalse(gate_lanes.pi_slow(["packages/corral-pi/test/support/fake-browser.ts"]))
         self.assertFalse(gate_lanes.pi_slow(["packages/corral-pi/src/host/session.ts", "docs/a.md"]))
         for prefix in gate_lanes.PI_SLOW_OWNERS:
             self.assertTrue((ROOT / prefix).exists(), prefix)
