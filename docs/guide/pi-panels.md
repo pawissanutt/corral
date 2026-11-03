@@ -89,8 +89,9 @@ History belongs only to this running parent host: at most 32 recent helpers, 64 
 After upgrading Corral and the Pi host, Codex Explore can use:
 
 ```toml
-agent.capabilities.assistant.subagents.model = "gpt-6-luna"
-agent.capabilities.assistant.subagents.service_tier = "priority"
+[agent.capabilities.assistant.subagents]
+model = "gpt-6-luna"
+service_tier = "priority"
 ```
 
 The optional tier accepts `default` or `priority`; leaving it unset preserves existing behavior. Priority is supported only for `openai-codex` Explore, not the parent, Oracle or subscription search. Fast is a request tier, not a `-fast` model alias. The SDK's own priority rate multiplier applies to conservative USD reservations and settlement; token counts are unchanged, and interrupted requests retain their tier-priced reservation. Settings bind on the next host generation.
