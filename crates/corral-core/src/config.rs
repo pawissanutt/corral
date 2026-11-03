@@ -464,8 +464,8 @@ pub struct SyncCfg {
     /// Pending-review idle bound, separate from worker warnings. Default 1800.
     #[serde(default = "default_review_idle_after_secs")]
     pub review_idle_after_secs: u64,
-    /// Seconds a launch waits, ahead of new readers, for in-flight pane-inventory leases
-    /// before refusing. 0 refuses at once. Default 10.
+    /// Seconds a launch waits for in-flight pane-inventory leases before refusing, and a
+    /// reader queued behind a waiting launch waits before skipping. 0 never waits. Default 10.
     #[serde(default = "default_launch_wait_secs")]
     pub launch_wait_secs: u64,
     /// OmO agent dir holding `sessions/<cwd-slug>/`. Unset: $OMO_CODING_AGENT_DIR,
