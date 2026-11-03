@@ -8,8 +8,8 @@ entry point and change no Corral default. Results: `bun-go.json`, recorded in
 
 ## Bun runtime, launch and lock
 
-- `package.json` pins `@earendil-works/pi-coding-agent` exactly at `1.3.0`
-  (upstream commit `71023aec`), plus the T-136 verification peers and
+- `package.json` pins `@earendil-works/pi-coding-agent` exactly at `1.5.0`
+  (upstream commit `f9a26365`), plus the T-136 verification peers and
   TypeScript 6.0.2 as dev dependencies. `trustedDependencies` is empty and every
   install passes `--ignore-scripts`, so no lifecycle script runs.
 - `bun.lock` was migrated by `bun install` from T-136's retained npm lock, so it

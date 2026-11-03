@@ -191,6 +191,12 @@
   "cache_read": 0.22,
   "cache_write": 2.75
  },
+ "au.anthropic.claude-sonnet-5-5": {
+  "input": 2.2,
+  "output": 11,
+  "cache_read": 0.11,
+  "cache_write": 2.75
+ },
  "ca.amazon.nova-lite-v1:0": {
   "input": 0.064,
   "output": 0.256,
@@ -466,6 +472,12 @@
   "output": 10,
   "cache_read": 0.1,
   "cache_write": 2.5
+ },
+ "global.openai.gpt-6.1-terra": {
+  "input": 1,
+  "output": 5,
+  "cache_read": 0.05,
+  "cache_write": 1.25
  },
  "global.xai.grok-4.6": {
   "input": 2,
@@ -785,6 +797,12 @@
   "cache_read": 0.11,
   "cache_write": 2.75
  },
+ "openai.gpt-6.1-terra": {
+  "input": 1.1,
+  "output": 5.5,
+  "cache_read": 0.055,
+  "cache_write": 1.375
+ },
  "openai.gpt-oss-120b": {
   "input": 0.15,
   "output": 0.6,
@@ -1084,6 +1102,12 @@
   "output": 11,
   "cache_read": 0.11,
   "cache_write": 2.75
+ },
+ "us.openai.gpt-6.1-terra": {
+  "input": 1.1,
+  "output": 5.5,
+  "cache_read": 0.055,
+  "cache_write": 1.375
  },
  "us.writer.palmyra-x4-v1:0": {
   "input": 2.5,

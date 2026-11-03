@@ -15,7 +15,7 @@ import { type FixtureInstall, buildFixtureInstall } from "../../test/support/fix
 import { loadModules } from "./modules.ts";
 import { guardedFetch, restrictEnvironment } from "./restrict.ts";
 import { HostSession, authContext } from "./session.ts";
-import { SUPPLEMENTAL_MODELS } from "./supplemental-models.ts";
+import { NO_CATALOG_CREDENTIALS, createModelCatalog } from "./catalog.ts";
 
 const originalFetch = globalThis.fetch;
 const previousXdg = process.env.XDG_DATA_HOME;
@@ -73,8 +73,9 @@ test("a model absent from every catalog is refused with model_unavailable", asyn
   await expect(start("openai-codex/gpt-9-missing", "medium")).rejects.toThrow("model_unavailable: openai-codex/gpt-9-missing");
 }, 60_000);
 
-test("Terra prices usage below and above the 272000-token long-context threshold", () => {
-  const terra = SUPPLEMENTAL_MODELS["openai-codex"]![0]!;
+test("Terra prices usage below and above the 272000-token long-context threshold", async () => {
+  const runtime = await createModelCatalog(NO_CATALOG_CREDENTIALS, { providers: ["openai-codex"], modelsPath: null });
+  const terra = runtime.getModel("openai-codex", "gpt-6.1-terra")!;
   const usage = (input: number) => ({
     input, output: 1000, cacheRead: 0, cacheWrite: 0, totalTokens: input + 1000,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },

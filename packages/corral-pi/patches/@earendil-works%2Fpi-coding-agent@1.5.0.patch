@@ -1,4 +1,201 @@
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 2472338..6b9eabd 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -1,3 +1,5 @@
++export { withBuiltInRenderers } from "./core/tools/renderers/index.ts";
++export type { InteractiveChatPresentation } from "./modes/interactive/interactive-mode.ts";
+ export { type Args, parseArgs } from "./cli/args.ts";
+ export { CONFIG_DIR_NAME, getAgentDir, getDocsPath, getExamplesPath, getPackageDir, getReadmePath, VERSION, } from "./config.ts";
+ export { AgentSession, type AgentSessionConfig, type AgentSessionEvent, type AgentSessionEventListener, type ModelCycleResult, type ParsedSkillBlock, type PromptOptions, parseSkillBlock, type SessionStats, } from "./core/agent-session.ts";
+diff --git a/dist/index.js b/dist/index.js
+index ab5cfcc..443c03d 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1,3 +1,4 @@
++export { withBuiltInRenderers } from "./core/tools/renderers/index.js";
+ // Core session management
+ export { parseArgs } from "./cli/args.js";
+ // Config paths
+diff --git a/dist/modes/interactive/chat-viewport.d.ts b/dist/modes/interactive/chat-viewport.d.ts
+index 65638e7..b94d737 100644
+--- a/dist/modes/interactive/chat-viewport.d.ts
++++ b/dist/modes/interactive/chat-viewport.d.ts
+@@ -1,6 +1,7 @@
+ import { type Component, ScrollView, type ScrollViewScrollbar } from "@earendil-works/pi-tui";
+ export interface ChatViewportOptions {
+     readonly document: Component;
++    readonly mainView?: (transcript: Component) => Component;
+     readonly pendingMessages: Component;
+     readonly status: Component;
+     readonly editor: Component;
+diff --git a/dist/modes/interactive/chat-viewport.js b/dist/modes/interactive/chat-viewport.js
+index afed5bd..e995c18 100644
+--- a/dist/modes/interactive/chat-viewport.js
++++ b/dist/modes/interactive/chat-viewport.js
+@@ -20,7 +20,7 @@ export function createChatViewport(options) {
+     return {
+         transcript,
+         root: new VStack([
+-            { component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
++            { component: options.mainView?.(transcript) ?? transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+             { component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
+         ]),
+     };
+diff --git a/dist/modes/interactive/components/assistant-message.d.ts b/dist/modes/interactive/components/assistant-message.d.ts
+index c58f050..6f07cb2 100644
+--- a/dist/modes/interactive/components/assistant-message.d.ts
++++ b/dist/modes/interactive/components/assistant-message.d.ts
+@@ -1,6 +1,8 @@
+ import type { AssistantMessage } from "@earendil-works/pi-ai";
+ import { Container, type MarkdownTheme } from "@earendil-works/pi-tui";
+ import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
++/** Presentation-only input: the renderer never consumes model, credential or usage metadata. */
++type AssistantPresentation = Pick<AssistantMessage, "content" | "stopReason" | "errorMessage"> & { readonly hasToolCalls?: boolean };
+ /**
+  * Component that renders a complete assistant message
+  */
+@@ -18,12 +20,12 @@ export declare class AssistantMessageComponent extends Container {
+     private timestamp?;
+     private thinkingVisibilityOverrides;
+     private markdownSlots;
+-    constructor(message?: AssistantMessage, hideThinkingBlock?: boolean, markdownTheme?: MarkdownTheme, hiddenThinkingLabel?: string, outputPad?: number, markdownTransformers?: readonly MarkdownTransformer[], messageId?: string, timestamp?: string);
++    constructor(message?: AssistantPresentation, hideThinkingBlock?: boolean, markdownTheme?: MarkdownTheme, hiddenThinkingLabel?: string, outputPad?: number, markdownTransformers?: readonly MarkdownTransformer[], messageId?: string, timestamp?: string);
+     invalidate(): void;
+     setHideThinkingBlock(hide: boolean): void;
+     setHiddenThinkingLabel(label: string): void;
+     setOutputPad(padding: number): void;
+     render(width: number): string[];
+-    updateContent(message: AssistantMessage, isStreaming?: boolean): void;
++    updateContent(message: AssistantPresentation, isStreaming?: boolean): void;
+ }
+ //# sourceMappingURL=assistant-message.d.ts.map
+\ No newline at end of file
+diff --git a/dist/modes/interactive/components/assistant-message.js b/dist/modes/interactive/components/assistant-message.js
+index 1e16f4c..3bfef65 100644
+--- a/dist/modes/interactive/components/assistant-message.js
++++ b/dist/modes/interactive/components/assistant-message.js
+@@ -157,7 +157,7 @@ export class AssistantMessageComponent extends Container {
+         // Check if incomplete/failed - show after partial content.
+         // For aborted/error tool calls, tool execution components show the error.
+         // Length stops can happen before a tool call is complete, so surface them here too.
+-        const hasToolCalls = message.content.some((c) => c.type === "toolCall");
++        const hasToolCalls = message.hasToolCalls ?? message.content.some((c) => c.type === "toolCall");
+         this.hasToolCalls = hasToolCalls;
+         if (message.stopReason === "length") {
+             this.contentContainer.addChild(new Spacer(1));
+diff --git a/dist/modes/interactive/interactive-mode.d.ts b/dist/modes/interactive/interactive-mode.d.ts
+index c75d274..342d196 100644
+--- a/dist/modes/interactive/interactive-mode.d.ts
++++ b/dist/modes/interactive/interactive-mode.d.ts
+@@ -3,7 +3,8 @@
+  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
+  */
+ import { type ImageContent } from "@earendil-works/pi-ai/compat";
+-import { type Terminal } from "@earendil-works/pi-tui";
++import { type Component, type MarkdownTheme, type Terminal, type TUI } from "@earendil-works/pi-tui";
++import type { MarkdownTransformer, ToolRenderers } from "../../core/extensions/types.ts";
+ import { type AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
+ import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
+ import { SessionManager } from "../../core/session-manager.ts";
+@@ -38,6 +39,18 @@ export interface InteractiveModeOptions {
+     initialThemeSetting?: string;
+     /** Terminal implementation. Defaults to the current process terminal. */
+     terminal?: Terminal;
++    /** Optional body composition; retains the original transcript and fixed input dock. */
++    mainView?: (transcript: Component, presentation: () => InteractiveChatPresentation) => Component;
++    /** Count-only pending input; never restore external notices into the owner's editor. */
++    readOnlyQueue?: boolean;
++}
++/** Live, presentation-only chat surface owned by this same interactive mode. */
++export interface InteractiveChatPresentation {
++    readonly tui: TUI;
++    readonly outputPad: 0 | 1;
++    readonly markdownTheme: MarkdownTheme;
++    readonly markdownTransformers: readonly MarkdownTransformer[];
++    readonly renderers: (name: string) => ToolRenderers | undefined;
+ }
+ export declare class InteractiveMode {
+     private runtimeHost;
+diff --git a/dist/modes/interactive/interactive-mode.js b/dist/modes/interactive/interactive-mode.js
+index 615a6ba..18b9522 100644
+--- a/dist/modes/interactive/interactive-mode.js
++++ b/dist/modes/interactive/interactive-mode.js
+@@ -694,6 +694,15 @@ export class InteractiveMode {
+         this.renderWidgets(); // Initialize with default spacer
+         const viewport = createChatViewport({
+             document: this.documentContainer,
++            mainView: this.options.mainView ? transcript => this.options.mainView(transcript, () => ({
++                tui: this.ui, outputPad: this.outputPad,
++                markdownTheme: this.getMarkdownThemeWithSettings(),
++                markdownTransformers: this.getMarkdownTransformers(),
++                renderers: name => {
++                    const renderers = this.getRegisteredToolDefinition(name);
++                    return renderers ? { renderShell: renderers.renderShell, renderCall: renderers.renderCall, renderResult: renderers.renderResult } : undefined;
++                },
++            })) : undefined,
+             pendingMessages: this.pendingMessagesContainer,
+             status: this.statusContainer,
+             widgetsAbove: this.widgetContainerAbove,
+@@ -761,7 +770,7 @@ export class InteractiveMode {
+                 rawKeyHint("!", "to run bash"),
+                 rawKeyHint("!!", "to run bash (no context)"),
+                 hint("app.message.followUp", "to queue follow-up"),
+-                hint("app.message.dequeue", "to edit all queued messages"),
++                ...(this.options.readOnlyQueue ? [] : [hint("app.message.dequeue", "to edit all queued messages")]),
+                 hint("app.clipboard.pasteImage", "to paste files on macOS, images, or text"),
+                 rawKeyHint("drop files", "to attach"),
+             ].join("\n");
+@@ -3749,6 +3758,10 @@ export class InteractiveMode {
+         }
+     }
+     handleDequeue() {
++        if (this.options.readOnlyQueue) {
++            this.showStatus("Queued input is read-only in this bound session.");
++            return;
++        }
+         const restored = this.restoreQueuedMessagesToEditor();
+         if (restored === 0) {
+             this.showStatus("No queued messages to restore");
+@@ -3943,6 +3956,13 @@ export class InteractiveMode {
+     updatePendingMessagesDisplay() {
+         this.pendingMessagesContainer.clear();
+         const { steering: steeringMessages, followUp: followUpMessages } = this.getAllQueuedMessages();
++        if (this.options.readOnlyQueue) {
++            if (steeringMessages.length || followUpMessages.length) {
++                this.pendingMessagesContainer.addChild(new TruncatedText(theme.fg("dim",
++                    `${steeringMessages.length} steering · ${followUpMessages.length} follow-ups · queued, not execution`), 1, 0));
++            }
++            return;
++        }
+         if (steeringMessages.length > 0 || followUpMessages.length > 0) {
+             this.pendingMessagesContainer.addChild(new Spacer(1));
+             for (const message of steeringMessages) {
+@@ -3959,6 +3979,13 @@ export class InteractiveMode {
+         }
+     }
+     restoreQueuedMessagesToEditor(options) {
++        if (this.options.readOnlyQueue) {
++            // Abort retains its native meaning, but neither abort nor dequeue can turn
++            // structured external input into editable owner instructions or discard the draft.
++            if (options?.abort) void this.session.abort();
++            else this.showStatus("Queued input is read-only in this bound session.");
++            return 0;
++        }
+         const { steering, followUp } = this.clearAllQueues();
+         const allQueued = [...steering, ...followUp];
+         if (allQueued.length === 0) {
+@@ -5851,7 +5878,7 @@ export class InteractiveMode {
+ | \`${externalEditor}\` | Edit message in external editor |
+ | \`${copyMessage}\` | Copy selection or last assistant message |
+ | \`${followUp}\` | Queue follow-up message |
+-| \`${dequeue}\` | Restore queued messages |
++${this.options.readOnlyQueue ? "| Queue | Read-only counts; no edit, cancel or reorder |" : `| \`${dequeue}\` | Restore queued messages |`}
+ | \`${pasteImage}\` | Paste files on macOS, images, or text from clipboard |
+ | \`/\` | Slash commands |
+ | \`!\` | Run bash command |
 diff --git a/dist/utils/image-process.js b/dist/utils/image-process.js
+index 65b15af..75c1e84 100644
 --- a/dist/utils/image-process.js
 +++ b/dist/utils/image-process.js
 @@ -1,3 +1,4 @@
@@ -36,191 +233,3 @@ diff --git a/dist/utils/image-process.js b/dist/utils/image-process.js
              };
          }
          const hints = [];
-diff --git a/dist/modes/interactive/chat-viewport.d.ts b/dist/modes/interactive/chat-viewport.d.ts
-index 65638e7fc46589141ca4b0d37e7032f553d6f573..b94d7375521752f911de63a0cd0dff5827b3e819 100644
---- a/dist/modes/interactive/chat-viewport.d.ts
-+++ b/dist/modes/interactive/chat-viewport.d.ts
-@@ -1,6 +1,7 @@
- import { type Component, ScrollView, type ScrollViewScrollbar } from "@earendil-works/pi-tui";
- export interface ChatViewportOptions {
-     readonly document: Component;
-+    readonly mainView?: (transcript: Component) => Component;
-     readonly pendingMessages: Component;
-     readonly status: Component;
-     readonly editor: Component;
-diff --git a/dist/modes/interactive/chat-viewport.js b/dist/modes/interactive/chat-viewport.js
-index afed5bdc99bad115f3e5c14b872aa714ef71d023..e995c18b1fc7c748d7630fccd91f623ba0deaf39 100644
---- a/dist/modes/interactive/chat-viewport.js
-+++ b/dist/modes/interactive/chat-viewport.js
-@@ -20,7 +20,7 @@ export function createChatViewport(options) {
-     return {
-         transcript,
-         root: new VStack([
--            { component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
-+            { component: options.mainView?.(transcript) ?? transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
-             { component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
-         ]),
-     };
-diff --git a/dist/modes/interactive/interactive-mode.d.ts b/dist/modes/interactive/interactive-mode.d.ts
-index 6142005e6e816123e73e68c568f53f4a6c3697bc..35d553d03e5da7bb6dee4527e52fdbdf3fc89620 100644
---- a/dist/modes/interactive/interactive-mode.d.ts
-+++ b/dist/modes/interactive/interactive-mode.d.ts
-@@ -3,7 +3,8 @@
-  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
-  */
- import { type ImageContent } from "@earendil-works/pi-ai/compat";
--import { type Terminal } from "@earendil-works/pi-tui";
-+import { type Component, type MarkdownTheme, type Terminal, type TUI } from "@earendil-works/pi-tui";
-+import type { MarkdownTransformer, ToolRenderers } from "../../core/extensions/types.ts";
- import { type AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
- import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
- import { SessionManager } from "../../core/session-manager.ts";
-@@ -38,6 +39,18 @@ export interface InteractiveModeOptions {
-     initialThemeSetting?: string;
-     /** Terminal implementation. Defaults to the current process terminal. */
-     terminal?: Terminal;
-+    /** Optional body composition; retains the original transcript and fixed input dock. */
-+    mainView?: (transcript: Component, presentation: () => InteractiveChatPresentation) => Component;
-+    /** Count-only pending input; never restore external notices into the owner's editor. */
-+    readOnlyQueue?: boolean;
- }
-+/** Live, presentation-only chat surface owned by this same interactive mode. */
-+export interface InteractiveChatPresentation {
-+    readonly tui: TUI;
-+    readonly outputPad: 0 | 1;
-+    readonly markdownTheme: MarkdownTheme;
-+    readonly markdownTransformers: readonly MarkdownTransformer[];
-+    readonly renderers: (name: string) => ToolRenderers | undefined;
-+}
- export declare class InteractiveMode {
-     private runtimeHost;
-diff --git a/dist/modes/interactive/interactive-mode.js b/dist/modes/interactive/interactive-mode.js
-index d2343a5bb53c9d9ab8060e0a242f561da2cbfd3a..1777baf920fffcc9a538661ab23e91a6f4f5524c 100644
---- a/dist/modes/interactive/interactive-mode.js
-+++ b/dist/modes/interactive/interactive-mode.js
-@@ -676,6 +676,15 @@ export class InteractiveMode {
-         this.renderWidgets(); // Initialize with default spacer
-         const viewport = createChatViewport({
-             document: this.documentContainer,
-+            mainView: this.options.mainView ? transcript => this.options.mainView(transcript, () => ({
-+                tui: this.ui, outputPad: this.outputPad,
-+                markdownTheme: this.getMarkdownThemeWithSettings(),
-+                markdownTransformers: this.getMarkdownTransformers(),
-+                renderers: name => {
-+                    const renderers = this.getRegisteredToolDefinition(name);
-+                    return renderers ? { renderShell: renderers.renderShell, renderCall: renderers.renderCall, renderResult: renderers.renderResult } : undefined;
-+                },
-+            })) : undefined,
-             pendingMessages: this.pendingMessagesContainer,
-             status: this.statusContainer,
-             widgetsAbove: this.widgetContainerAbove,
-@@ -743,7 +752,7 @@ export class InteractiveMode {
-                 rawKeyHint("!", "to run bash"),
-                 rawKeyHint("!!", "to run bash (no context)"),
-                 hint("app.message.followUp", "to queue follow-up"),
--                hint("app.message.dequeue", "to edit all queued messages"),
-+                ...(this.options.readOnlyQueue ? [] : [hint("app.message.dequeue", "to edit all queued messages")]),
-                 hint("app.clipboard.pasteImage", "to paste files on macOS, images, or text"),
-                 rawKeyHint("drop files", "to attach"),
-             ].join("\n");
-@@ -3684,6 +3693,10 @@ export class InteractiveMode {
-         }
-     }
-     handleDequeue() {
-+        if (this.options.readOnlyQueue) {
-+            this.showStatus("Queued input is read-only in this bound session.");
-+            return;
-+        }
-         const restored = this.restoreQueuedMessagesToEditor();
-         if (restored === 0) {
-             this.showStatus("No queued messages to restore");
-@@ -3875,6 +3888,13 @@ export class InteractiveMode {
-     updatePendingMessagesDisplay() {
-         this.pendingMessagesContainer.clear();
-         const { steering: steeringMessages, followUp: followUpMessages } = this.getAllQueuedMessages();
-+        if (this.options.readOnlyQueue) {
-+            if (steeringMessages.length || followUpMessages.length) {
-+                this.pendingMessagesContainer.addChild(new TruncatedText(theme.fg("dim",
-+                    `${steeringMessages.length} steering · ${followUpMessages.length} follow-ups · queued, not execution`), 1, 0));
-+            }
-+            return;
-+        }
-         if (steeringMessages.length > 0 || followUpMessages.length > 0) {
-             this.pendingMessagesContainer.addChild(new Spacer(1));
-             for (const message of steeringMessages) {
-@@ -3891,6 +3911,13 @@ export class InteractiveMode {
-         }
-     }
-     restoreQueuedMessagesToEditor(options) {
-+        if (this.options.readOnlyQueue) {
-+            // Abort retains its native meaning, but neither abort nor dequeue can turn
-+            // structured external input into editable owner instructions or discard the draft.
-+            if (options?.abort) void this.session.abort();
-+            else this.showStatus("Queued input is read-only in this bound session.");
-+            return 0;
-+        }
-         const { steering, followUp } = this.clearAllQueues();
-         const allQueued = [...steering, ...followUp];
-         if (allQueued.length === 0) {
-@@ -5783,7 +5810,7 @@ export class InteractiveMode {
- | \`${externalEditor}\` | Edit message in external editor |
- | \`${copyMessage}\` | Copy selection or last assistant message |
- | \`${followUp}\` | Queue follow-up message |
--| \`${dequeue}\` | Restore queued messages |
-+${this.options.readOnlyQueue ? "| Queue | Read-only counts; no edit, cancel or reorder |" : `| \`${dequeue}\` | Restore queued messages |`}
- | \`${pasteImage}\` | Paste files on macOS, images, or text from clipboard |
- | \`/\` | Slash commands |
- | \`!\` | Run bash command |
-diff --git a/dist/index.js b/dist/index.js
---- a/dist/index.js
-+++ b/dist/index.js
-@@ -1,3 +1,4 @@
-+export { withBuiltInRenderers } from "./core/tools/renderers/index.js";
- // Core session management
- export { parseArgs } from "./cli/args.js";
- // Config paths
-diff --git a/dist/index.d.ts b/dist/index.d.ts
---- a/dist/index.d.ts
-+++ b/dist/index.d.ts
-@@ -1,3 +1,5 @@
-+export { withBuiltInRenderers } from "./core/tools/renderers/index.ts";
-+export type { InteractiveChatPresentation } from "./modes/interactive/interactive-mode.ts";
- export { type Args, parseArgs } from "./cli/args.ts";
- export { CONFIG_DIR_NAME, getAgentDir, getDocsPath, getExamplesPath, getPackageDir, getReadmePath, VERSION, } from "./config.ts";
- export { AgentSession, type AgentSessionConfig, type AgentSessionEvent, type AgentSessionEventListener, type ModelCycleResult, type ParsedSkillBlock, type PromptOptions, parseSkillBlock, type SessionStats, } from "./core/agent-session.ts";
-diff --git a/dist/modes/interactive/components/assistant-message.d.ts b/dist/modes/interactive/components/assistant-message.d.ts
---- a/dist/modes/interactive/components/assistant-message.d.ts
-+++ b/dist/modes/interactive/components/assistant-message.d.ts
-@@ -1,6 +1,8 @@
- import type { AssistantMessage } from "@earendil-works/pi-ai";
- import { Container, type MarkdownTheme } from "@earendil-works/pi-tui";
- import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
-+/** Presentation-only input: the renderer never consumes model, credential or usage metadata. */
-+type AssistantPresentation = Pick<AssistantMessage, "content" | "stopReason" | "errorMessage"> & { readonly hasToolCalls?: boolean };
- /**
-  * Component that renders a complete assistant message
-  */
-@@ -15,7 +17,7 @@
-     private hasToolCalls;
-     private isStreaming;
-     private thinkingVisibilityOverrides;
--    constructor(message?: AssistantMessage, hideThinkingBlock?: boolean, markdownTheme?: MarkdownTheme, hiddenThinkingLabel?: string, outputPad?: number, markdownTransformers?: readonly MarkdownTransformer[]);
-+    constructor(message?: AssistantPresentation, hideThinkingBlock?: boolean, markdownTheme?: MarkdownTheme, hiddenThinkingLabel?: string, outputPad?: number, markdownTransformers?: readonly MarkdownTransformer[]);
-     invalidate(): void;
-     setHideThinkingBlock(hide: boolean): void;
-     setHiddenThinkingLabel(label: string): void;
-@@ -22,5 +24,5 @@
-     setOutputPad(padding: number): void;
-     render(width: number): string[];
--    updateContent(message: AssistantMessage, isStreaming?: boolean): void;
-+    updateContent(message: AssistantPresentation, isStreaming?: boolean): void;
- }
- //# sourceMappingURL=assistant-message.d.ts.map
-diff --git a/dist/modes/interactive/components/assistant-message.js b/dist/modes/interactive/components/assistant-message.js
---- a/dist/modes/interactive/components/assistant-message.js
-+++ b/dist/modes/interactive/components/assistant-message.js
-@@ -135,3 +135,3 @@
-         // Length stops can happen before a tool call is complete, so surface them here too.
--        const hasToolCalls = message.content.some((c) => c.type === "toolCall");
-+        const hasToolCalls = message.hasToolCalls ?? message.content.some((c) => c.type === "toolCall");
-         this.hasToolCalls = hasToolCalls;

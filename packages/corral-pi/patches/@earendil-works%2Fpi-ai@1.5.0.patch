@@ -1,0 +1,47 @@
+diff --git a/dist/api/openai-codex-responses.d.ts b/dist/api/openai-codex-responses.d.ts
+index 704476d..0f9acad 100644
+--- a/dist/api/openai-codex-responses.d.ts
++++ b/dist/api/openai-codex-responses.d.ts
+@@ -7,6 +7,8 @@ export interface OpenAICodexResponsesOptions extends StreamOptions {
+     textVerbosity?: "low" | "medium" | "high";
+     toolChoice?: "auto" | "none" | "required";
+ }
++/** The adapter's own rate multiplier, shared by conservative budget admission and settlement. */
++export declare function getServiceTierCostMultiplier(model: { readonly id: string }, serviceTier: OpenAICodexResponsesOptions["serviceTier"]): number;
+ export declare const stream: StreamFunction<"openai-codex-responses", OpenAICodexResponsesOptions>;
+ export declare const streamSimple: StreamFunction<"openai-codex-responses", SimpleStreamOptions>;
+ export interface OpenAICodexWebSocketDebugStats {
+diff --git a/dist/api/openai-codex-responses.js b/dist/api/openai-codex-responses.js
+index 427df0a..b35cf59 100644
+--- a/dist/api/openai-codex-responses.js
++++ b/dist/api/openai-codex-responses.js
+@@ -356,6 +356,7 @@ export const streamSimple = (model, context, options) => {
+     }
+     const base = {
+         ...buildBaseOptions(model, context, options, apiKey),
++        serviceTier: options?.serviceTier,
+         toolChoice: options?.toolChoice,
+     };
+     const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
+@@ -431,7 +432,7 @@ function buildRequestBody(model, context, options, cacheSessionId, grammarToolIn
+     }
+     return body;
+ }
+-function getServiceTierCostMultiplier(model, serviceTier) {
++export function getServiceTierCostMultiplier(model, serviceTier) {
+     switch (serviceTier) {
+         case "flex":
+             return 0.5;
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index 2d650ea..162624f 100644
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -231,6 +231,8 @@ export interface ImagesOptions extends ProviderRequestOptions<ImageModel<ImageAp
+ }
+ export type ProviderImagesOptions = ImagesOptions & Record<string, unknown>;
+ export interface SimpleStreamOptions extends StreamOptions {
++    /** Optional Codex service tier, forwarded by the Codex simple adapter. */
++    serviceTier?: "auto" | "default" | "flex" | "priority";
+     /** Provider-neutral tool selection for simple requests. When omitted, adapters use provider-specific behavior. */
+     toolChoice?: ToolChoice;
+     reasoning?: ThinkingLevel;

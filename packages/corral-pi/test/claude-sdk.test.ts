@@ -8,7 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
-import { type AssistantMessage, type Context, type Credential, Type, normalizeContext } from "@earendil-works/pi-ai";
+import { type AssistantMessage, type Context, type Credential, normalizeContext } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 
 import { type SdkBoundary, overrideSdk, resolveClaudeCode } from "../src/claude/sdk.ts";
 import { CLAUDE_SDK_API, claudeSystemPrompt } from "../src/claude/stream.ts";

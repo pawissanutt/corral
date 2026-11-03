@@ -2,7 +2,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { Type, normalizeContext } from "@earendil-works/pi-ai";
+import { normalizeContext } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import auth from "../auth/index.ts";
 import { createModelCatalog } from "./catalog.ts";
 import { guardedFetch, restrictEnvironment } from "./restrict.ts";
