@@ -34,13 +34,14 @@ SLOW_OWNERS = {
     ),
     "ledger_cleanup_closes": ("crates/corral-ops/src/cleanup", "crates/corral-ops/tests/support/cleanup"),
     "delivery_history::s21_": (
-        "crates/corral-ops/src/delivery", "crates/corral-ops/src/inbox",
-        "crates/corral-core/src/inbox", "crates/corral-ops/tests/attention_eval",
+        "crates/corral-ops/src/delivery", "crates/corral-ops/src/attention.rs",
+        "crates/corral-ops/src/attention/", "crates/corral-core/src/inbox",
+        "crates/corral-ops/tests/attention_eval",
     ),
     "self_projection_restart": ("crates/corral-ops/src/plan", "crates/corral-ops/tests/plan_ops"),
     "inputs_changed_between_approval": (
         "crates/corral-ops/src/autopilot", "crates/corral-ops/src/gate",
-        "crates/corral-ops/src/approve", "crates/corral-ops/tests/autopilot_ops",
+        "crates/corral-ops/src/review.rs", "crates/corral-ops/tests/autopilot_ops",
     ),
     "interrupted_coding_stages": ("crates/corral-ops/src/operating", "crates/corral-ops/tests/operating_launch"),
     "concrete_planning_paths": ("crates/corral-ops/src/operating", "crates/corral-ops/src/plan", "crates/corral-ops/tests/operating_launch"),
@@ -50,7 +51,8 @@ SLOW_OWNERS = {
         "crates/corral-ops/src/autopilot", "crates/corral-ops/tests/gate_tiers_e2e",
     ),
     "retained_branch_cleanup_refuses": (
-        "crates/corral-ops/src/cleanup", "crates/corral-ops/src/approve",
+        "crates/corral-ops/src/cleanup", "crates/corral-ops/src/review.rs",
+        "crates/corral-ops/src/storage_gc.rs", "crates/corral-ops/src/storage_gc/",
         "crates/corral-ops/tests/cleanup_ops",
     ),
 }

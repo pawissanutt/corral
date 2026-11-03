@@ -82,6 +82,28 @@ class PolicyTests(unittest.TestCase):
         self.assertNotIn(" or (", ordinary)
         self.assertIn(" or (", cleanup)
         self.assertIn("ledger_cleanup_closes", cleanup.split(" or (")[1])
+        for prefixes in gate_lanes.SLOW_OWNERS.values():
+            for prefix in prefixes:
+                with self.subTest(owner_prefix=prefix):
+                    self.assertTrue((ROOT / prefix).exists() or any(ROOT.glob(prefix + "*")), prefix)
+        delivery = (
+            "delivery_history::s21_prior_unsafe_attempts_bar_rejected_resends_after_restart_and_fifo_promotion",
+            "delivery_history::s21_ten_current_attempts_preserve_prior_unsafe_witness_on_every_recipient",
+            "delivery_history::s21_unattempted_replacements_retry_original_recipient_after_restart_and_promotion",
+        )
+        cases = {
+            "crates/corral-ops/src/storage_gc.rs": ("retained_branch_cleanup_refuses",),
+            "crates/corral-ops/src/storage_gc/worktrees.rs": ("retained_branch_cleanup_refuses",),
+            "crates/corral-ops/src/storage_gc/lifecycle.rs": ("retained_branch_cleanup_refuses",),
+            "crates/corral-ops/src/attention.rs": delivery,
+            "crates/corral-ops/src/attention/metrics.rs": delivery,
+            "crates/corral-ops/src/review.rs": ("inputs_changed_between_approval", "retained_branch_cleanup_refuses"),
+        }
+        for path, terms in cases.items():
+            with self.subTest(changed_path=path):
+                restored = gate_lanes.landing_filter([path]).partition(" or (")[2]
+                for term in terms:
+                    self.assertIn(term, restored)
         self.assertEqual(gate_lanes.landing_filter(["Cargo.lock"]), "all()")
         config = Path(".config/nextest.toml")
         config.write_text(config.read_text().replace("test(retained_branch_cleanup_refuses)",
