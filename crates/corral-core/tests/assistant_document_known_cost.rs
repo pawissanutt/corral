@@ -104,7 +104,9 @@ fn actual_assistant_documents_roundtrip_growth_with_exact_load_save_and_enumerat
             drop(hot);
             exact(&write, "assistant_session_load", 1, sb, 1);
             exact(&write, "assistant_container_load", 1, cb, 1);
-            exact(&write, "assistant_container_save", 1, cb, 1);
+            // Container load and save share change_assistant_container's record unit:
+            // save decodes the held row but reuses the view opened by the load.
+            exact(&write, "assistant_container_save", 1, cb, 0);
             assert_eq!(write.followup_calls.len(), 3);
             let docs = store.record_rows("assistant-sessions").unwrap();
             let all_bytes = docs
