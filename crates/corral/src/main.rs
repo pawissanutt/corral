@@ -826,7 +826,7 @@ fn main() {
             .map(|args| (cmd.name(), args.id.clone())),
         _ => None,
     };
-    let result = cmds::run(cli, &matches);
+    let result = corral_core::clock::pin_from_test_env().and_then(|()| cmds::run(cli, &matches));
     // An owner action's command child records how its command ended before it exits.
     let failure = result.as_ref().err().map(|err| format!("{err:#}"));
     if let Err(error) = corral_ops::assistant::owner_action::finish(failure.as_deref()) {
