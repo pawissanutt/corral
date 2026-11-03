@@ -148,7 +148,7 @@ pub use runtime::UPDATE_NOTICE;
 pub use schema::STORE_SCHEMA_VERSION;
 pub use session::*;
 pub use session_binding::{
-    HerdrSessionBinding, SessionClaim, SessionTurn, SessionView, UnqueuedReads,
+    HerdrSessionBinding, SessionClaim, SessionLease, SessionView, UnqueuedReads,
 };
 pub use slot_release::*;
 pub use storage_roots::{StorageCfg, StorageClass, StorageEnv, StorageLayout};

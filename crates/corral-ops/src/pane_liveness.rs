@@ -13,7 +13,7 @@ pub(crate) struct Inventory {
     pub ticket: Ticket,
     // Keep ownership stable until every consumer has finished with these IDs. The lease
     // also carries this pass's single read of the session binding.
-    _ownership: corral_core::StoreLock,
+    _ownership: corral_core::SessionLease,
 }
 
 impl Inventory {

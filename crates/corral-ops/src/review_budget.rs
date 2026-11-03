@@ -381,13 +381,34 @@ impl<'a> ReviewLaunch<'a> {
         crate::hold::require_clear(&ctx.store, &requested)?;
         corral_core::Park::require_unparked_ref(&requested)?;
         let id = requested.id.as_str();
-        // Wait for in-flight inventory readers before taking the global budget lock, so the
-        // wait never runs under it; later readers stay queued behind this turn until the claim.
-        let turn = ctx.store.session_turn()?;
+        if let Some(launch) = Self::admit(ctx, id, kind, force_resources, origin, None)? {
+            return Ok(launch);
+        }
+        // Ownership is busy: wait for it holding no lock, so the wait never runs under the
+        // budget lock, then admit again under the claim the wait returned. No launch or reader
+        // can take ownership between the wait and the admission.
+        let claim = ctx.store.claim_session_ownership()?.ok_or(LaunchBusy(
+            "pane inventory is being reconciled; retry review launch",
+        ))?;
+        Self::admit(ctx, id, kind, force_resources, origin, Some(claim))?
+            .context("held session-ownership claim was refused")
+    }
+
+    /// One admission under the global budget lock. Without `claim` it takes ownership only if
+    /// it is free now, and is None otherwise.
+    fn admit(
+        ctx: &'a Ctx,
+        id: &str,
+        kind: Kind,
+        force_resources: bool,
+        origin: crate::operating::Origin,
+        claim: Option<corral_core::SessionClaim>,
+    ) -> Result<Option<Self>> {
         let lock = ctx.store.try_lock("review-budget")?.ok_or(LaunchBusy(
             "another review launch is in progress; try again",
         ))?;
-        // This launch's own inventory reads must not queue behind its turn.
+        // Reads under the budget lock never wait behind a launch; under the claim they run
+        // under it, since it already excludes every other launch.
         let _reads = corral_core::UnqueuedReads::begin();
         crate::session_scope::check_launch(ctx)?;
         if let Some(pending) = load_pending(ctx)? {
@@ -425,9 +446,13 @@ impl<'a> ReviewLaunch<'a> {
                 refused_request: None,
             }
         };
-        let ownership = turn.claim(&ctx.store)?.ok_or(LaunchBusy(
-            "pane inventory is being reconciled; retry review launch",
-        ))?;
+        let ownership = match claim {
+            Some(claim) => claim,
+            None => match ctx.store.try_claim_session_ownership()? {
+                Some(claim) => claim,
+                None => return Ok(None),
+            },
+        };
         let (_, waiting) = ctx.store.dispatch_update_head(id, |store, current| {
             corral_core::Park::require_unparked_ref(&*current)?;
             crate::operating::require_origin(
@@ -527,14 +552,14 @@ impl<'a> ReviewLaunch<'a> {
         if let Some(reason) = waiting {
             return Err(CapacityWait { kind, reason }.into());
         }
-        Ok(Self {
+        Ok(Some(Self {
             ctx,
             _lock: lock,
             pending,
             armed: true,
             committed: false,
             request: None,
-        })
+        }))
     }
 
     /// Binds the agent request this launch executes, before either submit path runs.
