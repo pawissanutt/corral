@@ -467,7 +467,7 @@ impl Store {
         self.append_event_immediate(event)
     }
 
-    // Runtime fencing must survive the surrounding unit being aborted.
+    // Runtime fencing must survive an aborted unit or detection on a read-only snapshot.
     pub(super) fn append_event_immediate(&self, event: NewEvent) -> Result<()> {
         self.db
             .backend
