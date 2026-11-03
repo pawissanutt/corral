@@ -326,7 +326,7 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
             ("cargo", ["metadata", "--format-version", "1"]),
             ("cargo", ["nextest", "list", "--workspace", "--list-type", "binaries-only", "--message-format", "json"]),
             ("cargo", ["nextest", "list", "--profile", "default", "--ignore-default-filter", "--run-ignored", "all", "--message-format", "json", "-E", "<exception selection>"]),
-            ("cargo", ["nextest", "run", "--profile", "default"]),
+            ("cargo", ["nextest", "run", "--profile", "default", "-E", "(all())"]),
             ("cargo", ["test", "--workspace", "--doc"]),
             ("cargo", ["nextest", "run", "--profile", "default", "--run-ignored", "only", "-E", BUDGET_FILTER]),
             ("cargo", ["build", "-p", "corral"]),
