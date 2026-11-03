@@ -261,7 +261,13 @@ fn refresh_overflow(
 
 /// Hot active/owed board. Unrelated settled terminal tasks are not inputs.
 pub fn board_hot(ctx: &Ctx, now: Timestamp) -> Result<AttentionBoard> {
-    Ok(snapshot_heads::snapshot(ctx, now)?.1)
+    Ok(board_hot_heads(ctx, now)?.1)
+}
+
+/// The assessed roots on the same pinned view, for callers that also render task metadata.
+/// Includes indexed terminal owed/slot owners; ordinary list callers keep only open heads.
+pub fn board_hot_heads(ctx: &Ctx, now: Timestamp) -> Result<(Vec<TaskHead>, AttentionBoard)> {
+    snapshot_heads::snapshot(ctx, now)
 }
 
 /// The same real projection plus its sampled admission, for the owning read operation.

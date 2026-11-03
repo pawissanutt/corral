@@ -442,6 +442,27 @@ impl Store {
             .view_with_max_age(self.config.storage.view_max_age())?)
     }
 
+    fn current_cached_head(&self, view: &PinnedView, num: TaskNum) -> Result<Option<TaskHead>> {
+        let seq = {
+            let guard = view.lock().unwrap_or_else(PoisonError::into_inner);
+            guard.ensure_fresh()?;
+            guard.seq()
+        };
+        let cache = self
+            .db
+            .checked_board
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let head = cache
+            .as_ref()
+            .filter(|board| board.seq == seq)
+            .and_then(|board| board.heads.iter().find(|head| head.num == num));
+        Ok(head.cloned().map(|mut head| {
+            head.view = Some(Arc::clone(view));
+            head
+        }))
+    }
+
     /// The head of one task; its keyed reads use the view it was read on.
     ///
     /// # Errors
@@ -449,7 +470,10 @@ impl Store {
     pub fn head(&self, id: &str) -> Result<TaskHead> {
         let id = Self::normalize_id(id)?;
         let view = self.pinned_view()?;
-        Self::head_on(&view, TaskNum(id_number(&id)))?
+        let num = TaskNum(id_number(&id));
+        self.current_cached_head(&view, num)?
+            .map(|head| Ok(Some(head)))
+            .unwrap_or_else(|| Self::head_on(&view, num))?
             .filter(|head| head.task.id == id)
             .with_context(|| format!("task {id} not found"))
     }
@@ -461,7 +485,12 @@ impl Store {
     pub fn head_if_exists(&self, id: &str) -> Result<Option<TaskHead>> {
         let id = Self::normalize_id(id)?;
         let view = self.pinned_view()?;
-        Ok(Self::head_on(&view, TaskNum(id_number(&id)))?.filter(|head| head.task.id == id))
+        let num = TaskNum(id_number(&id));
+        let head = match self.current_cached_head(&view, num)? {
+            Some(head) => Some(head),
+            None => Self::head_on(&view, num)?,
+        };
+        Ok(head.filter(|head| head.task.id == id))
     }
 
     /// Heads matching `q`, all on one view.
@@ -567,19 +596,23 @@ impl Store {
     /// # Errors
     /// Returns read errors.
     pub fn board_since(&self, prev: &Board) -> Result<Board> {
+        self.board_since_with_policy(prev, false)
+    }
+
+    fn board_since_with_policy(&self, prev: &Board, checked: bool) -> Result<Board> {
         let view = self.pinned_view()?;
         let delta = {
             let guard = view.lock().unwrap_or_else(PoisonError::into_inner);
             if guard.seq() < prev.seq {
                 // Another store now lives at this root: nothing of `prev` carries over.
                 drop(guard);
-                return self.board(None);
+                return self.board_with_policy(None, checked);
             }
             match guard.board(Some(prev.seq)) {
                 Ok(delta) => delta,
                 Err(crate::backend::FeedError::Gap { .. }) => {
                     drop(guard);
-                    return self.board(None);
+                    return self.board_with_policy(None, checked);
                 }
                 Err(error) => return Err(error.into()),
             }
@@ -591,7 +624,7 @@ impl Store {
             .iter()
             .map(|doc| doc.header.id.clone())
             .collect();
-        let changed = Self::board_on(&view, delta)?;
+        let changed = Self::board_on(&view, delta, checked)?;
         let gone: std::collections::BTreeSet<&str> = changed_ids
             .iter()
             .map(String::as_str)
@@ -612,35 +645,57 @@ impl Store {
         Ok(Board { heads, ..changed })
     }
 
+    /// Refresh the open board using this database handle's detached previous frame.
+    /// The cache holds no read view and cannot mix different stores or backend replacements.
+    /// An older snapshot or a feed gap falls back to a complete open-board read.
+    pub fn cached_board(&self) -> Result<Board> {
+        self.cached_board_with_policy(false)
+    }
+
+    /// The same incremental refresh, failing closed on undecodable attention/policy inputs.
+    /// Kept separately so a tolerant UI frame cannot hide corruption from an aggregate read.
+    pub fn cached_board_checked(&self) -> Result<Board> {
+        self.cached_board_with_policy(true)
+    }
+
+    fn cached_board_with_policy(&self, checked: bool) -> Result<Board> {
+        let cache = if checked {
+            &self.db.checked_board
+        } else {
+            &self.db.board
+        };
+        let mut previous = cache.lock().unwrap_or_else(PoisonError::into_inner);
+        let board = match previous.as_ref() {
+            Some(board) => self.board_since_with_policy(board, checked)?,
+            None => self.board_with_policy(None, checked)?,
+        };
+        *previous = Some(board.clone().detach());
+        Ok(board)
+    }
+
     /// The open board, or the heads changed after `since`, on one view.
     ///
     /// # Errors
     /// Returns read errors, including a feed gap when `since` was pruned.
     pub fn board(&self, since: Option<ChangeSeq>) -> Result<Board> {
+        self.board_with_policy(since, false)
+    }
+
+    fn board_with_policy(&self, since: Option<ChangeSeq>, checked: bool) -> Result<Board> {
         let view = self.pinned_view()?;
         let delta = {
             let guard = view.lock().unwrap_or_else(PoisonError::into_inner);
             guard.board(since)?
         };
-        Self::board_on(&view, delta)
+        Self::board_on(&view, delta, checked)
     }
 
-    fn board_on(view: &PinnedView, delta: crate::backend::BoardDelta) -> Result<Board> {
-        let mut heads = Vec::new();
-        for doc in delta.heads {
-            work::decoded(
-                Counter::TaskHeadDecodes,
-                super::read::doc_bytes(&doc.doc) + super::read::doc_bytes(&doc.summary),
-                work::Subject::Plain,
-            );
-            let guard = view.lock().unwrap_or_else(PoisonError::into_inner);
-            let head = decode_or_skip(guard.as_ref(), doc)?;
-            drop(guard);
-            if let Some(mut head) = head {
-                head.view = Some(Arc::clone(view));
-                heads.push(head);
-            }
-        }
+    fn board_on(
+        view: &PinnedView,
+        delta: crate::backend::BoardDelta,
+        checked: bool,
+    ) -> Result<Board> {
+        let heads = Self::decode_heads(view, delta.heads, checked)?;
         Ok(Board {
             seq: delta.seq,
             since: delta.since,

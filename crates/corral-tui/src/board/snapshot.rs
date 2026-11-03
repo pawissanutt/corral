@@ -56,7 +56,7 @@ impl BoardSnapshot {
             store,
             ..ctx.clone()
         };
-        corral_ops::lesson_rows::prepare_evaluation(ctx)?;
+        corral_ops::lesson_rows::prepare_coordination(ctx)?;
         let _hot = corral_core::work::HotScope::enter();
         let sources::FrameSources {
             tasks,

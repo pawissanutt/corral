@@ -33,6 +33,9 @@ pub(crate) struct Db {
     pub(crate) sqlite: Option<SqliteBackend>,
     /// The last full listing and the change seq it was read at.
     pub(crate) listing: Mutex<Option<(ChangeSeq, Arc<Vec<crate::Task>>)>>,
+    /// Detached open heads, shared by refreshes without retaining a WAL read view.
+    pub(crate) board: Mutex<Option<super::Board>>,
+    pub(crate) checked_board: Mutex<Option<super::Board>>,
     /// Task ids a fixture keeps [`crate::Store::publish_staged`] from publishing.
     pub(crate) blocked: Mutex<std::collections::BTreeSet<String>>,
     _gate: Option<Arc<StoreGate>>,
@@ -51,6 +54,8 @@ impl Db {
             backend,
             sqlite: None,
             listing: Mutex::default(),
+            board: Mutex::default(),
+            checked_board: Mutex::default(),
             blocked: Mutex::default(),
             _gate: None,
         })
@@ -252,6 +257,8 @@ pub(crate) fn open(corral: &Path) -> Result<Arc<Db>> {
         backend: Box::new(backend),
         sqlite: Some(sqlite),
         listing: Mutex::default(),
+        board: Mutex::default(),
+        checked_board: Mutex::default(),
         blocked: Mutex::default(),
         _gate: Some(gate),
     });

@@ -23,6 +23,9 @@ pub(super) const LIFECYCLE_BELOW: &str = "WHERE policy_digest < ? ORDER BY polic
 pub(super) const LIFECYCLE_ABOVE: &str = "WHERE policy_digest > ? ORDER BY policy_digest, rowid";
 
 #[cfg(test)]
+#[path = "view_hot_tests.rs"]
+mod hot_tests;
+#[cfg(test)]
 #[path = "view_lifecycle_tests.rs"]
 mod lifecycle_tests;
 
@@ -196,7 +199,8 @@ impl ReadView for SqliteView {
         let (heads, left) = match since {
             None => {
                 let sql = format!(
-                    "SELECT {} FROM tasks WHERE status NOT IN ('done','dropped') ORDER BY num",
+                    "SELECT {} FROM tasks INDEXED BY tasks_open \
+                     WHERE status NOT IN ('done','dropped') ORDER BY num",
                     load::HEAD_COLUMNS
                 );
                 let heads = load::all(db, &sql, [], |row| load::head(db, row)).or_view()?;
@@ -280,7 +284,8 @@ impl ReadView for SqliteView {
             HeadQuery::Open { project: None } => self.page(
                 &page,
                 &format!(
-                    "SELECT {cols} FROM tasks WHERE status NOT IN ('done','dropped') ORDER BY num"
+                    "SELECT {cols} FROM tasks INDEXED BY tasks_open \
+                     WHERE status NOT IN ('done','dropped') ORDER BY num"
                 ),
                 Vec::new(),
                 head_query,
@@ -290,7 +295,7 @@ impl ReadView for SqliteView {
             } => self.page(
                 &page,
                 &format!(
-                    "SELECT {cols} FROM tasks WHERE status NOT IN ('done','dropped') \
+                    "SELECT {cols} FROM tasks INDEXED BY tasks_open WHERE status NOT IN ('done','dropped') \
                      AND project = ? ORDER BY num"
                 ),
                 vec![Sql::Text(project.clone())],
@@ -440,17 +445,30 @@ impl ReadView for SqliteView {
         if q.open_only {
             filters.push("r.open = 1".to_owned());
         }
-        let from = match &q.index {
+        // Drive exact-token reads from the token's index range. An ordinary JOIN lets
+        // SQLite scan the whole history family before testing the token, even for no match.
+        let (from, key) = match &q.index {
             Some(token) => {
                 args.insert(0, Sql::Text(token.clone()));
-                "task_rows r JOIN task_row_index i ON i.task = r.task AND i.part = r.part \
-                 AND i.key = r.key AND i.token = ?"
+                (
+                    "task_row_index i CROSS JOIN task_rows r ON i.task = r.task AND i.part = r.part \
+                     AND i.key = r.key AND i.token = ?",
+                    "i.key",
+                )
             }
-            None => "task_rows r",
+            None => (
+                match (q.current_only, q.open_only) {
+                    (true, true) => "task_rows r INDEXED BY task_rows_current_open",
+                    (true, false) => "task_rows r INDEXED BY task_rows_current",
+                    (false, true) => "task_rows r INDEXED BY task_rows_open",
+                    _ => "task_rows r",
+                },
+                "r.key",
+            ),
         };
         let order = if q.newest_first { "DESC" } else { "ASC" };
         let sql = format!(
-            "SELECT r.part, r.key, r.current, r.open, r.doc, r.idx FROM {from}{} ORDER BY r.key {order}",
+            "SELECT r.part, r.key, r.current, r.open, r.doc, r.idx FROM {from}{} ORDER BY {key} {order}",
             where_clause(&filters)
         );
         self.page(&page, &sql, args, |_, row| load::history_row(row))

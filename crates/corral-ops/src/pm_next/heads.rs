@@ -51,7 +51,7 @@ pub(crate) fn event_of(row: corral_core::backend::StoredEvent) -> Result<corral_
 
 pub(crate) fn open(store: &Store) -> Result<Arc<Vec<TaskHead>>> {
     store.pass_derived("pm-open-heads", || {
-        let heads = store.heads(&HeadQuery::Open { project: None })?;
+        let heads = store.cached_board_checked()?.heads;
         crate::pm_workset::after_open_heads();
         Ok(heads)
     })

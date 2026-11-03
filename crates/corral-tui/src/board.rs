@@ -56,7 +56,7 @@ mod slots;
 mod snapshot;
 #[cfg(test)]
 mod snapshot_tests;
-mod sources;
+pub(crate) mod sources;
 pub use snapshot::BoardSnapshot;
 #[cfg(test)]
 mod slots_tests;

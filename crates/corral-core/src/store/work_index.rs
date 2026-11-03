@@ -80,11 +80,21 @@ impl Store {
         for token in ["attention:owed", "slots:held"] {
             owners.extend(view.token_owners(TaskPart::WorkIndex, token, u32::MAX)?);
         }
-        frozen.heads(&HeadQuery::Ids(
-            owners
-                .into_iter()
-                .map(|num| format!("T-{:03}", num.0))
-                .collect(),
-        ))
+        let mut heads = Vec::new();
+        for head in frozen.cached_board_checked()?.heads {
+            if owners.remove(&head.num) {
+                heads.push(head);
+            }
+        }
+        heads.extend(
+            frozen.heads(&HeadQuery::Ids(
+                owners
+                    .into_iter()
+                    .map(|num| format!("T-{:03}", num.0))
+                    .collect(),
+            ))?,
+        );
+        heads.sort_by_key(|head| head.num);
+        Ok(heads)
     }
 }

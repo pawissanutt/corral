@@ -155,6 +155,20 @@ pub fn prepare(ctx: &Ctx) -> Result<()> {
     prepared(ctx).map(|_| ())
 }
 
+/// Coordination reads scheduling facts, not artifact signals or landed-file Git diffs.
+/// Its independent feed cursor cannot consume invalidations owed to a later signal preview.
+pub fn prepare_coordination(ctx: &Ctx) -> Result<()> {
+    schedule_prepared(ctx)?;
+    crate::approvals::prepare(ctx)
+}
+
+fn schedule_prepared(ctx: &Ctx) -> Result<Arc<Prepared>> {
+    ctx.store.pass_derived("lesson-schedule-prepared-v1", || {
+        let _lock = lock(&ctx.store, "lesson-schedule")?;
+        follow::prepare_schedule_locked(ctx, &ctx.store.config.projects.keys().cloned().collect())
+    })
+}
+
 fn prepared(ctx: &Ctx) -> Result<Arc<Prepared>> {
     ctx.store.pass_derived("lesson-rows-prepared-v5", || {
         let _lock = lock(&ctx.store, "lesson-rows")?;
@@ -226,7 +240,11 @@ pub(crate) fn signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
 }
 
 pub(crate) fn due(ctx: &Ctx, project: &str) -> Result<DueRow> {
-    Ok(prepared(ctx)?.due.get(project).cloned().unwrap_or_default())
+    Ok(schedule_prepared(ctx)?
+        .due
+        .get(project)
+        .cloned()
+        .unwrap_or_default())
 }
 
 /// Announcement identity is independent of the length of the announcement event stream.

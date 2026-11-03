@@ -7,6 +7,20 @@ use super::codec::*;
 use crate::backend::*;
 use crate::blob_ref::BlobHash;
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static VM_STEPS: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
+}
+
+fn measured(stmt: &rusqlite::Statement<'_>) {
+    #[cfg(test)]
+    VM_STEPS.with(|steps| {
+        steps.set(steps.get() + stmt.reset_status(rusqlite::StatementStatus::VmStep));
+    });
+    #[cfg(not(test))]
+    let _ = stmt;
+}
+
 pub(super) fn first<T>(
     db: &Connection,
     sql: &str,
@@ -17,10 +31,13 @@ pub(super) fn first<T>(
         .prepare_cached(sql)
         .with_context(|| format!("prepare {sql}"))?;
     let mut rows = stmt.query(params)?;
-    match rows.next()? {
-        Some(row) => Ok(Some(map(row)?)),
-        None => Ok(None),
-    }
+    let out = match rows.next()? {
+        Some(row) => Some(map(row)?),
+        None => None,
+    };
+    drop(rows);
+    measured(&stmt);
+    Ok(out)
 }
 
 pub(super) fn all<T>(
@@ -37,6 +54,8 @@ pub(super) fn all<T>(
     while let Some(row) = rows.next()? {
         out.push(map(row)?);
     }
+    drop(rows);
+    measured(&stmt);
     Ok(out)
 }
 
@@ -54,13 +73,17 @@ pub(super) fn up_to<T>(
         .with_context(|| format!("prepare {sql}"))?;
     let mut rows = stmt.query(params)?;
     let mut out = Vec::new();
+    let mut more = false;
     while let Some(row) = rows.next()? {
         if out.len() == limit {
-            return Ok((out, true));
+            more = true;
+            break;
         }
         out.push(map(row)?);
     }
-    Ok((out, false))
+    drop(rows);
+    measured(&stmt);
+    Ok((out, more))
 }
 
 pub(super) fn text(row: &Row<'_>, i: usize) -> Result<String> {
