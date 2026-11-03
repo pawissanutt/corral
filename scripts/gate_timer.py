@@ -151,12 +151,42 @@ def phase(path: Path, label: str, command: list[str], compile_only: bool = False
     return result['exit_code']
 
 
+def cost_audit(config: dict, rows: list[dict]) -> None:
+    import re
+    attempt = re.sub(r'[^A-Za-z0-9_-]', '_', os.environ.get('CORRAL_GATE_ATTEMPT', 'manual'))
+    target = Path('.evidence') / f'{attempt}-existing-test-costs.md'
+    target.parent.mkdir(exist_ok=True)
+    lines = ['# Existing test cost audit — T-766 gardening input', '',
+             f'Candidate: `{os.environ.get("CORRAL_CANDIDATE_HEAD", "manual")}`.',
+             f'Integration base: `{config["ratchet_base"]}`.', '',
+             'Only added/modified test bodies or attributes are ratcheted. Existing overruns',
+             'are observations, never performance failures; assertion failures still fail.',
+             'Approved candidate exceptions retain their documented treatment. This list is',
+             'partial if the gate fails/cancels; unrun tests are not timing proof.', '',
+             '| Test | Seconds | Classification | Load/core before → after |',
+             '|---|---:|---|---|']
+    for row in sorted(rows, key=lambda value: value['seconds'], reverse=True):
+        name = ' '.join(row['test']).replace('|', '\\|')
+        lines.append(f'| `{name}` | {row["seconds"]:.3f} | {row["classification"]} | '
+                     f'{row["load_before"].get("load_per_core")} → {row["load_after"].get("load_per_core")} |')
+    if not rows:
+        lines.append('| No overrun observed before the gate ended | | | |')
+    target.write_text('\n'.join(lines) + '\n')
+    print(f'Per-test ratchet: {len(config["enforce"])} candidate identities; existing overruns report-only. '
+          f'Existing-cost audit (T-766 input): {target}', flush=True)
+
+
 def report(path: Path) -> None:
     state = json.loads(path.read_text())
     metrics = path.with_name('case-metrics.jsonl')
+    rows = []
     if metrics.is_file():
         for line in metrics.read_text().splitlines():
             print('Per-test budget observation: ' + line, flush=True)
+            rows.append(json.loads(line))
+    config = path.with_name('case.json')
+    if config.is_file():
+        cost_audit(json.loads(config.read_text()), rows)
     print(f'Test budget summary: {state["tier"]} measured={state["measured"]:.3f}s '
           f'budgeted-quiet={state["budgeted"]:.3f}s build-preparation={state["compile"]:.3f}s '
           f'limit={state["limit"]}s; busy/unknown phases are reported, not budget failures', flush=True)
