@@ -1,5 +1,7 @@
 // Process exits observed through Linux pidfds (T-768): a pidfd becomes readable when its process
 // exits, so a test waits on that exact signal instead of polling /proc on a timer.
+import { existsSync } from "node:fs";
+
 interface Ffi {
   dlopen(path: string, symbols: Record<string, { args: string[]; returns: string }>): {
     symbols: {
@@ -20,9 +22,21 @@ const libc = dlopen("libc.so.6", {
 }).symbols;
 const POLLIN = 1;
 
-/** Opens a pidfd per process, pinning its identity; a process already gone needs none. */
+/**
+ * Opens a pidfd per process, pinning its identity. A process already gone needs none; failing to
+ * watch one that still exists (seccomp, fd exhaustion) throws instead of leaving it unwatched.
+ */
 export function watchExits(pids: readonly number[]): number[] {
-  return pids.map((pid) => libc.pidfd_open(pid, 0)).filter((fd) => fd >= 0);
+  const fds: number[] = [];
+  for (const pid of pids) {
+    const fd = libc.pidfd_open(pid, 0);
+    if (fd >= 0) fds.push(fd);
+    else if (existsSync(`/proc/${pid}`)) {
+      for (const open of fds) libc.close(open);
+      throw new Error(`could not open a pidfd for live process ${pid}`);
+    }
+  }
+  return fds;
 }
 
 /** Blocks until every watched process has exited, then closes the pidfds; throws after `ms`. */

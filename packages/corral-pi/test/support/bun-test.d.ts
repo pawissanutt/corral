@@ -22,6 +22,9 @@ declare module "bun:test" {
   }
   export function expect(actual: unknown): Matchers;
   export function test(name: string, run: () => unknown, timeout?: number): void;
+  export namespace test {
+    function skipIf(condition: boolean): (name: string, run: () => unknown, timeout?: number) => void;
+  }
   export function describe(name: string, run: () => void): void;
   export function beforeAll(run: () => unknown, timeout?: number): void;
   export function afterAll(run: () => unknown, timeout?: number): void;

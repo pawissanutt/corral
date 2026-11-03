@@ -179,7 +179,10 @@ python3 scripts/slow-tests.py --list /tmp/tests.json <workspace>/.corral/state/g
 The historical timing helper prints `enter`/`leave`/`keep` suggestions. They are
 advisory, not permission to reclassify tests or weaken a failure. Catalog changes
 need a defect-catching/cost reason and an owner-module trigger; remove stale terms
-when tests are renamed or deleted. Pi is path-scoped to its package/shared contracts;
+when tests are renamed or deleted. Pi is path-scoped to its package/shared contracts; its one slow test, the live-browser
+cancellation check in `packages/corral-pi/test/browser.test.ts` (T-768: a real browser cannot
+meet its fixed 20 s bound under host load), skips when `CORRAL_GATE_TIER=quick` and runs in the
+full tier and plan verify;
 Darwin checks are path-scoped to platform code and dependencies. Both always run
 in plan verification. `.config/gate.toml` reports 180s quick and 600s full measured-test
 budgets (nextest, work budgets, Bun), not compilation. Candidate test binaries are built
