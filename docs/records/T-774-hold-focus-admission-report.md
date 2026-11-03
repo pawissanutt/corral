@@ -43,6 +43,7 @@ persists their focus-owned hold.
 - Native process ownership regression: **1 passed**.
 - Board held-reason regression: **1 passed**.
 - Compiled CLI focus e2e: **1 passed**.
+- `cargo test -p corral --test assistant_entry_cli`: **2 passed**, including explicit refusal rows for the new commands from an assistant shell. The first quick gate caught the missing coverage-table rows; these now accompany the already exhaustive classifier.
 - `cargo clippy -p corral-core -p corral-ops -p corral-tui -p corral --all-targets -- -D warnings`: **passed**.
 - `cargo check -p corral`: **passed**; changed Rust files remain within 800 SLOC.
 
