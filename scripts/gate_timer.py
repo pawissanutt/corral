@@ -172,6 +172,12 @@ def report(path: Path) -> int:
               f'budgeted-quiet={state["budgeted"]:.3f}s build-preparation={state["compile"]:.3f}s '
               f'reference={state["limit"]}s; ALL timing is report-only (T-776), including quiet load', flush=True)
     except OSError as error:
+        # Discard any buffered stdout that Python would otherwise retry at shutdown.
+        try:
+            with open(os.devnull, 'w') as sink:
+                os.dup2(sink.fileno(), sys.stdout.fileno())
+        except OSError:
+            pass
         try:
             print(f'Timing report unavailable: {error}', file=sys.stderr, flush=True)
         except OSError:
