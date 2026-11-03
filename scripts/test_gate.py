@@ -91,11 +91,12 @@ class GateTests(unittest.TestCase):
         self.repo = Path(temp.name)
         (self.repo / "scripts").mkdir()
         (self.repo / "src").mkdir()
-        for name in ("gate.sh", "gate_select.py", "gate_lanes.py", "gate_pi.py", "gate_timer.py", "gate_case.py", "gate_ratchet.py", "gate_repair.py", "test_cost.py", "check-candidate.py", "work-budget.sh"):
+        for name in ("gate.sh", "gate_select.py", "gate_lanes.py", "gate_pi.py", "gate_timer.py", "gate_case.py", "gate_ratchet.py", "gate_repair.py", "gate_quarantine.py", "test_cost.py", "check-candidate.py", "work-budget.sh"):
             _ = shutil.copy2(SCRIPTS / name, self.repo / "scripts" / name)
         (self.repo / ".config").mkdir()
         for file in ("gate.toml", "nextest.toml"):
             _ = shutil.copy2(SCRIPTS.parent / ".config" / file, self.repo / ".config" / file)
+        self.write(".config/gate-quarantine.toml", "tests = []\n")
         self.write("Cargo.toml", '[package]\nname = "gate-fixture"\nversion = "0.0.0"\n'
                    + 'edition = "2024"\n[workspace]\n')
         self.write("src/lib.rs", "pub fn fixture() {}\n")
@@ -122,6 +123,14 @@ class GateTests(unittest.TestCase):
         )
         print(result.stdout + result.stderr)
         return result
+
+    def test_quarantine_reports_failure_but_preserves_other_failures(self) -> None:
+        self.write('.config/gate-quarantine.toml', 'tests = [{ binary = "pkg::suite", test = "flaky", fix = "T-123", reason = "flake" }]\n')
+        self.write('runner.py', 'import os, sys\nsys.exit(int(os.environ["FLAKY"] if "--ignore-default-filter" in sys.argv else os.environ["ORDINARY"]))\n')
+        for ordinary in (0, 100):
+            result = subprocess.run([sys.executable, 'scripts/gate_quarantine.py', 'all()', sys.executable, 'runner.py'], cwd=self.repo, env={**os.environ, 'FLAKY': '100', 'ORDINARY': str(ordinary)}, capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, int(ordinary != 0))
+            self.assertIn('QUARANTINED FAIL pkg::suite flaky (fix: T-123)', result.stdout)
 
     def test_fmt_violation_stops_before_size_check(self) -> None:
         # Given malformed formatting in a temporary Cargo project:

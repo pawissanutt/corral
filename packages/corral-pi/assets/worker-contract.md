@@ -7,6 +7,8 @@ your task, and the gate section in that message is the only gate instruction.
 
 ## Test cost and placement
 
+When fixing a test listed in `.config/gate-quarantine.toml`, remove its entry when the fix lands.
+
 Test at the lowest layer that can catch a named defect. A bug fix needs one failing-first
 regression, not a matrix of overlapping end-to-end tests. Keep one end-to-end test per user
 journey; use cheaper unit/contract tests for variants. Refactors add no tests; prose/docs add
