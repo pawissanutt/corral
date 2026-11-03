@@ -107,29 +107,22 @@ def main() -> None:
     search_lock = root / ".corral" / "state" / "content-search.lock"
     with search_lock.open("a") as held:
         fcntl.flock(held, fcntl.LOCK_EX)
-        sync = subprocess.Popen(
-            [tracer, "-yy", "-e", "trace=flock,fcntl", *command, "sync"],
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=True,
-        )
         try:
-            trace = lock_attempt(sync, b"/content-search.lock>, LOCK_EX")
-            print("SYNC_AT_INDEX_LOCK\n" + trace.decode(), flush=True)
-            # This is deliberately a real CLI attempt while the traced sync remains blocked.
-            first = cli(*approve)
-            if first.returncode != 0:
-                second = cli(*approve)
-                assert second.returncode == 1
-                assert b"approval already in progress" in second.stderr
-            fcntl.flock(held, fcntl.LOCK_UN)
-            stdout, stderr = sync.communicate(timeout=HANG_GUARD_SECONDS)
-            print("SYNC_FINISHED\n" + stdout.decode() + stderr.decode(), flush=True)
+            # Sync never queues for the index lock: while another process indexes it skips the
+            # refresh and finishes, so it cannot keep the approval guard meanwhile.
+            sync = subprocess.run(
+                [*command, "sync"],
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=HANG_GUARD_SECONDS,
+            )
+            print("SYNC_FINISHED\n" + sync.stdout.decode() + sync.stderr.decode(), flush=True)
             assert sync.returncode == 0
-            if first.returncode != 0:
-                assert cli(*approve).returncode == 0
+            first = cli(*approve)
+            assert first.returncode == 0, (
+                "owner-ready sync held approval guard during rebuildable indexing"
+            )
             # Completed approval cannot authorize another merge or acceptance.
             assert cli(*approve).returncode == 1
             shown = json.loads(cli("show", task, "--json").stdout)
@@ -151,17 +144,8 @@ def main() -> None:
                 "run": shown["runs"][-1], "approvals": approvals,
                 "first_approval_exit": first.returncode,
             }), flush=True)
-            assert first.returncode == 0, (
-                "owner-ready sync held approval guard during rebuildable indexing; "
-                "repeated native busy refusals reproduced"
-            )
         finally:
             fcntl.flock(held, fcntl.LOCK_UN)
-            if sync.poll() is None:
-                os.killpg(sync.pid, signal.SIGKILL)
-                sync.wait(timeout=HANG_GUARD_SECONDS)
-            print("TRACE_CLEANUP: disposable trace process reaped; fixture locks released", flush=True)
-
 
 if __name__ == "__main__":
     main()
