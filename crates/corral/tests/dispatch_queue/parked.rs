@@ -284,7 +284,6 @@ fn red_main_fix_takes_the_next_gate_slot() {
         .store
         .update(&fix, |t| {
             t.labels = vec!["red_main".into()];
-            t.priority = "P0".into();
             t.review_wait = Some(ReviewWork::Gate);
             Ok(())
         })
@@ -297,7 +296,7 @@ fn red_main_fix_takes_the_next_gate_slot() {
     assert!(!out.status.success());
     assert!(
         String::from_utf8_lossy(&out.stderr)
-            .contains(&format!("{fix} (P0) has priority for the next review slot"))
+            .contains(&format!("red-main fix {fix} takes the next gate slot"))
     );
     f.ok(&["gate", &fix]);
     assert!(

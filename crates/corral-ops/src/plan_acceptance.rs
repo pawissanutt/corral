@@ -238,7 +238,7 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
     };
     let budget = attempt
         .code
-        .then(|| crate::review_budget::priority::auxiliary(ctx, id, corral_core::ReviewWork::Gate))
+        .then(|| crate::review_budget::hold_guard(ctx, id))
         .transpose()?;
     let contract = crate::gate_tier::aggregate(&ctx.store.config, &tracker, &policy);
     let prepared = attempt

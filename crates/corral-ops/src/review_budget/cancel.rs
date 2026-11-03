@@ -5,7 +5,7 @@ use serde_json::json;
 
 use crate::Ctx;
 
-pub(crate) fn cancel_task(ctx: &Ctx, id: &str, reason: &str, requeue: bool) -> Result<()> {
+pub(crate) fn cancel_task(ctx: &Ctx, id: &str, reason: &str) -> Result<()> {
     let head = ctx.store.head(id)?;
     if !crate::session_scope::owns_head(ctx, &head)? {
         return Ok(());
@@ -51,12 +51,14 @@ pub(crate) fn cancel_task(ctx: &Ctx, id: &str, reason: &str, requeue: bool) -> R
         }
     }
     cancel_plan_reviews(ctx, id, reason)?;
-    let gate_cancelled = cancel_gates(ctx, id, reason, false)?;
+    crate::gate::cancel(ctx, id, reason)?;
+    crate::plan_acceptance::cancel_gate(ctx, id, reason)?;
+    crate::plan_acceptance::checkpoint::cancel(ctx, id, reason)?;
     let head = ctx.store.head(id)?;
     let Some(run) = head.current_run.as_deref() else {
         ctx.store.update_head(id, |task| {
             task.review_reservation = None;
-            task.review_wait = (requeue && gate_cancelled).then_some(ReviewWork::Gate);
+            task.review_wait = None;
             Ok(())
         })?;
         return Ok(());
@@ -72,11 +74,7 @@ pub(crate) fn cancel_task(ctx: &Ctx, id: &str, reason: &str, requeue: bool) -> R
     }
     ctx.store.update_head(id, |task| {
         task.review_reservation = None;
-        task.review_wait = if requeue && gate_cancelled {
-            Some(ReviewWork::Gate)
-        } else {
-            None
-        };
+        task.review_wait = None;
         let Some(current) = task.current_run_mut().filter(|r| r.id == run.id) else {
             return Ok(());
         };
@@ -104,23 +102,6 @@ pub(crate) fn cancel_task(ctx: &Ctx, id: &str, reason: &str, requeue: bool) -> R
         crate::cleanup_worktree::reap_review(ctx, id, &run.id, &child.id)?;
     }
     Ok(())
-}
-
-/// Preemption stops only gates, even when the same task also has a reviewer.
-pub(crate) fn cancel_gates(ctx: &Ctx, id: &str, reason: &str, requeue: bool) -> Result<bool> {
-    if !crate::session_scope::owns_head(ctx, &ctx.store.head(id)?)? {
-        return Ok(false);
-    }
-    let changed = crate::gate::cancel(ctx, id, reason)?
-        | crate::plan_acceptance::cancel_gate(ctx, id, reason)?
-        | crate::plan_acceptance::checkpoint::cancel(ctx, id, reason)?;
-    if changed && requeue {
-        ctx.store.update_head(id, |task| {
-            task.review_wait = Some(ReviewWork::Gate);
-            Ok(())
-        })?;
-    }
-    Ok(changed)
 }
 
 fn cancel_plan_reviews(ctx: &Ctx, id: &str, reason: &str) -> Result<()> {

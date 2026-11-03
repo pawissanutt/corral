@@ -20,8 +20,6 @@ mod replay;
 
 #[path = "review_budget/hold_tests.rs"]
 mod hold;
-#[path = "review_budget/preempt_tests.rs"]
-mod preempt;
 
 #[path = "slots_tests.rs"]
 mod slots;

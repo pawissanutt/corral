@@ -31,8 +31,7 @@ pub(super) fn review_with_origin(
 ) -> Result<PlanReview> {
     let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
     crate::session_scope::check_launch(ctx)?;
-    let _budget =
-        crate::review_budget::priority::auxiliary(ctx, id, corral_core::ReviewWork::Reviewer)?;
+    let _budget = crate::review_budget::hold_guard(ctx, id)?;
     // Unlike implementation reviews, plans have no run-backed launch journal.
     // Retain the exclusive claim until the real pane reference has been saved.
     let _ownership = ctx
@@ -234,7 +233,6 @@ pub(super) fn review_with_origin(
         if let Some(reason) = crate::resources::read_admission(ctx)? {
             bail!("{reason}");
         }
-        if let Some(reason) = crate::review_budget::priority::ahead(store, t.head())? { bail!("waiting for a slot: {reason}"); }
         let heads = crate::pm_next::heads::open(store)?;
         let usage = crate::slots::SlotUsage::from_heads(&heads, &store.config.limits);
         if usage.reviews + usage.gates >= store.config.limits.review {

@@ -192,9 +192,6 @@ impl Defaults {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Limits {
-    /// Optional priority threshold for cancelling lower-priority running gates.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preempt: Option<String>,
     /// Global run slots (Running + NeedsMe): the hard limit. Default 3.
     pub running: usize,
     /// Soft target automatic coding admission fills up to; unset means `running`. The gap up to
@@ -216,7 +213,6 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Limits {
-            preempt: None,
             running: 3,
             running_target: None,
             review: default_review_limit(),
@@ -730,14 +726,6 @@ impl Config {
         out.extend(self.ui.problems());
         out.extend(self.resources.problems());
         out.extend(self.storage.problems(root, &self.projects));
-        if self
-            .limits
-            .preempt
-            .as_deref()
-            .is_some_and(|p| !["P0", "P1", "P2", "P3"].contains(&p))
-        {
-            out.push("limits.preempt must be P0, P1, P2 or P3".into());
-        }
         if self.limits.running == 0 {
             out.push("limits.running must be > 0".to_string());
         }

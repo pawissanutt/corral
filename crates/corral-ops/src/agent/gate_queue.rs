@@ -171,19 +171,18 @@ pub(crate) fn advance_heads(ctx: &Ctx, tasks: &[corral_core::TaskHead]) -> Resul
     let mut queued = Vec::new();
     for task in tasks {
         if task.hold.is_none() {
-            queued.extend(
-                task.queued_agent_gates()?
-                    .into_iter()
-                    .map(|receipt| (task.priority.clone(), task.created, receipt)),
-            );
+            queued.extend(task.queued_agent_gates()?);
         }
     }
-    queued.sort_by(|a, b| (&a.0, a.1, &a.2.request_id).cmp(&(&b.0, b.1, &b.2.request_id)));
+    queued.sort_by(|a, b| {
+        a.at.cmp(&b.at)
+            .then_with(|| a.request_id.cmp(&b.request_id))
+    });
     if queued.is_empty() {
         return Ok(());
     }
     let me = effects::executor()?;
-    for (_, _, receipt) in queued {
+    for receipt in queued {
         if receipt.executor.as_ref().is_some_and(|e| e == &me) {
             continue;
         }

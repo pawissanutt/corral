@@ -280,13 +280,12 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
         scope: gate::CHECKPOINT_SCOPE,
         previous: previous.as_deref(),
     };
-    let budget = crate::review_budget::priority::auxiliary(ctx, id, corral_core::ReviewWork::Gate)?;
+    let budget = crate::review_budget::hold_guard(ctx, id)?;
     let contract = crate::gate_tier::aggregate(&store.config, &tracker, &policy);
     let prepared = gate::prepare(ctx, &attempt.identity, run, &verify, &contract)?;
     journal.attempts.push(attempt.clone());
     store.update(id, |task| {
         crate::hold::require_clear(&store, task)?;
-        task.review_reservation = Some(corral_core::ReviewWork::Gate);
         task.review_wait = None;
         journal.save(&store, id)?;
         store.log_event(
@@ -347,7 +346,7 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
         .context("checkpoint attempt missing")?;
     *stored = attempt.clone();
     let staged = prepared.put_result(ctx)?;
-    store.update(id, |task| {
+    store.update(id, |_| {
         let canonical = Journal::load(&store, id)?;
         if let Some(cancelled) = canonical
             .attempts
@@ -357,7 +356,6 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
             attempt = cancelled.clone();
             journal = canonical;
         }
-        task.review_reservation = None;
         journal.save(&store, id)?;
         store.log_event(
             Some(id),
