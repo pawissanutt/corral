@@ -43,6 +43,15 @@ fn cowork_live_setup() {
         )
         .unwrap(),
     );
+    // The provider boundary is deterministic; the harness records this independent
+    // reviewer's verdict before asking the assistant to approve the candidate.
+    store.config.agents.insert(
+        "cowork-reviewer".into(),
+        corral_core::AgentCmd {
+            command: "true".into(),
+        },
+    );
+    store.config.review.reviewer = Some("cowork-reviewer".into());
     store.config.review.accept = Some(Accept::Owner);
     store.config.review.gate = Some(vec!["true".into()]);
     store.config.resources.max_load_per_core = 1.0e6;

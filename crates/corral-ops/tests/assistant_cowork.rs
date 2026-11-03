@@ -140,7 +140,7 @@ fn kinds(ctx: &Ctx, task: &str) -> Vec<String> {
 }
 
 #[test]
-fn c9_finish_materializes_a_gated_review_none_task_that_lands_through_approve() {
+fn owner_finish_materializes_gated_reviewed_work_and_autopilot_lands_it() {
     // Given A-1's scratch cache-fix with one commit, while main moved on, in a project whose
     // policy names reviewer rev; A-1's transcript has usage before, during and after the work.
     let fx = Fx::new(Some("rev"));
@@ -148,7 +148,18 @@ fn c9_finish_materializes_a_gated_review_none_task_that_lands_through_approve() 
     fx.commit(&made.path, "cache.txt");
     let moved = fx.commit(&fx.app, "main.txt");
     fx.usage_around(made.created);
-    // When the owner finishes it as a fix for the cache, with no review.
+    // A missing classification previously missed every reviewer routing rule.
+    let mut fx = fx;
+    fx.ctx.store.config.review.reviewer = None;
+    fx.ctx.store.config.review.accept = Some(Accept::Owner);
+    fx.ctx.store.config.routing.reviewer_rules.push(
+        serde_json::from_value(json!({
+            "kind": "backend", "size": "m", "profile": "rev"
+        }))
+        .unwrap(),
+    );
+    fx.ctx.store.save_config().unwrap();
+    // When the owner finishes it as a fix for the cache, review is mandatory.
     let opts = Finish {
         title: Some("Fix the cache"),
         ..Finish::default()
@@ -157,19 +168,26 @@ fn c9_finish_materializes_a_gated_review_none_task_that_lands_through_approve() 
     // Then a Review task exists with origin assistant, label cowork and run R1 on the scratch.
     assert_eq!(
         (finished.gate.as_str(), finished.status, &finished.reviewer),
-        ("pass", Status::Review, &None)
+        ("pass", Status::Review, &Some("rev".into()))
     );
     let task = fx.ctx.store.get(&finished.task).unwrap();
     assert_eq!(task.title, "Fix the cache");
     assert_eq!(task.origin, Some(Origin::Assistant));
     assert_eq!(task.labels, ["cowork"]);
+    assert_eq!(task.kind.as_deref(), Some("backend"));
+    assert_eq!(task.size, Some(corral_core::TaskSize::M));
     let cowork = Cowork {
         session: "A-1".into(),
         scratch: "cache-fix".into(),
         run: "R1".into(),
-        review: CoworkReview::None,
+        review: CoworkReview::Required,
+        owner_confirmed: true,
     };
-    assert_eq!(task.cowork.as_ref(), Some(&cowork));
+    assert_eq!(
+        serde_json::to_value(task.cowork.as_ref().unwrap()).unwrap()["owner_confirmed"],
+        true
+    );
+    assert_eq!(task.cowork.as_ref().unwrap().review, cowork.review);
     let run = task.current_run().unwrap();
     assert_eq!((run.id.as_str(), &run.worktree), ("R1", &made.path));
     assert_eq!(
@@ -185,23 +203,43 @@ fn c9_finish_materializes_a_gated_review_none_task_that_lands_through_approve() 
     // Only the usage between scratch creation and finish is on the run.
     let usage = run.usage.as_ref().expect("A-1's usage on the run");
     assert_eq!((usage.input, usage.entries.len()), (10, 1));
-    // The review choice resolves reviewer none and owner acceptance for this run.
+    // Confirmed finish selects the independent reviewer and delegates acceptance for this run.
     let policy = fx.ctx.store.config.task_review_policy(&task);
     assert_eq!(
         (policy.reviewer, policy.accept),
-        (Reviewer::None, Accept::Owner)
+        (Reviewer::parse("rev"), Accept::Auto)
     );
     // The scratch now belongs to the task: kind cowork, and the session cannot discard it.
     assert_eq!(fx.kind("cache-fix").as_deref(), Some("cowork"));
     let held = scratch::discard(&fx.ctx, "A-1", "cache-fix").unwrap_err();
     assert!(format!("{held:#}").contains("scratch_attached"), "{held:#}");
 
-    // When the owner approves it, it lands through the normal approve path.
-    let line =
-        corral_ops::approve(&fx.ctx, &task.id, ApproveStrategy::FastForward, true, false).unwrap();
-    assert!(line.contains("worktree removed"), "{line}");
+    // The explicit finish authorizes this pipeline in Assist mode without a workspace grant.
+    assert_eq!(
+        fx.ctx.store.config.automation.mode,
+        corral_core::OperatingMode::Assist
+    );
+    corral_ops::sync(&fx.ctx).unwrap();
+    let waiting = fx.ctx.store.get(&task.id).unwrap();
+    assert_eq!(waiting.status, Status::Review);
+    assert_eq!(waiting.current_run().unwrap().review_runs.len(), 1);
+    corral_ops::verdict(
+        &fx.ctx,
+        &task.id,
+        Verdict::Approve,
+        "reviewed independently",
+    )
+    .unwrap();
+    corral_ops::sync(&fx.ctx).unwrap();
     let task = fx.ctx.store.get(&task.id).unwrap();
     assert_eq!(task.status, Status::Done);
+    assert!(
+        !task
+            .attention
+            .records
+            .values()
+            .any(|record| record.kind == "owner_accept")
+    );
     assert_eq!(
         task.landed.as_ref().map(|l| l.sha.as_str()),
         Some(finished.head.as_str())
@@ -241,7 +279,7 @@ fn c9_finish_materializes_a_gated_review_none_task_that_lands_through_approve() 
         role.cowork.review_none,
         role.cowork.landed,
     );
-    assert_eq!(counts, (1, 1, 1));
+    assert_eq!(counts, (1, 0, 1));
     assert_eq!(role.sessions[0].landed, 1);
 }
 
@@ -298,8 +336,7 @@ fn review_required_runs_the_normal_reviewer_after_the_gate() {
         ..Finish::default()
     };
     let finished = scratch::finish(&fx.ctx, "A-1", "spinner", &opts).unwrap();
-    // Then the gate passed and the project's reviewer started on the run, while landing still
-    // waits for the owner.
+    // Then the gate passed and the project's reviewer started on the run.
     assert_eq!(finished.gate, "pass");
     assert_eq!(finished.reviewer.as_deref(), Some("rev"));
     let task = fx.ctx.store.get(&finished.task).unwrap();
@@ -311,7 +348,7 @@ fn review_required_runs_the_normal_reviewer_after_the_gate() {
     assert_eq!(run.review_runs.len(), 1);
     let policy = fx.ctx.store.config.task_review_policy(&task);
     assert_eq!(policy.reviewer, Reviewer::parse("rev"));
-    assert_eq!(policy.accept, Accept::Owner);
+    assert_eq!(policy.accept, Accept::Auto);
     // When the reviewer configuration later changes to none, the required review still binds.
     let mut fx = fx;
     fx.ctx.store.config.review.reviewer = None;
@@ -478,6 +515,7 @@ fn reviewer_none_applies_only_to_the_cowork_run() {
         scratch: "s".into(),
         run: "R2".into(),
         review: CoworkReview::None,
+        owner_confirmed: false,
     });
     assert_eq!(policy(&cowork), (Reviewer::None, Accept::Owner));
     // A later ordinary run of the same task is reviewed and accepted as the project says.
@@ -538,6 +576,33 @@ fn finish_into_an_existing_task_adds_a_run_and_refuses_task_busy_while_one_is_li
     assert_eq!(task.cowork.as_ref().map(|c| c.run.as_str()), Some("R2"));
     assert!(task.labels.iter().any(|label| label == "cowork"));
     assert_eq!(fx.kind("cache-fix").as_deref(), Some("cowork"));
+    // A repair sent back to this assistant reuses its attached scratch, never a worker run.
+    fx.ctx
+        .store
+        .update(&created.id, |task| {
+            task.status = Status::NeedsMe;
+            task.current_run_mut().unwrap().autopilot = Some(corral_core::AutopilotState {
+                stage: corral_core::AutoStage::Changes,
+                reason: Some("repair in A-1".into()),
+                sha: None,
+                at: jiff::Timestamp::now(),
+            });
+            Ok(())
+        })
+        .unwrap();
+    fx.commit(&made.path, "repaired.txt");
+    let repaired = scratch::finish(&fx.ctx, "A-1", "cache-fix", &into).unwrap();
+    assert_eq!(repaired.run, "R3");
+    assert_eq!(
+        fx.ctx
+            .store
+            .get(&created.id)
+            .unwrap()
+            .current_run()
+            .unwrap()
+            .worktree,
+        made.path
+    );
 }
 
 #[test]

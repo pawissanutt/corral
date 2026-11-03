@@ -1,8 +1,8 @@
 //! Co-work finish (T-544 cowork-landing). On the owner's instruction a scratch becomes a task:
 //! corral materializes task `T-<m>` (origin assistant, label `cowork`) or, with `into`, a new run
-//! of an existing task, whose worktree and branch are the scratch's own. It then runs the gate
-//! and, when the owner asked for review, the normal reviewer. Landing stays the ordinary
-//! `approve`; a landed co-work run is recorded on its session.
+//! of an existing task, whose worktree and branch are the scratch's own. Confirmed owner
+//! finishes require gate and independent review, then autopilot can land without another
+//! owner acceptance. A landed co-work run is recorded on its session.
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -23,7 +23,7 @@ use crate::assistant::owner_action::{self, OwnerAuthority};
 pub const LABEL: &str = "cowork";
 
 /// What the owner's finish instruction names: a new task's title and classification, or the
-/// existing task that gets a new run, and the review choice (default none).
+/// existing task that gets a new run. Confirmed finishes always require independent review.
 #[derive(Debug, Clone, Default)]
 pub struct Finish<'a> {
     pub title: Option<&'a str>,
@@ -225,12 +225,18 @@ struct Draft<'a> {
     base_sha: &'a str,
     summary: &'a str,
     review: CoworkReview,
+    owner_confirmed: bool,
     now: Timestamp,
     usage: (Option<Usage>, Option<String>),
 }
 
 impl Draft<'_> {
     fn apply(&self, ctx: &Ctx, task: &mut Task) -> Result<String> {
+        if self.owner_confirmed {
+            task.kind
+                .get_or_insert_with(|| TaskKind::Backend.to_string());
+            task.size.get_or_insert(TaskSize::M);
+        }
         let id = format!("R{}", task.runs.len() + 1);
         let mut run: Run = serde_json::from_value(json!({
             "id": id, "agent": self.profile, "worktree": self.scratch.path,
@@ -259,6 +265,7 @@ impl Draft<'_> {
             scratch: self.scratch.slug.clone(),
             run: id.clone(),
             review: self.review,
+            owner_confirmed: self.owner_confirmed,
         });
         if !task.labels.iter().any(|label| label == LABEL) {
             task.labels.push(LABEL.into());
@@ -278,7 +285,25 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
     let _guard = lock(ctx, &format!("scratch-{session}-{slug}"))?;
     let scratch = find(ctx, session, slug)?;
     if let Some(holder) = holder(&ctx.store.list()?, &scratch) {
-        bail!("scratch_attached: {session}/{slug} already belongs to {holder}; nothing finished");
+        let target = opts.into.map(|id| ctx.store.get(id)).transpose()?;
+        let repairing = target.as_ref().is_some_and(|task| {
+            matches!(task.status, Status::Review | Status::NeedsMe)
+                && task
+                    .cowork_run()
+                    .is_some_and(|cowork| cowork.session == session && cowork.scratch == slug)
+                && task.current_run().is_some_and(|run| {
+                    run.worktree == scratch.path
+                        && run
+                            .autopilot
+                            .as_ref()
+                            .is_some_and(|state| state.stage == corral_core::AutoStage::Changes)
+                })
+        });
+        if !repairing {
+            bail!(
+                "scratch_attached: {session}/{slug} already belongs to {holder}; nothing finished"
+            );
+        }
     }
     let repo = repo_of(&scratch)?;
     let project = opts.project.unwrap_or(&scratch.project);
@@ -333,7 +358,15 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
         ),
         OwnerAuthority::Shell => "by the owner from the shell.".to_owned(),
     };
-    let review = opts.review.unwrap_or(CoworkReview::None);
+    let owner_confirmed = match owner_action::authority() {
+        OwnerAuthority::Shell => true,
+        OwnerAuthority::ViaAssistant(via) => via.confirmed,
+    };
+    let review = if owner_confirmed {
+        CoworkReview::Required
+    } else {
+        opts.review.unwrap_or(CoworkReview::None)
+    };
     let mut summary = format!(
         "Co-work finish of assistant scratch {session}/{slug} (branch `{}`, head `{head}`) {words}\n\nReview: {}.",
         scratch.branch,
@@ -354,6 +387,7 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
         base_sha: &base_sha,
         summary: &summary,
         review,
+        owner_confirmed,
         now,
         usage: usage_between(ctx, session, scratch.created, now),
     };
@@ -363,7 +397,8 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
             "cowork_finished",
             json!({
                 "session": session, "slug": slug, "run": run, "branch": scratch.branch,
-                "head": head, "candidate": candidate, "base": base, "review": review, "into": into.is_some(),
+                "head": head, "candidate": candidate, "base": base, "review": review,
+                "owner_confirmed": owner_confirmed, "into": into.is_some(),
             }),
         )
     };
@@ -413,6 +448,23 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
     let gate = gate(ctx, &task.id);
     let reviewer =
         (review == CoworkReview::Required).then(|| required_review(ctx, &task.id, &gate));
+    if owner_confirmed {
+        ctx.store.update(&task.id, |task| {
+            if let Some(current) = task.current_run_mut().filter(|current| {
+                current.id == run
+                    && current.review.as_ref().is_some_and(|r| r.verdict.is_none())
+                    && current.autopilot.is_none()
+            }) {
+                current.autopilot = Some(corral_core::AutopilotState {
+                    stage: corral_core::AutoStage::Reviewing,
+                    reason: None,
+                    sha: Some(head.clone()),
+                    at: Timestamp::now(),
+                });
+            }
+            Ok(())
+        })?;
+    }
     Ok(Finished {
         status: ctx.store.get(&task.id)?.status,
         task: task.id,
@@ -446,34 +498,68 @@ fn required_review(ctx: &Ctx, id: &str, gate: &str) -> String {
             "not started: the gate did not pass; fix it in the scratch, then `corral gate {id}` and `corral review-run {id}`"
         );
     }
-    let policy = ctx
-        .store
-        .get(id)
-        .and_then(|task| crate::verification::policy(ctx, &task));
-    if policy.is_ok_and(|policy| policy.reviewer == Reviewer::None) {
-        return format!(
-            "not started: no reviewer resolves for {id}; run `corral review-run {id} --reviewer <profile>`; approval waits for its approving verdict"
-        );
-    }
-    match crate::review_run(ctx, id, None) {
+    let configured = ctx.store.get(id).and_then(|task| {
+        let confirmed = task
+            .cowork_run()
+            .is_some_and(|cowork| cowork.owner_confirmed);
+        if confirmed {
+            crate::operating::require(&ctx.store, &task, corral_core::OperatingActionKind::Review)?;
+        }
+        Ok((crate::verification::policy(ctx, &task)?, confirmed))
+    });
+    let automatic = match configured {
+        Err(error) => return format!("not started: {error:#}"),
+        Ok((policy, _)) if policy.reviewer == Reviewer::None => {
+            return format!(
+                "not started: no reviewer resolves for {id}; run `corral review-run {id} --reviewer <profile>`; approval waits for its approving verdict"
+            );
+        }
+        Ok((_, confirmed)) => confirmed,
+    };
+    let started = if automatic {
+        crate::reviewer::review_run_automatic(ctx, id, None)
+    } else {
+        crate::review_run(ctx, id, None)
+    };
+    match started {
         Ok(record) => record.reviewer,
-        Err(error) => format!(
-            "not started: {error:#}; run `corral review-run {id}`; approval waits for its approving verdict"
-        ),
+        Err(error) => {
+            if let Some(wait) = error.downcast_ref::<crate::review_budget::CapacityWait>()
+                && let Err(error) = wait.persist(ctx, id, Timestamp::now())
+            {
+                crate::messages::report(
+                    Some(id),
+                    "cowork",
+                    format!("saving reviewer wait failed: {error:#}"),
+                );
+            }
+            format!(
+                "not started: {error:#}; run `corral review-run {id}`; approval waits for its approving verdict"
+            )
+        }
     }
 }
 
 /// Runs the configured gate to its end. The task exists either way, so a gate that cannot run
 /// is reported, as for workers, rather than undoing the finish.
 fn gate(ctx: &Ctx, task: &str) -> String {
-    let configured = ctx
-        .store
-        .get(task)
-        .and_then(|task| crate::verification::policy(ctx, &task));
+    let configured = ctx.store.get(task).and_then(|task| {
+        let confirmed = task
+            .cowork_run()
+            .is_some_and(|cowork| cowork.owner_confirmed);
+        if confirmed {
+            crate::operating::require(&ctx.store, &task, corral_core::OperatingActionKind::Gate)?;
+        }
+        Ok((crate::verification::policy(ctx, &task)?, confirmed))
+    });
     match configured {
-        Ok(policy) if policy.gate.is_empty() => "none".into(),
-        Ok(_) => match crate::gate::gate_start(ctx, task)
-            .and_then(|_| crate::gate::gate_wait(ctx, task))
+        Ok((policy, _)) if policy.gate.is_empty() => "none".into(),
+        Ok((_, automatic)) => match (if automatic {
+            crate::gate::gate_start_automatic(ctx, task)
+        } else {
+            crate::gate::gate_start(ctx, task)
+        })
+        .and_then(|_| crate::gate::gate_wait(ctx, task))
         {
             Ok(record) => record.result.as_str().into(),
             Err(error) => format!("not run: {error:#}; run `corral gate {task} --wait`"),

@@ -60,7 +60,8 @@ impl TaskHead {
         });
         let worker = planning.map_or_else(
             || {
-                self.status.holds_slot()
+                crate::TaskFieldsRef::cowork_run(self).is_none()
+                    && self.status.holds_slot()
                     && run.is_none_or(|r| {
                         r.outcome != Some(crate::RunOutcome::Failed) && !r.releases_slot(&self.id)
                     })

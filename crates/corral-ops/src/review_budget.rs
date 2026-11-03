@@ -325,6 +325,27 @@ fn abandon(ctx: &Ctx, pending: &Pending) -> Result<()> {
     clear(ctx)
 }
 
+/// Advisory capacity probe before rewriting a co-work candidate that is already waiting for
+/// a reviewer. Unlike a launch reservation this never consumes/abandons a prepared attempt;
+/// the actual launch still rechecks all admission under its own lease.
+pub(crate) fn reviewer_waiting(ctx: &Ctx, id: &str) -> Result<bool> {
+    let Some(_lock) = ctx.store.try_lock("review-budget")? else {
+        return Ok(true);
+    };
+    let task = ctx.store.head(id)?;
+    let active = active_processes(ctx, id, Kind::Reviewer)?;
+    if crate::resources::admission(ctx)?.is_some() || active >= ctx.store.config.limits.review {
+        return Ok(true);
+    }
+    let replacing = task.current_run.as_ref().is_some_and(|run| {
+        run.review
+            .as_ref()
+            .is_some_and(corral_core::ReviewRecord::holds_slot)
+    });
+    Ok(ctx.store.config.limits.count_reviews
+        && crate::slots::capacity_reason(&ctx.store, &task, usize::from(replacing))?.is_some())
+}
+
 impl<'a> ReviewLaunch<'a> {
     #[cfg(test)]
     pub(crate) fn reserve(ctx: &'a Ctx, id: &str, kind: Kind) -> Result<Self> {
