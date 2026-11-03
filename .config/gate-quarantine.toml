@@ -1,6 +1,5 @@
 # One entry per line; the fixing task removes its entry when it lands.
 tests = [
   { binary = "corral-ops::cleanup_ops", test = "worktree::verdict_reaps_reviewer_resident_before_landing", fix = "T-775", reason = "Reviewer resident cleanup intermittently fails." },
-  { binary = "corral-ops::assistant_cowork", test = "c9_finish_materializes_a_gated_review_none_task_that_lands_through_approve", fix = "T-781", reason = "Gated review-none landing intermittently fails." },
   { binary = "corral::dispatch_queue", test = "parked::a_woken_run_waits_in_queue_then_reacquires_ahead_of_queued_work", fix = "T-784", reason = "Receipt observation intermittently outlives its registration." },
 ]
