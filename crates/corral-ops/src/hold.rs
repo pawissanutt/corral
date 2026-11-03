@@ -360,7 +360,7 @@ fn prior_automatic(
     let Some((run, attempt)) = task.current_run.as_ref().zip(attempt) else {
         return Ok(false);
     };
-    Ok(crate::operating::is_automatic(&crate::operating::load(
+    Ok(crate::operating::automatic_driver(&crate::operating::load(
         ctx, &task.id, &run.id, kind, attempt,
     )?))
 }
