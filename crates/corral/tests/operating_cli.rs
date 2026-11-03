@@ -61,6 +61,17 @@ impl Fixture {
         serde_json::from_slice(&self.ok(args).stdout).unwrap()
     }
 
+    fn json_at(&self, args: &[&str], at: jiff::Timestamp) -> Value {
+        let output = self
+            .command()
+            .env("CORRAL_TEST_NOW", at.to_string())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        serde_json::from_slice(&output.stdout).unwrap()
+    }
+
     fn preview(&self) -> Value {
         self.json(&[
             "mode",
@@ -338,9 +349,24 @@ fn pause_resume_assist_and_legacy_status_use_one_policy() {
             .unwrap()
     );
     fixture.ok(&["mode", "resume"]);
-    let status = fixture.json(&["mode", "status", "--json"]);
+    // Both real CLI entry points observe one instant, even across a wall-clock second.
+    let sampled_at = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(17);
+    let since = fixture
+        .store
+        .get(&fixture.id)
+        .unwrap()
+        .status_since
+        .unwrap();
+    let status = fixture.json_at(&["mode", "status", "--json"], sampled_at);
+    assert_eq!(
+        status["assessments"][0]["primary"]["age_secs"],
+        sampled_at.duration_since(since).as_secs(),
+    );
     // Then every alias shares status, no legacy flag changes, and pause retained the grant.
-    assert_eq!(status, fixture.json(&["autopilot", "status", "--json"]));
+    assert_eq!(
+        status,
+        fixture.json_at(&["autopilot", "status", "--json"], sampled_at)
+    );
     assert_eq!(status["paused"], false);
     assert_eq!(
         fixture.store.operating_state().unwrap().approval.unwrap(),

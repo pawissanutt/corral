@@ -62,6 +62,25 @@ pub(crate) fn pinned() -> Option<Timestamp> {
     PINNED.get()
 }
 
+/// Pins a CLI fixture's main-thread clock across subprocesses. The environment input is
+/// compiled only with `test-clock`, which production dependencies never enable.
+#[doc(hidden)]
+pub fn pin_from_test_env() -> anyhow::Result<()> {
+    #[cfg(feature = "test-clock")]
+    {
+        use anyhow::Context;
+        if let Some(raw) = std::env::var_os("CORRAL_TEST_NOW") {
+            let at = raw
+                .to_str()
+                .context("CORRAL_TEST_NOW must be UTF-8")?
+                .parse()
+                .context("CORRAL_TEST_NOW must be a timestamp")?;
+            pin_thread(Some(at));
+        }
+    }
+    Ok(())
+}
+
 /// Process-wide strictly increasing wall clock for attempt-window stamps.
 pub fn now() -> Timestamp {
     if let Some(stamp) = pinned() {
