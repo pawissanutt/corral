@@ -688,7 +688,7 @@ fn transcript_reads_must_not_grow_with_history() {
     assert_eq!(
         failures,
         [
-            "board_open: transcript_reads grows with history: 54 at 60 tasks/6000 events, 0 at 240 tasks/24000 events"
+            "board_open: transcript_reads grows with history: 54 at 2 tasks/10 events, 0 at 5 tasks/25 events"
         ]
     );
     let failures = violations(&large, &small, 263);

@@ -9,8 +9,8 @@ tests above 10s are **reported, never failed for performance**; assertion failur
 fail. No additional per-test exceptions were added. Previously approved treatments remain.
 Tier runtime budgets and their quiet-load rule are unchanged.
 
-The real metadata identifies 43 candidate test identities: the 40 already-approved action
-case splits and three modified ordinary tests. The newly failing aggregate acceptance
+The ratchet identifies 44 candidate test identities: the 40 already-approved action
+case splits and four modified ordinary tests. The newly failing aggregate acceptance
 matrix is unchanged and therefore report-only, not split, weakened or specially exempted.
 Its original T-745 time was 8.182s; its unchanged targeted run now passes in 8.065s wall.
 Real disposable fixtures prove that an unchanged overrun passes at quiet load, a new
@@ -22,6 +22,13 @@ input**. That report is attached after the final receipt without modifying the c
 candidate. Below, earlier attempts describe the policy at the time, not the final ratchet.
 Attempt six (`ag-7600577550bf71d8`) ran 1556 passes before the unchanged aggregate matrix
 hit 10.045s; its 205.655s phase was busy-exempt. Those failed receipts remain failed.
+
+Attempt seven (`ag-d29877cd849916d4`) reached 2956 passes (434.589s busy-exempt runtime,
+66.462s build/preparation) before a stale expected diagnostic still named the original
+60/240-task fixtures. The detector correctly emitted the new 2/5-task labels. Corrected
+only the expected fixture labels; its injected 54-vs-zero transcript work and exact error
+assertion remain intact. The per-attempt T-766 cost audit was generated and retained;
+it is explicitly partial because this unrelated assertion stopped the gate.
 
 ## Measurement boundary
 
