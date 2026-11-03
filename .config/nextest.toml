@@ -8,6 +8,10 @@ retries = 0
 # Explicit measured exceptions retain their original 30s report-only guards.
 slow-timeout = "10s"
 
+# scripts/gate_repair.py turns a failed run's report into narrow rerun commands.
+[profile.default.junit]
+path = "junit.xml"
+
 [test-groups]
 # Live tests share one private test-herdr server per suite. Keep its workspace,
 # focus, delivery, and inventory transitions apart; fake-engine tests stay parallel.
@@ -61,6 +65,9 @@ not (
 | (binary_id(=corral-git) & test(=memo_tests::settings_changes_never_serve_facts_computed_under_other_settings))
 )
 '''
+
+[profile.quick.junit]
+path = "junit.xml"
 
 # Explicit slow lane; full landings restore catalog entries on owning-module changes
 # (scripts/gate_lanes.py). Plan verify and legacy/missing context run all tests.

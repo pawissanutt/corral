@@ -36,7 +36,7 @@ mod repair;
 #[cfg(test)]
 mod tests;
 mod tiers;
-use output::{LOG_TAIL_LINES, first_line, log_tail, short};
+use output::{first_line, gate_log_details, short};
 
 enum Step {
     /// Waiting on something outside (a gate, the reviewer, the owner, a dirty main checkout): stop for this sync.
@@ -393,12 +393,7 @@ impl Pilot<'_> {
             label.unwrap_or_default(),
             short(&g.sha)
         );
-        let log = gate_paths(self.ctx, self.id(), &self.run.id).log;
-        let mut details = format!(
-            "Last {LOG_TAIL_LINES} lines of the gate log ({}):\n\n```\n{}\n```",
-            log.display(),
-            log_tail(&log, LOG_TAIL_LINES)
-        );
+        let mut details = gate_log_details(&gate_paths(self.ctx, self.id(), &self.run.id).log);
         if let Some((_, text)) = tier {
             details.push_str(&format!("\n\n{text}"));
         }

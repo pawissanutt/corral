@@ -53,12 +53,17 @@ on_error() {
   if [[ -f ${CORRAL_TEST_BUDGET_STATE:-/absent} ]]; then
     python3 scripts/gate_timer.py report "$CORRAL_TEST_BUDGET_STATE" || true
   fi
+  # A failed nextest run names narrow rerun commands for the worker; diagnostic only.
+  if [[ -n $repair_profile ]]; then
+    python3 scripts/gate_repair.py report "$repair_profile" || true
+  fi
   printf 'FAILED: %s (exit %s)\n' "$step" "$status" >&2
   exit "$status"
 }
 
 step="repository setup"
 step_active=0
+repair_profile=""
 trap on_error ERR
 cd "$(dirname "$0")/.."
 # Keep Cargo's worktree-local default: shared top-level CLI executable paths can be
@@ -196,8 +201,10 @@ if [[ $tier == quick ]]; then
       printf '\nSkipping cargo nextest run (no selected test remains to run).\n'
     else
       begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest run (prebuilt, tier quick)"
+      repair_profile=quick
       CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_timer.py run \
         "$CORRAL_TEST_BUDGET_STATE" nextest -- cargo nextest run "${run_args[@]}"
+      repair_profile=""
       end_step
     fi
   else
@@ -270,8 +277,10 @@ fi
 begin_step "$nextest_label"
 prepare_test_binaries --workspace || on_error
 reuse=(--cargo-metadata "$CORRAL_GATE_CARGO_METADATA" --binaries-metadata "$CORRAL_GATE_BINARIES_METADATA")
+repair_profile=default
 CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_timer.py run \
   "$CORRAL_TEST_BUDGET_STATE" nextest -- cargo nextest run --profile default "${reuse[@]}" "${nextest_args[@]}"
+repair_profile=""
 end_step
 
 begin_step "CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc"

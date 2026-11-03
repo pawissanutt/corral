@@ -91,7 +91,7 @@ class GateTests(unittest.TestCase):
         self.repo = Path(temp.name)
         (self.repo / "scripts").mkdir()
         (self.repo / "src").mkdir()
-        for name in ("gate.sh", "gate_select.py", "gate_lanes.py", "gate_pi.py", "gate_timer.py", "gate_case.py", "gate_ratchet.py", "test_cost.py", "check-candidate.py", "work-budget.sh"):
+        for name in ("gate.sh", "gate_select.py", "gate_lanes.py", "gate_pi.py", "gate_timer.py", "gate_case.py", "gate_ratchet.py", "gate_repair.py", "test_cost.py", "check-candidate.py", "work-budget.sh"):
             _ = shutil.copy2(SCRIPTS / name, self.repo / "scripts" / name)
         (self.repo / ".config").mkdir()
         for file in ("gate.toml", "nextest.toml"):
