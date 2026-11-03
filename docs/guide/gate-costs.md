@@ -16,7 +16,8 @@ Plan verification keeps every suite and both optional lanes. Missing/older conte
 conservative. `gate_lanes.py` maps the slow catalog to owning paths; unmapped catalog entries
 run, never silently disappear. Its Bun catalog `PI_SLOW` lists each slow Pi test with its reason
 (currently `a cancelled call stops its browser and removes its profile`, "T-768: load-sensitive
-live browser cancellation") and `PI_SLOW_OWNERS` (the browser extension and its test file). The
+live browser cancellation") and `PI_SLOW_OWNERS` (the browser extension, its test file, and the `exits.ts` and `wait.ts` test
+support files it waits through). The
 Pi lane passes `CORRAL_PI_SLOW` (0 in quick; in full, 1 only when an owner changed; 1 in plan
 verify), and a catalog test skips when it is 0. Shared dependency/store/Git/herdr changes restore all torture
 coverage. Quick's explicit declared tests can opt into slow tests.
