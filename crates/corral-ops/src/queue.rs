@@ -149,6 +149,7 @@ pub fn admit_ready(ctx: &Ctx, project: &str, enabled: bool) -> Result<()> {
 
 pub(crate) fn authorized_ready<T: TaskRef + ?Sized>(store: &Store, task: &T) -> bool {
     !*task.tracker()
+        && task.hold().is_none()
         && task.park().is_none()
         && *task.status() == Status::Ready
         && !*task.dispatch_hold()
@@ -194,7 +195,9 @@ pub(crate) fn migrate_backlog(ctx: &Ctx) -> Result<Vec<crate::Change>> {
 }
 
 pub(crate) fn ready_reason<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Option<String> {
-    if let Some(park) = task.park() {
+    if let Some(hold) = task.hold() {
+        Some(hold.refusal())
+    } else if let Some(park) = task.park() {
         Some(park.refusal(task.id()))
     } else if *task.tracker() {
         Some("tracker; dispatch its child tasks instead".into())

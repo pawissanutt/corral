@@ -630,6 +630,7 @@ fn refuse_prepared(fx: &Fx, id: &str, path: Path, automatic: bool) {
                     }))?);
                 } else {
                     let review = ReviewRecord {
+                        cancelled: false,
                         route: None,
                         identity: Some(candidate.clone()),
                         evidence_digest: Some(crate::verification::evidence_digest(

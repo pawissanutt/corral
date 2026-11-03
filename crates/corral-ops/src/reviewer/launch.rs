@@ -375,6 +375,7 @@ pub(super) fn review_run_origin(
     }
     let sha = corral_git::rev_sha(&run.worktree, "HEAD")?;
     let mut record = ReviewRecord {
+        cancelled: false,
         route: Some(Box::new(selected.route)),
         evidence_digest: Some(verification::evidence_digest(&run)?),
         identity: Some(identity),

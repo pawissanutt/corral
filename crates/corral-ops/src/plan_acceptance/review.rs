@@ -402,6 +402,8 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
     let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
     ctx.store.check_runtime()?;
     crate::session_scope::check_launch(ctx)?;
+    let _budget =
+        crate::review_budget::priority::auxiliary(ctx, id, corral_core::ReviewWork::Reviewer)?;
     let _ownership = ctx
         .store
         .try_lock("session-ownership")?
@@ -461,6 +463,8 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
             current_head(task.head(), &chosen.id)? == &chosen_head,
             "aggregate attempt changed; retry"
         );
+        crate::hold::require_clear(&ctx.store, &*task)?;
+        task.review_wait = None;
         superseded = task.pending_aggregate_reviews(&chosen.id)?;
         task.supersede_pending_aggregate_reviews(&chosen.id, &review.id)?;
         for previous in &mut superseded {
@@ -557,6 +561,7 @@ fn launch(
     };
     let attempt = review.identity.attempt.clone();
     ctx.store.update_head(id, |task| {
+        crate::hold::require_clear(&ctx.store, &*task)?;
         let stored = current_review(task, &attempt, &review.id)?;
         ensure!(
             stored.pending(),

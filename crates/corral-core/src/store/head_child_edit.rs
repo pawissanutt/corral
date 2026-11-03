@@ -39,7 +39,7 @@ fn plan_review_facts(
         .saturating_add_signed(sign * i64::from(review.verdict == Some(crate::Verdict::Changes)));
     facts.pending_children = facts
         .pending_children
-        .saturating_add_signed(sign * i64::from(review.verdict.is_none()));
+        .saturating_add_signed(sign * i64::from(review.verdict.is_none() && !review.cancelled));
     let panes = herdr_panes(owner, "plan_review", review.herdr.as_ref());
     add_panes(&mut facts.pane_refs, &panes, sign);
     panes

@@ -164,6 +164,7 @@ pub(super) fn draft_task(
         dispatch_plan: None,
         launch: None,
         dispatch_hold: false,
+        hold: None,
         review_reservation: None,
         review_wait: None,
         review: None,

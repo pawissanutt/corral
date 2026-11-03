@@ -167,7 +167,7 @@ pub(crate) fn plan_review_row(
         TaskPart::PlanReview,
         child_key(plan, n),
         current,
-        review.verdict.is_none(),
+        review.verdict.is_none() && !review.cancelled,
         serde_json::to_value(review)?,
         plan_review_tokens(&review.id, &review.reviewer, review.verdict),
     ))
@@ -705,7 +705,7 @@ impl TaskHeadMut {
             plan.facts.children_rev += 1;
             let changes =
                 |r: &PlanReviewHead| i64::from(r.verdict == Some(crate::Verdict::Changes));
-            let pending = |r: &PlanReviewHead| i64::from(r.verdict.is_none());
+            let pending = |r: &PlanReviewHead| i64::from(r.verdict.is_none() && !r.cancelled);
             plan.facts.changes = plan
                 .facts
                 .changes

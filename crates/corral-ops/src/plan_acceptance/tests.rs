@@ -5,6 +5,7 @@ use corral_core::{
 };
 use std::path::{Path, PathBuf};
 
+mod holds;
 mod integrity;
 mod landing;
 mod membership;

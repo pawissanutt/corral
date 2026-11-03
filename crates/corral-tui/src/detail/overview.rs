@@ -203,6 +203,7 @@ impl DetailView {
                         GateResult::Pass => "passed",
                         GateResult::Fail => "failed",
                         GateResult::Stale => "stale",
+                        GateResult::Cancelled => "cancelled",
                     }
                 }
             });

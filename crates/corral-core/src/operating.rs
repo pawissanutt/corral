@@ -626,6 +626,7 @@ impl Store {
                 }
             };
             let task = self.operating_task(&head)?;
+            common.extend(task.hold.as_ref().map(|hold| hold.refusal()));
             common.extend(task.dispatch_hold.then(|| "task dispatch hold".into()));
             common.extend(task.park.as_ref().map(|park| park.refusal(&task.id)));
             match self.operating_member_head(config, &head) {

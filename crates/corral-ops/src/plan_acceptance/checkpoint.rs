@@ -125,7 +125,12 @@ fn progress_of(store: &Store, tracker: &Task) -> Result<CheckpointProgress> {
     let journal = Journal::load(store, &tracker.id)?;
     let landings = landings(&store.events_shared()?, &tracker.id);
     let last = journal.attempts.last();
-    let since = landings.saturating_sub(last.map_or(0, |attempt| attempt.landings));
+    let completed = journal
+        .attempts
+        .iter()
+        .rev()
+        .find(|a| a.gate.result != GateResult::Cancelled);
+    let since = landings.saturating_sub(completed.map_or(0, |attempt| attempt.landings));
     let every = store
         .config
         .plan_checkpoint_every(tracker.project.as_deref());
@@ -178,6 +183,7 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
     };
     let store = ctx.store.reopen()?;
     let tracker = store.get(id)?;
+    crate::hold::require_clear(&store, &tracker)?;
     let branch = target_branch(&tracker)?;
     ensure!(
         !matches!(tracker.status, Status::Done | Status::Dropped),
@@ -274,10 +280,14 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
         scope: gate::CHECKPOINT_SCOPE,
         previous: previous.as_deref(),
     };
+    let budget = crate::review_budget::priority::auxiliary(ctx, id, corral_core::ReviewWork::Gate)?;
     let contract = crate::gate_tier::aggregate(&store.config, &tracker, &policy);
     let prepared = gate::prepare(ctx, &attempt.identity, run, &verify, &contract)?;
     journal.attempts.push(attempt.clone());
-    store.update(id, |_| {
+    store.update(id, |task| {
+        crate::hold::require_clear(&store, task)?;
+        task.review_reservation = Some(corral_core::ReviewWork::Gate);
+        task.review_wait = None;
         journal.save(&store, id)?;
         store.log_event(
             Some(id),
@@ -287,8 +297,9 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
         )?;
         prepared.stage_start(&store)
     })?;
+    drop(budget);
     crate::gate::evidence::failpoint("plan_checkpoint_running");
-    let mut record = match prepared.execute(&attempt.identity, &contract.commands) {
+    let mut record = match prepared.execute(ctx, &attempt.identity, &contract.commands) {
         Ok(record) => record,
         Err(error) => GateRecord {
             result: GateResult::Fail,
@@ -297,6 +308,13 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
             ..attempt.gate.clone()
         },
     };
+    if let Some(cancelled) = Journal::load(&store, id)?
+        .attempts
+        .last()
+        .filter(|a| a.id == attempt.id && a.gate.result == GateResult::Cancelled)
+    {
+        record = cancelled.gate.clone();
+    }
     if record.result == GateResult::Pass
         && let Some(reason) = gate::checkout_changed(&verify, &attempt.head)?
     {
@@ -329,7 +347,17 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
         .context("checkpoint attempt missing")?;
     *stored = attempt.clone();
     let staged = prepared.put_result(ctx)?;
-    store.update(id, |_| {
+    store.update(id, |task| {
+        let canonical = Journal::load(&store, id)?;
+        if let Some(cancelled) = canonical
+            .attempts
+            .last()
+            .filter(|a| a.id == attempt.id && a.gate.result == GateResult::Cancelled)
+        {
+            attempt = cancelled.clone();
+            journal = canonical;
+        }
+        task.review_reservation = None;
         journal.save(&store, id)?;
         store.log_event(
             Some(id),
@@ -348,6 +376,48 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
             .map_or(Ok(()), |staged| staged.stage(&store, outcome))
     })?;
     Ok(Some(attempt))
+}
+
+pub(crate) fn automatic(store: &Store, id: &str) -> Result<bool> {
+    Ok(Journal::load(store, id)?
+        .attempts
+        .last()
+        .is_some_and(|a| a.automatic))
+}
+
+pub(crate) fn cancelled(store: &Store, id: &str) -> Result<bool> {
+    Ok(Journal::load(store, id)?
+        .attempts
+        .last()
+        .is_some_and(|a| a.gate.result == GateResult::Cancelled))
+}
+
+pub(crate) fn cancel(ctx: &Ctx, id: &str, reason: &str) -> Result<bool> {
+    let journal = Journal::load(&ctx.store, id)?;
+    let Some(attempt) = journal
+        .attempts
+        .last()
+        .filter(|a| a.gate.result == GateResult::Running)
+    else {
+        return Ok(false);
+    };
+    crate::gate::stop_descendants(&gate::paths(ctx, id, &attempt.id).script)?;
+    let staged = gate::put_lost(ctx, id, gate::CHECKPOINT_SCOPE, &attempt.id)?;
+    let changed = ctx.store.try_update_head(id, |task| {
+        let mut journal = Journal::load(&ctx.store, id)?;
+        let Some(current) = journal.attempts.last_mut().filter(|a| a.id == attempt.id && a.gate.result == GateResult::Running) else { return Ok(false); };
+        current.gate.result = GateResult::Cancelled;
+        current.gate.failed_cmd = None;
+        current.gate.at = ctx.store.now();
+        current.fix_command = None;
+        current.failed_step = None;
+        task.review_reservation = None;
+        journal.save(&ctx.store, id)?;
+        if let Some(staged) = &staged { staged.stage(&ctx.store, (GateResult::Cancelled, None))?; }
+        ctx.store.log_event(Some(id), "gate_cancelled", json!({"target":"checkpoint","attempt":attempt.id,"result":"cancelled","reason":reason}))?;
+        Ok(true)
+    })?;
+    Ok(changed.is_some())
 }
 
 #[allow(clippy::too_many_arguments)]

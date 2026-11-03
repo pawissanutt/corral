@@ -17,6 +17,10 @@ use crate::overlays::truncate;
 use crate::resources::MACHINE_BUSY;
 use crate::theme;
 
+#[cfg(test)]
+#[path = "cards_hold_tests.rs"]
+mod hold_tests;
+
 /// What a card shows beyond the task file: for Done cards the finish record; on every card a ★ when the task or
 /// one of its artifacts is pinned.
 #[derive(Clone, Copy, Default)]
@@ -174,6 +178,12 @@ fn meta_lines(
     now: Timestamp,
     extra: CardExtra,
 ) -> Vec<Line<'static>> {
+    if let Some(hold) = &t.hold {
+        return wrap2(&hold.refusal(), width)
+            .into_iter()
+            .map(|line| Line::styled(line, Style::new().fg(theme::YELLOW)))
+            .collect();
+    }
     if t.tracker {
         if let Some(progress) = extra.plan_progress {
             return crate::plan::tracker::card_lines(progress, width);
@@ -583,6 +593,14 @@ pub(crate) fn card_lines(
             route_warning,
         };
         let mut lines = vec![compact.line(bar.clone(), width, title_style)];
+        if let Some(hold) = &t.hold {
+            for text in wrap2(&hold.refusal(), width) {
+                lines.push(Line::from(vec![
+                    bar.clone(),
+                    Span::styled(text, Style::new().fg(theme::YELLOW)),
+                ]));
+            }
+        }
         lines.extend(blocked_lines());
         if let Some(progress) = extra.plan_progress {
             for mut line in crate::plan::tracker::card_lines(progress, width) {

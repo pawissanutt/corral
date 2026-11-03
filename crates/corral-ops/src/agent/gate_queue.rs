@@ -10,9 +10,11 @@ use super::{admission, effects};
 use crate::Ctx;
 
 fn transient(error: &anyhow::Error) -> bool {
-    error
-        .downcast_ref::<crate::review_budget::CapacityWait>()
-        .is_some()
+    error.is::<crate::hold::Held>()
+        || crate::operating::transient_refusal(error)
+        || error
+            .downcast_ref::<crate::review_budget::CapacityWait>()
+            .is_some()
         || error
             .downcast_ref::<crate::review_budget::LaunchBusy>()
             .is_some()
@@ -48,7 +50,9 @@ fn enqueue(
             &origin.binding.container,
             agent::NativeRecord::Receipt(receipt),
         )?;
-        task.review_wait = Some(corral_core::ReviewWork::Gate);
+        task.review_wait = crate::hold::require_clear(&ctx.store, &*task)
+            .is_ok()
+            .then_some(corral_core::ReviewWork::Gate);
         Ok(true)
     })?;
     out.context("queue update produced no receipt")
@@ -81,7 +85,12 @@ pub(super) fn execute(
     let task_id = origin.binding.container.task().context("gate task")?;
     let request = crate::review_budget::GateRequest {
         request_id: origin.request_id.clone(),
-        attempt: effects::own_attempt(&origin.request_id),
+        attempt: ctx
+            .store
+            .head(task_id)?
+            .agent_receipt(&origin.binding.container, &origin.request_id)?
+            .and_then(|r| r.effect.map(|e| e.reference))
+            .unwrap_or_else(|| effects::own_attempt(&origin.request_id)),
         binding: origin.binding.clone(),
     };
     let outcome = crate::gate::gate_start_request(ctx, task_id, request);
@@ -109,6 +118,47 @@ pub(super) fn execute(
     super::receipts::respond(ctx, &origin.binding.container, settled, replayed)
 }
 
+/// Preserve the worker's outstanding gate request and wake while replacing a cancelled
+/// attempt with a new immutable attempt. No model turn or new request is needed.
+pub(crate) fn requeue_cancelled(ctx: &Ctx, task: &mut corral_core::TaskHeadMut) -> Result<()> {
+    let Some(run) = task.head().current_run.as_deref() else {
+        return Ok(());
+    };
+    let Some(old) = run
+        .gate
+        .as_ref()
+        .filter(|g| g.result == corral_core::GateResult::Cancelled)
+        .and_then(|g| g.identity.as_ref())
+        .map(|i| i.attempt.clone())
+    else {
+        return Ok(());
+    };
+    for (container, mut wake) in task.active_worker_wakes()? {
+        if wake.kind != agent::WakeKind::Gate || wake.target != old {
+            continue;
+        }
+        let Some(mut receipt) = task.agent_receipt(&container, &wake.request_id)? else {
+            continue;
+        };
+        let next = format!(
+            "{}-c{}",
+            effects::own_attempt(&receipt.request_id),
+            ctx.store.now().as_nanosecond()
+        );
+        if let Some(effect) = receipt.effect.as_mut() {
+            effect.reference = next.clone();
+        }
+        receipt.state = ReceiptState::Queued;
+        receipt.executor = None;
+        receipt.result = json!({"outcome":"queued", "attempt":next, "requeued_from":old, "reason":"previous attempt cancelled"});
+        wake.target = next;
+        wake.state = agent::WakeState::Armed;
+        task.put_agent_record(&container, agent::NativeRecord::Receipt(receipt))?;
+        task.put_agent_record(&container, agent::NativeRecord::Wake(wake))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 pub(crate) fn advance(ctx: &Ctx) -> Result<()> {
     advance_heads(ctx, &ctx.store.unfinished_native_heads()?)
@@ -120,17 +170,20 @@ pub(crate) fn advance(ctx: &Ctx) -> Result<()> {
 pub(crate) fn advance_heads(ctx: &Ctx, tasks: &[corral_core::TaskHead]) -> Result<()> {
     let mut queued = Vec::new();
     for task in tasks {
-        queued.extend(task.queued_agent_gates()?);
+        if task.hold.is_none() {
+            queued.extend(
+                task.queued_agent_gates()?
+                    .into_iter()
+                    .map(|receipt| (task.priority.clone(), task.created, receipt)),
+            );
+        }
     }
-    queued.sort_by(|a, b| {
-        a.at.cmp(&b.at)
-            .then_with(|| a.request_id.cmp(&b.request_id))
-    });
+    queued.sort_by(|a, b| (&a.0, a.1, &a.2.request_id).cmp(&(&b.0, b.1, &b.2.request_id)));
     if queued.is_empty() {
         return Ok(());
     }
     let me = effects::executor()?;
-    for receipt in queued {
+    for (_, _, receipt) in queued {
         if receipt.executor.as_ref().is_some_and(|e| e == &me) {
             continue;
         }
@@ -147,7 +200,9 @@ pub(crate) fn advance_heads(ctx: &Ctx, tasks: &[corral_core::TaskHead]) -> Resul
             .context("queued gate task")?;
         let mut claimed = false;
         ctx.store.try_update_head(id, |task| {
-            if agent::check_live_ref(task, &origin.binding)?.is_err() {
+            if crate::hold::require_clear(&ctx.store, &*task).is_err()
+                || agent::check_live_ref(task, &origin.binding)?.is_err()
+            {
                 return Ok(false);
             }
             admission::recheck_task_head(task, &origin.binding)?;
@@ -166,6 +221,9 @@ pub(crate) fn advance_heads(ctx: &Ctx, tasks: &[corral_core::TaskHead]) -> Resul
             Ok(true)
         })?;
         if !claimed {
+            if crate::hold::require_clear(&ctx.store, &ctx.store.head(id)?).is_err() {
+                continue;
+            }
             // A fenced/closed request is cancelled by the same evidence-based reconciler.
             crate::review_budget::settle(ctx, &receipt, receipt.executor.as_ref(), false, None)?;
             continue;

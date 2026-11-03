@@ -78,7 +78,7 @@ fn windows_path(path: &Path) -> String {
 }
 
 /// Never terminate the caller or any process hosting it.
-fn protected_pids() -> Result<BTreeSet<u32>> {
+pub(crate) fn protected_pids() -> Result<BTreeSet<u32>> {
     let mut protected_set = BTreeSet::from([0, 1]);
     let mut pid = std::process::id();
     while protected_set.insert(pid) {

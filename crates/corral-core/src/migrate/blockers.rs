@@ -357,7 +357,11 @@ fn task_blockers(task: &LegacyTask, live: &mut Vec<Blocker>, history: &mut Vec<B
         }
     }
     for plan in &t.plans {
-        for review in plan.reviews.iter().filter(|r| r.verdict.is_none()) {
+        for review in plan
+            .reviews
+            .iter()
+            .filter(|r| r.verdict.is_none() && !r.cancelled)
+        {
             push(
                 live,
                 "pending_plan_review",

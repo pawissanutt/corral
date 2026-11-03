@@ -152,7 +152,7 @@ fn planner_owns(task: &Task) -> bool {
 
 fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
     let shell = ctx.store.head(id)?.to_shell_task()?;
-    if shell.park.is_some() || idle(ctx, &shell, now)? {
+    if shell.hold.is_some() || shell.park.is_some() || idle(ctx, &shell, now)? {
         return Ok(());
     }
     act(ctx, id, now)
@@ -179,7 +179,7 @@ fn idle(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<bool> {
         return Ok(task.plan.as_deref() == Some(&format!("{}@{}", task.id, plan.id)));
     }
     crate::plan::fresh(ctx, task, plan)?;
-    let Some(review) = plan.reviews.last() else {
+    let Some(review) = plan.reviews.last().filter(|r| !r.cancelled) else {
         crate::operating::require(
             &ctx.store,
             task,
@@ -265,7 +265,7 @@ fn act(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
         return Ok(());
     }
     crate::plan::fresh(ctx, task, plan)?;
-    let Some(review) = plan.reviews.last() else {
+    let Some(review) = plan.reviews.last().filter(|r| !r.cancelled) else {
         crate::operating::require(
             &ctx.store,
             task,

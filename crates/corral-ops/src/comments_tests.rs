@@ -113,6 +113,7 @@ fn adding_comments_preserves_spec_candidate_gate_and_review_identities() {
         tier: None,
     };
     let review = ReviewRecord {
+        cancelled: false,
         route: None,
         identity: Some(identity.clone()),
         evidence_digest: Some(verification::evidence_digest(&run_head(run)).unwrap()),

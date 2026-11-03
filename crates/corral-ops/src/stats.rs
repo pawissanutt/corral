@@ -435,7 +435,7 @@ pub(crate) fn collect_stats(
                         gates += 1;
                         failures += 1;
                     }
-                    GateResult::Running => {}
+                    GateResult::Running | GateResult::Cancelled => {}
                 }
             }
             total.gates += gates;

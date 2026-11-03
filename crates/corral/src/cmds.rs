@@ -31,6 +31,7 @@ fn gate_line(g: &GateRecord, run: &Run) -> String {
             "running in pane {} at {sha}",
             g.pane.as_deref().unwrap_or("?")
         ),
+        GateResult::Cancelled => format!("cancelled at {sha} (not a verdict)"),
         GateResult::Pass => format!("pass at {sha} ({})", g.at),
         GateResult::Fail | GateResult::Stale => format!(
             "{} at {sha} ({}): {}",
@@ -532,6 +533,11 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
                 corral_ops::reviewer_set(&ctx, &id, set_reviewer.as_deref())?;
             }
             route::explain(&ctx, &id, &profile.choice(), json)
+        }
+        Cmd::Hold { id, reason } => corral_ops::hold::hold(&open(&root)?, &id, reason.as_deref()),
+        Cmd::Release { id } => corral_ops::hold::release(&open(&root)?, &id),
+        Cmd::Focus { id, all, clear: _ } => {
+            corral_ops::hold::focus(&open(&root)?, id.as_deref(), all)
         }
         Cmd::Queue { cmd } => crate::queue::run(&open(&root)?, cmd),
         Cmd::Dispatch {

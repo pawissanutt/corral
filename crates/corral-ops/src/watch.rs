@@ -206,6 +206,10 @@ fn observe(ctx: &Ctx, task: &Task, attempt: &mut GateAttempt) -> Result<()> {
         }
     }
     match attempt.record.result {
+        GateResult::Cancelled => {
+            attempt.state = ProgressState::Interrupted;
+            attempt.ended = Some(attempt.record.at);
+        }
         GateResult::Pass => attempt.state = ProgressState::Passed,
         GateResult::Fail | GateResult::Stale => attempt.state = ProgressState::Failed,
         GateResult::Running => {

@@ -14,6 +14,6 @@ impl GateRecord {
 
 impl ReviewRecord {
     pub fn holds_slot(&self) -> bool {
-        self.verdict.is_none() && !self.process_lost
+        self.verdict.is_none() && !self.process_lost && !self.cancelled
     }
 }

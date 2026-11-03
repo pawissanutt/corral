@@ -128,6 +128,23 @@ pub enum Cmd {
         #[command(subcommand)]
         cmd: run_cmd::RunCmd,
     },
+    /// Suspend automatic processing and cancel gate/review work without stopping the worker
+    Hold {
+        id: String,
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Restore processing for a held task
+    Release { id: String },
+    /// Hold lower-priority work until this task lands or is dropped
+    Focus {
+        #[arg(required_unless_present = "clear", conflicts_with = "clear")]
+        id: Option<String>,
+        #[arg(long, requires = "id")]
+        all: bool,
+        #[arg(long)]
+        clear: bool,
+    },
     /// Authorize, pause, and inspect the coding dispatch queue
     Queue {
         #[command(subcommand)]

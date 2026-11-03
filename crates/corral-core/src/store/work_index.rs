@@ -42,10 +42,11 @@ pub(super) fn full(task: &Task) -> Option<HistoryRow> {
                     .as_ref()
                     .is_some_and(crate::ReviewRecord::holds_slot)
         })
-        || task
-            .plans
-            .iter()
-            .any(|plan| plan.reviews.iter().any(|review| review.verdict.is_none()));
+        || task.plans.iter().any(|plan| {
+            plan.reviews
+                .iter()
+                .any(|review| review.verdict.is_none() && !review.cancelled)
+        });
     row(&task.attention, slots)
 }
 

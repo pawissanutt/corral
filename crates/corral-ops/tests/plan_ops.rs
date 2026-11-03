@@ -77,6 +77,7 @@ fn seed_review(ctx: &Ctx, id: &str, plan: &str) {
                 .find(|record| record.id == plan)
                 .unwrap()
                 .reviews = vec![PlanReview {
+                cancelled: false,
                 agent_host: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),

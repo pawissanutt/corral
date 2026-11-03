@@ -54,6 +54,7 @@ fn prepared<'a>(fx: &'a Fixture, id: &str, kind: Kind) -> ReviewLaunch<'a> {
                 }
                 Kind::Reviewer => {
                     let record = ReviewRecord {
+                        cancelled: false,
                         route: None,
                         identity: Some(candidate.clone()),
                         evidence_digest: Some(crate::verification::evidence_digest(

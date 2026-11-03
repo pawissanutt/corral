@@ -31,6 +31,8 @@ pub(super) fn review_with_origin(
 ) -> Result<PlanReview> {
     let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
     crate::session_scope::check_launch(ctx)?;
+    let _budget =
+        crate::review_budget::priority::auxiliary(ctx, id, corral_core::ReviewWork::Reviewer)?;
     // Unlike implementation reviews, plans have no run-backed launch journal.
     // Retain the exclusive claim until the real pane reference has been saved.
     let _ownership = ctx
@@ -111,7 +113,12 @@ pub(super) fn review_with_origin(
             "prepared plan review was superseded"
         );
     }
-    if retained.is_none() && selected.reviews.last().is_some_and(|r| r.verdict.is_none()) {
+    if retained.is_none()
+        && selected
+            .reviews
+            .last()
+            .is_some_and(|r| r.verdict.is_none() && !r.cancelled)
+    {
         bail!("plan review already pending");
     }
     let plan_id = selected.id.clone();
@@ -190,6 +197,7 @@ pub(super) fn review_with_origin(
             spec_revision: selected.spec_revision.clone(),
             previous_reviews: reviews,
             review: PlanReview {
+                cancelled: false,
                 agent_host: None,
                 delivery: if native {
                     crate::agent::hooks::delivery::launch_mode()
@@ -226,6 +234,7 @@ pub(super) fn review_with_origin(
         if let Some(reason) = crate::resources::read_admission(ctx)? {
             bail!("{reason}");
         }
+        if let Some(reason) = crate::review_budget::priority::ahead(store, t.head())? { bail!("waiting for a slot: {reason}"); }
         let heads = crate::pm_next::heads::open(store)?;
         let usage = crate::slots::SlotUsage::from_heads(&heads, &store.config.limits);
         if usage.reviews + usage.gates >= store.config.limits.review {
@@ -329,7 +338,8 @@ pub(super) fn review_with_origin(
                 .and_then(|plan| plan.current_review.as_ref());
             ensure!(
                 saved_review == Some(&PlanReviewHead::of(&preparation.review))
-                    && preparation.review.verdict.is_none(),
+                    && preparation.review.verdict.is_none()
+                    && !preparation.review.cancelled,
                 "prepared plan review attempt changed"
             );
             let task = &task.shell_task()?;
@@ -430,7 +440,7 @@ pub(super) fn review_with_origin(
             }
             ctx.store.update_head(&task.id, |t| {
                 if let Some(review) = current_review(t, &plan_id)?
-                    .filter(|r| r.id == attempt && r.verdict.is_none())
+                    .filter(|r| r.id == attempt && r.verdict.is_none() && !r.cancelled)
                 {
                     review.verdict = Some(Verdict::Escalate);
                     review.notes = Some(format!("Review launch failed: {error:#}"));

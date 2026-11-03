@@ -442,6 +442,7 @@ fn bedrock_approved_plan(cross_family: bool) -> Fx {
         .store
         .update(&fx.id, |task| {
             task.plans.last_mut().unwrap().reviews = vec![corral_core::PlanReview {
+                cancelled: false,
                 agent_host: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),

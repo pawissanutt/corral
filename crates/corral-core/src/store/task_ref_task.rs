@@ -766,7 +766,7 @@ impl TaskRef for Task {
     fn pending_plan_reviews(&self, plan: &str) -> Result<Vec<PlanReviewHead>> {
         Ok(plan_reviews(self, plan)?
             .into_iter()
-            .filter(|r| r.verdict.is_none())
+            .filter(|r| r.verdict.is_none() && !r.cancelled)
             .collect())
     }
 
@@ -777,7 +777,7 @@ impl TaskRef for Task {
             .filter_map(|(i, plan)| {
                 plan.reviews
                     .last()
-                    .filter(|review| review.verdict.is_none())
+                    .filter(|review| review.verdict.is_none() && !review.cancelled)
                     .map(|_| (i, plan))
             })
             .map(|(i, plan)| {

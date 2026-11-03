@@ -738,6 +738,7 @@ fn reviewer_cross_lane_setup() {
         .unwrap();
     let run = &corral_core::RunHead::of(&saved.runs[0]).unwrap();
     let record = corral_core::ReviewRecord {
+        cancelled: false,
         evidence_digest: Some(crate::verification::evidence_digest(run).unwrap()),
         identity: Some(
             crate::verification::review_identity(&ctx, &saved, run, "xl-attempt").unwrap(),

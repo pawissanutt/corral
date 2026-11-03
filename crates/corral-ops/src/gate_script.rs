@@ -104,6 +104,7 @@ identity={identity}
 export CORRAL_INTEGRATION_BASE={base}
 export CORRAL_CANDIDATE_HEAD={head}
 export CORRAL_GATE_ATTEMPT={attempt}
+export CORRAL_GATE_PROCESS_OWNER={process_owner}
 {tier_exports}receipts=''
 runner={runner}
 {process_clock}
@@ -174,6 +175,7 @@ finish pass 0
         base = q(&identity.integration_base),
         head = q(&identity.head),
         attempt = q(&identity.attempt),
+        process_owner = qp(&paths.script),
         wt = qp(worktree),
         command_environment = q(&environment),
     ))

@@ -95,6 +95,7 @@ fn isolated_terminal_cleanup_lifecycle() {
                     tier: None,
                 });
                 r.review = Some(ReviewRecord {
+                    cancelled: false,
                     route: None,
                     identity: None,
                     evidence_digest: None,

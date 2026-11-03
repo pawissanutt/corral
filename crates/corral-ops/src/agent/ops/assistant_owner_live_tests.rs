@@ -57,6 +57,7 @@ fn reviewable(ctx: &Ctx, title: &str) -> String {
                 tier: None,
             });
             r.review = Some(ReviewRecord {
+                cancelled: false,
                 route: None,
                 identity: None,
                 evidence_digest: None,

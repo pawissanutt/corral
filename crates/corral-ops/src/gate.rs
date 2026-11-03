@@ -18,7 +18,9 @@ use crate::gate_script::{qp, render};
 use crate::verification;
 use corral_core::TaskMut as _;
 
+mod cancel;
 mod collect;
+pub(crate) use cancel::{cancel, stop_descendants};
 pub(crate) mod evidence;
 mod stale;
 
@@ -119,7 +121,7 @@ pub(crate) fn command_log_valid(
     let marker: &[u8] = match result {
         GateResult::Pass => b"corral gate: pass",
         GateResult::Fail => b"corral gate: fail",
-        GateResult::Running | GateResult::Stale => return false,
+        GateResult::Running | GateResult::Stale | GateResult::Cancelled => return false,
     };
     if receipts.is_empty()
         || receipts.len() > commands.len()
@@ -456,7 +458,9 @@ fn gate_start_origin(
                     let paths = attempt_paths(ctx, &task.id, &run.id, Some(&previous.attempt));
                     evidence::put_result(ctx, &task.id, &run.id, &previous.attempt, &stem, &paths)?
                 }
-                GateResult::Pass | GateResult::Fail | GateResult::Stale => None,
+                GateResult::Pass | GateResult::Fail | GateResult::Stale | GateResult::Cancelled => {
+                    None
+                }
             };
             superseded = Some((stem, lost));
         }
@@ -497,8 +501,9 @@ fn gate_start_origin(
     }
     let marker = crate::launch_exit::ownership_marker(&receipt)?;
     let command = format!(
-        "CORRAL_PROCESS_OWNER={} bash {} </dev/null",
+        "CORRAL_PROCESS_OWNER={} CORRAL_GATE_PROCESS_OWNER={} bash {} </dev/null",
         crate::gate_script::q(&marker),
+        qp(&paths.script),
         qp(&paths.script)
     );
     let title = format!("{} gate", task.id);

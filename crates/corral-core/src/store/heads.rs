@@ -304,6 +304,8 @@ pub struct PlanHead {
 /// A plan review without its inbox history.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanReviewHead {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cancelled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_host: Option<Box<AgentHostHead>>,
     #[serde(default)]
@@ -330,6 +332,7 @@ impl PlanReviewHead {
     /// Project the actual review's scalars and native/inbox facts, without history.
     pub fn of(review: &crate::PlanReview) -> Self {
         Self {
+            cancelled: review.cancelled,
             agent_host: review
                 .agent_host
                 .as_deref()
@@ -502,6 +505,8 @@ impl Default for InboxHead {
 /// A task's own fields without any history vector; `body` is the head document's body member.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskHeadFields {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<crate::TaskHold>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub park: Option<crate::Park>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

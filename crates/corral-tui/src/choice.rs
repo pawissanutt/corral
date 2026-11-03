@@ -42,6 +42,7 @@ pub(crate) fn outcome_label(
         Some(corral_core::RunOutcome::Discarded) => ("discarded", theme::RED),
         Some(corral_core::RunOutcome::Interrupted) => ("interrupted", theme::DIM),
         Some(corral_core::RunOutcome::Failed) => ("failed", theme::RED),
+        Some(corral_core::RunOutcome::Cancelled) => ("cancelled", theme::YELLOW),
         None => ("in progress", theme::BLUE),
     }
 }

@@ -289,6 +289,7 @@ fn verdict_inner(
         .map(|i| i.attempt.clone())
         .unwrap_or_else(|| format!("owner-{}", jiff::Timestamp::now().as_nanosecond()));
     let record = started.clone().unwrap_or(ReviewRecord {
+        cancelled: false,
         evidence_digest: Some(verification::evidence_digest(&run_head)?),
         identity: Some(verification::review_identity(
             ctx, &task, &run_head, &attempt,

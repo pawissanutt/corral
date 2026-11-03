@@ -1,6 +1,6 @@
 //! Woken parked runs re-acquire a coding slot before resuming; red-main fixes take capacity first.
 use anyhow::Result;
-use corral_core::{ReviewWork, SlotWait, Status, Store, Task, TaskHead, TaskRef, red_main};
+use corral_core::{SlotWait, Status, Store, Task, TaskHead, TaskRef, red_main};
 use jiff::Timestamp;
 use serde::Serialize;
 use serde_json::json;
@@ -112,30 +112,6 @@ pub(crate) fn precedence_reason<T: TaskRef + ?Sized>(
             format!(
                 "waiting: {} take the next coding slot first (red-main fixes, then woken runs)",
                 ahead.join(", ")
-            )
-        }),
-    )
-}
-
-/// Refuses a gate slot while a red-main fix waits for gate admission.
-pub(crate) fn gate_precedence<T: corral_core::TaskFieldsRef + ?Sized>(
-    store: &Store,
-    task: &T,
-    active: usize,
-) -> Result<Option<String>> {
-    if red_main(task) {
-        return Ok(None);
-    }
-    let waiting: Vec<_> = crate::pm_next::heads::open(store)?
-        .iter()
-        .filter(|o| o.id != *task.id() && red_main(*o) && o.review_wait == Some(ReviewWork::Gate))
-        .map(|o| o.id.clone())
-        .collect();
-    Ok(
-        (!waiting.is_empty() && active + waiting.len() >= store.config.limits.review).then(|| {
-            format!(
-                "waiting: red-main fix {} takes the next gate slot",
-                waiting.join(", ")
             )
         }),
     )

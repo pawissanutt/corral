@@ -154,6 +154,7 @@ fn fixture() -> (tempfile::TempDir, corral_ops::Ctx, String) {
     ctx.store
         .update(&task.id, |t| {
             t.plans.last_mut().unwrap().reviews = vec![PlanReview {
+                cancelled: false,
                 agent_host: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),

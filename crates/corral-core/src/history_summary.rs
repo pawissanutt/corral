@@ -225,7 +225,11 @@ impl HistorySummary {
 
     pub fn fold_plan(&mut self, seq: usize, plan: &PlanRecord) {
         self.plans += 1;
-        self.pending_plan_reviews += n(plan.reviews.iter().filter(|r| r.verdict.is_none()).count());
+        self.pending_plan_reviews += n(plan
+            .reviews
+            .iter()
+            .filter(|r| r.verdict.is_none() && !r.cancelled)
+            .count());
         self.plan_review_changes += n(plan
             .reviews
             .iter()

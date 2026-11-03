@@ -19,6 +19,8 @@ pub mod blob;
 pub mod blob_ref;
 pub mod card;
 pub mod clock;
+mod hold;
+pub use hold::TaskHold;
 pub mod comments;
 pub mod completion;
 pub mod config;
