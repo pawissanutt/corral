@@ -37,6 +37,10 @@ def main() -> int:
                 os.environ.get('CORRAL_ALLOW_EMPTY_ORDINARY') == '1') else []
     result = subprocess.run([*command, *empty_ok, '-E', ordinary], check=False).returncode
     failed = result != 0
+    # Quarantine invocations overwrite nextest's JUnit file. Report ordinary failures
+    # first so repair hints describe the failure that actually made the gate fail.
+    if failed and (profile := os.environ.get('CORRAL_GATE_REPAIR_PROFILE')):
+        subprocess.run([sys.executable, 'scripts/gate_repair.py', 'report', profile], check=False)
     for entry, expression in zip(entries, filters, strict=True):
         code = subprocess.run([*command, '--ignore-default-filter', '-E', expression],
                               check=False).returncode

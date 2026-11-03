@@ -211,13 +211,11 @@ if [[ $tier == quick ]]; then
       run_filter="($run_filter) and ($package_filter)"
     fi
     begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest run (prebuilt, tier quick)"
-    repair_profile=quick
     # A valid selection can consist entirely of quarantined tests.
-    CORRAL_HERDR_SESSION=corral-test CORRAL_ALLOW_EMPTY_ORDINARY=$((selected > 0)) \
+    CORRAL_HERDR_SESSION=corral-test CORRAL_GATE_REPAIR_PROFILE=quick CORRAL_ALLOW_EMPTY_ORDINARY=$((selected > 0)) \
       python3 scripts/gate_timer.py run \
       "$CORRAL_TEST_BUDGET_STATE" nextest -- python3 scripts/gate_quarantine.py "$run_filter" \
       cargo nextest run "${run_args[@]}"
-    repair_profile=""
     end_step
   else
     printf '\nSkipping cargo nextest (no touched crates and no declared tests).\n'
@@ -289,11 +287,9 @@ fi
 begin_step "$nextest_label"
 prepare_test_binaries --workspace || on_error
 reuse=(--cargo-metadata "$CORRAL_GATE_CARGO_METADATA" --binaries-metadata "$CORRAL_GATE_BINARIES_METADATA")
-repair_profile=default
-CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_timer.py run \
+CORRAL_HERDR_SESSION=corral-test CORRAL_GATE_REPAIR_PROFILE=default python3 scripts/gate_timer.py run \
   "$CORRAL_TEST_BUDGET_STATE" nextest -- python3 scripts/gate_quarantine.py "$landing_filter" \
   cargo nextest run --profile default "${reuse[@]}"
-repair_profile=""
 end_step
 
 begin_step "CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc"
