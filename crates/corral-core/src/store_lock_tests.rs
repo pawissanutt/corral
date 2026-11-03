@@ -142,6 +142,23 @@ fn a_waiting_launch_claims_ahead_of_continuous_and_later_readers() {
     assert!(store.try_begin_session_pass().unwrap().is_some());
 }
 
+#[test]
+fn a_pass_under_its_own_claim_keeps_ownership_until_the_lease_drops() {
+    // Given a thread that holds the claim and begins a pass under it.
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::init(root.path()).unwrap();
+    let claim = store.try_claim_session_ownership().unwrap().unwrap();
+    let lease = store.try_begin_session_pass().unwrap().unwrap();
+
+    // When the claim is dropped before the lease.
+    drop(claim);
+
+    // Then an exclusive acquirer stays blocked until the lease drops.
+    assert!(store.try_lock("session-ownership").unwrap().is_none());
+    drop(lease);
+    assert!(store.try_lock("session-ownership").unwrap().is_some());
+}
+
 fn prepared_operating_action() -> (tempfile::TempDir, Store, crate::ActionAuthorization) {
     let root = tempfile::tempdir().unwrap();
     let store = Store::init(root.path()).unwrap();

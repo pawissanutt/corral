@@ -187,7 +187,7 @@ impl Store {
     /// A reader that arrives while a launch waits queues behind it and takes the lease once
     /// that launch is done; the launch's own bounded wait and claim bound the queue. None while
     /// a launch or bind holds the lease without having waited. On a thread holding the claim,
-    /// the pass runs under that claim.
+    /// the pass runs under that claim, and the lease keeps it until both are dropped.
     pub fn try_begin_session_pass(&self) -> Result<Option<SessionLease>> {
         let Some(lease) = self.session_lease()? else {
             return Ok(None);
@@ -197,9 +197,12 @@ impl Store {
     }
 
     fn session_lease(&self) -> Result<Option<SessionLease>> {
-        // The claim already excludes binds and every other launch.
-        if holds_claim(self.dir()) {
-            return Ok(Some(SessionLease { _lock: None }));
+        // The claim already excludes binds and every other launch; the lease keeps it alive.
+        if let Some(claim) = held_claim(self.dir()) {
+            return Ok(Some(SessionLease {
+                _lock: None,
+                _claim: Some(claim),
+            }));
         }
         let queue = UNQUEUED.with(Cell::get) == 0 && self.config.sync.launch_wait_secs > 0;
         loop {
@@ -209,7 +212,10 @@ impl Store {
                 };
                 // A launch that registered while this lease was taken still goes first.
                 if !launch_waiting(self.dir())? {
-                    return Ok(Some(SessionLease { _lock: Some(lock) }));
+                    return Ok(Some(SessionLease {
+                        _lock: Some(lock),
+                        _claim: None,
+                    }));
                 }
             }
             if !queue {
@@ -301,13 +307,21 @@ impl Store {
     }
 }
 
+/// One held claim: the thread that took it, its id, the store it claims and the claim.
+type ClaimEntry = (ThreadId, u64, PathBuf, Weak<ClaimInner>);
+
 /// Claims held now, by the thread that took them and the store they claim: that thread's
 /// session passes run under its claim.
-static CLAIMS: Mutex<Vec<(ThreadId, u64, PathBuf)>> = Mutex::new(Vec::new());
+static CLAIMS: Mutex<Vec<ClaimEntry>> = Mutex::new(Vec::new());
 
 /// An exclusive session-ownership claim. A launch that waited keeps its turn until the claim
 /// is released; the lease goes first, so no reader finds it held with no turn to queue behind.
+/// A pass begun under it shares it, so ownership lasts until both are dropped.
 pub struct SessionClaim {
+    _inner: Arc<ClaimInner>,
+}
+
+struct ClaimInner {
     id: u64,
     _lock: StoreLock,
     _turn: Option<Turn>,
@@ -316,33 +330,43 @@ pub struct SessionClaim {
 impl SessionClaim {
     fn new(corral: &Path, lock: StoreLock, turn: Option<Turn>) -> SessionClaim {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let id = NEXT.fetch_add(1, Ordering::Relaxed);
-        guard(&CLAIMS).push((std::thread::current().id(), id, corral.to_path_buf()));
-        SessionClaim {
-            id,
+        let inner = Arc::new(ClaimInner {
+            id: NEXT.fetch_add(1, Ordering::Relaxed),
             _lock: lock,
             _turn: turn,
-        }
+        });
+        guard(&CLAIMS).push((
+            std::thread::current().id(),
+            inner.id,
+            corral.to_path_buf(),
+            Arc::downgrade(&inner),
+        ));
+        SessionClaim { _inner: inner }
     }
 }
 
-impl Drop for SessionClaim {
+impl Drop for ClaimInner {
     fn drop(&mut self) {
-        guard(&CLAIMS).retain(|(_, id, _)| *id != self.id);
+        guard(&CLAIMS).retain(|(_, id, _, _)| *id != self.id);
     }
 }
 
-fn holds_claim(corral: &Path) -> bool {
+/// This thread's live claim on `corral`. The upgraded claim leaves the registry guard before it
+/// can be dropped, since dropping the last one takes that guard.
+fn held_claim(corral: &Path) -> Option<Arc<ClaimInner>> {
     let thread = std::thread::current().id();
-    guard(&CLAIMS)
+    let claims = guard(&CLAIMS);
+    claims
         .iter()
-        .any(|(holder, _, dir)| *holder == thread && dir.as_path() == corral)
+        .filter(|(holder, _, dir, _)| *holder == thread && dir.as_path() == corral)
+        .find_map(|(_, _, _, claim)| claim.upgrade())
 }
 
-/// The shared session-ownership lease of one pass; none when the pass runs under this
-/// thread's own claim.
+/// The shared session-ownership lease of one pass; under this thread's own claim, a share of
+/// that claim instead.
 pub struct SessionLease {
     _lock: Option<StoreLock>,
+    _claim: Option<Arc<ClaimInner>>,
 }
 
 /// While held, this thread's session passes never wait: they yield to a waiting launch or
