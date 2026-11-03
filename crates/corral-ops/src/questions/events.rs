@@ -79,10 +79,8 @@ type Logged = HashSet<(String, String, u64, String)>;
 
 fn logged(store: &Store, task: &str) -> Result<Logged> {
     Ok(store
-        .events_shared()?
+        .events_of(Some(task), &QUESTION_EVENT_KINDS)?
         .iter()
-        .filter(|e| e.task.as_deref() == Some(task))
-        .filter(|e| QUESTION_EVENT_KINDS.contains(&e.kind.as_str()))
         .map(|e| {
             let field = |name: &str| e.detail[name].as_str().unwrap_or_default().to_string();
             let revision = e.detail["revision"].as_u64().unwrap_or_default();

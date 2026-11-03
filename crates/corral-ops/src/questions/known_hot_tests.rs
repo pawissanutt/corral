@@ -52,6 +52,16 @@ fn replay_cost(doc: &TaskDoc, events: &[corral_core::Event]) -> Cost {
     expected.insert(Counter::DecodedDocBytes, doc_bytes);
     expected
 }
+/// Replay reads only the task's own question events, never unrelated history.
+fn question_events(events: &[corral_core::Event], task: &str) -> Vec<corral_core::Event> {
+    events
+        .iter()
+        .filter(|e| e.task.as_deref() == Some(task))
+        .filter(|e| QUESTION_EVENT_KINDS.contains(&e.kind.as_str()))
+        .cloned()
+        .collect()
+}
+
 fn assert_site(delta: &WorkSnapshot, site: &str, expected: &Cost, multiple: u64) {
     assert_eq!(delta.followup_calls("T-623", site), multiple);
     for counter in Counter::ALL {
@@ -106,7 +116,7 @@ fn t623_question_event_replay_has_exact_visible_cost_and_no_unattributed_work() 
             .task(TaskNum(1), &TaskParts::All)
             .unwrap()
             .unwrap();
-        let expected = replay_cost(&doc, &events);
+        let expected = replay_cost(&doc, &question_events(&events, &task.id));
         let hot = HotScope::enter();
         let before = work::snapshot();
         assert_eq!(
@@ -187,8 +197,11 @@ fn automatic_deadline_head_transition_keeps_only_exact_t623_replay_work_history_
             .unwrap();
         let events = ctx.store.events().unwrap();
         assert_eq!(events.last().unwrap().kind, "question_expired");
-        let replay = replay_cost(&doc, &events);
-        let by_key = replay_cost(&doc, &events[..events.len() - 1]);
+        let replay = replay_cost(&doc, &question_events(&events, &task.id));
+        let by_key = replay_cost(
+            &doc,
+            &question_events(&events[..events.len() - 1], &task.id),
+        );
         assert_eq!(delta.followup_calls.len(), 2);
         assert_site(&delta, "question_event_by_key", &by_key, 1);
         assert_site(&delta, "question_event_replay", &replay, 2);
