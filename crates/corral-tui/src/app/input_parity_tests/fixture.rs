@@ -213,6 +213,9 @@ impl Fixture {
 
     pub(super) fn assert_landed(&self, app: &mut App) {
         assert_eq!(self.status(), Status::Done);
+        // Back requests an asynchronous refresh; deliver the worker snapshot before checking
+        // the landed card, as the live event loop does after its immediate cached redraw.
+        app.on_worker(WorkerMsg::synced(&self.ctx, Ok(Vec::new())));
         let text = render(app);
         let card = app
             .hits
