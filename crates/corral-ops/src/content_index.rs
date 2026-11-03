@@ -476,6 +476,15 @@ fn index_lock(ctx: &Ctx) -> Result<File> {
         .context("opening search index lock")
 }
 
+/// Whether another process is refreshing or searching the index right now.
+pub(crate) fn busy(ctx: &Ctx) -> Result<bool> {
+    match index_lock(ctx)?.try_lock() {
+        Ok(()) => Ok(false),
+        Err(fs::TryLockError::WouldBlock) => Ok(true),
+        Err(fs::TryLockError::Error(error)) => Err(error).context("probing search index lock"),
+    }
+}
+
 /// Lock order: index before storage; never queue for this lock holding storage.
 pub(crate) fn lock(ctx: &Ctx) -> Result<File> {
     anyhow::ensure!(
