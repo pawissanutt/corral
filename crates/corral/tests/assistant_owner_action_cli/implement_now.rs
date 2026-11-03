@@ -1,6 +1,7 @@
 //! T-653 implement-now: after the assistant reports a scratch's candidate, the owner's one
-//! land-now answer finishes exactly that candidate and approves it; a scratch that moved after
-//! the report refuses `stale_candidate`; dropping it saves the work and files nothing; and
+//! land-now answer finishes exactly that candidate for gate, independent review and automatic
+//! landing; a scratch that moved after the report refuses `stale_candidate`; dropping it saves
+//! the work and files nothing; and
 //! `assistant show` tells whether the session runs the installed assets.
 use std::path::PathBuf;
 
@@ -50,10 +51,11 @@ fn finish(head: &str, input: &str) -> Value {
 fn one_land_now_answer_finishes_the_reported_candidate_and_approves_it() {
     // Given A-1 reported scratch cache-fix at its candidate, and the owner answered "land it now".
     let fx = Fixture::new();
+    fx.configure_cowork_shipping();
     let (_, head) = reported_scratch(&fx);
     let mut host = Host::bind(&fx);
     let answer = host.journal("land it now", None);
-    // When the assistant finishes that candidate without review, citing the answer.
+    // The assistant's finish cites that answer and hands the candidate to gate and review.
     let finished = host.act("rq-finish", finish(&head[..12], &answer));
     assert_eq!(
         (
@@ -68,12 +70,31 @@ fn one_land_now_answer_finishes_the_reported_candidate_and_approves_it() {
     assert_eq!(task.status, corral_core::Status::Review);
     assert_eq!(task.runs.len(), 1);
     assert_eq!(task.runs[0].branch, "corral/A-1/cache-fix");
-    // When it approves T-002 citing the same answer, it lands through the normal approve path.
-    let landed = host.act(
-        "rq-approve",
-        json!({"kind": "approve", "target": "T-002", "input": answer}),
+    assert!(task.cowork.as_ref().unwrap().owner_confirmed);
+    assert_eq!(
+        task.cowork.as_ref().unwrap().review,
+        corral_core::CoworkReview::Required
     );
-    assert_eq!(landed["result"]["outcome"], "executed", "{landed}");
+    assert_eq!(
+        task.runs[0].gate.as_ref().unwrap().result,
+        corral_core::GateResult::Pass
+    );
+    assert_eq!(
+        task.runs[0].review.as_ref().unwrap().reviewer,
+        "cowork-reviewer"
+    );
+    // Once its independent reviewer approves, no second owner action is needed to land it.
+    fx.ok(
+        &[
+            "verdict",
+            "T-002",
+            "approve",
+            "--notes",
+            "independent fixture review",
+        ],
+        &[],
+    );
+    fx.ok(&["sync"], &[]);
     assert_eq!(
         fx.store().get("T-002").unwrap().status,
         corral_core::Status::Done
@@ -81,23 +102,26 @@ fn one_land_now_answer_finishes_the_reported_candidate_and_approves_it() {
     assert_eq!(git(&fx.root, &["rev-parse", "main"]), head);
     let session = fx.store().get_assistant("A-1").unwrap();
     assert_eq!(session.landed[0].commits, vec![head.clone()]);
-    // And both effects carry the one owner answer they ran on.
-    for kind in ["cowork_finished", "approved"] {
-        let event = fx
-            .events()
-            .into_iter()
-            .find(|event| event["kind"] == kind)
-            .unwrap();
-        let authority = &event["detail"]["owner_authority"];
-        assert_eq!(
-            (
-                authority["input"].as_str(),
-                authority["owner_message"].as_str()
-            ),
-            (Some(answer.as_str()), Some("land it now")),
-            "{kind}"
-        );
-    }
+    // The finish carries the one owner answer; acceptance is automatic, not a second approval.
+    let approved = fx
+        .events()
+        .into_iter()
+        .find(|event| event["kind"] == "approved")
+        .unwrap();
+    assert_eq!(approved["actor"], "autopilot");
+    let event = fx
+        .events()
+        .into_iter()
+        .find(|event| event["kind"] == "cowork_finished")
+        .unwrap();
+    let authority = &event["detail"]["owner_authority"];
+    assert_eq!(
+        (
+            authority["input"].as_str(),
+            authority["owner_message"].as_str()
+        ),
+        (Some(answer.as_str()), Some("land it now"))
+    );
 }
 
 #[test]

@@ -59,7 +59,7 @@ impl Fixture {
             .env("XDG_DATA_HOME", self.home.join("data"))
             .env("XDG_STATE_HOME", self.home.join("state"))
             .env("XDG_CACHE_HOME", self.home.join("cache"))
-            .env("HERDR_BIN_PATH", "/nonexistent/herdr")
+            .env("HERDR_BIN_PATH", self.home.join("bin/herdr"))
             .envs(env.iter().copied())
             .args(args)
             .current_dir(&self.root)
@@ -80,6 +80,30 @@ impl Fixture {
 
     fn store(&self) -> Store {
         Store::open(&self.root).unwrap()
+    }
+
+    /// Synchronous fake engine and independent reviewer for the co-work shipping journeys.
+    fn configure_cowork_shipping(&self) {
+        let target = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../corral-ops/tests/reviewer_ops/herdr.sh");
+        let link = self.home.join("bin/herdr");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&target, &link).unwrap();
+        let mut store = self.store();
+        store.config.agents.insert(
+            "cowork-reviewer".into(),
+            corral_core::AgentCmd {
+                command: "true".into(),
+            },
+        );
+        store.config.review.gate = Some(vec!["true".into()]);
+        store.config.review.reviewer = Some("cowork-reviewer".into());
+        store.config.review.accept = Some(corral_core::Accept::Owner);
+        // Machine-load admission is not the subject of these synchronous fake-engine checks.
+        store.config.resources.max_load_per_core = 1.0e6;
+        store.save_config().unwrap();
     }
 
     fn status(&self) -> String {
@@ -547,6 +571,7 @@ fn git(dir: &std::path::Path, args: &[&str]) -> String {
 fn c9_c10_finish_and_approve_run_on_the_owner_s_words_and_never_from_the_shell() {
     // Given the workspace is project corral's repository, and A-1 co-worked in scratch cache-fix.
     let fx = Fixture::new();
+    fx.configure_cowork_shipping();
     for args in [
         &["init", "-q", "-b", "main"][..],
         &["config", "user.name", "corral test"],
@@ -606,7 +631,7 @@ fn c9_c10_finish_and_approve_run_on_the_owner_s_words_and_never_from_the_shell()
     );
     assert_eq!(untitled["result"]["outcome"], "refused", "{untitled}");
     assert_eq!(tasks().len(), 1);
-    // When the owner says to finish it as a fix for the cache with no review, it finishes at once.
+    // An older assistant's no-review option cannot bypass mandatory review of a confirmed finish.
     let words = "finish this as a fix for the cache, no review";
     let input = host.journal(words, None);
     let finish = json!({"kind": "finish", "target": "cache-fix",
@@ -627,9 +652,12 @@ fn c9_c10_finish_and_approve_run_on_the_owner_s_words_and_never_from_the_shell()
     assert_eq!(shown["labels"], json!(["cowork"]));
     assert_eq!(
         shown["cowork"],
-        json!({"session": "A-1", "scratch": "cache-fix", "run": "R1", "review": "none"})
+        json!({"session": "A-1", "scratch": "cache-fix", "run": "R1", "review": "required", "owner_confirmed": true})
     );
     assert_eq!(shown["runs"][0]["branch"], "corral/A-1/cache-fix");
+    assert_eq!(finished["result"]["confirmed"], true);
+    assert_eq!(shown["runs"][0]["gate"]["result"], "pass");
+    assert_eq!(shown["runs"][0]["review"]["reviewer"], "cowork-reviewer");
     let task = fx.store().get("T-002").unwrap();
     assert!(task.body.contains(words), "{}", task.body);
     let finished_event = fx
@@ -648,13 +676,34 @@ fn c9_c10_finish_and_approve_run_on_the_owner_s_words_and_never_from_the_shell()
         finished_event["detail"]["owner_authority"]["owner_message"],
         words
     );
-    // When the owner later says "approve T-002", it lands through the normal approve path.
-    let approve = host.journal("approve T-002", None);
-    let landed = host.act(
-        "rq-approve",
-        json!({"kind": "approve", "target": "T-002", "input": approve}),
+    // No approval may bypass the independent review, even using the original owner instruction.
+    let blocked = host.act(
+        "rq-early-approve",
+        json!({"kind":"approve", "target":"T-002", "input":input}),
     );
-    assert_eq!(landed["result"]["outcome"], "executed", "{landed}");
+    assert_eq!(blocked["result"]["outcome"], "refused", "{blocked}");
+    assert_eq!(
+        fx.store().get("T-002").unwrap().status,
+        corral_core::Status::Review
+    );
+    // The fixture reviewer approves; one sync then lands in Assist without another owner answer.
+    fx.ok(
+        &[
+            "verdict",
+            "T-002",
+            "approve",
+            "--notes",
+            "independent fixture review",
+        ],
+        &[],
+    );
+    fx.ok(&["sync"], &[]);
+    let approved = fx
+        .events()
+        .into_iter()
+        .find(|event| event["kind"] == "approved")
+        .unwrap();
+    assert_eq!(approved["actor"], "autopilot");
     let head = git(&fx.root, &["rev-parse", "main"]);
     assert_eq!(
         git(&fx.root, &["log", "-1", "--format=%s", "main"]),
@@ -662,6 +711,13 @@ fn c9_c10_finish_and_approve_run_on_the_owner_s_words_and_never_from_the_shell()
     );
     let task = fx.store().get("T-002").unwrap();
     assert_eq!(task.status, corral_core::Status::Done);
+    assert!(
+        !task
+            .attention
+            .records
+            .values()
+            .any(|record| record.kind == "owner_accept")
+    );
     // And A-1's record lists the landed task and commits.
     let session = fx.store().get_assistant("A-1").unwrap();
     assert_eq!(session.landed.len(), 1);
