@@ -2,9 +2,9 @@
 # Leave capacity for another gate and the owner's interactive work on 32 cores.
 test-threads = 12
 retries = 0
-# The candidate-bound runner ratchets added/modified tests at10s under quiet load.
-# Existing overruns are reported for T-766 gardening, never performance failures.
-# Native nextest only reports slowness; it must not independently terminate a test.
+# ALL timing is report-only in T-761; enforcement is deferred to T-776.
+# Candidate/existing overruns and load observations feed T-766 gardening.
+# Native nextest must not terminate a test for these timing references.
 # Explicit measured exceptions retain their original 30s report-only guards.
 slow-timeout = "10s"
 

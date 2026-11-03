@@ -4,67 +4,48 @@ Tests are budgeted by cost and judged by defect-catching value, not count. Never
 failing test to go green. The placement/reviewer rules live in `AGENTS.md` and the shipped
 worker/reviewer contracts. Test-cost justification belongs in the candidate's change report.
 
-## Fixed tiers and limits
+## Fixed tiers and report-only timing references
 
-| Tier | Membership | When | Test budget / guard |
+| Tier | Membership | When | Timing reference (report-only) |
 |---|---|---|---:|
 | quick | Touched modules/consumers, crate-wide fallback; declared tests replace selection | Each review round / Plan member | 180s test execution |
 | full | Workspace except the fixed torture catalog; restore affected torture suites when an owning module changes | Main landing | 600s test execution |
-| slow | Fixed race/crash/torture/restart catalog in `profile.slow` | Nightly and owning-module changes | 1800s nightly maintenance wall guard |
+| slow | Fixed race/crash/torture/restart catalog in `profile.slow` | Nightly and owning-module changes | 1800s nightly maintenance wall observation |
 
 Plan verification keeps every suite and both optional lanes. Missing/older context is also
 conservative. `gate_lanes.py` maps the slow catalog to owning paths; unmapped catalog entries
 run, never silently disappear. Shared dependency/store/Git/herdr changes restore all torture
 coverage. Quick's explicit declared tests can opt into slow tests.
 
-`.config/gate.toml` enforces cumulative **test execution**, not compilation: nextest, the
-three work budgets, and Bun tests share one per-attempt ledger. Build/preparation and
-whole-recipe wall time are reported separately. The timer logs load/core before/after and
-monitors it during tests; a phase that observes load/core >1.0 or an unavailable reading
-is reported as busy-exempt, not charged to the quiet-host cap. Tests still run, and assertion
-failures still fail. This owner-approved policy prevents cold-cache or host-contention
-budget flakes; a busy-exempt run is not proof of meeting the quiet-host timing target.
+**Owner's relaxed T-761 scope:** every time threshold is report-only. Enforcement belongs
+to **T-776**, not this candidate. The per-test10s reference, quick180s/full600s runtime
+references, quiet-load accounting and added-suite30s reference print observations and
+never replace a command's exit status. Assertions, compilation, lint and actual command
+failures still fail normally; there are no retries-to-green.
 
-Nextest compiles candidate binaries once, then lists/runs them using fresh cargo/binaries
-metadata. The measured run cannot compile source again. Pi cross-lane Rust helpers are
-prebuilt before Bun timing; dependency install and typecheck are reported as preparation.
-Quick Clippy checks touched production targets; nextest still compiles/runs selected tests.
-Full retains all-target Clippy, so test-body lint coverage moves to landing, not deletion.
-Doctest/build/docs-check step walls remain separately visible in the log. On budget expiry
-the timer terminates its owned process group and exits nonzero.
-Linked worktrees keep Cargo's local target by default. Forced primary-target sharing was
-tried and reverted: it did not solve the cold build and concurrent candidates can overwrite
-the stable top-level CLI path after the build lock is released. Explicit `CARGO_TARGET_DIR`
-is respected; callers sharing executable targets must serialize through execution. The
-docs checker always uses the candidate binary from the actual target, not another path. Work budgets keep the workspace's `corral-core/test-clock` feature union
-to avoid recompiling core/ops/TUI merely to toggle a test-only feature. An experimental
-Clippy `--profile test` alignment made the cold check slower and was reverted; the time
-test assertions and overflow checks were not relaxed. It never
-changes an assertion's result to PASS. `gate_case.py` applies a **candidate ratchet**:10s
-only for added/modified registered test bodies or attributes, diffed against the integration
-base and mapped to nextest binary/test identities. Production/helper changes do not turn
-every selected test into a modified test. Existing tests over10s are **reported, never
-performance failures**, even at quiet load. Their assertions still fail normally. The log
-and `.evidence/<attempt>-existing-test-costs.md` list overruns as T-766 gardening input;
-attach that report after the gate without editing the committed candidate. Already
-approved exceptions remain documented; do not add exceptions to chase old-test timings. Nextest itself
-reports at 10s without unconditional termination: its native wall guard cannot distinguish
-a busy host. Nextest evaluates the exception filters (including ignored work matrices);
-the runner never reimplements that DSL. Over-budget observations retain load/exit evidence,
-and cancellation forwards to the owned child group. No retries. Explicit
-measured integration exceptions retain their original 30s report-only guards, each with a
-one-line defect/fixture reason in `.config/nextest.toml`; this does not exclude them from
-full. The owner approved these exceptions rather than dropping useful journey coverage.
-Do not add an exception merely because a test is failing; diagnose it and justify placement.
+`.config/gate.toml` records cumulative nextest/work-budget/Bun execution separately from
+build/preparation and total wall. Load/core is sampled before, during and after execution;
+busy/unknown phases remain identified, not timing qualification. No timer terminates a
+command for slowness. Cancellation still forwards to owned child groups.
 
-Each gate prints candidate-added test registrations (Rust, Bun, Python), measured added suite
-seconds and unmeasured additions. Renames and case splits count as additions and need their
-cost explained too. Rust/Bun use the current attempt's receipt log; Python can record its
-containing-script time via `scripts/test_cost.py python-tests <scripts...>` (a conservative
-suite upper bound). Unselected/slow/ignored tests are **unmeasured**, not free. More than 30s
-measured added suite time fails without a `Test-cost justification:` line added to a candidate
-Markdown report. The reviewer checks the actual defect-catching reason, including unmeasured
-additions; the line alone is not semantic approval.
+Nextest compiles candidate binaries once and reuses fresh metadata. Pi cross-lane Rust
+helpers are prebuilt before Bun timing; install/typecheck are preparation. Quick Clippy
+checks touched production targets; full retains all-target Clippy. Work budgets preserve
+the core/test-clock feature union. Linked worktrees keep local targets unless explicitly
+overridden, avoiding cross-candidate top-level CLI overwrites; docs use the actual target.
+The slower Clippy test-profile experiment was reverted.
+
+`gate_case.py` reports per-test observations and candidate body/attribute changes against
+the integration base. The log and `.evidence/<attempt>-existing-test-costs.md` retain the
+T-766 gardening input; attach that report without changing the committed candidate. Native
+nextest reports at10s; documented integrations retain their pre-existing30s report-only
+guards, with reasons. These are not additional full-tier exclusions.
+
+The gate prints added Rust/Bun/Python registrations, measured suite seconds and explicit
+unmeasured additions. Renames/case splits count as additions. Python containing-suite time
+is a conservative upper bound. More than30s without a `Test-cost justification:` is a
+report, not an automated failure here. Worker/reviewer placement and justification guidance
+remains in force; reviewers evaluate named defect-catching value, not evidence volume.
 
 ## Optional lanes
 
@@ -90,7 +71,7 @@ additions; the line alone is not semantic approval.
    Busy hosts defer with exit 75 before starting herdr, tests, or board writes.
 3. Takes a nonblocking local lock and refuses a dirty worktree.
 4. Starts a fresh plugin-free private HOME/XDG/server through `test-herdr.sh`, runs only the
-   explicit nextest slow profile under a quiet-load-only maintenance wall guard, and lets the helper clean up its own
+   explicit nextest slow profile with a reported maintenance wall threshold, and lets the helper clean up its own
    server/directories. It never reuses or stops an owner's server.
 5. Retains raw logs locally and as `log` artifacts with tier `keep` on a monitoring task.
    Each distinct failing test gets one open task keyed by binary+test; subsequent failures

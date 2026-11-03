@@ -31,7 +31,8 @@ use super::work_paths::{Paths, Row, report};
 
 const START: Timestamp = Timestamp::constant(1_767_268_800, 0);
 const SMALL: (usize, usize) = (2, 10);
-const LARGE: (usize, usize) = (5, 25);
+const LARGE: (usize, usize) = (8, 40);
+const _: () = assert!(LARGE.0 >= SMALL.0 * 4 && LARGE.1 >= SMALL.1 * 4);
 /// Artifact snapshot files, recorded on the active tasks so they do not grow with history.
 const ARTIFACTS: usize = 24;
 
@@ -687,9 +688,10 @@ fn transcript_reads_must_not_grow_with_history() {
     let failures = violations(&small, &large, 263);
     assert_eq!(
         failures,
-        [
-            "board_open: transcript_reads grows with history: 54 at 2 tasks/10 events, 0 at 5 tasks/25 events"
-        ]
+        [format!(
+            "board_open: transcript_reads grows with history: 54 at {} tasks/{} events, 0 at {} tasks/{} events",
+            SMALL.0, SMALL.1, LARGE.0, LARGE.1
+        )]
     );
     let failures = violations(&large, &small, 263);
     assert!(

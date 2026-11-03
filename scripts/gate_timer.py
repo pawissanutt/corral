@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure compilation separately; cap cumulative test runtime only on an unbusy host."""
+"""Observe compilation, test time and load; all time thresholds are report-only (T-776)."""
 from __future__ import annotations
 
 import argparse
@@ -59,31 +59,17 @@ def execute(command: list[str], seconds: float | None, respect_load: bool = Fals
     previous = signal.signal(signal.SIGTERM, terminate)
     child = None
     code = 0
-    budget_exceeded = False
-    enforcement_load = None
-    observed = before
     try:
         child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stream, start_new_session=True)
         while True:
             if interrupted:
                 raise KeyboardInterrupt
-            elapsed = time.monotonic() - started
-            remaining = seconds - elapsed if seconds is not None and not busy else None
             try:
-                code = child.wait(timeout=max(0.001, min(1, remaining)) if remaining is not None else 1)
+                code = child.wait(timeout=1)
                 break
             except subprocess.TimeoutExpired:
-                # Bounded process waits, never load generation. Once load is busy/unknown,
-                # report this phase as exempt rather than making host contention a flake.
                 if respect_load:
-                    observed = load_snapshot()
-                    busy |= not observed['quiet']
-                if seconds is not None and not busy and time.monotonic() - started >= seconds:
-                    enforcement_load = observed
-                    stop(child, grace)
-                    budget_exceeded = True
-                    code = 124
-                    break
+                    busy |= not load_snapshot()['quiet']
     except KeyboardInterrupt:
         if child is not None:
             stop(child, grace)
@@ -94,24 +80,17 @@ def execute(command: list[str], seconds: float | None, respect_load: bool = Fals
             stream.close()
     elapsed = time.monotonic() - started
     after = load_snapshot() if respect_load else {'quiet': True}
-    # A load change after a quiet-host termination cannot make killed tests a pass.
-    # Retain the load at enforcement rather than mislabel that failure busy-exempt.
-    if not budget_exceeded:
-        busy |= not after['quiet']
-    if code == 0 and seconds is not None and not busy and elapsed > seconds:
-        code = 124
-        budget_exceeded = True
-        enforcement_load = after
-    return {'exit_code': code, 'budget_exceeded': budget_exceeded,
-            'enforcement_load': enforcement_load, 'seconds': elapsed, 'load_before': before,
-            'load_after': after, 'busy_exempt': busy}
+    busy |= not after['quiet']
+    return {'exit_code': code, 'budget_exceeded': seconds is not None and elapsed > seconds,
+            'report_only': True, 'enforcement_load': None, 'seconds': elapsed,
+            'load_before': before, 'load_after': after, 'busy_exempt': busy}
 
 
 def run(command: list[str], seconds: float) -> int:
-    """Strict primitive used by the tiny timeout fixture, independent of host load."""
+    """Observe a threshold without replacing the command's actual result."""
     result = execute(command, seconds)
     if result['budget_exceeded']:
-        print(f'FAILED: test runtime budget {seconds:g}s exceeded', file=sys.stderr)
+        print(f'Time observation: {seconds:g}s threshold exceeded (report-only; T-776)', file=sys.stderr)
     return result['exit_code']
 
 
@@ -145,8 +124,8 @@ def phase(path: Path, label: str, command: list[str], compile_only: bool = False
           f'{result["load_before"].get("load_per_core")} -> '
           f'{result["load_after"].get("load_per_core")}; busy-exempt={result["busy_exempt"]}', flush=True)
     if result['budget_exceeded']:
-        print(f'FAILED: cumulative {state["tier"]} test runtime budget {state["limit"]}s exceeded; '
-              f'enforced at load {result["enforcement_load"]}',
+        print(f'Time observation: cumulative {state["tier"]} threshold {state["limit"]}s exceeded '
+              '(report-only; T-776)',
               file=sys.stderr, flush=True)
     return result['exit_code']
 
@@ -159,8 +138,8 @@ def cost_audit(config: dict, rows: list[dict]) -> None:
     lines = ['# Existing test cost audit — T-766 gardening input', '',
              f'Candidate: `{os.environ.get("CORRAL_CANDIDATE_HEAD", "manual")}`.',
              f'Integration base: `{config["ratchet_base"]}`.', '',
-             'Only added/modified test bodies or attributes are ratcheted. Existing overruns',
-             'are observations, never performance failures; assertion failures still fail.',
+             'All time thresholds are report-only; enforcement is deferred to T-776.',
+             'Candidate and existing overruns are observations; assertion failures still fail.',
              'Approved candidate exceptions retain their documented treatment. This list is',
              'partial if the gate fails/cancels; unrun tests are not timing proof.', '',
              '| Test | Seconds | Classification | Load/core before → after |',
@@ -172,7 +151,7 @@ def cost_audit(config: dict, rows: list[dict]) -> None:
     if not rows:
         lines.append('| No overrun observed before the gate ended | | | |')
     target.write_text('\n'.join(lines) + '\n')
-    print(f'Per-test ratchet: {len(config["enforce"])} candidate identities; existing overruns report-only. '
+    print(f'Per-test observations: {len(config["enforce"])} candidate identities; all timing report-only (T-776). '
           f'Existing-cost audit (T-766 input): {target}', flush=True)
 
 
@@ -189,16 +168,16 @@ def report(path: Path) -> None:
         cost_audit(json.loads(config.read_text()), rows)
     print(f'Test budget summary: {state["tier"]} measured={state["measured"]:.3f}s '
           f'budgeted-quiet={state["budgeted"]:.3f}s build-preparation={state["compile"]:.3f}s '
-          f'limit={state["limit"]}s; busy/unknown phases are reported, not budget failures', flush=True)
+          f'reference={state["limit"]}s; ALL timing is report-only (T-776), including quiet load', flush=True)
 
 
 def main() -> int:
     args = sys.argv[1:]
-    # The host-only slow lane retains a bounded wall guard, enforced only at quiet load.
-    # It is not the quick/full gate's test budget and is never used by worker gates.
+    # The host-only slow lane reports a wall reference too; no timing-based failure.
+    # It is never used as another worker gate.
     if args and args[0] == 'slow':
         result = execute(['bash', *args[1:]], config()['seconds']['slow'], respect_load=True)
-        print('Slow-lane guard: ' + json.dumps(result), flush=True)
+        print('Slow-lane observation: ' + json.dumps(result), flush=True)
         return result['exit_code']
     mode = args.pop(0)
     if mode == 'init':

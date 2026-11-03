@@ -110,8 +110,8 @@ def report(profile: str) -> int:
     justification = re.search(r"^\+Test-cost justification:\s*\S.+",
                               git("diff", f"{base}...HEAD", "--", "*.md"), re.M)
     if seconds > threshold and not justification:
-        print(f"FAILED: >{threshold}s added suite needs Test-cost justification:", file=sys.stderr)
-        return 1
+        print(f"Test-cost observation: >{threshold}s added suite has no Test-cost justification: "
+              "(report-only; enforcement T-776)", file=sys.stderr)
     return 0
 
 

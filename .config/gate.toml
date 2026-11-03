@@ -1,6 +1,6 @@
-# Cumulative nextest/work-budget/Bun runtime budgets; compilation is reported separately.
-# Runtime caps apply only when observed load/core stays <=1.0, never to busy/cold-cache work.
-# slow is a host-maintenance wall guard, also quiet-load conditional, not a worker gate.
+# Report-only timing references (owner relaxed T-761 scope; enforcement is T-776).
+# Compilation, test execution and load/core are recorded separately. No timing failure.
+# slow is a host-maintenance observation, not a worker gate.
 [seconds]
 quick = 180
 full = 600

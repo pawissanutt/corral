@@ -1,34 +1,27 @@
 # T-761 — gate/test cost audit (R1)
 
-## Final per-test policy: candidate ratchet (owner direction after attempt six)
+## Final scope: reporting now, enforcement in T-776
 
-The 10s quiet-host performance guard now applies **only to registered Rust tests added or
-modified by this candidate**, comparing their function bodies/attributes against the
-integration base. Production/helper edits do not ratchet every selected test. Existing
-tests above 10s are **reported, never failed for performance**; assertion failures still
-fail. No additional per-test exceptions were added. Previously approved treatments remain.
-Tier runtime budgets and their quiet-load rule are unchanged.
+Owner relaxed T-761 after the repeated timing-policy failures: **EVERY time budget is
+report-only**. The 10s per-test reference, tier180s/600s references, quiet-load accounting
+and added-suite30s reference only print observations; none changes a command's exit status.
+Actual assertions, exact work counters, lint and compilation still fail normally.
+Worker/reviewer placement and justification guidance stays; automation is deferred to
+**T-776**. Existing/candidate overrun audits remain **T-766 gardening input**.
 
-The ratchet identifies 44 candidate test identities: the 40 already-approved action
-case splits and four modified ordinary tests. The newly failing aggregate acceptance
-matrix is unchanged and therefore report-only, not split, weakened or specially exempted.
-Its original T-745 time was 8.182s; its unchanged targeted run now passes in 8.065s wall.
-Real disposable fixtures prove that an unchanged overrun passes at quiet load, a new
-ordinary overrun fails, explicit prior treatment remains, and assertions still fail.
+The board fixture now uses 2 tasks/10 events versus8 tasks/40 events (4x); diagnostic
+expectations are formatted from `SMALL`/`LARGE`, not literal counts. Hot/sync fixtures use
+2 vs8 histories and1 vs4 nested rows. Their assertions are unchanged, and the affected
+crate passed locally before the final commit: **492 regular tests in22.526s**, then
+**all three ignored work matrices in11.057s** (board3.608s, hot6.914s, sync11.050s),
+with6.69s compilation separate, inside a fresh private plugin-free server.
+Trims that passed are retained; no new per-test exception was added.
 
-The gate log prints all over-budget observations. It also generates
-`.evidence/<attempt>-existing-test-costs.md`, the per-attempt audit list for **T-766 gardening
-input**. That report is attached after the final receipt without modifying the committed
-candidate. Below, earlier attempts describe the policy at the time, not the final ratchet.
-Attempt six (`ag-7600577550bf71d8`) ran 1556 passes before the unchanged aggregate matrix
-hit 10.045s; its 205.655s phase was busy-exempt. Those failed receipts remain failed.
-
-Attempt seven (`ag-d29877cd849916d4`) reached 2956 passes (434.589s busy-exempt runtime,
-66.462s build/preparation) before a stale expected diagnostic still named the original
-60/240-task fixtures. The detector correctly emitted the new 2/5-task labels. Corrected
-only the expected fixture labels; its injected 54-vs-zero transcript work and exact error
-assertion remain intact. The per-attempt T-766 cost audit was generated and retained;
-it is explicitly partial because this unrelated assertion stopped the gate.
+The generated `.evidence/<attempt>-existing-test-costs.md` is attached per attempt. It is
+partial on a stopped/failed gate, and never proves unrun tests. Earlier sections below
+record historical policies/results, not the final report-only scope. The superseded gate
+on4cfe3df6 was stopped by PM and is void, not a new defect. Original full-wall <600s remains
+unmeasured: the authorized landing measurement is still PM-owned, not claimed achieved.
 
 ## Measurement boundary
 
@@ -75,8 +68,8 @@ policy: **160 passed, 1 native nextest timeout** at 10.003s, with load/core **2.
 The unchanged fence regression had passed in 3.558s in attempt three. Aggregate runtime
 18.895s was correctly busy-exempt, but the new per-test native guard was not.
 
-Fixed the guard mechanism, not the test or its 10s budget: a candidate-bound runner now
-enforces that same limit only under observed quiet load; native nextest reports slowness
+At that earlier stage, the guard mechanism was fixed rather than its 10s reference:
+a candidate-bound runner enforced that limit only under observed quiet load; native nextest reports slowness
 without an independent busy-host kill. Existing exceptions are resolved by nextest itself,
 not a duplicate parser. Real tiny fixtures prove quiet ordinary termination, exception
 completion, busy-host completion and nonzero assertion propagation. All 40 action cases
@@ -88,7 +81,8 @@ approved using the landing full gate as the after measurement; PM extracts/posts
 Estimates above are planning ranges, not a promise that their sum is under 600s. The old
 per-test times were measured under substantially more simultaneous history-fixture work;
 the landing gate measures both full wall and test time. Its <=600s quiet-host **test**
-cap is enforceable; cold compilation is reported separately, not turned into a test flake.
+cap was enforced at that stage; it is now report-only under the relaxed scope. Cold
+compilation remains reported separately, not turned into a test flake.
 The original full-wall target remains an observation for PM's after-table, not a claim
 that a test-only budget guarantees end-to-end wall time.
 
@@ -206,8 +200,8 @@ No test was deleted, moved out of full, retried to green, or given a new asserti
 
 - Action histories: 9/90 → 2/5; terminal tasks: 10/100 → 2/5; terminal nested history 1/10 → 1/2.
   Grown-family assertions, exact counters and warm/cold output comparisons stay intact.
-- Board history/tasks: 60/240 → 2/5; events: 6000/24000 → 10/25; artifact files: 2000 → 24.
-- Hot read/sync stores: terminal tasks 12/120 → 2/5; history 2/20 → 2/5; nested 1/10 → 1/3.
+- Board history/tasks: 60/240 → 2/8; events: 6000/24000 → 10/40; artifact files: 2000 → 24.
+- Hot read/sync stores: terminal tasks 12/120 → 2/8; history 2/20 → 2/8; nested 1/10 → 1/4.
   Both fixtures saturate a configured one-card Done window: the visible working set stays
   fixed, while history changes. All existing exact work assertions stay intact.
 - Closed fallback cleanup history: 1/10 → 1/3, still exact decode-counter equality.
@@ -252,17 +246,17 @@ No test was deleted, moved out of full, retried to green, or given a new asserti
   process-global; the production work-budget recipe already uses separate processes. No
   assertion was relaxed. The first shrink also exposed an unsaturated Done viewport, fixed
   by keeping the configured working set constant, not changing counter expectations.
-- `python3 scripts/test_gate.py`: 14/14 pass in 45.362s (temporary fake-command fixtures, no full gate),
+- `python3 scripts/test_gate.py`: 14/14 pass in 58.822s (temporary fake-command fixtures, no full gate),
   including full-branch Pi/Darwin scope, plan verification, linked-worktree target
   isolation/override and checking the binary from that same target directory.
 - `python3 scripts/test_gate_select.py`: 7/7 pass in 1.423s. The new private-fixture regression
   fails before the fix (17 tests selected instead of its one enclosing case) and passes after.
 - Targeted plan verify and checkpoint context tests each pass (4.859s / 4.195s),
   asserting that both aggregate verification paths preserve all optional lanes.
-- `python3 scripts/test_gate_policy.py`: 9/9 pass, 3.551s (path/deletion/plan/unknown-owner
-  selection, strict runtime timeout, >30s added-cost justification, transitive Pi consumer
-  selection, real nextest ordinary timeout + report-only exception, source-free prebuilt
-  execution, and deterministic compile-excluded/busy-host budget accounting).
+- `python3 scripts/test_gate_policy.py`: 9/9 pass, 3.529s (path/deletion/plan/unknown-owner
+  selection, report-only thresholds and missing-justification observations, transitive Pi
+  consumers, real nextest new/existing/approved overruns without failure, source-free
+  prebuilt execution, and compile/load accounting with actual failure propagation).
 - `python3 scripts/test_slow_lane.py`: 3/3 pass, 0.003s (busy admission before any test/board
   work, own-process idle priority, repeated failures deduplicated per test with kept log proof).
 - `cargo nextest list -p corral-ops --profile slow --message-format json`: catalog compiles
@@ -271,10 +265,9 @@ No test was deleted, moved out of full, retried to green, or given a new asserti
 
 ## Remaining work / not acceptance yet
 
-Long-term quiet-host test-execution budgets (quick 180s/full 600s), separate build/wall/load
-reporting, added Rust/Bun/Python registration accounting and the
-reviewer rubric are implemented. Added/modified ordinary nextest tests have load-aware
-10s runner guards; unchanged overruns are report-only T-766 input. The 149 measured
+Report-only timing references (quick180s/full600s/per-test10s), separate build/wall/load
+reporting, added Rust/Bun/Python registration accounting and the reviewer rubric are
+implemented. Enforcement is deferred to T-776; all overruns are observations for T-766. The 149 measured
 pre-existing >10s integration cases (some also in the torture catalog), plus the rescheduled
 action cases and the four Q7 landing journeys, explicitly retain their original report-only
 guards with per-case reasons.
