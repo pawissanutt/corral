@@ -4,6 +4,13 @@ Tests are budgeted by cost and judged by defect-catching value, not count. Never
 failing test to go green. The placement/reviewer rules live in `AGENTS.md` and the shipped
 worker/reviewer contracts. Test-cost justification belongs in the candidate's change report.
 
+## Quarantined tests
+
+`.config/gate-quarantine.toml` lists exact nextest identities, their fixing tasks and reasons.
+Every quick and full gate runs these tests separately and reports their pass or failure; only
+ordinary test failures and quarantine infrastructure errors fail the gate. The fixing task
+must remove its own one-line entry when its fix lands.
+
 ## Fixed tiers and report-only timing references
 
 | Tier | Membership | When | Timing reference (report-only) |

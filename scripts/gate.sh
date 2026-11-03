@@ -172,8 +172,8 @@ if [[ $tier == quick ]]; then
   # Declared tests replace the module selection and may name any package. The 'quick'
   # nextest profile leaves out the slow group (.config/nextest.toml) unless tests are
   # declared; full landings restore torture suites on owning-module changes.
-  test_scope=("${scope[@]}")
-  ((declared)) && test_scope=(--workspace)
+  # Quarantine runs in every tier, even when the changed files select no Rust tests.
+  test_scope=(--workspace)
   if ((${#test_scope[@]})); then
     profile=(--profile quick)
     list_args=("${test_scope[@]}" "${profile[@]}")
@@ -182,9 +182,10 @@ if [[ $tier == quick ]]; then
       list_args=("${test_scope[@]}" "${profile[@]}" -E "$selection")
     fi
     begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest list ${list_args[*]}"
-    prepare_test_binaries "${test_scope[@]}" || on_error
+    prepare_test_binaries --workspace || on_error
     reuse=(--cargo-metadata "$CORRAL_GATE_CARGO_METADATA" --binaries-metadata "$CORRAL_GATE_BINARIES_METADATA")
     actual_list=("${profile[@]}" "${reuse[@]}")
+    if ((!declared && ${#scope[@]})); then actual_list+=("${scope[@]}"); fi
     ((declared)) && actual_list+=(-E "$selection")
     CORRAL_HERDR_SESSION=corral-test cargo nextest list "${actual_list[@]}" \
       --message-format json >"$quick_dir/list.json"
@@ -194,20 +195,19 @@ if [[ $tier == quick ]]; then
     source "$quick_dir/select.sh"
     end_step
     run_args=("${profile[@]}" "${reuse[@]}")
-    [[ $run_filter != "all()" ]] && run_args+=(-E "$run_filter")
     # Approved exclusions or the slow group may cover the whole selection; nextest would call
     # that an empty run. A declared selection that matched nothing still reaches nextest and
     # fails.
-    if ((remaining == 0 && !(declared && selected == 0))); then
-      printf '\nSkipping cargo nextest run (no selected test remains to run).\n'
-    else
-      begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest run (prebuilt, tier quick)"
-      repair_profile=quick
-      CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_timer.py run \
-        "$CORRAL_TEST_BUDGET_STATE" nextest -- cargo nextest run "${run_args[@]}"
-      repair_profile=""
-      end_step
+    if ((!declared && ${#scope[@]} == 0)) || ((remaining == 0 && !(declared && selected == 0))); then
+      run_filter='none()'
     fi
+    begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest run (prebuilt, tier quick)"
+    repair_profile=quick
+    CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_timer.py run \
+      "$CORRAL_TEST_BUDGET_STATE" nextest -- python3 scripts/gate_quarantine.py "$run_filter" \
+      cargo nextest run "${run_args[@]}"
+    repair_profile=""
+    end_step
   else
     printf '\nSkipping cargo nextest (no touched crates and no declared tests).\n'
   fi
@@ -280,7 +280,8 @@ prepare_test_binaries --workspace || on_error
 reuse=(--cargo-metadata "$CORRAL_GATE_CARGO_METADATA" --binaries-metadata "$CORRAL_GATE_BINARIES_METADATA")
 repair_profile=default
 CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_timer.py run \
-  "$CORRAL_TEST_BUDGET_STATE" nextest -- cargo nextest run --profile default "${reuse[@]}" "${nextest_args[@]}"
+  "$CORRAL_TEST_BUDGET_STATE" nextest -- python3 scripts/gate_quarantine.py "$landing_filter" \
+  cargo nextest run --profile default "${reuse[@]}"
 repair_profile=""
 end_step
 
