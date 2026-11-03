@@ -1,47 +1,38 @@
 //! Pin the start identity, not the work: variable-width nonces are read repeatedly.
-//! The site model was independently traced on 83dcc33e and the integrated path; see
-//! docs/records/T-337-R2-nonce-model.md. These are derivatives, not history budgets.
+//! The current sites and reused reads are independently traced in
+//! docs/records/T-758-nonce-model.md; T-337-R2-nonce-model.md records the prior model.
+//! These are derivatives, not history budgets.
 use super::action_budget::{measure, unattributed};
 use super::action_budget_fixture::{Kind, Variant, build, settle};
 
 fn coefficient(kind: Kind) -> u64 {
-    let original: &[(&str, u64)] = match kind {
+    let sites: &[(&str, u64)] = match kind {
         Kind::Worker => &[
             ("dispatch", 1),
-            ("launch", 11),
+            ("launch including fresh-session update", 13),
             ("tracker target", 3),
             ("operating heads", 8),
-            ("PM open heads", 4),
-            ("finishing slots", 3),
+            ("PM open heads", 1),
+            ("finishing slots", 0),
+            ("role-session audit", 1),
             ("authorization start load", 1),
             ("authorization submission loads", 4),
         ],
         Kind::AcceptPlanScopes => &[
             ("dispatch", 1),
-            ("launch", 10),
+            ("launch including fresh-session update", 12),
             ("plan target", 12),
             ("tracker target", 9),
             ("operating heads", 16),
-            ("PM open heads", 4),
-            ("finishing slots", 6),
+            ("PM open heads", 1),
+            ("finishing slots", 1),
+            ("role-session audit", 1),
             ("authorization start load", 1),
             ("authorization submission loads", 4),
         ],
         _ => panic!("nonce derivative model covers only worker and plan-scope acceptance"),
     };
-    // Each case launches exactly one worker. These are the four added nonce-bearing
-    // head decodes, not a tolerance: owning fresh-session update (before/after), the
-    // parked-work admission scan, and the truthful role-session audit lookup.
-    let integrated = [
-        ("fresh session owning update", 2),
-        ("parked waiting admission", 1),
-        ("role-session audit", 1),
-    ];
-    original
-        .iter()
-        .chain(integrated.iter())
-        .map(|(_, n)| n)
-        .sum()
+    sites.iter().map(|(_, n)| n).sum()
 }
 
 #[test]
