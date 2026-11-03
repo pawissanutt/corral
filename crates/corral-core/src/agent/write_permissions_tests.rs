@@ -36,6 +36,7 @@ fn container() -> AssistantContainer {
         write_grants: Vec::new(),
         write_grants_issued: 0,
         permission_audit: Vec::new(),
+        workflow: None,
     }
 }
 

@@ -79,9 +79,8 @@ pub(super) fn container(store: &Store, id: &str) -> Result<AssistantContainer> {
     validate_id(id)?;
     let value: AssistantContainer = document(store, CONTAINERS, id, "assistant_container_load")?
         .with_context(|| format!("assistant container {id} not found"))?;
-    if value.version != ASSISTANT_VERSION
-        || value.state.binding.role != crate::agent::AgentRole::Assistant
-    {
+    value.validate_protocol()?;
+    if value.state.binding.role != crate::agent::AgentRole::Assistant {
         bail!("unsupported assistant container {id}");
     }
     Ok(value)

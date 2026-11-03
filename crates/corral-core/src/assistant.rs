@@ -105,6 +105,7 @@ pub struct AssistantLanding {
 
 /// The pane is adopted, never owned: ending a session must not close or type into it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AssistantContainer {
     pub version: u32,
     pub pane: Option<String>,
@@ -123,6 +124,9 @@ pub struct AssistantContainer {
     /// Audit lines committed with their decision or revocation and not yet logged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permission_audit: Vec<PermissionAudit>,
+    /// v2 only. Absent in legacy/ordinary containers; never inferred from Todo or prose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<crate::assistant_workflow::WorkflowIndex>,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -189,6 +193,15 @@ pub struct NewOwnerInput {
 }
 
 impl AssistantContainer {
+    /// v1 is ordinary only; live workflow state must never be readable by a v1-only binary.
+    pub fn validate_protocol(&self) -> Result<()> {
+        match (self.version, &self.workflow) {
+            (ASSISTANT_VERSION, None) => Ok(()),
+            (crate::assistant_workflow::CONTAINER_VERSION, Some(workflow)) => workflow.validate(),
+            _ => bail!("unsupported assistant container/workflow protocol"),
+        }
+    }
+
     pub fn owner_input(&self, id: &str) -> Option<&OwnerInput> {
         self.owner_inputs.iter().find(|input| input.id == id)
     }
@@ -385,6 +398,7 @@ impl Store {
             write_grants: Vec::new(),
             write_grants_issued: 0,
             permission_audit: Vec::new(),
+            workflow: None,
         };
         self.records_transaction(|| {
             self.write_assistant_container(&session.id, &container)?;
@@ -477,10 +491,13 @@ impl Store {
         if ended && !allow_ended {
             bail!("assistant_ended: {id}");
         }
-        let mut container = self.read_assistant_container(id)?;
-        let result = f(&mut container, ended)?;
-        self.write_assistant_container(id, &container)?;
-        Ok(result)
+        self.records_transaction(|| {
+            let mut container = self.read_assistant_container(id)?;
+            let result = f(&mut container, ended)?;
+            container.validate_protocol()?;
+            self.write_assistant_container(id, &container)?;
+            Ok(result)
+        })
     }
 
     pub fn update_assistant(

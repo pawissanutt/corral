@@ -30,7 +30,8 @@ export type CorralOp =
   | "read_route" | "read_artifacts" | "read_lessons" | "inbox_read" | "inbox_resolve"
   | "memory_list" | "memory_read" | "memory_put" | "memory_remove"
   | "job" | "job_monitor"
-  | "plan_write" | "plan_submit" | "plan_verdict" | "owner_action" | "write_permission";
+  | "plan_write" | "plan_submit" | "plan_verdict" | "owner_action" | "write_permission"
+  | "assistant_plan" | "assistant_plan_review" | "assistant_handoff";
 
 export const CORRAL_OPS: readonly CorralOp[] = [
   "hello", "event", "receipt_lookup", "ask", "withdraw", "wait", "progress", "checkpoint",
@@ -39,6 +40,7 @@ export const CORRAL_OPS: readonly CorralOp[] = [
   "read_list", "read_search", "read_route", "read_artifacts", "read_lessons", "inbox_read", "inbox_resolve",
   "todo", "job", "job_monitor", "memory_list", "memory_read", "memory_put", "memory_remove",
   "plan_write", "plan_submit", "plan_verdict", "owner_action", "write_permission",
+  "assistant_plan", "assistant_plan_review", "assistant_handoff",
 ];
 
 /** The launcher-bound identity; never chosen by the model. */
