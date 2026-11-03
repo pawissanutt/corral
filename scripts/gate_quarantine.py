@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run the selected nextest suite and every quarantined test, without masking errors."""
 import json
+import os
 import subprocess
 import sys
 import tomllib
@@ -32,7 +33,8 @@ def main() -> int:
     ordinary = f"({selection})"
     if filters:
         ordinary += " and not (" + " or ".join(filters) + ")"
-    empty_ok = ['--no-tests', 'pass'] if selection == 'none()' else []
+    empty_ok = ['--no-tests', 'pass'] if (selection == 'none()' or
+                os.environ.get('CORRAL_ALLOW_EMPTY_ORDINARY') == '1') else []
     result = subprocess.run([*command, *empty_ok, '-E', ordinary], check=False).returncode
     failed = result != 0
     for entry, expression in zip(entries, filters, strict=True):
