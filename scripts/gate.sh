@@ -202,6 +202,13 @@ if [[ $tier == quick ]]; then
     # fails.
     if ((!declared && ${#scope[@]} == 0)) || ((remaining == 0 && !(declared && selected == 0))); then
       run_filter='none()'
+    elif ((!declared && !workspace)); then
+      package_filter=''
+      for package in "${packages[@]}"; do
+        [[ -z $package_filter ]] || package_filter+=' or '
+        package_filter+="package(=$package)"
+      done
+      run_filter="($run_filter) and ($package_filter)"
     fi
     begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest run (prebuilt, tier quick)"
     repair_profile=quick
