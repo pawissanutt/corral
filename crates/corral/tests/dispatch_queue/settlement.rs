@@ -27,8 +27,9 @@ fn concurrent_hooks_read_settlement_state_only_after_its_derivation_lease() {
     held.lock().unwrap();
     let mut groups = Groups(Vec::new());
     let mut hooks = Vec::new();
-    for _ in 0..2 {
-        let mut child = wrapped(&f, &["strace", "-yy", "-e", "trace=flock"], &["hook"])
+    // Concurrent hooks coalesce into one sync, so the second contender is a plain sync.
+    for args in [&["hook"][..], &["sync"][..]] {
+        let mut child = wrapped(&f, &["strace", "-yy", "-e", "trace=flock"], args)
             .process_group(0)
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
