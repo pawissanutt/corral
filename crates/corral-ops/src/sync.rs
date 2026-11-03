@@ -251,7 +251,7 @@ fn sync_scoped(
         reconcile_attention(ctx, now, None, attention, held_admission.as_deref())?;
         crate::pm_events::push_events(ctx, false)?;
         crate::desktop_notifications::reconcile(ctx)?;
-        match crate::content_refresh::refresh_after_sync(ctx, &[], &search_stamp) {
+        match crate::content_refresh::refresh_after_sync_if_due(ctx, &[], &search_stamp) {
             Ok(followed) => *rebuild |= !followed,
             Err(error) => crate::content_refresh::defer_corrupt_blob_cache_refresh(error)?,
         }
@@ -403,7 +403,7 @@ fn sync_scoped(
     crate::agent::effects::failpoint("sync_events");
     crate::pm_events::push_events(ctx, true)?;
     crate::desktop_notifications::reconcile(ctx)?;
-    match crate::content_refresh::refresh_after_sync(ctx, &[], &search_stamp) {
+    match crate::content_refresh::refresh_after_sync_if_due(ctx, &[], &search_stamp) {
         Ok(followed) => *rebuild |= !followed,
         Err(error) => crate::content_refresh::defer_corrupt_blob_cache_refresh(error)?,
     }

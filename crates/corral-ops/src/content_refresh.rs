@@ -331,3 +331,23 @@ pub(crate) fn defer_corrupt_blob_cache_refresh(error: anyhow::Error) -> Result<(
 pub(crate) fn refresh_after_sync(ctx: &Ctx, _tasks: &[Task], _before: &str) -> Result<bool> {
     follow_index(ctx)
 }
+
+/// How often a sync pass may rewrite the index; searches bring it current themselves.
+const SYNC_REFRESH_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The refresh every sync pass (each hook and board pass) runs. It never queues for another
+/// refresher and rewrites the index at most once per `SYNC_REFRESH_EVERY`: queued passes held
+/// read views on the index lock (pinning the WAL) and per-pass rewrites saturated the disk.
+/// A skipped pass leaves the cursor in place, so the next due pass follows every change.
+pub(crate) fn refresh_after_sync_if_due(ctx: &Ctx, tasks: &[Task], before: &str) -> Result<bool> {
+    let root = ctx.store.cache_root()?;
+    let recent = fs::metadata(root.join(CURSOR))
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|at| at.elapsed().ok())
+        .is_some_and(|age| age < SYNC_REFRESH_EVERY);
+    if recent || crate::content_index::busy(ctx)? {
+        return Ok(true);
+    }
+    refresh_after_sync(ctx, tasks, before)
+}
