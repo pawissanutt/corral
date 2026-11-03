@@ -879,6 +879,18 @@ impl Store {
             .collect())
     }
 
+    /// Read one scratch registration by id without scanning historical registrations.
+    pub fn scratch_row_viewed(&self, id: &str) -> Result<Option<ScratchRow>> {
+        let query = StorageQuery::ScratchKey { id: id.to_owned() };
+        Ok(self
+            .storage_rows_up_to(&query, 1)?
+            .into_iter()
+            .find_map(|row| match row {
+                StorageRow::Scratch(row) => Some(row),
+                _ => None,
+            }))
+    }
+
     /// The storage leases (readers that hold blob GC's horizon back).
     pub fn storage_leases(&self) -> Result<Vec<LeaseRow>> {
         Ok(self

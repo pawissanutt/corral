@@ -507,6 +507,15 @@ impl ReadView for FakeView {
                     .map(StorageRow::Scratch),
                 &page,
             ),
+            StorageQuery::ScratchKey { id } => self.page(
+                state
+                    .scratch
+                    .get(id)
+                    .cloned()
+                    .map(StorageRow::Scratch)
+                    .into_iter(),
+                &page,
+            ),
             StorageQuery::Lifecycle { task } => self.page(
                 state
                     .lifecycle

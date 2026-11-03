@@ -392,9 +392,38 @@ pub(super) fn review_run_origin(
         .current_run
         .as_ref()
         .map_or(0, |run| run.facts.children);
-    let review_id = launch
-        .bound_attempt()
-        .unwrap_or_else(|| format!("{}-review{}", run.id, children + 1));
+    // A failed, unrecorded launch may have left a closed or reclaimed registration.
+    // Allocate a new identity only if no review child was ever recorded for the old one.
+    let head = ctx.store.head(id)?;
+    let mut number = children + 1;
+    let bound = launch.bound_attempt();
+    let mut candidate = bound
+        .clone()
+        .unwrap_or_else(|| format!("{}-review{number}", run.id));
+    let review_id = loop {
+        let scratch = crate::scratch_reclaim::Attempt::Review {
+            task: &task.id,
+            run: &run.id,
+            child: &candidate,
+        };
+        let row = ctx.store.scratch_row_viewed(&scratch.id())?;
+        let recorded = head.review_child(&run.id, &candidate)?.is_some();
+        if (recorded && bound.as_deref() == Some(&candidate))
+            || (!recorded
+                && row.as_ref().is_none_or(|row| {
+                    row.state == corral_core::backend::ScratchState::Open
+                        && row.kind == corral_core::backend::ScratchKind::ImplementationReview
+                        && row.task.as_deref() == Some(&task.id)
+                        && row.subject.as_deref() == Some(&run.id)
+                        && row.attempt.as_deref() == Some(&candidate)
+                        && row.path == format!("reviews/{}-{candidate}", task.id)
+                }))
+        {
+            break candidate;
+        }
+        number += 1;
+        candidate = format!("{}-review{number}", run.id);
+    };
     launch.bind(
         record
             .identity

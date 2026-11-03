@@ -715,6 +715,18 @@ impl ReadView for SqliteView {
                     Ok(StorageRow::Scratch(load::scratch(row)?))
                 })
             }
+            StorageQuery::ScratchKey { id } => {
+                let sql = format!(
+                    "SELECT {} FROM scratch_dirs WHERE id = ?",
+                    load::SCRATCH_COLUMNS
+                );
+                self.page(
+                    &page,
+                    &sql,
+                    text_args(std::slice::from_ref(id)).collect(),
+                    |_, row| Ok(StorageRow::Scratch(load::scratch(row)?)),
+                )
+            }
             StorageQuery::Lifecycle { task } => {
                 let (filter, args) = optional_filter("task", task);
                 let sql = format!(
