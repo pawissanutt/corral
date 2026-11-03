@@ -2,8 +2,9 @@
 # Leave capacity for another gate and the owner's interactive work on 32 cores.
 test-threads = 12
 retries = 0
-# The gate's candidate-bound runner enforces 10s only while observed load is quiet.
-# Native nextest reports at 10s but must not kill on a busy host independently.
+# The candidate-bound runner ratchets added/modified tests at10s under quiet load.
+# Existing overruns are reported for T-766 gardening, never performance failures.
+# Native nextest only reports slowness; it must not independently terminate a test.
 # Explicit measured exceptions retain their original 30s report-only guards.
 slow-timeout = "10s"
 

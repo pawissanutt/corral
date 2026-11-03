@@ -58,8 +58,11 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
   Missing/legacy context is conservative: all suites and optional lanes.
 - Install cargo-nextest before running the gate. `.config/nextest.toml` uses 12 slots,
   serializes shared live fixtures and disables retries. The candidate-bound runner in
-  `scripts/gate_case.py` caps ordinary tests at 10s only while observed load/core <=1;
-  native nextest reports slowness without an independent busy-host termination. Explicit
+  `scripts/gate_case.py` ratchets added/modified registered test bodies/attributes at10s
+  only while observed load/core <=1, diffed against the integration base. Production/helper
+  changes do not ratchet every selected test. Existing overruns are reported, never failed
+  for performance, in the gate log and `.evidence/<attempt>-existing-test-costs.md` for T-766.
+  Assertions still fail. Native nextest reports slowness without independent termination. Explicit
   measured integration/torture exceptions retain their original 30s report-only guards,
   with one-line reasons; they are not extra full-tier exclusions. Never bump a failing timeout.
   `.config/gate.toml` caps measured nextest/work-budget/Bun execution at quick <=180s

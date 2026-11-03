@@ -48,7 +48,9 @@ temporary-fixture regression checks.
 Install cargo-nextest before running the gate. The default nextest profile in
 `.config/nextest.toml` uses 12 test slots, serializes live fixtures sharing the
 private herdr server, and reports ordinary slowness at 10 seconds. The gate's candidate-bound
-runner terminates over-budget ordinary tests only while observed load/core <=1. Explicit measured
+runner ratchets only added/modified registered tests against the integration base, under
+observed load/core <=1. Existing overruns are report-only gardening input for T-766, in
+the log and the per-attempt existing-cost audit; assertions still fail. Explicit measured
 integration/torture exceptions keep their original 30s report-only guards, not extra
 full-tier exclusions. Retries are disabled. Runtime caps, fixed membership, path-scoped
 lanes and nightly scheduling are detailed in [gate cost policy](gate-costs.md). Run the gate inside the private plugin-free environment:

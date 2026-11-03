@@ -35,7 +35,14 @@ def prepare(path: Path, cargo: Path, binaries: Path) -> tuple[str, str]:
         version = subprocess.check_output(['rustc', '-vV'], stdin=subprocess.DEVNULL, text=True)
         host = next(line.split(': ', 1)[1] for line in version.splitlines() if line.startswith('host: '))
     key = 'CARGO_TARGET_' + host.upper().replace('-', '_') + '_RUNNER'
+    if metadata.get('rust-binaries'):
+        from gate_ratchet import candidate_tests
+        enforce, base = candidate_tests(json.loads(cargo.read_text()), metadata, suites)
+    else:
+        enforce, base = [], 'no-test-binaries'
     path.write_text(json.dumps({
+        'enforce': enforce,
+        'ratchet_base': base,
         'seconds': tomllib.loads(Path('.config/gate.toml').read_text())['tests']['ordinary_seconds'],
         'exemptions': exemptions,
         'binaries': [item['binary-path'] for item in metadata.get('rust-binaries', {}).values()],
@@ -45,12 +52,16 @@ def prepare(path: Path, cargo: Path, binaries: Path) -> tuple[str, str]:
     return key, shlex.join([sys.executable, str(Path(__file__).resolve()), str(path.resolve())])
 
 
-def guarded(command: list[str], seconds: float, identity: list[str], metrics: Path) -> int:
+def guarded(command: list[str], seconds: float, identity: list[str], metrics: Path,
+            enforce: bool = True, classification: str = 'candidate-ratchet') -> int:
     import gate_timer
-    os.environ['CORRAL_CASE_BUDGET_SECONDS'] = str(seconds)
-    result = gate_timer.execute(command, seconds, respect_load=True, grace=1)
+    if enforce:
+        os.environ['CORRAL_CASE_BUDGET_SECONDS'] = str(seconds)
+    else:
+        os.environ.pop('CORRAL_CASE_BUDGET_SECONDS', None)
+    result = gate_timer.execute(command, seconds if enforce else None, respect_load=True, grace=1)
     if result['seconds'] > seconds:
-        entry = json.dumps({'test': identity, 'limit': seconds, **result}) + '\n'
+        entry = json.dumps({'test': identity, 'limit': seconds, 'classification': classification, **result}) + '\n'
         fd = os.open(metrics, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         try:
             os.write(fd, entry.encode())
@@ -71,10 +82,13 @@ def main() -> int:
     command = config['previous_runner'] + sys.argv[2:]
     identity = [os.environ.get('NEXTEST_BINARY_ID'), os.environ.get('NEXTEST_TEST_NAME')]
     # Listing and foreign nested Cargo commands are not test executions from this candidate.
-    if (not all(identity) or sys.argv[2] not in config['binaries']
-            or identity in config['exemptions']):
+    if not all(identity) or sys.argv[2] not in config['binaries']:
         os.execvp(command[0], command)
-    return guarded(command, config['seconds'], identity, Path(config['metrics']))
+    approved = identity in config['exemptions']
+    changed = identity in config['enforce']
+    enforce = changed and not approved
+    classification = ('candidate-ratchet' if enforce else 'candidate-exception') if changed else 'existing-report'
+    return guarded(command, config['seconds'], identity, Path(config['metrics']), enforce, classification)
 
 
 if __name__ == '__main__':

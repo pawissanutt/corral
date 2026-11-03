@@ -15,6 +15,7 @@ from unittest.mock import patch
 import gate_lanes
 import gate_timer
 import gate_case
+import gate_ratchet
 import test_cost
 import gate_pi
 import tomllib
@@ -107,7 +108,11 @@ class PolicyTests(unittest.TestCase):
         config = tomllib.loads(Path(".config/nextest.toml").read_text())
         self.assertEqual(config["profile"]["default"]["slow-timeout"], "10s")
         self.write("Cargo.toml", '[package]\nname="cap-fixture"\nversion="0.0.0"\nedition="2024"\n[workspace]\n[lib]\npath="src.rs"\n')
-        self.write("src.rs", "#[test] fn ordinary() { std::thread::sleep(std::time::Duration::from_millis(200)); }\n"
+        existing = "#[test] fn existing() { std::thread::sleep(std::time::Duration::from_millis(200)); }\n"
+        self.write("src.rs", existing)
+        self.commit()
+        baseline = self.git("rev-parse", "HEAD").strip()
+        self.write("src.rs", existing + "#[test] fn ordinary() { std::thread::sleep(std::time::Duration::from_millis(200)); }\n"
                    "#[test] fn exception() { std::thread::sleep(std::time::Duration::from_millis(200)); }\n")
         self.write(".config/nextest.toml", '[profile.default]\nslow-timeout="50ms"\n'
                    '[[profile.default.overrides]]\nfilter="test(=exception)"\nslow-timeout="30s"\n')
@@ -121,7 +126,8 @@ class PolicyTests(unittest.TestCase):
             result = cargo(*args)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.write(file, result.stdout)
-        key, _ = gate_case.prepare(Path("guard.json"), Path("cargo.json"), Path("binaries.json"))
+        with patch.dict(os.environ, {"CORRAL_INTEGRATION_BASE": baseline}):
+            key, _ = gate_case.prepare(Path("guard.json"), Path("cargo.json"), Path("binaries.json"))
         for quiet in (True, False):
             # Mock load in a disposable entrypoint, never generate host load or add a
             # production test hook. Both cases use the actual runner and actual nextest.
@@ -134,11 +140,21 @@ class PolicyTests(unittest.TestCase):
             output = result.stdout + result.stderr
             self.assertEqual(result.returncode, 100 if quiet else 0, output)
             self.assertRegex(output, r"PASS\s+\[[^]]+\].*exception")
+            self.assertRegex(output, r"PASS\s+\[[^]]+\].*existing")
             if quiet:
                 self.assertIn("quiet-host per-test budget", output)
                 self.assertRegex(output, r"FAIL\s+\[[^]]+\].*ordinary")
             else:
-                self.assertIn("2 passed", output)
+                self.assertIn("3 passed", output)
+        config = json.loads(Path("guard.json").read_text())
+        rows = [json.loads(line) for line in Path(config["metrics"]).read_text().splitlines()]
+        existing_rows = [row for row in rows if row["test"][1] == "existing"]
+        self.assertEqual(len(existing_rows), 2)
+        self.assertTrue(all(row["classification"] == "existing-report" and row["exit_code"] == 0
+                            and not row["budget_exceeded"] for row in existing_rows))
+        with patch.dict(os.environ, {"CORRAL_GATE_ATTEMPT": "ratchet-fixture"}), contextlib.redirect_stdout(io.StringIO()):
+            gate_timer.cost_audit(config, rows)
+        self.assertIn("cap-fixture existing", Path(".evidence/ratchet-fixture-existing-test-costs.md").read_text())
 
     def test_prebuilt_nextest_runs_without_compiler_or_source(self):
         self.write("Cargo.toml", '[package]\nname="reuse-fixture"\nversion="0.0.0"\nedition="2024"\n[workspace]\n[lib]\npath="src.rs"\n')
@@ -189,6 +205,31 @@ class PolicyTests(unittest.TestCase):
                              .05, ["fixture", "assertion-failure"], Path("case-metrics.jsonl")), 7)
         with patch.object(gate_timer.os, "getloadavg", side_effect=OSError("unavailable")):
             self.assertFalse(gate_timer.load_snapshot()["quiet"])
+
+    def test_ratchet_distinguishes_modified_and_added_tests_from_existing_and_other_targets(self):
+        before = '''mod tests {
+#[test] fn same() { let _ = r#"} #[test] fn phantom() {}"#; let _ = '{'; }
+#[test] fn changed() { assert_eq!(1, 1); }
+}
+fn helper() {}
+'''
+        self.write("src.rs", before)
+        self.write("other.rs", before)
+        self.commit()
+        base = self.git("rev-parse", "HEAD").strip()
+        self.write("src.rs", before.replace("assert_eq!(1, 1)", "assert_eq!(2, 1)")
+                   + "#[test] fn added() {}\n")
+        cargo = {"packages": [{"id": "pkg", "targets": [
+            {"name": name, "kind": [kind], "src_path": str(Path(file).resolve())}
+            for name, kind, file in (("unit", "lib", "src.rs"), ("other", "test", "other.rs"))]}]}
+        binaries = {"rust-binaries": {binary: {"package-id": "pkg", "kind": kind, "binary-name": name}
+                    for binary, kind, name in (("pkg", "lib", "unit"), ("pkg::other", "test", "other"))}}
+        suites = {binary: {"testcases": {name: {} for name in ("tests::same", "tests::changed", "added")}}
+                  for binary in binaries["rust-binaries"]}
+        with patch.dict(os.environ, {"CORRAL_INTEGRATION_BASE": base}):
+            enforce, observed = gate_ratchet.candidate_tests(cargo, binaries, suites)
+        self.assertEqual(observed, base)
+        self.assertEqual(enforce, [["pkg", "added"], ["pkg", "tests::changed"]])
 
     def test_added_suite_cost_requires_candidate_justification(self):
         self.write("src.rs", "#[test]\nfn catches_named_defect() {}\n")

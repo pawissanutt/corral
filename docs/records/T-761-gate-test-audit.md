@@ -1,5 +1,28 @@
 # T-761 — gate/test cost audit (R1)
 
+## Final per-test policy: candidate ratchet (owner direction after attempt six)
+
+The 10s quiet-host performance guard now applies **only to registered Rust tests added or
+modified by this candidate**, comparing their function bodies/attributes against the
+integration base. Production/helper edits do not ratchet every selected test. Existing
+tests above 10s are **reported, never failed for performance**; assertion failures still
+fail. No additional per-test exceptions were added. Previously approved treatments remain.
+Tier runtime budgets and their quiet-load rule are unchanged.
+
+The real metadata identifies 43 candidate test identities: the 40 already-approved action
+case splits and three modified ordinary tests. The newly failing aggregate acceptance
+matrix is unchanged and therefore report-only, not split, weakened or specially exempted.
+Its original T-745 time was 8.182s; its unchanged targeted run now passes in 8.065s wall.
+Real disposable fixtures prove that an unchanged overrun passes at quiet load, a new
+ordinary overrun fails, explicit prior treatment remains, and assertions still fail.
+
+The gate log prints all over-budget observations. It also generates
+`.evidence/<attempt>-existing-test-costs.md`, the per-attempt audit list for **T-766 gardening
+input**. That report is attached after the final receipt without modifying the committed
+candidate. Below, earlier attempts describe the policy at the time, not the final ratchet.
+Attempt six (`ag-7600577550bf71d8`) ran 1556 passes before the unchanged aggregate matrix
+hit 10.045s; its 205.655s phase was busy-exempt. Those failed receipts remain failed.
+
 ## Measurement boundary
 
 Baseline is the passing T-745 full gate on this host, log SHA-256
@@ -116,6 +139,9 @@ Test-cost justification: the 40 scheduled cases replace two giant tests and thre
 duplicates, adding no scenario coverage or repeated work. They preserve real-entry history
 independence and output assertions while allowing the existing 12-slot runner to schedule
 bounded work; the targeted run takes 44.154s rather than multi-minute long poles.
+One cheap ratchet regression is necessary to reject unchanged/other-target identities and
+recognize changed/added bodies despite raw-string braces; the existing tiny process fixture
+now also proves unchanged overruns are reported, not failed. No new Rust scenarios added.
 
 ## Fixed slow membership (complete inventory)
 
@@ -219,14 +245,14 @@ No test was deleted, moved out of full, retried to green, or given a new asserti
   process-global; the production work-budget recipe already uses separate processes. No
   assertion was relaxed. The first shrink also exposed an unsaturated Done viewport, fixed
   by keeping the configured working set constant, not changing counter expectations.
-- `python3 scripts/test_gate.py`: 14/14 pass in 39.117s (temporary fake-command fixtures, no full gate),
+- `python3 scripts/test_gate.py`: 14/14 pass in 45.362s (temporary fake-command fixtures, no full gate),
   including full-branch Pi/Darwin scope, plan verification, linked-worktree target
   isolation/override and checking the binary from that same target directory.
 - `python3 scripts/test_gate_select.py`: 7/7 pass in 1.423s. The new private-fixture regression
   fails before the fix (17 tests selected instead of its one enclosing case) and passes after.
 - Targeted plan verify and checkpoint context tests each pass (4.859s / 4.195s),
   asserting that both aggregate verification paths preserve all optional lanes.
-- `python3 scripts/test_gate_policy.py`: 8/8 pass, 3.820s (path/deletion/plan/unknown-owner
+- `python3 scripts/test_gate_policy.py`: 9/9 pass, 3.551s (path/deletion/plan/unknown-owner
   selection, strict runtime timeout, >30s added-cost justification, transitive Pi consumer
   selection, real nextest ordinary timeout + report-only exception, source-free prebuilt
   execution, and deterministic compile-excluded/busy-host budget accounting).
@@ -240,10 +266,11 @@ No test was deleted, moved out of full, retried to green, or given a new asserti
 
 Long-term quiet-host test-execution budgets (quick 180s/full 600s), separate build/wall/load
 reporting, added Rust/Bun/Python registration accounting and the
-reviewer rubric are implemented. Ordinary nextest tests have load-aware 10s runner guards; 149 measured
+reviewer rubric are implemented. Added/modified ordinary nextest tests have load-aware
+10s runner guards; unchanged overruns are report-only T-766 input. The 149 measured
 pre-existing >10s integration cases (some also in the torture catalog), plus the rescheduled
 action cases and the four Q7 landing journeys, explicitly retain their original report-only
- guards with per-case reasons.
+guards with per-case reasons.
 Owner approved preserving these useful journey exceptions in Q2 instead of dropping them.
 The host slow runner enforces nice 19, idle I/O and load/core <=1.0 admission, isolates herdr,
 retains logs/artifacts and deduplicates failure tasks. Its cron line is documented only: PM

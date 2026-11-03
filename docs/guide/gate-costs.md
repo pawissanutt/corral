@@ -40,8 +40,14 @@ docs checker always uses the candidate binary from the actual target, not anothe
 to avoid recompiling core/ops/TUI merely to toggle a test-only feature. An experimental
 Clippy `--profile test` alignment made the cold check slower and was reverted; the time
 test assertions and overflow checks were not relaxed. It never
-changes a test's result to PASS. `gate_case.py` enforces ordinary 10s guards with the same
-observed-load rule, using nextest's binary/test identity and candidate metadata. Nextest itself
+changes an assertion's result to PASS. `gate_case.py` applies a **candidate ratchet**:10s
+only for added/modified registered test bodies or attributes, diffed against the integration
+base and mapped to nextest binary/test identities. Production/helper changes do not turn
+every selected test into a modified test. Existing tests over10s are **reported, never
+performance failures**, even at quiet load. Their assertions still fail normally. The log
+and `.evidence/<attempt>-existing-test-costs.md` list overruns as T-766 gardening input;
+attach that report after the gate without editing the committed candidate. Already
+approved exceptions remain documented; do not add exceptions to chase old-test timings. Nextest itself
 reports at 10s without unconditional termination: its native wall guard cannot distinguish
 a busy host. Nextest evaluates the exception filters (including ignored work matrices);
 the runner never reimplements that DSL. Over-budget observations retain load/exit evidence,
