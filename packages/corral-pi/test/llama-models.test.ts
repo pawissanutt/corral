@@ -112,7 +112,7 @@ test("a real endpoint can advertise another model and stream zero-USD usage with
     expect(answer.provider).toBe("llama.cpp");
     expect(answer.usage.input).toBe(23);
     expect(answer.usage.output).toBe(7);
-    expect(answer.usage.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
+    expect(answer.usage.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, totalFromProvider: false });
     const inference = requests.filter((request) => request.method === "POST");
     expect(inference).toHaveLength(1);
     expect(inference[0]?.url).toBe("/v1/chat/completions");

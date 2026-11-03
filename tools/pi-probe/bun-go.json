@@ -11,22 +11,23 @@
   },
   "pi": {
     "package": "@earendil-works/pi-coding-agent",
-    "version": "1.3.0",
-    "integrity": "sha512-V/WoCjA2hQSe3QLWIUB24cTRdtEdeLiIzkDqU5RMXV6VWuD+KGZnzVBMhglwdnQTySkehZsjt8a3g6Jd2g4nnw==",
-    "upstreamCommit": "71023aec1546d6d677a65669c5665c0927ce0dd0",
+    "version": "1.5.0",
+    "integrity": "sha512-xNDZ5kqowO6Z03FS2gwAkPEGk1ssxVcYKQ6qZId84mFEvwACvvyc2l0vAMOS+c5zvxLRMLBE9r4y44IGYkMJaQ==",
+    "upstreamCommit": "f9a26365568127461c47a07a37dcb42c140a3ac5",
     "packages": {
-      "@earendil-works/pi-agent-core": "1.3.0",
-      "@earendil-works/pi-ai": "1.3.0",
-      "@earendil-works/pi-codemode": "1.3.0",
-      "@earendil-works/pi-coding-agent": "1.3.0",
-      "@earendil-works/pi-mcp": "1.3.0",
-      "@earendil-works/pi-telemetry": "1.3.0",
-      "@earendil-works/pi-tui": "1.3.0"
+      "@earendil-works/pi-agent-core": "1.5.0",
+      "@earendil-works/pi-ai": "1.5.0",
+      "@earendil-works/pi-codemode": "1.5.0",
+      "@earendil-works/pi-coding-agent": "1.5.0",
+      "@earendil-works/pi-mcp": "1.5.0",
+      "@earendil-works/pi-schema": "1.5.0",
+      "@earendil-works/pi-telemetry": "1.5.0",
+      "@earendil-works/pi-tui": "1.5.0"
     }
   },
   "lock": {
     "file": "tools/pi-probe/bun.lock",
-    "sha256": "292af16cf0f192abd1b8038754b48551994dddd5a2eee83f91dfa3bce9c9fd48",
+    "sha256": "60431ff118b00a8029a2164cb19c9d8ea932cb341456f26f76ba7aa849be50e9",
     "t136NpmLockSha256": "d96d0a7303245992b782b25787e13e4bd0576ec3f1d00b3e22ceb39e1648472a",
     "diff": "tools/pi-probe/lock-diff.json"
   },
@@ -35,29 +36,32 @@
     "emptyRoot": true,
     "ok": true,
     "lockUnchanged": true,
-    "locked": 205,
-    "installed": 205,
+    "locked": 208,
+    "installed": 208,
     "runtimeCopies": {
       "@earendil-works/pi-agent-core": [
-        "1.3.0"
+        "1.5.0"
       ],
       "@earendil-works/pi-ai": [
-        "1.3.0"
+        "1.5.0"
       ],
       "@earendil-works/pi-codemode": [
-        "1.3.0"
+        "1.5.0"
       ],
       "@earendil-works/pi-coding-agent": [
-        "1.3.0"
+        "1.5.0"
       ],
       "@earendil-works/pi-mcp": [
-        "1.3.0"
+        "1.5.0"
+      ],
+      "@earendil-works/pi-schema": [
+        "1.5.0"
       ],
       "@earendil-works/pi-telemetry": [
-        "1.3.0"
+        "1.5.0"
       ],
       "@earendil-works/pi-tui": [
-        "1.3.0"
+        "1.5.0"
       ],
       "typebox": [
         "1.3.27"
@@ -145,7 +149,7 @@
   },
   "live": {
     "status": "NOT RUN",
-    "reason": "live_check_not_authorized",
+    "reason": "no owner authorization recorded for a live check",
     "limit": "a separate owner grant no larger than T-136's: 5 requests, 1,024 output tokens each, $0 API"
   },
   "fixtures": {

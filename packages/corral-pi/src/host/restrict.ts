@@ -10,7 +10,7 @@ export const PROVIDER_API = PROVIDERS["openai-codex"].api;
 export const TOKEN_REFRESH = PROVIDERS["openai-codex"].refresh;
 export const ALLOWED_DESTINATIONS: readonly string[] = hostDestinations("openai-codex");
 
-/** Every built-in upstream extension (pi-coding-agent 1.3.0 `builtInExtensions`). */
+/** Every built-in upstream extension (pi-coding-agent 1.5.0 `builtInExtensions`). */
 export const BUILTIN_EXTENSIONS: readonly string[] = ["llama.cpp", "codemode", "tool-search", "mcp"];
 
 /** Upstream reads these before any network feature starts; set before the SDK loads. */
