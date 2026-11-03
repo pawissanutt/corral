@@ -5,9 +5,8 @@
 
 use anyhow::Result;
 use corral_core::{
-    Accept, AutoStage, AutopilotState, Config, GateRecord, GateResult, MergeMode,
-    OperatingActionKind, ReviewPolicy, ReviewRecord, Reviewer, RunHead, RunOutcome, Status,
-    Verdict,
+    AutoStage, AutopilotState, Config, GateRecord, GateResult, MergeMode, OperatingActionKind,
+    ReviewPolicy, ReviewRecord, Reviewer, RunHead, RunOutcome, Status, Verdict,
 };
 use corral_git::RebaseOutcome;
 use jiff::Timestamp;
@@ -30,6 +29,7 @@ use corral_core::{TaskFieldsRef as _, TaskMut as _, TaskRef as _};
 const MAX_STEPS: usize = 16;
 
 mod cowork;
+mod cowork_finish;
 mod infra;
 mod output;
 mod repair;
@@ -150,23 +150,8 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
         policy,
         now,
     };
-    if task.cowork_run().is_some()
-        && !matches!(pilot.stage(), Some(AutoStage::Escalated | AutoStage::Done))
-    {
-        if let Some(step) = pilot.cowork_wait()? {
-            return Ok(step);
-        }
-        // A failed co-work gate already ran at finish. Do not silently retry it, even if
-        // main moved: this candidate's defect belongs to its originating assistant.
-        if let Some(gate) = run.gate.as_ref().filter(|gate| {
-            gate.result == GateResult::Fail && run_head_sha(run).as_deref() == Some(&gate.sha)
-        }) {
-            if crate::operating::require(&ctx.store, task, OperatingActionKind::Repair).is_err() {
-                return Ok(Step::Wait);
-            }
-            let (summary, details) = pilot.gate_failure(gate, "")?;
-            return pilot.request_changes(&summary, &details);
-        }
+    if let Some(step) = pilot.cowork_initial_step()? {
+        return Ok(step);
     }
     // Main movement can stale an approval, but cannot erase a known defect on this candidate.
     // Handle it before integration preflight or a stale gate can restart verification.
@@ -485,17 +470,7 @@ impl Pilot<'_> {
     /// Gate and review passed: wait for the owner (accept = owner), or check the guards and start landing.
     /// Diff size is deliberately not a guard: the independent reviewer is the safeguard.
     fn accept(&self, head: String) -> Result<Step> {
-        if !self
-            .head
-            .cowork_run()
-            .is_some_and(|cowork| cowork.owner_confirmed)
-            && self.head.review == Some(Accept::Owner)
-            && self
-                .config
-                .review_policy(self.head.project.as_deref(), None)
-                .accept
-                == Accept::Auto
-        {
+        if self.owner_acceptance_required() {
             return self.escalate("the task asks for the owner's acceptance (review: owner)");
         }
         let base = corral_git::rev_sha(&self.run.worktree, &self.run.base)?;
@@ -697,16 +672,7 @@ impl Pilot<'_> {
         if !details.trim().is_empty() {
             request.push_str(&format!("\n{}\n", details.trim_end()));
         }
-        let finish = if let Some(cowork) = self.head.cowork_run() {
-            format!(
-                "Fix and commit in assistant {}; resubmit scratch {} with the original owner finish instruction and `--into {id} --expected-head <new HEAD>`.",
-                cowork.session, cowork.scratch
-            )
-        } else {
-            format!(
-                "Fix it, commit, and run `{corral} done {id} --summary \"<what changed>\"` again."
-            )
-        };
+        let finish = self.repair_finish_instruction(&corral);
         let document =
             format!("# Changes requested: {id} round {round} of {max}\n\n{request}\n{finish}\n");
         let artifact = self.snapshot(
