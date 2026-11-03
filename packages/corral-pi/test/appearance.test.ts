@@ -28,6 +28,11 @@ test("action catalog retains role restrictions and packaged preferences change r
       expect(h.panels.appearance).toBe(appearance);
       expect(h.panels.actions().find(a => a.id === choice?.id)?.label).toContain("(current)");
     }
+    // Main's Usage command must survive extraction into the shared palette/command handler.
+    const usage = h.panels.actions().find(a => a.id === "/panels usage");
+    expect(usage?.disabled()).toBeUndefined();
+    await usage?.run();
+    expect(h.panels.workbench.view).toBe("usage");
     expect(h.host.sessionId()).toBe(bound);
     expect(h.screen().text()).toContain("Keep my draft");
   } finally { await h.stop(); }
