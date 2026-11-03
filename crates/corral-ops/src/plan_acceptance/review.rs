@@ -402,8 +402,7 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
     let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
     ctx.store.check_runtime()?;
     crate::session_scope::check_launch(ctx)?;
-    let _budget =
-        crate::review_budget::priority::auxiliary(ctx, id, corral_core::ReviewWork::Reviewer)?;
+    let _budget = crate::review_budget::hold_guard(ctx, id)?;
     let _ownership = ctx
         .store
         .try_lock("session-ownership")?

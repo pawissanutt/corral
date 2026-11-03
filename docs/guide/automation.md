@@ -516,20 +516,6 @@ A manual hold on a focus-held task takes ownership of that hold. Each changed ho
 release has one audit event. While focus remains active, sync reasserts its lower-priority
 holds; clear focus to release those tasks permanently.
 
-Gate and reviewer admission uses priority, then task creation age, then task ID, including
-explicit and native queued requests. A lower-priority caller cannot steal the launch lease
-from an already waiting higher-priority task. Existing running work is not interrupted by
-default. To let urgent waiting work cancel the lowest-priority running gate, opt in:
-
-```toml
-[limits]
-preempt = "P0"
-```
-
-The threshold accepts P0–P3; P0 permits only P0 claimants. Preemption affects only a
-strictly lower-priority gate, never a worker or an independent review. The cancelled gate
-is automatically requeued and never counted as a failure. Capacity and machine-resource
-checks still apply after cancellation. `--force` bypasses resource pressure, not priority.
 Workspace `mode pause` remains different: it pauses every new automatic action but does
 not cancel running work.
 

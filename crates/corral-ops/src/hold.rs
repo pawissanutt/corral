@@ -233,7 +233,7 @@ fn cancel_held(ctx: &Ctx) -> Result<()> {
         .heads(&corral_core::backend::HeadQuery::Open { project: None })?
     {
         if task.hold.is_some() {
-            crate::review_budget::cancel_task(ctx, &task.id, "held", false)?;
+            crate::review_budget::cancel_task(ctx, &task.id, "held")?;
         }
     }
     Ok(())
@@ -242,10 +242,9 @@ fn cancel_held(ctx: &Ctx) -> Result<()> {
 /// Cancelled explicit worker gates resume even when review autopilot is off. Native requests
 /// have their own receipted queue. Automatic attempts still require current authority.
 pub(crate) fn resume_gates(ctx: &Ctx) -> Result<()> {
-    let mut tasks = ctx
+    let tasks = ctx
         .store
         .heads(&corral_core::backend::HeadQuery::Open { project: None })?;
-    tasks.sort_by(|a, b| (&a.priority, a.created, &a.id).cmp(&(&b.priority, b.created, &b.id)));
     for task in tasks {
         if task.hold.is_none()
             && task.review_wait == Some(corral_core::ReviewWork::Gate)
