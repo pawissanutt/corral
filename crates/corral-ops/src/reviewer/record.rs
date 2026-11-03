@@ -177,10 +177,11 @@ pub(super) fn record_verdict(
             receipt = Some(report.record(t, kind, Some(verdict), commit)?);
         } else {
             let notes = record.notes.as_deref().map(|notes| ctx.store.event_text(notes)).transpose()?;
+            // Bind cleanup to this review, not the independently sampled event wall clock.
             ctx.store.log_event(
                 Some(&task.id),
                 "verdict",
-                json!({ "run": run.id, "verdict": verdict.as_str(), "reviewer": record.reviewer, "sha": record.sha, "notes": notes }),
+                json!({ "run": run.id, "verdict": verdict.as_str(), "reviewer": record.reviewer, "sha": record.sha, "review_at": record.at.to_string(), "notes": notes }),
             )?;
         }
         staged.attach(ctx, t, &run.id)
