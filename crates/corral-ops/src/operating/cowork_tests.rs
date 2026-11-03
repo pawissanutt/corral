@@ -34,6 +34,16 @@ fn finish_instruction_is_one_run_not_a_workspace_grant_and_live_stops_still_appl
         OperatingActionKind::Accept,
     ] {
         super::super::require(&store, &task, kind).unwrap();
+        task.hold = Some(corral_core::TaskHold {
+            reason: "urgent work".into(),
+            at: task.created,
+            resume: None,
+            focus: None,
+        });
+        let error = super::super::require(&store, &task, kind).unwrap_err();
+        assert!(error.to_string().contains("Held:"), "{kind:?}: {error}");
+        task.hold = None;
+        super::super::require(&store, &task, kind).unwrap();
     }
     assert!(super::super::require(&store, &task, OperatingActionKind::Dispatch).is_err());
     let mut other = task.clone();
