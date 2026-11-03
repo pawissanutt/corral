@@ -191,5 +191,21 @@ impl BoardView {
             self.show_done = self.visible_columns.contains(&Status::Done);
         }
         self.restore_selection();
+        release_refresh_pages();
+    }
+}
+
+/// A refresh temporarily holds two frames plus JSON conversion buffers. Once the old frame
+/// is retired, return unused allocator pages instead of retaining that high-water RSS for
+/// the board's lifetime. This is not a cache eviction and never runs on paint/input paths.
+fn release_refresh_pages() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        unsafe extern "C" {
+            fn malloc_trim(pad: usize) -> i32;
+        }
+        // SAFETY: glibc's thread-safe advisory trim has no pointer/lifetime preconditions.
+        // Zero retains no extra top padding; live allocations and other threads are untouched.
+        unsafe { malloc_trim(0) };
     }
 }
