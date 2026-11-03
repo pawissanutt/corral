@@ -126,11 +126,25 @@ class GateTests(unittest.TestCase):
 
     def test_quarantine_reports_failure_but_preserves_other_failures(self) -> None:
         self.write('.config/gate-quarantine.toml', 'tests = [{ binary = "pkg::suite", test = "flaky", fix = "T-123", reason = "flake" }]\n')
-        self.write('runner.py', 'import os, sys\nsys.exit(int(os.environ["FLAKY"] if "--ignore-default-filter" in sys.argv else os.environ["ORDINARY"]))\n')
-        for ordinary in (0, 100):
-            result = subprocess.run([sys.executable, 'scripts/gate_quarantine.py', 'all()', sys.executable, 'runner.py'], cwd=self.repo, env={**os.environ, 'FLAKY': '100', 'ORDINARY': str(ordinary)}, capture_output=True, text=True, check=False)
-            self.assertEqual(result.returncode, int(ordinary != 0))
+        path = self.install_command_recorder()
+        cargo = self.repo / 'bin/cargo'
+        recorder = cargo.read_text()
+        # Model two selected tests: flaky always fails; ordinary fails on request.
+        # The ordinary invocation must actually exclude the exact flaky identity.
+        probe = '''if entry["args"][:2] == ["nextest", "run"] and "--run-ignored" not in visible:
+    expression = visible[visible.index("-E") + 1] if "-E" in visible else "all()"
+    identity = "binary_id(=pkg::suite) and test(=flaky)"
+    if "--ignore-default-filter" in visible:
+        sys.exit(100 if expression == "(" + identity + ")" else 4)
+    flaky_selected = "and not ((" + identity + "))" not in expression
+    sys.exit(100 if flaky_selected or os.environ.get("ORDINARY_FAIL") == "1" else 0)
+'''
+        cargo.write_text(recorder.replace('failure = os.environ.get("FAIL_COMMAND")', probe + 'failure = os.environ.get("FAIL_COMMAND")'))
+        for ordinary in (False, True):
+            result = self.gate(PATH=path, ORDINARY_FAIL=str(int(ordinary)))
+            self.assertEqual(result.returncode == 0, not ordinary, result.stderr)
             self.assertIn('QUARANTINED FAIL pkg::suite flaky (fix: T-123)', result.stdout)
+            self.assertEqual('Gate passed.' in result.stdout, not ordinary)
 
     def test_fmt_violation_stops_before_size_check(self) -> None:
         # Given malformed formatting in a temporary Cargo project:
