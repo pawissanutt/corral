@@ -39,7 +39,7 @@ const build = await exited(process.execPath, [
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 test("compiled codemode runs cells on the embedded Corral kernel worker, including reload", async () => {
-  expect([build.code, build.signal, build.stderr]).toEqual([0, null, expect.any(String)]);
+  if (build.code !== 0 || build.signal) throw new Error(`bun build failed (${build.signal ?? build.code})\n${build.stderr}`);
   const { code, signal, stdout, stderr } = await exited(binary, [], {
     cwd: root, env: { ...process.env, HOME: root, XDG_DATA_HOME: root },
   }, 55_000);
