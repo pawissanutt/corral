@@ -74,7 +74,7 @@ impl Store {
                 bail!("submission already attempted; refusing replay")
             }
         }
-        let (held, mut task) = M::hold(self, &expected.task)?;
+        let (held, mut task) = <M as SubmissionTask>::hold(self, &expected.task)?;
         let validation = self.operating_config().and_then(|config| {
             self.validate_operating_action(&config, &task, authorization)?;
             Ok(config)

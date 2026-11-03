@@ -396,6 +396,7 @@ fn review_task(
 
 fn started_review(reviewer: &str) -> corral_core::ReviewRecord {
     corral_core::ReviewRecord {
+        cancelled: false,
         route: None,
         identity: None,
         evidence_digest: None,

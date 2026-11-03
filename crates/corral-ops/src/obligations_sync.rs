@@ -373,6 +373,9 @@ fn observe(
                 );
             }
             match gate.result {
+                GateResult::Cancelled => {
+                    state(WaitState::Pending, "gate cancelled; awaiting re-admission")
+                }
                 GateResult::Pass | GateResult::Fail | GateResult::Stale => {
                     // gate_collect is the only authority that turns the real result file into Pass/Fail.
                     let receipt = ResumeReceipt {

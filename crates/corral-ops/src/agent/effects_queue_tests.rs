@@ -68,6 +68,64 @@ fn queued_gate_is_admitted_once_when_the_lease_is_released() {
 }
 
 #[test]
+fn held_queued_and_running_native_gates_resume_the_same_request_without_a_model_turn() {
+    for case in 0..3 {
+        let running = case == 1;
+        let fx = fixture(true);
+        let o = fx.call(fx.bind(), "hold", "gate");
+        if case == 2 {
+            crate::hold::hold(&fx.ctx, &fx.id, None).unwrap();
+        }
+        queued(&fx, &o);
+        if running {
+            super::super::gate_queue::advance(&fx.ctx).unwrap();
+        }
+        let before = fx.task();
+        crate::hold::hold(&fx.ctx, &fx.id, Some("focus P0")).unwrap();
+        assert!(fx.task().review_wait.is_none());
+        effects::reconcile_task(&fx.ctx, &fx.id).unwrap();
+        super::super::gate_queue::advance(&fx.ctx).unwrap();
+        assert_eq!(fx.calls("pane run"), usize::from(running));
+        assert_eq!(fx.receipt(&o).unwrap().state, ReceiptState::Queued);
+        assert_eq!(
+            fx.task().current_run().unwrap().herdr,
+            before.current_run().unwrap().herdr
+        );
+        crate::hold::release(&fx.ctx, &fx.id).unwrap();
+        super::super::gate_queue::advance(&fx.ctx).unwrap();
+        assert_eq!(fx.calls("pane run"), usize::from(running) + 1);
+        assert_eq!(fx.receipt(&o).unwrap().state, ReceiptState::Committed);
+        assert_eq!(wake_state(&fx, &o), WakeState::Armed);
+        let task = fx.task();
+        assert_eq!(task.rounds, 0);
+        assert_eq!(task.current_run().unwrap().failures, 0);
+        if running {
+            assert_ne!(
+                task.current_run()
+                    .unwrap()
+                    .gate
+                    .as_ref()
+                    .unwrap()
+                    .identity
+                    .as_ref()
+                    .unwrap()
+                    .attempt,
+                before
+                    .current_run()
+                    .unwrap()
+                    .gate
+                    .as_ref()
+                    .unwrap()
+                    .identity
+                    .as_ref()
+                    .unwrap()
+                    .attempt
+            );
+        }
+    }
+}
+
+#[test]
 fn dirty_candidate_after_queueing_posts_one_actionable_wake() {
     // Given a queued gate whose candidate is no longer clean.
     let fx = fixture(true);

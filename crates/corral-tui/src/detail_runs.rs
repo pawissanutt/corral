@@ -49,6 +49,7 @@ impl DetailView {
                 Some(RunOutcome::Interrupted) => ("interrupted", YELLOW),
                 Some(RunOutcome::Failed) => ("failed", RED),
                 None if t.status == Status::NeedsMe => ("blocked", YELLOW),
+                Some(RunOutcome::Cancelled) => ("cancelled", YELLOW),
                 None => ("running", BLUE),
             };
             let mode = format!("{:?}", r.mode).to_lowercase();

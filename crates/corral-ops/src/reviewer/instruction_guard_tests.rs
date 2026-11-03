@@ -428,6 +428,7 @@ fn restored_launch_is_refused_before_resume_and_its_preparation_is_retained() {
         .update(&fx.id, |task| {
             let run = task.current_run_mut().unwrap();
             let record = ReviewRecord {
+                cancelled: false,
                 route: None,
                 identity: Some(candidate.clone()),
                 evidence_digest: Some(crate::verification::evidence_digest(

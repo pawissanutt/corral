@@ -265,7 +265,7 @@ fn run_lines(task: &Task) -> Vec<Line<'static>> {
                 let color = match g.result {
                     GateResult::Pass => GREEN,
                     GateResult::Fail | GateResult::Stale => RED,
-                    GateResult::Running => BLUE,
+                    GateResult::Running | GateResult::Cancelled => BLUE,
                 };
                 spans.push(Span::styled(
                     format!("gate {}", g.result.as_str()),

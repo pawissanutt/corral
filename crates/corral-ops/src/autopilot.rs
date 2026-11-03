@@ -131,6 +131,9 @@ fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<Vec<Change>>> {
 fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
     let head = ctx.store.head(id)?;
     let task = &head;
+    if task.hold.is_some() {
+        return Ok(Step::Wait);
+    }
     // Only runs finished with `corral done`; a Review task with an open run was moved there by hand.
     let Some(run) = task
         .current_run_head()?
@@ -278,7 +281,12 @@ impl Pilot<'_> {
         }
         // A gate that passed (or is running) on this exact commit stands; a failed one is re-run.
         let reuse = match &self.run.gate {
-            Some(g) if !matches!(g.result, GateResult::Fail | GateResult::Stale) => {
+            Some(g)
+                if !matches!(
+                    g.result,
+                    GateResult::Fail | GateResult::Stale | GateResult::Cancelled
+                ) =>
+            {
                 self.gate_stands(g)?
             }
             _ => false,
@@ -371,13 +379,13 @@ impl Pilot<'_> {
             }
             Some(g) => g,
         };
-        if gate.sha != head || !self.gate_stands(&gate)? {
+        if gate.result == GateResult::Cancelled || gate.sha != head || !self.gate_stands(&gate)? {
             return self.start_gate(head);
         }
         Ok(match gate.result {
             GateResult::Pass => GateNow::Pass,
             GateResult::Fail | GateResult::Stale => GateNow::Fail(Box::new(gate)),
-            GateResult::Running => GateNow::Pending,
+            GateResult::Running | GateResult::Cancelled => GateNow::Pending,
         })
     }
 

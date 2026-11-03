@@ -140,10 +140,12 @@ impl Prepared {
     /// the runner's exit status, are the authority.
     pub(super) fn execute(
         &self,
+        ctx: &Ctx,
         identity: &CandidateIdentity,
         commands: &[String],
     ) -> Result<GateRecord> {
         execute(
+            ctx,
             identity,
             commands,
             &self.paths,
@@ -167,19 +169,28 @@ impl Prepared {
 }
 
 fn execute(
+    ctx: &Ctx,
     identity: &CandidateIdentity,
     commands: &[String],
     paths: &GatePaths,
     owner: &Path,
     context: Option<crate::gate_tier::GateContext>,
 ) -> Result<GateRecord> {
-    Command::new("bash")
-        .arg(&paths.script)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .context("running Plan gate")?;
+    let mut child = ctx.store.read_locked_head(&identity.task, |task| {
+        crate::hold::require_clear(&ctx.store, task)?;
+        Command::new("bash")
+            .arg(&paths.script)
+            .env(
+                "CORRAL_GATE_PROCESS_OWNER",
+                crate::prompt::shell_path(&paths.script),
+            )
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("starting Plan gate")
+    })?;
+    child.wait().context("running Plan gate")?;
     let text = std::fs::read_to_string(&paths.result)
         .with_context(|| format!("Plan gate produced no result {}", paths.result.display()))?;
     let parsed: ResultFile = serde_json::from_str(text.trim())

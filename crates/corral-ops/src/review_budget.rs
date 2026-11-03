@@ -12,6 +12,9 @@ use crate::Ctx;
 use corral_core::{TaskMut as _, TaskRef as _};
 
 pub(crate) use corral_core::ReviewWork as Kind;
+mod cancel;
+pub(crate) use cancel::{cancel_gates, cancel_task};
+pub(crate) mod priority;
 
 #[derive(Debug)]
 pub(crate) struct CapacityWait {
@@ -43,6 +46,9 @@ impl std::error::Error for LaunchBusy {}
 impl CapacityWait {
     pub(crate) fn persist(&self, ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
         ctx.store.update_head(id, |task| {
+            if task.hold.is_some() {
+                return Ok(());
+            }
             task.review_wait = Some(self.kind);
             if let Some(run) = task.current_run_mut() {
                 let state = run.autopilot.get_or_insert(AutopilotState {
@@ -176,6 +182,39 @@ fn active_processes(ctx: &Ctx, id: &str, kind: Kind) -> Result<usize> {
         .store
         .heads(&corral_core::backend::HeadQuery::Open { project: None })?
     {
+        active += usize::try_from(
+            head.summary.pending_plan_reviews
+                + head
+                    .last_plan
+                    .as_deref()
+                    .map_or(0, |p| p.facts.pending_children),
+        )?;
+        active += usize::from(
+            head.last_aggregate_attempt
+                .as_deref()
+                .and_then(|a| a.current_review.as_ref())
+                .is_some_and(|r| r.pending()),
+        );
+        active += usize::from(
+            head.last_aggregate_attempt
+                .as_deref()
+                .and_then(|a| a.gate.as_ref())
+                .is_some_and(|g| g.holds_slot()),
+        );
+        if head.review_reservation == Some(Kind::Gate)
+            && head
+                .current_run
+                .as_ref()
+                .and_then(|r| r.gate.as_ref())
+                .is_none_or(|g| !g.holds_slot())
+            && head
+                .last_aggregate_attempt
+                .as_ref()
+                .and_then(|a| a.gate.as_ref())
+                .is_none_or(|g| !g.holds_slot())
+        {
+            active += 1;
+        }
         let Some(run) = head.current_run.as_deref() else {
             continue;
         };
@@ -361,6 +400,7 @@ impl<'a> ReviewLaunch<'a> {
     ) -> Result<Self> {
         crate::session_scope::check_launch(ctx)?;
         let requested = ctx.store.head(id)?;
+        crate::hold::require_clear(&ctx.store, &requested)?;
         corral_core::Park::require_unparked_ref(&requested)?;
         let id = requested.id.as_str();
         let lock = ctx.store.try_lock("review-budget")?.ok_or(LaunchBusy(
@@ -370,8 +410,11 @@ impl<'a> ReviewLaunch<'a> {
         if let Some(pending) = load_pending(ctx)? {
             abandon(ctx, &pending)?;
         }
-        let active = active_processes(ctx, id, kind)?;
+        let mut active = active_processes(ctx, id, kind)?;
         let task = ctx.store.head(id)?;
+        if priority::preempt(ctx, &task, active, force_resources)? {
+            active = active_processes(ctx, id, kind)?;
+        }
         let run = task.current_run.as_deref().context("task has no run")?;
         crate::operating::require_origin(&ctx.store, &task, submission::action_kind(kind), origin)?;
         let mut retained = submission::load_retained(ctx, &task.id, &run.id, kind)?;
@@ -426,6 +469,9 @@ impl<'a> ReviewLaunch<'a> {
             {
                 bail!("review run changed before reservation");
             }
+            if let Some(reason) = priority::ahead(store, current.head())? {
+                return Ok(Some(reason));
+            }
             if !force_resources && let Some(reason) = crate::resources::admission(ctx)? {
                 return Ok(Some(reason));
             }
@@ -434,12 +480,6 @@ impl<'a> ReviewLaunch<'a> {
                 return Ok(Some(format!(
                     "review process limit reached ({active}/{limit})"
                 )));
-            }
-            if kind == Kind::Gate
-                && let Some(reason) =
-                    crate::parked::gate_precedence(store, &current.shell_task()?, active)?
-            {
-                return Ok(Some(reason));
             }
             let counted = match kind {
                 Kind::Gate => store.config.limits.count_gates,
@@ -502,7 +542,9 @@ impl<'a> ReviewLaunch<'a> {
         })?;
         drop(ownership);
         if let Some(reason) = waiting {
-            return Err(CapacityWait { kind, reason }.into());
+            let wait = CapacityWait { kind, reason };
+            wait.persist(ctx, id, ctx.store.now())?;
+            return Err(wait.into());
         }
         Ok(Self {
             ctx,

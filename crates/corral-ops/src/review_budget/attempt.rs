@@ -334,6 +334,16 @@ fn gate_evidence<T: TaskRef + ?Sized>(
     if state != AttemptState::Absent || named == own {
         return Ok((named, state));
     }
+    if receipt.state == ReceiptState::Queued
+        && task.run_head(run)?.and_then(|r| r.gate).is_some_and(|g| {
+            g.result == GateResult::Cancelled
+                && g.identity.as_ref().is_some_and(|i| {
+                    receipt.result["requeued_from"].as_str() == Some(i.attempt.as_str())
+                })
+        })
+    {
+        return Ok((named, state));
+    }
     let fallback = attempt_state(ctx, task, run, Kind::Gate, &own, request)?;
     Ok(if fallback == AttemptState::Absent {
         (named, state)

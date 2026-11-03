@@ -590,7 +590,11 @@ impl ContainerFacts {
                     .iter()
                     .filter(|r| r.verdict == Some(Verdict::Changes)),
             ),
-            pending_children: count(plan.reviews.iter().filter(|r| r.verdict.is_none())),
+            pending_children: count(
+                plan.reviews
+                    .iter()
+                    .filter(|r| r.verdict.is_none() && !r.cancelled),
+            ),
             pane_refs: count_sockets(panes),
             ..ContainerFacts::default()
         }

@@ -167,7 +167,11 @@ impl ReviewLaunch<'_> {
             Kind::Gate => {
                 let paths = crate::gate::gate_paths(ctx, &task.id, &run.id);
                 ensure!(paths.script.is_file(), "prepared gate script missing");
-                format!("bash {} </dev/null", crate::gate_script::qp(&paths.script))
+                format!(
+                    "CORRAL_GATE_PROCESS_OWNER={} bash {} </dev/null",
+                    crate::gate_script::qp(&paths.script),
+                    crate::gate_script::qp(&paths.script)
+                )
             }
             Kind::Reviewer => {
                 let child = run

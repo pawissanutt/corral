@@ -308,6 +308,8 @@ impl PlanRun {
 /// One independent review attempt against a plan and policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanReview {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cancelled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_host: Option<Box<crate::agent::AgentRunState>>,
     /// Fixed at launch; reviews predating inbox adapters retain legacy delivery.

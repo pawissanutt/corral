@@ -317,6 +317,7 @@ macro_rules! head_fields {
 }
 
 head_fields! {
+    hold: Option<crate::TaskHold>,
     park: Option<crate::Park>,
     landed: Option<crate::LandingReceipt>,
     infra_wait: Option<crate::InfraWait>,

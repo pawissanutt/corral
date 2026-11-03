@@ -398,6 +398,7 @@ fn plan_history_and_pending_reviews_round_trip_through_store() {
     assert!(task.plans.is_empty());
     let at = "2026-10-15T00:00:00Z".parse().unwrap();
     let review = PlanReview {
+        cancelled: false,
         agent_host: None,
         delivery: corral_core::inbox::DeliveryMode::Legacy,
         inbox: Default::default(),
@@ -437,6 +438,7 @@ fn plan_history_and_pending_reviews_round_trip_through_store() {
         reviews: vec![
             review.clone(),
             PlanReview {
+                cancelled: false,
                 id: "PR2".into(),
                 verdict: None,
                 notes: None,

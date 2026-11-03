@@ -187,6 +187,7 @@ pub(super) fn gate_text<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHead)
     };
     let sha = short(&g.sha);
     let mut text = match g.result {
+        GateResult::Cancelled => format!("Gate cancelled at {sha}; not a verdict."),
         GateResult::Running => format!("Gate still running at {sha}."),
         GateResult::Pass => format!("Gate passed at {sha} ({})", g.at),
         GateResult::Fail | GateResult::Stale => format!(

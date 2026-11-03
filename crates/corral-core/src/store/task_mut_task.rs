@@ -414,7 +414,7 @@ impl TaskMut for Task {
 
     fn terminalize_pending_plan_reviews(&mut self, plan: &str, reason: &str) -> Result<()> {
         for review in &mut current_plan(self, plan)?.reviews {
-            if review.verdict.is_none() {
+            if review.verdict.is_none() && !review.cancelled {
                 review.verdict = Some(crate::Verdict::Escalate);
                 review.notes = Some(reason.into());
                 review.pending_reply = None;

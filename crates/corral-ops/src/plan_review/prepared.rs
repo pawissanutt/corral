@@ -108,7 +108,7 @@ impl Prepared {
             if plan
                 .current_review
                 .as_ref()
-                .is_some_and(|r| r.id == self.review.id && r.verdict.is_none())
+                .is_some_and(|r| r.id == self.review.id && r.verdict.is_none() && !r.cancelled)
             {
                 task.pop_current_plan_review(&self.plan)?;
             }

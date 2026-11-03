@@ -22,7 +22,11 @@ fn current<'a>(task: &'a mut Task, id: &str) -> Result<&'a mut PlanRecord> {
 
 /// End admission and reject callbacks before a pending attempt is abandoned.
 pub(crate) fn terminalize_pending(plan: &mut PlanRecord, reason: &str) {
-    for review in plan.reviews.iter_mut().filter(|r| r.verdict.is_none()) {
+    for review in plan
+        .reviews
+        .iter_mut()
+        .filter(|r| r.verdict.is_none() && !r.cancelled)
+    {
         review.verdict = Some(Verdict::Escalate);
         review.notes = Some(reason.into());
         review.pending_reply = None;
@@ -175,7 +179,7 @@ fn verdict_report_inner(
         let mut authorized = true;
         let reviewer = match input.attempt {
             Some(attempt) => {
-                let review = selected.reviews.last().filter(|r| r.id == attempt && r.verdict.is_none())
+                let review = selected.reviews.last().filter(|r| r.id == attempt && r.verdict.is_none() && !r.cancelled)
                     .context("stale plan verdict: review attempt was replaced or already has a verdict")?;
                 if review.policy_digest != digest {
                     bail!("stale plan verdict: reviewer policy changed; review again");
@@ -267,6 +271,7 @@ fn verdict_report_inner(
             None => {
                 terminalize_pending(p, "Superseded by an owner decision.");
                 p.reviews.push(PlanReview {
+                cancelled: false,
                 agent_host: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),

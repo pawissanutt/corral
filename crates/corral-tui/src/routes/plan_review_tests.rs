@@ -74,6 +74,7 @@ pub(crate) fn reviewing(state: PlanRunState) -> Fixture {
                     owner_decisions: Vec::new(),
                 },
                 reviews: vec![PlanReview {
+                    cancelled: false,
                     agent_host: None,
                     delivery: corral_core::inbox::DeliveryMode::Legacy,
                     inbox: Default::default(),

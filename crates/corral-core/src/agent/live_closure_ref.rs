@@ -48,10 +48,7 @@ pub fn container_closure_ref<T: TaskRef + ?Sized>(
             else {
                 return closed(ClosureReason::ReviewSuperseded);
             };
-            Ok(child
-                .verdict
-                .is_some()
-                .then_some(ClosureReason::ReviewClosed))
+            Ok((child.verdict.is_some() || child.cancelled).then_some(ClosureReason::ReviewClosed))
         }
         ContainerRef::Worker { task: id, run } | ContainerRef::Reviewer { task: id, run, .. } => {
             if task.id() != id || *task.status() == Status::Dropped {

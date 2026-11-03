@@ -413,7 +413,7 @@ pub(crate) fn plan_review_rows(
             TaskPart::PlanReview,
             review_key,
             current,
-            review.verdict.is_none(),
+            review.verdict.is_none() && !review.cancelled,
             Value::Object(doc),
         ),
         plan_review_tokens(&review.id, &review.reviewer, review.verdict),

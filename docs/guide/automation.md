@@ -488,6 +488,51 @@ launches acquire an exclusive ownership claim. Another process retaining a real
 inventory lease can still defer a launch; that contention must not be bypassed
 or mistaken for a task's consent.
 
+## Task holds and focus
+
+```bash
+corral hold T-042 --reason "let the incident fix finish"
+corral release T-042
+corral focus T-042             # lower priorities in this task's project
+corral focus T-042 --all       # lower priorities across the workspace
+corral focus --clear
+```
+
+The owner and PM can use these commands without new grants or approvals. A hold works
+on every non-terminal status and preserves that status, the worktree and worker session.
+The board shows **Held** and the reason. Held tasks do not dispatch, gate, review, repair
+or land automatically; pending gate/review admissions are suspended. Existing gate and
+review launches are cancelled. Cancellation is recorded as `cancelled`, not a gate failure
+or reviewer verdict, and consumes no repair round. Dedicated gate/reviewer panes close;
+a shared PM pane and the worker are never closed. Stale reviewer callbacks are refused.
+A release resumes normal processing; cancelled gates receive a fresh attempt. A native
+worker's pending gate request and completion wake are retained, so no model turn is needed.
+
+Focus is one workspace-wide selection. It holds only strictly lower priorities (P0 is
+highest); equal or higher priorities continue. Focus also applies to newly filed tasks
+on sync, and is cleared automatically on sync after the selected task lands or is dropped.
+Replacing or clearing focus releases only focus-owned holds: earlier manual holds survive.
+A manual hold on a focus-held task takes ownership of that hold. Each changed hold or
+release has one audit event. While focus remains active, sync reasserts its lower-priority
+holds; clear focus to release those tasks permanently.
+
+Gate and reviewer admission uses priority, then task creation age, then task ID, including
+explicit and native queued requests. A lower-priority caller cannot steal the launch lease
+from an already waiting higher-priority task. Existing running work is not interrupted by
+default. To let urgent waiting work cancel the lowest-priority running gate, opt in:
+
+```toml
+[limits]
+preempt = "P0"
+```
+
+The threshold accepts P0–P3; P0 permits only P0 claimants. Preemption affects only a
+strictly lower-priority gate, never a worker or an independent review. The cancelled gate
+is automatically requeued and never counted as a failure. Capacity and machine-resource
+checks still apply after cancellation. `--force` bypasses resource pressure, not priority.
+Workspace `mode pause` remains different: it pauses every new automatic action but does
+not cancel running work.
+
 ## Dispatch queue
 
 Ready is the dispatch queue: Backlog is filed work; Ready is authorized work waiting for

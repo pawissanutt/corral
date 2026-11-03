@@ -364,7 +364,8 @@ fn closure(task: &Task, container: &ContainerRef, verdict_closes: bool) -> Optio
             let Some(child) = parent.reviews.last().filter(|r| r.id == *review) else {
                 return Some(ClosureReason::ReviewSuperseded);
             };
-            (verdict_closes && child.verdict.is_some()).then_some(ClosureReason::ReviewClosed)
+            (child.cancelled || verdict_closes && child.verdict.is_some())
+                .then_some(ClosureReason::ReviewClosed)
         }
         ContainerRef::Worker { task: id, run } => {
             (task.id != *id || worker_closed(task, run)).then_some(ClosureReason::RunEnded)
@@ -578,7 +579,7 @@ fn planning_live_ref<T: crate::TaskRef + ?Sized>(
                     .is_some_and(|turn| turn.started.is_some() && turn.ended.is_none()),
                 _ => false,
             };
-            if child.verdict.is_some() && !settling {
+            if child.cancelled || child.verdict.is_some() && !settling {
                 return refused(ClosureReason::ReviewClosed);
             }
             child.agent_host.clone()

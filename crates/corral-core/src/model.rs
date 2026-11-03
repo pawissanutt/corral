@@ -197,6 +197,8 @@ pub enum RunOutcome {
     Abandoned,
     Superseded,
     Discarded,
+    /// A gate/review was intentionally stopped; never a failure or verdict.
+    Cancelled,
     /// A reviewer session stopped on a provider failure that outlasted its retries.
     Interrupted,
     /// The agent returned to its shell before reporting (its launch failed or it exited); the
@@ -220,6 +222,8 @@ pub enum GateResult {
     Running,
     Pass,
     Fail,
+    /// Intentionally stopped; releases capacity without a failure verdict.
+    Cancelled,
     /// Commands passed, but verification inputs changed. Never authorizes completion.
     Stale,
 }
@@ -231,6 +235,7 @@ impl GateResult {
             GateResult::Pass => "pass",
             GateResult::Fail => "fail",
             GateResult::Stale => "stale",
+            GateResult::Cancelled => "cancelled",
         }
     }
 }
@@ -299,6 +304,9 @@ impl Verdict {
 /// The latest review of a run, tied to the commit it reviewed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewRecord {
+    /// An intentional stop, without a reviewer verdict or failure.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cancelled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<crate::CandidateIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -744,6 +752,8 @@ pub enum CoworkReview {
 /// A task file: `.corral/tasks/<id>-<slug>.md` = YAML frontmatter (this struct minus `body`/`path`) + markdown body.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<crate::TaskHold>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub park: Option<crate::Park>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

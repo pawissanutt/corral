@@ -42,6 +42,7 @@ mod gate_script;
 mod gate_tier;
 mod harness;
 mod history;
+pub mod hold;
 mod hook_command;
 mod hook_process;
 mod hooks;

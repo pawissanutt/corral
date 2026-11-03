@@ -218,6 +218,7 @@ fn sync_scoped(
         return Ok(Vec::new());
     }
     ctx.store.check_runtime()?;
+    crate::hold::reconcile(ctx)?;
     crate::desktop_notifications::reconcile(ctx)?;
     crate::digest::scheduled_digest_at(ctx, now)?;
     let mut changes = crate::queue::migrate_backlog(ctx)?;
@@ -386,10 +387,12 @@ fn sync_scoped(
     drop(inventory);
     // Post-land hooks run commands that may call corral: never under storage or the lease (T-509).
     crate::hooks::reconcile_post_land(ctx)?;
+    crate::hold::resume_gates(ctx)?;
     crate::agent::gate_queue::advance_heads(ctx, &ctx.store.unfinished_native_heads()?)?;
     crate::plan_pilot::advance_all(ctx, now)?;
     changes.extend(crate::availability::advance_all(ctx, now)?);
     changes.extend(crate::autopilot::advance_all(ctx, now)?);
+    crate::hold::reconcile(ctx)?;
     crate::movement::reconcile(ctx, now, true)?;
     changes.extend(crate::dashboard::advance(ctx, now)?);
     changes.extend(crate::parked::reacquire_woken(ctx, &open_heads(ctx)?)?);

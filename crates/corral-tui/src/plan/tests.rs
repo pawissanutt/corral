@@ -115,6 +115,7 @@ pub(crate) fn reviewing_text(fx: &Fixture, id: &str, text: &str) {
             t.status = Status::Review;
             t.plan_runs[0].state = PlanRunState::Reviewing;
             t.plans[0].reviews = vec![PlanReview {
+                cancelled: false,
                 agent_host: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),

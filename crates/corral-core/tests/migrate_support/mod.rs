@@ -315,7 +315,7 @@ pub fn command_log_valid(
     let marker: &[u8] = match result {
         GateResult::Pass => b"corral gate: pass",
         GateResult::Fail => b"corral gate: fail",
-        GateResult::Running | GateResult::Stale => return false,
+        GateResult::Running | GateResult::Stale | GateResult::Cancelled => return false,
     };
     if receipts.is_empty()
         || receipts.len() > commands.len()

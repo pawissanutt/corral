@@ -39,6 +39,7 @@ pub(crate) fn require<T: TaskRef + ?Sized>(
     task: &T,
     kind: OperatingActionKind,
 ) -> Result<()> {
+    crate::hold::require_clear(store, task)?;
     if !cowork::require(store, task, kind)? {
         require_grant(store, task, kind)?;
     }
@@ -268,6 +269,7 @@ pub(crate) fn submit<R>(
         authorization,
         &authorization.action,
         |store, task| {
+            crate::hold::require_clear(store, task)?;
             if is_automatic(authorization) || cowork::carried(authorization) {
                 if cowork::carried(authorization) {
                     ensure!(
@@ -297,6 +299,7 @@ pub(crate) fn submit_head<R>(
         authorization,
         &authorization.action,
         |store, head| {
+            crate::hold::require_clear(store, &*head)?;
             if is_automatic(authorization) || cowork::carried(authorization) {
                 if cowork::carried(authorization) {
                     ensure!(
@@ -347,6 +350,7 @@ pub(crate) fn require_origin<T: TaskRef + ?Sized>(
     kind: OperatingActionKind,
     origin: Origin,
 ) -> Result<()> {
+    crate::hold::require_clear(store, task)?;
     match origin {
         Origin::Owner => Ok(()),
         Origin::Automatic => require(store, task, kind),
@@ -391,7 +395,8 @@ pub(crate) fn refused(error: &anyhow::Error) -> bool {
 /// A refusal that only reflects momentary capacity or a state that moved under the caller; the
 /// prepared action stays valid and a later attempt can submit it.
 pub(crate) fn transient_refusal(error: &anyhow::Error) -> bool {
-    const TRANSIENT: [&str; 3] = [
+    const TRANSIENT: [&str; 4] = [
+        "Held:",
         "waiting: machine busy",
         "waiting for a slot",
         "or dispatch configuration changed; retry with the current state",

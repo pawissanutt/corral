@@ -18,12 +18,14 @@ const REPAIR_GUIDANCE: &str = "Rerun the gate's repair commands above after each
 /// Report authority transitions once per run, including concurrent sync callers.
 /// The open Review tasks, as heads: autopilot never reads a terminal task.
 pub(super) fn review_tasks(ctx: &Ctx) -> Result<Vec<TaskHead>> {
-    Ok(ctx
+    let mut tasks: Vec<_> = ctx
         .store
         .heads(&corral_core::backend::HeadQuery::Open { project: None })?
         .into_iter()
-        .filter(|head| head.status == corral_core::Status::Review)
-        .collect())
+        .filter(|head| head.status == corral_core::Status::Review && head.hold.is_none())
+        .collect();
+    tasks.sort_by(|a, b| (&a.priority, a.created, &a.id).cmp(&(&b.priority, b.created, &b.id)));
+    Ok(tasks)
 }
 
 /// Whether the integration request `digest` was already sent for `key`'s run.

@@ -182,6 +182,7 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
         .try_lock(&format!("plan-verify-{id}"))?
         .context("another Plan verification is in progress")?;
     let tracker = ctx.store.get(id)?;
+    crate::hold::require_clear(&ctx.store, &tracker)?;
     ensure!(
         !matches!(tracker.status, Status::Done | Status::Dropped),
         "{} is {}",
@@ -235,6 +236,10 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
         reviews: Vec::new(),
         acceptance: None,
     };
+    let budget = attempt
+        .code
+        .then(|| crate::review_budget::priority::auxiliary(ctx, id, corral_core::ReviewWork::Gate))
+        .transpose()?;
     let contract = crate::gate_tier::aggregate(&ctx.store.config, &tracker, &policy);
     let prepared = attempt
         .code
@@ -253,6 +258,8 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
                 && task.aggregate_acceptance().is_none(),
             "aggregate attempts changed during verification"
         );
+        crate::hold::require_clear(&ctx.store, task)?;
+        task.review_wait = None;
         task.aggregate_attempts.push(attempt.clone());
         ctx.store.log_event(
             Some(id),
@@ -262,11 +269,12 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
         // The Running attempt commits with its started gate row.
         prepared.as_ref().map_or(Ok(()), |gate| gate.stage_start(&ctx.store))
     })?;
+    drop(budget);
     crate::gate::evidence::failpoint("plan_verify_running");
     let Some(prepared) = prepared else {
         return Ok(attempt);
     };
-    let (mut record, failure) = match prepared.execute(&attempt.identity, &contract.commands) {
+    let (mut record, failure) = match prepared.execute(ctx, &attempt.identity, &contract.commands) {
         Ok(record) => (record, None),
         Err(error) => {
             let running = attempt.gate.clone().context("code attempt has no gate")?;
@@ -302,6 +310,10 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
             .iter_mut()
             .find(|stored| stored.id == attempt.id && stored.identity == attempt.identity)
             .context("aggregate attempt changed while its gate ran")?;
+        if let Some(cancelled) = stored.gate.as_ref().filter(|g| g.result == GateResult::Cancelled) {
+            record = cancelled.clone();
+            return Ok(());
+        }
         stored.gate = Some(record.clone());
         ctx.store.log_event(
             Some(id),
@@ -313,7 +325,9 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
             staged.stage(&ctx.store, (record.result, record.failed_cmd.as_deref()))
         })
     })?;
-    if let Some(error) = failure {
+    if record.result != GateResult::Cancelled
+        && let Some(error) = failure
+    {
         return Err(error);
     }
     attempt = saved
@@ -337,6 +351,48 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
         )?;
     }
     Ok(attempt)
+}
+
+/// Stop a Plan gate without inventing a failed command or a verification verdict.
+pub(crate) fn cancel_gate(ctx: &Ctx, id: &str, reason: &str) -> Result<bool> {
+    let head = ctx.store.head(id)?;
+    let Some(attempt) = head.last_aggregate_attempt.as_deref() else {
+        return Ok(false);
+    };
+    let Some(record) = attempt
+        .gate
+        .as_ref()
+        .filter(|g| g.result == GateResult::Running)
+    else {
+        return Ok(false);
+    };
+    crate::gate::stop_descendants(&gate::paths(ctx, id, &attempt.id).script)?;
+    let staged = gate::put_lost(ctx, id, gate::AGGREGATE_SCOPE, &attempt.id)?;
+    let changed = ctx.store.try_update_head(id, |task| {
+        let Some(current) = task
+            .last_aggregate_attempt_mut()
+            .filter(|a| a.id == attempt.id && a.gate.as_ref() == Some(record))
+        else {
+            return Ok(false);
+        };
+        let gate = current
+            .gate
+            .as_mut()
+            .context("aggregate gate disappeared")?;
+        gate.result = GateResult::Cancelled;
+        gate.failed_cmd = None;
+        gate.at = ctx.store.now();
+        if let Some(staged) = &staged {
+            staged.stage(&ctx.store, (GateResult::Cancelled, None))?;
+        }
+        ctx.store.log_event(
+            Some(id),
+            "gate_cancelled",
+            json!({"target":"aggregate","attempt":attempt.id,"result":"cancelled","reason":reason}),
+        )?;
+        Ok(true)
+    })?;
+    Ok(changed.is_some())
 }
 
 /// Ends an aggregate attempt whose gate is still Running, which the verification lock proves

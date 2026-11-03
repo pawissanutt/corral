@@ -195,6 +195,7 @@ fn receipt<T: TaskRef + ?Sized>(
             Some(GateResult::Pass) => "pass",
             Some(GateResult::Fail) => "fail",
             Some(GateResult::Stale) => "stale",
+            Some(GateResult::Cancelled) => "cancelled",
         },
         fresh,
         attempt: gate.and_then(|g| g.identity.as_ref().map(|i| i.attempt.clone())),

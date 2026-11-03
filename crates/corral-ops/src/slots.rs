@@ -85,7 +85,7 @@ impl SlotUsage {
                 .plans
                 .iter()
                 .flat_map(|p| &p.reviews)
-                .filter(|r| r.verdict.is_none())
+                .filter(|r| r.verdict.is_none() && !r.cancelled)
                 .count();
             if let Some(work) = task.review_reservation {
                 let recorded = task.current_run().is_some_and(|r| match work {
@@ -185,7 +185,7 @@ pub(crate) fn finishing_first(store: &Store, candidate: &str) -> Result<Option<S
     }
     for head in heads.iter() {
         let task = head.to_shell_task()?;
-        if task.status != Status::Review || task.id == candidate {
+        if task.hold.is_some() || task.status != Status::Review || task.id == candidate {
             continue;
         }
         if crate::operating::require(store, &task, corral_core::OperatingActionKind::Gate).is_err()
@@ -230,7 +230,7 @@ pub(crate) fn finishing_first(store: &Store, candidate: &str) -> Result<Option<S
                     }
                 }
                 Some(AutoStage::Gating) => match run.gate.as_ref().map(|g| g.result) {
-                    None => Some(ReviewWork::Gate),
+                    None | Some(GateResult::Cancelled) => Some(ReviewWork::Gate),
                     Some(GateResult::Pass)
                         if policy.reviewer != corral_core::Reviewer::None
                             && run.review.is_none() =>

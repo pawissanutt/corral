@@ -171,6 +171,7 @@ mod assessment_tests {
                     crate::verification::evidence_digest(&corral_core::RunHead::of(run)?)?
                 };
                 let review = corral_core::ReviewRecord {
+                    cancelled: false,
                     route: None,
                     identity: Some(candidate.clone()),
                     evidence_digest: Some(digest),

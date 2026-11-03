@@ -290,6 +290,7 @@ fn acceptance_tab_shows_policy_sources_results_records_and_history() {
                     tier: None,
                 });
                 r.review = Some(ReviewRecord {
+                    cancelled: false,
                     route: None,
                     identity: None,
                     evidence_digest: None,
