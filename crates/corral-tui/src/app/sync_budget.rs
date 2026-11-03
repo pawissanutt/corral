@@ -1,8 +1,8 @@
 //! The hot-sync work budget (plan T-253 sections 4 and 5), run by `scripts/work-budget.sh`.
 //!
 //! One board sync step (`sync_step::run`: the sync pass, then the usage refresh) is measured
-//! on the base, grown (2 vs 5 terminal tasks/history rows per active task) and nested
-//! (1 vs 3 nested rows inside every current container) stores, whose open tasks own live panes
+//! on the base, grown (2 vs 8 terminal tasks/history rows per active task) and nested
+//! (1 vs 4 nested rows inside every current container) stores, whose open tasks own live panes
 //! on the fake engine. Warm runs measure a settled tick and then a tick that contains one real
 //! current-run mutation (sync writing back a stale `agent_state`); cold runs measure each of
 //! those steps in a fresh process on the settled store. Between the base and each larger variant every

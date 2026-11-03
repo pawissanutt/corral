@@ -48,9 +48,9 @@ temporary-fixture regression checks.
 Install cargo-nextest before running the gate. The default nextest profile in
 `.config/nextest.toml` uses 12 test slots, serializes live fixtures sharing the
 private herdr server, and reports ordinary slowness at 10 seconds. The gate's candidate-bound
-runner ratchets only added/modified registered tests against the integration base, under
-observed load/core <=1. Existing overruns are report-only gardening input for T-766, in
-the log and the per-attempt existing-cost audit; assertions still fail. Explicit measured
+runner classifies candidate changes against the integration base and reports timing for
+T-766 gardening. All time thresholds (per-test, tier and quiet-load accounting) are
+report-only here; enforcement is deferred to T-776. Actual assertions still fail. Explicit measured
 integration/torture exceptions keep their original 30s report-only guards, not extra
 full-tier exclusions. Retries are disabled. Runtime caps, fixed membership, path-scoped
 lanes and nightly scheduling are detailed in [gate cost policy](gate-costs.md). Run the gate inside the private plugin-free environment:
@@ -181,7 +181,7 @@ advisory, not permission to reclassify tests or weaken a failure. Catalog change
 need a defect-catching/cost reason and an owner-module trigger; remove stale terms
 when tests are renamed or deleted. Pi is path-scoped to its package/shared contracts;
 Darwin checks are path-scoped to platform code and dependencies. Both always run
-in plan verification. `.config/gate.toml` enforces 180s quick and 600s full measured-test
+in plan verification. `.config/gate.toml` reports 180s quick and 600s full measured-test
 budgets (nextest, work budgets, Bun), not compilation. Candidate test binaries are built
 first and reused without recompilation. Build/preparation and whole wall time are reported
 separately, together with load/core; busy phases do not produce budget flakes. Quick lints

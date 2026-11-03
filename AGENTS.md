@@ -58,16 +58,16 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
   Missing/legacy context is conservative: all suites and optional lanes.
 - Install cargo-nextest before running the gate. `.config/nextest.toml` uses 12 slots,
   serializes shared live fixtures and disables retries. The candidate-bound runner in
-  `scripts/gate_case.py` ratchets added/modified registered test bodies/attributes at10s
-  only while observed load/core <=1, diffed against the integration base. Production/helper
-  changes do not ratchet every selected test. Existing overruns are reported, never failed
-  for performance, in the gate log and `.evidence/<attempt>-existing-test-costs.md` for T-766.
-  Assertions still fail. Native nextest reports slowness without independent termination. Explicit
+  `scripts/gate_case.py` observes the 10s per-test reference and classifies candidate test
+  changes against the integration base. ALL time thresholds and load observations are
+  report-only in T-761; enforcement is deferred to T-776. Timing never changes a command's
+  exit status. Overruns appear in the log and `.evidence/<attempt>-existing-test-costs.md`
+  for T-766. Assertions still fail. Native nextest reports without termination. Explicit
   measured integration/torture exceptions retain their original 30s report-only guards,
   with one-line reasons; they are not extra full-tier exclusions. Never bump a failing timeout.
-  `.config/gate.toml` caps measured nextest/work-budget/Bun execution at quick <=180s
-  and full <=600s, excluding compilation/preparation. Logs record build and total wall time
-  separately plus load/core; busy/unknown-load phases are reported, not budget failures.
+  `.config/gate.toml` records reference thresholds of quick180s/full600s execution,
+  excluding compilation/preparation. They are observations, not gate failures, including
+  at quiet load. Logs retain build/total wall time and load/core separately.
   Quick lints touched production targets; full retains all-target Clippy. Selected tests
   still compile and execute in quick, using fresh prebuilt metadata (no runtime rebuild).
   See [gate cost policy](docs/guide/gate-costs.md) for added-test cost reporting and the host

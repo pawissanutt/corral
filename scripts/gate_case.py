@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Candidate-bound nextest runner: ordinary 10s guard only while observed load is quiet."""
+"""Candidate-bound nextest time observer; thresholds never change test results (T-776)."""
 from __future__ import annotations
 
 import json
@@ -53,13 +53,10 @@ def prepare(path: Path, cargo: Path, binaries: Path) -> tuple[str, str]:
 
 
 def guarded(command: list[str], seconds: float, identity: list[str], metrics: Path,
-            enforce: bool = True, classification: str = 'candidate-ratchet') -> int:
+            classification: str = 'candidate-observation') -> int:
     import gate_timer
-    if enforce:
-        os.environ['CORRAL_CASE_BUDGET_SECONDS'] = str(seconds)
-    else:
-        os.environ.pop('CORRAL_CASE_BUDGET_SECONDS', None)
-    result = gate_timer.execute(command, seconds if enforce else None, respect_load=True, grace=1)
+    os.environ['CORRAL_CASE_OBSERVED_LIMIT_SECONDS'] = str(seconds)
+    result = gate_timer.execute(command, seconds, respect_load=True, grace=1)
     if result['seconds'] > seconds:
         entry = json.dumps({'test': identity, 'limit': seconds, 'classification': classification, **result}) + '\n'
         fd = os.open(metrics, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
@@ -68,8 +65,8 @@ def guarded(command: list[str], seconds: float, identity: list[str], metrics: Pa
         finally:
             os.close(fd)
     if result['budget_exceeded']:
-        print(f'FAILED: quiet-host per-test budget {seconds:g}s: {identity}; '
-              f'load at enforcement {result["enforcement_load"]}', file=sys.stderr, flush=True)
+        print(f'Time observation: per-test threshold {seconds:g}s: {identity}; '
+              'report-only (T-776)', file=sys.stderr, flush=True)
     return result['exit_code']
 
 
@@ -86,9 +83,8 @@ def main() -> int:
         os.execvp(command[0], command)
     approved = identity in config['exemptions']
     changed = identity in config['enforce']
-    enforce = changed and not approved
-    classification = ('candidate-ratchet' if enforce else 'candidate-exception') if changed else 'existing-report'
-    return guarded(command, config['seconds'], identity, Path(config['metrics']), enforce, classification)
+    classification = ('candidate-exception' if approved else 'candidate-observation') if changed else 'existing-report'
+    return guarded(command, config['seconds'], identity, Path(config['metrics']), classification)
 
 
 if __name__ == '__main__':

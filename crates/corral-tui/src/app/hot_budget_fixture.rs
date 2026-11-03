@@ -39,15 +39,15 @@ pub(crate) const BASE: Shape = Shape {
 };
 pub(crate) const GROWN: Shape = Shape {
     name: "grown",
-    terminal: 5,
-    history: 5,
+    terminal: 8,
+    history: 8,
     nested: 1,
 };
 pub(crate) const NESTED: Shape = Shape {
     name: "nested",
     terminal: 2,
     history: 2,
-    nested: 3,
+    nested: 4,
 };
 
 pub(crate) fn shape(name: &str) -> Shape {
