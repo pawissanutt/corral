@@ -30,13 +30,13 @@ def load_snapshot() -> dict:
         return {'cores': cores, 'load_per_core': None, 'quiet': False}
 
 
-def stop(child: subprocess.Popen) -> None:
+def stop(child: subprocess.Popen, grace: float = 10) -> None:
     try:
         os.killpg(child.pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
     try:
-        child.wait(timeout=10)
+        child.wait(timeout=grace)
     except subprocess.TimeoutExpired:
         pass
     try:
@@ -47,22 +47,30 @@ def stop(child: subprocess.Popen) -> None:
 
 
 def execute(command: list[str], seconds: float | None, respect_load: bool = False,
-            output: Path | None = None) -> dict:
+            output: Path | None = None, grace: float = 10) -> dict:
     started = time.monotonic()
     before = load_snapshot() if respect_load else {'quiet': True}
     busy = not before['quiet']
     stream = output.open('w') if output else None
-    child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stream, start_new_session=True)
+    interrupted = False
+    def terminate(_signum, _frame):
+        nonlocal interrupted
+        interrupted = True
+    previous = signal.signal(signal.SIGTERM, terminate)
+    child = None
     code = 0
     budget_exceeded = False
     enforcement_load = None
     observed = before
     try:
+        child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stream, start_new_session=True)
         while True:
+            if interrupted:
+                raise KeyboardInterrupt
             elapsed = time.monotonic() - started
             remaining = seconds - elapsed if seconds is not None and not busy else None
             try:
-                code = child.wait(timeout=max(0.001, min(5, remaining)) if remaining is not None else 5)
+                code = child.wait(timeout=max(0.001, min(1, remaining)) if remaining is not None else 1)
                 break
             except subprocess.TimeoutExpired:
                 # Bounded process waits, never load generation. Once load is busy/unknown,
@@ -72,14 +80,16 @@ def execute(command: list[str], seconds: float | None, respect_load: bool = Fals
                     busy |= not observed['quiet']
                 if seconds is not None and not busy and time.monotonic() - started >= seconds:
                     enforcement_load = observed
-                    stop(child)
+                    stop(child, grace)
                     budget_exceeded = True
                     code = 124
                     break
     except KeyboardInterrupt:
-        stop(child)
+        if child is not None:
+            stop(child, grace)
         code = 130
     finally:
+        signal.signal(signal.SIGTERM, previous)
         if stream:
             stream.close()
     elapsed = time.monotonic() - started
@@ -143,6 +153,10 @@ def phase(path: Path, label: str, command: list[str], compile_only: bool = False
 
 def report(path: Path) -> None:
     state = json.loads(path.read_text())
+    metrics = path.with_name('case-metrics.jsonl')
+    if metrics.is_file():
+        for line in metrics.read_text().splitlines():
+            print('Per-test budget observation: ' + line, flush=True)
     print(f'Test budget summary: {state["tier"]} measured={state["measured"]:.3f}s '
           f'budgeted-quiet={state["budgeted"]:.3f}s build-preparation={state["compile"]:.3f}s '
           f'limit={state["limit"]}s; busy/unknown phases are reported, not budget failures', flush=True)

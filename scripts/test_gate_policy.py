@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 import gate_lanes
 import gate_timer
+import gate_case
 import test_cost
 import gate_pi
 import tomllib
@@ -104,21 +105,40 @@ class PolicyTests(unittest.TestCase):
 
     def test_nextest_cap_and_report_only_exception_do_not_inherit_termination(self):
         config = tomllib.loads(Path(".config/nextest.toml").read_text())
-        self.assertEqual(config["profile"]["default"]["slow-timeout"],
-                         {"period": "10s", "terminate-after": 1})
-        exception = config["profile"]["default"]["overrides"][-1]["slow-timeout"]
+        self.assertEqual(config["profile"]["default"]["slow-timeout"], "10s")
         self.write("Cargo.toml", '[package]\nname="cap-fixture"\nversion="0.0.0"\nedition="2024"\n[workspace]\n[lib]\npath="src.rs"\n')
         self.write("src.rs", "#[test] fn ordinary() { std::thread::sleep(std::time::Duration::from_millis(200)); }\n"
                    "#[test] fn exception() { std::thread::sleep(std::time::Duration::from_millis(200)); }\n")
-        self.write("cap.toml", '[profile.default]\nslow-timeout={period="50ms", terminate-after=1}\n'
-                   '[[profile.default.overrides]]\nfilter="test(=exception)"\nslow-timeout=' + json.dumps(exception) + "\n")
-        result = subprocess.run(["cargo", "nextest", "run", "--lib", "--config-file", "cap.toml"],
-                                stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                                env={**os.environ, "RUSTC_WRAPPER": ""}, check=False, timeout=60)
-        output = result.stdout + result.stderr
-        self.assertEqual(result.returncode, 100, output)
-        self.assertRegex(output, r"TIMEOUT\s+\[[^]]+\].*ordinary")
-        self.assertRegex(output, r"PASS\s+\[[^]]+\].*exception")
+        self.write(".config/nextest.toml", '[profile.default]\nslow-timeout="50ms"\n'
+                   '[[profile.default.overrides]]\nfilter="test(=exception)"\nslow-timeout="30s"\n')
+        self.write(".config/gate.toml", "[tests]\nordinary_seconds=0.05\n")
+        env = {**os.environ, "RUSTC_WRAPPER": ""}
+        def cargo(*args):
+            return subprocess.run(["cargo", *args], stdin=subprocess.DEVNULL, capture_output=True,
+                                  text=True, env=env, check=False, timeout=60)
+        for file, args in (("cargo.json", ("metadata", "--format-version", "1")),
+                           ("binaries.json", ("nextest", "list", "--lib", "--list-type", "binaries-only", "--message-format", "json"))):
+            result = cargo(*args)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.write(file, result.stdout)
+        key, _ = gate_case.prepare(Path("guard.json"), Path("cargo.json"), Path("binaries.json"))
+        for quiet in (True, False):
+            # Mock load in a disposable entrypoint, never generate host load or add a
+            # production test hook. Both cases use the actual runner and actual nextest.
+            self.write("runner.py", f"import sys\nsys.path.insert(0, {str(ROOT / 'scripts')!r})\n"
+                       "import gate_case, gate_timer\n"
+                       f"gate_timer.load_snapshot=lambda: {{'quiet': {quiet!r}, 'load_per_core': {0.5 if quiet else 2.0}}}\n"
+                       "raise SystemExit(gate_case.main())\n")
+            env[key] = f"{sys.executable} {Path('runner.py').resolve()} {Path('guard.json').resolve()}"
+            result = cargo("nextest", "run", "--cargo-metadata", "cargo.json", "--binaries-metadata", "binaries.json")
+            output = result.stdout + result.stderr
+            self.assertEqual(result.returncode, 100 if quiet else 0, output)
+            self.assertRegex(output, r"PASS\s+\[[^]]+\].*exception")
+            if quiet:
+                self.assertIn("quiet-host per-test budget", output)
+                self.assertRegex(output, r"FAIL\s+\[[^]]+\].*ordinary")
+            else:
+                self.assertIn("2 passed", output)
 
     def test_prebuilt_nextest_runs_without_compiler_or_source(self):
         self.write("Cargo.toml", '[package]\nname="reuse-fixture"\nversion="0.0.0"\nedition="2024"\n[workspace]\n[lib]\npath="src.rs"\n')
@@ -165,6 +185,8 @@ class PolicyTests(unittest.TestCase):
             data = json.loads(state.read_text())
             self.assertEqual(data["budgeted"], before)
             self.assertTrue(data["phases"][-1]["busy_exempt"])
+            self.assertEqual(gate_case.guarded([sys.executable, "-c", "raise SystemExit(7)"],
+                             .05, ["fixture", "assertion-failure"], Path("case-metrics.jsonl")), 7)
         with patch.object(gate_timer.os, "getloadavg", side_effect=OSError("unavailable")):
             self.assertFalse(gate_timer.load_snapshot()["quiet"])
 

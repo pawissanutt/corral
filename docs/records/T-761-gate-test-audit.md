@@ -40,7 +40,20 @@ load/core **0.908 → 0.713**, so the cap applied. The failing existing managed-
 check caught an unstamped packaged worker skill after the guidance edit. Its content hash
 is now regenerated from the canonical source; the same unchanged test passes (0.062s
 nextest wall). No assertion, timeout or skill-equality rule was weakened. A fresh quick
-receipt is pending. Original full-wall <600s and the full test budget remain **unmeasured**. Owner Q1 explicitly
+receipt is pending. Fourth attempt `ag-c0b9778e0195eadd` exposed an incomplete load-aware
+policy: **160 passed, 1 native nextest timeout** at 10.003s, with load/core **2.333 → 1.781**.
+The unchanged fence regression had passed in 3.558s in attempt three. Aggregate runtime
+18.895s was correctly busy-exempt, but the new per-test native guard was not.
+
+Fixed the guard mechanism, not the test or its 10s budget: a candidate-bound runner now
+enforces that same limit only under observed quiet load; native nextest reports slowness
+without an independent busy-host kill. Existing exceptions are resolved by nextest itself,
+not a duplicate parser. Real tiny fixtures prove quiet ordinary termination, exception
+completion, busy-host completion and nonzero assertion propagation. All 40 action cases
+and all three ignored work matrices retain their exception status. The unchanged fence
+regression passes in a private fixture server (3.816s nextest wall), still an ordinary
+10s-quiet test, not a new exception. Original full-wall <600s and the full test budget
+remain **unmeasured**. Owner Q1 explicitly
 approved using the landing full gate as the after measurement; PM extracts/posts its table.
 Estimates above are planning ranges, not a promise that their sum is under 600s. The old
 per-test times were measured under substantially more simultaneous history-fixture work;
@@ -186,14 +199,14 @@ changes, shared store/Git/herdr changes, and missing/old gate contexts.
   process-global; the production work-budget recipe already uses separate processes. No
   assertion was relaxed. The first shrink also exposed an unsaturated Done viewport, fixed
   by keeping the configured working set constant, not changing counter expectations.
-- `python3 scripts/test_gate.py`: 14/14 pass in 44.144s (temporary fake-command fixtures, no full gate),
+- `python3 scripts/test_gate.py`: 14/14 pass in 39.117s (temporary fake-command fixtures, no full gate),
   including full-branch Pi/Darwin scope, plan verification, linked-worktree target
   isolation/override and checking the binary from that same target directory.
-- `python3 scripts/test_gate_select.py`: 7/7 pass in 1.435s. The new private-fixture regression
+- `python3 scripts/test_gate_select.py`: 7/7 pass in 1.423s. The new private-fixture regression
   fails before the fix (17 tests selected instead of its one enclosing case) and passes after.
 - Targeted plan verify and checkpoint context tests each pass (4.859s / 4.195s),
   asserting that both aggregate verification paths preserve all optional lanes.
-- `python3 scripts/test_gate_policy.py`: 8/8 pass, 2.857s (path/deletion/plan/unknown-owner
+- `python3 scripts/test_gate_policy.py`: 8/8 pass, 3.820s (path/deletion/plan/unknown-owner
   selection, strict runtime timeout, >30s added-cost justification, transitive Pi consumer
   selection, real nextest ordinary timeout + report-only exception, source-free prebuilt
   execution, and deterministic compile-excluded/busy-host budget accounting).
@@ -207,7 +220,7 @@ changes, shared store/Git/herdr changes, and missing/old gate contexts.
 
 Long-term quiet-host test-execution budgets (quick 180s/full 600s), separate build/wall/load
 reporting, added Rust/Bun/Python registration accounting and the
-reviewer rubric are implemented. Ordinary nextest tests are capped at 10s; 149 measured
+reviewer rubric are implemented. Ordinary nextest tests have load-aware 10s runner guards; 149 measured
 pre-existing >10s integration cases (some also in the torture catalog), plus the rescheduled
 action cases, explicitly retain their original report-only guards with per-case reasons.
 Owner approved preserving these useful journey exceptions in Q2 instead of dropping them.

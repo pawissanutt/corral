@@ -47,9 +47,10 @@ Run `python3 scripts/test_gate.py` and `python3 scripts/test_gate_select.py` for
 temporary-fixture regression checks.
 Install cargo-nextest before running the gate. The default nextest profile in
 `.config/nextest.toml` uses 12 test slots, serializes live fixtures sharing the
-private herdr server, and caps ordinary tests at 10 seconds. Explicit measured
+private herdr server, and reports ordinary slowness at 10 seconds. The gate's candidate-bound
+runner terminates over-budget ordinary tests only while observed load/core <=1. Explicit measured
 integration/torture exceptions keep their original 30s report-only guards, not extra
-full-tier exclusions. Retries are disabled. Whole-gate caps, fixed membership, path-scoped
+full-tier exclusions. Retries are disabled. Runtime caps, fixed membership, path-scoped
 lanes and nightly scheduling are detailed in [gate cost policy](gate-costs.md). Run the gate inside the private plugin-free environment:
 
 ```bash

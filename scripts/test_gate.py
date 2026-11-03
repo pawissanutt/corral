@@ -37,6 +37,8 @@ def semantic_args(args: list[str]) -> list[str]:
         if flag in args:
             at = args.index(flag)
             del args[at:at + 2]
+    if args[:2] == ["nextest", "list"] and "--ignore-default-filter" in args:
+        args[args.index("-E") + 1] = "<exception selection>"
     return args
 STARTERS: Final = (
     "e2e.sh", "screenshots.sh", "tui-drive.sh", "tui-drive-autopilot.sh",
@@ -89,7 +91,7 @@ class GateTests(unittest.TestCase):
         self.repo = Path(temp.name)
         (self.repo / "scripts").mkdir()
         (self.repo / "src").mkdir()
-        for name in ("gate.sh", "gate_select.py", "gate_lanes.py", "gate_pi.py", "gate_timer.py", "test_cost.py", "check-candidate.py", "work-budget.sh"):
+        for name in ("gate.sh", "gate_select.py", "gate_lanes.py", "gate_pi.py", "gate_timer.py", "gate_case.py", "test_cost.py", "check-candidate.py", "work-budget.sh"):
             _ = shutil.copy2(SCRIPTS / name, self.repo / "scripts" / name)
         (self.repo / ".config").mkdir()
         for file in ("gate.toml", "nextest.toml"):
@@ -172,8 +174,8 @@ key = entry["command"] + ":" + " ".join(visible)
 failure = os.environ.get("FAIL_COMMAND")
 if failure and (key == failure or key.startswith(failure + " ")):
     sys.exit(23)
-if entry["args"][:2] == ["nextest", "list"] and os.environ.get("LIST_JSON"):
-    print(Path(os.environ["LIST_JSON"]).read_text())
+if entry["args"][:2] == ["nextest", "list"]:
+    print(Path(os.environ["LIST_JSON"]).read_text() if os.environ.get("LIST_JSON") else json.dumps({{"rust-suites": {{}}}}))
 """
         self.write("bin/cargo", recorder)
         self.write("scripts/check-docs.sh", recorder)
@@ -235,7 +237,7 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
             "scripts/work-budget.sh",
             "cargo build -p corral && scripts/check-docs.sh target/debug/corral",
         ]
-        work_budget = "cargo:nextest run --run-ignored only"
+        work_budget = "cargo:nextest run --profile default --run-ignored only"
         def fail(command: str) -> dict[str, str]:
             return {"FAIL_COMMAND": command}
 
@@ -296,9 +298,10 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
             ("cargo", ["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]),
             ("cargo", ["metadata", "--format-version", "1"]),
             ("cargo", ["nextest", "list", "--workspace", "--list-type", "binaries-only", "--message-format", "json"]),
-            ("cargo", ["nextest", "run"]),
+            ("cargo", ["nextest", "list", "--profile", "default", "--ignore-default-filter", "--run-ignored", "all", "--message-format", "json", "-E", "<exception selection>"]),
+            ("cargo", ["nextest", "run", "--profile", "default"]),
             ("cargo", ["test", "--workspace", "--doc"]),
-            ("cargo", ["nextest", "run", "--run-ignored", "only", "-E", BUDGET_FILTER]),
+            ("cargo", ["nextest", "run", "--profile", "default", "--run-ignored", "only", "-E", BUDGET_FILTER]),
             ("cargo", ["build", "-p", "corral"]),
             ("check-docs.sh", ["target/debug/corral"]),
         ])
@@ -311,7 +314,7 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
             self.assertEqual(entry["context"], CONTEXT)
             self.assertEqual(entry["stdin"], "")
         self.assertEqual([e["session"] for e in entries],
-                         ["not-the-test-session"] * 3 + ["corral-test"] * 4 + ["not-the-test-session"] * 2)
+                         ["not-the-test-session"] * 3 + ["corral-test"] * 5 + ["not-the-test-session"] * 2)
         self.assertIn("maximum 800 (limit 800)", result.stdout)
 
     def test_linked_worktree_keeps_candidate_target_and_honors_explicit_override(self) -> None:
