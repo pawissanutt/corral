@@ -212,7 +212,9 @@ if [[ $tier == quick ]]; then
     fi
     begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest run (prebuilt, tier quick)"
     repair_profile=quick
-    CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_timer.py run \
+    # A valid selection can consist entirely of quarantined tests.
+    CORRAL_HERDR_SESSION=corral-test CORRAL_ALLOW_EMPTY_ORDINARY=$((selected > 0)) \
+      python3 scripts/gate_timer.py run \
       "$CORRAL_TEST_BUDGET_STATE" nextest -- python3 scripts/gate_quarantine.py "$run_filter" \
       cargo nextest run "${run_args[@]}"
     repair_profile=""
