@@ -45,6 +45,92 @@ fn hold_cancels_gate_without_failure_or_worker_changes_and_release_requeues() {
         .unwrap();
     assert_ne!(next.identity.unwrap().attempt, identity.attempt);
     assert_eq!(fx.ctx.store.get(&id).unwrap().rounds, 0);
+
+    for kind in [Kind::Gate, Kind::Reviewer] {
+        let mut fx = Fixture::new(1);
+        fx.ctx.store.config.dispatch.paused = false;
+        fx.ctx.store.config.review.reviewer = Some("rev".into());
+        fx.ctx.store.save_config().unwrap();
+        let id = fx.task();
+        fx.ctx
+            .store
+            .update(&id, |task| {
+                task.current_run_mut().unwrap().outcome = Some(corral_core::RunOutcome::Done);
+                task.cowork = Some(serde_json::from_value(json!({
+                    "session":"A-1", "scratch":"fix", "run":"R1",
+                    "review":"required", "owner_confirmed":true
+                }))?);
+                Ok(())
+            })
+            .unwrap();
+        let action = match kind {
+            Kind::Gate => {
+                crate::gate::gate_start_automatic(&fx.ctx, &id).unwrap();
+                corral_core::OperatingActionKind::Gate
+            }
+            Kind::Reviewer => {
+                crate::reviewer::review_run_automatic(&fx.ctx, &id, None).unwrap();
+                corral_core::OperatingActionKind::Review
+            }
+        };
+        let attempt = |task: &corral_core::Task| {
+            let run = task.current_run().unwrap();
+            match kind {
+                Kind::Gate => run
+                    .gate
+                    .as_ref()
+                    .unwrap()
+                    .identity
+                    .as_ref()
+                    .unwrap()
+                    .attempt
+                    .clone(),
+                Kind::Reviewer => run.review_runs.last().unwrap().id.clone(),
+            }
+        };
+        let before = fx.ctx.store.get(&id).unwrap();
+        let authority =
+            crate::operating::load(&fx.ctx, &id, "R1", action, &attempt(&before)).unwrap();
+        assert!(!crate::operating::is_automatic(&authority));
+        assert!(crate::operating::automatic_driver(&authority));
+        crate::hold::hold(&fx.ctx, &id, None).unwrap();
+        fx.ctx.store.config.automation.paused = true;
+        fx.ctx.store.save_config().unwrap();
+        crate::hold::release(&fx.ctx, &id).unwrap();
+        crate::hold::resume_gates(&fx.ctx).unwrap();
+        assert_eq!(fx.created(), 1, "paused co-work must not restart {kind:?}");
+
+        fx.ctx.store.config.automation.paused = false;
+        fx.ctx.store.save_config().unwrap();
+        fx.ctx
+            .store
+            .update(&id, |task| {
+                task.cowork.as_mut().unwrap().owner_confirmed = false;
+                Ok(())
+            })
+            .unwrap();
+        crate::hold::resume_gates(&fx.ctx).unwrap();
+        assert_eq!(fx.created(), 1, "revoked co-work must not restart {kind:?}");
+
+        fx.ctx
+            .store
+            .update(&id, |task| {
+                task.cowork.as_mut().unwrap().owner_confirmed = true;
+                Ok(())
+            })
+            .unwrap();
+        crate::hold::resume_gates(&fx.ctx).unwrap();
+        assert_eq!(fx.created(), 2, "authorized co-work resumes {kind:?}");
+        let resumed = fx.ctx.store.get(&id).unwrap();
+        assert_ne!(attempt(&resumed), attempt(&before));
+        let next = crate::operating::load(&fx.ctx, &id, "R1", action, &attempt(&resumed)).unwrap();
+        assert_eq!(
+            next.origin, authority.origin,
+            "carry the same co-work instruction"
+        );
+        assert_eq!(resumed.rounds, 0);
+        assert_eq!(resumed.current_run().unwrap().failures, 0);
+    }
 }
 
 #[test]
