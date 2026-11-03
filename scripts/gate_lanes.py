@@ -2,7 +2,8 @@
 """Select full-gate optional lanes. Missing context is conservative (plan/legacy/manual).
 
 The slow profile is the explicit torture catalog; full landings exclude it except when
-an owning module changes. Plan verification always runs every lane and every test.
+an owning module changes. PI_SLOW is the same for Bun tests. Plan verification always runs
+every lane and every test.
 """
 from __future__ import annotations
 
@@ -56,10 +57,22 @@ SLOW_OWNERS = {
         "crates/corral-ops/tests/cleanup_ops",
     ),
 }
+# Bun slow catalog: (test file under packages/corral-pi, test name, reason). The Pi lane skips
+# these unless CORRAL_PI_SLOW=1: quick gates never run them, full landings restore them when an
+# owner path changes, and plan verify and the nightly slow lane (scripts/slow_lane.py) always do.
+PI_SLOW = (
+    ("test/browser.test.ts", "a cancelled call stops its browser and removes its profile",
+     "T-768: load-sensitive live browser cancellation"),
+)
+PI_SLOW_OWNERS = ("packages/corral-pi/src/extensions/browser/", "packages/corral-pi/test/browser.test.ts")
 
 
 def pi_touched(paths: list[str]) -> bool:
     return any(path.startswith(PI_CONTRACTS) for path in paths)
+
+
+def pi_slow(paths: list[str]) -> bool:
+    return any(path.startswith(PI_SLOW_OWNERS) for path in paths)
 
 
 def workspace_input(path: str) -> bool:
@@ -115,6 +128,7 @@ def plan(path: str | None) -> None:
     paths = context["changed_paths"] if context else []
     values = {
         "pi_touched": int(all_lanes or pi_touched(paths)),
+        "pi_slow": int(all_lanes or pi_slow(paths)),
         "darwin_touched": int(all_lanes or darwin_touched(context)),
         "landing_filter": "all()" if all_lanes else landing_filter(paths),
     }

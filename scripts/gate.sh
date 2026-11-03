@@ -100,7 +100,8 @@ pi_lane() {
   if [[ -d packages/corral-pi ]]; then
     begin_step "scripts/pi-lane.sh"
     # Functions do not inherit the ERR trap; report the step's failure explicitly.
-    scripts/pi-lane.sh "${pi_tests[@]}" || on_error
+    # The Bun slow catalog (gate_lanes.PI_SLOW) runs only when the lane plan restores it.
+    CORRAL_PI_SLOW="${pi_slow:-0}" scripts/pi-lane.sh "${pi_tests[@]}" || on_error
     end_step
   else
     printf '\nSkipping scripts/pi-lane.sh (packages/corral-pi/ is absent).\n'

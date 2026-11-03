@@ -73,6 +73,7 @@ class PolicyTests(unittest.TestCase):
             with contextlib.redirect_stdout(out):
                 gate_lanes.plan("context.json")
             self.assertIn("pi_touched=1", out.getvalue())
+            self.assertIn("pi_slow=1", out.getvalue())
             self.assertIn("darwin_touched=1", out.getvalue())
             self.assertIn("landing_filter='all()'", out.getvalue())
 
@@ -105,6 +106,17 @@ class PolicyTests(unittest.TestCase):
                 for term in terms:
                     self.assertIn(term, restored)
         self.assertEqual(gate_lanes.landing_filter(["Cargo.lock"]), "all()")
+        # The Bun slow catalog follows the same rule: only its owners restore it on a landing.
+        self.assertTrue(gate_lanes.pi_slow(["packages/corral-pi/src/extensions/browser/chrome.ts"]))
+        self.assertTrue(gate_lanes.pi_slow(["packages/corral-pi/test/browser.test.ts"]))
+        self.assertFalse(gate_lanes.pi_slow(["packages/corral-pi/src/host/session.ts", "docs/a.md"]))
+        for prefix in gate_lanes.PI_SLOW_OWNERS:
+            self.assertTrue((ROOT / prefix).exists(), prefix)
+        for path, name, reason in gate_lanes.PI_SLOW:
+            with self.subTest(pi_slow=name):
+                source = (ROOT / "packages/corral-pi" / path).read_text()
+                self.assertIn(f'test.skipIf(process.env.CORRAL_PI_SLOW === "0")("{name}"', source)
+                self.assertTrue(reason.startswith("T-"), reason)
         config = Path(".config/nextest.toml")
         config.write_text(config.read_text().replace("test(retained_branch_cleanup_refuses)",
                                                      "test(new_unmapped_torture)"))

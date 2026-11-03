@@ -63,8 +63,12 @@ class SlowLaneTests(unittest.TestCase):
      TIMEOUT [ 2.0s] ( 2/2) pkg::binary module::two
         FAIL [ 1.0s] pkg::binary module::one
      TIMEOUT [ 2.0s] pkg::binary module::two
+(fail) a cancelled call stops its browser and removes its profile [20062.02ms]
+(fail) a cancelled call stops its browser and removes its profile [20062.02ms]
 ''')
-        self.assertEqual(names, ['pkg::binary module::one', 'pkg::binary module::two'])
+        self.assertEqual(names, ['corral-pi a cancelled call stops its browser and removes its profile',
+                                 'pkg::binary module::one', 'pkg::binary module::two'])
+        names = names[1:]
         board = FakeBoard()
         first = board.file_failures(names, Path('/disposable/proof.log'), 'candidate')
         second = board.file_failures(names, Path('/disposable/proof.log'), 'candidate')
@@ -73,6 +77,18 @@ class SlowLaneTests(unittest.TestCase):
         self.assertEqual(sum(call[0] == 'new' for call in board.calls), 2)
         self.assertEqual(sum(call[:2] == ('artifact', 'set-tier') and call[-1] == 'keep'
                              for call in board.calls), 4)
+
+    def test_nightly_runs_the_bun_slow_catalog_after_nextest_whatever_its_result(self):
+        command = slow_lane.pi_slow_command()
+        for path, name, _reason in slow_lane.PI_SLOW:
+            self.assertIn(f'CORRAL_PI_SLOW=1 bun test {path} -t', command)
+            self.assertIn(name.replace(' ', '\\ '), command)
+        script = (
+            'f() { return 3; }; { f; nextest=$?; '
+            + command.replace('cd packages/corral-pi && bun install --frozen-lockfile && ', 'true && ')
+            .replace('CORRAL_PI_SLOW=1 bun test', 'true') + '; pi=$?; exit $((nextest || pi)); }')
+        import subprocess
+        self.assertEqual(subprocess.run(['bash', '-c', script], stdin=subprocess.DEVNULL).returncode, 1)
 
 
 if __name__ == '__main__':
