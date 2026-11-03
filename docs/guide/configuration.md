@@ -838,6 +838,7 @@ How `corral sync` (and the board's background sync) reads agent activity.
 | `idle_after_secs` | `120` | A run that looks idle without calling `corral done` gets an `idle_no_report` badge after this many seconds. It never moves the card. |
 | `review_idle_after_secs` | `1800` | Positive idle bound for a pending reviewer, separate from worker warnings so quiet monitor/background waits can finish. The persisted deadline survives syncs and restarts; expiry escalates with the saved notes path. |
 | `stuck_after_secs` | `300` | Seconds of raw herdr idle, and foreground-process age, before a run gets the `stuck:` warning (see [the watchdog](automation.md#the-watchdog-stuck-commands)). |
+| `launch_wait_secs` | `10` | Seconds a launch (dispatch, gate, review, planning, binding) waits for pane-inventory reads already in progress before refusing with "pane inventory is being reconciled". New reads yield to a waiting launch. `0` refuses at once. |
 | `omo_agent_dir` | unset | OmO agent directory holding `sessions/`. Unset: `$OMO_CODING_AGENT_DIR`, then `$SENPI_CODING_AGENT_DIR`, then `~/.omo/agent`. |
 | `omp_agent_dir` | unset | OMP agent directory holding `sessions/`, read for provider-overload stalls. Unset: `~/.omp/agent`. |
 

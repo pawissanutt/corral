@@ -405,7 +405,7 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
     let _budget = crate::review_budget::hold_guard(ctx, id)?;
     let _ownership = ctx
         .store
-        .try_lock("session-ownership")?
+        .claim_session_ownership()?
         .context("pane inventory is being reconciled; retry aggregate review")?;
     let store = ctx.store.reopen()?;
     store.config.validate_review()?;

@@ -166,6 +166,7 @@ fn transient_refusals_leave_a_retry_that_succeeds_once_they_clear() {
     let Some((mut fx, id)) = live() else { return };
     fx.ctx.store.config.limits.count_reviews = true;
     fx.ctx.store.config.limits.running = 3;
+    fx.ctx.store.config.sync.launch_wait_secs = 0;
     fx.ctx.store.save_config().unwrap();
     let mut app = open(&fx, &id, Surface::DetailPlanTab);
     let reviews = |fx: &Fixture| fx.ctx.store.get(&id).unwrap().plans[0].reviews.len();

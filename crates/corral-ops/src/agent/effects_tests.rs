@@ -85,6 +85,8 @@ fn fixture(gate: bool) -> Fx {
     store.config.limits.review = 4;
     store.config.limits.count_reviews = false;
     store.config.limits.count_gates = false;
+    // Queued-gate tests hold the inventory lease and expect the launch refused at once.
+    store.config.sync.launch_wait_secs = 0;
     store.config.dispatch.paused = true;
     if gate {
         store.config.review.gate = Some(vec!["true".into()]);

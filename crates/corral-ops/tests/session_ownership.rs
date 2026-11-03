@@ -169,7 +169,9 @@ fn process_b_binds_session() {
 fn bind_is_refused_while_inventory_holds_the_ownership_lease() {
     for refs in [Refs::Saved, Refs::Legacy] {
         // Given A owns the blocked pane: by its saved socket, or legacy refs plus a binding.
-        let fx = fixture(refs);
+        let mut fx = fixture(refs);
+        fx.ctx.store.config.sync.launch_wait_secs = 0;
+        fx.ctx.store.save_config().unwrap();
         if refs == Refs::Legacy {
             fx.ctx
                 .store

@@ -95,6 +95,8 @@ fn submitted_plan_offers_run_review_on_the_panel_and_the_stage_cell() {
 fn a_transient_refusal_is_reported_changes_nothing_and_keeps_the_action() {
     let mut fx = seeded();
     let id = submitted(&mut fx);
+    fx.ctx.store.config.sync.launch_wait_secs = 0;
+    fx.ctx.store.save_config().unwrap();
     let before = fx.ctx.store.get(&id).unwrap();
     let held = fx.ctx.store.try_lock("session-ownership").unwrap().unwrap();
     let mut view = DetailView::plan(&fx.ctx, &id).unwrap();
