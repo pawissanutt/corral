@@ -346,15 +346,6 @@ fn verdict_reaps_reviewer_resident_before_landing() {
         .fixture_pin_now("2020-01-01T00:00:00Z".parse().unwrap())
         .unwrap();
     corral_ops::verdict(&fx.ctx, &fx.id, Verdict::Approve, "Checked.").unwrap();
-    let saved = fx.run();
-    let review = saved.review.as_ref().unwrap();
-    assert!(
-        fx.ctx.store.events().unwrap().iter().any(|event| {
-            event.kind == "verdict"
-                && event.detail["review_at"].as_str() == Some(review.at.to_string().as_str())
-        }),
-        "verdict event must identify the exact review independently of its wall-clock timestamp"
-    );
     // Signal delivery precedes actual exit; wait for the kernel event before reaping.
     let mut fds = [rustix::event::PollFd::new(
         &pidfd,
@@ -370,6 +361,15 @@ fn verdict_reaps_reviewer_resident_before_landing() {
         "reviewer survived verdict"
     );
     assert!(resident.0.try_wait().unwrap().is_some());
+    let saved = fx.run();
+    let review = saved.review.as_ref().unwrap();
+    assert!(
+        fx.ctx.store.events().unwrap().iter().any(|event| {
+            event.kind == "verdict"
+                && event.detail["review_at"].as_str() == Some(review.at.to_string().as_str())
+        }),
+        "verdict event must identify the exact review independently of its wall-clock timestamp"
+    );
     fx.sync();
     let result =
         corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
