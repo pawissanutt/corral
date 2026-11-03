@@ -23,7 +23,24 @@ const SCHEDULE_KINDS: [&str; 10] = [
 ];
 
 pub(super) fn prepare_locked(ctx: &Ctx, selected: &BTreeSet<String>) -> Result<Prepared> {
-    let root = root(ctx)?;
+    prepare_at(ctx, selected, root(ctx)?, true)
+}
+
+pub(super) fn prepare_schedule_locked(ctx: &Ctx, selected: &BTreeSet<String>) -> Result<Prepared> {
+    prepare_at(
+        ctx,
+        selected,
+        ctx.store.cache_root()?.join("lesson-schedule-v1"),
+        false,
+    )
+}
+
+fn prepare_at(
+    ctx: &Ctx,
+    selected: &BTreeSet<String>,
+    root: PathBuf,
+    signals: bool,
+) -> Result<Prepared> {
     let path = root.join("cursor.json");
     let ctx = Ctx {
         store: ctx.store.read_only_snapshot()?,
@@ -133,9 +150,9 @@ pub(super) fn prepare_locked(ctx: &Ctx, selected: &BTreeSet<String>) -> Result<P
     // byte total, never as a copied event list: each event is read once on entry and once
     // on eviction, and a refresh reads only its window tasks' own events.
     let limit = u64::try_from(EVENT_BYTES)?;
-    if rebuild {
+    if rebuild && signals {
         (cursor.window_after, cursor.window_bytes) = window(&ctx, limit)?;
-    } else if new_events {
+    } else if !rebuild && new_events {
         for stored in event_rows(
             &ctx.store,
             &EventQuery {
@@ -150,7 +167,7 @@ pub(super) fn prepare_locked(ctx: &Ctx, selected: &BTreeSet<String>) -> Result<P
             }
         }
         let view = ctx.store.view()?;
-        while cursor.window_bytes > limit {
+        while signals && cursor.window_bytes > limit {
             let query = EventQuery {
                 after: after(cursor.window_after),
                 ..EventQuery::default()
@@ -168,9 +185,11 @@ pub(super) fn prepare_locked(ctx: &Ctx, selected: &BTreeSet<String>) -> Result<P
     if new_events {
         cursor.event = ctx.store.event_tail()?;
     }
-    for project in &affected {
-        refresh_signals(&ctx, &root, project, &changed, rebuild, cursor.window_after)?;
-        cursor.recomputations += 1;
+    if signals {
+        for project in &affected {
+            refresh_signals(&ctx, &root, project, &changed, rebuild, cursor.window_after)?;
+            cursor.recomputations += 1;
+        }
     }
     // Scheduling rows are constant-size and project-keyed. A new event only updates the
     // relevant counters above; this output step never visits historical task metadata.

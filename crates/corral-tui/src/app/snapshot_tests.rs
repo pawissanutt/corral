@@ -143,6 +143,12 @@ fn header_counts_derived_membership_on_load_and_worker_refresh() {
     // Then the header follows visual membership and native resumption reoccupies its slot.
     assert_eq!((app.counts.needs, app.counts.used), (2, 3));
     assert_eq!(fx.ctx.store.get("T-004").unwrap().status, Status::Running);
+    // Header-only reloads reuse the frame's BoardDelta; no unchanged task is decoded.
+    let before = corral_core::work::snapshot();
+    app.load_counts();
+    let work = corral_core::work::snapshot().since(&before);
+    assert_eq!(work.get(corral_core::work::Counter::TaskHeadDecodes), 0);
+    assert_eq!((app.counts.needs, app.counts.used), (2, 3));
 }
 
 #[test]

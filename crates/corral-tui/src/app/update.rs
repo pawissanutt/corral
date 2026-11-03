@@ -44,8 +44,7 @@ impl App {
                         snapshot.ctx.store.config_path().display().to_string(),
                     ));
                 }
-                self.counts = Counts::from_snapshot(&snapshot)
-                    .with_attention(&snapshot.tasks, &snapshot.attention);
+                self.counts = Counts::from_snapshot(&snapshot).with_attention(&snapshot.attention);
                 self.resources = snapshot.resources.clone();
                 self.operating_header = snapshot.operating_header.clone();
                 self.ctx = snapshot.ctx.clone();
@@ -121,18 +120,14 @@ impl App {
         let Ok(store) = self.ctx.store.read_only_snapshot() else {
             return;
         };
-        let Ok(board) = store.board(None) else {
+        let ctx = corral_ops::Ctx {
+            store,
+            ..self.ctx.clone()
+        };
+        let Ok(board) = crate::board::sources::open_board(&ctx) else {
             return;
         };
-        self.counts = Counts::from_heads(&board.heads, &board.status_counts, &store.config);
-        let Ok(tasks) = board
-            .heads
-            .iter()
-            .map(|head| head.to_shell_task())
-            .collect::<anyhow::Result<Vec<_>>>()
-        else {
-            return;
-        };
+        self.counts = Counts::from_heads(&board.heads, &board.status_counts, &ctx.store.config);
         if let Some(columns) = self.stack.first().and_then(|view| view.column_counts()) {
             for (status, count) in Status::COLUMNS.into_iter().zip(columns) {
                 match status {
@@ -143,12 +138,8 @@ impl App {
                 }
             }
         } else {
-            let ctx = corral_ops::Ctx {
-                store: store.clone(),
-                ..self.ctx.clone()
-            };
             let attention = crate::attention::load(&ctx, jiff::Timestamp::now());
-            self.counts = self.counts.with_attention(&tasks, &attention);
+            self.counts = self.counts.with_attention(&attention);
         }
     }
 
@@ -181,20 +172,12 @@ impl App {
 }
 
 impl Counts {
-    fn with_attention(
-        mut self,
-        tasks: &[corral_core::Task],
-        attention: &crate::attention::Snapshot,
-    ) -> Self {
-        let count = |status| {
-            tasks
-                .iter()
-                .filter(|task| crate::attention::column(task, attention) == Some(status))
-                .count()
-        };
-        self.needs = count(Status::NeedsMe);
-        self.review = count(Status::Review);
-        self.ready = count(Status::Ready);
+    fn with_attention(mut self, attention: &crate::attention::Snapshot) -> Self {
+        if let Ok(projection) = attention {
+            self.needs += projection.into_needs;
+            self.ready = self.ready.saturating_sub(projection.from_ready);
+            self.review = self.review.saturating_sub(projection.from_review);
+        }
         self
     }
 

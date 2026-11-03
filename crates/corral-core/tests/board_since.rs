@@ -34,7 +34,8 @@ fn the_second_frame_reads_only_the_changed_task() {
                 .id
         })
         .collect();
-    let previous = store.board(None).unwrap().detach();
+    let previous = store.cached_board().unwrap().detach();
+    assert_eq!(ids(&store.cached_board_checked().unwrap()), ids(&previous));
 
     // When one task changes between two frames.
     store
@@ -44,7 +45,7 @@ fn the_second_frame_reads_only_the_changed_task() {
         })
         .unwrap();
     let mut board = None;
-    let decodes = head_decodes(|| board = Some(store.board_since(&previous).unwrap()));
+    let decodes = head_decodes(|| board = Some(store.cached_board().unwrap()));
     let board = board.unwrap();
 
     // Then the frame decodes exactly that one head, and equals a fresh open board.
@@ -69,16 +70,28 @@ fn the_second_frame_reads_only_the_changed_task() {
             Ok(())
         })
         .unwrap();
-    let next = store.board_since(&board.detach()).unwrap();
+    let next = store.cached_board().unwrap();
     assert_eq!(ids(&next), ids(&store.board(None).unwrap()));
     assert!(!next.heads.iter().any(|head| head.id == tasks[4]));
 
     // And an unchanged store reads no head at all.
-    let unchanged = next.clone().detach();
     assert_eq!(
         head_decodes(|| {
-            store.board_since(&unchanged).unwrap();
+            store.cached_board().unwrap();
         }),
         0
     );
+    assert_eq!(ids(&store.cached_board_checked().unwrap()), ids(&next));
+    assert_eq!(
+        head_decodes(|| {
+            store.cached_board_checked().unwrap();
+        }),
+        0
+    );
+    // A tolerant cached frame must never hide corruption from a policy projection.
+    store
+        .fixture_corrupt_task(&tasks[0], "not-a-status")
+        .unwrap();
+    assert!(store.cached_board().is_ok());
+    assert!(store.cached_board_checked().is_err());
 }

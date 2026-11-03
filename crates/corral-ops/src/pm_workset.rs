@@ -259,7 +259,7 @@ fn project(
     };
     {
         let _prepare = corral_core::work::Preparation::enter();
-        crate::lesson_rows::prepare(ctx)?;
+        crate::lesson_rows::prepare_coordination(ctx)?;
         crate::approvals::prepare(ctx)?;
         crate::pm_next::observe::prepare(ctx)?;
     }

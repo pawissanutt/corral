@@ -54,7 +54,7 @@ pub fn lessons_due(ctx: &Ctx, now: Timestamp) -> Result<Vec<LessonDue>> {
         };
         &frozen
     };
-    crate::lesson_rows::prepare(ctx)?;
+    crate::lesson_rows::prepare_coordination(ctx)?;
     let _hot = corral_core::work::HotScope::enter();
     let config = &ctx.store.config.lessons;
     let mut due = Vec::new();

@@ -14,16 +14,31 @@ use crate::artifacts::ui;
 use crate::overlays::truncate;
 use crate::theme;
 
-pub(crate) type Snapshot = Result<BTreeMap<String, Assessment>, String>;
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Projection {
+    rows: BTreeMap<String, Assessment>,
+    /// Visual moves away from canonical status counts, derived by the assessor once.
+    pub(crate) into_needs: usize,
+    pub(crate) from_ready: usize,
+    pub(crate) from_review: usize,
+    blocked: std::collections::BTreeSet<String>,
+}
+
+impl std::ops::Deref for Projection {
+    type Target = BTreeMap<String, Assessment>;
+    fn deref(&self) -> &Self::Target {
+        &self.rows
+    }
+}
+
+pub(crate) type Snapshot = Result<Projection, String>;
 
 /// Visual membership only; actions and slot accounting still use the stored status.
 pub(crate) fn column(task: &Task, snapshot: &Snapshot) -> Option<corral_core::Status> {
-    let blocked = snapshot
+    if snapshot
         .as_ref()
-        .ok()
-        .and_then(|rows| rows.get(&task.id))
-        .and_then(|assessment| corral_core::attention::blocked(task, assessment));
-    if blocked.is_some() {
+        .is_ok_and(|rows| rows.blocked.contains(&task.id))
+    {
         Some(corral_core::Status::NeedsMe)
     } else {
         task.status.column()
@@ -31,11 +46,19 @@ pub(crate) fn column(task: &Task, snapshot: &Snapshot) -> Option<corral_core::St
 }
 
 pub(crate) fn from_board(board: corral_ops::attention::AttentionBoard) -> Snapshot {
-    Ok(board
-        .tasks
-        .into_iter()
-        .map(|task| (task.task, task.assessment))
-        .collect())
+    let mut projection = Projection::default();
+    for row in board.tasks {
+        if row.blocked.is_some() {
+            projection.blocked.insert(row.task.clone());
+            if row.status != corral_core::Status::NeedsMe {
+                projection.into_needs += 1;
+                projection.from_ready += usize::from(row.status == corral_core::Status::Ready);
+                projection.from_review += usize::from(row.status == corral_core::Status::Review);
+            }
+        }
+        projection.rows.insert(row.task, row.assessment);
+    }
+    Ok(projection)
 }
 
 #[derive(Debug)]

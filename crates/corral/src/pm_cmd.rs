@@ -74,7 +74,7 @@ pub(crate) fn evaluate<T>(
         store: ctx.store.read_only_snapshot()?,
         ..ctx.clone()
     };
-    corral_ops::lesson_rows::prepare_evaluation(&snapshot)?;
+    corral_ops::lesson_rows::prepare_coordination(&snapshot)?;
     let _hot = corral_core::work::HotScope::enter();
     let result = pass(&snapshot);
     if std::env::var_os("CORRAL_WORK_REPORT").is_some_and(|value| !value.is_empty()) {

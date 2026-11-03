@@ -119,7 +119,8 @@ fn snapshot_inner(
     let frozen = ctx.store.read_only_snapshot()?;
     let mut roots = BTreeMap::new();
     for head in frozen
-        .heads_checked(&HeadQuery::Open { project: None })?
+        .cached_board_checked()?
+        .heads
         .into_iter()
         .chain(frozen.attention_input_heads()?)
     {

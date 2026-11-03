@@ -220,10 +220,20 @@ pub(super) fn list(
             store: ctx.store.read_only_snapshot()?,
             ..ctx.clone()
         };
+        let assessed = (want.is_some() || json)
+            .then(|| corral_ops::attention::board_hot_heads(ctx, jiff::Timestamp::now()))
+            .transpose()?;
         let mut heads = if open {
-            ctx.store.heads(&corral_core::backend::HeadQuery::Open {
-                project: project.map(str::to_owned),
-            })?
+            match &assessed {
+                Some((heads, _)) => heads
+                    .iter()
+                    .filter(|head| !matches!(head.status, Status::Done | Status::Dropped))
+                    .cloned()
+                    .collect(),
+                None => ctx.store.heads(&corral_core::backend::HeadQuery::Open {
+                    project: project.map(str::to_owned),
+                })?,
+            }
         } else {
             let statuses: Vec<_> = match want {
                 Some(status) => vec![status],
@@ -251,15 +261,11 @@ pub(super) fn list(
             heads
         };
         heads.retain(|head| project.is_none_or(|p| head.project.as_deref() == Some(p)));
-        let assessments: std::collections::BTreeMap<_, _> = if want.is_some() || json {
-            corral_ops::attention::board_hot(ctx, jiff::Timestamp::now())?
-                .tasks
-                .into_iter()
-                .map(|row| (row.task, row.assessment))
-                .collect()
-        } else {
-            Default::default()
-        };
+        let assessments: std::collections::BTreeMap<_, _> = assessed
+            .into_iter()
+            .flat_map(|(_, board)| board.tasks)
+            .map(|row| (row.task, row.assessment))
+            .collect();
         let mut selected = Vec::new();
         let mut conditions = std::collections::BTreeMap::new();
         for head in heads {

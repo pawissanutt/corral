@@ -108,6 +108,45 @@ fn same_cells(left: &WorkSnapshot, right: &WorkSnapshot) {
 }
 
 #[test]
+fn coordination_prepares_schedule_without_consuming_signal_invalidations() {
+    let (_dir, ctx) = fixture();
+    let mut task = ctx
+        .store
+        .create("Work", Some("app"), Status::Done, "")
+        .unwrap();
+    task.runs.push(run(1, "test suite::before ... FAILED"));
+    ctx.store.fixture_put_task(&task).unwrap();
+    for summary in [
+        "test suite::before ... FAILED",
+        "test suite::after ... FAILED",
+    ] {
+        ctx.store
+            .update_head(&task.id, |head| {
+                head.current_run_mut().unwrap().summary = Some(summary.into());
+                Ok(())
+            })
+            .unwrap();
+        let frozen = Ctx {
+            store: ctx.store.read_only_snapshot().unwrap(),
+            ..ctx.clone()
+        };
+        let before = work::snapshot();
+        {
+            let _hot = work::HotScope::enter();
+            prepare_coordination(&frozen).unwrap();
+        }
+        let work = work::snapshot().since(&before);
+        assert_eq!(work.get(Counter::HistoryRowDecodes), 0);
+        assert_eq!(work.get(Counter::SelectedArtifactBytesRead), 0);
+        // A later signal preview must still follow every task change, not a schedule cursor.
+        assert_eq!(
+            crate::lesson_signals(&ctx, "app").unwrap(),
+            legacy(&ctx, "app")
+        );
+    }
+}
+
+#[test]
 fn derived_rows_equal_full_task_oracle_across_fixture_boards_and_updates() {
     let (_dir, ctx) = fixture();
     let mut seed = 729_u64;
