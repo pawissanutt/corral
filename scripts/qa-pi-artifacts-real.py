@@ -167,7 +167,21 @@ os.execv(target, [target, *argv])
     print('PASS: owned production-host PTY over a disposable real store; real catalog and viewers; viewers only on explicit keys')
 finally:
     if 'real' in dir() and 'env' in dir():
+        daemons = []
+        for pid in filter(str.isdigit, os.listdir('/proc')):
+            try:
+                cmdline = Path(f'/proc/{pid}/cmdline').read_bytes()
+                if b'serve\0--daemon' in cmdline and str(work).encode() in cmdline: daemons.append(os.pidfd_open(int(pid)))
+            except OSError:
+                continue
         subprocess.run([str(real), '--root', str(work), 'artifact', 'serve', '--stop'], env=env, stdin=subprocess.DEVNULL, capture_output=True)
+        # `serve --stop` returns before the daemon exits; wait for each exit event (hang guard only).
+        with selectors.DefaultSelector() as exited:
+            for fd in daemons: exited.register(fd, selectors.EVENT_READ)
+            deadline = time.monotonic() + 30
+            while exited.get_map() and exited.select(max(0, deadline - time.monotonic())):
+                for key, _ in exited.select(0): exited.unregister(key.fileobj); os.close(key.fileobj)
+            for fd in list(exited.get_map()): os.close(fd)
     (args.output / 'pty-session.ansi').write_bytes(log)
     if proc and proc.poll() is None:
         os.killpg(proc.pid, signal.SIGTERM)
