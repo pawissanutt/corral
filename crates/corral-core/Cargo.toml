@@ -8,6 +8,8 @@ license.workspace = true
 [features]
 # Test-only thread-local wall source; never enabled by production dependencies.
 test-clock = []
+# Opt-in integration-test synchronization; omitted from release builds.
+test-skew-barrier = []
 
 [dependencies]
 anyhow.workspace = true
