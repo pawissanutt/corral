@@ -96,16 +96,16 @@ fn watch_refuses_next_tick_after_its_executable_is_replaced() {
 
 #[cfg(all(feature = "test-skew-barrier", debug_assertions))]
 #[test]
-fn watch_persists_skew_detected_inside_an_aborted_task_creation() {
+fn watch_persists_skew_detected_by_read_only_snapshot() {
     use std::io::Write;
 
+    // Match the original empty default store and fake herdr. The barrier proves the
+    // replacement happens at a reachable snapshot runtime check, after herdr readiness.
     let tmp = tempfile::tempdir().unwrap();
-    let mut store = corral_core::Store::init(tmp.path()).unwrap();
-    store.config.digest.every = Some("1h".into());
-    store.save_config().unwrap();
+    let store = corral_core::Store::init(tmp.path()).unwrap();
     let binary = tmp.path().join("corral");
     std::fs::copy(env!("CARGO_BIN_EXE_corral"), &binary).unwrap();
-    for name in ["entered", "resume"] {
+    for name in ["ready", "entered", "resume"] {
         assert!(
             Command::new("mkfifo")
                 .arg(tmp.path().join(name))
@@ -115,6 +115,20 @@ fn watch_persists_skew_detected_inside_an_aborted_task_creation() {
                 .success()
         );
     }
+    let engine = tmp.path().join("herdr");
+    std::os::unix::fs::symlink(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/version_skew/herdr.sh"),
+        &engine,
+    )
+    .unwrap();
+    let ready = tmp.path().join("ready");
+    std::thread::spawn(move || {
+        let mut byte = [0];
+        std::fs::File::open(ready)
+            .unwrap()
+            .read_exact(&mut byte)
+            .unwrap();
+    });
     let entered = tmp.path().join("entered");
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -126,8 +140,9 @@ fn watch_persists_skew_detected_inside_an_aborted_task_creation() {
         command(&binary, tmp.path())
             .args(["--root", tmp.path().to_str().unwrap(), "sync", "--watch"])
             .current_dir(tmp.path())
-            .env("HERDR_BIN_PATH", tmp.path().join("missing-herdr"))
+            .env("HERDR_BIN_PATH", &engine)
             .env("CORRAL_HERDR_SESSION", "corral-test")
+            .env("CORRAL_READY_PIPE", tmp.path().join("ready"))
             .env("CORRAL_TEST_SKEW_BARRIER", tmp.path())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -165,10 +180,7 @@ fn watch_persists_skew_detected_inside_an_aborted_task_creation() {
         events.iter().filter(|e| e.kind == "version_skew").count(),
         1
     );
-    assert!(
-        store.list().unwrap().is_empty(),
-        "the interrupted digest anchor must not be created"
-    );
+    assert!(store.list().unwrap().is_empty());
     assert!(!events.iter().any(|e| matches!(
         e.kind.as_str(),
         "created" | "gate_started" | "review_started" | "dispatched" | "gate"

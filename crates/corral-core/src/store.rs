@@ -373,6 +373,22 @@ impl Store {
     /// read-only snapshot, which refuses every write, trusts the check made when it was taken.
     /// A replacement latches this process off even if the executable is restored.
     pub fn check_runtime(&self) -> Result<()> {
+        // Test-only rendezvous on the real watch path after its fake herdr signals readiness.
+        // Omitted from default and release builds.
+        #[cfg(all(feature = "test-skew-barrier", debug_assertions, unix))]
+        if self.is_snapshot()
+            && let Some(dir) = std::env::var_os("CORRAL_TEST_SKEW_BARRIER")
+        {
+            use std::io::{Read, Write};
+            let dir = Path::new(&dir);
+            if dir.join("ready.sent").exists() {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(dir.join("entered"))?
+                    .write_all(b"x")?;
+                std::fs::File::open(dir.join("resume"))?.read_exact(&mut [0])?;
+            }
+        }
         let result = self.executable.check().and_then(|()| match self.frozen {
             Some(_) => Ok(()),
             None => self.check_schema(),

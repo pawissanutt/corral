@@ -45,6 +45,8 @@ jobs:
           shellcheck install.sh scripts/install-test.sh
           sh scripts/install-test.sh
           python scripts/test_gate.py
+      - name: Deterministic watch skew regression
+        run: cargo test --locked -p corral --features test-skew-barrier --test version_skew_cli watch_persists_skew_detected_by_read_only_snapshot </dev/null
       - name: Full gate in isolated plugin-free herdr
         env:
           CORRAL_SIZE_LIMITS: '{"rs":800}'
