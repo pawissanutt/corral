@@ -330,8 +330,15 @@ test("unconfigured targets fail, including a redirect away from a configured ori
   // When the worker targets it directly, then the call fails without a request reaching it.
   await expect(run("browser_navigate", { url: `http://127.0.0.1:${strayPort}/` })).rejects.toThrow(/browser_target_refused/);
   expect(strayHits).toBe(0);
-  // When a configured page redirects to it, then the landed page is refused and not returned.
-  await expect(run("browser_screenshot", { url: `${origin}/away` })).rejects.toThrow(/landed on http:\/\/127\.0\.0\.1/);
+  // When a configured page redirects to it, then the landed page is refused and not returned. The
+  // call's timeout_ms deadlines run on fake timers, so host load cannot turn the refusal into a
+  // timeout (T-794); the call settles on the browser's own landing and the test timeout guards a hang.
+  jest.useFakeTimers();
+  try {
+    await expect(run("browser_screenshot", { url: `${origin}/away` })).rejects.toThrow(/landed on http:\/\/127\.0\.0\.1/);
+  } finally {
+    jest.useRealTimers();
+  }
   cleanedUp(profiles, profiles);
 }, 60_000);
 
