@@ -15,8 +15,11 @@ import math
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
+
+from gate_lanes import PI_SLOW
 
 REPO = Path(__file__).resolve().parent.parent
 # Mirrored from SystemResourceProbe: load1 / available cores, threshold 1.0.
@@ -61,10 +64,19 @@ def idle_priority() -> None:
 
 def failures(text: str) -> list[str]:
     text = re.sub(r'\x1b\[[0-9;]*m', '', text)
-    # Nextest repeats failed rows in its final summary; identify each test only once.
-    return sorted(set(re.findall(
+    # Nextest and Bun repeat failed rows in their final summaries; identify each test only once.
+    rust = re.findall(
         r'^\s*(?:FAIL|TIMEOUT|ABORT|LEAK)\s+\[[^\]]+\]\s+(?:\(\s*\d+/\d+\)\s+)?(\S+ \S+)\s*$',
-        text, re.M)))
+        text, re.M)
+    bun = re.findall(r'^\(fail\) (.+?)(?: \[[\d.]+m?s\])?\s*$', text, re.M)
+    return sorted({*rust, *(f'corral-pi {name}' for name in bun)})
+
+
+def pi_slow_command() -> str:
+    """Runs every PI_SLOW test (Bun) with CORRAL_PI_SLOW=1; a failing entry fails the whole command."""
+    runs = ' '.join(f'CORRAL_PI_SLOW=1 bun test {shlex.quote(path)} -t {shlex.quote("^" + re.escape(name) + "$")} || rc=1;'
+                    for path, name, _reason in PI_SLOW)
+    return f'(cd packages/corral-pi && bun install --frozen-lockfile && {{ rc=0; {runs} exit $rc; }})'
 
 
 class Board:
@@ -131,8 +143,10 @@ def run(args: argparse.Namespace) -> int:
         sha = command(['git', 'rev-parse', 'HEAD']).strip()
         stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
         log = scratch / f'{stamp}-{sha[:12]}.log'
+        # The Bun slow catalog runs even when nextest fails, so each lane reports its own failures.
         shell = ('source scripts/test-herdr.sh && corral_test_herdr_start && '
-                 'CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace --profile slow')
+                 '{ CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace --profile slow; nextest=$?; '
+                 f'{pi_slow_command()}; pi=$?; exit $((nextest || pi)); }}')
         with log.open('w') as output:
             output.write(f'candidate={sha} load1={load} cores={cores} nice=19 ionice=idle\n')
             output.flush()

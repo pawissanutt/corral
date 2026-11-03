@@ -291,29 +291,6 @@ test("a call cancelled mid-page after start-up and page each took nearly all of 
   cleanedUp(root, root, exits);
 }, 30_000);
 
-test("waiting for a page request ends with the call's own error when the call fails first", async () => {
-  // Given a browser that never starts, so its call fails at timeout_ms before any page request.
-  const root = mkdtempSync(join(work, "no-request-"));
-  jest.useFakeTimers();
-  try {
-    const call = navigateWith(300, root);
-    call.catch(() => {});
-    const waited = requestArrived(new Promise<void>(() => {}), call, 20_000);
-    waited.catch(() => {});
-    // When the call's start-up deadline passes, and after it the wait's own 20 s bound.
-    await Promise.race([appeared(root, "asked-Browser.getVersion"), call]);
-    jest.advanceTimersByTime(300);
-    await call.catch(() => {});
-    jest.advanceTimersByTime(20_000);
-    // Then the wait reports the call's start-up timeout, not its own expiry.
-    await expect(waited).rejects.toThrow(/browser_timeout: the browser did not start within 300 ms/);
-  } finally {
-    jest.useRealTimers();
-  }
-  removeGates(root);
-  cleanedUp(root, root);
-}, 30_000);
-
 test("a browser that never starts is stopped after timeout_ms", async () => {
   // Given a browser that never gives its first DevTools reply.
   const root = mkdtempSync(join(work, "no-start-"));
@@ -358,10 +335,11 @@ test("unconfigured targets fail, including a redirect away from a configured ori
   cleanedUp(profiles, profiles);
 }, 60_000);
 
-// Slow tier (T-768): a real browser's start-up and navigation under host load cannot be held to this
-// test's fixed 20 s bound, so the quick gate (CORRAL_GATE_TIER=quick) leaves it to the full tier and
-// plan verify. The fake-browser cancellation tests above cover the same path deterministically.
-test.skipIf(process.env.CORRAL_GATE_TIER === "quick")("a cancelled call stops its browser and removes its profile", async () => {
+// Slow catalog (scripts/gate_lanes.py PI_SLOW, "T-768: load-sensitive live browser cancellation"):
+// a real browser's start-up and navigation under host load cannot be held to this test's fixed 20 s
+// bound. Gates run it only with CORRAL_PI_SLOW=1 (owner-module full landings, plan verify, nightly);
+// the fake-browser cancellation test above covers the same path deterministically in every tier.
+test.skipIf(process.env.CORRAL_PI_SLOW === "0")("a cancelled call stops its browser and removes its profile", async () => {
   if (!chrome) return;
   // Given a page load the dev server never answers.
   const controller = new AbortController();

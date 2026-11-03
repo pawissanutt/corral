@@ -10,11 +10,15 @@ worker/reviewer contracts. Test-cost justification belongs in the candidate's ch
 |---|---|---|---:|
 | quick | Touched modules/consumers, crate-wide fallback; declared tests replace selection | Each review round / Plan member | 180s test execution |
 | full | Workspace except the fixed torture catalog; restore affected torture suites when an owning module changes | Main landing | 600s test execution |
-| slow | Fixed race/crash/torture/restart catalog in `profile.slow` | Nightly and owning-module changes | 1800s nightly maintenance wall observation |
+| slow | Fixed race/crash/torture/restart catalog in `profile.slow`, plus the Bun catalog `PI_SLOW` in `scripts/gate_lanes.py` | Nightly and owning-module changes | 1800s nightly maintenance wall observation |
 
 Plan verification keeps every suite and both optional lanes. Missing/older context is also
 conservative. `gate_lanes.py` maps the slow catalog to owning paths; unmapped catalog entries
-run, never silently disappear. Shared dependency/store/Git/herdr changes restore all torture
+run, never silently disappear. Its Bun catalog `PI_SLOW` lists each slow Pi test with its reason
+(currently `a cancelled call stops its browser and removes its profile`, "T-768: load-sensitive
+live browser cancellation") and `PI_SLOW_OWNERS` (the browser extension and its test file). The
+Pi lane passes `CORRAL_PI_SLOW` (0 in quick; in full, 1 only when an owner changed; 1 in plan
+verify), and a catalog test skips when it is 0. Shared dependency/store/Git/herdr changes restore all torture
 coverage. Quick's explicit declared tests can opt into slow tests.
 
 **Owner's relaxed T-761 scope:** every time threshold is report-only. Enforcement belongs
@@ -81,7 +85,8 @@ stale or missing report prints nothing, and compile, lint and Pi failures print 
    Busy hosts defer with exit 75 before starting herdr, tests, or board writes.
 3. Takes a nonblocking local lock and refuses a dirty worktree.
 4. Starts a fresh plugin-free private HOME/XDG/server through `test-herdr.sh`, runs only the
-   explicit nextest slow profile with a reported maintenance wall threshold, and lets the helper clean up its own
+   explicit nextest slow profile and then the Bun `PI_SLOW` catalog (with `CORRAL_PI_SLOW=1`,
+   whatever nextest's result) with a reported maintenance wall threshold, and lets the helper clean up its own
    server/directories. It never reuses or stops an owner's server.
 5. Retains raw logs locally and as `log` artifacts with tier `keep` on a monitoring task.
    Each distinct failing test gets one open task keyed by binary+test; subsequent failures
