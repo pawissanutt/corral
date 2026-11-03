@@ -722,13 +722,16 @@ pub struct LandingReceipt {
 }
 
 /// An owner-instructed co-work finish: the assistant scratch run `run` came from and the owner's
-/// review choice. The choice and owner-only landing apply only while `run` is the current run.
+/// review choice and confirmed shipping instruction, effective only while `run` is current.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cowork {
     pub session: String,
     pub scratch: String,
     pub run: String,
     pub review: CoworkReview,
+    /// The owner explicitly instructed this finish to ship. Old records remain manual.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub owner_confirmed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -903,7 +906,8 @@ impl Task {
         });
         let worker = planning.map_or_else(
             || {
-                self.status.holds_slot()
+                self.cowork_run().is_none()
+                    && self.status.holds_slot()
                     && self.current_run().is_none_or(|r| {
                         r.outcome != Some(RunOutcome::Failed) && !r.releases_slot(&self.id)
                     })

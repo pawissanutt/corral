@@ -28,7 +28,7 @@ interface Fixture { session: string; bootstrap: string; launch: string; scratch:
 interface StoreEvent { kind: string; task?: string; actor?: string; via?: string; detail?: Record<string, unknown> }
 type Step = { toolCalls: { callId: string; name: string; arguments: Record<string, unknown> }[] } | { text: string };
 
-test("live private-pane co-work: shell finish refused, unclear ship asks, promote, finish without review, approve lands", async () => {
+test("live private-pane co-work: shell finish refused, unclear ship asks, promote, finish requires review before landing", async () => {
   if (!privateHerdr()) {
     process.stdout.write("cowork live: skipped (requires fresh scripts/test-herdr.sh private server)\n");
     return;
@@ -142,7 +142,7 @@ test("live private-pane co-work: shell finish refused, unclear ship asks, promot
     expect(ok(["git", "-C", fixture.scratch[1] ?? "", "rev-parse", "HEAD"]).trim()).toBe(spikeHead);
     expect(kinds()["spike-idea"]).toBe("spike");
 
-    // C9: the owner's clear instruction finishes cache-fix at once: task, gate, Review, reviewer none.
+    // The owner's clear instruction confirms shipping, but cannot bypass independent review.
     const words = "finish this as a fix for the cache, no review";
     await turn(words, [{ toolCalls: [{ callId: "finish", name: "corral_owner_action", arguments: { kind: "finish",
       target: "cache-fix", args: ["--title", "Fix the cache"], input: input(4) } }] }, { text: "Finished as T-002; gate pass." }]);
@@ -152,7 +152,8 @@ test("live private-pane co-work: shell finish refused, unclear ship asks, promot
     expect(asked).toEqual([]);
     const task = show("T-002");
     expect([task.status, task.origin, task.labels]).toEqual(["review", "assistant", ["cowork"]]);
-    expect(task.cowork).toEqual({ session: fixture.session, scratch: "cache-fix", run: "R1", review: "none" });
+    expect(task.cowork).toEqual({ session: fixture.session, scratch: "cache-fix", run: "R1", review: "required", owner_confirmed: true });
+    expect(finished.result.confirmed).toBe(true);
     const runR1 = task.runs[0];
     process.stdout.write(`COWORK_LIVE_USAGE ${JSON.stringify({ usage: runR1.usage, usage_note: runR1.usage_note })}\n`);
     expect([runR1.id, runR1.branch, runR1.worktree]).toEqual(["R1", `corral/${fixture.session}/cache-fix`, fixture.scratch[0]]);
@@ -171,12 +172,10 @@ test("live private-pane co-work: shell finish refused, unclear ship asks, promot
     const finishedEvent = storeEvents().find((e) => e.kind === "cowork_finished" && e.task === "T-002");
     expect([finishedEvent?.actor, finishedEvent?.via]).toEqual(["owner", `assistant:${fixture.session}`]);
 
-    // C9: "approve T-002" lands it through the normal approve path; the session lists the commits.
-    await turn("approve T-002", [{ toolCalls: [{ callId: "approve", name: "corral_owner_action", arguments: {
-      kind: "approve", target: "T-002", input: input(5) } }] }, { text: "Landed T-002." }]);
-    const approved = result("approve");
-    process.stdout.write(`COWORK_LIVE_APPROVE ${JSON.stringify(approved).slice(0, 1500)}\n`);
-    expect([approved.state, approved.result.outcome]).toEqual(["committed", "executed"]);
+    // The deterministic independent reviewer approves before the owner exercises manual approval.
+    ok([corral, "verdict", "T-002", "approve", "--notes", "independent fixture review"], { cwd: workspace, env: originalEnv });
+    // Autopilot lands without another owner answer or approve tool call.
+    ok([corral, "sync"], { cwd: workspace, env: originalEnv });
     expect(show("T-002").status).toBe("done");
     const head = ok(["git", "-C", app, "rev-parse", "main"]).trim();
     expect(ok(["git", "-C", app, "log", "-1", "--format=%s", "main"]).trim()).toBe("Fix the cache");
@@ -184,7 +183,7 @@ test("live private-pane co-work: shell finish refused, unclear ship asks, promot
     expect(landed).toHaveLength(1);
     expect([landed[0]?.task, landed[0]?.run, landed[0]?.commits]).toEqual(["T-002", "R1", [head]]);
     const approvedEvent = storeEvents().find((e) => e.kind === "approved" && e.task === "T-002");
-    expect([approvedEvent?.actor, approvedEvent?.via]).toEqual(["owner", `assistant:${fixture.session}`]);
+    expect(approvedEvent?.actor).toBe("autopilot");
     expect(Object.keys(kinds())).toEqual(["spike-idea"]);
 
     const evidence = process.env.CORRAL_COWORK_EVIDENCE;
@@ -195,9 +194,9 @@ test("live private-pane co-work: shell finish refused, unclear ship asks, promot
         c10: { shellFinish: offered, question, promoted, backlog: { status: backlog.status, artifacts: backlog.artifacts } },
         c9: { finish: finished, task: { status: task.status, origin: task.origin, labels: task.labels, cowork: task.cowork,
           run: { id: runR1.id, branch: runR1.branch, gate: runR1.gate.result, usage: runR1.usage, usage_note: runR1.usage_note } },
-          finishedEvent, approve: approved, landed, head, approvedEvent } }, null, 2));
+          finishedEvent, landed, head, approvedEvent } }, null, 2));
     }
-    process.stdout.write(`PASS LIVE COWORK: private pane ${pane}; assistant ${fixture.session}; shell finish refused; unclear ship asked; spike promoted as T-001; cache-fix finished as T-002 (gate pass, review none) and landed at ${head}\n`);
+    process.stdout.write(`PASS LIVE COWORK: private pane ${pane}; assistant ${fixture.session}; shell finish refused; unclear ship asked; spike promoted as T-001; cache-fix finished as T-002 (gate pass, independent review) and landed at ${head}\n`);
   } finally {
     await host?.close();
     globalThis.fetch = originalFetch;

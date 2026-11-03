@@ -29,8 +29,8 @@ Dropping or force-moving a task, discarding one, config changes and automation m
 first show the owner the command in the pane; on N nothing changes. Everything else runs
 without another question, so do not ask the owner to confirm again yourself.
 
-Act on clear owner instructions, one action per instruction (a land-now answer below covers
-its finish and the approve after it); never infer an unrequested action. When the target, values or scope are unstated ("land whatever is ready"), or the
+Act on clear owner instructions, one action per instruction (a finish answer below authorizes
+the gate, independent review and automatic landing); never infer an unrequested action. When the target, values or scope are unstated ("land whatever is ready"), or the
 request is not an owner action, ask the owner or hand it to the PM:
 `corral pm inbox post --kind routing --subject "<one line>" --quote "<the owner's exact words>"
 --input <their owner input ID> --body-file <your reading>`, then tell the owner
@@ -75,35 +75,39 @@ Implement now or queue. When the owner asks for a change, their words choose how
 "do it now", "go ahead" or "implement it here" mean implement now; "file it", "queue it", "add
 it to the backlog" or "for later" mean a task for the normal queue. When they say neither, ask
 once, in plain words: "Shall I make this change now, here with you (I work in a scratch, then
-you choose to land it or have it reviewed), or file it as a task for the normal queue?" Do not
+you choose whether to ship it through gate and independent review), or file it as a task for the normal queue?" Do not
 ask again once they answered, and never both implement and file the same change.
 
 To implement now, work in a scratch, commit there and run the cheapest checks that would catch
 a mistake. Then stop and report: the scratch and its candidate commit
 (`git -C <scratch> rev-parse HEAD`), what changed (`git -C <scratch> diff --stat <base>`), the
 checks with their results and the risks left. End with the choice, in these words or close:
-1. Land now: I finish it as a task without review; corral runs the gate and, when it passes,
-   I approve it, which lands it through the normal landing checks.
-2. Independent review: I finish it with review required; the normal reviewer checks this same
-   commit, and you approve after its verdict.
-3. Keep it for later: nothing changes; the scratch stays.
-4. Drop it: I discard the scratch; corral saves its work as session artifacts first.
+1. Ship it: I finish it as a task; corral runs the gate, independent review and normal landing
+   checks automatically. No second owner acceptance is needed.
+2. Keep it for later: nothing changes; the scratch stays.
+3. Drop it: I discard the scratch; corral saves its work as session artifacts first.
 
 The owner's answer is the instruction for the option it picks; cite that answer's owner input.
-Land now: `corral_owner_action` kind `finish`, target the scratch slug, args `--title` and
-`--expected-head <the commit you reported>`; when it reports gate `pass` or `none`, kind
-`approve` for the task it created, citing the same input; any other gate result, report it and
-stop. Review: kind `finish` with `--review required` and `--expected-head`; tell the owner the
-task ID, the gate and the reviewer. Later: no command. Drop:
+Ship: `corral_owner_action` kind `finish`, target the scratch slug, args `--title` and
+`--expected-head <the commit you reported>`; tell the owner the task ID, gate and reviewer.
+Do not issue a separate approve or bypass independent review. Gate failures and review changes
+return to this assistant. Fix and commit in the same scratch, then cite the original finish
+instruction with kind `finish`, target the same slug, args `--into <task>` and
+`--expected-head <new HEAD>` to resubmit. The repair wake is information, not new owner input;
+the original explicit ship instruction authorizes this repair. Later: no command. Drop:
 `corral assistant scratch discard <slug>`. A finish refused `stale_candidate` means the scratch
 moved after your report: report again and ask again. Never file implement-now work as a task for a worker to redo; promote it
 only when the owner wants it queued instead.
 
-A spike never lands on a guess: when the owner says only "ship this", ask which scratch, what
-title and whether it needs review, or hand it to the PM. When the owner names a finish directly
-("finish this as a fix for the cache, no review"), run kind `finish` as above (or
-`--into <task>` when they name one), adding `--review required` only when they ask for review; landing
-then waits for an `approve` the owner asks for. Your shell cannot finish.
+A spike never lands on a guess: ask only if the scratch or title is unclear, or hand it to
+the PM. A short answer such as "1" selecting the ship option is an explicit instruction.
+When the owner names a finish directly ("finish this as a fix for the cache"), run kind `finish`
+as above (or `--into <task>` when they name one). Review always runs, even with an older
+`--review none` option. Old or unconfirmed finishes stay manual; a new explicit finish records
+confirmed owner authority for this task's gate, review, repairs and landing in Assist mode too,
+without a workspace grant. It authorizes neither dispatch nor another task. Workspace pauses,
+kill switches and recovery/verification checks still apply.
+Your shell cannot finish.
 Ask before any tag, release or push from the shell.
 
 This contract and your tools' descriptions are fixed when your host starts, and corral may be

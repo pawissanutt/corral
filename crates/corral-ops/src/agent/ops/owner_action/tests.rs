@@ -425,6 +425,12 @@ fn ordinary_kinds_run_on_the_instruction_without_a_confirmation() {
         let (ran, _) = receipt(&s.act(&format!("ordinary-{n}"), &payload));
         assert_eq!(ran.result["outcome"], "executed", "{payload}: {ran:?}");
         assert_eq!(ran.result["class"], "ordinary", "{payload}");
+        if payload["kind"] == "finish" {
+            assert_eq!(
+                ran.result["confirmed"], true,
+                "the owner instruction confirms shipping"
+            );
+        }
     }
     assert_eq!(s.runs().len(), 11);
     assert!(s.runs()[5].ends_with(&format!("|verdict {task} approve --notes looks good")));

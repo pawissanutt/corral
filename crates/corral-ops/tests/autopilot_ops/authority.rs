@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "cowork.rs"]
+mod cowork;
+
 fn assist(fx: &mut Fx) {
     fx.ctx.store.config.automation = Default::default();
     fx.ctx.store.save_config().unwrap();

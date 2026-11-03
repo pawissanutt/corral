@@ -106,7 +106,7 @@ fn base(action: &Action, cited: &Cited) -> Value {
         "kind": action.kind, "target": action.target, "command": action.command, "argv": action.argv,
         "class": action.class.as_str(), "input": cited.input.id, "sha256": cited.input.sha256,
         "confirmation": confirmation.map(|entry| &entry.id),
-        "confirmed": confirmation.is_some_and(|entry| entry.text == "y"),
+        "confirmed": action.kind == "finish" || confirmation.is_some_and(|entry| entry.text == "y"),
     })
 }
 

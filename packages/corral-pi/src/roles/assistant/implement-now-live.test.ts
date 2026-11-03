@@ -162,25 +162,26 @@ test("live implement-now: one ambiguous question, scratch work, a candidate-boun
     const candidate = ok(["git", "-C", scratch, "rev-parse", "HEAD"]).trim();
     const reported = said().at(-1) ?? "";
     const choices = completionChoices(sent);
-    expect(choices).toHaveLength(4);
+    expect(choices).toHaveLength(3);
     for (const part of [candidate, "USAGE.md |", "passed", "Risks:", ...choices]) expect(reported).toContain(part);
     // Then still nothing is finished, and the question was not asked again.
     expect([tasks().length, kinds()[slug], ownerActions().length]).toEqual([0, "spike", 0]);
     expect(said().filter((text) => text.includes(question as string))).toHaveLength(1);
 
-    // When the owner answers "land it now", one answer finishes exactly the reported candidate and approves it.
+    // One owner answer finishes exactly the reported candidate; independent review still runs.
     await turn("land it now", [
       { toolCalls: [{ callId: "finish", name: "corral_owner_action", arguments: { kind: "finish", target: slug,
         args: ["--title", "Add a usage section", "--expected-head", candidate.slice(0, 12)], input: input(3) } }] },
-      { toolCalls: [{ callId: "approve", name: "corral_owner_action", arguments: { kind: "approve", target: "T-001", input: input(3) } }] },
-      { text: "Landed T-001." }]);
+      { text: "T-001 is gated and waiting for independent review." }]);
     const finished = JSON.parse(toolText("finish"));
-    const approved = JSON.parse(toolText("approve"));
-    expect([finished.result.outcome, approved.result.outcome, asked]).toEqual(["executed", "executed", []]);
+    expect([finished.result.outcome, finished.result.confirmed, asked]).toEqual(["executed", true, []]);
+    expect(show("T-001").status).toBe("review");
+    ok([corral, "verdict", "T-001", "approve", "--notes", "independent fixture review"], { cwd: workspace, env: originalEnv });
+    ok([corral, "sync"], { cwd: workspace, env: originalEnv });
     const task = show("T-001");
     expect([task.status, task.runs.length, task.runs[0].branch]).toEqual(["done", 1, `corral/${fixture.session}/${slug}`]);
     expect(ok(["git", "-C", app, "rev-parse", "main"]).trim()).toBe(candidate);
-    for (const kind of ["cowork_finished", "approved"]) {
+    for (const kind of ["cowork_finished"]) {
       const event = storeEvents().find((e) => e.kind === kind && e.task === "T-001");
       const authority = event?.detail?.owner_authority as { input?: string; owner_message?: string } | undefined;
       expect([authority?.input, authority?.owner_message]).toEqual([input(3), "land it now"]);
@@ -193,7 +194,7 @@ test("live implement-now: one ambiguous question, scratch work, a candidate-boun
       mkdirSync(evidence, { recursive: true });
       writeFileSync(join(evidence, "implement-now-live-summary.json"), JSON.stringify({ pane, assistant: fixture.session,
         provider: "deterministic Codex SSE transport; production host, auth, role and loaded contract",
-        question, report: reported, choices, candidate, finish: finished, approve: approved,
+        question, report: reported, choices, candidate, finish: finished,
         task: { status: task.status, runs: task.runs.length, branch: task.runs[0].branch } }, null, 2));
     }
     process.stdout.write(`PASS LIVE IMPLEMENT-NOW: pane ${pane}; asked once; report bound to ${candidate.slice(0, 12)}; T-001 landed on one answer\n`);

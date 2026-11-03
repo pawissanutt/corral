@@ -574,11 +574,11 @@ corral approve T-060
 
 The owner and an assistant can work together in one of the assistant's scratch worktrees
 without a task. No task exists before or during that work. When the owner says to finish
-it ("finish this as a fix for the cache, no review"), the assistant runs the `finish` owner
-action with the scratch slug as target and the title and review choice from the
-instruction. It is an ordinary owner action, so no confirmation is shown. The assistant
-asks only when the scratch, the title or the review choice is unclear ("ship something like
-this"), or hands the request to the PM; nothing finishes on a guess. From the owner's own
+it ("finish this as a fix for the cache", or "1" selecting a concrete ship option), the
+assistant runs the `finish` owner action with the scratch slug and title from the instruction.
+That explicit finish is confirmed owner authority to ship: gate → independent review → land,
+without a second owner acceptance or confirmation dialog. The assistant asks only when the
+scratch or title is unclear ("ship something like this"), or hands the request to the PM; nothing finishes on a guess. From the owner's own
 shell the same command takes `--session A-<n>`. An assistant shell is refused with
 `assistant_refused`: finishing is an owner action and reaches an assistant only through
 `corral_owner_action`.
@@ -593,8 +593,11 @@ changes nothing. Then:
 
 1. **Materialize.** Corral creates task `T-<m>` in Review with origin `assistant`, label
    `cowork` and `cowork: {session, scratch, run, review}`. The body is the session's
-   summary followed by the owner's finish words, and `--kind`, `--size` and `--note` are
-   optional. The task's run `R1` is already finished: its worktree and branch are the
+   summary followed by the owner's finish words. `--kind`, `--size` and `--note` are
+   optional; missing classification defaults to `backend`, size `m`, so normal reviewer
+   routing rules can match. Explicit values and an existing task's classification survive.
+   `cowork.owner_confirmed` records the shipping instruction; missing/false in old or
+   unconfirmed records retains the manual path. The task's run `R1` is already finished: its worktree and branch are the
    scratch's own, its agent is the session's profile, and it owns no pane. Its usage is the
    part of the session's usage recorded between scratch creation and finish. A diff
    artifact is saved on the run as for `corral done`. The scratch's kind becomes `cowork`;
@@ -608,28 +611,39 @@ changes nothing. Then:
    would, with the run's tier rules fixed as a dispatch fixes them. A failed gate leaves
    the task in Review with the failed receipt, as for a worker. The finish reports the
    result (`pass`, `fail`, `none` without a configured gate) instead of undoing itself.
-4. **Review choice.** The default `--review none` makes the co-work run resolve reviewer
-   none, so `approve` needs no review. `--review required` starts the project's normal
-   reviewer after a passing gate (`corral review-run`), and approval then needs its
-   verdict. The required review binds whatever the reviewer resolves to: when none
-   resolves (no reviewer configured, or the task's own `reviewer: none`), now or after a
-   later configuration change, the finish says so and `approve` refuses `review_required`
-   until `corral review-run <id> --reviewer <profile>` has returned its verdict on the
-   candidate. Either way the co-work run lands only on the owner's approval: its acceptance
-   resolves to `owner`, so autopilot never lands it. Both overrides apply only while the
-   co-work run is the task's current run. A later run of the same task, and every other
-   task, follow the project's review policy.
-5. **Land.** Landing is a separate `approve` the owner asks for (from the shell, or as the
-   `approve` owner action). It runs the normal path: landing lock, integration, size and
-   freshness checks, and the full gate where the project is tiered. The `approved` event
-   records `owner via assistant:A-<n>` when an assistant ran it. After the landing the
+4. **Independent review.** A confirmed finish always requires review, including when an
+   older assistant sends `--review none`. The normal configured/routed reviewer starts
+   after a passing gate. If none resolves (including an explicit task `reviewer: none`),
+   the finish names the missing configuration and landing refuses `review_required` until
+   `corral review-run <id> --reviewer <profile>` returns an approving verdict. No gate pass
+   substitutes for review. Old/unconfirmed records retain their saved review choice.
+5. **Land.** Confirmed finish resolves acceptance to `auto`, not `owner`. Its explicit
+   owner instruction authorizes this task's gate, review, repair and landing even in Assist
+   mode, without a workspace grant, an `owner_accept` attention or another owner decision.
+   It authorizes neither dispatch nor another task. Workspace pauses, kill switches, recovery holds,
+   owner paths and all normal landing checks still apply. Landing takes the landing lock,
+   integration, size and freshness checks, and the full gate where the project is tiered.
+   Old/unconfirmed finishes remain owner-accepted. These overrides apply only while the
+   co-work run is current; a later ordinary run follows the project's policy. After landing the
    session record's `landed` list gains `{task, run, base, sha, commits}` (the commits the
    landing added to the base, oldest first), the session's scratch record is removed (the
    task run owns the worktree, and `approve` removes it with the run's branch), and corral
    logs `cowork_landed`. Discarding the task instead removes the worktree as for any task,
    and the session forgets the scratch record too.
 
-Events: `cowork_finished` (session, scratch, run, branch, head, candidate: the scratch HEAD
+**Failures return to the assistant.** A gate failure or review changes on the current co-work
+run never resumes or dispatches a worker. Corral posts the request, details and resubmission
+instructions to the originating assistant's native inbox. A live assistant receives it; an
+offline session keeps it queued and the owner gets Needs me with `corral pi --resume A-<n>`.
+An ended/missing session produces an actionable owner notice naming the scratch and finish
+command instead. Fix and commit in that scratch, then use the original finish instruction
+with the `finish` owner action, the same slug, `--into <task>` and
+`--expected-head <new HEAD>`. The owner's shell can run that finish too. It adds a finished
+run on the same scratch for fresh gate and review. While waiting for repair, owner acceptance,
+a running review or a blocked landing checkout, unrelated main movement does not rewrite
+or repeatedly gate the candidate. Once it can proceed, verification refreshes before landing.
+
+Events: `cowork_finished` (session, scratch, run, branch, head, owner_confirmed, candidate: the scratch HEAD
 before any rebase, base, review) and
 `cowork_landed` (session, run, sha, commits). Through an owner action, both carry the owner
 authority like every owner-action event. `corral stats` keeps co-work tasks in the ordinary
@@ -647,18 +661,17 @@ implement-now work is not handed to a worker to redo.
 
 Implement-now work happens in one of the session's scratch worktrees. When it is done, the
 assistant stops and reports the scratch and its candidate commit, the diff stat against the
-base, the checks it ran with their results and the risks left, then offers four options:
+base, the checks it ran with their results and the risks left, then offers three options:
 
 | Owner picks | The assistant runs (citing that answer's owner input) | Result |
 |---|---|---|
-| Land now | `finish` with `--title` and `--expected-head <candidate>`; then, when the gate is `pass` or `none`, `approve` of the new task | the [finish](#co-work-finish-and-landing) task, gated, landed through the normal approve path |
-| Independent review | `finish` with `--review required` and `--expected-head <candidate>` | the normal reviewer starts on that same run and commit; landing waits for its verdict and an owner `approve` |
+| Ship it | `finish` with `--title` and `--expected-head <candidate>` | the [finish](#co-work-finish-and-landing) task proceeds through gate, independent review and automatic landing |
 | Keep it for later | nothing | the scratch stays as it is |
 | Drop it | `corral assistant scratch discard <slug>` | the work is saved as session artifacts, then removed |
 
-The owner's one land-now answer covers both the finish and the approve after it. Nothing
-else is relaxed: the approve takes the landing lock and runs the integration, size, freshness
-and gate checks of any approval, and a failed gate stops before it. When the scratch moved
+The owner's one ship answer authorizes the complete finish pipeline, including repairs
+returned to that assistant; it needs no separate approve call. Independent review and the
+landing lock, integration, size, freshness and gate checks are not relaxed. When the scratch moved
 after the report, the finish refuses `stale_candidate` and changes nothing, and the assistant
 reports the new candidate and asks again. Plain chat works for both decisions. When the
 generation exposes `ask_user`, the assistant can offer the same choices in its structured

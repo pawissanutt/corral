@@ -1,6 +1,6 @@
 //! Re-admit an exact never-submitted attempt, not a replacement gate or review child.
 use anyhow::{Context, Result, ensure};
-use corral_core::{OperatingOrigin, ProfileChoice, TaskRef as _};
+use corral_core::{ProfileChoice, TaskRef as _};
 use serde_json::json;
 
 use super::{Kind, Pending, ReviewLaunch, submission};
@@ -82,7 +82,7 @@ pub(super) fn prepare(
         .as_ref()
         .context("prepared action has no origin")?;
     ensure!(
-        operating::is_automatic(authorization) == (origin == operating::Origin::Automatic),
+        operating::automatic_driver(authorization) == (origin == operating::Origin::Automatic),
         "cannot change the prepared action's origin"
     );
     ensure!(
@@ -104,7 +104,7 @@ pub(super) fn prepare(
             && corral_git::is_clean(&run.worktree)?,
         "prepared candidate changed; retained evidence needs owner disposition"
     );
-    if matches!(authorization.origin, OperatingOrigin::Automatic { .. }) {
+    if operating::automatic_driver(authorization) {
         pending.authorization = Some(operating::authorize(
             ctx,
             authorization.action.clone(),

@@ -7,6 +7,7 @@ use corral_core::{
 
 use crate::Ctx;
 
+mod cowork;
 #[cfg(test)]
 mod records_tests;
 mod start;
@@ -38,6 +39,17 @@ pub(crate) fn require<T: TaskRef + ?Sized>(
     task: &T,
     kind: OperatingActionKind,
 ) -> Result<()> {
+    if !cowork::require(store, task, kind)? {
+        require_grant(store, task, kind)?;
+    }
+    require_recovery(store, task)
+}
+
+fn require_grant<T: TaskRef + ?Sized>(
+    store: &Store,
+    task: &T,
+    kind: OperatingActionKind,
+) -> Result<()> {
     let effective = store.effective_operating_policy()?;
     let id = task.id();
     let reasons = effective
@@ -57,6 +69,10 @@ pub(crate) fn require<T: TaskRef + ?Sized>(
         "automatic {kind:?} is not authorized for {id}: {}",
         reasons.join("; ")
     );
+    Ok(())
+}
+
+fn require_recovery<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Result<()> {
     if let Some(run) = task.current_run_head()? {
         let stuck_unresolved = run.stuck.as_ref().is_some_and(|stuck| {
             if run.outcome.is_none() {
@@ -131,12 +147,31 @@ pub(crate) fn authorize(
     action: OperatingActionIdentity,
     origin: Origin,
 ) -> Result<ActionAuthorization> {
+    let carried_owner = if origin == Origin::Automatic {
+        let task = ctx.store.head(&action.task)?;
+        let provenance = cowork::provenance(&task, &action)?;
+        if provenance.is_some() {
+            require(&ctx.store, &task, action.kind)?;
+        }
+        provenance
+    } else {
+        None
+    };
+    let origin = if carried_owner.is_some() {
+        Origin::Owner
+    } else {
+        origin
+    };
     let key = claim_key(&action.task, &action.run, action.kind, &action.attempt)?;
     let _claim = ctx.store.operating_claim_lock()?;
     let existing = ctx.store.record::<String>(CLAIMS, &key)?.is_some();
     if existing {
         let previous = load(ctx, &action.task, &action.run, action.kind, &action.attempt)?;
         if previous.action.plan == action.plan && previous.action.round == action.round {
+            ensure!(
+                carried_owner.is_none() || cowork::carried(&previous),
+                "cannot convert another owner approval into a co-work instruction"
+            );
             if previous.action != action {
                 ensure!(
                     rederivable(ctx, &previous, origin)?,
@@ -163,8 +198,9 @@ pub(crate) fn authorize(
             }
         }
     }
-    let provenance = match origin {
-        Origin::Owner => OperatingOrigin::ExplicitOwner {
+    let provenance = match (carried_owner, origin) {
+        (Some(provenance), _) => provenance,
+        (None, Origin::Owner) => OperatingOrigin::ExplicitOwner {
             approval: format!(
                 "{}:{}:{:?}:{}:{}",
                 action.task,
@@ -176,7 +212,7 @@ pub(crate) fn authorize(
             confirmed_by: "owner".into(),
             confirmed_at: corral_core::clock::now(),
         },
-        Origin::Automatic => {
+        (None, Origin::Automatic) => {
             require(
                 &ctx.store,
                 &ctx.store.head(&action.task)?.to_shell_task()?,
@@ -209,7 +245,10 @@ pub(crate) fn authorize(
 /// A definitely unsubmitted automatic preparation is stale churn: fresh automatic authority
 /// replaces it. Its consent and verification result are never reused.
 fn rederivable(ctx: &Ctx, previous: &ActionAuthorization, origin: Origin) -> Result<bool> {
-    if origin != Origin::Automatic || !is_automatic(previous) {
+    if cowork::carried(previous) && origin == Origin::Owner {
+        let task = ctx.store.head(&previous.action.task)?;
+        require(&ctx.store, &task, previous.action.kind)?;
+    } else if origin != Origin::Automatic || !is_automatic(previous) {
         return Ok(false);
     }
     Ok(matches!(
@@ -229,7 +268,13 @@ pub(crate) fn submit<R>(
         authorization,
         &authorization.action,
         |store, task| {
-            if matches!(authorization.origin, OperatingOrigin::Automatic { .. }) {
+            if is_automatic(authorization) || cowork::carried(authorization) {
+                if cowork::carried(authorization) {
+                    ensure!(
+                        cowork::confirmed(task, authorization.action.kind),
+                        "co-work instruction changed"
+                    );
+                }
                 require(store, task, authorization.action.kind)?;
             }
             prepare(store, task)
@@ -252,7 +297,13 @@ pub(crate) fn submit_head<R>(
         authorization,
         &authorization.action,
         |store, head| {
-            if matches!(authorization.origin, OperatingOrigin::Automatic { .. }) {
+            if is_automatic(authorization) || cowork::carried(authorization) {
+                if cowork::carried(authorization) {
+                    ensure!(
+                        cowork::confirmed(&*head, authorization.action.kind),
+                        "co-work instruction changed"
+                    );
+                }
                 require(store, &*head, authorization.action.kind)?;
             }
             prepare(store, head)
@@ -279,6 +330,11 @@ pub(crate) fn identity(
         plan: None,
         round: None,
     }
+}
+
+/// Automatic executors can carry the original finish instruction without a workspace grant.
+pub(crate) fn automatic_driver(authorization: &ActionAuthorization) -> bool {
+    is_automatic(authorization) || cowork::carried(authorization)
 }
 
 pub(crate) fn is_automatic(authorization: &ActionAuthorization) -> bool {

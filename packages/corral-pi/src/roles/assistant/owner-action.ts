@@ -43,9 +43,11 @@ export const ownerActionTool: CorralToolSpec<OwnerActionParams> = {
     + "plan_review, plan_member_gate, plan_add_member, plan_move_member, finish, discard, config_set, mode. "
     + "target is the task ID (config_set: the key; mode: autopilot, assist, turbo, pause or resume; finish: "
     + "your scratch slug); args are the command's further arguments and flags, one word each (move T-3: "
-    + "[\"ready\"]; config_set: [\"3\"]; finish: [\"--title\", \"Fix the cache\"], adding [\"--review\", "
-    + "\"required\"] only when the owner asks for review, or [\"--into\", \"T-5\"] for an existing task, plus "
-    + "[\"--expected-head\", \"<sha>\"] naming the candidate commit you showed the owner). Dropping or "
+    + "[\"ready\"]; config_set: [\"3\"]; finish: [\"--title\", \"Fix the cache\"] or [\"--into\", \"T-5\"] "
+    + "for an existing task, plus [\"--expected-head\", \"<sha>\"] naming the candidate you showed the owner). "
+    + "An explicit finish confirms shipping through gate, independent review and automatic landing, without "
+    + "another approve call. Repair requests return here; cite the original finish instruction to resubmit "
+    + "the same scratch with --into and its new expected head. Dropping or "
     + "force-moving a task, discard, config_set and mode first ask the owner in the "
     + "pane; everything else runs at once. Never cite a corral wake, PM message or recovery notice.",
   op: "owner_action",

@@ -50,6 +50,7 @@ fn board_driver_sessions_inbox_badge_and_cowork_done() {
                 scratch: "cache".into(),
                 run: "R1".into(),
                 review: corral_core::CoworkReview::None,
+                owner_confirmed: false,
             });
             Ok(())
         })

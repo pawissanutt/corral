@@ -23,12 +23,13 @@ use crate::review::{approve_landed, has_tracked_changes, main_repo};
 use crate::reviewer::review_run_automatic as review_run;
 use crate::verification;
 use crate::{ApproveStrategy, Change, Ctx, DispatchOutcome};
-use corral_core::{TaskMut as _, TaskRef as _};
+use corral_core::{TaskFieldsRef as _, TaskMut as _, TaskRef as _};
 
 /// Bound on the steps one task takes in one sync. A step that changes nothing waits, so this only guards
 /// against a loop bug.
 const MAX_STEPS: usize = 16;
 
+mod cowork;
 mod infra;
 mod output;
 mod repair;
@@ -94,6 +95,7 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
             }
         }
     }
+    cowork::deliver_pending(&ctx);
     crate::plan_acceptance::checkpoint::start_due(&ctx);
     Ok(changes)
 }
@@ -148,6 +150,24 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
         policy,
         now,
     };
+    if task.cowork_run().is_some()
+        && !matches!(pilot.stage(), Some(AutoStage::Escalated | AutoStage::Done))
+    {
+        if let Some(step) = pilot.cowork_wait()? {
+            return Ok(step);
+        }
+        // A failed co-work gate already ran at finish. Do not silently retry it, even if
+        // main moved: this candidate's defect belongs to its originating assistant.
+        if let Some(gate) = run.gate.as_ref().filter(|gate| {
+            gate.result == GateResult::Fail && run_head_sha(run).as_deref() == Some(&gate.sha)
+        }) {
+            if crate::operating::require(&ctx.store, task, OperatingActionKind::Repair).is_err() {
+                return Ok(Step::Wait);
+            }
+            let (summary, details) = pilot.gate_failure(gate, "")?;
+            return pilot.request_changes(&summary, &details);
+        }
+    }
     // Main movement can stale an approval, but cannot erase a known defect on this candidate.
     // Handle it before integration preflight or a stale gate can restart verification.
     if !matches!(pilot.stage(), Some(AutoStage::Escalated | AutoStage::Done))
@@ -465,7 +485,11 @@ impl Pilot<'_> {
     /// Gate and review passed: wait for the owner (accept = owner), or check the guards and start landing.
     /// Diff size is deliberately not a guard: the independent reviewer is the safeguard.
     fn accept(&self, head: String) -> Result<Step> {
-        if self.head.review == Some(Accept::Owner)
+        if !self
+            .head
+            .cowork_run()
+            .is_some_and(|cowork| cowork.owner_confirmed)
+            && self.head.review == Some(Accept::Owner)
             && self
                 .config
                 .review_policy(self.head.project.as_deref(), None)
@@ -673,9 +697,16 @@ impl Pilot<'_> {
         if !details.trim().is_empty() {
             request.push_str(&format!("\n{}\n", details.trim_end()));
         }
-        let finish = format!(
-            "Fix it, commit, and run `{corral} done {id} --summary \"<what changed>\"` again."
-        );
+        let finish = if let Some(cowork) = self.head.cowork_run() {
+            format!(
+                "Fix and commit in assistant {}; resubmit scratch {} with the original owner finish instruction and `--into {id} --expected-head <new HEAD>`.",
+                cowork.session, cowork.scratch
+            )
+        } else {
+            format!(
+                "Fix it, commit, and run `{corral} done {id} --summary \"<what changed>\"` again."
+            )
+        };
         let document =
             format!("# Changes requested: {id} round {round} of {max}\n\n{request}\n{finish}\n");
         let artifact = self.snapshot(
@@ -695,6 +726,9 @@ impl Pilot<'_> {
             sha: run_head_sha(self.run),
             at: self.now,
         };
+        if let Some(cowork) = self.head.cowork_run() {
+            return self.cowork_changes(cowork, &message, summary, state, key, round);
+        }
         let pane = self.run.herdr.as_ref().map(|h| h.pane_id.as_str());
         let task = self.ctx.store.head(id)?;
         let switch = crate::escalation::escalation_head(self.config, &task, false)?;

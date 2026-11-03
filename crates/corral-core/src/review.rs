@@ -393,9 +393,12 @@ impl Config {
             self.review.plan_accept == Some(Accept::Owner)
                 || project.is_some_and(|project| project.review.plan_accept == Some(Accept::Owner))
         } else {
-            task.review == Some(Accept::Owner)
-                || self.review.accept == Some(Accept::Owner)
-                || project.is_some_and(|project| project.review.accept == Some(Accept::Owner))
+            !task
+                .cowork_run()
+                .is_some_and(|cowork| cowork.owner_confirmed)
+                && (task.review == Some(Accept::Owner)
+                    || self.review.accept == Some(Accept::Owner)
+                    || project.is_some_and(|project| project.review.accept == Some(Accept::Owner)))
         }
     }
 
@@ -548,11 +551,15 @@ impl Config {
             }
             policy.reviewer = Reviewer::parse(&rule.profile);
         }
-        // A co-work finish lands only on the owner's approval, and is reviewed only when the
-        // owner asked for review; neither choice outlives the finished run.
+        // A confirmed finish is the owner's shipping instruction, not a request for another
+        // acceptance. Legacy/unconfirmed finishes retain their original manual behavior.
         if let Some(cowork) = task.cowork_run() {
-            policy.accept = Accept::Owner;
-            if cowork.review == crate::CoworkReview::None {
+            policy.accept = if cowork.owner_confirmed {
+                Accept::Auto
+            } else {
+                Accept::Owner
+            };
+            if !cowork.owner_confirmed && cowork.review == crate::CoworkReview::None {
                 policy.reviewer = Reviewer::None;
             }
         }
