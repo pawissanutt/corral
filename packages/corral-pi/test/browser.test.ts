@@ -14,6 +14,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Browser, findBrowser } from "../src/extensions/browser/chrome.ts";
 import { browserSettings, browserTools } from "../src/extensions/browser/index.ts";
 import { browserTarget, checkLanded } from "../src/extensions/browser/target.ts";
+import { awaitExits, watchExits } from "./support/exits.ts";
 import { within } from "./support/wait.ts";
 
 const work = mkdtempSync(join(tmpdir(), "corral-pi-browser-"));
@@ -94,12 +95,25 @@ function owned(marker: string): number[] {
   }).map(Number);
 }
 
-/** Waits for the observable state "no owned process and no profile left", with a deadline. */
-async function cleanedUp(marker: string, root: string): Promise<void> {
-  const deadline = Date.now() + 10_000;
-  while (owned(marker).length || readdirSync(root).length) {
-    if (Date.now() > deadline) throw new Error(`browser leftovers: ${owned(marker).join(",")} ${readdirSync(root).join(",")}`);
-    await new Promise((resolve) => setTimeout(resolve, 25));
+/**
+ * Asserts "no owned process and no profile left". Each still-owned process is awaited on its
+ * pidfd exit signal, bounded; one that never exits fails the test. The profile is removed before a
+ * call settles, so it is checked directly.
+ */
+function cleanedUp(marker: string, root: string, exits: readonly number[] = []): void {
+  awaitExits(exits, 10_000);
+  allExited(marker);
+  expect(readdirSync(root)).toEqual([]);
+}
+
+/** Awaits the pidfd exit of every process still owned by `marker`, until none is left. */
+function allExited(marker: string): void {
+  for (let pids = owned(marker); pids.length; pids = owned(marker)) {
+    try {
+      awaitExits(watchExits(pids), 10_000);
+    } catch (error) {
+      throw new Error(`browser leftovers ${owned(marker).join(",")}: ${String(error)}`);
+    }
   }
 }
 
@@ -184,10 +198,10 @@ test("detached browser leader is registered and removed on exit", async () => {
   await browser.close();
   expect([...pids]).toEqual([]);
 });
-const navigateWith = (timeout_ms: number, tmpRoot: string) =>
+const navigateWith = (timeout_ms: number, tmpRoot: string, signal?: AbortSignal) =>
   (browserTools({ origins: [origin], timeout_ms, executable: fakeBrowser }, { cwd, tmpRoot })
     .find((entry) => entry.name === "browser_navigate") as ToolDefinition)
-    .execute("call-1", { url: `${origin}/` } as never, undefined, undefined, undefined as never);
+    .execute("call-1", { url: `${origin}/` } as never, signal, undefined, undefined as never);
 
 /** Resolves once `name` exists in `dir`, e.g. the fake browser's marker for a request it received. */
 function appeared(dir: string, name: string): Promise<void> {
@@ -230,7 +244,37 @@ test("a slow browser start-up does not consume the page's timeout_ms", async () 
     jest.useRealTimers();
   }
   removeGates(root);
-  await cleanedUp(root, root);
+  cleanedUp(root, root);
+}, 30_000);
+
+test("a call cancelled mid-page after start-up and page each took nearly all of timeout_ms stops its browser", async () => {
+  // Given a browser whose start-up and page load each take 3.999 s of a 4 s timeout_ms. Together
+  // that is about twice timeout_ms, the case where the real-browser cancellation test's former
+  // single 20 s wait expired before the request arrived (T-768). The deadlines stay live on fake
+  // timers, advanced only once the fake browser has received the request each phase waits on.
+  const root = mkdtempSync(join(work, "cancel-late-"));
+  const controller = new AbortController();
+  let exits: number[] = [];
+  jest.useFakeTimers();
+  try {
+    const call = navigateWith(4_000, root, controller.signal);
+    call.catch(() => {});
+    await Promise.race([appeared(root, "asked-Browser.getVersion"), call]);
+    jest.advanceTimersByTime(3_999);
+    writeFileSync(join(root, "started"), "");
+    await Promise.race([appeared(root, "asked-Page.navigate"), call]);
+    jest.advanceTimersByTime(3_999);
+    // When the call is cancelled while its page has still not loaded.
+    exits = watchExits(owned(root));
+    expect(exits.length).toBeGreaterThan(0);
+    controller.abort();
+    // Then it fails as interrupted, not timed out, and its browser and profile are gone.
+    await expect(call).rejects.toThrow(/browser_interrupted/);
+  } finally {
+    jest.useRealTimers();
+  }
+  removeGates(root);
+  cleanedUp(root, root, exits);
 }, 30_000);
 
 test("a browser that never starts is stopped after timeout_ms", async () => {
@@ -239,7 +283,7 @@ test("a browser that never starts is stopped after timeout_ms", async () => {
   // When a call uses it, then start-up is bounded by timeout_ms and nothing is left behind.
   await expect(navigateWith(300, root)).rejects.toThrow(/browser_timeout: the browser did not start within 300 ms/);
   removeGates(root);
-  await cleanedUp(root, root);
+  cleanedUp(root, root);
 }, 30_000);
 
 test("navigate and screenshot use fresh profiles and attach screenshots locally", async () => {
@@ -263,7 +307,7 @@ test("navigate and screenshot use fresh profiles and attach screenshots locally"
   expect([summary.title, summary.saved, summary.bytes]).toEqual(["Worktree Page", "shots/nested/page.png", png.length]);
   expect(readFileSync(join(cwd, "shots/nested/page.png")).equals(png)).toBe(true);
   await expect(run("browser_screenshot", { url: "site/index.html", save_as: "../out.png" })).rejects.toThrow(/browser_save_refused/);
-  await cleanedUp(profiles, profiles);
+  cleanedUp(profiles, profiles);
 }, 60_000);
 
 test("unconfigured targets fail, including a redirect away from a configured origin", async () => {
@@ -274,28 +318,22 @@ test("unconfigured targets fail, including a redirect away from a configured ori
   expect(strayHits).toBe(0);
   // When a configured page redirects to it, then the landed page is refused and not returned.
   await expect(run("browser_screenshot", { url: `${origin}/away` })).rejects.toThrow(/landed on http:\/\/127\.0\.0\.1/);
-  await cleanedUp(profiles, profiles);
+  cleanedUp(profiles, profiles);
 }, 60_000);
 
 test("a cancelled call stops its browser and removes its profile", async () => {
   if (!chrome) return;
   // Given a page load the dev server never answers.
   const controller = new AbortController();
-  // The call's start-up and page deadlines run on fake timers that are never advanced: on a loaded
-  // host a slow start-up raced a 20 s wait against an equal timeout_ms (T-768). Only the request
-  // reaching the server or the call failing ends the wait now; the test timeout bounds it.
-  jest.useFakeTimers();
-  let call: ReturnType<typeof run>;
-  try {
-    call = run("browser_navigate", { url: `${origin}/hang` }, controller.signal);
-    call.catch(() => {});
-    const ended = call.then(() => { throw new Error("the call finished before its page request reached the server"); });
-    ended.catch(() => {});
-    // When the request reaches the server and the call is cancelled.
-    await Promise.race([hangReached, ended]);
-  } finally {
-    jest.useRealTimers();
-  }
+  const call = run("browser_navigate", { url: `${origin}/hang` }, controller.signal);
+  call.catch(() => {});
+  const ended = call.then(() => { throw new Error("the call finished before its page request reached the server"); });
+  ended.catch(() => {});
+  // When the request reaches the server and the call is cancelled. The wait has no clock of its
+  // own: the call's live start-up and page deadlines (timeout_ms each) bound it, and a call that
+  // fails first ends it with its own error. A separate 20 s clock over start-up and navigation
+  // together was tighter than those bounds and lost to slow start-ups under load (T-768).
+  await Promise.race([hangReached, ended]);
   // Then, while it runs, the browser's profile and HOME are that call's own fresh directory.
   const main = owned(profiles).map((pid) => ({
     argv: readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0"),
@@ -304,12 +342,12 @@ test("a cancelled call stops its browser and removes its profile", async () => {
   const [root] = readdirSync(profiles);
   expect(main?.argv).toContain(`--user-data-dir=${join(profiles, String(root), "profile")}`);
   expect(main?.env).toContain(`HOME=${join(profiles, String(root), "home")}`);
+  const exits = watchExits(owned(profiles));
   controller.abort();
-  // Then the call fails as interrupted and the browser and its profile are gone.
+  // Then the call fails as interrupted, and every browser process watched before the cancel
+  // signals its exit; close() removed the profile before the call settled.
   await expect(call).rejects.toThrow(/browser_interrupted/);
-  // The call settles only after close() saw the browser exit and removed its profile.
-  expect(readdirSync(profiles)).toEqual([]);
-  await cleanedUp(profiles, profiles);
+  cleanedUp(profiles, profiles, exits);
 }, 60_000);
 
 test("a browser exits with its host when the host process dies", async () => {
@@ -335,13 +373,11 @@ setInterval(() => {}, 1 << 30);
   const pid = await within(ready, 20_000, "the host's browser");
   expect(owned(root)).toContain(pid);
   // When the host is killed without any cleanup of its own.
+  const exits = watchExits(owned(root));
   const exited = new Promise((resolve) => host.once("exit", resolve));
   host.kill("SIGKILL");
   await exited;
   // Then the browser sees its DevTools pipe close and its whole process tree exits.
-  const deadline = Date.now() + 10_000;
-  while (owned(root).length) {
-    if (Date.now() > deadline) throw new Error(`orphaned browser processes ${owned(root).join(",")}`);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
+  awaitExits(exits, 10_000);
+  allExited(root);
 }, 60_000);
