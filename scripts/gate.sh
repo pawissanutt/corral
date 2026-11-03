@@ -185,10 +185,12 @@ if [[ $tier == quick ]]; then
     prepare_test_binaries --workspace || on_error
     reuse=(--cargo-metadata "$CORRAL_GATE_CARGO_METADATA" --binaries-metadata "$CORRAL_GATE_BINARIES_METADATA")
     actual_list=("${profile[@]}" "${reuse[@]}")
-    if ((!declared && ${#scope[@]})); then actual_list+=("${scope[@]}"); fi
     ((declared)) && actual_list+=(-E "$selection")
     CORRAL_HERDR_SESSION=corral-test cargo nextest list "${actual_list[@]}" \
       --message-format json >"$quick_dir/list.json"
+    if ((!declared && !workspace)); then
+      python3 scripts/gate_quarantine.py scope-list "$quick_dir/list.json" "${packages[@]}"
+    fi
     quick_helper select "$CORRAL_GATE_CONTEXT" "$quick_dir/list.json" "${expected[@]}" \
       >"$quick_dir/select.sh"
     # shellcheck disable=SC1091
