@@ -10,6 +10,9 @@ description = "Project management control plane for agentic coding, inside herdr
 name = "corral"
 path = "src/main.rs"
 
+[features]
+test-skew-barrier = ["corral-core/test-skew-barrier"]
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true

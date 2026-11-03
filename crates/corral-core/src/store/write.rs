@@ -335,6 +335,19 @@ impl Store {
 
     /// Creates a new task with one `CreateTask`, which allocates its id.
     pub(super) fn insert_new(&self, task: &Task) -> Result<Task> {
+        // The integration fixture replaces the executable while creation's event unit is active.
+        // This opt-in rendezvous is not compiled into release or default builds.
+        #[cfg(all(feature = "test-skew-barrier", debug_assertions, unix))]
+        if let Some(dir) = std::env::var_os("CORRAL_TEST_SKEW_BARRIER") {
+            use std::io::{Read, Write};
+            debug_assert!(self.has_record_unit());
+            let dir = std::path::Path::new(&dir);
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(dir.join("entered"))?
+                .write_all(b"x")?;
+            std::fs::File::open(dir.join("resume"))?.read_exact(&mut [0])?;
+        }
         self.check_runtime()?;
         let mut t = task.clone();
         t.path = PathBuf::new();

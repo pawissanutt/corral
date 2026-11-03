@@ -94,6 +94,87 @@ fn watch_refuses_next_tick_after_its_executable_is_replaced() {
     )));
 }
 
+#[cfg(all(feature = "test-skew-barrier", debug_assertions))]
+#[test]
+fn watch_persists_skew_detected_inside_an_aborted_task_creation() {
+    use std::io::Write;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mut store = corral_core::Store::init(tmp.path()).unwrap();
+    store.config.digest.every = Some("1h".into());
+    store.save_config().unwrap();
+    let binary = tmp.path().join("corral");
+    std::fs::copy(env!("CARGO_BIN_EXE_corral"), &binary).unwrap();
+    for name in ["entered", "resume"] {
+        assert!(
+            Command::new("mkfifo")
+                .arg(tmp.path().join(name))
+                .stdin(Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let entered = tmp.path().join("entered");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut byte = [0];
+        tx.send(std::fs::File::open(entered).and_then(|mut f| f.read_exact(&mut byte)))
+            .unwrap();
+    });
+    let mut watch = Watch(
+        command(&binary, tmp.path())
+            .args(["--root", tmp.path().to_str().unwrap(), "sync", "--watch"])
+            .current_dir(tmp.path())
+            .env("HERDR_BIN_PATH", tmp.path().join("missing-herdr"))
+            .env("CORRAL_HERDR_SESSION", "corral-test")
+            .env("CORRAL_TEST_SKEW_BARRIER", tmp.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let stderr = watch.0.stderr.take().unwrap();
+    let (notice_tx, notice_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines() {
+            let line = line.unwrap();
+            if line.contains(corral_core::UPDATE_NOTICE) {
+                notice_tx.send(line).unwrap();
+                return;
+            }
+        }
+    });
+    rx.recv_timeout(Duration::from_secs(120)).unwrap().unwrap();
+    let replacement = tmp.path().join("replacement");
+    std::fs::copy(env!("CARGO_BIN_EXE_corral"), &replacement).unwrap();
+    std::fs::rename(replacement, &binary).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(tmp.path().join("resume"))
+        .unwrap()
+        .write_all(b"x")
+        .unwrap();
+    println!(
+        "{}",
+        notice_rx.recv_timeout(Duration::from_secs(120)).unwrap()
+    );
+    let events = store.events().unwrap();
+    assert_eq!(
+        events.iter().filter(|e| e.kind == "version_skew").count(),
+        1
+    );
+    assert!(
+        store.list().unwrap().is_empty(),
+        "the interrupted digest anchor must not be created"
+    );
+    assert!(!events.iter().any(|e| matches!(
+        e.kind.as_str(),
+        "created" | "gate_started" | "review_started" | "dispatched" | "gate"
+    )));
+}
+
 #[test]
 fn latched_process_resumes_sync_through_the_installed_executable() {
     // Given: a store whose scheduled digest every completed sync pass writes, and a process
