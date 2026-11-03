@@ -54,6 +54,9 @@ are absent; the pre-existing admission helpers and their tests match the base.
 The first quick gate caught missing rows in the exhaustive assistant-entry command table.
 `cargo test -p corral --test assistant_entry_cli` then passed both tests after adding the
 new command variants, preserving owner/PM access and refusing direct assistant-shell use.
+A later quick gate caught the corresponding external-command reserved-name registry;
+`cargo test -p corral --bin corral ext_cmd::tests::` passed both tests after registering
+`hold`, `release`, and `focus` as built-ins there as well.
 
 The final proof is the receipted quick gate on the committed, rebased narrowed tree.
 Its receipt and attached log, rather than an earlier broader candidate's checks, establish
