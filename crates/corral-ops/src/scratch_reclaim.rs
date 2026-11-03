@@ -245,9 +245,7 @@ fn state(ctx: &Ctx, row: &ScratchRow, attempt: Attempt<'_>, now: Timestamp) -> R
                                     review: l.id.clone(),
                                 }),
                         }
-                    } else if head.review_child(run, child)?.is_none()
-                        && current.review.as_ref().is_none_or(|r| r.verdict.is_none())
-                    {
+                    } else if head.review_child(run, child)?.is_none() {
                         unrecorded()
                     } else {
                         State {
@@ -382,6 +380,11 @@ fn report(row: &ScratchRow, error: &anyhow::Error) {
 /// reported and never stop the pass; another process's running pass makes this one a no-op.
 pub fn reclaim_scratch_pass(ctx: &Ctx, now: Timestamp) -> Result<()> {
     let Some(_lease) = ctx.store.try_lock(LEASE)? else {
+        return Ok(());
+    };
+    // Review launch holds this lock from reservation through dispatch. Do not infer that an
+    // unrecorded attempt ended, or delete its directory, while that launch is in flight.
+    let Some(_review_launch) = ctx.store.try_lock("review-budget")? else {
         return Ok(());
     };
     for row in ctx.store.scratch_rows_in(&[ScratchState::Open])? {

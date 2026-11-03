@@ -99,6 +99,71 @@ fn a_review_launch_keeps_its_prompt_and_notes_in_a_registered_scratch_dir() {
 }
 
 #[test]
+fn unrecorded_next_review_survives_reclaim_after_previous_verdict() {
+    let (_tmp, ctx, task, _) = task_in_review();
+    corral_ops::review_run(&ctx, &task, Some("rev")).unwrap();
+    ctx.store
+        .update_head(&task, |head| {
+            head.current_run_mut()
+                .unwrap()
+                .review
+                .as_mut()
+                .unwrap()
+                .verdict = Some(Verdict::Changes);
+            Ok(())
+        })
+        .unwrap();
+    let id = format!("review-{task}-R1-review2");
+    let rel = format!("reviews/{task}-R1-review2");
+    let dir = ctx
+        .store
+        .attempt_scratch(&AttemptScratch {
+            kind: ScratchKind::ImplementationReview,
+            id: &id,
+            task: &task,
+            subject: Some("R1"),
+            attempt: "R1-review2",
+            rel: &rel,
+        })
+        .unwrap();
+    let launch = ctx.store.try_lock("review-budget").unwrap().unwrap();
+    corral_ops::reclaim_scratch_pass(&ctx, Timestamp::now() + SignedDuration::from_hours(25))
+        .unwrap();
+    assert_eq!(row(&ctx, &id).state, ScratchState::Open);
+    assert!(dir.is_dir());
+    drop(launch);
+    corral_ops::reclaim_scratch_pass(&ctx, Timestamp::now()).unwrap();
+    assert_eq!(row(&ctx, &id).state, ScratchState::Open);
+    assert!(dir.is_dir());
+}
+
+#[test]
+fn failed_packet_write_can_retry_the_same_review_scratch() {
+    let (_tmp, ctx, task, _) = task_in_review();
+    corral_ops::review_run(&ctx, &task, Some("rev")).unwrap();
+    ctx.store
+        .update_head(&task, |head| {
+            head.current_run_mut()
+                .unwrap()
+                .review
+                .as_mut()
+                .unwrap()
+                .verdict = Some(Verdict::Changes);
+            Ok(())
+        })
+        .unwrap();
+    let dir = ctx
+        .store
+        .scratch_path(&format!("reviews/{task}-R1-review2"))
+        .unwrap();
+    std::fs::create_dir_all(dir.join(format!("{task}-R1-R1-review2-review.diff"))).unwrap();
+    assert!(corral_ops::review_run(&ctx, &task, Some("rev")).is_err());
+    std::fs::remove_dir(dir.join(format!("{task}-R1-R1-review2-review.diff"))).unwrap();
+    corral_ops::reclaim_scratch_pass(&ctx, Timestamp::now()).unwrap();
+    corral_ops::review_run(&ctx, &task, Some("rev")).unwrap();
+}
+
+#[test]
 fn verdict_evidence_from_the_attempt_dir_and_worktree_is_promoted_with_the_verdict() {
     let (_tmp, ctx, id, worktree) = task_in_review();
     corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
