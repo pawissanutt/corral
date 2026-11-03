@@ -6,5 +6,8 @@ quick = 180
 full = 600
 slow = 1800
 
+[tests]
+ordinary_seconds = 10
+
 [test_cost]
 justification_threshold_seconds = 30

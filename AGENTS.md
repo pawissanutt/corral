@@ -57,7 +57,9 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
   changes; Darwin runs on platform/dependency changes; plan verify keeps both lanes.
   Missing/legacy context is conservative: all suites and optional lanes.
 - Install cargo-nextest before running the gate. `.config/nextest.toml` uses 12 slots,
-  serializes shared live fixtures, caps ordinary tests at 10s, and disables retries. Explicit
+  serializes shared live fixtures and disables retries. The candidate-bound runner in
+  `scripts/gate_case.py` caps ordinary tests at 10s only while observed load/core <=1;
+  native nextest reports slowness without an independent busy-host termination. Explicit
   measured integration/torture exceptions retain their original 30s report-only guards,
   with one-line reasons; they are not extra full-tier exclusions. Never bump a failing timeout.
   `.config/gate.toml` caps measured nextest/work-budget/Bun execution at quick <=180s

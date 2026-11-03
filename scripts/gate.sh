@@ -118,6 +118,10 @@ prepare_test_binaries() {
   CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_timer.py compile \
     "$CORRAL_TEST_BUDGET_STATE" nextest-binaries --output "$CORRAL_GATE_BINARIES_METADATA" -- \
     cargo nextest list "$@" --list-type binaries-only --message-format json || return
+  CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_case.py prepare "$gate_dir/case.json" \
+    "$CORRAL_GATE_CARGO_METADATA" "$CORRAL_GATE_BINARIES_METADATA" >"$gate_dir/runner.sh" || return
+  # shellcheck disable=SC1091
+  source "$gate_dir/runner.sh"
 }
 
 if [[ $tier == quick ]]; then
@@ -267,7 +271,7 @@ begin_step "$nextest_label"
 prepare_test_binaries --workspace || on_error
 reuse=(--cargo-metadata "$CORRAL_GATE_CARGO_METADATA" --binaries-metadata "$CORRAL_GATE_BINARIES_METADATA")
 CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_timer.py run \
-  "$CORRAL_TEST_BUDGET_STATE" nextest -- cargo nextest run "${reuse[@]}" "${nextest_args[@]}"
+  "$CORRAL_TEST_BUDGET_STATE" nextest -- cargo nextest run --profile default "${reuse[@]}" "${nextest_args[@]}"
 end_step
 
 begin_step "CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc"

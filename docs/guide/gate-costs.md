@@ -40,7 +40,12 @@ docs checker always uses the candidate binary from the actual target, not anothe
 to avoid recompiling core/ops/TUI merely to toggle a test-only feature. An experimental
 Clippy `--profile test` alignment made the cold check slower and was reverted; the time
 test assertions and overflow checks were not relaxed. It never
-changes a test's result to PASS. Nextest caps ordinary tests at 10s with no retries. Explicit
+changes a test's result to PASS. `gate_case.py` enforces ordinary 10s guards with the same
+observed-load rule, using nextest's binary/test identity and candidate metadata. Nextest itself
+reports at 10s without unconditional termination: its native wall guard cannot distinguish
+a busy host. Nextest evaluates the exception filters (including ignored work matrices);
+the runner never reimplements that DSL. Over-budget observations retain load/exit evidence,
+and cancellation forwards to the owned child group. No retries. Explicit
 measured integration exceptions retain their original 30s report-only guards, each with a
 one-line defect/fixture reason in `.config/nextest.toml`; this does not exclude them from
 full. The owner approved these exceptions rather than dropping useful journey coverage.
