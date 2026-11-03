@@ -255,7 +255,7 @@ fn production_pm_recovers_and_follows_mutations_without_history_sized_hot_work()
             ctx.store
                 .cache_root()
                 .unwrap()
-                .join("lesson-rows-v1/cursor.json"),
+                .join("lesson-schedule-v1/cursor.json"),
             serde_json::to_vec(&json!({
                 "change":seq,"event":event,"config":"legacy","recomputations":0
             }))

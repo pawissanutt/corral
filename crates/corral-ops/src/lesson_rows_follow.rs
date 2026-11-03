@@ -27,12 +27,7 @@ pub(super) fn prepare_locked(ctx: &Ctx, selected: &BTreeSet<String>) -> Result<P
 }
 
 pub(super) fn prepare_schedule_locked(ctx: &Ctx, selected: &BTreeSet<String>) -> Result<Prepared> {
-    prepare_at(
-        ctx,
-        selected,
-        ctx.store.cache_root()?.join("lesson-schedule-v1"),
-        false,
-    )
+    prepare_at(ctx, selected, schedule_root(ctx)?, false)
 }
 
 fn prepare_at(

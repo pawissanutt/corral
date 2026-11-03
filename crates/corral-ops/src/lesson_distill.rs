@@ -119,7 +119,7 @@ pub(crate) fn announce_due(ctx: &Ctx, now: Timestamp) -> Result<()> {
     };
     {
         let _prepare = corral_core::work::Preparation::enter();
-        crate::lesson_rows::prepare(&snapshot)?;
+        crate::lesson_rows::prepare_coordination(&snapshot)?;
     }
     let _hot = corral_core::work::HotScope::enter();
     for due in lessons_due(&snapshot, now)?

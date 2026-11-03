@@ -103,6 +103,10 @@ fn root(ctx: &Ctx) -> Result<PathBuf> {
     Ok(ctx.store.cache_root()?.join("lesson-rows-v1"))
 }
 
+fn schedule_root(ctx: &Ctx) -> Result<PathBuf> {
+    Ok(ctx.store.cache_root()?.join("lesson-schedule-v1"))
+}
+
 fn task_path(root: &Path, id: &str) -> PathBuf {
     root.join("tasks").join(format!("{}.json", key(id)))
 }
@@ -249,7 +253,7 @@ pub(crate) fn due(ctx: &Ctx, project: &str) -> Result<DueRow> {
 
 /// Announcement identity is independent of the length of the announcement event stream.
 pub(crate) fn announced(ctx: &Ctx, project: &str, request: Option<&str>) -> Result<bool> {
-    Ok(read::<bool>(&announcement_path(&root(ctx)?, project, request))?.unwrap_or(false))
+    Ok(read::<bool>(&announcement_path(&schedule_root(ctx)?, project, request))?.unwrap_or(false))
 }
 
 pub(crate) fn announcement_path(root: &Path, project: &str, request: Option<&str>) -> PathBuf {
