@@ -11,6 +11,7 @@ pub mod artifact;
 pub mod artifact_owner;
 pub use artifact_owner::{ArtifactOwner, ArtifactOwnerSource};
 pub mod assistant;
+pub mod assistant_workflow;
 pub mod attention;
 pub mod attribution;
 pub mod availability;

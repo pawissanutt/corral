@@ -58,6 +58,9 @@ pub enum AgentOp {
     PlanVerdict,
     OwnerAction,
     WritePermission,
+    AssistantPlan,
+    AssistantPlanReview,
+    AssistantHandoff,
     MemoryList,
     MemoryRead,
     MemoryPut,
@@ -89,7 +92,7 @@ const ASSISTANT: &[AgentRole] = &[AgentRole::Assistant];
 const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm, AgentRole::Assistant];
 
 impl AgentOp {
-    pub const ALL: [AgentOp; 41] = [
+    pub const ALL: [AgentOp; 44] = [
         AgentOp::Hello,
         AgentOp::Event,
         AgentOp::ReceiptLookup,
@@ -127,6 +130,9 @@ impl AgentOp {
         AgentOp::PlanVerdict,
         AgentOp::OwnerAction,
         AgentOp::WritePermission,
+        AgentOp::AssistantPlan,
+        AgentOp::AssistantPlanReview,
+        AgentOp::AssistantHandoff,
         AgentOp::MemoryList,
         AgentOp::MemoryRead,
         AgentOp::MemoryPut,
@@ -172,6 +178,9 @@ impl AgentOp {
             AgentOp::PlanVerdict => "plan_verdict",
             AgentOp::OwnerAction => "owner_action",
             AgentOp::WritePermission => "write_permission",
+            AgentOp::AssistantPlan => "assistant_plan",
+            AgentOp::AssistantPlanReview => "assistant_plan_review",
+            AgentOp::AssistantHandoff => "assistant_handoff",
             AgentOp::MemoryList => "memory_list",
             AgentOp::MemoryRead => "memory_read",
             AgentOp::MemoryPut => "memory_put",
@@ -200,7 +209,11 @@ impl AgentOp {
             AgentOp::PlanWrite => PLANNING,
             AgentOp::PlanSubmit => PLANNER,
             AgentOp::PlanVerdict => PLAN_REVIEWER,
-            AgentOp::OwnerAction | AgentOp::WritePermission => ASSISTANT,
+            AgentOp::OwnerAction
+            | AgentOp::WritePermission
+            | AgentOp::AssistantPlan
+            | AgentOp::AssistantPlanReview
+            | AgentOp::AssistantHandoff => ASSISTANT,
             _ => PM,
         }
     }
@@ -227,7 +240,12 @@ impl AgentOp {
             | AgentOp::MemoryPut
             | AgentOp::MemoryRemove => None,
             AgentOp::Todo | AgentOp::Job | AgentOp::JobMonitor | AgentOp::OwnerAction => None,
-            AgentOp::Ask | AgentOp::Withdraw | AgentOp::WritePermission => None,
+            AgentOp::Ask
+            | AgentOp::Withdraw
+            | AgentOp::WritePermission
+            | AgentOp::AssistantPlan
+            | AgentOp::AssistantPlanReview
+            | AgentOp::AssistantHandoff => None,
             AgentOp::QuestionAnswer | AgentOp::QuestionEscalate | AgentOp::QuestionCancel => None,
             AgentOp::Evidence | AgentOp::Artifact if role == AgentRole::Reviewer => {
                 Some(Route::Reviewer)
@@ -557,6 +575,9 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
             AgentOp::Job | AgentOp::JobMonitor => super::ops::jobs::call(ctx, &envelope, op),
             AgentOp::OwnerAction => super::ops::owner_action::call(ctx, &envelope),
             AgentOp::WritePermission => super::ops::write_permission::call(ctx, &envelope),
+            AgentOp::AssistantPlan | AgentOp::AssistantPlanReview | AgentOp::AssistantHandoff => {
+                super::ops::assistant_workflow::call(ctx, &envelope, op)
+            }
             AgentOp::Ask => ask(ctx, &envelope),
             AgentOp::Withdraw => withdraw(ctx, &envelope),
             AgentOp::QuestionAnswer | AgentOp::QuestionEscalate | AgentOp::QuestionCancel => {

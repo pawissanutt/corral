@@ -38,6 +38,21 @@ pub enum AssistantCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Inspect bounded local design state/history, or exact UTF-8 bytes of one revision
+    Workflow {
+        id: String,
+        #[arg(long, default_value_t = 0)]
+        after: u32,
+        #[arg(long, default_value_t = 3)]
+        limit: u32,
+        /// Revision 0 reads the original request; otherwise a published local design
+        #[arg(long)]
+        revision: Option<u32>,
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        #[arg(long)]
+        json: bool,
+    },
     /// End a session (stopping a running host), keeping its record and transcript references
     End {
         id: String,
@@ -278,6 +293,30 @@ pub fn run(ctx: &Ctx, args: AssistantArgs) -> Result<()> {
                     }
                 }
                 println!("{}", session.body);
+            }
+        }
+        AssistantCmd::Workflow {
+            id,
+            after,
+            limit,
+            revision,
+            offset,
+            json,
+        } => {
+            let result =
+                ctx.store
+                    .inspect_assistant_container(&id, |container, _| match revision {
+                        Some(revision) => corral_ops::assistant::workflow::read_revision(
+                            &ctx.store, &id, container, revision, offset, 1024,
+                        ),
+                        None => corral_ops::assistant::workflow::read_state(
+                            &ctx.store, &id, container, after, limit,
+                        ),
+                    })?;
+            if !json && revision.is_some() {
+                print!("{}", result["text"].as_str().unwrap_or(""));
+            } else {
+                print_json(&result)?;
             }
         }
         AssistantCmd::End { id, json } => {
