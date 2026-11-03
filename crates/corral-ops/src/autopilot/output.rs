@@ -7,7 +7,13 @@ use serde_json::json;
 use super::Pilot;
 use crate::Ctx;
 
-pub(super) const LOG_TAIL_LINES: usize = 30;
+const LOG_TAIL_LINES: usize = 30;
+/// The markers `scripts/gate_repair.py` prints around a failed test run's rerun commands.
+const REPAIR_START: &str = "Repair commands (diagnostic only, not a gate result):";
+const REPAIR_END: &str = "End of repair commands.";
+const REPAIR_GUIDANCE: &str = "Rerun the gate's repair commands above after each edit until \
+    they pass: each builds only the failing test's binary and runs only its failed tests, and is \
+    not a gate result. Then continue as instructed below; do not start a gate to check each edit.";
 
 /// Report authority transitions once per run, including concurrent sync callers.
 /// The open Review tasks, as heads: autopilot never reads a terminal task.
@@ -103,15 +109,40 @@ pub(super) fn first_line(text: &str) -> &str {
         .unwrap_or("")
 }
 
-pub(super) fn log_tail(path: &std::path::Path, lines: usize) -> String {
-    match std::fs::read(path) {
-        Ok(bytes) => {
-            let text = String::from_utf8_lossy(&bytes);
-            let all: Vec<&str> = text.lines().collect();
-            all[all.len().saturating_sub(lines)..].join("\n")
-        }
+/// A failed gate's send-back details: its log's tail, plus the repair commands the gate printed
+/// when they fall outside that tail, and the repair-first guidance whenever there are any.
+pub(super) fn gate_log_details(path: &std::path::Path) -> String {
+    let text = match std::fs::read(path) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
         Err(e) => format!("(could not read {}: {e})", path.display()),
+    };
+    log_details(&path.display().to_string(), &text)
+}
+
+fn log_details(name: &str, text: &str) -> String {
+    let all: Vec<&str> = text.lines().collect();
+    let tail = all[all.len().saturating_sub(LOG_TAIL_LINES)..].join("\n");
+    let mut details =
+        format!("Last {LOG_TAIL_LINES} lines of the gate log ({name}):\n\n```\n{tail}\n```");
+    if let Some(block) = repair_block(&all) {
+        if !tail.contains(&block) {
+            details.push_str(&format!(
+                "\n\nRepair commands from the gate log:\n\n```\n{block}\n```"
+            ));
+        }
+        details.push_str(&format!("\n\n{REPAIR_GUIDANCE}"));
     }
+    details
+}
+
+/// The log's last complete repair-commands block, markers included.
+fn repair_block(lines: &[&str]) -> Option<String> {
+    let start = lines.iter().rposition(|l| l.trim_end() == REPAIR_START)?;
+    let end = start
+        + lines[start..]
+            .iter()
+            .position(|l| l.trim_end() == REPAIR_END)?;
+    Some(lines[start..=end].join("\n"))
 }
 
 impl Pilot<'_> {
@@ -148,5 +179,45 @@ impl Pilot<'_> {
             );
         }
         added
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BLOCK: [&str; 3] = [REPAIR_START, "(rerun alpha)", REPAIR_END];
+
+    #[test]
+    fn repair_commands_outside_the_tail_are_carried_with_guidance() {
+        let mut lines = vec!["test alpha ... FAILED"];
+        lines.extend(BLOCK);
+        lines.extend(std::iter::repeat_n("timer line", LOG_TAIL_LINES));
+        let details = log_details("gate.log", &lines.join("\n"));
+        assert!(details.contains("Repair commands from the gate log:"));
+        assert!(details.contains("(rerun alpha)"));
+        assert!(details.ends_with(REPAIR_GUIDANCE));
+    }
+
+    #[test]
+    fn repair_commands_in_the_tail_are_not_repeated() {
+        let mut lines = vec!["timer line"];
+        lines.extend(BLOCK);
+        lines.push("FAILED: nextest (exit 100)");
+        let details = log_details("gate.log", &lines.join("\n"));
+        assert_eq!(details.matches("(rerun alpha)").count(), 1);
+        assert!(!details.contains("Repair commands from the gate log:"));
+        assert!(details.ends_with(REPAIR_GUIDANCE));
+    }
+
+    #[test]
+    fn no_complete_repair_block_means_no_guidance() {
+        for text in [
+            "FAILED: clippy (exit 101)",
+            &format!("{REPAIR_START}\n(rerun alpha)"),
+        ] {
+            let details = log_details("gate.log", text);
+            assert!(!details.contains(REPAIR_GUIDANCE), "{details}");
+        }
     }
 }

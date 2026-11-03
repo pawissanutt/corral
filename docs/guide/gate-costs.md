@@ -47,6 +47,16 @@ is a conservative upper bound. More than30s without a `Test-cost justification:`
 report, not an automated failure here. Worker/reviewer placement and justification guidance
 remains in force; reviewers evaluate named defect-catching value, not evidence volume.
 
+## Repair commands
+
+When a gate's nextest run fails, `scripts/gate_repair.py` reads that run's JUnit report and
+prints, just before `FAILED:`, one command per failing test binary. Each builds only that
+binary's target and runs only its failed tests under a private test herdr. Autopilot carries
+the block into the send-back with one instruction: rerun those commands after each edit until
+they pass, then gate the candidate once as the send-back says, not once per edit. The commands
+are diagnostics, never a gate result: the gate still passes or fails on its own commands, a
+stale or missing report prints nothing, and compile, lint and Pi failures print no block.
+
 ## Optional lanes
 
 - Pi: package or shared agent/inbox/CLI/capability contracts. Full runs all Bun tests; quick
