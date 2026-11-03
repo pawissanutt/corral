@@ -64,9 +64,7 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
             StorageCmd::Backup { .. } => Refused,
         },
         Cmd::Assistant(args) => match &args.cmd {
-            AssistantCmd::List { .. }
-            | AssistantCmd::Show { .. }
-            | AssistantCmd::Workflow { .. } => Read,
+            AssistantCmd::List { .. } | AssistantCmd::Show { .. } => Read,
             AssistantCmd::Summary { id, .. } => file_if_own(id == session),
             AssistantCmd::Create { .. } | AssistantCmd::End { .. } => Refused,
             // Grants come only from the owner's dialog answer; a shell may only end its own.
