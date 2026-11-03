@@ -347,6 +347,8 @@ pub(crate) fn reviewer_waiting(ctx: &Ctx, id: &str) -> Result<bool> {
     let Some(_lock) = ctx.store.try_lock("review-budget")? else {
         return Ok(true);
     };
+    // Never wait behind another launch while holding the global budget lock.
+    let _reads = corral_core::UnqueuedReads::begin();
     let task = ctx.store.head(id)?;
     let active = active_processes(ctx, id, Kind::Reviewer)?;
     if crate::resources::admission(ctx)?.is_some() || active >= ctx.store.config.limits.review {
@@ -379,9 +381,14 @@ impl<'a> ReviewLaunch<'a> {
         crate::hold::require_clear(&ctx.store, &requested)?;
         corral_core::Park::require_unparked_ref(&requested)?;
         let id = requested.id.as_str();
+        // Wait for in-flight inventory readers before taking the global budget lock, so the
+        // wait never runs under it; later readers stay queued behind this turn until the claim.
+        let turn = ctx.store.session_turn()?;
         let lock = ctx.store.try_lock("review-budget")?.ok_or(LaunchBusy(
             "another review launch is in progress; try again",
         ))?;
+        // This launch's own inventory reads must not queue behind its turn.
+        let _reads = corral_core::UnqueuedReads::begin();
         crate::session_scope::check_launch(ctx)?;
         if let Some(pending) = load_pending(ctx)? {
             abandon(ctx, &pending)?;
@@ -418,7 +425,7 @@ impl<'a> ReviewLaunch<'a> {
                 refused_request: None,
             }
         };
-        let ownership = ctx.store.claim_session_ownership()?.ok_or(LaunchBusy(
+        let ownership = turn.claim(&ctx.store)?.ok_or(LaunchBusy(
             "pane inventory is being reconciled; retry review launch",
         ))?;
         let (_, waiting) = ctx.store.dispatch_update_head(id, |store, current| {

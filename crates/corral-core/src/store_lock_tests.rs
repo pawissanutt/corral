@@ -89,27 +89,40 @@ fn shared_inventory_leases_exclude_claims_until_the_last_consumer_finishes() {
 }
 
 #[test]
-fn a_waiting_launch_claims_ownership_ahead_of_continuous_readers() {
+fn a_waiting_launch_claims_ahead_of_continuous_and_later_readers() {
     // Given readers that always overlap: each takes its lease before the previous one drops.
+    // They do not queue, so their loop ends at the first reader to find the launch waiting.
     let root = tempfile::tempdir().unwrap();
     let store = Store::init(root.path()).unwrap();
-    let mut held = store.try_begin_session_pass().unwrap().unwrap();
+    let mut readers = store.clone();
+    readers.config.sync.launch_wait_secs = 0;
+    let mut held = readers.try_begin_session_pass().unwrap().unwrap();
     std::thread::scope(|scope| {
         // When a launch claims ownership while some reader always holds the lease.
         let launch = scope.spawn(|| store.claim_session_ownership().unwrap());
-        // Readers keep taking and releasing it until one arrives after the waiting launch.
-        while let Some(next) = store.try_begin_session_pass().unwrap() {
+        // Its turn registers without any lock a reader holds, so the churn cannot hide it.
+        while let Some(next) = readers.try_begin_session_pass().unwrap() {
             assert!(!launch.is_finished(), "launch gave up behind readers");
             held = next;
         }
-        assert!(!launch.is_finished(), "a later reader was turned away");
+        // And a reader arrives after the waiting launch.
+        let later = scope.spawn(|| store.try_begin_session_pass().unwrap());
 
-        // Then the reader already holding the lease finishes and the launch claims it first.
+        // Then once the reader already holding the lease finishes, the launch claims first:
+        // the later reader keeps any lease it takes, which would have refused the claim.
         drop(held);
         let claim = launch.join().unwrap();
-        assert!(claim.is_some(), "launch refused once the readers finished");
-        assert!(store.try_begin_session_pass().unwrap().is_none());
+        assert!(
+            claim.is_some(),
+            "a later reader got ahead of the waiting launch"
+        );
+        assert!(readers.try_begin_session_pass().unwrap().is_none());
         drop(claim);
+        // And the later reader, queued behind the launch, proceeds after it.
+        assert!(
+            later.join().unwrap().is_some(),
+            "queued reader never proceeded"
+        );
     });
     assert!(store.try_begin_session_pass().unwrap().is_some());
 }
