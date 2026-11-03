@@ -3,7 +3,7 @@ name: corral-worker
 description: Procedure for a dispatched corral coding run - implement one task in its worktree, run the gate, attach evidence and finish with corral done. Use when your prompt carries a corral Run contract.
 ---
 <!-- managed by `corral skill install`; local edits are overwritten -->
-<!-- corral-skill: corral-worker version=0.3.0 sha256=ac7157006eaec94a1d9343b14712fe2be6bff6fe623b6b189afb447017dddc35 -->
+<!-- corral-skill: corral-worker version=0.3.0 sha256=797829dadcb9caea334a2506af35dcacf1d682c1ce42d91c6f9426bbab3011c3 -->
 
 # corral worker
 
