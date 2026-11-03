@@ -418,3 +418,19 @@ slow-timeout = "30s"
 [[profile.default.overrides]]
 filter = 'binary_id(=corral-tui) and (test(=app::work_budget::board_work_stays_within_budget_and_independent_of_history) or test(=app::hot_budget::hot_reads_work_stays_independent_of_history) or test(=app::sync_budget::sync_tick_work_stays_independent_of_history))'
 slow-timeout = "30s"
+
+# Owner Q7: retain one real-Git E2E for each distinct landing journey, assertions unchanged.
+# gate_pass_and_reviewer_approval_land_with_an_acceptance_record: reviewed gate -> merge -> durable acceptance record.
+# gate_failure_sends_the_run_back_and_the_second_done_lands: failed gate -> worker repair -> second done -> landing.
+# freshness::rebase_after_approval_carries_equal_patch_after_new_gate: equal-patch rebase carries only after fresh verification.
+# guardrails::autopilot_landing_proceeds_while_same_project_review_is_pending: candidate landing does not drain a peer's review.
+[[profile.default.overrides]]
+filter = '''
+binary_id(=corral-ops::autopilot_ops) and (
+  test(=gate_pass_and_reviewer_approval_land_with_an_acceptance_record)
+| test(=gate_failure_sends_the_run_back_and_the_second_done_lands)
+| test(=freshness::rebase_after_approval_carries_equal_patch_after_new_gate)
+| test(=guardrails::autopilot_landing_proceeds_while_same_project_review_is_pending)
+)
+'''
+slow-timeout = "30s"

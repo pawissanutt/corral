@@ -149,6 +149,26 @@ The existing quick-only exclusion of the Git settings matrix remains unchanged; 
 a new removal from full. Slow catalog changes fail closed to full coverage, as do dependency
 changes, shared store/Git/herdr changes, and missing/old gate contexts.
 
+## Owner-approved landing journey exceptions (Q7)
+
+Attempt `ag-deb29c5c4cc07ecf` ran 1919 passing tests before four 10s cost exits at quiet
+load/core 0.57. The whole 241.490s phase was busy-exempt (started at 1.647), so it is not
+quiet-budget timing proof. Owner Q7 approved these four distinct real-Git E2Es retaining
+their original 30s report-only guards; they remain in full and keep every assertion.
+No other limit or classification changed. All names below are in `corral-ops::autopilot_ops`.
+
+| Test | Reason for retained integration guard | T-745 baseline | Targeted after classification |
+|---|---|---:|---:|
+| `gate_pass_and_reviewer_approval_land_with_an_acceptance_record` | One reviewed gate-to-merge journey with the durable acceptance record. | 7.076s | 8.738s PASS |
+| `gate_failure_sends_the_run_back_and_the_second_done_lands` | One failed-gate, worker-repair, second-done landing journey. | 8.096s | 9.960s PASS |
+| `freshness::rebase_after_approval_carries_equal_patch_after_new_gate` | Real equal-patch rebase carries approval only after fresh verification. | 8.508s | 9.393s PASS |
+| `guardrails::autopilot_landing_proceeds_while_same_project_review_is_pending` | Landing the authorized candidate must not drain a peer's pending review. | 6.533s | 8.599s PASS |
+
+Their unchanged targeted run passed **4/4 in 9.964s wall** inside a fresh private server.
+The real candidate runner resolves exactly these additions (ops/TUI exception count
+185 → 189); ordinary tests, including the fence regression, retain the same 10s quiet cap.
+No test was deleted, moved out of full, retried to green, or given a new assertion here.
+
 ## Fixture reductions
 
 - Action histories: 9/90 → 2/5; terminal tasks: 10/100 → 2/5; terminal nested history 1/10 → 1/2.
@@ -222,7 +242,8 @@ Long-term quiet-host test-execution budgets (quick 180s/full 600s), separate bui
 reporting, added Rust/Bun/Python registration accounting and the
 reviewer rubric are implemented. Ordinary nextest tests have load-aware 10s runner guards; 149 measured
 pre-existing >10s integration cases (some also in the torture catalog), plus the rescheduled
-action cases, explicitly retain their original report-only guards with per-case reasons.
+action cases and the four Q7 landing journeys, explicitly retain their original report-only
+ guards with per-case reasons.
 Owner approved preserving these useful journey exceptions in Q2 instead of dropping them.
 The host slow runner enforces nice 19, idle I/O and load/core <=1.0 admission, isolates herdr,
 retains logs/artifacts and deduplicates failure tasks. Its cron line is documented only: PM
