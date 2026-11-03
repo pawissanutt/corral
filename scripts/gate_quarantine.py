@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run the selected nextest suite and every quarantined test, without masking errors."""
+import json
 import subprocess
 import sys
 import tomllib
@@ -11,6 +12,14 @@ def escape(value: str) -> str:
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == 'scope-list':
+        path = Path(sys.argv[2])
+        listing = json.loads(path.read_text())
+        packages = set(sys.argv[3:])
+        listing['rust-suites'] = {key: suite for key, suite in listing['rust-suites'].items()
+                                  if suite['package-name'] in packages}
+        path.write_text(json.dumps(listing))
+        return 0
     entries = tomllib.loads(Path('.config/gate-quarantine.toml').read_text())['tests']
     identities = [(entry['binary'], entry['test']) for entry in entries]
     if len(set(identities)) != len(identities):
