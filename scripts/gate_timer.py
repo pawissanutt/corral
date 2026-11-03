@@ -151,24 +151,32 @@ def cost_audit(config: dict, rows: list[dict]) -> None:
     if not rows:
         lines.append('| No overrun observed before the gate ended | | | |')
     target.write_text('\n'.join(lines) + '\n')
-    print(f'Per-test observations: {len(config["enforce"])} candidate identities; all timing report-only (T-776). '
-          f'Existing-cost audit (T-766 input): {target}', flush=True)
 
 
-def report(path: Path) -> None:
-    state = json.loads(path.read_text())
-    metrics = path.with_name('case-metrics.jsonl')
-    rows = []
-    if metrics.is_file():
-        for line in metrics.read_text().splitlines():
-            print('Per-test budget observation: ' + line, flush=True)
-            rows.append(json.loads(line))
-    config = path.with_name('case.json')
-    if config.is_file():
-        cost_audit(json.loads(config.read_text()), rows)
-    print(f'Test budget summary: {state["tier"]} measured={state["measured"]:.3f}s '
-          f'budgeted-quiet={state["budgeted"]:.3f}s build-preparation={state["compile"]:.3f}s '
-          f'reference={state["limit"]}s; ALL timing is report-only (T-776), including quiet load', flush=True)
+def report(path: Path) -> int:
+    try:
+        os.set_blocking(sys.stdout.fileno(), True)
+        state = json.loads(path.read_text())
+        metrics = path.with_name('case-metrics.jsonl')
+        rows = []
+        if metrics.is_file():
+            for line in metrics.read_text().splitlines():
+                row = json.loads(line)
+                rows.append(row)
+                if row['budget_exceeded']:
+                    print('Per-test budget observation: ' + line, flush=True)
+        config = path.with_name('case.json')
+        if config.is_file():
+            cost_audit(json.loads(config.read_text()), rows)
+        print(f'Test budget summary: {state["tier"]} measured={state["measured"]:.3f}s '
+              f'budgeted-quiet={state["budgeted"]:.3f}s build-preparation={state["compile"]:.3f}s '
+              f'reference={state["limit"]}s; ALL timing is report-only (T-776), including quiet load', flush=True)
+    except OSError as error:
+        try:
+            print(f'Timing report unavailable: {error}', file=sys.stderr, flush=True)
+        except OSError:
+            pass
+    return 0
 
 
 def main() -> int:
@@ -184,8 +192,7 @@ def main() -> int:
         initialize(Path(args[0]), args[1])
         return 0
     if mode == 'report':
-        report(Path(args[0]))
-        return 0
+        return report(Path(args[0]))
     split = args.index('--')
     parser = argparse.ArgumentParser()
     parser.add_argument('state', type=Path)
