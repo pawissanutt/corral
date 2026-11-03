@@ -159,8 +159,21 @@ fn failed_packet_write_can_retry_the_same_review_scratch() {
     std::fs::create_dir_all(dir.join(format!("{task}-R1-R1-review2-review.diff"))).unwrap();
     assert!(corral_ops::review_run(&ctx, &task, Some("rev")).is_err());
     std::fs::remove_dir(dir.join(format!("{task}-R1-R1-review2-review.diff"))).unwrap();
-    corral_ops::reclaim_scratch_pass(&ctx, Timestamp::now()).unwrap();
+    corral_ops::reclaim_scratch_pass(&ctx, Timestamp::now() + SignedDuration::from_hours(25))
+        .unwrap();
+    assert_eq!(
+        row(&ctx, &format!("review-{task}-R1-review2")).state,
+        ScratchState::Reclaimed
+    );
     corral_ops::review_run(&ctx, &task, Some("rev")).unwrap();
+    assert_eq!(
+        row(&ctx, &format!("review-{task}-R1-review3")).state,
+        ScratchState::Open
+    );
+    assert_eq!(
+        row(&ctx, &format!("review-{task}-R1-review2")).state,
+        ScratchState::Reclaimed
+    );
 }
 
 #[test]

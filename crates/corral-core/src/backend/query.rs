@@ -213,6 +213,10 @@ pub enum StorageQuery {
     Scratch {
         states: Vec<ScratchState>,
     },
+    /// One scratch registration by its stable identifier.
+    ScratchKey {
+        id: String,
+    },
     Lifecycle {
         task: Option<String>,
     },
