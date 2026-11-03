@@ -60,7 +60,7 @@ pub(crate) fn dispatch(
     crate::agent::hooks::preflight::check(ctx, corral_core::agent::AgentRole::Planner, &resolved)?;
     let _ownership = ctx
         .store
-        .try_lock("session-ownership")?
+        .claim_session_ownership()?
         .context("pane inventory is being reconciled; retry plan dispatch")?;
     crate::session_scope::check_launch(ctx)?;
     let origin = admission.origin(&ctx.store, head)?;
@@ -542,7 +542,7 @@ pub(crate) fn revise(
     }
     let _ownership = ctx
         .store
-        .try_lock("session-ownership")?
+        .claim_session_ownership()?
         .context("pane inventory is being reconciled; retry plan revision")?;
     crate::session_scope::check_launch(ctx)?;
     let run = task.plan_runs.last().context("plan run missing")?;
@@ -707,7 +707,7 @@ pub(crate) fn resume_prepared(ctx: &Ctx, head: &TaskHead) -> Result<bool> {
     }
     let _ownership = ctx
         .store
-        .try_lock("session-ownership")?
+        .claim_session_ownership()?
         .context("pane inventory is being reconciled; retry prepared planning")?;
     crate::session_scope::check_launch(ctx)?;
     claim.check(task)?;

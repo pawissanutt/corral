@@ -88,6 +88,32 @@ fn shared_inventory_leases_exclude_claims_until_the_last_consumer_finishes() {
     );
 }
 
+#[test]
+fn a_waiting_launch_claims_ownership_ahead_of_continuous_readers() {
+    // Given readers that always overlap: each takes its lease before the previous one drops.
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::init(root.path()).unwrap();
+    let mut held = store.try_begin_session_pass().unwrap().unwrap();
+    std::thread::scope(|scope| {
+        // When a launch claims ownership while some reader always holds the lease.
+        let launch = scope.spawn(|| store.claim_session_ownership().unwrap());
+        // Readers keep taking and releasing it until one arrives after the waiting launch.
+        while let Some(next) = store.try_begin_session_pass().unwrap() {
+            assert!(!launch.is_finished(), "launch gave up behind readers");
+            held = next;
+        }
+        assert!(!launch.is_finished(), "a later reader was turned away");
+
+        // Then the reader already holding the lease finishes and the launch claims it first.
+        drop(held);
+        let claim = launch.join().unwrap();
+        assert!(claim.is_some(), "launch refused once the readers finished");
+        assert!(store.try_begin_session_pass().unwrap().is_none());
+        drop(claim);
+    });
+    assert!(store.try_begin_session_pass().unwrap().is_some());
+}
+
 fn prepared_operating_action() -> (tempfile::TempDir, Store, crate::ActionAuthorization) {
     let root = tempfile::tempdir().unwrap();
     let store = Store::init(root.path()).unwrap();

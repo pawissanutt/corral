@@ -224,7 +224,7 @@ pub(crate) fn fail(ctx: &Ctx, task: &Task, reason: &str, now: Timestamp) -> Resu
 pub fn plan_cancel(ctx: &Ctx, id: &str) -> Result<Task> {
     let _ownership = ctx
         .store
-        .try_lock("session-ownership")?
+        .claim_session_ownership()?
         .context("pane inventory is being reconciled; retry plan cancellation")?;
     let _delivery = ctx
         .store

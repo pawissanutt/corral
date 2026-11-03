@@ -418,7 +418,7 @@ impl<'a> ReviewLaunch<'a> {
                 refused_request: None,
             }
         };
-        let ownership = ctx.store.try_lock("session-ownership")?.ok_or(LaunchBusy(
+        let ownership = ctx.store.claim_session_ownership()?.ok_or(LaunchBusy(
             "pane inventory is being reconciled; retry review launch",
         ))?;
         let (_, waiting) = ctx.store.dispatch_update_head(id, |store, current| {

@@ -36,7 +36,7 @@ pub(super) fn review_with_origin(
     // Retain the exclusive claim until the real pane reference has been saved.
     let _ownership = ctx
         .store
-        .try_lock("session-ownership")?
+        .claim_session_ownership()?
         .context("pane inventory is being reconciled; retry plan review")?;
     crate::session_scope::check_launch(ctx)?;
     let head = ctx.store.head(id)?;

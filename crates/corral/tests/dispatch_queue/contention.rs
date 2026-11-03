@@ -666,6 +666,7 @@ fn inventory_first_refuses_manual_dispatch_then_sync_launches_exactly_one() {
         .limits
         .per_project
         .insert("app".into(), 1);
+    f.ctx.store.config.sync.launch_wait_secs = 0;
     f.ctx.store.save_config().unwrap();
     let queued = f.task("app", Status::Ready);
     let manual = f.task("app", Status::Ready);

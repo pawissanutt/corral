@@ -337,7 +337,7 @@ fn dispatch_with(
 
     let ownership = ctx
         .store
-        .try_lock("session-ownership")?
+        .claim_session_ownership()?
         .context("pane inventory is being reconciled; retry dispatch")?;
     crate::session_scope::check_launch(ctx)?;
     let origin = admission.origin(&ctx.store, &*head)?;

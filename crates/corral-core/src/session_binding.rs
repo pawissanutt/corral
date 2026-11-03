@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
@@ -22,6 +23,13 @@ pub struct HerdrSessionBinding {
 
 /// Identifies one shared task-list snapshot; holding it keeps the address from naming another.
 type ListKey = Weak<Vec<Task>>;
+
+/// Shared by pane-inventory readers, exclusive for launches and bindings.
+const OWNERSHIP: &str = "session-ownership";
+/// Held exclusively while a launch waits for `OWNERSHIP`; new readers pass it shared first,
+/// so they queue behind the waiting launch instead of starving it.
+const INTENT: &str = "session-ownership-intent";
+const POLL: Duration = Duration::from_millis(10);
 
 /// One pass's single read of the session binding and the auxiliary-launch journal.
 /// It lives only as long as that pass; nothing carries it to a later pass or process.
@@ -167,13 +175,30 @@ impl Store {
     /// Takes the shared session-ownership lease and begins this handle's pass under it,
     /// reading the binding once: no bind can commit while the lease is held. The view serves
     /// the rest of the pass after the lease drops; launches still re-read at their boundary.
-    /// None while a bind holds the lease.
+    /// None while a launch or bind holds the lease or waits for it.
     pub fn try_begin_session_pass(&self) -> Result<Option<StoreLock>> {
-        let Some(lease) = self.try_lock_shared("session-ownership")? else {
+        let Some(turnstile) = self.try_lock_shared(INTENT)? else {
+            return Ok(None);
+        };
+        let lease = self.try_lock_shared(OWNERSHIP)?;
+        drop(turnstile);
+        let Some(lease) = lease else {
             return Ok(None);
         };
         *guard(&self.session_pass.0) = Some(self.read_session_view()?);
         Ok(Some(lease))
+    }
+
+    /// The exclusive session-ownership claim every launch and binding takes. It waits up to
+    /// `sync.launch_wait_secs` for readers already holding the lease, ahead of readers that
+    /// arrive later. None once the bound passes, as the no-wait claim was while a reader held it.
+    pub fn claim_session_ownership(&self) -> Result<Option<StoreLock>> {
+        let wait = Duration::from_secs(self.config.sync.launch_wait_secs);
+        let deadline = Instant::now().checked_add(wait);
+        let Some(_intent) = poll(deadline, || self.try_lock(INTENT))? else {
+            return Ok(None);
+        };
+        poll(deadline, || self.try_lock(OWNERSHIP))
     }
 
     /// The auxiliary-launch journal binds ownership before external pane creation.
@@ -198,7 +223,7 @@ impl Store {
         }
         self.check_runtime()?;
         let _ownership = self
-            .try_lock("session-ownership")?
+            .claim_session_ownership()?
             .context("pane inventory is being reconciled; retry binding")?;
         let _board = self.lock("dispatch")?;
         let view = self.read_session_view()?;
@@ -222,6 +247,27 @@ impl Store {
             bound_at: crate::clock::now(),
         };
         self.bind_session_record(&binding)
+    }
+}
+
+/// Retries a non-blocking claim until it succeeds or the deadline passes; a deadline beyond
+/// `Instant`'s range waits without bound.
+fn poll(
+    deadline: Option<Instant>,
+    mut claim: impl FnMut() -> Result<Option<StoreLock>>,
+) -> Result<Option<StoreLock>> {
+    loop {
+        if let Some(lock) = claim()? {
+            return Ok(Some(lock));
+        }
+        let pause = match deadline {
+            Some(deadline) => deadline.saturating_duration_since(Instant::now()).min(POLL),
+            None => POLL,
+        };
+        if pause.is_zero() {
+            return Ok(None);
+        }
+        std::thread::sleep(pause);
     }
 }
 

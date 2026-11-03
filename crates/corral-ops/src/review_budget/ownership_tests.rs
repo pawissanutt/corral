@@ -194,6 +194,7 @@ fn sync_releases_inventory_before_gate_and_reviewer_launches() {
 fn sync_launch_still_excludes_an_external_inventory_consumer() {
     // Given another observer retaining its lease until explicitly released.
     let mut fx = Fixture::new(1);
+    fx.ctx.store.config.sync.launch_wait_secs = 0;
     let id = automatic_task(&mut fx);
     let (ready, sampled) = mpsc::channel();
     let (release, released) = mpsc::channel();
