@@ -461,6 +461,11 @@ export class NativePanels implements PanelSurface {
           setPaddingX(padding: number): void { super.setPaddingX(owner.density === "compact" ? 0 : Math.max(2, padding)); }
           handleInput(data: string): void {
             if (owner.canInteract && matchesKey(data, "f2")) { void owner.palette(); return; }
+            // A message sent from another view returns to Chat, so its reply and any refusal notice show.
+            if (owner.workbench.view !== "conversation" && this.getText().trim()
+                && keys.getKeys("tui.input.submit").some(key => matchesKey(data, key))) {
+              owner.workbench.setView("conversation"); owner.workbench.focused = false;
+            }
             super.handleInput(data);
           }
           protected renderTopBorder(width: number, hidden: number): string {
