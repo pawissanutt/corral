@@ -741,7 +741,12 @@ pub(crate) fn split_agent_host(
         host.insert("_records".into(), serde_json::to_value(counts)?);
         if let Some(typed) = typed {
             let mut latest = BTreeMap::<u32, u64>::new();
-            for turn in &typed.turns {
+            for (ordinal, turn) in typed.turns.iter().enumerate() {
+                rows.put(turn_order_row(
+                    owner,
+                    turn,
+                    &format!("{owner}/turns/{}", seq(ordinal + 1)),
+                ));
                 latest
                     .entry(turn.generation)
                     .and_modify(|seq| *seq = (*seq).max(turn.seq))
@@ -780,6 +785,20 @@ pub(crate) fn split_agent_host(
         }
     }
     Ok(())
+}
+
+/// Sequence-ordered deletion metadata; the canonical turn row stays in append order.
+pub(super) fn turn_order_row(owner: &str, turn: &crate::agent::AgentTurn, key: &str) -> HistoryRow {
+    row(
+        TaskPart::AgentRecord,
+        format!(
+            "{owner}/turn_order/{:010}/{:020}",
+            turn.generation, turn.seq
+        ),
+        false,
+        false,
+        json!({"key": key}),
+    )
 }
 
 pub(super) fn latest_turn_seq(doc: &Value) -> Result<u64> {

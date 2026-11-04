@@ -285,43 +285,51 @@ pub(crate) fn commit_with_task(
     admitted: &Admitted,
     apply: impl FnOnce(&mut corral_core::Task) -> Result<Commit>,
 ) -> Result<CallResponse> {
-    commit_with_task_scope(ctx, admitted, apply, false)
+    commit_with_task_scope(ctx, admitted, apply)
 }
 
-/// T-626's retained-vector mutation only; bounded post-commit work stays unattributed.
+/// Task-native lifecycle callbacks read only their selected turn and classification witnesses.
 pub(crate) fn commit_native_event(
     ctx: &Ctx,
     admitted: &Admitted,
-    turn: u64,
+    generation: u32,
+    seq: u64,
     apply: impl FnOnce(&mut AgentRunState, Option<ClosureReason>) -> Result<Commit>,
 ) -> Result<CallResponse> {
     let container = &admitted.origin.binding.container;
     if container.task().is_none() {
         let selection = pm_selection(&admitted.origin).key(
             "turns",
-            format!("turn:{}:{turn}", admitted.origin.binding.generation),
+            format!("turn:{}:{seq}", admitted.origin.binding.generation),
         );
         return commit_selected(ctx, admitted, &selection, apply);
     }
-    failpoint("agent_admitted_before_commit");
-    commit_with_task_scope(
-        ctx,
-        admitted,
-        |task| {
-            let closure = agent::container_closure(task, container);
-            let state = agent::container_state_mut(task, container)
-                .context("the agent binding disappeared")?;
-            apply(state, closure)
-        },
-        true,
-    )
+    commit_head(ctx, admitted, |task| {
+        let closure = agent::container_closure_ref(task, container)?;
+        let mut state = task.agent_event_inputs(container, generation, seq)?;
+        let commit = apply(&mut state, closure)?;
+        task.edit_agent_head(container, |host| {
+            host.binding = state.binding;
+            Ok(())
+        })?;
+        for generation in state.generations {
+            task.put_agent_record(
+                container,
+                agent::NativeRecord::Generation(Box::new(generation)),
+            )?;
+        }
+        for turn in state.turns {
+            task.put_agent_record(container, agent::NativeRecord::Turn(turn))?;
+        }
+        task.retain_agent_turns(container)?;
+        Ok(commit)
+    })
 }
 
 fn commit_with_task_scope(
     ctx: &Ctx,
     admitted: &Admitted,
     apply: impl FnOnce(&mut corral_core::Task) -> Result<Commit>,
-    retention: bool,
 ) -> Result<CallResponse> {
     let origin = &admitted.origin;
     let container = &origin.binding.container;
@@ -329,7 +337,6 @@ fn commit_with_task_scope(
         .task()
         .context("a task commit names a worker run or review child")?;
     let mut outcome: Option<(RequestReceipt, bool)> = None;
-    let known = retention.then(|| corral_core::work::followup("T-626", "native_event_retention"));
     ctx.store.try_update(task_id, |task| {
         let state = agent::container_state(task, container).ok_or_else(|| {
             Rejection::new(
@@ -349,7 +356,6 @@ fn commit_with_task_scope(
         outcome = Some((append(state, origin, commit)?, false));
         Ok(true)
     })?;
-    drop(known);
     let (receipt, replayed) = outcome.context("the commit produced no receipt")?;
     respond(ctx, container, receipt, replayed)
 }

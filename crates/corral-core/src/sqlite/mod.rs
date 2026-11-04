@@ -23,6 +23,7 @@ mod lesson_artifacts;
 mod load;
 mod maintenance;
 pub mod migrate;
+mod native_retention;
 mod plans;
 mod question_events;
 mod readers;
@@ -230,6 +231,7 @@ impl SqliteBackend {
         schema::init(&mut writer, &workspace_id)?;
         artifact_reviews::init(&mut writer)?;
         artifact_digests::init(&mut writer)?;
+        native_retention::init(&mut writer)?;
         accepted_proof::init(&mut writer)?;
         lesson_artifacts::init(&mut writer)?;
         lesson_approvals::init(&mut writer)?;

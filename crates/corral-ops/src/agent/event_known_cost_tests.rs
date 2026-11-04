@@ -1,4 +1,4 @@
-//! T-626 is only the canonical retained-vector mutation, never bounded admission/replay/postwork.
+//! Lifecycle mutations and replays are independent of retained task/native history.
 use super::{
     native_test_support::{self as native, data},
     test_support as ts,
@@ -10,7 +10,7 @@ use corral_core::{
 };
 
 #[test]
-fn native_event_has_exact_canonical_t626_cost_and_constant_unattributed_replay_work() {
+fn native_event_and_replay_have_constant_work_without_retention_exception() {
     let mut costs = Vec::new();
     for scale in [1, 10] {
         corral_core::clock::pin_thread(Some(data::at(100_000)));
@@ -78,15 +78,6 @@ fn native_event_has_exact_canonical_t626_cost_and_constant_unattributed_replay_w
         assert_eq!(delta.cells(Counter::FullTaskHydrations).unattributed, 0);
         costs.push(Counter::ALL.map(|counter| delta.cells(counter).unattributed));
         ts::committed(&ts::hello(&fx, &host));
-        let doc = fx
-            .ctx
-            .store
-            .view()
-            .unwrap()
-            .task(TaskNum(1), &TaskParts::All)
-            .unwrap()
-            .unwrap();
-        let expected = native::full_read_cost(&doc);
         let input = ts::event_input(&host, 1, "turn_started", 1);
         let before = work::snapshot();
         let hot = HotScope::enter();
@@ -94,21 +85,9 @@ fn native_event_has_exact_canonical_t626_cost_and_constant_unattributed_replay_w
         let delta = work::snapshot().since(&before);
         drop(hot);
         delta.check_identity().unwrap();
-        assert_eq!(delta.followup_calls("T-626", "native_event_retention"), 1);
-        for counter in Counter::ALL {
-            let cells = delta.cells(counter);
-            assert_eq!(
-                cells
-                    .followup
-                    .get(&("T-626".into(), "native_event_retention".into()))
-                    .copied()
-                    .unwrap_or(0),
-                expected[&counter],
-                "{}",
-                counter.name()
-            );
-        }
-        assert_eq!(delta.cells(Counter::FullTaskHydrations).unattributed, 0);
+        assert_eq!(delta.followup_calls("T-626", "native_event_retention"), 0);
+        assert_eq!(delta.cells(Counter::FullTaskHydrations).total, 0);
+        assert_eq!(delta.cells(Counter::HistoryRowDecodes).total, 0);
         costs.push(Counter::ALL.map(|counter| delta.cells(counter).unattributed));
         let container = ContainerRef::Worker {
             task: task.id.clone(),
@@ -147,17 +126,52 @@ fn native_event_has_exact_canonical_t626_cost_and_constant_unattributed_replay_w
         assert!(
             agent::container_closure(&fx.ctx.store.get(&task.id).unwrap(), &container).is_none()
         );
+        for (event_seq, payload) in [
+            (
+                2,
+                serde_json::json!({"kind":"provider_error", "turn":1, "class":"overload"}),
+            ),
+            (3, serde_json::json!({"kind":"turn_ended", "turn":1})),
+        ] {
+            let id = super::event_request_id(host.identity.generation, event_seq);
+            let input = ts::envelope(&host, "event", &id, payload, false);
+            let before = work::snapshot();
+            let hot = HotScope::enter();
+            ts::committed(&ts::send(&fx, &input, "event"));
+            let delta = work::snapshot().since(&before);
+            drop(hot);
+            delta.check_identity().unwrap();
+            assert_eq!(delta.followup_calls("T-626", "native_event_retention"), 0);
+            assert_eq!(delta.cells(Counter::FullTaskHydrations).total, 0);
+            assert_eq!(delta.cells(Counter::HistoryRowDecodes).total, 0);
+            costs.push(Counter::ALL.map(|counter| delta.cells(counter).unattributed));
+        }
+        let ended = fx
+            .ctx
+            .store
+            .head(&task.id)
+            .unwrap()
+            .agent_turn(&container, host.identity.generation, 1)
+            .unwrap()
+            .unwrap();
+        assert!(ended.ended.is_some());
+        assert_eq!(ended.class, Some(agent::TurnClass::ProviderFailed));
     }
     assert_eq!(
-        costs[0], costs[3],
+        costs[0], costs[5],
         "generation opening's bounded remainder must not follow retained history"
     );
     assert_eq!(
-        costs[1], costs[4],
+        costs[1], costs[6],
         "event's bounded remainder must not follow retained task/native history"
     );
     assert_eq!(
-        costs[2], costs[5],
+        costs[2], costs[7],
         "all replay counters must be history-independent"
     );
+    assert_eq!(
+        costs[3], costs[8],
+        "provider-error work is history-independent"
+    );
+    assert_eq!(costs[4], costs[9], "turn-end work is history-independent");
 }
