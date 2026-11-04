@@ -160,6 +160,11 @@ const ROWS: &[(&str, &[&str], Class)] = &[
     ("setup diff", &[], Read),
     ("setup apply", &[], Refused),
     ("setup cancel", &["--expected-revision", "0"], Refused),
+    ("repair status", &["T-001"], Read),
+    ("repair finding", &["T-001", "--file", "f.json"], Refused),
+    ("repair diagnose", &["T-001"], Refused),
+    ("repair diagnosed", &["T-001", "--file", "d.json"], Refused),
+    ("repair renew", &["T-001", "--file", "r.json"], Refused),
     ("memory list", &[], Refused),
     ("memory read", &["entry"], Refused),
     (

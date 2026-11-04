@@ -64,8 +64,8 @@ while corrective starts still commit with the executor's final task mutation.
 - The run's receipted quick gate is requested only after commit and final rebase; its
   separate Corral receipt/log is the gate authority, not this pre-gate report.
 
-Test cost: **4 new deterministic lower-layer tests**, 1 existing inbox journey enhanced;
-no new end-to-end, slow, load or prose tests. The added tests took 1.11s together in the
+Test cost: **4 new deterministic lower-layer tests**; the existing inbox journey and
+exhaustive CLI-classification table were enhanced. No new end-to-end, slow, load or prose tests. The added tests took 1.11s together in the
 earlier recorded targeted run (compilation excluded); the existing inbox case took 0.20s and the two
 existing stronger-review cases 2.15s. The gate records its own candidate-added timing.
 
@@ -79,6 +79,16 @@ added for this variant. A final failing-first legacy-adoption boundary check
 qualifying for the initial-launch exemption. The exemption now requires an unblocked
 history. `401e20cd-repair-tests-final.log` passes the same four tests, including that
 regression, in 0.39s.
+
+The first receipted quick gate (`ag-5caf8d0d1eb2c5fa`, log artifact
+`8207fee7-T-156-R1-ag-5caf8d0d1eb2c5fa.log`) passed formatting, module-size and Clippy
+checks, then failed the exhaustive assistant-command classification table because the
+five new CLI paths lacked expectation rows. Added the same declared Read/Refused classes
+to that existing table; no assertion or guard was relaxed. The targeted
+`cargo test -p corral --test assistant_entry_cli every_command_variant_has_an_explicit_class -- --nocapture`
+now passes in 4.50s (`0b2e76e0-assistant-classification.log`). The next receipted quick
+gate supplies the final candidate-wide result; the first stopped early and is not proof
+of the unrun tests. Its existing-test timing overruns remain report-only observations.
 
 Not exercised: live model/provider calls, paid execution, or load generation. None was
 required or authorized. This increment does not migrate the owner's live configuration,
