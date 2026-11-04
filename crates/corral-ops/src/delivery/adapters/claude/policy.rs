@@ -1,4 +1,4 @@
-//! Fail-closed inbound policy. CLI accept cannot loosen a repository or managed
+//! Fail-closed inbound policy. CLI accept cannot loosen a user, repository or managed
 //! restriction. Unknown/dynamic policy sources are blocked, never bypassed or executed.
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -10,7 +10,7 @@ use super::{Session, process};
 use crate::delivery::{BlockReason, Readiness};
 use crate::watchdog::{ProcessControl, SystemProcesses};
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Policy {
     Accept,
     Hold,
@@ -26,6 +26,11 @@ fn value(settings: &Value) -> Result<Option<Policy>> {
         Some(Value::String(s)) if s == "refuse" => Ok(Some(Policy::Refuse)),
         Some(_) => anyhow::bail!("unrecognized crossSessionInbound"),
     }
+}
+
+fn initial_policy(cli: &Value, user: &Value) -> Result<Policy> {
+    // Corral's injected accept opts into delivery; it never overrides a user's restriction.
+    Ok(value(cli)?.max(value(user)?).unwrap_or(Policy::Hold))
 }
 
 fn settings(path: &Path) -> Result<Value> {
@@ -165,7 +170,7 @@ pub(super) fn readiness(session: &Session) -> Result<Readiness> {
         None => serde_json::json!({}),
     };
     // Missing accept is not evidence of readiness in bypassPermissions (live capture).
-    let mut policy = value(&cli)?.or(value(&user)?).unwrap_or(Policy::Hold);
+    let mut policy = initial_policy(&cli, &user)?;
     let managed_path = env
         .get("CLAUDE_CODE_MANAGED_SETTINGS_PATH")
         .map(PathBuf::from)
@@ -227,6 +232,18 @@ pub(super) fn readiness(session: &Session) -> Result<Readiness> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_accept_cannot_override_explicit_user_hold_or_refuse() {
+        let cli = serde_json::json!({"crossSessionInbound":"accept"});
+        for (setting, expected) in [("hold", Policy::Hold), ("refuse", Policy::Refuse)] {
+            let user = serde_json::json!({"crossSessionInbound":setting});
+            assert_eq!(initial_policy(&cli, &user).unwrap(), expected);
+        }
+        let absent = serde_json::json!({});
+        assert_eq!(initial_policy(&absent, &absent).unwrap(), Policy::Hold);
+        assert_eq!(initial_policy(&cli, &absent).unwrap(), Policy::Accept);
+    }
 
     #[test]
     fn unknown_policy_values_and_duplicate_cli_settings_fail_closed() {

@@ -39,8 +39,9 @@ unknown versions and truncated payloads do not count.
   not add the setting; old run delivery modes are never changed.
 - Policy reads use the bound process's environment and argv, not the sync process's
   HOME. User, CLI, project/local (including main-checkout local settings), managed
-  file and managed drop-ins are inspected. Explicit repository or managed hold/refuse
-  never becomes Native through CLI accept. Missing accept defaults to blocked hold.
+  file and managed drop-ins are inspected. Explicit user, repository or managed hold/refuse
+  never becomes Native through CLI accept (user merge corrected in review round 1;
+  see T-208-review-round-1.md). Missing accept defaults to blocked hold.
 - Remote managed caches, dynamic policy helpers, unsupported policy environment
   overrides, malformed/unreadable settings and non-Linux policy inspection are
   conservatively blocked, not guessed, executed, modified or overridden. This is a
