@@ -144,11 +144,12 @@ def cost_audit(config: dict, rows: list[dict]) -> None:
              'partial if the gate fails/cancels; unrun tests are not timing proof.', '',
              '| Test | Seconds | Classification | Load/core before → after |',
              '|---|---:|---|---|']
-    for row in sorted(rows, key=lambda value: value['seconds'], reverse=True):
+    for row in sorted((row for row in rows if row['budget_exceeded']),
+                      key=lambda value: value['seconds'], reverse=True):
         name = ' '.join(row['test']).replace('|', '\\|')
         lines.append(f'| `{name}` | {row["seconds"]:.3f} | {row["classification"]} | '
                      f'{row["load_before"].get("load_per_core")} → {row["load_after"].get("load_per_core")} |')
-    if not rows:
+    if not any(row['budget_exceeded'] for row in rows):
         lines.append('| No overrun observed before the gate ended | | | |')
     target.write_text('\n'.join(lines) + '\n')
 
@@ -163,8 +164,7 @@ def report(path: Path) -> int:
             for line in metrics.read_text().splitlines():
                 row = json.loads(line)
                 rows.append(row)
-                if row['budget_exceeded']:
-                    print('Per-test budget observation: ' + line, flush=True)
+                print('Per-test budget observation: ' + line, flush=True)
         config = path.with_name('case.json')
         if config.is_file():
             cost_audit(json.loads(config.read_text()), rows)
