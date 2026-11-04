@@ -50,7 +50,7 @@ test("assistant edit and write reach the session's scratch, never the main check
     const corral = writeFakeCorral(work);
     corral.snapshot({ session: { id: "A-1", scratch: [{ slug: "spike", project: "corral", path: spike }] } });
     const client = new CorralClient({
-      corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "",
+      corral: corral.path, root: cwd, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "",
     });
     const nest: ToolDefinition = {
       name: "fixture_nest", label: "Nest", description: "Runs a nested write",
