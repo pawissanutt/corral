@@ -121,6 +121,7 @@ mod sandbox_cleanup;
 pub use role_session::refresh_role_sessions;
 #[doc(hidden)]
 pub use role_session::{FixtureRoleEntropyGuard, fixture_role_entropy};
+mod plan_recovery;
 mod routing;
 mod scratch_reclaim;
 mod search;
@@ -144,6 +145,7 @@ pub mod throughput;
 mod thumbnails;
 pub mod timeline;
 mod tracker;
+pub use plan_recovery::{PlanRecovery, RecoveryResource, plan_recovery_inventory};
 mod transcripts;
 mod usage;
 mod verdict_carry;

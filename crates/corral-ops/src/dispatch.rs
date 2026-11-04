@@ -335,6 +335,7 @@ fn dispatch_with(
         &corral_core::RunHead::of(&run)?,
     )?);
 
+    let retry_source = crate::plan_recovery::retry::source(&task, &run)?;
     let ownership = ctx
         .store
         .claim_session_ownership()?
@@ -366,6 +367,9 @@ fn dispatch_with(
                 &run.base,
                 &run.base_sha,
             )?;
+            if let Some(source) = &retry_source {
+                crate::plan_recovery::retry::stage(store, &current.id, &run_id, source)?;
+            }
             current.start_run(run)?;
             current.launch = Some(corral_core::LaunchReservation {
                 authorization: Some(authorization.clone()),

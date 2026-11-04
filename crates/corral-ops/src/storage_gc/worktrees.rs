@@ -157,6 +157,9 @@ fn finding(
 /// Why a finished worktree is deliberately kept: approve left it in place on purpose
 /// (`--keep-worktree` or `remove_worktree = false`), or the policy keeps worktrees.
 fn kept(ctx: &Ctx, head: &TaskHead, run: &str) -> Result<Option<String>> {
+    if let Err(error) = crate::plan_recovery::protect_run(ctx, head) {
+        return Ok(Some(format!("kept: {error:#}")));
+    }
     if !ctx
         .store
         .config

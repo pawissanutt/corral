@@ -14,6 +14,7 @@ use crate::{Action, HitMap, MouseCtx, Toast, Tone, View, theme};
 pub(crate) struct ConfirmDrop {
     id: String,
     has_run: bool,
+    execution_plan: bool,
     reason: LineInput,
     editing: bool,
 }
@@ -23,6 +24,7 @@ impl ConfirmDrop {
         Self {
             id: task.id.clone(),
             has_run: task.current_run().is_some(),
+            execution_plan: task.tracker && task.approved_scope.is_some(),
             reason: LineInput::default(),
             editing: false,
         }
@@ -83,7 +85,10 @@ impl View for ConfirmDrop {
             Paragraph::new(format!(" Drop {}?", self.id)).style(Style::new().fg(theme::RED)),
             question,
         );
-        let text = if self.has_run {
+        let text = if self.execution_plan {
+            "Cancels Plan coordination. Member worktrees, branches and worker panes stay; \
+             a recovery inventory and outstanding obligations are retained."
+        } else if self.has_run {
             "Owned panes are closed. Discard removes the worktree and branch when possible; \
              artifacts stay. Cleanup warnings appear in messages."
         } else {

@@ -59,6 +59,10 @@ pub(crate) fn summary(progress: &Progress) -> Vec<String> {
         Err(error) => return vec![format!("Plan progress unavailable: {error}")],
     };
     let mut lines = vec![counts(p)];
+    if let Some(recovery) = &p.recovery {
+        lines.push(format!("Coordination cancelled; {} retained resources, {} outstanding obligations (corral plan progress {} --json)", recovery.resources.len(), recovery.outstanding.len(), p.task));
+        lines.extend(recovery.outstanding.iter().cloned());
+    }
     if let Some(scope) = &p.approved_scope {
         lines.push(format!(
             "Approved scope r{}: {}",
@@ -166,6 +170,23 @@ pub(crate) fn details(progress: &Progress, width: usize) -> Vec<Line<'static>> {
                 ),
                 width,
                 4,
+            ));
+        }
+    }
+    if let Some(recovery) = &p.recovery {
+        out.push(Line::styled("Retained recovery inventory", theme::bold()));
+        for resource in &recovery.resources {
+            out.extend(indented(
+                &format!(
+                    "{} {} {} · {} · {}",
+                    resource.task,
+                    resource.run.as_deref().unwrap_or(&resource.kind),
+                    resource.path.display(),
+                    resource.branch.as_deref().unwrap_or("detached/unknown"),
+                    resource.errors.join("; ")
+                ),
+                width,
+                2,
             ));
         }
     }

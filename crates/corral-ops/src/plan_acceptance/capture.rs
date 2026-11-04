@@ -73,6 +73,7 @@ fn capture_with<T: TaskRef + ?Sized>(
     // The candidate reads the tracker's own fields and its contract revision, never its
     // history; members are read as heads.
     let tracker = &source.shell_task()?;
+    crate::plan_recovery::require_active(store, tracker)?;
     ensure!(
         tracker.plan_acceptance_required(),
         "{} is not a tracker Plan with approved acceptance criteria",

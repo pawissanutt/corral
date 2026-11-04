@@ -177,6 +177,7 @@ fn execute(
     context: Option<crate::gate_tier::GateContext>,
 ) -> Result<GateRecord> {
     let mut child = ctx.store.read_locked_head(&identity.task, |task| {
+        crate::plan_recovery::require_active(&ctx.store, task)?;
         crate::hold::require_clear(&ctx.store, task)?;
         Command::new("bash")
             .arg(&paths.script)

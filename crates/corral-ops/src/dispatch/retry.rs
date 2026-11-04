@@ -213,6 +213,24 @@ pub(super) fn retry_with(
         Some(h) => ctx.herdr.pane_get(&h.pane_id)?.is_some(),
         None => false,
     };
+    if prev.plan_target.is_some() {
+        let repo = ctx
+            .store
+            .project_path(task.project.as_deref().context("task has no project")?)?;
+        let _landing = corral_git::landing_lock(&repo)?;
+        crate::plan_target::recover_run(
+            ctx,
+            &head,
+            head.current_run.as_deref().context("missing run")?,
+        )?;
+        if let Some(target) = crate::plan_target::validate_run(
+            &ctx.store,
+            &head,
+            head.current_run.as_deref().context("missing run")?,
+        )? {
+            crate::plan_recovery::retry::require_source(&prev, &target.head)?;
+        }
+    }
     let can_checkpoint = reachable && prev.worktree.is_dir();
     let refused_before_start =
         launch_refused_before_start(&head, head.current_run.as_deref().context("missing_run")?)?;

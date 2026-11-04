@@ -133,6 +133,53 @@ fn main_moved_outside_a_prepared_landing_refuses_reconciliation() {
 }
 
 #[test]
+fn cancelled_coordination_cannot_be_revived_by_a_prepared_final_receipt() {
+    let f = Fixture::new(Delivery::Integration, &GATE);
+    // Recovery checks only the prepared transaction and exact Git head, not gate/review
+    // execution. Seed just that boundary instead of repeating the acceptance journey.
+    let candidate = capture::capture(&f.ctx, &f.ctx.store, &f.plan(), "A1", None).unwrap();
+    let attempt = AggregateAttempt {
+        id: "A1".into(),
+        identity: candidate.identity,
+        target: candidate.target,
+        code: candidate.code,
+        members: candidate.members,
+        started: Timestamp::now(),
+        gate: None,
+        evidence: vec![],
+        reviews: vec![],
+        acceptance: None,
+    };
+    f.ctx
+        .store
+        .update(&f.plan, |task| {
+            task.aggregate_attempts.push(attempt.clone());
+            Ok(())
+        })
+        .unwrap();
+    let (before, head) = (f.main(), plan_head(&f));
+    prepare(&f, &attempt.id, &before, &head);
+    fast_forward_main(&f, &head);
+    crate::plan_cancel(&f.ctx, &f.plan).unwrap();
+    let error = plan_accept(&f.ctx, &f.plan, &attempt.id, false).unwrap_err();
+    assert!(format!("{error:#}").contains("cancelled"));
+    assert_eq!(f.plan().status, Status::Dropped);
+    assert_eq!(f.accepted_events(), 0);
+    assert_eq!(f.main(), head);
+    assert_eq!(
+        f.plan()
+            .aggregate_attempts
+            .last()
+            .unwrap()
+            .acceptance
+            .as_ref()
+            .unwrap()
+            .state,
+        AggregateLandingState::Prepared
+    );
+}
+
+#[test]
 fn integration_target_equal_to_main_completes_without_a_merge() {
     // Given an integration Plan whose branch is already on main.
     let f = Fixture::new(Delivery::Integration, &GATE);

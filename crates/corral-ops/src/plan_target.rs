@@ -101,6 +101,10 @@ fn integration_plan<T: TaskRef + ?Sized>(
     let Some(plan) = store.execution_plan_ref(task)? else {
         return Ok(None);
     };
+    integration_binding(plan)
+}
+
+fn integration_binding(plan: TaskHead) -> Result<Option<(TaskHead, String)>> {
     match &plan
         .approved_scope
         .as_ref()
@@ -226,6 +230,7 @@ pub(crate) fn prepare_dispatch(ctx: &Ctx, task: &Task) -> Result<Option<(Target,
     let Some((plan, branch)) = integration_plan(&ctx.store, task)? else {
         return Ok(None);
     };
+    crate::plan_recovery::require_active(&ctx.store, &plan)?;
     let repo = ctx
         .store
         .project_path(task.project.as_deref().context("task has no project")?)?
@@ -342,7 +347,11 @@ pub(crate) fn validate_run<T: TaskRef + ?Sized>(
     task: &T,
     run: &RunHead,
 ) -> Result<Option<Target>> {
-    let current = integration_plan(store, task)?;
+    let plan = store.execution_plan_ref(task)?;
+    if let Some(plan) = &plan {
+        crate::plan_recovery::require_active(store, plan)?;
+    }
+    let current = plan.map(integration_binding).transpose()?.flatten();
     match (&run.plan_target, current) {
         (None, None) => Ok(None),
         (Some(binding), Some((plan, branch))) => {
@@ -374,6 +383,7 @@ pub(crate) fn recover_run<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHea
             .store
             .project_path(task.project().as_deref().context("task has no project")?)?;
         let plan = ctx.store.head(&binding.plan)?;
+        crate::plan_recovery::require_active(&ctx.store, &plan)?;
         let mut target = Target::load(&repo, &binding.branch)?
             .context("Plan target ownership receipt missing")?;
         target.check_owner(&ctx.store, &plan)?;
@@ -386,6 +396,21 @@ pub(crate) fn recover_run<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHea
         )?;
     }
     Ok(())
+}
+
+/// Read-only retained transaction inventory; never reconciles a cancelled Plan.
+pub(crate) fn recovery_journal(store: &Store, plan: &Task) -> Result<Option<serde_json::Value>> {
+    let Some(corral_core::PlanDeliveryTarget::Integration { branch }) =
+        plan.approved_scope.as_ref().map(|s| &s.delivery_target)
+    else {
+        return Ok(None);
+    };
+    let repo = store.project_path(plan.project.as_deref().context("Plan has no project")?)?;
+    let Some(target) = Target::load(&repo, branch)? else {
+        return Ok(None);
+    };
+    target.check_owner(store, plan)?;
+    Ok(Some(serde_json::to_value(target)?))
 }
 
 pub(crate) fn protect_cleanup(repo: &Path, run: &RunHead) -> Result<()> {

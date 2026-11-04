@@ -69,6 +69,9 @@ pub struct PlanProgress {
     /// Present when acceptance criteria require aggregate acceptance beyond child completion.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aggregate: Option<crate::AggregateProgress>,
+    /// Durable cancellation inventory, including unresolved resource obligations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<crate::PlanRecovery>,
 }
 
 #[derive(Clone)]
@@ -229,7 +232,9 @@ pub fn plan_progress_in(ctx: &Ctx, store: &Store, id: &str) -> Result<PlanProgre
     // Readiness reads maintained artifact facts, Git refs and checkpoint records, independent
     // of task scopes. Do not memoize acceptance readiness on the task-only feed cursor.
     let aggregate = crate::plan_acceptance::progress(&fresh, &tracker);
+    let recovery = crate::plan_recovery::inventory(&fresh.store, &tracker.id)?;
     Ok(PlanProgress {
+        recovery,
         task: tracker.id,
         status: tracker.status,
         approved_scope: tracker.approved_scope,

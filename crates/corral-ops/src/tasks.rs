@@ -124,7 +124,17 @@ pub fn move_task_with_decision(
     actor: &str,
     owner_ok: bool,
 ) -> Result<Task> {
+    let current = ctx.store.head(id)?;
+    if current.tracker && current.approved_scope.is_some() {
+        if to == Status::Dropped {
+            return crate::plan_recovery::cancel_with_decision(ctx, id, reason, actor, owner_ok);
+        }
+        crate::plan_recovery::require_active(&ctx.store, &current)?;
+    }
     let task = ctx.store.update(id, |t| {
+        if t.tracker && t.approved_scope.is_some() {
+            crate::plan_recovery::require_active(&ctx.store, t)?;
+        }
         if t.launch.is_some() {
             bail!("{} has an unfinished dispatch; dequeue it before moving", t.id);
         }

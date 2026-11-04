@@ -166,6 +166,9 @@ pub(crate) fn target_blocker(store: &Store, task: &Task) -> Result<Option<String
         return Ok(None);
     };
     let plan = plan.to_shell_task()?;
+    if let Err(error) = crate::plan_recovery::require_active(store, &plan) {
+        return Ok(Some(format!("{error:#}")));
+    }
     // Admission must retain the actual member's bound run/infra-wait context. The
     // target helper resolves its parent through heads, so this does not hydrate history.
     crate::plan_target::check_dispatch_target(store, task)?;
@@ -192,6 +195,7 @@ fn base_reason(
     base: &str,
     sha: &str,
 ) -> Result<Option<String>> {
+    crate::plan_recovery::require_active(store, plan)?;
     let target = match &plan
         .approved_scope
         .as_ref()

@@ -41,6 +41,7 @@ pub fn plan_add_member(ctx: &Ctx, tracker: &str, member: &str) -> Result<PlanMem
 /// A Plan whose membership may change: not finished or accepted, and no member run in flight,
 /// because that run is bound to the current membership.
 pub(super) fn check_open_plan(store: &Store, plan: &Task) -> Result<()> {
+    crate::plan_recovery::require_active(store, plan)?;
     ensure!(
         !matches!(plan.status, Status::Done | Status::Dropped)
             && plan.aggregate_acceptance().is_none(),
