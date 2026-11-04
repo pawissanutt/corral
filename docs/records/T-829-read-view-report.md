@@ -1,0 +1,37 @@
+# T-829: read-view lifetimes in autopilot and board refresh
+
+## Changes and lifetime audit
+
+The 30-second default is unchanged. No test timeout, work budget, retry policy, or slow-profile membership was increased.
+
+- **Autopilot:** each step materializes its scalar head and open review children, then detaches the head before Git/transport work. Authority, next-action classification, semantic-review freshness, evidence admission and released-review diagnostics obtain their own short read steps. Effects and locked transition checks are not replayed.
+- **Board/tracker:** coordination preparation and the one real host sample precede the frame view. The remaining read-only derivation can reopen on expiry; it replays the captured host observation, not the host operation. The normal frame still opens exactly one view. Returned heads are detached. Standalone tracker projections also retry expired reads; explicitly supplied snapshots retain their original state and fail closed.
+- **Other exercised single-view paths found and fixed:** `done_inner` retained an admission head across owner/Git work (checkpoint and audit now read separately); integration packets opened a snapshot before Git subprocesses (only approval lookup is pinned now); lesson-row maintenance held a view across cache I/O (expiry retries under its existing lock, with the invalidated cursor forcing recovery of partial output); reviewer reaping held a view across `/proc` discovery and process shutdown (discovery precedes the lookup view, and each eligibility read precedes its external shutdown).
+- The shared `Ctx::read_step` handles both direct `ViewError::Expired` and change-feed-wrapped expiry. Other errors propagate. Explicit snapshots never silently renew. Its final freshness check also catches projections that represent an expired read as an unavailable decoration rather than returning an error.
+- Removed all 17 T-829 quarantine entries present after rebasing; unrelated quarantine entries remain.
+
+This is not a blanket relaxation of immutable snapshots: explicit snapshot APIs, transaction preconditions and the storage lease limit are unchanged. Other short snapshot readers were not globally converted to renewable views.
+
+## Evidence
+
+Raw logs are attached separately from this report.
+
+1. `cargo test -p corral-ops --lib step_diagnostics_survive_expiry_after_external_work -- --nocapture`: failing-first regression, `read view expired after 31s` at the old diagnostic read. Uses one task/review child and an injected clock, not a sleep or a loaded host.
+2. `cargo test -p corral-tui --lib slow_resource_sample_does_not_expire_frame_artifact_reads -- --nocapture`: failing-first regression; the old frame lost its required unreviewed-artifact badge after a probe advanced the clock by 31 seconds.
+3. Targeted nextest selection across `autopilot::tests`, `ctx::tests`, board snapshot/tracker tests and the two initially reported autopilot journeys: **15/15 passed**. Includes the unchanged one-view frame budget and both reported membership-edge regressions.
+4. Isolated `test-herdr.sh` selection of all 17 removed-quarantine cases plus related unit tests: 23/24 initially passed. It exposed a detached-head keyed read in routed semantic-review freshness; that was fixed by moving next-action/review reads into fresh boundary steps. The repaired replay-and-land journey then **passed**, taking 104.993 seconds under ambient host contention without changing its timeout. The other three tests in that rerun passed as well. No production server was used.
+5. Final focused `cargo nextest run -p corral-ops --lib -E 'test(ctx::tests) | test(cleanup::reap::tests)'`: **3/3 passed**, including feed-wrapped expiry, explicit-snapshot refusal and the existing real owned-process reaping/history-budget test.
+6. `scripts/load-sandbox.sh --cpus 2 --memory 2g --pids-limit 256 --burners 2 -- ...`: the three small regression/contract tests passed **15/15 executions** (five rounds). Tests and burners were confined to that one Podman container. The subsequent T-829 labeled-container inventory was empty. No load was generated on the host. These checks reuse locally built test binaries; the receipted gate independently builds the committed candidate.
+7. `cargo fmt --all`, `git diff --check`, and the repository's exact Rust SLOC counter: clean; changed modules remain within 800 SLOC.
+
+The required quick gate is run only through the receipted corral gate operation after the final commit/rebase. Its candidate-bound result/log accompanies this report; no manual or full-tier gate was started.
+
+## Test cost
+
+Three small unit/contract tests were added: autopilot diagnostic expiry, board resource-boundary expiry, and renewable-read versus explicit-snapshot behavior. There are no new end-to-end journeys, large histories, sleeps or timeout increases. Existing frame/history work counters were preserved, not relaxed.
+
+Test-cost justification: restoring the 17 existing quarantined lifecycle tests can add over 30 seconds to execution. Those journeys already cover gate/verdict carry, cleanup and recovery, so they were reused rather than duplicated. The new expiry variants use tiny fake-backend clocks instead of expensive end-to-end delay/load matrices; the container check is attached evidence, not another committed suite.
+
+## Limitations
+
+The owner-equivalent full landing gate is intentionally left to corral. There was no live owner-board mutation or production autopilot run. An explicitly pinned view is still allowed to expire; callers choosing that API are not silently moved to a newer state.
