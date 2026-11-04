@@ -119,8 +119,8 @@ test("committed candidate files, binary/rename diffstats and captured hunks igno
     try {
       const component = wb.mount(new Text("transcript", 0, 0)); wb.setView("changes"); await wb.review.refresh(); await wb.openFile("added.ts");
       const visible = stripTerminalSequences(renderLayoutFrame(component, 80, 50, () => {}).lines.join("\n"));
-      expect(visible).toContain(current.base); expect(visible).toContain(current.head); expect(visible).toContain("Diffstat: +1 −0");
-      expect(visible).toContain("+committed line"); expect(visible).not.toContain("dirty worktree");
+      expect(visible).toContain(current.base.slice(0, 8)); expect(visible).toContain(current.head.slice(0, 8)); expect(visible).toMatch(/added\.ts\s+added\s+\+1 −0/);
+      expect(visible).toContain("+ committed line"); expect(visible).not.toContain("dirty worktree");
     } finally { wb.dispose(); }
     expect(parseChangedPaths("M\0literal\n界面.ts\0")[0]?.path).toBe("literal\n界面.ts");
   } finally { store.dispose(); rmSync(root, { recursive: true, force: true }); }
@@ -148,7 +148,7 @@ test("retained candidate status/diffstat and hunks advance together only when th
       wb.setView("changes"); await wb.review.refresh(); await wb.openFile("a.txt"); await wb.review.refresh();
       for (const width of [80, 140]) {
         const initial = render(width, "initial");
-        expect(initial).toContain(first); expect(initial).toContain("Diffstat: +1 −1"); expect(initial).toContain("a.txt · Modified"); expect(initial).toContain("+first");
+        expect(initial).toContain(first.slice(0, 8)); expect(initial).toMatch(/a\.txt\s+modified\s+\+1 −1/); expect(initial).toContain("+ first");
       }
       if (next === "edit") writeFileSync(join(root, "a.txt"), "second\nsecond2\nsecond3\n");
       else rmSync(join(root, "a.txt"));
@@ -160,17 +160,16 @@ test("retained candidate status/diffstat and hunks advance together only when th
       expect(wb.review.stats.get("a.txt")).toEqual({ added: next === "edit" ? 3 : 0, removed: 1 });
       for (const width of [80, 140]) {
         const retained = render(width, "retained");
-        expect(retained).toContain(first); expect(retained).not.toContain(second); expect(retained).toContain(current.base);
-        expect(retained).toContain("+first"); expect(retained).toContain("Diffstat: +1 −1"); expect(retained).toContain("a.txt · Modified");
-        expect(retained).toContain("New diff available"); expect(retained).not.toContain("a.txt · Deleted");
+        expect(retained).toContain(first.slice(0, 8)); expect(retained).not.toContain(second.slice(0, 8)); expect(retained).toContain(current.base.slice(0, 8));
+        expect(retained).toContain("+ first"); expect(retained).toMatch(/a\.txt\s+modified\s+\+1 −1/);
+        expect(retained).toContain("New diff available"); expect(retained).not.toMatch(/a\.txt\s+deleted/);
       }
       expect(wb.handleInput("r")).toBeTrue(); await wb.review.refresh();
       for (const width of [80, 140]) {
         const applied = render(width, "applied");
-        expect(applied).toContain(second); expect(applied).not.toContain(first); expect(applied).toContain(current.base);
-        expect(applied).toContain(next === "edit" ? "Diffstat: +3 −1" : "Diffstat: +0 −1");
-        expect(applied).toContain(next === "edit" ? "a.txt · Modified" : "a.txt · Deleted");
-        expect(applied).not.toContain("+first"); expect(applied).toContain(next === "edit" ? "+second3" : "-base");
+        expect(applied).toContain(second.slice(0, 8)); expect(applied).not.toContain(first.slice(0, 8)); expect(applied).toContain(current.base.slice(0, 8));
+        expect(applied).toMatch(next === "edit" ? /a\.txt\s+modified\s+\+3 −1/ : /a\.txt\s+deleted\s+\+0 −1/);
+        expect(applied).not.toContain("+ first"); expect(applied).toContain(next === "edit" ? "+ second3" : "− base");
       }
     } finally { wb.dispose(); rmSync(root, { recursive: true, force: true }); }
   }
@@ -184,15 +183,20 @@ test("Evidence keyboard/pointer navigation survives narrow/wide rendering and pr
     wb.handleInput("\x1b[21~"); await wb.inspection.refresh();
     expect(wb.view).toBe("evidence");
     for (const width of [52, 80, 140]) for (const row of lines(width)) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
-    wb.handleInput("j"); expect(stripTerminalSequences(lines(140).join("\n"))).toContain("Inspect C2");
-    wb.handleInput("k"); expect(stripTerminalSequences(lines(52).join("\n"))).toContain("Inspect C1");
-    const line = lines(140).findIndex(row => stripTerminalSequences(row).includes("C2 │"));
+    wb.handleInput("j"); expect(stripTerminalSequences(lines(140).join("\n"))).toMatch(/^▌ C2 /m);
+    wb.handleInput("k"); expect(stripTerminalSequences(lines(52).join("\n"))).toMatch(/^ ‹ C1 1\/2 › /m);
+    const wide = lines(140).map(row => stripTerminalSequences(row));
+    expect(wide.at(-1)).toMatch(/^ {2}j\/k criterion .*Enter expand section/);
+    expect(wide.slice(0, -1).some(row => row.includes("j/k criterion"))).toBe(false);
+    const line = wide.findIndex(row => row.startsWith("  C2 "));
     const event: TuiMouseEvent = { type: "click", button: "left", x: 1, y: line, screenX: 1, screenY: line, width: 140, height: 200, shift: false, alt: false, ctrl: false };
     const frame = renderLayoutFrame(root, 140, 200, () => {});
     for (const box of getLayoutBoxesAt(frame, event.screenX, event.screenY)) {
       if (box.component.handleMouse?.({ ...event, x: event.screenX - box.rect.x, y: event.screenY - box.rect.y, width: box.rect.width, height: box.rect.height })) break;
     }
-    expect(stripTerminalSequences(lines(140).join("\n"))).toContain("Inspect C2");
+    expect(stripTerminalSequences(lines(140).join("\n"))).toMatch(/^▌ C2 /m);
+    wb.handleInput("j"); wb.handleInput("\r");
+    expect(stripTerminalSequences(lines(140).join("\n"))).toMatch(/^▌ ▾ Review notes/m);
     wb.handleInput("\x1b[20~"); expect(stripTerminalSequences(lines(80).join("\n"))).toContain("REAL_TRANSCRIPT");
   } finally { wb.dispose(); }
 });

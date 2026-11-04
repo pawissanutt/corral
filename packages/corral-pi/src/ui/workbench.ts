@@ -8,21 +8,24 @@ import { VStack, ScrollView, Text, getKeybindings, matchesKey, visibleWidth, typ
 import { anchoredRow } from "./reading-anchor.ts";
 import { NativeImageViewer } from "./image-viewer.ts";
 import { ReviewStore, comparisonLabel, fileStatus, type PatchSnapshot } from "./review-store.ts";
+import { ChangesView, changesModel, type ChangesModel } from "./changes-view.ts";
 import { LifecycleView } from "./lifecycle-view.ts";
 import { ArtifactView } from "./artifact-view.ts";
-import { activityRows, type ActivityMode } from "./activity-view.ts";
+import type { ActivityMode } from "./activity-view.ts";
 import { agentRows } from "./agent-view.ts";
-import { HelperChat } from "./helper-chat.ts";
-import { activityKey, activityTitle, type ActivityTarget } from "./activity-sidebar.ts";
+import { activityKey, type ActivityTarget } from "./activity-sidebar.ts";
+import { activityEntries, activityHints, activityScope, resolveSelection, LIST_WIDTH, type ActivityEntry } from "./activity-list.ts";
+import { FittedScrollView, openOutputPager, pagerLines, renderActivityView, type JobFreeze } from "./activity-detail.ts";
 import { InspectionStore, evidenceLines } from "./inspection.ts";
-import { proofSplit, SPLIT_MIN } from "./proof-view.ts";
+import { proofHint, renderProof, SPLIT_MIN } from "./proof-view.ts";
+import { proofItems, type SectionId } from "./proof-parts.ts";
 import { usageLines } from "./usage-view.ts";
 import { TaskStore, taskHeadline, taskLines } from "./task-view.ts";
 import { splitRow } from "./panels-chrome.ts";
 import { DecisionInbox, inboxIdentity } from "./decision-inbox.ts";
 import { InboxView } from "./inbox-view.ts";
 import { HistoryNavigator, type HistoryRead } from "./history.ts";
-import { pad, plainLabel, diffLine, styledPanelLine, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, PANEL_BG, PANEL_WARNING, RESET, type PanelSnapshot, type PanelLine } from "./panels-view.ts";
+import { pad, plainLabel, styledPanelLine, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, PANEL_BG, PANEL_WARNING, RESET, type PanelSnapshot, type PanelLine } from "./panels-view.ts";
 export function plainClick(event: TuiMouseEvent): boolean {
   return event.type === "click" && event.button === "left" && !event.shift && !event.alt && !event.ctrl && (event.clickCount ?? 1) === 1;
 }
@@ -65,6 +68,7 @@ export class NativeWorkbench {
   readonly inbox: DecisionInbox; private readonly inboxView: InboxView;
   private inboxScroll: ScrollView | undefined;
   private ui: ExtensionUIContext | undefined;
+  private changes: ChangesView | undefined;
   private changesScroll: ScrollView | undefined; private activityScroll: ScrollView | undefined;
   private agentsScroll: ScrollView | undefined; private agentId: string | undefined;
   private agentHits = new Map<number, string>(); private readingTranscript = false;
@@ -76,26 +80,20 @@ export class NativeWorkbench {
   private readonly activityPositions = new Map<string, number>();
   private activityRestore: number | undefined;
   private chatPresentation: (() => InteractiveChatPresentation) | undefined;
-  private chatStart = -1; private readonly helperChat: HelperChat;
+  private activityHits: ReadonlyMap<number, ActivityTarget> = new Map(); private jobFreeze: JobFreeze | undefined;
   private toolsExpanded = false;
-  private legend = false; private proofExpanded = false;
-  private hunk = 0; private hunkRows: number[] = [];
-  private hunkSources: number[] = []; private lastPatch = ""; private displayedPath: string | undefined;
+  private legend = false; private readonly proofOpen = new Set<SectionId>(); private proofWide = false;
+  private hunk = 0;
+  private lastPatch = ""; private displayedPath: string | undefined;
   private displayedRoot: string | undefined;
   private displayedBase: string | undefined;
-  private displayedMetadata: Pick<PatchSnapshot, "file" | "stat"> | undefined;
+  private displayedFile: PatchSnapshot["file"] | undefined;
   private displayedAt: number | undefined; private displayedHead: string | undefined; private displayedComparison = "";
   private projectName: string | undefined;
   private choosingScope = false;
   private readonly scopeAbort = new AbortController();
   get scopeLabel(): string { return this.review.scopeRequired ? "Choose project" : this.projectName ?? this.review.name; }
   constructor(private readonly options: WorkbenchOptions) {
-    this.helperChat = new HelperChat(() => this.chatPresentation?.().tui, options.cwd, () => {
-      const native = this.chatPresentation?.();
-      return { outputPad: native?.outputPad ?? 1, markdownTheme: native?.markdownTheme ?? getMarkdownTheme(),
-        markdownTransformers: native?.markdownTransformers ?? [],
-        renderers: name => options.canRenderTool?.(name) ? native?.renderers(name) : undefined };
-    });
     this.history = new HistoryNavigator(options.readHistory, options.canInteract);
     this.images = new NativeImageViewer(() => options.canInteract(), () => { this.focused = this.images.isOpen || this.view !== "conversation"; options.changed(); });
     this.lifecycle = new LifecycleView(options.identity, options.lifecycle, () => options.snapshot()?.agents, () => options.snapshot()?.bound ?? false, options.changed, options.canInteract, () => options.snapshot()?.inspector);
@@ -165,6 +163,32 @@ export class NativeWorkbench {
     if (this.view === "activity") this.rememberActivity();
     this.activityMode = "jobs"; this.jobId = job; this.openActivity();
   }
+  private shownActivity(): ActivityEntry | undefined {
+    return resolveSelection(activityEntries(this.options.snapshot(), Date.now()), this.selectedActivity).entry;
+  }
+  private selectActivity(target: ActivityTarget): void {
+    if (target.kind === "job") this.openJob(target.job); else this.openHelpers(target.request);
+  }
+  private moveActivity(delta: number): void {
+    const entries = activityEntries(this.options.snapshot(), Date.now()), shown = this.shownActivity();
+    const index = shown ? entries.findIndex(entry => entry.key === shown.key) + delta : 0;
+    const next = entries[Math.max(0, Math.min(entries.length - 1, index))];
+    if (next) this.selectActivity(next.target);
+  }
+  private async openJobOutput(id: string, search: boolean): Promise<void> {
+    const ui = this.ui, snapshot = this.options.snapshot(), job = snapshot?.jobs?.find(item => item.job === id);
+    if (!ui || !this.options.canInteract()) return;
+    if (!job?.detail || !snapshot?.bound) { ui.notify("Job output unavailable for this job source or host", "warning"); return; }
+    const lines = pagerLines(job);
+    let start = lines.length;
+    if (search) {
+      const query = await ui.input("Search retained job output");
+      if (!query) return;
+      start = lines.findIndex(line => line.includes(query));
+      if (start < 0) { ui.notify(`No match for ${JSON.stringify(plainLabel(query))} in retained output`, "info"); return; }
+    }
+    await openOutputPager(ui, `Job ${id} · retained output · ${lines.length} lines`, lines, start);
+  }
   private openActivity(): void {
     const selected = this.selectedActivity;
     this.activityRestore = selected ? this.activityPositions.get(activityKey(selected)) ?? 0 : 0;
@@ -216,8 +240,9 @@ export class NativeWorkbench {
           const sub = strip([["activity", " Now "], ["graph", " Graph "], ["timeline", " Timeline "], ["history", " History "]],
             view => view === this.view || view === "activity" && this.view === "agents");
           subHits = sub.placed;
-          const title = this.view === "activity" && this.selectedActivity ? activityTitle(this.options.snapshot(), this.selectedActivity) : "";
-          rows.push(PANEL_BG + pad(sub.text + (title ? PANEL_MUTED + " │ " + PANEL_TEXT + plainLabel(title) : ""), width) + RESET);
+          const scope = this.view === "activity" ? activityScope(this.options.snapshot(), this.shownActivity()?.target.kind) : "";
+          const fits = scope && visibleWidth(sub.text) + 2 + visibleWidth(scope) <= width;
+          rows.push(PANEL_BG + (fits ? splitRow(sub.text, scope, width) : pad(sub.text, width)) + RESET);
         } else {
           subHits = [];
           rows.push(PANEL_BG + PANEL_TEXT + (this.headline(width) || pad(`Files: ${plainLabel(this.scopeLabel)} · ` + PANEL_MUTED
@@ -258,19 +283,21 @@ export class NativeWorkbench {
     transcript.scrollTo(top, { disableFollow: true });
   }
   mount(transcript: Component, presentation?: () => InteractiveChatPresentation): Component {
-    this.chatPresentation = presentation; this.helperChat.clear();
+    this.chatPresentation = presentation;
     if (transcript instanceof ScrollView) this.transcript = transcript;
-    this.changesScroll = new ScrollView({ render: width => this.renderChanges(width), handleMouse: event => this.diffMouse(event), invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
-    this.activityScroll = new ScrollView({ render: width => this.renderActivity(width), handleMouse: event => {
-      if (this.options.canInteract() && plainClick(event)) {
-        this.focused = true;
-        if (this.chatStart >= 0 && event.y >= this.chatStart) {
-          const handled = this.helperChat.handleMouse({ ...event, y: event.y - this.chatStart });
-          if (handled) { this.options.changed(); return handled; }
-        }
-        this.options.changed(); return { handled: true };
-      } return undefined;
-    }, invalidate: () => this.helperChat.invalidate() }, { primary: true, follow: "none", scrollbar: "auto" });
+    this.changes = new ChangesView({ model: () => this.changesModel(), click: event => this.options.canInteract() && plainClick(event),
+      focus: () => { this.focused = true; this.options.changed(); }, step: delta => void this.selectRelative(delta),
+      select: path => void this.review.select(path).then(() => { this.acceptPatch(); this.changesScroll?.scrollToStart(); }),
+      pickHunk: index => { this.hunk = index; this.options.changed(); } });
+    this.changesScroll = this.changes.diff;
+    this.activityScroll = new FittedScrollView({ render: width => this.renderActivity(width), handleMouse: event => {
+      if (!this.options.canInteract() || !plainClick(event)) return undefined;
+      this.focused = true;
+      const target = event.x < LIST_WIDTH ? this.activityHits.get(event.y) : undefined;
+      if (target) this.selectActivity(target);
+      this.options.changed(); return { handled: true };
+    }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
+    const activityHintRow: Component = { render: width => [activityHints(this.shownActivity()?.target.kind, width)], invalidate() {} };
     this.agentsScroll = new ScrollView({ render: width => this.renderAgents(width), handleMouse: event => {
       if (!this.options.canInteract() || !plainClick(event)) return undefined;
       const id = this.agentHits.get(event.y); if (id) this.agentId = id;
@@ -309,10 +336,13 @@ export class NativeWorkbench {
       { component: this.taskScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "task" && !this.images.isOpen },
       { component: transcript, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "conversation" && !this.images.isOpen },
       { component: this.images, basis: 0, grow: 1, minSize: 1, visible: viewport => { this.images.setViewportHeight(Math.max(0, viewport.height - (rail() ? 1 : 2))); return this.images.isOpen; } },
-      { component: this.changesScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "changes" },
+      { component: this.changes.root, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "changes" },
       { component: this.activityScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "activity" },
+      { component: activityHintRow, basis: 1, shrink: 0, visible: () => this.view === "activity" },
       { component: this.agentsScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "agents" },
       { component: this.evidenceScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "evidence" },
+      { component: { render: width => [proofHint(width, this.legend)], invalidate() {} }, basis: 1, shrink: 0,
+        visible: viewport => { this.proofWide = viewport.width >= SPLIT_MIN; return this.view === "evidence"; } },
       { component: this.usageScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "usage" },
       { component: this.lifecycleScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "graph" || this.view === "timeline" },
       { component: this.artifactScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "artifacts" && !this.images.isOpen },
@@ -320,14 +350,25 @@ export class NativeWorkbench {
     ]);
   }
   private renderEvidence(width: number): string[] {
-    this.criterionHits.clear(); const rows: string[] = [];
-    this.criterionIndex = Math.max(0, Math.min(this.criterionIndex, (this.inspection.current?.criteria.length ?? 1) - 1));
-    for (const row of evidenceLines(this.inspection, this.criterionIndex, width, this.legend)) {
-      const wrapped = new Text((row.heading ? PANEL_BLUE : PANEL_TEXT) + row.text, 0, 0).render(width);
-      if (row.criterion !== undefined) for (let i = 0; i < wrapped.length; i++) this.criterionHits.set(rows.length + i, row.criterion);
-      rows.push(...wrapped);
+    this.criterionIndex = Math.max(0, Math.min(this.criterionIndex, this.proofRows() - 1));
+    const frame = renderProof(this.inspection, this.criterionIndex, width, this.legend, this.proofOpen, Date.now(), this.proofWide);
+    this.criterionHits = frame.hits;
+    return frame.lines;
+  }
+  /** Selectable Proof rows: criteria, then the MORE sections (list rows when wide, picker steps when narrow). */
+  private proofRows(): number {
+    return Math.max(1, proofItems(this.inspection.current).length);
+  }
+  private proofEnter(): void {
+    const item = proofItems(this.inspection.current)[this.criterionIndex];
+    if (item?.kind !== "section") {
+      const path = item ? this.inspection.current?.criteria[item.index]?.observation?.artifacts[0] : undefined;
+      this.setView("artifacts");
+      if (path !== undefined) void this.artifacts.openPath(path);
+      return;
     }
-    return rows;
+    if (!this.proofOpen.delete(item.id)) this.proofOpen.add(item.id);
+    this.options.changed();
   }
   private renderAgents(width: number): string[] {
     this.agentHits.clear(); const result: string[] = [], snapshot = this.options.snapshot();
@@ -370,20 +411,11 @@ export class NativeWorkbench {
     } finally { this.readingTranscript = false; this.options.changed(); }
   }
   private renderActivity(width: number): string[] {
-    this.chatStart = -1; const rows: string[] = [];
-    const snapshot = this.options.snapshot();
-    const jobIndex = snapshot?.jobs?.findIndex(job => job.job === this.jobId) ?? -1;
-    for (const row of activityRows(snapshot, jobIndex, Date.now(), this.activityMode, this.helperRequest, this.legend)) {
-      const line = row.text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
-      const wrapped = line === "" ? [""] : new Text(this.ui ? this.ui.theme.fg(row.color ?? "text", line) : line, 0, 0).render(width);
-      rows.push(...wrapped);
-    }
-    const helper = this.activityMode === "helpers" ? snapshot?.helpers?.find(helper => helper.request === this.helperRequest) : undefined;
-    if (helper) {
-      this.chatStart = rows.length;
-      // Preserve ANSI/OSC emitted by Pi itself; untrusted data is sanitized before native rendering.
-      rows.push(...this.helperChat.renderHelper(helper, width));
-    }
+    const view = renderActivityView({ snapshot: this.options.snapshot(), identity: this.options.identity, selected: this.selectedActivity,
+      width, height: this.activityScroll?.viewportHeight || 24, now: Date.now(), legend: this.legend, expanded: this.toolsExpanded,
+      freeze: this.jobFreeze, markdownTheme: this.chatPresentation?.().markdownTheme ?? getMarkdownTheme() });
+    this.activityHits = view.hits;
+    const rows = view.lines;
     if (this.activityRestore !== undefined && this.activityScroll) {
       this.activityScroll.updateLayout(rows.length, this.activityScroll.viewportHeight, () => {});
       this.activityScroll.scrollTo(this.activityRestore, { disableFollow: true });
@@ -394,66 +426,17 @@ export class NativeWorkbench {
   private acceptPatch(): void {
     const snapshot = this.review.patchSnapshot;
     if (!snapshot || snapshot.root !== this.review.root || snapshot.path !== this.review.selected || snapshot.comparison !== this.review.comparison) return;
-    this.lastPatch = snapshot.text; this.displayedPath = snapshot.path; this.displayedRoot = snapshot.root;
-    this.displayedMetadata = snapshot;
+    this.lastPatch = snapshot.text; this.displayedPath = snapshot.path; this.displayedRoot = snapshot.root; this.displayedFile = snapshot.file;
     this.displayedAt = snapshot.at; this.displayedHead = snapshot.head; this.displayedBase = snapshot.base;
     this.displayedComparison = comparisonLabel(snapshot.comparison); this.hunk = 0;
     this.options.changed();
   }
-  private renderChanges(width: number): string[] {
+  private changesModel(): ChangesModel {
     const r = this.review;
-    const label = comparisonLabel(r.comparison);
-    const sameScope = this.displayedRoot === r.root && this.displayedPath === r.selected && this.displayedComparison === label;
-    const base = sameScope ? this.displayedHead : r.head;
-    const state = r.error ? "STALE / unavailable: " + plainLabel(r.error) : r.refreshing ? "Checking Git…" : r.checkedAt ? "Updated " + new Date(r.checkedAt).toLocaleTimeString() : "Not loaded";
-    if (r.scopeRequired) return [PANEL_TEXT + "Choose a project", "", PANEL_MUTED + "Workspace-wide changes are not shown.",
-      PANEL_MUTED + "Press o to choose a project or your scratch worktree.", PANEL_MUTED + "This is a read-only view; your session stays bound to Corral."]
-      .flatMap(line => new Text(line, 0, 0).render(width));
-    const head = [PANEL_BLUE + `${plainLabel(this.scopeLabel)} (${plainLabel(r.branch)})` + PANEL_TEXT,
-      ...(width >= 90 ? [PANEL_MUTED + plainLabel(r.root)] : []), PANEL_MUTED + label + (width >= 90 && r.comparison !== "candidate" ? ` · base ${base?.slice(0, 10) ?? "unborn/unavailable"}` : ""),
-      ...(r.comparison === "candidate" ? [PANEL_MUTED + `Comparison base ${sameScope ? this.displayedBase ?? "unavailable" : r.candidateBase ?? "unavailable"}`,
-        PANEL_MUTED + `Candidate HEAD ${base ?? r.head ?? "unavailable"} · committed only; uncommitted edits excluded`] : []),
-      PANEL_MUTED + state, PANEL_MUTED + (width >= 90 ? "/ search · c compare · o repository · j/k files · n/p hunks · a ask hunk · r refresh" : "j/k files · n/p hunks · a ask · / filter"), ""];
-    if (r.limitNotice) head.push(PANEL_MUTED + r.limitNotice);
-    const file = r.current;
-    const selected = sameScope ? this.displayedMetadata?.file : file;
-    const stat = sameScope ? this.displayedMetadata?.stat : file ? r.stats.get(file.path) : undefined;
-    head.push(PANEL_BLUE + (selected ? `${plainLabel(selected.path)} · ${fileStatus(selected)}` : "No selected file"),
-      ...(selected ? [PANEL_MUTED + (stat ? stat.added === null ? "Diffstat: binary" : `Diffstat: +${stat.added} −${stat.removed}` : "Diffstat: unavailable")] : []), "");
-    if (!file) return [...head.flatMap(line => new Text(line, 0, 0).render(width)), plainLabel(r.refreshing ? "Loading comparison…" : r.error ?? (r.selected ? "Selected file is no longer in this comparison." : "No changes in this comparison."))];
-    if (r.patchPath !== r.selected || r.patchComparison !== r.comparison) return [...head.map(line => pad(line, width)), "Loading selected diff…"];
-    if (this.displayedPath !== r.selected || this.displayedRoot !== r.root || this.displayedComparison !== comparisonLabel(r.comparison) || !this.lastPatch) this.acceptPatch();
-    if (this.displayedRoot !== r.root || this.displayedPath !== r.selected || this.displayedComparison !== label) {
-      return [...head.flatMap(line => new Text(line, 0, 0).render(width)), r.patch.startsWith("Diff unavailable:") ? plainLabel(r.patch) : "Waiting for a captured diff matching this scope…"];
-    }
-    if (!r.patchSnapshot && r.patch.startsWith("Diff unavailable:")) return [...head.flatMap(line => new Text(line, 0, 0).render(width)), plainLabel(r.patch)];
-    if (r.patch !== this.lastPatch || r.patchSnapshot?.head !== this.displayedHead || r.patchSnapshot?.base !== this.displayedBase) head.push(PANEL_BLUE + "New diff available (content or identity) · r to apply; current hunk/scroll preserved");
-    const result = head.flatMap(line => new Text(line, 0, 0).render(width));
-    this.hunkRows = []; this.hunkSources = [];
-    const source = this.lastPatch.split("\n");
-    let oldLine: number | undefined, newLine: number | undefined;
-    source.forEach((line, index) => {
-      if (line.startsWith("@@")) { this.hunkRows.push(result.length); this.hunkSources.push(index); }
-      if (line.startsWith("diff ")) { oldLine = undefined; newLine = undefined; }
-      const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line);
-      if (hunk) { oldLine = Number(hunk[1]); newLine = Number(hunk[2]); }
-      let gutter = "";
-      const inHunk = oldLine !== undefined && newLine !== undefined && !hunk && /^[ +\-]/.test(line);
-      if (inHunk && oldLine !== undefined && newLine !== undefined) {
-        const before = line.startsWith("+") ? "" : String(oldLine++);
-        const after = line.startsWith("-") ? "" : String(newLine++);
-        gutter = PANEL_MUTED + before.padStart(4) + " " + after.padStart(4) + " │ " + PANEL_TEXT;
-      }
-      const colored = this.ui ? diffLine(line, this.ui.theme, inHunk) : plainLabel(line);
-      result.push(...new Text(gutter + colored, 0, 0).render(width));
-    });
-    return result;
-  }
-  private diffMouse(event: TuiMouseEvent) {
-    if (!this.options.canInteract() || !plainClick(event)) return undefined;
-    this.focused = true;
-    for (let i = 0; i < this.hunkRows.length; i++) if ((this.hunkRows[i] ?? Infinity) <= event.y) this.hunk = i;
-    this.options.changed(); return { handled: true };
+    if (r.current && r.patchPath === r.selected && r.patchComparison === r.comparison && (this.displayedPath !== r.selected || this.displayedRoot !== r.root
+      || this.displayedComparison !== comparisonLabel(r.comparison) || !this.lastPatch)) this.acceptPatch();
+    return changesModel(r, { root: this.displayedRoot, path: this.displayedPath, comparison: this.displayedComparison, text: this.lastPatch,
+      head: this.displayedHead, base: this.displayedBase, file: this.displayedFile }, this.scopeLabel, this.hunk, Date.now());
   }
   files(): PanelLine[] {
     const r = this.review;
@@ -520,22 +503,40 @@ export class NativeWorkbench {
     } finally { this.choosingScope = false; }
   }
   private moveHunk(delta: number): void {
-    this.hunk = Math.max(0, Math.min(this.hunkRows.length - 1, this.hunk + delta));
-    const row = this.hunkRows[this.hunk]; if (row !== undefined) this.changesScroll?.scrollTo(row, { disableFollow: true });
+    this.hunk = Math.max(0, Math.min((this.changes?.hunkRows.length ?? 0) - 1, this.hunk + delta));
+    const row = this.changes?.hunkRows[this.hunk]; if (row !== undefined) this.changesScroll?.scrollTo(row, { disableFollow: true });
     this.options.changed();
   }
   askHunk(): void {
-    const ui = this.ui, file = this.review.current, start = this.hunkSources[this.hunk];
+    const ui = this.ui, file = this.review.current, sources = this.changes?.hunkSources ?? [], start = sources[this.hunk];
     if (!ui || !file) return;
     if (this.displayedPath !== file.path || this.displayedRoot !== this.review.root || this.review.patchComparison !== this.review.comparison || this.displayedComparison !== comparisonLabel(this.review.comparison)) {
       ui.notify("Wait for the selected comparison to load before attaching its hunk.", "warning"); return;
     }
     const source = this.lastPatch.split("\n");
-    const end = this.hunkSources[this.hunk + 1] ?? source.length;
+    const end = sources[this.hunk + 1] ?? source.length;
     const excerpt = start === undefined ? source.slice(0, 18) : source.slice(start, Math.min(end, start + 24));
     const reference = `Please review ${JSON.stringify(file.path)} in ${this.review.root}\nComparison: ${this.displayedComparison} · base ${this.displayedBase ?? "see comparison"} · HEAD ${this.displayedHead ?? "unborn/unavailable"}\nDiff SHA256: ${createHash("sha256").update(this.lastPatch).digest("hex")}\nSelected Git excerpt (observed ${this.displayedAt ? new Date(this.displayedAt).toISOString() : "time unavailable"}):\n` + excerpt.map(line => "> " + line.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")).join("\n").slice(0, 3000);
     const draft = ui.getEditorText(); ui.setEditorText(draft + (draft ? "\n\n" : "") + reference + "\n");
     this.focused = false; this.options.changed(); // Never submit or overwrite the existing draft.
+  }
+  /** Activity › Now keys: j/k walk the shared list; f, Enter and / act on a job; Enter and t on a helper. */
+  private activityInput(data: string): boolean {
+    if (data === "j" || data === "k") { this.moveActivity(data === "j" ? 1 : -1); return true; }
+    const target = this.shownActivity()?.target;
+    if (target?.kind === "job") {
+      if (data === "f") {
+        const job = this.options.snapshot()?.jobs?.find(item => item.job === target.job);
+        this.jobFreeze = this.jobFreeze?.job === target.job || !job?.detail ? undefined
+          : { job: target.job, tail: job.detail.tail, lines: job.detail.lines, running: job.state === "running" };
+        this.options.changed(); return true;
+      }
+      if (matchesKey(data, "enter") || data === "/") { void this.openJobOutput(target.job, data === "/"); return true; }
+    } else if (target?.kind === "helper") {
+      if (matchesKey(data, "enter")) { this.toolsExpanded = !this.toolsExpanded; this.options.changed(); return true; }
+      if (data === "t") { this.agentId = target.request; void this.openAgentTranscript(); return true; }
+    }
+    return false;
   }
   handleInput(data: string): boolean {
     if (matchesKey(data, "f9")) { this.setView("conversation"); this.focused = false; return true; }
@@ -551,10 +552,11 @@ export class NativeWorkbench {
     if ((this.view === "graph" || this.view === "timeline") && this.lifecycle.handleInput(data)) { this.lifecycleScroll?.scrollTo(0, { disableFollow: true }); return true; }
     if (this.view === "inbox" && this.inboxView.handleInput(data)) return true;
     if (this.view === "activity" && this.activityMode === "helpers" && getKeybindings().matches(data, "app.tools.expand")) {
-      this.toolsExpanded = !this.toolsExpanded; this.helperChat.expandTools(this.toolsExpanded); this.options.changed(); return true;
+      this.toolsExpanded = !this.toolsExpanded; this.options.changed(); return true;
     }
+    if (this.view === "activity" && this.activityInput(data)) return true;
     if (this.view === "evidence" && data === "a") { this.setView("artifacts"); return true; }
-    if (this.view === "evidence" && data === "e") { this.proofExpanded = !this.proofExpanded; this.options.changed(); return true; }
+    if (this.view === "evidence" && matchesKey(data, "enter")) { this.proofEnter(); return true; }
     if (this.view === "artifacts" && this.artifacts.handleInput(data)) { this.artifactScroll?.scrollTo(0, { disableFollow: true }); return true; }
     if (matchesKey(data, "enter") || matchesKey(data, "tab")) { this.focused = false; this.options.changed(); return true; }
     if (this.view === "activity" && data === "a") { this.setView("agents"); return true; }
@@ -574,12 +576,11 @@ export class NativeWorkbench {
     }
     if (data === "j" || data === "k") {
       if (this.view === "changes") void this.selectRelative(data === "j" ? 1 : -1);
-      else if (this.view === "evidence") this.criterionIndex = Math.max(0, Math.min((this.inspection.current?.criteria.length ?? 1) - 1, this.criterionIndex + (data === "j" ? 1 : -1)));
+      else if (this.view === "evidence") this.criterionIndex = Math.max(0, Math.min(this.proofRows() - 1, this.criterionIndex + (data === "j" ? 1 : -1)));
       else if (this.view === "agents") {
         const agents = this.options.snapshot()?.agents ?? [], index = agents.findIndex(agent => agent.id === this.agentId);
         this.agentId = agents[Math.max(0, Math.min(agents.length - 1, index + (data === "j" ? 1 : -1)))]?.id;
       }
-      else if (this.view === "activity") this.activityScroll?.scrollBy(data === "j" ? 1 : -1);
       this.options.changed(); return true;
     }
     if ((this.view === "evidence" || this.view === "usage") && data === "r") { void this.inspection.refresh(true); return true; }
@@ -597,7 +598,7 @@ export class NativeWorkbench {
   }
   dispose(): void {
     if (this.timer) clearInterval(this.timer); if (this.debounce) clearTimeout(this.debounce);
-    this.helperChat.clear(); this.chatPresentation = undefined;
+    this.chatPresentation = undefined;
     this.history.dispose(); this.scopeAbort.abort(); this.images.dispose(); this.review.dispose(); this.inspection.dispose(); this.task.dispose(); this.inboxView.dispose(); this.lifecycle.dispose(); this.artifacts.dispose(); this.ui = undefined;
   }
 }

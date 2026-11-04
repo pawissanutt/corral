@@ -115,6 +115,15 @@ export class ArtifactView implements Component {
     if (this.marks.length < 2) this.compare = false;
     this.options.changed();
   }
+  /** Select the artifact registered at `path` and open it (Proof's Enter on a criterion artifact). */
+  async openPath(path: string): Promise<void> {
+    if (!this.current) await this.refresh();
+    const entry = this.current?.artifacts.find(a => a.path === path);
+    if (!entry) { this.say(`Artifact ${path} is not in the catalog at read · not opened`); return; }
+    if (entry.reference !== this.selected) this.opened = undefined;
+    this.selected = entry.reference;
+    await this.open();
+  }
   private say(text: string): void { if (!this.disposed) { this.notice = plainLabel(text).slice(0, 2000); this.options.changed(); } }
   private async open(): Promise<void> {
     const entry = this.entry(this.selected);

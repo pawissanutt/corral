@@ -43,7 +43,7 @@ test("selected helper details remain stable without embedding another selector",
       for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
       const text = stripTerminalSequences(lines.join("\n"));
       expect(text).toContain("Visible response for Second question"); expect(text).toContain("REAL_EDITOR_DRAFT");
-      expect(text).not.toContain("First question"); expect(text).not.toContain("Newest question");
+      expect(text).not.toContain("Visible response for First question"); expect(text).not.toContain("Visible response for Newest question");
       expect(text).not.toContain("switches jobs/helpers");
     }
     wb.handleInput("\x1b[20~");
