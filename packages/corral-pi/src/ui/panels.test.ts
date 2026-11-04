@@ -132,13 +132,14 @@ test("ambient context inspection does not repeat composer model or context-usage
 test("model and measured context have one ambient owner, with binding and refusals retained", () => {
   for (const width of [40, 52, 80, 105, 140]) {
     const statuses = new Map([[STATUS_BINDING, "● corral g3"], [STATUS_ALERTS, "2 tool denied"]]);
-    const bar = statusBar(identity, snapshot, statuses, width);
+    const bar = statusBar(identity, { ...snapshot, cost: 1.234 }, statuses, width);
     const rail = overviewLines(snapshot, { kind: "ready", files: [] }).map(row => row.text);
     const screen = stripTerminalSequences([composerBar(snapshot, width), ...bar, ...rail].join("\n"));
     expect(screen.match(/example/g)).toHaveLength(1);
     expect(screen.match(/12%/g)).toHaveLength(1);
     expect(screen).toMatch(/1\.2k \/ 10k|1k\/10k/);
     expect(screen).toContain("2 tool denied");
+    expect(screen).toContain("$1.23");
     expect(screen).toContain("●");
     expect(screen).not.toContain("● corral g3");
     if (width >= 80) expect(screen).toContain("WORKER");
