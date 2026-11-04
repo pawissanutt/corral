@@ -24,7 +24,7 @@ test("task view shows spec sections, criteria as spec only, the bound run and re
   expect(out).toContain("full gate green"); expect(out).toContain("not a pass");
   expect(out).toContain("Run R1 (this session)");
   expect(out).toContain("pm · 30m ago");
-  expect(taskHeadline(worker, store)).toEqual({ id: "T-796", title: "Main regression: receipts_tests [31m list", chips: ["running", "P1", "xs"] });
+  expect(taskHeadline(worker, store)).toEqual({ id: "T-796", title: "Main regression: receipts_tests [31m list", chips: ["● running", "P1", "xs"] });
 });
 
 test("a failed or mismatched read stays visible as stale and never invents task content", async () => {

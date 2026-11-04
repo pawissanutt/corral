@@ -61,11 +61,12 @@ export class InspectionStore {
   dispose(): void { this.disposed = true; this.version++; }
 }
 export interface EvidenceLine extends PanelLine { readonly criterion?: number }
-export function evidenceLines(store: InspectionStore, selected: number, width: number): EvidenceLine[] {
+/** `legend`: the ? key shows the reading rules; stale and missing states always stay inline. */
+export function evidenceLines(store: InspectionStore, selected: number, width: number, legend = false): EvidenceLine[] {
   const rows: EvidenceLine[] = [];
   const add = (text: string, heading = false, criterion?: number) => rows.push({ text: plainLabel(text), heading, criterion });
   add("Evidence · read-only canonical inspection", true);
-  add("j/k select criterion · r reconcile · F7 changes · F9 conversation");
+  add(`j/k select criterion · r reconcile · ? ${legend ? "hide" : "show"} legend · F9 conversation`);
   if (store.stale || store.error) add("STALE / unavailable: " + (store.error ?? "canonical read required; retained rows are historical"));
   if (store.refreshing) add("Checking canonical records… retained results are not a new check");
   const data = store.current;
@@ -79,8 +80,10 @@ export function evidenceLines(store: InspectionStore, selected: number, width: n
   const gate = data.gate, review = data.review;
   add(gate ? `Gate receipt: ${gate.result} · ${gate.fresh && !store.stale ? "fresh at read" : "STALE / retained"} · log ${gate.log_passed ? "passed" : "not passed"} · tier ${gate.tier ?? "legacy"} · ${gate.attempt ?? "legacy identity"} · ${gate.head}` : "Gate: missing receipt");
   add(review ? `Review (candidate-wide): ${review.verdict ?? "pending"} · ${review.fresh && !store.stale ? "fresh at read" : "STALE / legacy / retained"} · ${review.reviewer} · ${review.head}` : "Review: missing record");
-  add("Implemented ≠ tested ≠ reviewed ≠ accepted. No per-criterion acceptance record exists.");
-  add("Test observations below are worker_assertion, never machine PASS.");
+  if (legend) {
+    add("Implemented ≠ tested ≠ reviewed ≠ accepted. No per-criterion acceptance record exists.");
+    add("Test observations below are worker_assertion, never machine PASS. * marks a self-report or retained value.");
+  } else add("Implemented ≠ tested ≠ reviewed ≠ accepted · ? legend");
   if (width >= 90) add("Criterion │ Implemented │ Tested assertion / canonical proof │ Reviewed │ Accepted", true);
   const reviewed = !review ? "missing" : store.stale ? "retained" : !review.fresh ? "stale" : review.verdict ?? "pending";
   data.criteria.forEach((c, index) => {

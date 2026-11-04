@@ -23,7 +23,8 @@ test("scoped identities, missing/stale observations and parent provenance never 
 test("completed/lost job observations and missing/stale output are explicit, not readiness/settlement", () => {
   const data = snapshot();
   const jobs = [{ job: "finished", state: "exited" }, { job: "gone", state: "lost" }];
-  const lines = activityLines({ ...data, jobs }, 1).join("\n");
+  expect(activityLines({ ...data, jobs }, 1).join("\n")).toContain("? show legend");
+  const lines = activityLines({ ...data, jobs }, 1, Date.now(), true).join("\n");
   expect(lines).toContain("1 exited · 1 lost"); expect(lines).toContain("Readiness unavailable");
   expect(lines).toContain("Detailed output unavailable"); expect(lines).toContain("No stop/restart");
   expect(activityLines({ ...data, jobs }, 10).join("\n")).toContain("Selected job missing");

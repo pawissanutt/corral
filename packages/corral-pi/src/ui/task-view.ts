@@ -57,12 +57,16 @@ export class TaskStore {
   dispose(): void { this.disposed = true; this.version++; }
 }
 
+const STATUS_GLYPH: Readonly<Record<string, string>> = { running: "●", review: "◐", done: "✓", landed: "✓", blocked: "⚠", failed: "✗", backlog: "○", ready: "○", idea: "·" };
+export function statusChip(status: string): string {
+  return `${STATUS_GLYPH[status] ?? "◇"} ${status.replaceAll("_", " ")}`;
+}
 /** Header facts: task ID, title and the small chips. Undefined when no task is bound. */
 export function taskHeadline(identity: HostIdentity, store: TaskStore): { readonly id: string; readonly title: string; readonly chips: readonly string[] } | undefined {
   if (!identity.task) return undefined;
   const data = store.current;
   if (!data) return { id: identity.task, title: store.error ? "Task unavailable" : "Reading task…", chips: [] };
-  const chips = [data.status.replaceAll("_", " "), data.priority, data.size].filter((chip): chip is string => !!chip).map(plainLabel);
+  const chips = [statusChip(data.status), data.priority, data.size].filter((chip): chip is string => !!chip).map(plainLabel);
   return { id: data.id, title: plainLabel(data.title), chips: store.stale ? [...chips, "stale"] : chips };
 }
 
