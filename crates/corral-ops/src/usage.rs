@@ -84,14 +84,18 @@ pub fn refresh_active_usage(store: &Store) {
                 return;
             }
         };
-        for head in heads {
+        // Retain identities/scalars, not a WAL read transaction across transcript I/O.
+        for head in heads.into_iter().map(TaskHead::detach).collect::<Vec<_>>() {
             if !matches!(
                 head.status,
                 Status::Running | Status::NeedsMe | Status::Review
             ) {
                 continue;
             }
-            if let Err(error) = refresh_current(store, &head) {
+            if let Err(error) = store
+                .head(&head.id)
+                .and_then(|head| refresh_current(store, &head))
+            {
                 corral_core::report_message(
                     Some(&head.id),
                     "Usage not refreshed",
@@ -126,19 +130,25 @@ fn refresh_current(store: &Store, head: &TaskHead) -> Result<()> {
         let events = store.events_of_run(Some(&head.id), &kinds, Some(&run.id), 0, u32::MAX)?;
         backfill_reviews(&mut measured, store, &head.id, &events);
     }
-    for review in &mut measured.review_runs {
-        if review.ended.is_none()
-            && let Some(end) =
-                first_verdict_from(store, &head.id, &run.id, &review.id, review.started)?
-        {
-            review.ended = Some(end);
-            let previous = review.usage.clone();
-            collect(review, store);
-            if review.usage.is_none() {
-                review.usage = previous;
+    // All verdict cursors sampled for this run are records-only accounting writes. Batch
+    // them without holding a database transaction during transcript I/O. Task mutations
+    // below retain their own conflict checks and external-effect durability boundaries.
+    store.records_transaction(|| {
+        for review in &mut measured.review_runs {
+            if review.ended.is_none()
+                && let Some(end) =
+                    first_verdict_from(store, &head.id, &run.id, &review.id, review.started)?
+            {
+                review.ended = Some(end);
+                let previous = review.usage.clone();
+                collect(review, store);
+                if review.usage.is_none() {
+                    review.usage = previous;
+                }
             }
         }
-    }
+        Ok(())
+    })?;
     refresh_run(&mut measured, store);
     if measured == run {
         return Ok(());

@@ -7,12 +7,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use anyhow::anyhow;
+#[cfg(test)]
 use jiff::Timestamp;
 use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, Row, params, params_from_iter};
 
 use super::codec::*;
 use super::load;
+use super::readers::{self, ReadGuard, ReadLease};
 use crate::backend::*;
 
 /// The lifecycle reads' filters and orders. Each reads one index range in index order
@@ -30,13 +32,10 @@ mod hot_tests;
 mod lifecycle_tests;
 
 pub(super) struct SqliteView {
-    conn: Option<Connection>,
+    lease: Option<Arc<Mutex<ReadLease>>>,
     pool: Arc<Mutex<Vec<Connection>>>,
     seq: ChangeSeq,
     floor: ChangeSeq,
-    opened: Timestamp,
-    clock: Arc<dyn Clock>,
-    max_age: Duration,
     _retain: Option<super::Keepalive>,
 }
 
@@ -59,29 +58,24 @@ impl SqliteView {
             }
         };
         Ok(Self {
-            conn: Some(conn),
+            lease: Some(Arc::new(Mutex::new(ReadLease::new(conn, clock, max_age)))),
             pool,
             seq: ChangeSeq(seq),
             floor: ChangeSeq(floor),
-            opened: clock.now(),
-            clock,
-            max_age,
             _retain: retain,
         })
     }
 
-    fn db(&self) -> Result<&Connection, ViewError> {
-        self.conn
-            .as_ref()
-            .ok_or_else(|| ViewError::Io(anyhow!("read view connection is closed")))
+    pub(super) fn lease(&self) -> std::sync::Weak<Mutex<ReadLease>> {
+        self.lease.as_ref().map(Arc::downgrade).unwrap_or_default()
     }
 
-    fn fresh(&self) -> Result<&Connection, ViewError> {
-        let age = elapsed(self.opened, self.clock.now());
-        if age > self.max_age {
-            return Err(ViewError::Expired { age });
-        }
-        self.db()
+    fn fresh(&self) -> Result<ReadGuard<'_>, ViewError> {
+        readers::fresh(
+            self.lease
+                .as_ref()
+                .ok_or_else(|| ViewError::Io(anyhow!("closed read view")))?,
+        )
     }
 
     fn page<T>(
@@ -91,7 +85,8 @@ impl SqliteView {
         mut args: Vec<Sql>,
         mut map: impl FnMut(&Connection, &Row<'_>) -> anyhow::Result<T>,
     ) -> Result<Page<T>, ViewError> {
-        let db = self.fresh()?;
+        let guard = self.fresh()?;
+        let db = &*guard;
         let (offset, limit) = bounds(req)?;
         args.push(Sql::Integer(int(limit as u64 + 1).or_view()?));
         args.push(Sql::Integer(int(offset as u64).or_view()?));
@@ -102,7 +97,7 @@ impl SqliteView {
         Ok(Page { items, next })
     }
 
-    fn check_feed(&self, after: ChangeSeq) -> Result<&Connection, FeedError> {
+    fn check_feed(&self, after: ChangeSeq) -> Result<ReadGuard<'_>, FeedError> {
         let db = self.fresh()?;
         if after < self.floor {
             return Err(FeedError::Gap {
@@ -119,13 +114,17 @@ impl SqliteView {
 
 impl Drop for SqliteView {
     fn drop(&mut self) {
-        if let Some(conn) = self.conn.take()
-            && conn.execute_batch("ROLLBACK").is_ok()
+        // The maintenance registry owns only Weak references. In the rare case a sweep
+        // still holds this lease, closing its final Arc releases the connection instead.
+        if let Some(lease) = self.lease.take()
+            && let Ok(lease) = Arc::try_unwrap(lease)
         {
-            self.pool
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push(conn);
+            let lease = lease.into_inner().unwrap_or_else(PoisonError::into_inner);
+            if !lease.expired
+                && (lease.conn.is_autocommit() || lease.conn.execute_batch("ROLLBACK").is_ok())
+            {
+                readers::recycle(&self.pool, lease.conn);
+            }
         }
     }
 }
@@ -183,7 +182,7 @@ fn head_query(db: &Connection, row: &Row<'_>) -> anyhow::Result<TaskHeadDoc> {
 
 impl ReadView for SqliteView {
     fn run_worktrees(&self, current_only: bool) -> Result<Vec<RunWorktree>, ViewError> {
-        super::run_worktrees::read(self.fresh()?, current_only).or_view()
+        super::run_worktrees::read(&*self.fresh()?, current_only).or_view()
     }
 
     fn seq(&self) -> ChangeSeq {
@@ -195,7 +194,8 @@ impl ReadView for SqliteView {
     }
 
     fn board(&self, since: Option<ChangeSeq>) -> Result<BoardDelta, FeedError> {
-        let db = self.fresh()?;
+        let guard = self.fresh()?;
+        let db = &*guard;
         let (heads, left) = match since {
             None => {
                 let sql = format!(
@@ -207,7 +207,11 @@ impl ReadView for SqliteView {
                 (heads, Vec::new())
             }
             Some(since) => {
-                self.check_feed(since)?;
+                if since < self.floor {
+                    return Err(FeedError::Gap {
+                        oldest: ChangeSeq(self.floor.0 + 1),
+                    });
+                }
                 let mut heads = Vec::new();
                 let mut left = Vec::new();
                 for num in changed_tasks(db, since).or_view()? {
@@ -229,7 +233,8 @@ impl ReadView for SqliteView {
     }
 
     fn changes(&self, after: ChangeSeq, limit: u32) -> Result<ChangePage, FeedError> {
-        let db = self.check_feed(after)?;
+        let guard = self.check_feed(after)?;
+        let db = &*guard;
         if limit == 0 {
             return Err(FeedError::View(ViewError::Io(anyhow!(
                 "page limit must be positive"
@@ -266,7 +271,8 @@ impl ReadView for SqliteView {
     }
 
     fn head(&self, num: TaskNum) -> Result<Option<TaskHeadDoc>, ViewError> {
-        let db = self.fresh()?;
+        let guard = self.fresh()?;
+        let db = &*guard;
         load::head_by_num(db, num).or_view()
     }
 
@@ -302,7 +308,8 @@ impl ReadView for SqliteView {
                 head_query,
             ),
             HeadQuery::Ids(ids) => {
-                let db = self.fresh()?;
+                let guard = self.fresh()?;
+                let db = &*guard;
                 let sql = format!("SELECT {cols} FROM tasks WHERE id = ?1");
                 let mut found = BTreeMap::new();
                 for id in ids.iter().collect::<BTreeSet<_>>() {
@@ -373,7 +380,8 @@ impl ReadView for SqliteView {
         token: &str,
         limit: u32,
     ) -> Result<Vec<TaskNum>, ViewError> {
-        let db = self.fresh()?;
+        let guard = self.fresh()?;
+        let db = &*guard;
         let read = || -> anyhow::Result<Vec<TaskNum>> {
             let mut statement = db.prepare_cached(
                 "SELECT DISTINCT task FROM task_row_index WHERE part = ?1 AND token = ?2 \
@@ -392,7 +400,8 @@ impl ReadView for SqliteView {
     }
 
     fn task(&self, num: TaskNum, parts: &TaskParts) -> Result<Option<TaskDoc>, ViewError> {
-        let db = self.fresh()?;
+        let guard = self.fresh()?;
+        let db = &*guard;
         let Some(head) = load::head_by_num(db, num).or_view()? else {
             return Ok(None);
         };
@@ -475,7 +484,8 @@ impl ReadView for SqliteView {
     }
 
     fn last_task_num(&self) -> Result<Option<TaskNum>, ViewError> {
-        let db = self.fresh()?;
+        let guard = self.fresh()?;
+        let db = &*guard;
         (|| -> anyhow::Result<Option<TaskNum>> {
             let last: Option<i64> =
                 db.query_row("SELECT MAX(num) FROM tasks", [], |row| row.get(0))?;
@@ -507,10 +517,10 @@ impl ReadView for SqliteView {
         self.page(&page, &sql, args, load::header)
     }
     fn lesson_artifacts(&self, num: TaskNum, limit: u32) -> Result<Vec<HistoryRow>, ViewError> {
-        super::lesson_artifacts::read(self.fresh()?, num, limit).or_view()
+        super::lesson_artifacts::read(&*self.fresh()?, num, limit).or_view()
     }
     fn lesson_approvals(&self, sha: &str) -> Result<Vec<LessonApproval>, ViewError> {
-        super::lesson_approvals::read(self.fresh()?, sha).or_view()
+        super::lesson_approvals::read(&*self.fresh()?, sha).or_view()
     }
 
     fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError> {
@@ -632,7 +642,8 @@ impl ReadView for SqliteView {
     }
 
     fn aggregates(&self, names: &[AggregateName]) -> Result<Aggregates, ViewError> {
-        let db = self.fresh()?;
+        let guard = self.fresh()?;
+        let db = &*guard;
         let mut out = Aggregates::default();
         for name in names {
             if let AggregateName::ArtifactReviewed(task) = name {

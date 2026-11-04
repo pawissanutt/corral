@@ -27,10 +27,9 @@ pub const HOLDERS: &str = "store.holders";
 const GATE_WAIT: Duration = Duration::from_secs(2);
 
 pub(crate) struct Db {
-    pub(crate) backend: Box<dyn StoreBackend>,
-    /// A second handle on the database file for the operations outside the contract
-    /// (database metadata, fixtures).
-    pub(crate) sqlite: Option<SqliteBackend>,
+    pub(crate) backend: Arc<dyn StoreBackend>,
+    /// The same pooled backend, for operations outside the storage contract.
+    pub(crate) sqlite: Option<Arc<SqliteBackend>>,
     /// The last full listing and the change seq it was read at.
     pub(crate) listing: Mutex<Option<(ChangeSeq, Arc<Vec<crate::Task>>)>>,
     /// Detached open heads, shared by refreshes without retaining a WAL read view.
@@ -51,7 +50,7 @@ impl Db {
     /// A database over any backend, without a gate (test fixtures over the fake backend).
     pub(crate) fn unguarded(backend: Box<dyn StoreBackend>) -> Arc<Db> {
         Arc::new(Db {
-            backend,
+            backend: Arc::from(backend),
             sqlite: None,
             listing: Mutex::default(),
             board: Mutex::default(),
@@ -227,6 +226,16 @@ fn check_openable(corral: &Path) -> Result<()> {
     }
 }
 
+impl crate::Store {
+    /// Non-waiting WAL maintenance. Call between background steps, after dropping read views.
+    pub fn maintain_database(&self) -> Result<()> {
+        if let Some(sqlite) = &self.db.sqlite {
+            sqlite.maintain_wal()?;
+        }
+        Ok(())
+    }
+}
+
 fn registry() -> &'static Mutex<HashMap<PathBuf, Weak<Db>>> {
     static OPEN: OnceLock<Mutex<HashMap<PathBuf, Weak<Db>>>> = OnceLock::new();
     OPEN.get_or_init(Mutex::default)
@@ -252,10 +261,10 @@ pub(crate) fn open(corral: &Path) -> Result<Arc<Db>> {
             "the store database was not created by `corral init` and has no migration journal; run `corral migrate --status`"
         );
     }
-    let sqlite = backend.handle()?;
+    let backend = Arc::new(backend);
     let db = Arc::new(Db {
-        backend: Box::new(backend),
-        sqlite: Some(sqlite),
+        backend: backend.clone(),
+        sqlite: Some(backend),
         listing: Mutex::default(),
         board: Mutex::default(),
         checked_board: Mutex::default(),

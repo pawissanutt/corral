@@ -245,7 +245,7 @@ fn sync_scoped(
         crate::storage_gc::lifecycle_pass(ctx, now)?;
         let search_stamp = crate::content_refresh::task_stamp(ctx)?;
         for head in open_heads(ctx)? {
-            crate::obligations_sync::reconcile_head(ctx, &head, now, None)?;
+            crate::obligations_sync::reconcile_head(ctx, &ctx.store.head(&head.id)?, now, None)?;
         }
         crate::movement::reconcile(ctx, now, false)?;
         reconcile_attention(ctx, now, None, attention, held_admission.as_deref())?;
@@ -266,7 +266,7 @@ fn sync_scoped(
         // not authenticated completion receipts. Use a receipt-only ownership
         // lease here; the healthy path already owns one through inventory.
         if let Some(_ownership) = ctx.store.try_begin_session_pass()? {
-            let board = ctx.store.board(None)?;
+            let board = ctx.store.board(None)?.detach();
             let source_owned = source
                 .map(|source| crate::session_scope::owns_board(source, &ctx.store, &board))
                 .transpose()?
@@ -279,7 +279,7 @@ fn sync_scoped(
         return Ok(changes);
     };
     let search_stamp = crate::content_refresh::task_stamp(ctx)?;
-    let board = ctx.store.board(None)?;
+    let board = ctx.store.board(None)?.detach();
     crate::agent::effects::failpoint("sync_tasks_read");
     if !crate::session_scope::owns_board(ctx, &ctx.store, &board)? {
         return Ok(changes);
@@ -312,7 +312,7 @@ fn sync_scoped(
         .store
         .unfinished_native_heads()?
         .into_iter()
-        .map(|head| (head.id.clone(), head))
+        .map(|head| (head.id.clone(), head.detach()))
         .collect();
     for head in open_heads(ctx)? {
         if !crate::session_scope::owns_head(ctx, &head)? {
@@ -348,7 +348,7 @@ fn sync_scoped(
             let synced = crate::agent::hooks::sync::task_id(ctx, &head.id, now)?;
             (ctx.store.head(&head.id)?, synced)
         } else {
-            (head, Default::default())
+            (ctx.store.head(&head.id)?, Default::default())
         };
         let shell = head.to_shell_task()?;
         let agent_healthy = agent.current_worker_healthy(&shell);
@@ -414,9 +414,14 @@ fn sync_scoped(
     Ok(changes)
 }
 
-/// The open board's heads on one view.
+/// The open board's scalar projections; slow per-task work must open its own keyed view.
 fn open_heads(ctx: &Ctx) -> Result<Vec<TaskHead>> {
-    ctx.store.heads(&HeadQuery::Open { project: None })
+    Ok(ctx
+        .store
+        .heads(&HeadQuery::Open { project: None })?
+        .into_iter()
+        .map(TaskHead::detach)
+        .collect())
 }
 
 /// A held card has relinquished dispatch authority. Preserve its pane for inspection;

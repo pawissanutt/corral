@@ -243,7 +243,7 @@ fn eight_processes_open_a_fresh_database_ten_times() -> Result<()> {
                 .lines()
                 .find_map(marked)
                 .ok_or_else(|| anyhow!("trial {trial}: no report in {stdout}"))?;
-            ensure!(line == "OPENED wal 2 true 1", "trial {trial}: {line}");
+            ensure!(line == "OPENED wal 1 true 1", "trial {trial}: {line}");
             opened += 1;
         }
         let path = SqliteBackend::db_path(&corral);
@@ -267,7 +267,7 @@ fn eight_processes_open_a_fresh_database_ten_times() -> Result<()> {
         );
     }
     ensure!(opened == 80, "{opened}/80 opens");
-    println!("{opened}/80 opens: WAL, synchronous FULL (2), foreign keys on, schema_version 1");
+    println!("{opened}/80 opens: WAL, synchronous NORMAL (1), foreign keys on, schema_version 1");
     Ok(())
 }
 
@@ -300,7 +300,7 @@ fn fresh_relative_paths_open_against_the_working_directory() -> Result<()> {
         );
         let line = stdout.lines().find_map(marked);
         ensure!(
-            line == Some("OPENED wal 2 true 1"),
+            line == Some("OPENED wal 1 true 1"),
             "{role} {target}: {line:?}"
         );
         ensure!(
