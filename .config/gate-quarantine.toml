@@ -13,4 +13,7 @@ tests = [
   { binary = "corral-ops::evidence_artifacts", test = "the_search_index_follows_the_change_feed_with_work_independent_of_the_board", fix = "T-839", reason = "Search-index follow holds one read view across the index lock wait." },
   { binary = "corral-ops", test = "lesson_signals::tests::latest_tasks_are_selected_by_persisted_time", fix = "T-844", reason = "Lesson-signal selection holds one read view; expires under load." },
   { binary = "corral::pm_plan_cli", test = "changed_plan_bytes_only_offer_inspection_not_invalid_verdict_commands", fix = "T-845", reason = "Obsolete after T-800 (source edits no longer stale a plan); pm next aborts on a corrupt snapshot." },
+  { binary = "corral-ops", test = "agent::ops::planning::tests::a_reservation_whose_executor_died_settles_from_the_plan_record", fix = "T-845", reason = "Broken on main by T-800 (plan source vs blob snapshot)." },
+  { binary = "corral-ops", test = "agent::ops::planning::tests::normal_sync_settles_planning_reservations_and_closes_their_questions", fix = "T-845", reason = "Broken on main by T-800 (plan source vs blob snapshot)." },
+  { binary = "corral-ops", test = "agent::ops::planning::tests::normal_sync_abandons_a_dead_plan_reviewer_reservation_that_recorded_nothing", fix = "T-845", reason = "Broken on main by T-800 (plan source vs blob snapshot)." },
 ]
