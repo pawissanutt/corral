@@ -77,6 +77,7 @@ export class NativeWorkbench {
   private chatPresentation: (() => InteractiveChatPresentation) | undefined;
   private chatStart = -1; private readonly helperChat: HelperChat;
   private toolsExpanded = false;
+  private legend = false;
   private hunk = 0; private hunkRows: number[] = [];
   private hunkSources: number[] = []; private lastPatch = ""; private displayedPath: string | undefined;
   private displayedRoot: string | undefined;
@@ -320,7 +321,7 @@ export class NativeWorkbench {
   private renderEvidence(width: number): string[] {
     this.criterionHits.clear(); const rows: string[] = [];
     this.criterionIndex = Math.max(0, Math.min(this.criterionIndex, (this.inspection.current?.criteria.length ?? 1) - 1));
-    for (const row of evidenceLines(this.inspection, this.criterionIndex, width)) {
+    for (const row of evidenceLines(this.inspection, this.criterionIndex, width, this.legend)) {
       const wrapped = new Text((row.heading ? PANEL_BLUE : PANEL_TEXT) + row.text, 0, 0).render(width);
       if (row.criterion !== undefined) for (let i = 0; i < wrapped.length; i++) this.criterionHits.set(rows.length + i, row.criterion);
       rows.push(...wrapped);
@@ -371,7 +372,7 @@ export class NativeWorkbench {
     this.chatStart = -1; const rows: string[] = [];
     const snapshot = this.options.snapshot();
     const jobIndex = snapshot?.jobs?.findIndex(job => job.job === this.jobId) ?? -1;
-    for (const row of activityRows(snapshot, jobIndex, Date.now(), this.activityMode, this.helperRequest)) {
+    for (const row of activityRows(snapshot, jobIndex, Date.now(), this.activityMode, this.helperRequest, this.legend)) {
       const line = row.text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
       const wrapped = line === "" ? [""] : new Text(this.ui ? this.ui.theme.fg(row.color ?? "text", line) : line, 0, 0).render(width);
       rows.push(...wrapped);
@@ -557,6 +558,7 @@ export class NativeWorkbench {
     if (this.view === "activity" && data === "a") { this.setView("agents"); return true; }
     if (this.view === "agents" && data === "b") { this.setView("activity"); return true; }
     if (this.view === "agents" && data === "t") { void this.openAgentTranscript(); return true; }
+    if ((this.view === "evidence" || this.view === "activity") && data === "?") { this.legend = !this.legend; this.options.changed(); return true; }
     if (this.view === "usage" && data === "c") { this.usageChart = !this.usageChart; this.options.changed(); return true; }
     const scroll = this.view === "task" ? this.taskScroll : this.view === "usage" ? this.usageScroll : this.view === "artifacts" ? this.artifactScroll : this.view === "graph" || this.view === "timeline" ? this.lifecycleScroll : this.view === "agents" ? this.agentsScroll : this.view === "changes" ? this.changesScroll : this.view === "evidence" ? this.evidenceScroll : this.view === "inbox" ? this.inboxScroll : this.activityScroll;
     if (this.view === "inbox" && (data === "j" || data === "k" || matchesKey(data, "up") || matchesKey(data, "down"))) {

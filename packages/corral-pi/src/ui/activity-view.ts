@@ -4,14 +4,17 @@ import { helperRows } from "./helper-view.ts";
 import { inspectorActivity } from "./inspector.ts";
 export type ActivityMode = "jobs" | "helpers";
 export interface ActivityRow { readonly text: string; readonly color?: "accent" | "success" | "error" | "warning" | "text" | "muted" }
-export function activityRows(snapshot: PanelSnapshot | null, selected: number, now = Date.now(), mode: ActivityMode = "jobs", helper?: string): ActivityRow[] {
+/** `legend`: the ? key shows source caveats; unbound/stale states always stay inline. */
+export function activityRows(snapshot: PanelSnapshot | null, selected: number, now = Date.now(), mode: ActivityMode = "jobs", helper?: string, legend = false): ActivityRow[] {
   if (!snapshot) return [{ text: "Activity unavailable: session snapshot disconnected." }];
   if (mode === "helpers") return helperRows(snapshot.helpers, helper, snapshot.bound);
   const rows: ActivityRow[] = [{ text: "Job output · read-only", color: "accent" },
     { text: "F8 agents & jobs · PgUp/PgDn scroll · F9 conversation", color: "muted" }];
   const add = (...texts: string[]) => rows.push(...texts.map(text => ({ text })));
-  add("Background activity · read-only", "g dependencies · l lifecycle · a scoped agents · j/k scroll · PgUp/PgDn scroll · Enter compose · F9 conversation",
-    snapshot.bound ? "Bound host observations · not canonical task/run settlement" : "Disconnected/unbound · observations may be stale", "");
+  add("Background activity · read-only", `a scoped agents · j/k scroll · ? ${legend ? "hide" : "show"} legend · F9 conversation`);
+  if (!snapshot.bound) rows.push({ text: "Disconnected/unbound · observations may be stale", color: "warning" });
+  else if (legend) add("Bound host observations · not canonical task/run settlement");
+  add("");
   // Keep jobs inspectable before potentially long receipt/event history.
   const finish = () => {
     add("", "Host receipt/event history");
@@ -21,14 +24,15 @@ export function activityRows(snapshot: PanelSnapshot | null, selected: number, n
   };
   const auxiliary = snapshot.auxiliary;
   add(auxiliary ? `Helper slots occupied / queued: research ${auxiliary.explore.running}/${auxiliary.explore.queued} · oracle ${auxiliary.oracle.running}/${auxiliary.oracle.queued}` : "Helper telemetry unavailable");
-  add("Board task/run monitoring is separate; no task completion inferred here.", "");
+  if (legend) add("Board task/run monitoring is separate; no task completion inferred here.");
+  add("");
   if (snapshot.jobs === null) { add("Background-job runtime unavailable for this role."); return finish(); }
   if (!snapshot.jobs.length) { add("No background jobs in this host.", "Jobs started by the agent appear here automatically."); return finish(); }
   if (!snapshot.bound) { rows.push({ text: "Output unavailable: stale/disconnected host", color: "warning" }); return finish(); }
   const lost = snapshot.jobs.filter(job => job.state === "lost").length;
   add(`${snapshot.jobs.filter(job => job.state === "running").length} running · ${snapshot.jobs.filter(job => job.state === "exited").length} exited · ${lost ? lost + " lost" : "lost status unavailable"}`,
-    "Source: this host runtime only; missing jobs are not completed. No stop/restart controls.",
-    "Readiness unavailable unless a retained line match is observed; a match is not service health.");
+    ...(legend ? ["Source: this host runtime only; missing jobs are not completed. No stop/restart controls.",
+      "Readiness unavailable unless a retained line match is observed; a match is not service health."] : []));
   const job = snapshot.jobs[selected];
   if (!job) { add("Selected job missing / no longer retained. Press F8 to choose another."); return finish(); }
   if (job.state === "lost") { add("Detailed output unavailable for this job source."); return finish(); }
@@ -49,6 +53,6 @@ export function activityRows(snapshot: PanelSnapshot | null, selected: number, n
   }
   return finish();
 }
-export function activityLines(snapshot: PanelSnapshot | null, selected: number, now = Date.now()): string[] {
-  return activityRows(snapshot, selected, now).map(row => row.text);
+export function activityLines(snapshot: PanelSnapshot | null, selected: number, now = Date.now(), legend = false): string[] {
+  return activityRows(snapshot, selected, now, "jobs", undefined, legend).map(row => row.text);
 }
