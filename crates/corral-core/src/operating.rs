@@ -777,6 +777,8 @@ impl Store {
                 if action == OperatingActionKind::Repair
                     && !policy.turbo
                     && task.rounds >= resolved.review.max_rounds
+                    && config.routing.repair.is_none()
+                    && self.repair_ledger(&task.id)?.is_none()
                 {
                     reasons.push("automatic repair rounds exhausted".into());
                 }

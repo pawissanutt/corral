@@ -73,6 +73,8 @@ pub mod query;
 pub mod records;
 pub mod recovery;
 pub mod repair;
+mod repair_runtime;
+pub use repair_runtime::*;
 pub mod resources;
 pub mod retention;
 pub mod review;

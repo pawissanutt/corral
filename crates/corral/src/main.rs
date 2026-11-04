@@ -33,6 +33,7 @@ mod pm_inbox_cmd;
 mod pricing_cmd;
 mod question_cmd;
 mod queue;
+mod repair_cmd;
 mod run_cmd;
 mod search_cmd;
 mod selection_cmd;
@@ -94,6 +95,8 @@ pub enum Cmd {
     Selection(selection_cmd::SelectionArgs),
     /// Review and apply owner-approved profile setup; JSON output by default
     Setup(setup_cmd::SetupArgs),
+    /// Inspect bounded repairs, report findings and perform non-coding PM diagnosis
+    Repair(repair_cmd::RepairArgs),
     #[command(hide = true)]
     RuntimeProbe {
         #[arg(long)]
@@ -838,6 +841,7 @@ fn main() {
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
     let setup_json = match &cli.cmd {
         Some(Cmd::Setup(args)) => Some(args.cmd.name()),
+        Some(Cmd::Repair(args)) => Some(args.cmd.name()),
         _ => None,
     };
     let selection_json = match &cli.cmd {

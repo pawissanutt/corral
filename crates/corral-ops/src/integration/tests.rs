@@ -386,7 +386,18 @@ fn inbox_fixture() -> (tempfile::TempDir, Ctx, Task, Run, RepairKey) {
 #[cfg(unix)]
 fn automatic_inbox_request_commits_reopening_and_message_in_one_submission() {
     // Given an inbox run in Review and a current repair packet.
-    let (_tmp, ctx, task, _run, key) = inbox_fixture();
+    let (_tmp, mut ctx, task, _run, key) = inbox_fixture();
+    ctx.store.config.profiles.insert(
+        "fake".into(),
+        serde_json::from_value(json!({"harness":"generic"})).unwrap(),
+    );
+    ctx.store.config.routing.repair = Some(corral_core::RepairPolicy::V1 {
+        current_profile_limit: 1,
+        stronger_profile_limit: 0,
+        overall_limit: 1,
+        pm_diagnosis_allowance: 1,
+    });
+    ctx.store.save_config().unwrap();
     // When the autopilot requests changes.
     let saved =
         crate::dispatch::auto_request_changes(&ctx, &task.id, "repair", 1, state(), &key).unwrap();
@@ -405,6 +416,32 @@ fn automatic_inbox_request_commits_reopening_and_message_in_one_submission() {
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].kind, "changes_requested");
     assert_eq!(messages[0].author, "autopilot");
+    // The repair receipt commits with reopening/message, survives restart, and a duplicate
+    // sync cannot post another message or spend another allowance.
+    let ledger = Store::open(ctx.store.root())
+        .unwrap()
+        .repair_ledger(&task.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        ledger
+            .active()
+            .unwrap()
+            .history
+            .counters()
+            .unwrap()
+            .coding_repairs,
+        1
+    );
+    assert_eq!(
+        ledger.transition().unwrap(),
+        corral_core::RepairTransition::Diagnose
+    );
+    assert!(
+        crate::dispatch::auto_request_changes(&ctx, &task.id, "repair", 1, state(), &key).is_err()
+    );
+    assert_eq!(ctx.store.repair_ledger(&task.id).unwrap().unwrap(), ledger);
+    assert_eq!(inbox.messages().unwrap().len(), 1);
     assert!(
         ctx.store
             .events()

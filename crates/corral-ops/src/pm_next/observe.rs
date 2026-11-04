@@ -161,6 +161,35 @@ pub(crate) fn with_admission(
                 });
                 continue;
             }
+            if run
+                .autopilot
+                .as_ref()
+                .is_some_and(|a| a.stage == corral_core::AutoStage::Escalated)
+                && let Some(ledger) = ctx.store.repair_ledger(&task.id)?
+            {
+                let active = ledger.active()?;
+                if ledger.transition()? == corral_core::RepairTransition::Diagnose {
+                    out.push(PmObservation::RepairDiagnosis {
+                        task: task.id.clone(),
+                        reason: format!(
+                            "Counters: {:?}; unresolved findings: {:?}; blocker: {:?}",
+                            active.history.counters()?,
+                            ledger.unresolved()?,
+                            active.history.coding_blocker()
+                        ),
+                    });
+                    continue;
+                }
+                if let Some(diagnosis) = &active.diagnosis {
+                    out.push(match &diagnosis.proposal {
+                        Some(proposal) => PmObservation::Owner { task: task.id.clone(), reason: proposal.clone() },
+                        None => PmObservation::AutomaticWait { task: task.id.clone(), condition: format!(
+                            "PM diagnosis {} is in progress (one allowance consumed). Read `corral repair status {}`; finish with a concrete proposal via `corral repair diagnosed`. No coding retries are granted.",
+                            diagnosis.id, task.id) },
+                    });
+                    continue;
+                }
+            }
             if task.status == Status::NeedsMe {
                 out.push(PmObservation::Owner {
                     task: task.id.clone(),

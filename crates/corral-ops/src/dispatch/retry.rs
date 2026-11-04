@@ -190,6 +190,9 @@ pub(super) fn retry_with(
     {
         bail!("stale_run: expected {}, received {}", prev.id, expected);
     }
+    if availability.is_some() {
+        crate::repair_runtime::observations(ctx, &head, None)?;
+    }
     let plan = match availability.clone() {
         Some(plan) => plan,
         None => crate::escalation::retry_plan_head(ctx, &head, choice, forced)?,
@@ -266,6 +269,7 @@ pub(super) fn retry_with(
         if reachable && let Some(h) = &prev.herdr {
             ctx.herdr.pane_close(&h.pane_id)?;
         }
+        crate::repair_runtime::prepare_continuation(store, &*t, &prev.id, availability.is_some())?;
         mark(t);
         if let Some(run) = t.current_run_mut() {
             run.outcome = Some(RunOutcome::Superseded);

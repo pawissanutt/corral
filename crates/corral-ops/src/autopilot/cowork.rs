@@ -228,6 +228,7 @@ impl Pilot<'_> {
             |store, current| {
                 key.check(&*current)?;
                 crate::operating::require(store, &*current, OperatingActionKind::Repair)?;
+                crate::repair_runtime::start(store, &*current, &attempt, &self.run.agent, false)?;
                 crate::reviewer::supersede_review_head(current, self.now)?;
                 current
                     .current_run_mut()

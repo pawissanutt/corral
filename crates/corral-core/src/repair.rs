@@ -245,8 +245,16 @@ pub struct RepairHistory {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RepairEvent {
-    Finding { finding: RepairFinding },
-    Started { receipt: RepairStartReceipt },
+    Finding {
+        finding: RepairFinding,
+    },
+    Started {
+        receipt: RepairStartReceipt,
+    },
+    /// Host-observed inability to spend the remaining coding allowance (pin, access or policy).
+    CodingBlocked {
+        reason: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -340,6 +348,24 @@ impl RepairHistory {
         Ok(counts)
     }
 
+    /// Latest observations in stable identity order, including evidence-backed resolutions.
+    pub fn findings(&self) -> Vec<&RepairFinding> {
+        let mut latest = std::collections::BTreeMap::new();
+        for event in &self.events {
+            if let RepairEvent::Finding { finding } = event {
+                latest.insert(&finding.finding_id, finding);
+            }
+        }
+        latest.into_values().collect()
+    }
+
+    pub fn coding_blocker(&self) -> Option<&str> {
+        self.events.iter().find_map(|event| match event {
+            RepairEvent::CodingBlocked { reason } => Some(reason.as_str()),
+            _ => None,
+        })
+    }
+
     /// Append once or accept an identical redelivery. Conflicting IDs fail atomically.
     /// The caller must durably save the result before sending a launch command.
     pub fn apply(&mut self, event: RepairEvent) -> Result<ReceiptApplication> {
@@ -351,7 +377,7 @@ impl RepairHistory {
                     {
                         Some(old)
                     }
-                    RepairEvent::Finding { .. } | RepairEvent::Started { .. } => None,
+                    _ => None,
                 }) {
                     ensure!(previous == finding, "conflicting finding observation ID");
                     return Ok(ReceiptApplication::Duplicate);
@@ -365,6 +391,17 @@ impl RepairHistory {
                 }
                 self.validate_start(receipt)?;
             }
+            RepairEvent::CodingBlocked { reason } => {
+                nonempty(reason)?;
+                ensure!(
+                    self.counters()?.initial_implementations == 1,
+                    "block requires initial implementation"
+                );
+                if let Some(previous) = self.coding_blocker() {
+                    ensure!(previous == reason, "coding blocker is already recorded");
+                    return Ok(ReceiptApplication::Duplicate);
+                }
+            }
         }
         self.events.push(event);
         Ok(ReceiptApplication::Recorded)
@@ -373,14 +410,14 @@ impl RepairHistory {
     fn receipt(&self, id: &RepairAttemptId) -> Option<&RepairStartReceipt> {
         self.events.iter().find_map(|event| match event {
             RepairEvent::Started { receipt } if &receipt.attempt_id == id => Some(receipt),
-            RepairEvent::Finding { .. } | RepairEvent::Started { .. } => None,
+            _ => None,
         })
     }
 
     fn latest_finding(&self, id: &FindingId) -> Option<&RepairFinding> {
         self.events.iter().rev().find_map(|event| match event {
             RepairEvent::Finding { finding } if &finding.finding_id == id => Some(finding),
-            RepairEvent::Finding { .. } | RepairEvent::Started { .. } => None,
+            _ => None,
         })
     }
 
@@ -472,7 +509,8 @@ impl RepairHistory {
                 "attempt references resolved finding"
             );
         }
-        let repairs_exhausted = counts.coding_repairs >= *overall_limit
+        let repairs_exhausted = self.coding_blocker().is_some()
+            || counts.coding_repairs >= *overall_limit
             || (counts.current_profile_repairs >= *current_profile_limit
                 && (self.stronger_profile.is_none()
                     || counts.stronger_profile_repairs >= *stronger_profile_limit));
@@ -483,6 +521,10 @@ impl RepairHistory {
             ensure!(
                 counts.initial_implementations == 1,
                 "repair requires initial implementation"
+            );
+            ensure!(
+                self.coding_blocker().is_none(),
+                "coding is blocked pending owner decision"
             );
             ensure!(
                 counts.pm_diagnoses == 0,
@@ -559,7 +601,7 @@ impl RepairHistory {
                         {
                             Some(&receipt.attempt_id)
                         }
-                        RepairEvent::Finding { .. } | RepairEvent::Started { .. } => None,
+                        _ => None,
                     });
                 ensure!(
                     latest_coding_attempt == Some(interrupted_attempt),

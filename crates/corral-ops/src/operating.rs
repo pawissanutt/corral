@@ -43,10 +43,14 @@ pub(crate) fn require<T: TaskRef + ?Sized>(
     if !cowork::require(store, task, kind)? {
         require_grant(store, task, kind)?;
     }
-    require_recovery(store, task)
+    require_recovery(store, task)?;
+    if kind == OperatingActionKind::Repair {
+        crate::repair_runtime::require_coding(store, task)?;
+    }
+    Ok(())
 }
 
-fn require_grant<T: TaskRef + ?Sized>(
+pub(crate) fn require_grant<T: TaskRef + ?Sized>(
     store: &Store,
     task: &T,
     kind: OperatingActionKind,
@@ -71,6 +75,19 @@ fn require_grant<T: TaskRef + ?Sized>(
         reasons.join("; ")
     );
     Ok(())
+}
+
+/// Diagnosis consumes repair scope but cannot consume or enlarge the coding allowance.
+pub(crate) fn require_diagnosis<T: TaskRef + ?Sized>(
+    store: &Store,
+    task: &T,
+    owner: bool,
+) -> Result<()> {
+    crate::hold::require_clear(store, task)?;
+    if !owner && !cowork::require(store, task, OperatingActionKind::Repair)? {
+        require_grant(store, task, OperatingActionKind::Repair)?;
+    }
+    require_recovery(store, task)
 }
 
 fn require_recovery<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Result<()> {

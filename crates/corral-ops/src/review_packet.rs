@@ -75,6 +75,8 @@ pub struct BoundPacket {
     pub evidence: Evidence,
     pub gaps: Vec<EvidenceGap>,
     pub previous_findings: Vec<Finding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repair_history: Option<corral_core::RepairLedger>,
     /// Tiered runs only, so legacy packets and their digests are unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gate_contract: Option<ReviewGateContract>,
@@ -543,6 +545,7 @@ pub(crate) fn build<T: TaskRef + ?Sized>(
         },
         gaps: evidence_gaps(ctx, task, run, route, moved)?,
         previous_findings: previous,
+        repair_history: ctx.store.repair_ledger(task.id())?,
         gate_contract: gate_contract(ctx, task, run, moved)?,
     };
     let digest = verification::digest(&serde_json::to_vec(&bound)?);

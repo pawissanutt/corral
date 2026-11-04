@@ -683,9 +683,13 @@ impl Pilot<'_> {
         if packet.is_some() && output::requested(self.ctx, key, &digest)? {
             return Ok(Step::Wait);
         }
+        let (bounded, policy_switch, max) = match self.repair_budget(&digest, summary)? {
+            repair::RepairBudget::Legacy => (false, None, self.policy.max_rounds),
+            repair::RepairBudget::Coding { switch, max } => (true, switch, max),
+            repair::RepairBudget::Stop(step) => return Ok(step),
+        };
         let round = self.head.rounds + 1;
-        let max = self.policy.max_rounds;
-        if round > max && !self.ctx.store.config.automation.turbo {
+        if !bounded && round > max && !self.ctx.store.config.automation.turbo {
             return self.escalate(&format!("{summary} (all {max} change rounds used)"));
         }
         self.require(OperatingActionKind::Repair)?;
@@ -720,7 +724,11 @@ impl Pilot<'_> {
         }
         let pane = self.run.herdr.as_ref().map(|h| h.pane_id.as_str());
         let task = self.ctx.store.head(id)?;
-        let switch = crate::escalation::escalation_head(self.config, &task, false)?;
+        let switch = if bounded {
+            policy_switch
+        } else {
+            crate::escalation::escalation_head(self.config, &task, false)?
+        };
         let reuse = self.config.task_review_policy(&task).worker_session
             == corral_core::SessionPolicy::Reuse;
         let alive = if switch.is_none() {

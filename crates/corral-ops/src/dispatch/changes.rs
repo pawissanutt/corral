@@ -104,7 +104,16 @@ fn send_changes(
             task.status.label()
         );
     }
+    let bounded = crate::repair_runtime::observations(ctx, &head, Some((text, text)))?;
     let previous = task.current_run().context("task has no run")?;
+    if let Some(ledger) = &bounded {
+        let next = crate::repair_runtime::transition(ctx, &head, ledger, by == "owner")?;
+        anyhow::ensure!(
+            matches!(next, corral_core::RepairTransition::Current { ref profile }
+            | corral_core::RepairTransition::Stronger { ref profile } if profile == &previous.agent),
+            "repair policy requires {next:?}; use a fresh staged retry, diagnosis or explicit owner renewal"
+        );
+    }
     let previous_head = head.current_run.as_deref().context("task has no run")?;
     let continuation = super::worker_session::Continuation::prepare(ctx, &head, previous_head)?;
     let pane = previous
@@ -161,6 +170,12 @@ fn send_changes(
         run.outcome = None;
         run.ended = None;
         run.summary = None;
+        let attempt = expected
+            .map(|key| key.digest())
+            .transpose()?
+            .map(|key| format!("repair:{key}"))
+            .unwrap_or_else(|| format!("changes:{}:{}", previous.id, changes_round.n));
+        crate::repair_runtime::start(store, &*current, &attempt, &previous.agent, false)?;
         current.status = Status::Running;
         Ok(())
     };

@@ -49,7 +49,10 @@ pub(super) fn require<T: TaskRef + ?Sized>(
         "unresolved owner decision"
     );
     let policy = config.task_review_policy(task);
-    if kind == OperatingActionKind::Repair {
+    if kind == OperatingActionKind::Repair
+        && config.routing.repair.is_none()
+        && store.repair_ledger(task.id())?.is_none()
+    {
         ensure!(
             *task.rounds() < policy.max_rounds || config.automation.turbo,
             "automatic repair rounds exhausted"

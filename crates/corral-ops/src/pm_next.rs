@@ -64,6 +64,10 @@ pub enum PmObservation {
         task: String,
         condition: Box<corral_core::attention::Condition>,
     },
+    RepairDiagnosis {
+        task: String,
+        reason: String,
+    },
     GateNeeded {
         task: String,
     },
@@ -120,6 +124,7 @@ impl PmObservation {
             | Self::ReviewInFlight { task, .. }
             | Self::AutomaticWait { task, .. }
             | Self::Blocked { task, .. }
+            | Self::RepairDiagnosis { task, .. }
             | Self::GateNeeded { task }
             | Self::ReviewNeeded { task }
             | Self::ReadyToLand { task }
@@ -142,6 +147,7 @@ pub enum PmActionKind {
     Question,
     EvidenceOnly,
     LoadFailure,
+    Diagnosis,
     #[serde(rename = "promote", alias = "idea_promotion")]
     IdeaPromotion,
     ReviewInFlight,
@@ -194,6 +200,19 @@ fn option(id: &str, label: &str, command: String, requires_owner: bool) -> PmOpt
 pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
     use PmObservation::*;
     let (kind, task, why, verify, evidence, options) = match observation {
+        RepairDiagnosis { task, reason } => (
+            PmActionKind::Diagnosis,
+            Some(task.clone()),
+            "Coding repair options are exhausted; one bounded PM diagnosis remains.",
+            "Read the full attempt/finding history and return a concrete bounded proposal, not new coding retries.",
+            vec![reason.clone()],
+            vec![option(
+                "diagnose",
+                "Start the bounded PM diagnosis",
+                format!("{bin} repair diagnose {}", q(task)),
+                false,
+            )],
+        ),
         GateUntrusted { task, log, problem } => (
             PmActionKind::GateLog,
             Some(task.clone()),
@@ -606,7 +625,7 @@ pub(crate) fn rank(observation: &PmObservation) -> u8 {
         PmObservation::StaleReview { .. } => 1,
         PmObservation::GateUntrusted { .. } => 2,
         PmObservation::LoadFailure { .. } => 3,
-        PmObservation::EvidenceOnly { .. } => 4,
+        PmObservation::EvidenceOnly { .. } | PmObservation::RepairDiagnosis { .. } => 4,
         PmObservation::Owner { .. }
         | PmObservation::PlanDecision { .. }
         | PmObservation::Blocked { .. } => 5,
