@@ -201,7 +201,12 @@ fn owner_finish_materializes_gated_reviewed_work_and_autopilot_lands_it() {
     // The scratch was rebased onto the moved main before the gate.
     assert_eq!(git(&made.path, &["rev-parse", "HEAD^"]), moved);
     // Only the usage between scratch creation and finish is on the run.
-    let usage = run.usage.as_ref().expect("A-1's usage on the run");
+    let usage = run.usage.as_ref().unwrap_or_else(|| {
+        panic!(
+            "A-1's usage on the run: note={:?}, started={}",
+            run.usage_note, run.started
+        )
+    });
     assert_eq!((usage.input, usage.entries.len()), (10, 1));
     // Confirmed finish selects the independent reviewer and delegates acceptance for this run.
     let policy = fx.ctx.store.config.task_review_policy(&task);
