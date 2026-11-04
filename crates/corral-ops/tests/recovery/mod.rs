@@ -451,7 +451,14 @@ fn apply_rejects_missing_authority_changed_policy_and_changed_bytes() {
         .review
         .require_cross_family = Some(true);
     f.ctx.store.save_config().unwrap();
-    std::fs::write(&f.source, format!("{PLAN}Changed bytes")).unwrap();
+    // The draft is disposable; corrupt the exact stored snapshot bound by the preview.
+    let task = f.ctx.store.get(&f.id).unwrap();
+    let hash = corral_core::blob_ref::BlobHash::parse(&task.plans[0].artifact.sha256).unwrap();
+    std::fs::write(
+        f.ctx.store.blob_store().unwrap().path_of(&hash),
+        format!("{PLAN}Changed bytes"),
+    )
+    .unwrap();
     assert!(recover_apply(&f.ctx, &preview, &input, Some(confirmation(&preview))).is_err());
     assert!(records(&f.ctx, &f.id).unwrap().is_empty());
 }
