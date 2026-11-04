@@ -298,7 +298,7 @@ fn assistant_shell_creates_promotes_and_discards_only_its_own_scratch() {
 
 #[test]
 fn owner_gc_collects_an_ended_sessions_idle_scratch_after_a_dry_run() {
-    // Given A-1's scratch whose last commit and session end are ten days old.
+    // Given A-1's scratch whose creation, last commit and session end are ten days old.
     let fx = Fixture::new();
     fx.ok(
         Some("A-1"),
@@ -324,7 +324,11 @@ fn owner_gc_collects_an_ended_sessions_idle_scratch_after_a_dry_run() {
     corral_core::Store::open(&fx.root)
         .unwrap()
         .update_assistant("A-1", |s| {
+            s.created = old;
             s.ended = Some(old);
+            for scratch in &mut s.scratch {
+                scratch.created = old;
+            }
             Ok(())
         })
         .unwrap();

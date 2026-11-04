@@ -599,7 +599,11 @@ pub(crate) fn record_landing<T: corral_core::TaskRef + ?Sized>(
             at: Timestamp::now(),
         };
         ctx.store.update_assistant(&cowork.session, |session| {
-            session.scratch.retain(|entry| entry.branch != run.branch);
+            // Keep a released record for GC when cleanup was deferred or failed. Missing
+            // directories must not keep consuming the session's scratch allowance.
+            session
+                .scratch
+                .retain(|entry| entry.branch != run.branch || entry.path.exists());
             if !session
                 .landed
                 .iter()
@@ -634,7 +638,9 @@ pub(crate) fn release_discarded(ctx: &Ctx, task: &Task) {
         return;
     };
     let released = ctx.store.update_assistant(&cowork.session, |session| {
-        session.scratch.retain(|entry| entry.branch != run.branch);
+        session
+            .scratch
+            .retain(|entry| entry.branch != run.branch || entry.path.exists());
         Ok(())
     });
     if let Err(error) = released {

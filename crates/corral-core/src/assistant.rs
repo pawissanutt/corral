@@ -14,6 +14,7 @@ use crate::agent::{
 use crate::{Store, Usage};
 
 mod records;
+mod scratch_lease;
 
 pub const ASSISTANT_VERSION: u32 = 1;
 /// Ordinary journal limit; a first permission may occupy one extra slot to preserve citable inputs.
@@ -32,7 +33,7 @@ pub struct AssistantCfg {
     pub max_live: u32,
     /// Scratch worktrees the workspace may hold across all sessions.
     pub scratch_max: u32,
-    /// Days an ended session's scratch stays idle before `corral assistant scratch gc` collects it.
+    /// Idle days before GC collects scratch of an ended session or one without a live host.
     pub scratch_idle_days: u32,
 }
 

@@ -40,6 +40,7 @@ threads-required = 2
 # Projection: interrupted publication identity/authority replay matrices.
 # Carry: verification-input permutation matrix across approval and full landing.
 # Launch: revocation/crash-stage matrices, beyond real-entry smoke coverage.
+# Scratch: deterministic resume/startup-vs-GC interleaving requires admission and Git fixtures.
 # Plans: repeated multi-member full-gate/failure-repair journeys; ordinary member tests remain.
 # Cleanup: retained-branch approval corruption matrix across process restart.
 # Quick skips this catalog; declared tests can opt in. The extra memo test exercises
@@ -47,7 +48,8 @@ threads-required = 2
 [profile.quick]
 default-filter = '''
 not (
-  (binary_id(=corral-ops) & test(operating::records_tests::one_winner_per_thousand_claims_raced_by_eight_independent_processes))
+  (binary_id(=corral-ops) & test(scratch_gc_resume_startup_interleaving))
+| (binary_id(=corral-ops) & test(operating::records_tests::one_winner_per_thousand_claims_raced_by_eight_independent_processes))
 | (binary_id(=corral-ops) & test(submission_paths_tests::crashes::) & not test(submission_paths_child_entry))
 | (binary_id(=corral-ops) & test(cleanup::ledger_tests::ledger_cleanup_closes_what_the_history_walk_closed))
 | (binary_id(=corral-ops::attention_eval) & test(=delivery_history::s21_prior_unsafe_attempts_bar_rejected_resends_after_restart_and_fifo_promotion))
@@ -74,7 +76,8 @@ path = "junit.xml"
 [profile.slow]
 slow-timeout = "30s"
 default-filter = '''
-(binary_id(=corral-ops) & test(operating::records_tests::one_winner_per_thousand_claims_raced_by_eight_independent_processes))
+(binary_id(=corral-ops) & test(scratch_gc_resume_startup_interleaving))
+| (binary_id(=corral-ops) & test(operating::records_tests::one_winner_per_thousand_claims_raced_by_eight_independent_processes))
 | (binary_id(=corral-ops) & test(submission_paths_tests::crashes::) & not test(submission_paths_child_entry))
 | (binary_id(=corral-ops) & test(cleanup::ledger_tests::ledger_cleanup_closes_what_the_history_walk_closed))
 | (binary_id(=corral-ops::attention_eval) & test(=delivery_history::s21_prior_unsafe_attempts_bar_rejected_resends_after_restart_and_fifo_promotion))
@@ -94,7 +97,8 @@ default-filter = '''
 # Off-landing torture cases retain their original report-only hang guards.
 [[profile.default.overrides]]
 filter = '''
-(binary_id(=corral-ops) & test(operating::records_tests::one_winner_per_thousand_claims_raced_by_eight_independent_processes))
+(binary_id(=corral-ops) & test(scratch_gc_resume_startup_interleaving))
+| (binary_id(=corral-ops) & test(operating::records_tests::one_winner_per_thousand_claims_raced_by_eight_independent_processes))
 | (binary_id(=corral-ops) & test(submission_paths_tests::crashes::) & not test(submission_paths_child_entry))
 | (binary_id(=corral-ops) & test(cleanup::ledger_tests::ledger_cleanup_closes_what_the_history_walk_closed))
 | (binary_id(=corral-ops::attention_eval) & test(=delivery_history::s21_prior_unsafe_attempts_bar_rejected_resends_after_restart_and_fifo_promotion))

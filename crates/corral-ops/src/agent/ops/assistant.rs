@@ -168,6 +168,7 @@ pub(crate) fn session_project(ctx: &Ctx, id: &str) -> Result<String> {
 
 /// Opens session `id`'s next generation in `pane` and writes its one-shot bootstrap.
 fn prepare(ctx: &Ctx, id: &str, pane: &str, resolved: &ResolvedProfile) -> Result<Prepared> {
+    let _lease = ctx.store.assistant_scratch_lease(id)?;
     let session = ctx.store.get_assistant(id)?;
     let model = resolved
         .model
@@ -289,6 +290,7 @@ pub fn open_focused(
 /// current generation and opens the next one here on the same Pi session file.
 pub fn resume(ctx: &Ctx, id: &str, pane: &str, overrides: &Overrides) -> Result<(u32, Prepared)> {
     corral_core::assistant::validate_id(id).map_err(|e| refuse("usage_error", format!("{e:#}")))?;
+    let _lease = ctx.store.assistant_scratch_lease(id)?;
     if !ctx.store.assistant_exists(id)? {
         return Err(refuse(
             "assistant_unknown",
@@ -403,12 +405,39 @@ pub fn end(ctx: &Ctx, id: &str) -> Result<(AssistantSession, Option<String>)> {
     Ok((session, warning))
 }
 
+/// Revalidate a prepared generation under the admission lease, including the unbound interval.
+/// GC may fence an abandoned bootstrap; it must never launch into a removed scratch later.
+pub(crate) fn startup_lease(
+    bootstrap: &launch::Bootstrap,
+) -> Result<Option<corral_core::StoreLock>> {
+    let Some(id) = bootstrap.assistant.as_deref() else {
+        return Ok(None);
+    };
+    let store = Store::open(&bootstrap.root)?;
+    let lease = store.assistant_scratch_lease(id)?;
+    store.inspect_assistant_container(id, |container, ended| {
+        anyhow::ensure!(
+            !ended
+                && !container.state.binding.closing
+                && container.state.binding.generation == bootstrap.generation
+                && container
+                    .state
+                    .current_generation()
+                    .is_some_and(|g| { g.fenced.is_none() && g.bound.is_none() }),
+            "assistant_changed: {id}'s prepared generation is no longer launchable"
+        );
+        Ok(())
+    })?;
+    Ok(Some(lease))
+}
+
 /// Runs the prepared host as a child in this pane and waits: the checks and launch message of
 /// `corral agent launch`, without exec, so the supervisor can suspend the stopped host.
 #[cfg(unix)]
 pub fn run_host(prepared: &Prepared) -> Result<std::process::ExitStatus> {
     let args = prepared.launch_args();
     let bootstrap = launch::consume_bootstrap(&args.bootstrap)?;
+    let _lease = startup_lease(&bootstrap)?;
     let dir = args
         .bootstrap
         .parent()
@@ -419,9 +448,15 @@ pub fn run_host(prepared: &Prepared) -> Result<std::process::ExitStatus> {
     let (mut command, inherited) = launch::host_command(&bootstrap, &ready, &secrets)?;
     // This child has a `corral pi` supervisor handling /new (75) and idle scratch relink (76).
     command.arg("--assistant-new");
-    let mut child = command
-        .spawn()
-        .with_context(|| format!("starting {}", ready.bun.display()))?;
+    wait_host(command, inherited)
+}
+
+#[cfg(unix)]
+pub(crate) fn wait_host(
+    mut command: std::process::Command,
+    inherited: std::io::PipeReader,
+) -> Result<std::process::ExitStatus> {
+    let mut child = command.spawn().context("starting assistant host")?;
     drop(inherited);
     child.wait().context("waiting for the assistant host")
 }

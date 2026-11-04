@@ -20,7 +20,7 @@ mod measure;
 
 pub use finish::{Finish, Finished, LABEL, finish, session_for as finish_session};
 pub(crate) use finish::{record_landing, release_discarded};
-pub use gc::{GcItem, GcReport, gc, orphans};
+pub use gc::{GcItem, GcReport, Holder, gc, gc_with_options, orphans};
 pub use measure::{Measured, measure};
 
 pub const SPIKE: &str = "spike";
@@ -311,7 +311,26 @@ fn repo_of(scratch: &AssistantScratch) -> Result<PathBuf> {
 /// A task run or co-work finish that owns the scratch's lifecycle now.
 fn holder(tasks: &[Task], scratch: &AssistantScratch) -> Option<String> {
     if scratch.kind == COWORK {
-        return Some("a co-work finish".into());
+        let owners: Vec<_> = tasks
+            .iter()
+            .filter(|task| {
+                task.cowork.as_ref().is_some_and(|cowork| {
+                    cowork.scratch == scratch.slug
+                        && task
+                            .runs
+                            .iter()
+                            .any(|run| run.id == cowork.run && run.worktree == scratch.path)
+                })
+            })
+            .collect();
+        if owners.is_empty()
+            || owners
+                .iter()
+                .any(|task| !matches!(task.status, Status::Done | Status::Dropped))
+        {
+            return Some("a co-work finish".into());
+        }
+        return None;
     }
     tasks.iter().find_map(|task| {
         task.runs

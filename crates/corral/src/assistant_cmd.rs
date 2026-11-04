@@ -170,8 +170,11 @@ pub enum ScratchCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Collect idle scratch of ended sessions, saving work as diff artifacts first (owner)
+    /// Collect ended or idle hostless sessions' scratch, saving work first (owner or PM)
     Gc {
+        /// Stop resident processes only for ended or idle hostless sessions
+        #[arg(long)]
+        stop_stale: bool,
         /// List what would be collected without changing anything
         #[arg(long, conflicts_with = "yes")]
         dry_run: bool,
@@ -562,11 +565,16 @@ fn scratch(ctx: &Ctx, cmd: ScratchCmd) -> Result<()> {
                 None => println!("review none; land it with `corral approve {}`", done.task),
             }
         }
-        ScratchCmd::Gc { dry_run, yes, json } => {
+        ScratchCmd::Gc {
+            dry_run,
+            yes,
+            json,
+            stop_stale,
+        } => {
             if !dry_run && !yes {
                 anyhow::bail!("pass --dry-run to preview or --yes to collect");
             }
-            let report = ops::gc(ctx, jiff::Timestamp::now(), dry_run)?;
+            let report = ops::gc_with_options(ctx, jiff::Timestamp::now(), dry_run, stop_stale)?;
             if json {
                 print_json(&report)?;
             } else {
@@ -578,13 +586,23 @@ fn scratch(ctx: &Ctx, cmd: ScratchCmd) -> Result<()> {
                 for item in &report.items {
                     println!(
                         "{:<8} {}/{} {} bytes={} {}",
-                        item.action,
+                        match item.action {
+                            "skip" => "keep",
+                            "remove" => "collect",
+                            action => action,
+                        },
                         item.session,
                         item.slug,
                         item.path.display(),
                         item.bytes.map_or_else(|| "-".into(), |b| b.to_string()),
                         item.reason
                     );
+                    for holder in &item.holders {
+                        println!(
+                            "         pid={} age={}s command={:?}",
+                            holder.pid, holder.age_secs, holder.command
+                        );
+                    }
                 }
                 if let Some(why) = &report.panes_unavailable {
                     println!("pane checks skipped (terminal server unavailable: {why})");

@@ -173,6 +173,91 @@ fn c8_scratch_lifecycle_accounting_and_idle_gc() {
 }
 
 #[test]
+fn gc_collects_abandoned_open_sessions_but_never_a_live_host() {
+    let fx = Fixture::new();
+    let abandoned = fx.create("A-1", "abandoned");
+    let live = fx.create("A-2", "live");
+    let now = Timestamp::now();
+    let early = scratch::gc(&fx.ctx, now, true).unwrap();
+    assert!(early.items.iter().all(|item| item.action == "skip"));
+    // Bind a real host identity without a terminal server or a fake wall-clock wait.
+    let identity =
+        corral_ops::ProcessControl::inspect(&corral_ops::SystemProcesses, std::process::id())
+            .unwrap()
+            .unwrap();
+    fx.ctx
+        .store
+        .update_assistant_container("A-2", |container| {
+            container.state.binding.generation = 1;
+            container
+                .state
+                .generations
+                .push(serde_json::from_value(serde_json::json!({
+                    "n": 1, "bind_nonce_sha256": "nonce", "pane": "pane", "created": now,
+                    "bound": {"host_cap_sha256": "host", "ctl_cap_sha256": "ctl",
+                        "session_id": "sid", "session_file": "/unused", "pid": std::process::id(),
+                        "start_time": identity.started, "request_id": "hello", "at": now}
+                }))?);
+            Ok(())
+        })
+        .unwrap();
+    let later = now.checked_add(SignedDuration::from_hours(8 * 24)).unwrap();
+    let before = fx.record("A-2");
+    let dry = scratch::gc(&fx.ctx, later, true).unwrap();
+    assert_eq!(dry.items.len(), 2);
+    assert_eq!(dry.items[0].action, "remove", "{dry:?}");
+    assert_eq!(dry.items[1].action, "skip", "{dry:?}");
+    let mut holder = Command::new("cat")
+        .current_dir(&live.path)
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let real = scratch::gc_with_options(&fx.ctx, later, false, true).unwrap();
+    let holder_alive = holder.try_wait().unwrap().is_none();
+    if holder_alive {
+        holder.kill().unwrap();
+    }
+    holder.wait().unwrap();
+    assert!(
+        holder_alive,
+        "a live session's holder must never be stopped"
+    );
+    assert_eq!(real.items[0].action, "removed", "{real:?}");
+    assert!(!abandoned.path.exists());
+    assert!(live.path.is_dir());
+    assert_eq!(fx.record("A-2"), before);
+}
+
+#[test]
+fn gc_forgets_missing_directories_and_bundles_only_work_beyond_base() {
+    let fx = Fixture::new();
+    let empty = fx.create("A-1", "empty-missing");
+    let work = fx.create("A-1", "work-missing");
+    fx.commit(&work.path, "work.txt", "saved work\n");
+    let head = git(&work.path, &["rev-parse", "HEAD"]);
+    for made in [&empty, &work] {
+        std::fs::remove_dir_all(&made.path).unwrap();
+    }
+    let report = scratch::gc(&fx.ctx, Timestamp::now(), false).unwrap();
+    assert!(
+        report.items.iter().all(|item| item.action == "removed"),
+        "{report:?}"
+    );
+    assert!(report.items[0].artifacts.is_empty());
+    let (_, restored) = restore(&fx, "A-1", "work-missing", &report.items[1].artifacts);
+    assert_eq!(git(&restored, &["rev-parse", "HEAD"]), head);
+    assert!(!fx.branch_exists(&empty.branch) && !fx.branch_exists(&work.branch));
+    assert!(
+        fx.ctx
+            .store
+            .get_assistant("A-1")
+            .unwrap()
+            .scratch
+            .is_empty()
+    );
+}
+
+#[test]
 fn scratch_creation_links_the_session_directory() {
     // Given an open assistant without a scratch.
     let fx = Fixture::new();
@@ -260,8 +345,48 @@ fn gc_skips_a_scratch_with_a_live_process_cwd_or_a_pending_finish() {
         .unwrap();
     // When the owner collects, then both are skipped with their reasons and kept.
     let report = scratch::gc(&fx.ctx, later, false).unwrap();
-    drop(resident.stdin.take());
+    let preview = scratch::gc_with_options(&fx.ctx, later, true, true).unwrap();
+    assert!(
+        resident.try_wait().unwrap().is_none(),
+        "dry run must not signal"
+    );
+    let stopped = scratch::gc_with_options(&fx.ctx, later, false, true).unwrap();
+    let terminated = resident.try_wait().unwrap().is_some();
+    if !terminated {
+        resident.kill().unwrap();
+    }
     resident.wait().unwrap();
+    let busy_row = report.items.iter().find(|i| i.slug == "busy").unwrap();
+    let json = serde_json::to_value(busy_row).unwrap();
+    assert_eq!(json["holders"][0]["pid"], resident.id());
+    assert!(
+        json["holders"][0]["command"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s.as_str().is_some_and(|s| s.ends_with("cat")))
+    );
+    assert!(json["holders"][0]["age_secs"].is_u64());
+    assert_eq!(
+        preview
+            .items
+            .iter()
+            .find(|i| i.slug == "busy")
+            .unwrap()
+            .action,
+        "remove"
+    );
+    assert!(terminated, "--stop-stale did not stop the holder");
+    assert_eq!(
+        stopped
+            .items
+            .iter()
+            .find(|i| i.slug == "busy")
+            .unwrap()
+            .action,
+        "removed",
+        "{stopped:?}"
+    );
     let reason = |slug: &str| {
         let item = report.items.iter().find(|i| i.slug == slug).unwrap();
         assert_eq!(item.action, "skip", "{item:?}");
@@ -269,9 +394,9 @@ fn gc_skips_a_scratch_with_a_live_process_cwd_or_a_pending_finish() {
     };
     assert!(reason("busy").starts_with("live process cwd"), "{report:?}");
     assert_eq!(reason("finishing"), "pending finish: a co-work finish");
-    assert!(busy.path.is_dir() && cowork.path.is_dir());
+    assert!(!busy.path.exists() && cowork.path.is_dir());
     let kept = fx.ctx.store.get_assistant("A-1").unwrap().scratch;
-    assert_eq!(kept.len(), 2);
+    assert_eq!(kept.len(), 1);
     assert!(
         kept.iter()
             .all(|s| s.bytes.is_some() && s.measured_at == Some(later))

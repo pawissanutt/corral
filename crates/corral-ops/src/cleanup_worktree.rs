@@ -587,9 +587,8 @@ pub(crate) enum Callers {
     Occupy,
 }
 
-/// Processes using a scratch worktree. Corral launched none of them, so scratch residents
-/// are reported and never signalled.
-pub(crate) fn scratch_residents(path: &Path, callers: Callers) -> Result<Vec<u32>> {
+/// Processes using a scratch worktree, with kernel identities for optional stale cleanup.
+pub(crate) fn scratch_residents(path: &Path, callers: Callers) -> Result<Vec<StuckProcess>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -600,9 +599,36 @@ pub(crate) fn scratch_residents(path: &Path, callers: Callers) -> Result<Vec<u32
     };
     Ok(residents(&path)?
         .into_iter()
-        .map(|process| process.pid)
-        .filter(|pid| !exempt.contains(pid))
+        .filter(|process| !exempt.contains(&process.pid))
         .collect())
+}
+
+/// Only GC of an ended/idle session, under its exclusive lifecycle lease, may call this.
+/// Recheck cwd and identity before signalling; never stop the caller or its ancestors.
+pub(crate) fn stop_scratch_residents(path: &Path, processes: &[StuckProcess]) -> Result<()> {
+    let protected = protected_pids()?;
+    for process in processes {
+        if protected.contains(&process.pid) {
+            bail!(
+                "scratch_busy: protected caller {} still uses the scratch",
+                process.pid
+            );
+        }
+        let still_inside = scratch_residents(path, Callers::Occupy)?
+            .iter()
+            .any(|current| current.pid == process.pid && current.started == process.started);
+        if !still_inside {
+            continue;
+        }
+        if let Err(error) = SystemProcesses.terminate(process)
+            && SystemProcesses
+                .inspect(process.pid)?
+                .is_some_and(|current| current.started == process.started)
+        {
+            return Err(error).with_context(|| format!("stopping scratch holder {}", process.pid));
+        }
+    }
+    Ok(())
 }
 
 /// Removes an assistant scratch worktree and force-deletes its branch, after the caller has
@@ -614,28 +640,10 @@ pub(crate) fn remove_scratch(
     branch: &str,
     callers: Callers,
 ) -> Result<()> {
+    validate_scratch(repo, path, branch)?;
     let repo = repo
         .canonicalize()
         .context("resolving scratch repository")?;
-    let expected = repo.join(".worktrees");
-    let named = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("A-"));
-    if path.parent() != Some(expected.as_path())
-        || !named
-        || !branch.starts_with("corral/A-")
-        || std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
-    {
-        bail!(
-            "refusing scratch cleanup outside {}: {} ({branch})",
-            expected.display(),
-            path.display()
-        );
-    }
-    if path.exists() && path.canonicalize().context("resolving scratch worktree")? != path {
-        bail!("refusing aliased scratch worktree {}", path.display());
-    }
     let busy = scratch_residents(path, callers)?;
     if !busy.is_empty() {
         bail!(
@@ -666,6 +674,33 @@ pub(crate) fn remove_scratch(
         .success();
     if exists {
         git(&repo, &["branch", "-D", "--", branch])?;
+    }
+    Ok(())
+}
+
+/// Validate the managed path before inspecting or signalling any resident processes.
+pub(crate) fn validate_scratch(repo: &Path, path: &Path, branch: &str) -> Result<()> {
+    let repo = repo
+        .canonicalize()
+        .context("resolving scratch repository")?;
+    let expected = repo.join(".worktrees");
+    let named = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("A-"));
+    if path.parent() != Some(expected.as_path())
+        || !named
+        || !branch.starts_with("corral/A-")
+        || std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+    {
+        bail!(
+            "refusing scratch cleanup outside {}: {} ({branch})",
+            expected.display(),
+            path.display()
+        );
+    }
+    if path.exists() && path.canonicalize().context("resolving scratch worktree")? != path {
+        bail!("refusing aliased scratch worktree {}", path.display());
     }
     Ok(())
 }
