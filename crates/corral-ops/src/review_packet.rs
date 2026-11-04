@@ -549,17 +549,14 @@ pub(crate) fn build<T: TaskRef + ?Sized>(
     Ok((ReviewPacket { digest, bound }, diff))
 }
 
-/// Writes the packet whose previous findings are `previous`.
-pub(crate) fn write_with<T: TaskRef + ?Sized>(
+/// Publish materialized packet data after its retryable read phase has released the view.
+pub(crate) fn write_built<T: TaskRef + ?Sized>(
     ctx: &Ctx,
     task: &T,
     run: &RunHead,
-    attempt: &str,
-    record: &ReviewRecord,
-    route: &ReviewRoute,
-    previous: Vec<Finding>,
+    (attempt, route): (&str, &ReviewRoute),
+    (packet, diff): (ReviewPacket, String),
 ) -> Result<(String, String)> {
-    let (packet, diff) = build(ctx, task, run, (attempt, route), record, previous, None)?;
     let (packet_file, diff_file) = paths(ctx, task, run, (attempt, route))?;
     std::fs::write(&diff_file, diff).with_context(|| format!("writing {}", diff_file.display()))?;
     let json = serde_json::to_string_pretty(&packet)?;
