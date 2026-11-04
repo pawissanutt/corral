@@ -17,9 +17,9 @@
 
 ## Test cost and scope
 
-Two tests added: one plan workflow regression (fake engine, two minimal members) and one native read-op contract test. Existing host tests gained assertions; no new E2E matrix, history/performance fixture, wording pin or slow-profile test was added. The fake engine explicitly exposes its review pane rather than waiting for an unrelated observation timeout. Renamed source-integrity assertions now target stored metadata/hash integrity.
+Two tests added: one plan workflow regression (fake engine, two minimal members) and one native read-op contract test. The first gate classified three registrations because the existing mutable-source assertion was renamed to stored-metadata integrity (one old registration removed). It stopped at the size check before measuring tests; the new workflow regression is measured at 0.18s in the targeted run. Existing host tests gained assertions; no new E2E matrix, history/performance fixture, wording pin or slow-profile test was added. The fake engine explicitly exposes its review pane rather than waiting for an unrelated observation timeout. Renamed source-integrity assertions now target stored metadata/hash integrity.
 
-No intentional load was generated. Live owner-board restoration, real model sessions and real member worktree/pane dispatch were not exercised; the shared approval boundary used by dispatch was exercised. The authoritative quick gate runs after commit/rebase and supplies its own receipt/log.
+No intentional load was generated. Live owner-board restoration, real model sessions and real member worktree/pane dispatch were not exercised; the shared approval boundary used by dispatch was exercised. The authoritative quick gate runs after commit/rebase and supplies its own receipt/log. Its first attempt stopped because `plan_ops.rs` reached 837 SLOC; the new workflow regression was moved unchanged into sibling `plan_ops/blob_reads.rs` to restore the 800-SLOC ceiling.
 
 ## Investigation notes
 
