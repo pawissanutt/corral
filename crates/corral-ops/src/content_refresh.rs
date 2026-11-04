@@ -196,7 +196,7 @@ pub fn refresh_search_index_with_tasks(ctx: &Ctx, _tasks: &[Task]) -> Result<()>
 /// Brings the index to the feed position of one read view by following the feed from its
 /// cursor. `false` when it cannot be followed (missing or unreadable index, pruned feed,
 /// budget overflow) and must be rebuilt. `deferrable` leaves pending changes for a later pass
-/// while another process holds the index or it was written within `SYNC_REFRESH_EVERY`.
+/// while another process holds the index.
 fn follow_index(ctx: &Ctx, deferrable: bool) -> Result<bool> {
     let root = ctx.store.cache_root()?;
     let (view_ctx, seq) = crate::content_index::one_view(ctx)?;
@@ -208,7 +208,7 @@ fn follow_index(ctx: &Ctx, deferrable: bool) -> Result<bool> {
     if at == seq {
         return Ok(true);
     }
-    if deferrable && (written_recently(&root) || crate::content_index::busy(ctx)?) {
+    if deferrable && crate::content_index::busy(ctx)? {
         return Ok(true);
     }
     let view = view_ctx.store.view()?;
@@ -337,22 +337,10 @@ pub(crate) fn refresh_after_sync(ctx: &Ctx, _tasks: &[Task], _before: &str) -> R
     follow_index(ctx, false)
 }
 
-/// How often a sync pass may rewrite the index; searches bring it current themselves.
-const SYNC_REFRESH_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
-
-/// The refresh every sync pass (each hook and board pass) runs. The pass always checks the
-/// feed, but it never queues for another refresher and rewrites the index at most once per
-/// `SYNC_REFRESH_EVERY`: queued passes held read views on the index lock (pinning the WAL) and
-/// per-pass rewrites saturated the disk. A deferred pass leaves the cursor in place, so the
-/// next due pass follows every change.
+/// The refresh every sync pass (each hook and board pass) runs. It follows the feed so the
+/// index is current after the pass, but it never queues for another refresher: queued passes
+/// held read views on the index lock (pinning the WAL). A pass deferred because another
+/// process holds the index leaves the cursor in place, so the next pass follows every change.
 pub(crate) fn refresh_after_sync_if_due(ctx: &Ctx, _tasks: &[Task], _before: &str) -> Result<bool> {
     follow_index(ctx, true)
-}
-
-fn written_recently(root: &Path) -> bool {
-    fs::metadata(root.join(CURSOR))
-        .and_then(|meta| meta.modified())
-        .ok()
-        .and_then(|at| at.elapsed().ok())
-        .is_some_and(|age| age < SYNC_REFRESH_EVERY)
 }
