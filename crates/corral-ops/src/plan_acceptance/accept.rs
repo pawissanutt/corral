@@ -214,6 +214,7 @@ fn recover(ctx: &Ctx, id: &str, attempt: &str, repo: &Path) -> Result<Option<Agg
     // Only the current attempt can carry an acceptance: verification refuses a new attempt
     // once one exists, and a release clears it.
     let tracker = ctx.store.head(id)?;
+    crate::plan_recovery::require_active(&ctx.store, &tracker)?;
     let Some(accepted) = tracker
         .last_aggregate_attempt
         .as_ref()
@@ -267,6 +268,7 @@ fn release(ctx: &Ctx, id: &str, attempt: &str) -> Result<()> {
 fn finalize(ctx: &Ctx, id: &str, attempt: &str, after: &str) -> Result<AggregateAcceptance> {
     let mut landed = None;
     ctx.store.update_head(id, |task| {
+        crate::plan_recovery::require_active(&ctx.store, &*task)?;
         let mut detail = serde_json::Value::Null;
         task.edit_aggregate_attempt(attempt, |stored| {
             let code = stored.code;

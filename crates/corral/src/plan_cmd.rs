@@ -13,6 +13,12 @@ pub enum PlanCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Read a cancelled Plan's retained resources and outstanding recovery obligations
+    Recovery {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Start an aggregate attempt and run the gate on the combined Plan candidate
     Verify {
         id: String,
@@ -73,9 +79,14 @@ pub enum PlanCmd {
         #[arg(long)]
         json: bool,
     },
-    /// End a planner session while retaining submitted plans and review history
+    /// Cancel Plan coordination without deleting member work, or end a design session
     Cancel {
         id: String,
+        /// Confirm cancellation of an owner-origin execution Plan
+        #[arg(long)]
+        owner_ok: bool,
+        #[arg(long)]
+        reason: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -186,6 +197,23 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
                     counts.waiting,
                     counts.missing,
                 );
+                if let Some(recovery) = &progress.recovery {
+                    println!(
+                        "  coordination cancelled; {} retained resources",
+                        recovery.resources.len()
+                    );
+                    for resource in &recovery.resources {
+                        println!(
+                            "    {} {}: {}",
+                            resource.task,
+                            resource.run.as_deref().unwrap_or(&resource.kind),
+                            resource.path.display()
+                        );
+                    }
+                    for obligation in &recovery.outstanding {
+                        println!("    outstanding: {obligation}");
+                    }
+                }
                 for work in &progress.work {
                     println!(
                         "  {} {:?}{}: {}",
@@ -255,6 +283,30 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
                         println!("  checkpoint: unavailable: {error}");
                     }
                 }
+            }
+        }
+        PlanCmd::Recovery { id, json } => {
+            let recovery = corral_ops::plan_recovery_inventory(ctx, &id)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&recovery)?);
+            } else if let Some(recovery) = recovery {
+                println!(
+                    "{id}: cancelled at {}; inventory complete: {}",
+                    recovery.cancelled_at, recovery.inventory_complete
+                );
+                for resource in &recovery.resources {
+                    println!(
+                        "  {} {}: {}",
+                        resource.task,
+                        resource.run.as_deref().unwrap_or(&resource.kind),
+                        resource.path.display()
+                    );
+                }
+                for obligation in &recovery.outstanding {
+                    println!("  outstanding: {obligation}");
+                }
+            } else {
+                println!("{id}: no cancellation inventory");
             }
         }
         PlanCmd::Verify { id, json } => {
@@ -397,12 +449,30 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
                 );
             }
         }
-        PlanCmd::Cancel { id, json } => {
-            let task = corral_ops::plan_cancel(ctx, &id)?;
+        PlanCmd::Cancel {
+            id,
+            owner_ok,
+            reason,
+            json,
+        } => {
+            let head = ctx.store.head(&id)?;
+            let task = if head.tracker && head.approved_scope.is_some() {
+                corral_ops::move_task_with_decision(
+                    ctx,
+                    &id,
+                    corral_core::Status::Dropped,
+                    false,
+                    reason.as_deref(),
+                    "owner",
+                    owner_ok,
+                )?
+            } else {
+                corral_ops::plan_cancel(ctx, &id)?
+            };
             if json {
                 println!("{}", serde_json::to_string_pretty(&task)?);
             } else {
-                println!("{id}: plan run cancelled; plan history retained");
+                println!("{id}: plan cancelled; history and execution resources retained");
             }
         }
         PlanCmd::Submit { id, path, json } => {

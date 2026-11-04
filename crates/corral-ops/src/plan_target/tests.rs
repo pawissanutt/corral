@@ -14,6 +14,9 @@ fn git(repo: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().into()
 }
 
+#[path = "recovery_tests.rs"]
+mod recovery;
+
 const APPROVAL_STARTED: &str = "2026-10-19T01:00:00Z";
 
 struct Fixture {

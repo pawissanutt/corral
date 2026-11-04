@@ -183,6 +183,7 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
     };
     let store = ctx.store.reopen()?;
     let tracker = store.get(id)?;
+    crate::plan_recovery::require_active(&store, &tracker)?;
     crate::hold::require_clear(&store, &tracker)?;
     let branch = target_branch(&tracker)?;
     ensure!(
@@ -285,6 +286,7 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
     let prepared = gate::prepare(ctx, &attempt.identity, run, &verify, &contract)?;
     journal.attempts.push(attempt.clone());
     store.update(id, |task| {
+        crate::plan_recovery::require_active(&store, task)?;
         crate::hold::require_clear(&store, task)?;
         task.review_wait = None;
         journal.save(&store, id)?;

@@ -446,6 +446,9 @@ fn remove_inner<T: TaskRef + ?Sized>(
     mode: Removal,
 ) -> Result<()> {
     let discard = matches!(mode, Removal::Normal { discard: true });
+    if !discard {
+        crate::plan_recovery::protect_run(ctx, &ctx.store.head(task.id())?)?;
+    }
     crate::plan_target::protect_cleanup(repo, run)?;
     let repo = repo
         .canonicalize()

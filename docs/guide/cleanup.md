@@ -28,6 +28,47 @@ worktree but preserves the branch. Neither operation resets the main checkout.
 Artifacts and run history remain. The `discarded` event records cleanup warnings
 and whether the worktree and branch were removed; the CLI also prints warnings.
 
+## Cancelling an execution Plan
+
+`corral plan cancel T-042` cancels a tracker Plan's coordination, not its members'
+work. Dropping that Plan on the board, moving it to Dropped, or discarding the
+tracker uses the same retention policy. No child discard is performed. Accepted
+members stay accepted; queued members cannot start, and no new member landing,
+aggregate verification or final acceptance can revive the cancelled coordination.
+A forced status move does not reopen it. Owner-origin Plans retain the normal
+owner-disposition guard: use `corral plan cancel T-042 --owner-ok --reason "Stop coordination"`
+or confirm Drop on the board. Design-only planner cancellation still ends only
+that planner session.
+
+Cancellation retains member worker panes and asks reachable workers for a missing
+portable checkpoint. Unreachable or foreign-session workers remain named recovery
+obligations; cancellation does not claim that they stopped. Dirty and untracked
+files stay in their worktrees: keeping a branch alone would not preserve them.
+
+```sh
+corral plan recovery T-042 --json
+corral plan progress T-042 --json
+```
+
+The durable inventory includes member/run identities, recorded pane ownership,
+worktree paths, branch/HEAD and tracked/untracked status, checkpoint references and
+the latest checkpoint (including stale resource duties), native obligations,
+aggregate/checkpoint state and the owned target journal. Inspection errors are
+retained, not interpreted as absence. `plan recovery` works even if a missing member
+prevents the normal progress projection; CLI and board details also surface the
+record. If inventory construction is interrupted, the cancellation fence and an
+inventory-pending obligation already exist. Repeating cancellation refreshes the
+inventory and retries aggregate-tool cleanup. It never removes retained work.
+
+Member and final landing recovery observes exact prepared Git SHAs without merging
+again. After cancellation it refuses unpublished transactions, retaining the intent
+and refs for explicit owner reconciliation, even if Git moved before the crash.
+Normal worktree cleanup and storage GC retain cancelled-Plan worktrees. Explicit
+owner discard of an individual member remains destructive and separate: inspect
+the inventory and preserve its bytes first. Neither cancellation nor a cleanup
+failure erases outstanding checkpoint, wait or resource obligations. The inventory
+is a historical snapshot, not proof of present-day cleanliness or cleanup.
+
 `corral doctor` reports directories still present for any run of Done or Dropped
 tasks, including intentionally retained worktrees. It does not delete them.
 

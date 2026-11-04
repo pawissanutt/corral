@@ -266,15 +266,17 @@ fn advance(
         let repo = ctx
             .store
             .project_path(task.project.as_deref().context("task has no project")?)?;
+        let start =
+            crate::plan_recovery::retry::start_head(&ctx.store, &task, &RunHead::of(&run)?)?;
         if run.worktree.is_dir() {
             corral_git::ensure_evidence_excluded(&repo)?;
             if corral_git::current_branch(&run.worktree)? != run.branch
-                || corral_git::rev_sha(&run.worktree, "HEAD")? != run.base_sha
+                || corral_git::rev_sha(&run.worktree, "HEAD")? != start
             {
                 bail!("existing launch worktree does not match reserved branch/base");
             }
         } else {
-            corral_git::worktree_add(&repo, &run.worktree, &run.branch, &run.base_sha)?;
+            corral_git::worktree_add(&repo, &run.worktree, &run.branch, &start)?;
         }
         *task = phase(ctx, &task.id, LaunchStage::Worktree)?;
     }

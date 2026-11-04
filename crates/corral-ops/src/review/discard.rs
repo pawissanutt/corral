@@ -26,6 +26,10 @@ pub fn discard_with_decision(
     reason: Option<&str>,
     actor: &str,
 ) -> Result<Task> {
+    let head = ctx.store.head(id)?;
+    if head.tracker && head.approved_scope.is_some() {
+        return crate::plan_recovery::cancel_with_decision(ctx, id, reason, actor, false);
+    }
     let task = ctx.store.update(id, |t| {
         if let Some(r) = t.current_run_mut() {
             r.outcome = Some(RunOutcome::Discarded);

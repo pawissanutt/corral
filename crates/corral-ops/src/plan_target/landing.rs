@@ -112,6 +112,9 @@ impl Target {
 
     /// Observe only exact prepared SHAs. Never merge again to repair a missing receipt.
     pub(crate) fn reconcile(&mut self, ctx: &Ctx) -> Result<()> {
+        if self.pending.is_some() || self.receipts.iter().any(|r| !r.published) {
+            crate::plan_recovery::require_active(&ctx.store, &ctx.store.head(&self.plan)?)?;
+        }
         if let Some(pending) = self.pending.clone() {
             let head = corral_git::rev_sha(&self.repo, &format!("refs/heads/{}", self.branch))?;
             if head == pending.head {
@@ -157,6 +160,7 @@ impl Target {
         corral_git::check_target_checkout(&self.repo, &self.checkout, &self.branch, &self.head)?;
         let task = ctx.store.update_head(&receipt.task, |task| {
             let plan = ctx.store.head(&self.plan)?;
+            crate::plan_recovery::require_active(&ctx.store, &plan)?;
             ensure!(
                 self.binding(&plan)? == receipt.target
                     && ctx

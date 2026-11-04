@@ -165,8 +165,8 @@ corral retry T-058 --run R1
 corral retry T-058 --run R1 --profile implementer
 ```
 
-`--run` guards the source run explicitly and requires a current, valid checkpoint
-for that run. It is not a selector for replaying an arbitrary historical run.
+`--run` guards the source run explicitly. A reachable worker must supply a
+current, valid checkpoint before retry; availability handoffs always require it. It is not a selector for replaying an arbitrary historical run.
 Without `--run`, retry continues through the existing retry operation. Profile,
 model, and effort selection retain the existing retry options.
 
@@ -186,8 +186,24 @@ names it in `compatible_checkpoint` and reports the newer checkpoint's stale
 reasons. The latest `checkpoint` still carries current decisions, waits, and
 resource obligations. A replacement run must publish its own checkpoint before
 its next handoff; inherited snapshots never count as a new completion receipt.
-When the old worktree or worker is unavailable, retry records that limitation
-and falls back to the task contract and retained historical context.
+When the old worker is unavailable, retry records that limitation and retains
+historical context. For an integration-Plan member, a new run starts at the exact
+committed candidate of the superseded run, in a separate worktree; the original
+worktree and branch remain. Its source HEAD is frozen with the launch reservation,
+so a recovered launch cannot choose a later branch tip or repeat the committed
+work from the target base. A stale `--run` cannot allocate another replacement.
+
+A Plan retry refuses a dirty, missing or wrong-branch source checkout before
+superseding it. Preserve and commit tracked/untracked bytes first. If the Plan
+target advanced beyond the source candidate, explicitly reconcile that candidate
+before retrying. There is no automatic replay of unknown work or transfer of old
+PASS evidence. Non-Plan retries retain their existing fresh-base behavior.
+
+Cancelling an execution Plan retains checkpoints and native obligations separately
+from acceptance freshness. `corral plan recovery T-058 --json` reads the durable
+retention inventory, including unreachable workers and pending transaction or
+cleanup duties; see [cleanup](cleanup.md#cancelling-an-execution-plan). A late
+checkpoint, gate result or landing receipt cannot authorize cancelled coordination.
 
 Criterion and evidence links resolve through the shared `validate_references`
 seam and the canonical acceptance API. Changing the registered manifest makes

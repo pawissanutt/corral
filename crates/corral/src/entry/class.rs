@@ -173,7 +173,7 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
             ) => Refused,
         },
         Cmd::Plan { cmd } => match cmd {
-            PlanCmd::Progress { .. } | PlanCmd::Show { .. } => Read,
+            PlanCmd::Progress { .. } | PlanCmd::Recovery { .. } | PlanCmd::Show { .. } => Read,
             PlanCmd::Verify { .. }
             | PlanCmd::Checkpoint { .. }
             | PlanCmd::Evidence { .. }

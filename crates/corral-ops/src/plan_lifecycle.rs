@@ -220,8 +220,11 @@ pub(crate) fn fail(ctx: &Ctx, task: &Task, reason: &str, now: Timestamp) -> Resu
     Ok(true)
 }
 
-/// Cancel only the planner; submitted plans and independent verdicts remain intact.
+/// Cancel a tracker without discarding members, or end a design-only planner.
 pub fn plan_cancel(ctx: &Ctx, id: &str) -> Result<Task> {
+    if ctx.store.head(id)?.tracker {
+        return crate::plan_recovery::cancel(ctx, id);
+    }
     let _ownership = ctx
         .store
         .claim_session_ownership()?

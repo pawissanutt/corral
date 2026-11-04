@@ -258,6 +258,7 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
                 && task.aggregate_acceptance().is_none(),
             "aggregate attempts changed during verification"
         );
+        crate::plan_recovery::require_active(&ctx.store, task)?;
         crate::hold::require_clear(&ctx.store, task)?;
         task.review_wait = None;
         task.aggregate_attempts.push(attempt.clone());
