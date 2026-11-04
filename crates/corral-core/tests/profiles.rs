@@ -128,10 +128,11 @@ fn legacy_agents_config_parses_round_trips_and_resolves_unchanged() {
     assert_eq!(r.harness, "omo");
     assert_eq!(r.command, c.agents["omo"].command);
     assert!(r.model_args.is_empty() && r.model.is_none() && r.effort.is_none());
-    let r = c
+    // Old files still load, but a new Claude launch must explicitly opt into native delivery.
+    let err = c
         .resolve_profile(&choice(Some("claude"), None, None), None, None)
-        .unwrap();
-    assert_eq!(r.command, "claude \"$(cat '{prompt_file}')\"");
+        .unwrap_err();
+    assert!(err.to_string().contains("{delivery_args}"));
 
     let err = c
         .resolve_profile(&choice(None, Some("opus"), None), None, None)

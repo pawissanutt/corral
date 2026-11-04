@@ -275,7 +275,7 @@ pub struct Project {
 /// {name} "T-042 title", {task} task id,
 /// {worktree} absolute worktree path, {corral} absolute path of the corral binary,
 /// {model_args} rendered model/effort flags and profile args (empty when unset),
-/// {delivery_args} reserved delivery flags (empty until a delivery adapter is enabled).
+/// {delivery_args} structured native delivery flags (required for Claude inbox launches).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentCmd {
     pub command: String,
@@ -538,7 +538,7 @@ impl Config {
     /// Default harnesses (exact strings), each with a same-named profile (no model/effort):
     ///   omo     = omo -n '{name}' {model_args} {prompt_ref}
     ///   omp     = omp {model_args} {prompt_ref}
-    ///   claude  = claude {model_args} {prompt_ref}
+    ///   claude  = claude {delivery_args} {model_args} {prompt_ref}
     ///   generic = cat '{prompt_file}'   (shows the prompt; a human or any agent takes it from there)
     pub fn default_for(root: &Path) -> Config {
         let mut projects = BTreeMap::new();
@@ -588,7 +588,7 @@ impl Config {
         for (k, v) in [
             ("omo", "omo -n '{name}' {model_args} {prompt_ref}"),
             ("omp", "omp {model_args} {prompt_ref}"),
-            ("claude", "claude {model_args} {prompt_ref}"),
+            ("claude", "claude {delivery_args} {model_args} {prompt_ref}"),
             ("generic", "cat '{prompt_file}'"),
         ] {
             harnesses.insert(

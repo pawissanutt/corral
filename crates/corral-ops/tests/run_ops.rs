@@ -223,7 +223,7 @@ fn render_command_fills_model_args_from_profile_and_run() {
 }
 
 #[test]
-fn render_command_removes_delivery_slot_without_enabling_adapters() {
+fn render_command_preserves_legacy_and_renders_claude_inbox_arguments() {
     // Given legacy agents and harness profiles using the reserved slot.
     let (tmp, mut ctx) = workspace();
     ctx.store.config.agents.get_mut("fake").unwrap().command =
@@ -239,20 +239,25 @@ fn render_command_removes_delivery_slot_without_enabling_adapters() {
         .create("Reserved delivery slot", Some("app"), Status::Ready, "")
         .unwrap();
     let mut run = sample_run(tmp.path().join("app/.worktrees/T-001"));
-    // When rendering phase-1 launches.
+    // Legacy runs keep their launch semantics even when the template contains the slot.
     let legacy =
         corral_ops::render_command(&ctx, "fake", &task, &run, Path::new("/p/x.md")).unwrap();
     run.model = Some("opus".into());
     run.effort = Some("high".into());
     let harness =
         corral_ops::render_command(&ctx, "claude", &task, &run, Path::new("/p/x.md")).unwrap();
-    // Then the slot adds no flags and leaves model/effort rendering intact.
+    // Then legacy rendering adds no flags and leaves model/effort rendering intact.
     assert_eq!(legacy, format!("echo corral-fake {}", task.id));
     assert_eq!(
         harness,
         "claude --model opus --effort high 'Read /p/x.md in full and follow it: that file is your complete prompt for this session.'"
     );
     assert_eq!(run.delivery, corral_core::inbox::DeliveryMode::Legacy);
+    run.delivery = corral_core::inbox::DeliveryMode::Inbox;
+    assert_eq!(
+        corral_ops::render_command(&ctx, "claude", &task, &run, Path::new("/p/x.md")).unwrap(),
+        "claude --settings '{\"crossSessionInbound\":\"accept\"}' --model opus --effort high 'Read /p/x.md in full and follow it: that file is your complete prompt for this session.'"
+    );
 }
 
 #[test]
