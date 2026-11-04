@@ -26,6 +26,8 @@ Raw logs are attached separately from this report.
 
 8. The first receipted quick gate (`ag-49aa1d7b1dcc932e`) passed formatting, the exact SLOC ceiling and Clippy, then stopped at the existing packet-attribution work oracle (239 passed, one failed). Investigation distinguished an acquisition-accounting asymmetry from expiry/retry: a live packet's new late snapshot was acquired inside its internal HotScope, whereas an explicitly frozen packet opened no view there. The fix retains late acquisition but restores the original scope boundary: Git/DB work stays measured, and an outer caller-owned HotScope still counts acquisition. No assertion or budget changed. The gate's isolated targeted repair command now passes (`gate-repair-attribution.log`).
 
+9. The second quick gate (`ag-81344d4e945784c6`) stopped at an existing checkpoint-policy assertion (275 passed, one failed). Standalone `plan_progress` had retained the caller's old configuration instead of the original freshly opened store; explicitly frozen callers were already correct. Restored the live config reopen **before** the retryable snapshot, preserving frozen semantics. The gate's isolated checkpoint-policy repair command now passes (`gate-repair-checkpoint-policy.log`); no test or assertion changed.
+
 The required quick gate is run only through the receipted corral gate operation after the final commit/rebase. Its candidate-bound result/log accompanies this report; no manual or full-tier gate was started.
 
 ## Test cost
