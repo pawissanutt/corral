@@ -33,8 +33,10 @@ Question: can another agent execute this plan without inventing missing decision
   assessing compatible staging.
 - An integration target needs an explicit reason why main-delivery waves and compatibility
   staging are insufficient. Require bounded internal waves and a scheduled, owned step after
-  every wave to merge current main into the integration branch and run the full gate on that
-  merged head, recording green before the next wave starts (and after the last wave).
+  every wave for merging current main into the integration branch and full-gate verification
+  of that merged head, recording green before the next wave starts (and after the last wave).
+  This is a requirement on the proposed schedule, not an instruction for the planner or reviewer
+  to execute a gate; executing runs still take their gate only from their Gate contract.
   A long-lived integration branch with no per-wave main sync is a **blocking finding**: return
   `changes`. Missing justification, sync ownership or full-gate scheduling also requires changes.
   Member quick gates, advisory checkpoints and a final cutover gate are not substitutes.
