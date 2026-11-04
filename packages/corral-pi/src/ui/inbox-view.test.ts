@@ -18,7 +18,7 @@ test("Inbox keyboard and mouse select exact records in the real main-view layout
     await wb.inbox.refresh();
     expect(wb.view).toBe("inbox");
     const screen = () => stripTerminalSequences(renderLayoutFrame(root, 80, 24, () => {}).lines.join("\n"));
-    expect(screen()).toContain("READ ONLY"); expect(screen()).toContain("T-1/R2/Q1 @7");
+    expect(screen()).toContain("read only"); expect(screen()).toContain("T-1/R2/Q1 @7");
     wb.handleInput("j"); expect(wb.inbox.current?.key).toBe("T-2/R1/Q1");
     wb.handleInput("\x1b[A"); expect(wb.inbox.current?.key).toBe("T-1/R2/Q1");
     wb.handleInput("\t"); expect(wb.focused).toBeFalse(); expect(wb.view).toBe("inbox");

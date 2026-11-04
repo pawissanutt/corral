@@ -23,7 +23,7 @@ import { usageLines } from "./usage-view.ts";
 import { TaskStore, taskHeadline, taskLines } from "./task-view.ts";
 import { splitRow } from "./panels-chrome.ts";
 import { DecisionInbox, inboxIdentity } from "./decision-inbox.ts";
-import { InboxView } from "./inbox-view.ts";
+import { inboxHint, InboxView } from "./inbox-view.ts";
 import { HistoryNavigator, type HistoryRead } from "./history.ts";
 import { pad, plainLabel, styledPanelLine, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, PANEL_BG, PANEL_WARNING, RESET, type PanelSnapshot, type PanelLine } from "./panels-view.ts";
 export function plainClick(event: TuiMouseEvent): boolean {
@@ -110,7 +110,7 @@ export class NativeWorkbench {
       return this.inspection.current;
     } : undefined, !!options.readProjects && !options.identity.task && !options.projectDir, !!options.projectDir);
     this.inbox = new DecisionInbox(options.readInbox, options.changed);
-    this.inboxView = new InboxView(this.inbox, options.identity.role, options.identity.project, options.canInteract, options.changed, () => { this.focused = true; });
+    this.inboxView = new InboxView(this.inbox, options.identity.role, options.identity.project, options.canInteract, options.changed, () => { this.focused = true; }, () => this.legend);
   }
   async openHistory(): Promise<void> { if (this.ui) await this.history.open(this.ui); }
   bind(ui: ExtensionUIContext): void { this.ui = ui; this.images.bind(); this.inboxView.bind(ui); void this.task.refresh(); }
@@ -347,6 +347,7 @@ export class NativeWorkbench {
       { component: this.lifecycleScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "graph" || this.view === "timeline" },
       { component: this.artifactScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "artifacts" && !this.images.isOpen },
       { component: this.inboxScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "inbox" },
+      { component: { render: width => [inboxHint(width, this.inbox.history, this.legend)], invalidate() {} }, basis: 1, shrink: 0, visible: () => this.view === "inbox" },
     ]);
   }
   private renderEvidence(width: number): string[] {
@@ -562,7 +563,7 @@ export class NativeWorkbench {
     if (this.view === "activity" && data === "a") { this.setView("agents"); return true; }
     if (this.view === "agents" && data === "b") { this.setView("activity"); return true; }
     if (this.view === "agents" && data === "t") { void this.openAgentTranscript(); return true; }
-    if ((this.view === "evidence" || this.view === "activity") && data === "?") { this.legend = !this.legend; this.options.changed(); return true; }
+    if ((this.view === "evidence" || this.view === "activity" || this.view === "inbox") && data === "?") { this.legend = !this.legend; this.options.changed(); return true; }
     if (this.view === "usage" && data === "c") { this.usageChart = !this.usageChart; this.options.changed(); return true; }
     const scroll = this.view === "task" ? this.taskScroll : this.view === "usage" ? this.usageScroll : this.view === "artifacts" ? this.artifactScroll : this.view === "graph" || this.view === "timeline" ? this.lifecycleScroll : this.view === "agents" ? this.agentsScroll : this.view === "changes" ? this.changesScroll : this.view === "evidence" ? this.evidenceScroll : this.view === "inbox" ? this.inboxScroll : this.activityScroll;
     if (this.view === "inbox" && (data === "j" || data === "k" || matchesKey(data, "up") || matchesKey(data, "down"))) {

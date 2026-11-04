@@ -1,54 +1,16 @@
-// Proof (F10) building blocks: the I T R A ladder, chips, the selectable row model and short times.
+// Proof (F10) building blocks: the I T R A ladder, its chips and the selectable row model.
 // Pure presentation of the canonical inspection; nothing here reads or infers freshness.
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Inspection, InspectionStore } from "./inspection.ts";
-import { plainLabel, PANEL_MUTED, PANEL_RULE, PANEL_SUCCESS, PANEL_TEXT, PANEL_TINT, PANEL_WARNING, PANEL_ERROR } from "./panels-view.ts";
+import { plainLabel, PANEL_TEXT } from "./panels-view.ts";
+import { chip, toneColor, type Tone } from "./panel-parts.ts";
 
 export type Criterion = Inspection["criteria"][number];
-export type Tone = "ok" | "bad" | "warn" | "none";
 export interface Step { readonly letter: "I" | "T" | "R" | "A"; readonly glyph: string; readonly word: string; readonly tone: Tone }
 export type SectionId = "notes" | "findings" | "artifacts" | "summary";
 /** One selectable row of the Proof list: criteria first, then the MORE sections. */
 export type ProofItem = { readonly kind: "criterion"; readonly index: number } | { readonly kind: "section"; readonly id: SectionId };
 
-export const toneColor = (t: Tone) => t === "ok" ? PANEL_SUCCESS : t === "bad" ? PANEL_ERROR : t === "warn" ? PANEL_WARNING : PANEL_MUTED;
 export const short = (sha: string) => sha.slice(0, 8);
-export const bold = (text: string) => `\x1b[1m${text}\x1b[22m`;
-/** Ends a chip or selection background; the panel canvas maps the default back to its own surface. */
-export const BG_END = "\x1b[49m";
-
-/** A chip: glyph and word on a tone-tinted surface, coloured by tone. Colour is never the only signal. */
-export function chip(text: string, tone: Tone = "none"): string {
-  const back = tone === "ok" ? PANEL_TINT.success : tone === "bad" ? PANEL_TINT.error : tone === "warn" ? PANEL_TINT.warning : PANEL_TINT.raised;
-  return `${back}${tone === "none" ? PANEL_TEXT : toneColor(tone)} ${plainLabel(text)} ${BG_END}${PANEL_TEXT}`;
-}
-export function chipRows(chips: readonly string[], width: number): string[] {
-  const rows: string[] = [];
-  let row = "";
-  for (const c of chips) {
-    const piece = visibleWidth(c) > width ? truncateToWidth(c, width, "…") : c;
-    if (row && visibleWidth(row) + 1 + visibleWidth(piece) > width) { rows.push(row); row = ""; }
-    row = row ? `${row} ${piece}` : piece;
-  }
-  if (row) rows.push(row);
-  return rows;
-}
-export function sectionRule(label: string, width: number): string {
-  const head = plainLabel(label).toUpperCase();
-  return `${PANEL_MUTED}${bold(head)} ${PANEL_RULE}${"─".repeat(Math.max(0, width - visibleWidth(head) - 1))}${PANEL_TEXT}`;
-}
-
-export function ago(at: number, now: number): string | undefined {
-  if (!Number.isFinite(at)) return undefined;
-  const seconds = Math.max(0, Math.round((now - at) / 1000));
-  return seconds < 60 ? `${seconds}s ago` : seconds < 3600 ? `${Math.floor(seconds / 60)}m ago`
-    : seconds < 86_400 ? `${Math.floor(seconds / 3600)}h ago` : `${Math.floor(seconds / 86_400)}d ago`;
-}
-export function clock(at: number): string {
-  const d = new Date(at);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
 /** The four steps for one criterion. Glyph and word always travel together. */
 export function ladder(store: InspectionStore, data: Inspection, c: Criterion): readonly Step[] {
   const invalid = c.failures.length > 0 || data.manifest_failures.length > 0;
