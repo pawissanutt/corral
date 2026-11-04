@@ -180,8 +180,9 @@ fn publish(inbox: &Inbox<'_>, question: &AgentQuestion, project: &str) -> Result
     }
     let group = match &question.group {
         Some(group) => format!(
-            " It leads question group {group}: read `corral question show {group}` for every \
-             member and answer them together with `corral question answer-group`."
+            " It leads question group {group}: read every member with `corral question show \
+             {group}` and answer them together with corral_question_answer `answers` (one \
+             receipt, each member at its own revision)."
         ),
         None => String::new(),
     };

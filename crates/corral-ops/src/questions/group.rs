@@ -1,12 +1,12 @@
 //! Question groups: one batched ask opens 1-4 questions that share `group` (the first member's
-//! key). Readers present the members together; one answer command answers several of them, each
-//! at its own current revision, so stale-revision protection stays per question.
+//! key). Readers present the members together; `triage::answer_group` answers several of them in
+//! one transaction, each at its own current revision, so stale-revision protection stays per
+//! question.
 use anyhow::{Context, Result};
+use corral_core::agent::RequestReceipt;
 use serde::Deserialize;
 
-use super::{
-    Actor, AnswerInput, Applied, QuestionKey, QuestionView, RefusalKind, refuse, show, views,
-};
+use super::{Actor, AnswerInput, QuestionKey, QuestionView, show, views};
 use crate::Ctx;
 
 /// One member's answer in a group answer; `text` falls back to the shared text.
@@ -36,74 +36,34 @@ pub fn group(ctx: &Ctx, key: &str) -> Result<Vec<QuestionView>> {
         .collect())
 }
 
-/// Answers several members of one group. Every entry is checked first (membership, distinct
-/// keys, current revision, pending or, for the owner, answered); then each member is answered
-/// through the single-question path. A failure after the first commit names what was answered.
-pub fn answer_group(
-    ctx: &Ctx,
-    key: &str,
-    owner: bool,
-    shared: &AnswerInput,
-    answers: &[GroupAnswer],
-) -> Result<Vec<Applied>> {
-    if answers.is_empty() {
-        return Err(refuse(
-            RefusalKind::Bounds,
-            "a group answer names at least one member",
-        ));
-    }
-    let members = group(ctx, key)?;
-    let mut seen = Vec::new();
-    for entry in answers {
-        let member = members
-            .iter()
-            .find(|m| m.question.key == entry.key)
-            .ok_or_else(|| {
-                refuse(
-                    RefusalKind::NotFound,
-                    format!("{} is not in the group of {key}", entry.key),
-                )
-            })?;
-        if seen.contains(&entry.key.as_str()) {
-            return Err(refuse(
-                RefusalKind::Bounds,
-                format!("{} is answered twice", entry.key),
-            ));
-        }
-        seen.push(entry.key.as_str());
-        if member.question.revision != entry.rev {
-            return Err(refuse(
-                RefusalKind::StaleRevision,
-                format!(
-                    "{} is at revision {}, not {}",
-                    entry.key, member.question.revision, entry.rev
-                ),
-            ));
-        }
-        if entry.text.is_none() && shared.text.trim().is_empty() {
-            return Err(refuse(
-                RefusalKind::Bounds,
-                format!("{} has no answer text and no shared --text", entry.key),
-            ));
-        }
-    }
-    let mut applied = Vec::new();
-    for entry in answers {
-        let input = AnswerInput {
-            text: entry.text.clone().unwrap_or_else(|| shared.text.clone()),
-            option: entry.option.clone(),
-            basis_refs: shared.basis_refs.clone(),
-            scope_note: shared.scope_note.clone(),
+/// The corral-pi PM's group form of `question_answer`: `answers` instead of `rev`/`option`, each
+/// member at its own revision, sharing text, basis refs and scope note.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PmAnswerGroup {
+    pub key: String,
+    pub answers: Vec<GroupAnswer>,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub basis_refs: Vec<String>,
+    #[serde(default)]
+    pub scope_note: Option<String>,
+}
+
+impl PmAnswerGroup {
+    /// Answers the group in one transaction and returns its PM receipt and whether it replayed.
+    pub fn apply(self, ctx: &Ctx, actor: Actor<'_>) -> Result<(RequestReceipt, bool)> {
+        let shared = AnswerInput {
+            text: self.text,
+            option: None,
+            basis_refs: self.basis_refs,
+            scope_note: self.scope_note,
         };
-        let actor = if owner { Actor::Owner } else { Actor::Pm(None) };
-        let done: Vec<&str> = answers[..applied.len()]
-            .iter()
-            .map(|a| a.key.as_str())
-            .collect();
-        applied.push(
-            super::answer(ctx, &entry.key, entry.rev, actor, input)
-                .with_context(|| format!("answering {} (already answered: {done:?})", entry.key))?,
-        );
+        let group = super::answer_group(ctx, &self.key, actor, &shared, &self.answers)?;
+        let receipt = group
+            .receipt
+            .context("a PM group answer committed without a receipt")?;
+        Ok((receipt, group.replayed))
     }
-    Ok(applied)
 }

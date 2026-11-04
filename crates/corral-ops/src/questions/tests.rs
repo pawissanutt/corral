@@ -716,13 +716,23 @@ fn batched_ask_opens_one_group_that_one_group_answer_settles() {
     // A stale member revision refuses the whole group before anything is answered.
     let mut stale = answers.clone();
     stale[1].rev = 9;
-    assert_eq!(
-        refusal(&super::answer_group(&fx.ctx, &q1, true, &shared, &stale).unwrap_err()),
-        "stale_revision"
-    );
-    assert!(pending(&fx, &q1));
+    let error = super::answer_group(&fx.ctx, &q1, Actor::Owner, &shared, &stale).unwrap_err();
+    assert_eq!(refusal(&error), "stale_revision");
+    assert!(pending(&fx, &q1) && pending(&fx, &q2));
 
-    super::answer_group(&fx.ctx, &q1, true, &shared, &answers).unwrap();
+    // The authenticated corral-pi PM answers the whole group in one receipted request.
+    let pm = pm_host(&fx);
+    let payload = json!({
+        "key": q1, "text": "use the default", "basis_refs": [spec_ref(&fx, &id)],
+        "scope_note": "inside the approved write scope",
+        "answers": [{"key": q1, "rev": 1, "option": "b"}, {"key": q2, "rev": 1, "text": "corral-ops"}],
+    });
+    let response = send(&fx, &pm, "question_answer", "group", payload.clone());
+    let receipt = response
+        .receipt()
+        .unwrap_or_else(|| panic!("{response:?}"))
+        .clone();
+    assert_eq!(receipt.result["answers"].as_array().unwrap().len(), 2);
     let (a, b) = (question(&fx, &q1), question(&fx, &q2));
     assert_eq!(
         (a.state, b.state),
@@ -730,11 +740,17 @@ fn batched_ask_opens_one_group_that_one_group_answer_settles() {
     );
     assert_eq!(a.answer.unwrap().option.as_deref(), Some("b"));
     assert_eq!(b.answer.unwrap().text, "corral-ops");
-    assert_eq!(
-        messages(&fx, &id, "R1")
+    let answered = |fx: &Fx| {
+        messages(fx, &id, "R1")
             .iter()
             .filter(|m| m.kind == "question_answer")
-            .count(),
-        2
-    );
+            .count()
+    };
+    assert_eq!(answered(&fx), 2);
+    let replay = send(&fx, &pm, "question_answer", "group", payload);
+    assert!(matches!(
+        replay,
+        CallResponse::Receipt { replayed: true, .. }
+    ));
+    assert_eq!(answered(&fx), 2);
 }

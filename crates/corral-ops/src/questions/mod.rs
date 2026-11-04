@@ -43,10 +43,11 @@ pub use ask::{
 pub(crate) use events::pending_keys;
 pub(crate) use events::pending_keys_ref;
 pub use events::{QUESTION_EVENT_KINDS, reconcile_events, reconcile_question};
-pub use group::{GroupAnswer, answer_group, group};
+pub use group::{GroupAnswer, PmAnswerGroup, group};
 pub use lifecycle::{expire_deadlines, terminalize, unattended};
 pub use triage::{
-    Actor, AnswerInput, Applied, Outcome, PmRequest, answer, cancel, deadline, escalate,
+    Actor, AnswerInput, Applied, GroupApplied, Outcome, PmRequest, answer, answer_group, cancel,
+    deadline, escalate,
 };
 pub use triage::{hold_owner_attention, settle_needs_me};
 

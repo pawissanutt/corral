@@ -146,6 +146,10 @@ fn print_applied(applied: &Applied, json: bool) -> Result<()> {
     let Some(outcome) = applied.outcome() else {
         anyhow::bail!("the CLI never replays a host request");
     };
+    print_outcome(outcome, json)
+}
+
+fn print_outcome(outcome: &questions::Outcome, json: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string_pretty(outcome)?);
     } else {
@@ -199,14 +203,27 @@ pub fn run(ctx: &Ctx, args: QuestionArgs) -> Result<()> {
         }
         QuestionCmd::Show { key, json } => {
             let view = questions::show(ctx, &key)?;
+            // A grouped question shows every member in full, each with its own key and revision.
+            let members = match view.question.group {
+                Some(_) => questions::group(ctx, &key)?,
+                None => Vec::new(),
+            };
             if json {
-                println!("{}", serde_json::to_string_pretty(&view)?);
+                let mut value = serde_json::to_value(&view)?;
+                if !members.is_empty() {
+                    value["group_members"] = serde_json::to_value(&members)?;
+                }
+                println!("{}", serde_json::to_string_pretty(&value)?);
             } else {
                 print_view(&view);
                 println!("{}", serde_json::to_string_pretty(&view.question)?);
-                if view.question.group.is_some() {
-                    println!("group members:");
-                    questions::group(ctx, &key)?.iter().for_each(print_view);
+                for member in members
+                    .iter()
+                    .filter(|m| m.question.key != view.question.key)
+                {
+                    println!("group member:");
+                    print_view(member);
+                    println!("{}", serde_json::to_string_pretty(&member.question)?);
                 }
             }
             Ok(())
@@ -261,8 +278,9 @@ pub fn run(ctx: &Ctx, args: QuestionArgs) -> Result<()> {
                 basis_refs: basis,
                 scope_note,
             };
-            for applied in questions::answer_group(ctx, &key, owner, &shared, &answers)? {
-                print_applied(&applied, json)?;
+            let applied = questions::answer_group(ctx, &key, actor(owner), &shared, &answers)?;
+            for outcome in &applied.outcomes {
+                print_outcome(outcome, json)?;
             }
             Ok(())
         }

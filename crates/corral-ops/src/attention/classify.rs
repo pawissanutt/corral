@@ -389,9 +389,18 @@ fn question(
         Some(question.revision.to_string()),
         false,
     ));
-    condition.next_action.command = Some(format!("corral question show {} --json", question.key));
-    condition.next_action.description =
-        "Inspect and answer the exact question revision through its question workflow".into();
+    condition.next_action.command = Some(format!(
+        "corral question show {} --json",
+        question.group.as_deref().unwrap_or(&question.key)
+    ));
+    condition.next_action.description = match &question.group {
+        Some(group) => format!(
+            "Inspect question group {group} and answer its members together, each at its revision"
+        ),
+        None => {
+            "Inspect and answer the exact question revision through its question workflow".into()
+        }
+    };
     condition
 }
 

@@ -23,6 +23,9 @@ use crate::Ctx;
 #[path = "triage_heads.rs"]
 mod heads;
 pub(super) use heads::{apply_needs_me_ref, record_entry_notice_ref};
+#[path = "triage_group.rs"]
+mod group_tx;
+pub use group_tx::{GroupApplied, answer_group};
 #[path = "triage_system.rs"]
 mod system;
 pub(super) use system::transact_system;
@@ -419,36 +422,15 @@ pub(super) fn transact(
         transitioned = question.revision != current.revision;
         super::bound_triage(&ctx.store, &mut question)?;
         let message = match (&inbox, change.message) {
-            (Some(inbox), Some((kind, body))) => {
-                let message = inbox.reserve_in(
-                    task,
-                    Post {
-                        kind,
-                        urgency: Urgency::Wake,
-                        author: by_name(by),
-                        body: &body,
-                        binding: MessageBinding {
-                            run: match &container {
-                                ContainerRef::Worker { run, .. }
-                                | ContainerRef::Planner { run, .. } => Some(run.clone()),
-                                ContainerRef::Reviewer { review, .. }
-                                | ContainerRef::PlanReviewer { review, .. } => Some(review.clone()),
-                                ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
-                            },
-                            // Not question-bound: that convention marks an OmO native answer
-                            // (`dispatch/inbox_reply.rs`) which the inbox never packs. A triage
-                            // answer is a `corral_pi` message and travels in an envelope.
-                            ..MessageBinding::default()
-                        },
-                        subject: Some(json!({"key": key, "revision": question.revision})),
-                        max_payload: corral_core::inbox::MAX_PAYLOAD,
-                    },
-                )?;
-                if let Some(answer) = question.answer.as_mut() {
-                    answer.message_id = Some(message.id.clone());
-                }
-                Some(message)
-            }
+            (Some(inbox), Some((kind, body))) => Some(reserve(
+                inbox,
+                task,
+                &container,
+                key,
+                by,
+                (kind, &body),
+                &mut question,
+            )?),
             _ => None,
         };
         let delivery = if message.is_some() { "queued" } else { "none" };
@@ -504,6 +486,48 @@ pub(super) fn transact(
         )?;
     }
     Ok(applied)
+}
+
+/// Reserves a triage message in the asking container's inbox inside the task transaction and
+/// links it from the question's answer.
+fn reserve(
+    inbox: &Inbox<'_>,
+    task: &mut Task,
+    container: &ContainerRef,
+    key: &str,
+    by: QuestionActor,
+    (kind, body): (&'static str, &str),
+    question: &mut AgentQuestion,
+) -> Result<Message> {
+    let message = inbox.reserve_in(
+        task,
+        Post {
+            kind,
+            urgency: Urgency::Wake,
+            author: by_name(by),
+            body,
+            binding: MessageBinding {
+                run: match container {
+                    ContainerRef::Worker { run, .. } | ContainerRef::Planner { run, .. } => {
+                        Some(run.clone())
+                    }
+                    ContainerRef::Reviewer { review, .. }
+                    | ContainerRef::PlanReviewer { review, .. } => Some(review.clone()),
+                    ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
+                },
+                // Not question-bound: that convention marks an OmO native answer
+                // (`dispatch/inbox_reply.rs`) which the inbox never packs. A triage
+                // answer is a `corral_pi` message and travels in an envelope.
+                ..MessageBinding::default()
+            },
+            subject: Some(json!({"key": key, "revision": question.revision})),
+            max_payload: corral_core::inbox::MAX_PAYLOAD,
+        },
+    )?;
+    if let Some(answer) = question.answer.as_mut() {
+        answer.message_id = Some(message.id.clone());
+    }
+    Ok(message)
 }
 
 fn container_run(container: &ContainerRef) -> Option<&str> {
@@ -599,76 +623,86 @@ pub fn answer(
         &actor,
         by,
         corral_core::clock::now(),
-        |ctx, task, current, now| {
-            validate_answer(current, &input)?;
-            let superseding = matches!(
-                current.state,
-                QuestionState::Answered | QuestionState::Expired
-            );
-            if pm {
-                if !current.state.pending() {
-                    return Err(state_error(
-                        current,
-                        "the PM answers pending questions; only the owner supersedes",
-                    ));
-                }
-                if input.basis_refs.is_empty() {
-                    return Err(rule("a PM answer cites at least one basis ref"));
-                }
-                for reference in &input.basis_refs {
-                    super::basis::resolve(ctx, task, reference).map_err(|why| {
-                        rule(format!("basis ref {reference} does not resolve: {why}"))
-                    })?;
-                }
-                if input.scope_note.is_none() {
-                    return Err(rule(
-                        "a PM answer states its scope note (approved write scope and acceptance)",
-                    ));
-                }
-            } else if !current.state.pending() && !superseding {
-                return Err(state_error(
-                    current,
-                    "only pending or answered questions take an owner answer",
-                ));
-            }
-            let mut question = current.clone();
-            let previous = current.answer.as_ref().map(|a| (current.revision, a.by));
-            let answer = QuestionAnswer {
-                by: if pm { AnswerBy::Pm } else { AnswerBy::Owner },
-                text: input.text.clone(),
-                option: input.option.clone(),
-                basis_refs: input.basis_refs.clone(),
-                scope_note: input.scope_note.clone(),
-                at: now,
-                message_id: None,
-                superseded_by: None,
-            };
-            let (action, kind, note) = match previous.filter(|_| superseding) {
-                Some((rev, prior)) => (
-                    "supersede",
-                    "question_correction",
-                    Some(format!("supersedes the {prior:?} answer of revision {rev}")),
-                ),
-                None => ("answer", "question_answer", None),
-            };
-            transition(
-                &mut question,
-                QuestionState::Answered,
-                action,
-                by,
-                note,
-                now,
-            );
-            let body = answer_body(&question, &answer, kind);
-            question.answer = Some(answer);
-            Ok(Some(Change {
-                question,
-                message: Some((kind, body)),
-                needs_me: NeedsMe::Settle,
-            }))
-        },
+        |ctx, task, current, now| plan_answer(ctx, task, current, &input, pm, by, now),
     )?;
     applied.context("the answer produced no change")
+}
+
+/// The answer transition of one question, shared by single and group answers.
+pub(super) fn plan_answer(
+    ctx: &Ctx,
+    task: &Task,
+    current: &AgentQuestion,
+    input: &AnswerInput,
+    pm: bool,
+    by: QuestionActor,
+    now: Timestamp,
+) -> Result<Option<Change>> {
+    validate_answer(current, input)?;
+    let superseding = matches!(
+        current.state,
+        QuestionState::Answered | QuestionState::Expired
+    );
+    if pm {
+        if !current.state.pending() {
+            return Err(state_error(
+                current,
+                "the PM answers pending questions; only the owner supersedes",
+            ));
+        }
+        if input.basis_refs.is_empty() {
+            return Err(rule("a PM answer cites at least one basis ref"));
+        }
+        for reference in &input.basis_refs {
+            super::basis::resolve(ctx, task, reference)
+                .map_err(|why| rule(format!("basis ref {reference} does not resolve: {why}")))?;
+        }
+        if input.scope_note.is_none() {
+            return Err(rule(
+                "a PM answer states its scope note (approved write scope and acceptance)",
+            ));
+        }
+    } else if !current.state.pending() && !superseding {
+        return Err(state_error(
+            current,
+            "only pending or answered questions take an owner answer",
+        ));
+    }
+    let mut question = current.clone();
+    let previous = current.answer.as_ref().map(|a| (current.revision, a.by));
+    let answer = QuestionAnswer {
+        by: if pm { AnswerBy::Pm } else { AnswerBy::Owner },
+        text: input.text.clone(),
+        option: input.option.clone(),
+        basis_refs: input.basis_refs.clone(),
+        scope_note: input.scope_note.clone(),
+        at: now,
+        message_id: None,
+        superseded_by: None,
+    };
+    let (action, kind, note) = match previous.filter(|_| superseding) {
+        Some((rev, prior)) => (
+            "supersede",
+            "question_correction",
+            Some(format!("supersedes the {prior:?} answer of revision {rev}")),
+        ),
+        None => ("answer", "question_answer", None),
+    };
+    transition(
+        &mut question,
+        QuestionState::Answered,
+        action,
+        by,
+        note,
+        now,
+    );
+    let body = answer_body(&question, &answer, kind);
+    question.answer = Some(answer);
+    Ok(Some(Change {
+        question,
+        message: Some((kind, body)),
+        needs_me: NeedsMe::Settle,
+    }))
 }
 
 fn rank(kind: QuestionKind) -> u8 {
