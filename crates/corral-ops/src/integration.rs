@@ -186,7 +186,6 @@ impl IntegrationPacket {
         mut conflict_paths: Vec<String>,
         git_details: Option<String>,
     ) -> Result<Self> {
-        crate::approvals::prepare(ctx)?;
         let _hot = corral_core::work::HotScope::enter();
         let repo = &run.worktree;
         let memo = git_memo(ctx);
@@ -200,8 +199,16 @@ impl IntegrationPacket {
             .collect();
         // Git may take longer than a view lease. Pin only the attribution lookup,
         // not the subprocess work before and after it.
-        let approvals =
-            ctx.read_step(|read| crate::approvals::lookup(read, task.project(), &shas))?;
+        // Like the original packet boundary, acquire the view outside its internal
+        // HotScope; caller-owned scopes still count acquisition. Only DB/Git work is
+        // measured here, equally for live and explicitly frozen callers.
+        drop(_hot);
+        let approvals = ctx.read_step(|read| {
+            let _hot = corral_core::work::HotScope::enter();
+            crate::approvals::prepare(read)?;
+            crate::approvals::lookup(read, task.project(), &shas)
+        })?;
+        let _hot = corral_core::work::HotScope::enter();
         let commits = |commits: Vec<corral_git::Commit>| -> Result<Vec<LandedCommit>> {
             commits
                 .into_iter()

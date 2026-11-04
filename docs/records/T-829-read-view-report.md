@@ -24,11 +24,13 @@ Raw logs are attached separately from this report.
 6. `scripts/load-sandbox.sh --cpus 2 --memory 2g --pids-limit 256 --burners 2 -- ...`: the three small regression/contract tests passed **15/15 executions** (five rounds). Tests and burners were confined to that one Podman container. The subsequent T-829 labeled-container inventory was empty. No load was generated on the host. These checks reuse locally built test binaries; the receipted gate independently builds the committed candidate.
 7. `cargo fmt --all`, `git diff --check`, and the repository's exact Rust SLOC counter: clean; changed modules remain within 800 SLOC.
 
+8. The first receipted quick gate (`ag-49aa1d7b1dcc932e`) passed formatting, the exact SLOC ceiling and Clippy, then stopped at the existing packet-attribution work oracle (239 passed, one failed). Investigation distinguished an acquisition-accounting asymmetry from expiry/retry: a live packet's new late snapshot was acquired inside its internal HotScope, whereas an explicitly frozen packet opened no view there. The fix retains late acquisition but restores the original scope boundary: Git/DB work stays measured, and an outer caller-owned HotScope still counts acquisition. No assertion or budget changed. The gate's isolated targeted repair command now passes (`gate-repair-attribution.log`).
+
 The required quick gate is run only through the receipted corral gate operation after the final commit/rebase. Its candidate-bound result/log accompanies this report; no manual or full-tier gate was started.
 
 ## Test cost
 
-Three small unit/contract tests were added: autopilot diagnostic expiry, board resource-boundary expiry, and renewable-read versus explicit-snapshot behavior. There are no new end-to-end journeys, large histories, sleeps or timeout increases. Existing frame/history work counters were preserved, not relaxed.
+The first gate confirms exactly **+3 Rust test registrations** (its fail-fast execution left their suite cost unmeasured). Three small unit/contract tests were added: autopilot diagnostic expiry, board resource-boundary expiry, and renewable-read versus explicit-snapshot behavior. There are no new end-to-end journeys, large histories, sleeps or timeout increases. Existing frame/history work counters were preserved, not relaxed.
 
 Test-cost justification: restoring the 17 existing quarantined lifecycle tests can add over 30 seconds to execution. Those journeys already cover gate/verdict carry, cleanup and recovery, so they were reused rather than duplicated. The new expiry variants use tiny fake-backend clocks instead of expensive end-to-end delay/load matrices; the container check is attached evidence, not another committed suite.
 
