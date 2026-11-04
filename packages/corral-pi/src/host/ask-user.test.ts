@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { askUserEnabled, askUserTool } from "./ask-user.ts";
+import { AskDialog, type DialogResult } from "./ask-user-dialog.ts";
 
 test("only interactive roles can enable the dialog in the host loadout", () => {
   for (const role of ["assistant", "pm"]) {
@@ -59,4 +60,16 @@ test("the batch dialog keeps answered questions when the owner escapes and lists
   const result = await askUserTool(async (answer) => { recorded.push(answer); return answer; }).execute("id", batch, undefined, undefined, ctx);
   expect(result.details).toEqual({ status: "partial", answers: [{ question: "Scope?", option: "Large" }], unanswered: ["Lanes?"] });
   expect(recorded).toEqual(["Scope?: Large\nUnanswered (no consent): Lanes?"]);
+});
+
+test("a pasted note survives revision and a partial Escape", () => {
+  let result: DialogResult | undefined;
+  const dialog = new AskDialog([{ question: "Which?", options: [{ label: "One" }, { label: "Two" }], freeText: true }], (r) => { result = r; });
+  dialog.handleInput("\r"); // choose One; the only question, so Submit
+  dialog.handleInput("\x1b[D"); // back to the question to revise
+  dialog.handleInput("\x1b[B"); dialog.handleInput("\x1b[B"); // down to Note
+  dialog.handleInput("\x1b[200~keep database\nunchanged\x1b[201~");
+  dialog.handleInput("!");
+  dialog.handleInput("\x1b");
+  expect(result).toEqual({ submitted: false, answers: [{ selected: ["One"], text: "keep database unchanged!" }] });
 });
