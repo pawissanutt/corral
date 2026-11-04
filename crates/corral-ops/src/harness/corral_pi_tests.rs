@@ -70,7 +70,7 @@ fn lists_only_logged_in_providers_from_the_installed_host() {
         vec!["openai-codex/gpt-6.1-sol", "openai-codex/gpt-5.5"]
     );
     assert!(info.installed() && info.notes.is_empty());
-    assert_eq!(info.version.as_deref(), Some("1.3.0"));
+    assert_eq!(info.version.as_deref(), Some("1.5.0"));
     assert!(info.takes_effort && info.efforts.contains(&"medium".to_owned()));
     let argv = std::fs::read_to_string(tmp.path().join("bin/listing-argv")).unwrap();
     assert!(
