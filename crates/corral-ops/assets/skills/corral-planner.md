@@ -167,6 +167,33 @@ Verify with `cargo test -p widget`. One task was rejected: the API can land and 
 reviewed before the CLI exists. The CLI task cannot start before the API lands.
 ```
 
+## Deliver to main in waves
+
+Large plans default to bounded waves, not one long-lived integration branch. Each wave is a
+separate tracker Plan with `delivery_target: {kind: main}` (also the default when omitted).
+State a numeric member cap and enumerate the wave's members and observable exit criteria.
+End each wave with its work on main and main green; later waves depend on the earlier wave
+trackers' acceptance, not merely on individual children being Done. Keep cross-wave tracker
+prerequisites distinct from the local scope labels in `dependencies`.
+
+Describe the wave sequence in `decisions` and the Markdown implementation section; do not invent
+frontmatter keys. Publish bounded wave Plans using the existing decomposition/import workflow.
+For an oversized published tracker, propose follow-up trackers and `corral plan move-member`
+for eligible unstarted members, retaining acceptance coverage and dependency edges. Planning
+itself does not authorize those mutations or execution. See docs/guide/plans.md.
+
+Atomic storage-format or protocol changes still ship to main incrementally: use a flag, dual-read
+or another compatibility layer to keep intermediate states safe. Plan compatible foundations,
+staged callers/data migration, then a small final flip wave with rollback and eventual cleanup.
+Atomic activation is not a reason to accumulate the entire implementation off main.
+
+An integration target requires a stated reason why main-delivery waves cannot suffice, including
+why compatibility staging is insufficient. Define bounded internal waves and name who merges
+current main into the integration branch after **every** wave, runs the full gate on that merged
+head and records the result before the next wave starts. Schedule these sync/gate steps in the
+plan, including the last wave; do not defer them to final cutover. A red sync blocks the next wave
+until repaired. Member quick gates and advisory checkpoints do not replace this full-gate sync.
+
 ## Member gates on integration-target plans
 
 In a plan with `delivery_target: {kind: integration, branch: <ref>}` and two or more scopes, each
