@@ -326,13 +326,7 @@ pub fn prepare_bootstrap(
         BindTarget::Assistant { session } => {
             let file = super::ops::assistant::continued_session(ctx, session)?;
             fresh_session = file.is_none();
-            (
-                ctx.store
-                    .get_assistant(session)?
-                    .project
-                    .unwrap_or_default(),
-                file,
-            )
+            (super::ops::assistant::session_project(ctx, session)?, file)
         }
         BindTarget::Worker { .. } | BindTarget::Reviewer { .. } => {
             let task = ctx.store.get(
