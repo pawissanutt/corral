@@ -572,7 +572,13 @@ fn classify_lost(
         &bound.session_id,
         &generation.bind_nonce_sha256,
     )?;
-    let all = receipts(ctx, container)?;
+    // Draining uses unfinished work, but classification must also see a receipt
+    // that reconciliation just settled. For PM calls, read each named receipt below.
+    let all = if *container == ContainerRef::Pm {
+        Vec::new()
+    } else {
+        receipts(ctx, container)?
+    };
     let hooks = generation.capabilities.as_ref().and_then(HookSettings::of);
     let snapshot = match interrupted::needs_snapshot(&dangling, hooks.as_ref()) {
         true => Some(super::rewind::worktree_evidence(
@@ -599,7 +605,24 @@ fn classify_lost(
             continue;
         };
         let request = super::tool_request_id(&bound.session_id, &call.id);
-        let receipt = all.iter().find(|r| r.request_id == request);
+        let named = if *container == ContainerRef::Pm {
+            let pm = pm_state::load_selected(
+                &ctx.store,
+                &pm_state::Selection::default().key("receipts", format!("request:{request}")),
+            )?;
+            match pm.and_then(|pm| pm.state.receipt(&request).cloned()) {
+                Some(receipt) => Some(receipt),
+                None => ctx
+                    .store
+                    .pm_request_receipt(&request)?
+                    .map(|(_, receipt)| receipt),
+            }
+        } else {
+            None
+        };
+        let receipt = named
+            .as_ref()
+            .or_else(|| all.iter().find(|r| r.request_id == request));
         let alive = match receipt.and_then(|r| r.executor.as_ref()) {
             Some(executor) if receipt.is_some_and(|r| r.state == ReceiptState::Reserved) => {
                 !gone(executor)?
