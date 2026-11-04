@@ -194,6 +194,9 @@ impl Defaults {
 pub struct Limits {
     /// Global run slots (Running + NeedsMe): the hard limit. Default 3.
     pub running: usize,
+    /// Workspace-wide work in progress limit; zero disables the limit.
+    #[serde(default = "default_wip_limit")]
+    pub wip: usize,
     /// Soft target automatic coding admission fills up to; unset means `running`. The gap up to
     /// `running` is headroom for manual and authorized-queue dispatch, P0 and red-main fixes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -214,6 +217,7 @@ impl Default for Limits {
     fn default() -> Self {
         Limits {
             running: 3,
+            wip: default_wip_limit(),
             running_target: None,
             review: default_review_limit(),
             count_reviews: true,
@@ -225,6 +229,10 @@ impl Default for Limits {
 
 fn default_review_limit() -> usize {
     2
+}
+
+fn default_wip_limit() -> usize {
+    6
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
