@@ -50,12 +50,7 @@ impl SlotUsage {
             ..Self::default()
         };
         for task in tasks {
-            usage.wip += usize::from(
-                matches!(
-                    task.status,
-                    Status::Running | Status::NeedsMe | Status::Review
-                ) && task.current_run().is_some(),
-            );
+            usage.wip += usize::from(crate::wip::task_in_flight(task));
             let sharing = gate_shares_dispatch_slot(task);
             usage.tasks += usize::from(task.status.holds_slot() && task.holds_dispatch_slot());
             usage.parked += usize::from(
