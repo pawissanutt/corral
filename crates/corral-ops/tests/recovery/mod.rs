@@ -272,6 +272,8 @@ fn family_recovery_binds_launch_callback_owner_acceptance_and_hold() {
     );
     let task = f.ctx.store.get(&f.id).unwrap();
     assert!(task.dispatch_hold && !task.queued);
+    assert_eq!(task.plan_runs[0].state, PlanRunState::Approved);
+    assert!(accepted.outcomes.last().unwrap().after.is_some());
     assert!(crate::approved_plan(&f.ctx, &task).unwrap().is_some());
     let saved = records(&f.ctx, &f.id).unwrap().pop().unwrap();
     assert_eq!(saved.links.len(), 1);

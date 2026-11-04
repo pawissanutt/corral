@@ -21,6 +21,7 @@ pub(crate) use code::*;
 mod evaluate;
 mod policy;
 mod receipts;
+mod snapshot;
 pub(crate) use receipts::{require_manual_receipts, review_needed};
 mod reconcile;
 pub(crate) use reconcile::reconcile_pending;
