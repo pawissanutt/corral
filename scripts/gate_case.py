@@ -57,7 +57,7 @@ def guarded(command: list[str], seconds: float, identity: list[str], metrics: Pa
     import gate_timer
     os.environ['CORRAL_CASE_OBSERVED_LIMIT_SECONDS'] = str(seconds)
     result = gate_timer.execute(command, seconds, respect_load=True, grace=1)
-    if result['seconds'] > seconds:
+    if classification.startswith('candidate-') or result['seconds'] > seconds:
         entry = json.dumps({'test': identity, 'limit': seconds, 'classification': classification, **result}) + '\n'
         fd = os.open(metrics, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         try:

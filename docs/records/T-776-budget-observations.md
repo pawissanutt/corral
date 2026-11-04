@@ -1,0 +1,11 @@
+# T-776: report-only budget observations
+
+Enforcement remains off. PM confirmed T-766 gardening is separate and re-holds enforcement until approximately ten quiet-load gates are available. No timing failure policy was activated in this round.
+
+The 44 supplied gate-log references and extracted phase/load lines are attached as `artifacts/T-776/R1/725eb245-gate-observations.txt`. Some entries predate the report-only instrumentation or have no measured test phase; failed or interrupted gates are partial observations. Most measured phases were busy-exempt, so they cannot establish quiet-host thresholds. High-load overruns must not be treated as quiet-host failures.
+
+- **Quick tier:** T-797 R3 `artifacts/T-797/R3/856ebc3b-T-797-R3-0970739-1793755605600208515.log` reports 201.090s quiet test runtime against the 180s reference. Its nextest phase was busy-exempt. This alone disproves zero false failures at 180s.
+- **Full tier:** passing T-797 R3 `artifacts/T-797/R3/1abdf6cd-T-797-R3-1063328-1793756618915735335.log` reports 984.640s quiet test runtime against 600s; nextest began at load/core 0.345 and ended at 0.613. This disproves zero false failures at 600s.
+- **Per-test ratchet:** existing reports do not retain complete candidate case timing/load records, so zero false failures cannot be established. `docs/records/T-761-gate-test-audit.md` is the available baseline; it distinguishes existing slow cases and exceptions from candidate tests and notes partial audits.
+
+Before enforcement can be judged, each gate must retain candidate test identities, classification and exception status, elapsed time, outcome, threshold and quiet/busy load observations, including under-limit cases, and record tier phase timings and load. Partial or failed runs must be identified as such, not treated as observations of unrun tests. Collect approximately ten quiet-load gates, then evaluate the candidate ratchet first and tier budgets second against the recorded data, documenting zero false failures and choosing limits justified by those data. The per-case recording change logs candidate cases and existing overruns; the gardening audit remains an overrun-only list. The current observer samples load during execution and reports before/after plus the aggregate busy flag; this is not a continuous load trace.
