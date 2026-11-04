@@ -60,10 +60,10 @@ pub fn recover_apply(
     // Once Applying is durable, any process loss is uncertain: no retry submits again.
     let result = execute(ctx, input, &record);
     match result {
-        Ok(()) => record.outcomes.push(outcome(
-            RecoveryState::Applied,
+        Ok(()) => record.outcomes.push(super::snapshot::applied(
+            ctx,
+            &record,
             "Guarded operation completed",
-            Some(preview.proposed_effect.clone()),
         )),
         Err(error) => {
             // Only the executor's typed pre-submission refusal proves no command was sent.
@@ -190,6 +190,14 @@ fn accept_plan(ctx: &Ctx, input: &RecoveryInput, record: &RecoveryRecord) -> Res
             policy_digest: record.preview.contract_digest.clone(),
             authorization: None,
         });
+        let planner = p.run.clone();
+        if let Some(run) = task
+            .plan_runs
+            .iter_mut()
+            .find(|r| Some(&r.id) == planner.as_ref() && r.state != PlanRunState::Cancelled)
+        {
+            run.state = PlanRunState::Approved;
+        }
         task.dispatch_hold = true;
         task.queued = false;
         task.dispatch_plan = None;
@@ -286,10 +294,10 @@ pub fn recover_reconcile(ctx: &Ctx, id: &str, operation: &str) -> Result<Recover
         .context("recovery disappeared")?;
     if observed {
         super::journal::append_links(ctx, &mut record)?;
-        record.outcomes.push(outcome(
-            RecoveryState::Applied,
+        record.outcomes.push(super::snapshot::applied(
+            ctx,
+            &record,
             "Existing canonical receipt reconciled; no command replayed",
-            Some(record.preview.proposed_effect.clone()),
         ));
     } else if state(&record)? != RecoveryState::Unknown {
         record.outcomes.push(outcome(
