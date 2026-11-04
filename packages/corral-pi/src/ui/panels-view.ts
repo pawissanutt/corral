@@ -21,6 +21,8 @@ export interface PanelSnapshot {
   readonly streaming: boolean;
   readonly context: ContextUsage | undefined;
   readonly tokens: number;
+  /** API-equivalent USD of this session's responses, priced by the model catalog; absent means unknown. */
+  readonly cost?: number;
   readonly tools: readonly string[];
   readonly contextFiles: readonly string[];
   readonly skills: readonly string[];

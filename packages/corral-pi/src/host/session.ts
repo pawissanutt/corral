@@ -255,7 +255,10 @@ export function providerErrorClass(message: string): string {
   return "provider";
 }
 
+const panelStats = (stats: { readonly tokens: { readonly total: number }; readonly cost: number }) => ({ tokens: stats.tokens.total, cost: stats.cost });
+
 // allow: SIZE_OK - Generation-bound Pi lifecycle state machine; relink decisions live in assistant-relink.ts.
+
 export class HostSession {
   runtime!: AgentSessionRuntime;
   readonly panels: NativePanels | undefined;
@@ -285,7 +288,7 @@ export class HostSession {
   private readonly stats = { sent: 0, committed: 0, rejected: 0, failed: 0, lastError: undefined as string | undefined };
   private deniedTools = 0;
   private inspector: InspectorActivity | undefined;
-  private panelTokens: number | undefined;
+  private panelStats: { readonly tokens: number; readonly cost: number } | undefined;
   private panelTokenLeaf: string | null | undefined;
   private sessionsCreated = 0;
   /** How the bound host is attached: InteractiveMode in its pane, or headless (T-577). */
@@ -875,9 +878,9 @@ export class HostSession {
     this.terminalInputSequence = 0;
     this.terminalInput = undefined;
     observeTerminalInput(session, this.options.events);
-    this.panelTokens = undefined;
+    this.panelStats = undefined;
     this.unsubscribe = session.subscribe((event) => {
-      if (event.type === "message_end") this.panelTokens = undefined;
+      if (event.type === "message_end") this.panelStats = undefined;
       if (event.type === "agent_start") this.turnStarted();
       else if (event.type === "agent_settled") this.turnEnded(event.aborted);
       else if (event.type === "queue_update") {
@@ -1187,7 +1190,7 @@ export class HostSession {
     if (!this.runtime) return null;
     const session = this.session;
     const leaf = session.sessionManager.getLeafId();
-    if (leaf !== this.panelTokenLeaf) { this.panelTokenLeaf = leaf; this.panelTokens = undefined; }
+    if (leaf !== this.panelTokenLeaf) { this.panelTokenLeaf = leaf; this.panelStats = undefined; }
     const jobs: PanelJob[] | null = this.jobs ? this.jobs.inspection().map(detail => ({ job: detail.job, state: detail.state, detail })) : null;
     return {
       budget: (this.options.capabilities?.catalog ?? 0) >= 7 ? this.budget.state() : undefined,
@@ -1195,7 +1198,7 @@ export class HostSession {
       effort: session.thinkingLevel, effortAvailable: session.supportsThinking(),
       ...(this.terminalInput ? { input: this.terminalInput } : {}),
       streaming: session.isStreaming, context: session.getContextUsage(),
-      tokens: this.panelTokens ??= session.getSessionStats().tokens.total, tools: session.getActiveToolNames(),
+      ...(this.panelStats ??= panelStats(session.getSessionStats())), tools: session.getActiveToolNames(),
       contextFiles: this.guidance.contextFiles.map(file => file.path),
       skills: this.runtime.services.resourceLoader.getSkills().skills.map(skill => skill.name),
       ledger: this.ledger?.current ?? null, ledgerStale: this.ledger?.unavailable ?? true,
@@ -1218,7 +1221,7 @@ export class HostSession {
       agents: [{ id: session.sessionId, session: session.sessionId, kind: this.options.identity.role,
         state: session.isStreaming ? "streaming" : this.open ? "turn open" : "settled locally",
         model: session.model ? `${session.model.provider}/${session.model.id}` : null,
-        tokens: this.panelTokens, transcript: !!session.sessionFile && session.sessionId === this.boundSessionId },
+        tokens: this.panelStats.tokens, transcript: !!session.sessionFile && session.sessionId === this.boundSessionId },
         ...(this.auxiliary?.inspection() ?? []).map(child => ({ id: child.request, session: child.request,
           parent: child.parent, kind: `native ${child.kind}`, state: child.state, model: child.model, transcript: !!child.sessionFile && child.parent === this.boundSessionId }))],
       jobs, auxiliary: this.auxiliary?.state() ?? null, helpers: this.auxiliary?.inspections() ?? null,

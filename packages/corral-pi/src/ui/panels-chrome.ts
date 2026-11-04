@@ -88,8 +88,8 @@ export function contextSegment(snapshot: PanelSnapshot | null, room: number): st
   return tone + mid.trimStart();
 }
 /**
- * The bottom bar owns only what matters in every view: role and binding, the context window and
- * alerts. Below 52 columns the context takes its own row; alerts that do not fit wrap, never drop.
+ * The bottom bar owns only what matters in every view: role and binding, session cost, the context
+ * window and alerts. Below 52 columns the context takes its own row; alerts that do not fit wrap, never drop.
  */
 export function statusBar(identity: HostIdentity, snapshot: PanelSnapshot | null,
   statuses: ReadonlyMap<string, string>, width: number): string[] {
@@ -104,14 +104,15 @@ export function statusBar(identity: HostIdentity, snapshot: PanelSnapshot | null
     .sort(([a], [b]) => Number(b === STATUS_ALERTS) - Number(a === STATUS_ALERTS))
     .map(([, value]) => plainLabel(stripTerminalSequences(value))).filter(Boolean).join(" · ");
   const sep = PANEL_MUTED + " │ ";
+  const cost = snapshot?.cost === undefined ? "" : sep + PANEL_TEXT + "$" + snapshot.cost.toFixed(2);
   const row = (text: string) => PANEL_BG + pad(" " + text, width) + RESET;
   const wrapped = (text: string) => new Text(text, 0, 0).render(Math.max(1, width - 1)).map(line => row(PANEL_WARNING + line));
-  if (width < 52) return [row(badge + (alerts ? sep + PANEL_WARNING + alerts : "")), row(contextSegment(snapshot, width - 1))];
-  const room = width - 1 - visibleWidth(badge) - 3;
+  if (width < 52) return [row(badge + cost + (alerts ? sep + PANEL_WARNING + alerts : "")), row(contextSegment(snapshot, width - 1))];
+  const room = width - 1 - visibleWidth(badge) - visibleWidth(cost) - 3;
   const shortest = visibleWidth(contextSegment(snapshot, 0));
   const inline = alerts && visibleWidth(alerts) + 3 + shortest <= room;
   const context = contextSegment(snapshot, room - (inline ? visibleWidth(alerts) + 3 : 0));
-  return [row(badge + sep + context + (inline ? sep + PANEL_WARNING + alerts : "")), ...(alerts && !inline ? wrapped(alerts) : [])];
+  return [row(badge + cost + sep + context + (inline ? sep + PANEL_WARNING + alerts : "")), ...(alerts && !inline ? wrapped(alerts) : [])];
 }
 export function overviewLines(snapshot: PanelSnapshot | null, files: FilesState, scope?: { readonly name: string; readonly required: boolean },
   selected?: string, history = false): PanelLine[] {
