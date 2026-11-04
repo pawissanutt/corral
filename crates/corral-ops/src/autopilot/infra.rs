@@ -94,6 +94,23 @@ fn roots(checkout: &Path) -> Result<(PathBuf, PathBuf)> {
 }
 
 impl Pilot<'_> {
+    /// Authority can need keyed obligations (co-work). Read them at this boundary,
+    /// never through the scalar head retained across Git or transport operations.
+    pub(super) fn require(&self, kind: OperatingActionKind) -> Result<()> {
+        self.ctx.read_step(|read| {
+            let head = read.store.head(self.id())?;
+            if head.status != self.head.status
+                || head
+                    .current_run
+                    .as_deref()
+                    .is_none_or(|run| run.id != self.run.id)
+            {
+                return Err(crate::integration::StalePacket.into());
+            }
+            crate::operating::require(&read.store, &head, kind)
+        })
+    }
+
     pub(super) fn record_infra(&self, error: &anyhow::Error) -> Result<Step> {
         let wait = observation(error, self.now)?;
         self.ctx.store.try_update_head(self.id(), |task| {

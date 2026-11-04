@@ -46,18 +46,54 @@ impl BoardSnapshot {
         now: Timestamp,
         attention: Option<crate::attention::Snapshot>,
     ) -> Result<Self> {
-        let live_ctx = ctx.clone();
-        // Count the frame's view, but leave cold derivation preparation outside HotScope.
-        let store = {
-            let _hot = corral_core::work::HotScope::enter();
-            ctx.store.read_only_snapshot()?
-        };
-        let ctx = &Ctx {
-            store,
-            ..ctx.clone()
-        };
+        // Preparation may wait on derivation locks or do substantial filesystem work.
+        // Never age a frame view while it runs. Sample the host once, outside the
+        // retryable read derivation; all later admission reads replay that observation.
         corral_ops::lesson_rows::prepare_coordination(ctx)?;
         let _hot = corral_core::work::HotScope::enter();
+        let sampled = crate::attention::refresh_context(ctx);
+        sampled.read_step(|read| Self::load_view(read, ctx.clone(), now, attention.clone()))
+    }
+
+    fn load_view(
+        ctx: &Ctx,
+        live_ctx: Ctx,
+        now: Timestamp,
+        attention: Option<crate::attention::Snapshot>,
+    ) -> Result<Self> {
+        let (sources, finishes, unreviewed) = ctx.read_step(|read| {
+            let mut sources = sources::FrameSources::load(read)?;
+            let finishes = corral_ops::finishes_for(
+                &read.store,
+                &sources
+                    .heads
+                    .iter()
+                    .filter(|h| matches!(h.status, Status::Done | Status::Dropped))
+                    .map(|h| h.id.clone())
+                    .collect::<Vec<_>>(),
+            )?;
+            let mut unreviewed = HashMap::new();
+            for head in &sources.heads {
+                if head.status == Status::Review {
+                    let count = head
+                        .summary
+                        .kept_artifacts
+                        .saturating_sub(head.reviewed_keep_artifacts()?);
+                    if count > 0 {
+                        unreviewed.insert(
+                            head.id.clone(),
+                            usize::try_from(count).unwrap_or(usize::MAX),
+                        );
+                    }
+                }
+            }
+            sources.heads = sources
+                .heads
+                .into_iter()
+                .map(corral_core::TaskHead::detach)
+                .collect();
+            Ok((sources, finishes, unreviewed))
+        })?;
         let sources::FrameSources {
             tasks,
             heads,
@@ -66,19 +102,11 @@ impl BoardSnapshot {
             slot_usage,
             done_ids,
             pins,
-        } = sources::FrameSources::load(ctx)?;
+        } = sources;
         let plan_progress = tasks
             .iter()
             .filter_map(|task| crate::plan::tracker::load(ctx, task).map(|p| (task.id.clone(), p)))
             .collect();
-        let finishes = corral_ops::finishes_for(
-            &ctx.store,
-            &heads
-                .iter()
-                .filter(|h| matches!(h.status, Status::Done | Status::Dropped))
-                .map(|h| h.id.clone())
-                .collect::<Vec<_>>(),
-        )?;
         let resource_ctx = crate::attention::refresh_context(ctx);
         let (resources, waits) =
             crate::resources::ResourceDisplay::sample_board(&resource_ctx, &tasks);
@@ -99,26 +127,6 @@ impl BoardSnapshot {
         let plan_review_waits = tasks
             .iter()
             .filter_map(|task| Some((task.id.clone(), corral_ops::plan_review_wait(ctx, task)?)))
-            .collect();
-        let unreviewed = heads
-            .iter()
-            .filter(|task| task.status == Status::Review)
-            .filter_map(|task| match task.reviewed_keep_artifacts() {
-                Ok(seen) => {
-                    let count = usize::try_from(task.summary.kept_artifacts)
-                        .unwrap_or(usize::MAX)
-                        .saturating_sub(usize::try_from(seen).unwrap_or(usize::MAX));
-                    (count > 0).then(|| (task.id.clone(), count))
-                }
-                Err(error) => {
-                    corral_ops::report_message(
-                        Some(&task.id),
-                        "artifact review count",
-                        format!("{error:#}"),
-                    );
-                    None
-                }
-            })
             .collect();
         Ok(Self {
             attention: attention.unwrap_or_else(|| crate::attention::load(&resource_ctx, now)),

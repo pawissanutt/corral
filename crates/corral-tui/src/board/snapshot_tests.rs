@@ -3,6 +3,60 @@ use super::{BoardSnapshot, Status};
 use crate::View;
 
 #[test]
+fn slow_resource_sample_does_not_expire_frame_artifact_reads() {
+    use corral_core::{
+        Store,
+        backend::{BackendConfig, ManualClock, fake::FakeBackend},
+    };
+    use corral_ops::{
+        Ctx,
+        resources::{FixedResourceProbe, ResourceProbe},
+    };
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    struct SlowProbe(Arc<ManualClock>);
+    impl std::fmt::Debug for SlowProbe {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("SlowProbe")
+        }
+    }
+    impl ResourceProbe for SlowProbe {
+        fn sample(&self, store: &Store) -> anyhow::Result<corral_core::ResourceSnapshot> {
+            self.0.advance(Duration::from_secs(31));
+            FixedResourceProbe::healthy().sample(store)
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let clock = Arc::new(ManualClock::new(jiff::Timestamp::UNIX_EPOCH));
+    let store = Store::init(dir.path())
+        .unwrap()
+        .with_backend(Box::new(FakeBackend::new(
+            BackendConfig::default(),
+            clock.clone(),
+            Arc::default(),
+        )));
+    let task = store.create("Review", None, Status::Review, "").unwrap();
+    store
+        .update(&task.id, |task| {
+            task.artifacts
+                .push(serde_json::from_value(serde_json::json!({
+                    "run":"R1", "kind":"report", "title":"Review me", "path":"artifacts/report.md",
+                    "source":"/tmp/report.md", "sha256":"0".repeat(64), "bytes":1,
+                    "added":jiff::Timestamp::UNIX_EPOCH
+                }))?);
+            Ok(())
+        })
+        .unwrap();
+    let ctx = Ctx {
+        resource_probe: Arc::new(SlowProbe(clock)),
+        ..Ctx::from_store(store)
+    };
+    let board = super::BoardView::new(&ctx).unwrap();
+    assert_eq!(board.unreviewed.get(&task.id), Some(&1));
+}
+
+#[test]
 fn snapshot_updates_board_when_store_is_unavailable() {
     // Given a selected card that moved and a newly pinned Done card in the worker snapshot.
     let mut fx = seeded();

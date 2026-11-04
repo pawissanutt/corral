@@ -133,7 +133,14 @@ fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<Vec<Change>>> {
 }
 
 fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
-    let head = ctx.store.head(id)?;
+    let (head, open_reviews) = ctx.read_step(|read| {
+        let head = read.store.head(id)?;
+        let reviews = match head.current_run.as_deref() {
+            Some(run) => head.open_review_children(&run.id)?,
+            None => Vec::new(),
+        };
+        Ok((head.detach(), reviews))
+    })?;
     let task = &head;
     if task.hold.is_some() {
         return Ok(Step::Wait);
@@ -153,6 +160,7 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
         ctx,
         config,
         head: &head,
+        open_reviews,
         run,
         policy,
         now,
@@ -171,7 +179,7 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
         let Some(kind) = crate::automation_status::next_action_head(ctx, task)? else {
             return Ok(Step::Wait);
         };
-        if crate::operating::require(&ctx.store, task, kind).is_err() {
+        if pilot.require(kind).is_err() {
             return Ok(Step::Wait);
         }
         if let Err(error) = verification::require_gate(&pilot.policy, task) {
@@ -192,7 +200,7 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
         Err(error) if infra::classified(&error) => return pilot.record_infra(&error),
         Err(error) => return Err(error),
     };
-    if crate::operating::require(&ctx.store, task, kind).is_err() {
+    if pilot.require(kind).is_err() {
         return Ok(Step::Wait);
     }
     if let Err(error) = verification::require_gate(&pilot.policy, task) {
@@ -241,6 +249,8 @@ struct Pilot<'a> {
     ctx: &'a Ctx,
     config: &'a Config,
     head: &'a corral_core::TaskHead,
+    /// Materialized before external work; diagnostics must not retain a keyed read view.
+    open_reviews: Vec<RunHead>,
     /// The head's current run, with its current review child.
     run: &'a RunHead,
     policy: ReviewPolicy,
@@ -334,7 +344,19 @@ impl Pilot<'_> {
         if self.promote()? {
             return Ok(Step::Acted);
         }
-        let failures = crate::completion::evidence_failures(self.ctx, self.head, self.run)?;
+        let failures = self.ctx.read_step(|read| {
+            let head = read.store.head(self.id())?;
+            let run = head
+                .current_run
+                .as_deref()
+                .filter(|run| {
+                    head.status == Status::Review
+                        && run.id == self.run.id
+                        && run.outcome == Some(RunOutcome::Done)
+                })
+                .ok_or(crate::integration::StalePacket)?;
+            crate::completion::evidence_failures(read, &head, run)
+        })?;
         if !failures.is_empty() {
             return self.escalate(&format!(
                 "required evidence missing or stale: {}",
@@ -494,9 +516,7 @@ impl Pilot<'_> {
                 touched.join(", ")
             ));
         }
-        if crate::operating::require(&self.ctx.store, self.head, OperatingActionKind::Accept)
-            .is_err()
-        {
+        if self.require(OperatingActionKind::Accept).is_err() {
             if self.stage() == Some(AutoStage::Reviewed) {
                 return Ok(Step::Wait);
             }
@@ -558,9 +578,7 @@ impl Pilot<'_> {
         {
             return self.start();
         }
-        if crate::operating::require(&self.ctx.store, self.head, OperatingActionKind::Accept)
-            .is_err()
-        {
+        if self.require(OperatingActionKind::Accept).is_err() {
             return self.accept(head);
         }
         if !self.policy.gate.is_empty() {
@@ -672,7 +690,7 @@ impl Pilot<'_> {
         if round > max && !self.ctx.store.config.automation.turbo {
             return self.escalate(&format!("{summary} (all {max} change rounds used)"));
         }
-        crate::operating::require(&self.ctx.store, self.head, OperatingActionKind::Repair)?;
+        self.require(OperatingActionKind::Repair)?;
         let id = self.id();
         let corral = corral_bin()?.display().to_string();
         let mut request = format!("{summary}\n");
@@ -796,18 +814,23 @@ impl Pilot<'_> {
         reason: Option<&str>,
         note: &str,
     ) -> Result<()> {
-        let current = self.ctx.store.head(self.id())?;
-        let mut released_review_runs = Vec::new();
-        if to == AutoStage::Escalated {
-            for before in self.head.open_review_children(&self.run.id)? {
-                if current
-                    .review_child(&self.run.id, &before.id)?
-                    .is_some_and(|after| after.ended.is_some())
-                {
-                    released_review_runs.push(before.id);
+        let released_review_runs = if to == AutoStage::Escalated {
+            self.ctx.read_step(|read| {
+                let current = read.store.head(self.id())?;
+                let mut released = Vec::new();
+                for before in &self.open_reviews {
+                    if current
+                        .review_child(&self.run.id, &before.id)?
+                        .is_some_and(|after| after.ended.is_some())
+                    {
+                        released.push(before.id.clone());
+                    }
                 }
-            }
-        }
+                Ok(released)
+            })?
+        } else {
+            Vec::new()
+        };
         self.ctx.store.log_event(
             Some(self.id()),
             "autopilot",

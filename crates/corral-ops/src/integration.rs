@@ -186,10 +186,6 @@ impl IntegrationPacket {
         mut conflict_paths: Vec<String>,
         git_details: Option<String>,
     ) -> Result<Self> {
-        let ctx = &Ctx {
-            store: ctx.store.read_only_snapshot()?,
-            ..ctx.clone()
-        };
         crate::approvals::prepare(ctx)?;
         let _hot = corral_core::work::HotScope::enter();
         let repo = &run.worktree;
@@ -202,7 +198,10 @@ impl IntegrationPacket {
             .chain(&missing_commits)
             .map(|commit| commit.sha.clone())
             .collect();
-        let approvals = crate::approvals::lookup(ctx, task.project(), &shas)?;
+        // Git may take longer than a view lease. Pin only the attribution lookup,
+        // not the subprocess work before and after it.
+        let approvals =
+            ctx.read_step(|read| crate::approvals::lookup(read, task.project(), &shas))?;
         let commits = |commits: Vec<corral_git::Commit>| -> Result<Vec<LandedCommit>> {
             commits
                 .into_iter()

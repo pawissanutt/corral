@@ -150,6 +150,7 @@ fn done_inner(
     }
     let run = current_run(&task)?;
     refuse_open_questions_head(&head, &run.id)?;
+    drop(head); // Later admission phases must not age this keyed view across owner/Git I/O.
     if run
         .gate
         .as_ref()
@@ -162,13 +163,14 @@ fn done_inner(
     }
     crate::delivery::owner::done_gate(ctx, &task)?;
     trace("owner admission");
-    crate::resume::require_checkpoint_head(&head, &run.id)?;
+    ctx.read_step(|read| crate::resume::require_checkpoint_head(&read.store.head(id)?, &run.id))?;
     trace("checkpoint admission");
     if run.checkpoint_required && !corral_git::is_clean(&run.worktree)? {
         bail!("commit_before_checkpoint: commit work, then save a checkpoint before done");
     }
-    let audit = crate::completion::completion_check_task(ctx, &head, summary)?;
-    drop(head); // Admission is materialized; no read snapshot spans evidence I/O below.
+    let audit = ctx.read_step(|read| {
+        crate::completion::completion_check_task(read, &read.store.head(id)?, summary)
+    })?;
     if !audit.passed {
         bail!("completion audit failed: {}", audit.failures.join("; "));
     }
