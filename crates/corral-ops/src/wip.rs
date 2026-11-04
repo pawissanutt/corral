@@ -111,7 +111,7 @@ mod tests {
             Ok(())
         }).unwrap();
         let head = store.head(&task.id).unwrap();
-        assert_eq!(count(&[head.clone()]), 0);
+        assert_eq!(count(std::slice::from_ref(&head)), 0);
         assert_eq!(
             crate::SlotUsage::from_heads(&[head], &store.config.limits).wip,
             0
