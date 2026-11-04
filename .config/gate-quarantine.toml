@@ -12,4 +12,5 @@ tests = [
   { binary = "corral-ops", test = "submission_paths_tests::reviewer_guard::reviewer_launch_guard_decides_as_db316644_on_every_interleaving", fix = "T-833", reason = "Interleaving barrier intermittently does not fire." },
   { binary = "corral-ops::evidence_artifacts", test = "the_search_index_follows_the_change_feed_with_work_independent_of_the_board", fix = "T-839", reason = "Search-index follow holds one read view across the index lock wait." },
   { binary = "corral-ops", test = "lesson_signals::tests::latest_tasks_are_selected_by_persisted_time", fix = "T-844", reason = "Lesson-signal selection holds one read view; expires under load." },
+  { binary = "corral::pm_plan_cli", test = "changed_plan_bytes_only_offer_inspection_not_invalid_verdict_commands", fix = "T-845", reason = "Obsolete after T-800 (source edits no longer stale a plan); pm next aborts on a corrupt snapshot." },
 ]
