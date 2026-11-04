@@ -363,10 +363,10 @@ impl Store {
         prepare(&store)?;
         if observe {
             store.load_initial_config()?;
+            crate::agent::pm_state::migrate(&store)?;
         } else {
             store.config = store.config_layers()?.config()?;
         }
-        crate::agent::pm_state::migrate(&store)?;
         Ok(store)
     }
 
