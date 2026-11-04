@@ -302,6 +302,11 @@ fn binding_only_preview_and_recovery_model_floor_are_distinct() {
     }
     let f = Fixture::new(false);
     let mut input = f.input();
+    assert!(
+        records(&f.ctx, f.id.trim_start_matches("T-"))
+            .unwrap()
+            .is_empty()
+    );
     let before = f.ctx.store.fixture_task_text(&f.id).unwrap();
     let preview = recover_preview(&f.ctx, &f.id, &input).unwrap();
     assert!(preview.remaining_blockers.is_empty());
