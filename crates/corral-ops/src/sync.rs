@@ -567,25 +567,35 @@ fn reconcile(
             .review
             .as_ref()
             .is_some_and(corral_core::ReviewRecord::holds_slot);
-    let stuck =
-        if !parked && herdr_idle_since.is_some_and(|since| now.duration_since(since) > stuck_after)
-        {
-            match ctx.herdr.pane_process_info(&pane_id).and_then(|info| {
-                crate::watchdog::foreign_process(ctx, &watchdog_run, &info, processes)
-            }) {
-                Ok(process) => process,
-                Err(err) => {
-                    crate::messages::report(
-                        Some(&task.id),
-                        "watchdog",
-                        format!("inspecting {} for stuck processes failed: {err:#}", task.id),
-                    );
-                    run.stuck.clone()
-                }
+    let gate_pending = run
+        .gate
+        .as_ref()
+        .is_some_and(corral_core::GateRecord::holds_slot)
+        || head.queued_agent_gates()?.iter().any(|receipt| {
+            receipt.identity.role == corral_core::agent::AgentRole::Worker
+                && receipt.identity.task.as_deref() == Some(task.id.as_str())
+                && receipt.identity.run.as_deref() == Some(run.id.as_str())
+        });
+    let stuck = if !parked
+        && !gate_pending
+        && herdr_idle_since.is_some_and(|since| now.duration_since(since) > stuck_after)
+    {
+        match ctx.herdr.pane_process_info(&pane_id).and_then(|info| {
+            crate::watchdog::foreign_process(ctx, &watchdog_run, &info, processes)
+        }) {
+            Ok(process) => process,
+            Err(err) => {
+                crate::messages::report(
+                    Some(&task.id),
+                    "watchdog",
+                    format!("inspecting {} for stuck processes failed: {err:#}", task.id),
+                );
+                run.stuck.clone()
             }
-        } else {
-            None
-        };
+        }
+    } else {
+        None
+    };
     let newly_stuck = stuck.is_some() && stuck != run.stuck;
 
     let stall_key = crate::provider_stall::agent_key(&task.id, run);
