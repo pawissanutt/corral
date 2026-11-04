@@ -61,7 +61,10 @@ pub(super) fn record_authority(ctx: &Ctx, task: &TaskHead) -> Result<()> {
         |event| event.detail["run"].as_str() == run,
     )?;
     let previous = previous.as_ref();
-    if let Some(reason) = crate::automation_status::automation_blocker_ref(ctx, task)? {
+    let reason = ctx.read_step(|read| {
+        crate::automation_status::automation_blocker_ref(read, &read.store.head(&task.id)?)
+    })?;
+    if let Some(reason) = reason {
         if previous.is_none_or(|event| {
             event.kind != "automation_blocked"
                 || event.detail["reason"].as_str() != Some(reason.as_str())

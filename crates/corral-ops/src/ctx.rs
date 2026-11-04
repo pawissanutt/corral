@@ -2,7 +2,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
-use corral_core::Store;
+use corral_core::{
+    Store,
+    backend::{FeedError, ViewError},
+};
 use corral_herdr::Herdr;
 
 /// Everything an operation needs.
@@ -52,10 +55,13 @@ impl Ctx {
             match result {
                 Err(error)
                     if !self.store.is_snapshot()
-                        && matches!(
-                            error.downcast_ref::<corral_core::backend::ViewError>(),
-                            Some(corral_core::backend::ViewError::Expired { .. })
-                        ) => {}
+                        && (matches!(
+                            error.downcast_ref::<ViewError>(),
+                            Some(ViewError::Expired { .. })
+                        ) || matches!(
+                            error.downcast_ref::<FeedError>(),
+                            Some(FeedError::View(ViewError::Expired { .. }))
+                        )) => {}
                 result => return result,
             }
         }
@@ -72,6 +78,20 @@ impl Ctx {
         }
         Ok(changed)
     }
+}
+
+fn session(store: &Store) -> Option<String> {
+    std::env::var("CORRAL_HERDR_SESSION")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| store.config.herdr.session.clone())
+        .or_else(|| {
+            let inherited = std::env::var("HERDR_ENV").as_deref() == Ok("1")
+                || ["HERDR_SOCKET_PATH", "HERDR_SESSION"]
+                    .iter()
+                    .any(|name| std::env::var_os(name).is_some_and(|v| !v.is_empty()));
+            (!inherited).then(|| "corral".into())
+        })
 }
 
 #[cfg(test)]
@@ -98,6 +118,9 @@ mod tests {
                 if reads == 1 {
                     clock.advance(Duration::from_secs(31));
                 }
+                read.store
+                    .view()?
+                    .changes(corral_core::backend::ChangeSeq(0), 1)?;
                 Ok(read.store.head(&task.id)?.title.clone())
             })
             .unwrap();
@@ -120,18 +143,4 @@ mod tests {
         ));
         assert_eq!(reads, 1);
     }
-}
-
-fn session(store: &Store) -> Option<String> {
-    std::env::var("CORRAL_HERDR_SESSION")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| store.config.herdr.session.clone())
-        .or_else(|| {
-            let inherited = std::env::var("HERDR_ENV").as_deref() == Ok("1")
-                || ["HERDR_SOCKET_PATH", "HERDR_SESSION"]
-                    .iter()
-                    .any(|name| std::env::var_os(name).is_some_and(|v| !v.is_empty()));
-            (!inherited).then(|| "corral".into())
-        })
 }

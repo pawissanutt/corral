@@ -176,7 +176,7 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
                 && run_head_sha(run).as_deref() == Some(r.sha.as_str())
         })
     {
-        let Some(kind) = crate::automation_status::next_action_head(ctx, task)? else {
+        let Some(kind) = pilot.next_action()? else {
             return Ok(Step::Wait);
         };
         if pilot.require(kind).is_err() {
@@ -194,7 +194,7 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
             Err(error) => return pilot.escalate_error("integration preflight error", error),
         }
     }
-    let kind = match crate::automation_status::next_action_head(ctx, task) {
+    let kind = match pilot.next_action() {
         Ok(Some(kind)) => kind,
         Ok(None) => return Ok(Step::Wait),
         Err(error) if infra::classified(&error) => return pilot.record_infra(&error),
@@ -218,8 +218,7 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
     if pilot.stage() == Some(AutoStage::Reviewed) {
         let gate_stale =
             !pilot.policy.gate.is_empty() && !verification::gate_passed(ctx, task, run)?;
-        let review_stale =
-            pilot.policy.reviewer != Reviewer::None && !verification::review_fresh(ctx, task, run)?;
+        let review_stale = pilot.policy.reviewer != Reviewer::None && !pilot.review_fresh()?;
         if !gate_stale && !review_stale {
             // Fresh receipts need no integration packet or search-index refresh. Recheck
             // acceptance authority so a newly delegated task can still finish.
@@ -382,7 +381,7 @@ impl Pilot<'_> {
             return Ok(Step::Acted);
         }
         if self.run.review.as_ref().and_then(|r| r.verdict) == Some(Verdict::Approve)
-            && verification::review_fresh(self.ctx, self.head, self.run)?
+            && self.review_fresh()?
         {
             return self.accept(head);
         }
@@ -483,7 +482,7 @@ impl Pilot<'_> {
                         "the worktree changed after the reviewer approved it; a reviewer must not edit it",
                     );
                 }
-                if replayed || !verification::review_fresh(self.ctx, self.head, self.run)? {
+                if replayed || !self.review_fresh()? {
                     return self.start();
                 }
                 self.accept(head)
@@ -573,8 +572,7 @@ impl Pilot<'_> {
         }
         if (!self.policy.gate.is_empty()
             && !crate::review::landing_gate_passed(self.ctx, self.head, self.run)?)
-            || (self.policy.reviewer != Reviewer::None
-                && !verification::review_fresh(self.ctx, self.head, self.run)?)
+            || (self.policy.reviewer != Reviewer::None && !self.review_fresh()?)
         {
             return self.start();
         }

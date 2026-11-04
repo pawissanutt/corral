@@ -83,41 +83,42 @@ pub(crate) fn reap_current_reviews(ctx: &Ctx) {
 
 fn reap(owner_ctx: &Ctx, selected: Option<&str>) {
     let result: Result<()> = (|| {
-        // One view also makes absent marker lookups independent of unrelated live processes.
-        let ctx = Ctx {
-            store: owner_ctx.store.read_only_snapshot()?,
-            ..owner_ctx.clone()
-        };
-        let mut tasks: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
-        for marker in process_markers()? {
-            let Some(receipt) = crate::launch_exit::process_receipt(&ctx, &marker)? else {
-                continue;
-            };
-            let Some((number, attempt)) = receipt
-                .file_stem()
-                .and_then(|name| name.to_str())
-                .and_then(|name| name.strip_prefix("T-"))
-                .and_then(|name| name.split_once('-'))
-            else {
-                continue;
-            };
-            if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
-                continue;
+        // /proc discovery and process shutdown can each outlive a view. Only the
+        // idempotent ownership lookups belong inside a retryable database read.
+        let markers = process_markers()?;
+        let tasks = owner_ctx.read_step(|ctx| {
+            let mut tasks: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
+            for marker in &markers {
+                let Some(receipt) = crate::launch_exit::process_receipt(ctx, marker)? else {
+                    continue;
+                };
+                let Some((number, attempt)) = receipt
+                    .file_stem()
+                    .and_then(|name| name.to_str())
+                    .and_then(|name| name.strip_prefix("T-"))
+                    .and_then(|name| name.split_once('-'))
+                else {
+                    continue;
+                };
+                if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+                    continue;
+                }
+                let task = format!("T-{number}");
+                if selected.is_some_and(|id| task != id) {
+                    continue;
+                }
+                let Some((run, child)) = attempt.split_once('-') else {
+                    continue;
+                };
+                tasks
+                    .entry(task)
+                    .or_default()
+                    .insert((run.to_owned(), child.to_owned()));
             }
-            let task = format!("T-{number}");
-            if selected.is_some_and(|id| task != id) {
-                continue;
-            }
-            let Some((run, child)) = attempt.split_once('-') else {
-                continue;
-            };
-            tasks
-                .entry(task)
-                .or_default()
-                .insert((run.to_owned(), child.to_owned()));
-        }
+            Ok(tasks)
+        })?;
         for (task, candidates) in tasks {
-            if let Err(error) = reap_candidates(owner_ctx, &ctx, &task, candidates) {
+            if let Err(error) = reap_candidates(owner_ctx, &task, candidates) {
                 super::failed(owner_ctx, &task, "review process ownership", &error);
             }
         }
@@ -137,30 +138,34 @@ fn reap(owner_ctx: &Ctx, selected: Option<&str>) {
 
 fn reap_candidates(
     owner_ctx: &Ctx,
-    ctx: &Ctx,
     task: &str,
     candidates: BTreeSet<(String, String)>,
 ) -> Result<()> {
-    let head = ctx.store.head(task)?;
-    if !crate::session_scope::owns_head(ctx, &head)? {
-        return Ok(());
-    }
     for (run, child) in candidates {
-        let Some(review_child) = head
-            .review_child(&run, &child)?
-            .filter(|child| child.ended.is_some())
-        else {
-            continue;
-        };
-        if let Some(review) = review_child
-            .review
-            .as_ref()
-            .filter(|review| review.verdict.is_some())
-            && !durable_verdict(ctx, task, &run, &review.reviewer, review.at)?
-        {
+        let eligible = owner_ctx.read_step(|ctx| {
+            let head = ctx.store.head(task)?;
+            if !crate::session_scope::owns_head(ctx, &head)? {
+                return Ok(false);
+            }
+            let Some(review_child) = head
+                .review_child(&run, &child)?
+                .filter(|child| child.ended.is_some())
+            else {
+                return Ok(false);
+            };
+            match review_child
+                .review
+                .as_ref()
+                .filter(|review| review.verdict.is_some())
+            {
+                Some(review) => durable_verdict(ctx, task, &run, &review.reviewer, review.at),
+                None => Ok(true),
+            }
+        })?;
+        if !eligible {
             continue;
         }
-        if let Err(error) = crate::cleanup_worktree::reap_review(ctx, task, &run, &child) {
+        if let Err(error) = crate::cleanup_worktree::reap_review(owner_ctx, task, &run, &child) {
             super::failed(owner_ctx, task, &format!("review {run}-{child}"), &error);
         }
     }

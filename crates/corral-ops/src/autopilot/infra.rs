@@ -94,9 +94,12 @@ fn roots(checkout: &Path) -> Result<(PathBuf, PathBuf)> {
 }
 
 impl Pilot<'_> {
-    /// Authority can need keyed obligations (co-work). Read them at this boundary,
-    /// never through the scalar head retained across Git or transport operations.
-    pub(super) fn require(&self, kind: OperatingActionKind) -> Result<()> {
+    /// Read keyed inputs at this boundary, never through the scalar head retained
+    /// across Git or transport operations. Effects remain outside the retryable read.
+    fn read_head<T>(
+        &self,
+        mut read_head: impl FnMut(&Ctx, &corral_core::TaskHead) -> Result<T>,
+    ) -> Result<T> {
         self.ctx.read_step(|read| {
             let head = read.store.head(self.id())?;
             if head.status != self.head.status
@@ -107,8 +110,20 @@ impl Pilot<'_> {
             {
                 return Err(crate::integration::StalePacket.into());
             }
-            crate::operating::require(&read.store, &head, kind)
+            read_head(read, &head)
         })
+    }
+
+    pub(super) fn require(&self, kind: OperatingActionKind) -> Result<()> {
+        self.read_head(|read, head| crate::operating::require(&read.store, head, kind))
+    }
+
+    pub(super) fn next_action(&self) -> Result<Option<OperatingActionKind>> {
+        self.read_head(crate::automation_status::next_action_head)
+    }
+
+    pub(super) fn review_fresh(&self) -> Result<bool> {
+        self.read_head(|read, head| verification::review_fresh(read, head, self.run))
     }
 
     pub(super) fn record_infra(&self, error: &anyhow::Error) -> Result<Step> {
