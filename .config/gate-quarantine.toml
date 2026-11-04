@@ -21,4 +21,5 @@ tests = [
   { binary = "corral-ops::cleanup_ops", test = "cleanup_intent::an_explicit_keep_worktree_is_never_removed", fix = "T-829", reason = "Read view expires past the 30 s limit under load." },
   { binary = "corral-ops::cleanup_ops", test = "autopilot_changes_releases_tools_but_keeps_agent_and_workspace", fix = "T-829", reason = "Read view expires past the 30 s limit under load." },
   { binary = "corral-ops", test = "dispatch_policy::tests::completed_coding_work_is_replaced_on_the_next_sync", fix = "T-829", reason = "Read view expires past the 30 s limit under load." },
+  { binary = "corral-ops::autopilot_ops", test = "exhausted_rounds_escalate_to_needs_me_and_the_owner_can_still_approve", fix = "T-829", reason = "Read view expires past the 30 s limit under load." },
 ]
