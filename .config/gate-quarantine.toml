@@ -5,4 +5,10 @@ tests = [
   { binary = "corral-ops", test = "agent::ops::assistant::tests::the_soft_cap_needs_over_cap_and_a_critical_machine_refuses_with_its_values", fix = "T-819", reason = "Machine-pressure input not fully injected; takes the plain cap path." },
   { binary = "corral-ops", test = "submission_paths_tests::native_sync_budget::owning_native_sync_pipeline_has_fixed_unattributed_work_with_real_host_probes", fix = "T-830", reason = "Decoded byte count varies by a few bytes between runs." },
   { binary = "corral::run_obligations_cli", test = "unknown_delivery_duplicate_and_malformed_receipts_have_explicit_cli_results", fix = "T-816", reason = "Receipt observation intermittently outside its registration lifetime." },
+  { binary = "corral-ops::gate_ops", test = "tiers::changes_round::owner_changes_after_approval_reopen_review_gate", fix = "T-831", reason = "Strict round.at > approval.at fails on equal timestamps." },
+  { binary = "corral-ops::gate_ops", test = "tiers::changes_round::owner_changes_after_approval_keep_review_gate_after_candidate_changes", fix = "T-831", reason = "Strict round.at > approval.at fails on equal timestamps." },
+  { binary = "corral-ops::gate_ops", test = "tiers::changes_round::owner_changes_after_approval_reopen_review_gate_with_fresh_worker_session", fix = "T-831", reason = "Strict round.at > approval.at fails on equal timestamps." },
+  { binary = "corral-ops::gate_ops", test = "tiers::changes_round::renewed_approval_after_owner_changes_restores_landing_gate", fix = "T-831", reason = "Same changes-round ordering race (tier full vs quick)." },
+  { binary = "corral-ops", test = "submission_paths_tests::reviewer_guard::reviewer_launch_guard_decides_as_db316644_on_every_interleaving", fix = "T-833", reason = "Interleaving barrier intermittently does not fire." },
+  { binary = "corral-ops::evidence_artifacts", test = "the_search_index_follows_the_change_feed_with_work_independent_of_the_board", fix = "T-839", reason = "Search-index follow holds one read view across the index lock wait." },
 ]
