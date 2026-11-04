@@ -145,15 +145,20 @@ test("the main view bar keeps its focused hints and click targets at the minimum
     expect(bar).toContain("Esc");
     expect(bar).toContain("Enter");
     expect(bar).not.toContain("…");
-    const graph = width < 64 ? " G " : " Graph ", timeline = width < 64 ? " L " : " Timeline ";
-    const click = (label: string): TuiMouseEvent => ({ type: "click", button: "left", x: bar.indexOf(label) + 1, y: 0,
-      screenX: bar.indexOf(label) + 1, screenY: 0, width, height: 24, shift: false, alt: false, ctrl: false, clickCount: 1 });
-    root.handleMouse?.(click(width < 64 ? " U " : " Usage "));
+    const click = (row: string, y: number, label: string): TuiMouseEvent => ({ type: "click", button: "left", x: row.indexOf(label) + 1, y,
+      screenX: row.indexOf(label) + 1, screenY: y, width, height: 24, shift: false, alt: false, ctrl: false, clickCount: 1 });
+    root.handleMouse?.(click(bar, 0, width < 64 ? " U " : " Usage "));
     expect(native.workbench.view).toBe("usage");
-    root.handleMouse?.(click(graph));
+    root.handleMouse?.(click(bar, 0, width < 64 ? " A " : " Activity "));
+    expect(native.workbench.view).toBe("activity");
+    // Graph and Timeline are Activity sub-tabs on the second row.
+    const sub = stripTerminalSequences(renderLayoutFrame(root, width, 24, () => {}).lines[1] ?? "");
+    expect(visibleWidth(sub)).toBeLessThanOrEqual(width);
+    root.handleMouse?.(click(sub, 1, " Graph "));
     expect(native.workbench.view).toBe("graph");
-    root.handleMouse?.(click(timeline));
+    root.handleMouse?.(click(sub, 1, " Timeline "));
     expect(native.workbench.view).toBe("timeline");
+    native.workbench.setView("changes");
   }
   native.dispose();
 });
