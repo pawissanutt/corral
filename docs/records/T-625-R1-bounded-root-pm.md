@@ -76,3 +76,14 @@ remain untouched, and typed PM reads still reject invalid PM data. The existing
 failing test is unchanged. `.evidence/pm-migration-repair.log` records **10 passed**
 across migrate_workspace, profile_state_records and root_pm_bounded, including
 unchanged exact PM counters. No new test or timing exemption was added.
+
+## Second gate repair
+
+The next gate exposed a distinct selection error in recovery: the drain's
+unfinished-work view was reused after reconciliation had settled a receipt, so
+classification could no longer see the committed capture result. PM recovery
+classification now reads each dangling call's named root receipt, falling back
+to the existing task PM-receipt index; drain/reconcile retain unfinished-work
+selection. The unchanged killed-executor recovery regression passes all four
+capture/reply pre/post-effect cases (1.46s), recorded in
+`.evidence/pm-recovery-repair.log`. No tests or exemptions were added.
