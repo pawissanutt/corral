@@ -8,6 +8,8 @@ use crate::Ctx;
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct SlotUsage {
     pub tasks: usize,
+    /// Durable coding work in progress, independent of slot ownership.
+    pub wip: usize,
     pub reviews: usize,
     pub gates: usize,
     pub reservations: usize,
@@ -48,6 +50,12 @@ impl SlotUsage {
             ..Self::default()
         };
         for task in tasks {
+            usage.wip += usize::from(
+                matches!(
+                    task.status,
+                    Status::Running | Status::NeedsMe | Status::Review
+                ) && task.current_run().is_some(),
+            );
             let sharing = gate_shares_dispatch_slot(task);
             usage.tasks += usize::from(task.status.holds_slot() && task.holds_dispatch_slot());
             usage.parked += usize::from(
@@ -283,6 +291,7 @@ impl SlotUsage {
             count_gates: limits.count_gates,
             ..Self::default()
         };
+        usage.wip = crate::wip::count(heads);
         for head in heads {
             let run = head.current_run.as_ref();
             let reserved = head.launch.as_ref().is_some_and(|l| l.reserved);

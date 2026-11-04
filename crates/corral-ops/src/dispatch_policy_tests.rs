@@ -13,6 +13,8 @@ mod held;
 mod plan_targets;
 #[path = "dispatch_policy_soft_tests.rs"]
 mod soft_target;
+#[path = "dispatch_policy_wip_tests.rs"]
+mod wip;
 
 struct Fixture {
     _tmp: tempfile::TempDir,

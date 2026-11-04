@@ -218,6 +218,8 @@ impl Counts {
             needs: count(Status::NeedsMe),
             used: slots.total(),
             limit: config.limits.running,
+            wip: slots.wip,
+            wip_limit: config.limits.wip,
             review: count(Status::Review),
             ready: count(Status::Ready),
             tasks: slots.tasks,

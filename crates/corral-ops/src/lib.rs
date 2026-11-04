@@ -146,6 +146,7 @@ mod verification;
 pub mod viewers;
 pub mod watch;
 mod watchdog;
+pub mod wip;
 
 #[cfg(test)]
 mod native_runtime_tests;

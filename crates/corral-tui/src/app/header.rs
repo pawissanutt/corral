@@ -130,6 +130,12 @@ impl App {
             Span::styled(" · ", theme::dim()),
             Span::styled(name, Style::new().fg(theme::FG)),
             gap(),
+            Span::raw(if c.wip_limit == 0 {
+                format!("WIP {}/off", c.wip)
+            } else {
+                format!("WIP {}/{}", c.wip, c.wip_limit)
+            }),
+            gap(),
             Span::styled(
                 if narrow {
                     format!("▲ {}", c.needs)
@@ -199,11 +205,11 @@ impl App {
         for (i, s) in spans.iter().enumerate() {
             let w = s.width() as u16;
             let hit = match i {
-                4 => Some(Hit::Column(Status::NeedsMe)),
-                6 => Some(Hit::Column(Status::Running)),
-                8 => Some(Hit::Column(Status::Review)),
-                10 => Some(Hit::Column(Status::Ready)),
-                12 => Some(Hit::Key(hit::press(KeyCode::Char('S')))),
+                6 => Some(Hit::Column(Status::NeedsMe)),
+                8 => Some(Hit::Column(Status::Running)),
+                10 => Some(Hit::Column(Status::Review)),
+                12 => Some(Hit::Column(Status::Ready)),
+                14 => Some(Hit::Key(hit::press(KeyCode::Char('S')))),
                 _ => None,
             };
             if let Some(hit) = hit {
