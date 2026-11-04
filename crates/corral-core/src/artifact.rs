@@ -85,6 +85,22 @@ impl Store {
             "staging evidence requires a task update"
         );
         let put = self.put_gate_blob(bytes)?;
+        self.stage_prepared_task_evidence(area, key, put, doc)
+    }
+
+    /// Publishes a previously prepared blob in the current task update. Prepare slow blob
+    /// I/O before opening the task's view; references and reservations still commit atomically.
+    pub fn stage_prepared_task_evidence(
+        &self,
+        area: &str,
+        key: &str,
+        put: crate::blob::PutBlob,
+        doc: impl FnOnce(&BlobRef) -> serde_json::Value,
+    ) -> Result<bool> {
+        anyhow::ensure!(
+            self.has_record_unit(),
+            "staging evidence requires a task update"
+        );
         let created = self.record_row(area, key)?.is_none();
         self.save_record(area, key, &doc(&put.blob))?;
         self.stage_evidence_reservation(put.reservation)?;

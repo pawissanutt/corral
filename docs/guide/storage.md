@@ -21,7 +21,7 @@ if it fills, the terminal reports that a key was not queued rather than blocking
 
 One process-shared database backend owns one writer and at most two **idle** readers. Active
 read views use additional handles only for their lifetime. Displayed board heads are detached
-from their source view. The default read lifetime is five seconds; a two-second maintenance
+from their source view. The default read lifetime is 30 seconds; a two-second maintenance
 sweep revokes expired idle views and closes their file handles, even while sync is waiting on
 an external command. A query already executing is not interrupted. Custom `view_max_age`
 overrides retain their configured lifetime, so long overrides can still retain WAL frames.
@@ -41,7 +41,9 @@ process's valid snapshot. Inventory refreshes an explicitly begun ownership pass
 leave a persistent read view on a reusable command context. Long syncs reuse fresh ownership
 guards but re-read an expired summary before the next check; completed steps and external
 effects are never retried by that renewal. Explicit pinned passes and frozen snapshots still
-expire normally. Normal uncontended cycles reset the WAL to zero. Usage refresh batches
+expire normally. Normal uncontended cycles reset the WAL to zero. Completion releases its admission head before evidence I/O, and artifact
+scans prepare blobs without a task/record read view, then atomically publish metadata and
+reservations in a fresh task operation. Usage refresh batches
 per-run reviewer verdict cursor records, without combining transactions across external side
 effects. Costly periodic syncs back off to 19 times their CPU cost (2–60 seconds); explicit
 refresh triggers bypass that wait and bursts coalesce into one pass. Explicit session binding

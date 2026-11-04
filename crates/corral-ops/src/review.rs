@@ -168,6 +168,7 @@ fn done_inner(
         bail!("commit_before_checkpoint: commit work, then save a checkpoint before done");
     }
     let audit = crate::completion::completion_check_task(ctx, &head, summary)?;
+    drop(head); // Admission is materialized; no read snapshot spans evidence I/O below.
     if !audit.passed {
         bail!("completion audit failed: {}", audit.failures.join("; "));
     }

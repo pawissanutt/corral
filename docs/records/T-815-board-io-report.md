@@ -1,5 +1,9 @@
 # T-815: responsive terminal and bounded WAL retention
 
+Current policy after changes round 2: **30-second default read views** (PM decision B),
+with short operation scopes and renewal for idempotent sync guards. Historical five-second
+observations below describe earlier candidates or explicit regression seams.
+
 ## Implementation
 
 - `app/presentation.rs` separates the terminal driver from the app model. The terminal owns
@@ -13,7 +17,7 @@
   the previous second writer/pool is gone. The old reader pool retained its entire concurrency
   high-water mark. It now retains at most two idle file connections. Cached board heads and
   long sync/autopilot selection lists no longer keep their source read transactions.
-- Read leases default to five seconds. Maintenance revokes expired idle leases even if their
+- Read leases default to 30 seconds. Maintenance revokes expired idle leases even if their
   owner never calls another read, closes their file handles and makes subsequent reads return
   Expired. It does not silently change a snapshot's contents. A separate two-second maintenance
   worker runs even during long sync steps; it never waits for an executing query or writer mutex.
@@ -59,11 +63,12 @@ Other targeted checks: `cargo check -p corral-tui -p corral-core --all-targets` 
 checks passed. The initial combined focused command exhausted its 200-second shell window
 while compiling ops; the remaining targeted tests were then run successfully, not skipped.
 
-Added persistent tests: **4**: terminal transport, SQLite reader/WAL, inventory pass lifetime,
-and expired ownership-guard renewal. The first two take approximately **0.07 seconds combined**
+Added persistent tests: **5**: terminal transport, SQLite reader/WAL, inventory pass lifetime,
+expired ownership-guard renewal, and slow blob preparation outside the publication view. The first two take approximately **0.07 seconds combined**
 in focused runs; the two clock-driven lifetime tests are included in an eight-case suite taking
 **0.20 seconds total**. Gate registration accounting also counts one renamed existing cadence
-test (five additions, net four new tests). No new end-to-end matrix,
+test (six additions, net five new tests). The new two-file blob-preparation seam takes 0.58s;
+large-history completion coverage is reused, not added. No new end-to-end matrix,
 prose pins, large histories or slow/load tests. Existing pragma assertions now require NORMAL
 rather than FULL, as explicitly required by this task; the recovery FULL test is unchanged.
 
@@ -129,6 +134,59 @@ was 30.576s; the slowest existing Plan case took 30.575s (report-only observatio
 change). The contracted quick gate follows the committed/rebased fix. Evidence:
 `plan-sync-red.log`, `guard-renewal-red.log`, `guard-renewal-green.log`, `plan-sync-green.log`,
 and `sync-ownership-cost.log`.
+
+## Changes round 2: completion/evidence lifetime (also T-788)
+
+The second landing gate failed only `progress_ops::obligations::done_with_large_history_and_evidence_scratch`.
+An isolated replay reproduced expiry after 5.003751441s. The backtrace identified the artifact
+scan's single task/record unit around repeated blob writes, not a load threshold. The PM chose
+30 seconds as the new global default; the immediate explicit-bind claim and sync renewal stay.
+Existing ownership regressions keep explicit five-second seams rather than being weakened to
+match the new default.
+
+Completion now drops its admission head before Git/evidence work. Artifact discovery loads
+owned run/known-path data in a short view, closes it, and prepares each blob plus bounded
+extracted text without a task/record view. A fresh final task operation checks the run again
+and atomically publishes all artifact rows, blob references, reservations and events. Failed
+preparation can leave only reserved, unreferenced blobs eligible for GC, not partial artifact
+registrations. The atomic crash/retry contract is unchanged.
+
+A two-file ManualClock seam advances two seconds at each blob reservation with a **one-second**
+read lifetime: the original code fails at two seconds; the new pipeline passes, independently
+of the 30-second default. The existing killed-done crash regression also passes at both scan
+and committed boundaries. No test timeout increased.
+
+The requested command `cargo nextest run -p corral-ops --test progress_ops --test gate_tiers_e2e
+--no-fail-fast` passed **42/42 tests, zero skipped**, inside the private plugin-free server.
+T-788's existing large-history/evidence case passes in 14.642s: 1637 scratch artifacts, 439
+synthetic historical artifacts and 50 large checkpoints, with **zero task listings and zero
+full task lookups** during completion. Timings show evidence scanning finishing at 14.029s and
+transition commit at 14.082s; its view no longer spans that I/O phase. Raw evidence is in
+`done-history-red.log`, `scan-view-red.log`, `scan-view-green.log`, `scan-atomicity.log`, and
+`round2-required-tests.log`.
+
+### Requested audit of other long single-view paths
+
+- **Migration** — `corral-core/src/migrate/apply.rs::import` sets a pre-existing 24-hour lifetime
+  only on the unpublished, exclusively locked migration candidate; `import::verify` can read
+  whole legacy history on that candidate, then closes views before the TRUNCATE checkpoint.
+  The existing `migrate::view_age_tests::import_verification_can_outlive_normal_view_age` uses
+  121-second clock steps. This is an intentional isolated-import exception, not a live-WAL
+  reader; no change needed and no timeout was raised.
+- **Plan verification** — `plan_acceptance.rs::plan_verify` owns its tracker/candidate values
+  across the gate; `capture.rs::member` scopes keyed head/event reads per member. It does not
+  hold one database view across the entire blocking gate. Per-member integrity checks can
+  still read that member's artifact evidence while its head lives. The existing tests exercise
+  the long Plan/gate journeys but not unbounded per-member evidence data. All eight Plan E2E
+  cases pass; no speculative rewrite was made.
+- **Search rebuild** — `content_refresh.rs` and `content_index.rs::{one_view,build_locked}`
+  intentionally retain one coherent snapshot through whole-history source derivation and
+  artifact extraction before publishing its change-feed cursor. This remains a potential long
+  reader; blindly reopening it could acknowledge unindexed concurrent changes. The reviewed
+  tests cover feed consistency and a large JSON cache read, not a large database-history
+  rebuild exceeding the view lifetime. Left unchanged under the instruction to fix only
+  paths already exercised with large data. A future split must materialize coherent input
+  records/cursor before slow extraction, not simply renew the cursor's source view.
 
 ## Limits / not verified
 
