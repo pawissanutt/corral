@@ -34,6 +34,7 @@ mod pricing_cmd;
 mod question_cmd;
 mod queue;
 mod repair_cmd;
+mod report_cmd;
 mod run_cmd;
 mod search_cmd;
 mod selection_cmd;
@@ -104,6 +105,8 @@ pub enum Cmd {
     },
     /// Generate and pin a deterministic digest of recent outcomes and cost/time totals
     Digest(digest_cmd::DigestArgs),
+    /// Generate and pin a self-contained HTML cost and performance report (est. API-equivalent)
+    Report(report_cmd::ReportArgs),
     /// Revert a task's exact landed commits on base and reopen it in Backlog; never push
     Revert { id: String },
     /// Build and pin a sprint review from events, artifacts and recorded usage

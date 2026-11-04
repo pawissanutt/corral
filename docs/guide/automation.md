@@ -282,6 +282,15 @@ or `corral sync --watch` for regular syncs. Each report has its own pin and prot
 Report artifact. Like sprint reports, artifacts attach to the first existing task;
 an empty workspace gets one Done report-anchor task, reused by later digests.
 
+`corral report [--since 30d] [--project <p>] [--open] [--json]` writes one
+self-contained HTML page (inline CSS, SVG charts and script; no network) covering
+spend, models and modes, tasks, the quality loop, time and data quality. Dollars are
+est. API-equivalent and unpriced tokens are their own category. The page is a Report
+artifact on the same anchor, kept under one follow-latest pin per title, so the
+board's pin always opens the newest page through the artifact server. Set
+`report = true` under `[digest]` to regenerate it (last 30 days) with each scheduled
+digest; it is off by default.
+
 ## Reverting a landing
 
 ```bash

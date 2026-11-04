@@ -390,6 +390,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
         }
         Cmd::ReviewSprint(args) => crate::sprint_cmd::run(&open(&root)?, args),
         Cmd::Digest(args) => crate::digest_cmd::run(&open(&root)?, args),
+        Cmd::Report(args) => crate::report_cmd::run(&open(&root)?, args),
         Cmd::Revert { id } => {
             let result = corral_ops::revert(&open(&root)?, &id)?;
             println!(
