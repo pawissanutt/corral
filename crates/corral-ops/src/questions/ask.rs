@@ -3,7 +3,7 @@
 use anyhow::Result;
 use corral_core::agent::{
     AGENT_RECORD_VERSION, AgentQuestion, AgentRunState, BLOCKING_QUESTIONS_MAX, ContainerRef,
-    HostHealth, OutboxState, PENDING_QUESTIONS_MAX, QUESTION_CONTEXT_REFS_MAX,
+    HostHealth, OutboxState, PENDING_QUESTIONS_MAX, QUESTION_CONTEXT_REFS_MAX, QUESTION_GROUP_MAX,
     QUESTION_OPTIONS_MAX, QUESTION_TEXT_MAX_BYTES, QuestionActor, QuestionAsked, QuestionKind,
     QuestionState, QuestionWake, QuestionWakeRoute, RequestOrigin, pm_state,
 };
@@ -34,6 +34,49 @@ pub struct AskPayload {
     pub needed_by: Option<Timestamp>,
 }
 
+/// One question of a batched ask; the batch shares `blocking`, `context_refs` and `needed_by`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AskItem {
+    pub kind: QuestionKind,
+    pub text: String,
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default)]
+    pub recommendation: Option<String>,
+}
+
+/// A batched ask: 1-4 questions opened together as one group in one transaction.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AskBatchPayload {
+    pub questions: Vec<AskItem>,
+    #[serde(default)]
+    pub blocking: bool,
+    #[serde(default)]
+    pub context_refs: Vec<String>,
+    #[serde(default)]
+    pub needed_by: Option<Timestamp>,
+}
+
+impl AskBatchPayload {
+    /// Each member as a single-question payload carrying the shared fields.
+    pub fn members(&self) -> Vec<AskPayload> {
+        self.questions
+            .iter()
+            .map(|item| AskPayload {
+                kind: item.kind,
+                blocking: self.blocking,
+                text: item.text.clone(),
+                options: item.options.clone(),
+                recommendation: item.recommendation.clone(),
+                context_refs: self.context_refs.clone(),
+                needed_by: self.needed_by,
+            })
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WithdrawPayload {
@@ -46,6 +89,17 @@ pub struct Opened {
     pub key: String,
     pub revision: u32,
     pub blocking: bool,
+}
+
+pub fn validate_batch(batch: &AskBatchPayload) -> Result<(), QuestionRefusal> {
+    let len = batch.questions.len();
+    if len == 0 || len > QUESTION_GROUP_MAX {
+        return Err(QuestionRefusal::new(
+            RefusalKind::Bounds,
+            format!("{len} questions; a batch holds 1 to {QUESTION_GROUP_MAX}"),
+        ));
+    }
+    batch.members().iter().try_for_each(validate_ask)
 }
 
 pub fn validate_ask(payload: &AskPayload) -> Result<(), QuestionRefusal> {
@@ -113,28 +167,90 @@ pub fn open(
     now: Timestamp,
 ) -> Result<Opened, QuestionRefusal> {
     validate_ask(&payload)?;
+    admit(state, container, 1, payload.blocking)?;
+    Ok(push(state, container, origin, payload, None, route, now))
+}
+
+/// Opens a batch as one group: every member or none. The first member leads the group and
+/// carries its single PM wake; siblings record their wake as already posted, so the PM is woken
+/// once for the batch and reads the group from the leader.
+pub fn open_group(
+    state: &mut AgentRunState,
+    container: &ContainerRef,
+    origin: &RequestOrigin,
+    batch: AskBatchPayload,
+    route: QuestionWakeRoute,
+    now: Timestamp,
+) -> Result<(String, Vec<Opened>), QuestionRefusal> {
+    validate_batch(&batch)?;
+    let members = batch.members();
+    let grouped = members.len() > 1;
+    admit(state, container, members.len(), batch.blocking)?;
+    let group = question_key(container, state.questions.len() + 1);
+    let mut opened = Vec::new();
+    for (i, payload) in members.into_iter().enumerate() {
+        let route = if i == 0 {
+            route
+        } else {
+            QuestionWakeRoute::None
+        };
+        let group = grouped.then(|| group.clone());
+        opened.push(push(state, container, origin, payload, group, route, now));
+    }
+    Ok((group, opened))
+}
+
+/// Pending and blocking limits for `count` new questions; a group counts once for blocking.
+fn admit(
+    state: &AgentRunState,
+    container: &ContainerRef,
+    count: usize,
+    blocking: bool,
+) -> Result<(), QuestionRefusal> {
     let pending: Vec<&AgentQuestion> = state
         .questions
         .iter()
         .filter(|q| q.recorded_pending())
         .collect();
-    if pending.len() >= PENDING_QUESTIONS_MAX {
+    if pending.len() + count > PENDING_QUESTIONS_MAX {
         return Err(limit(format!(
-            "{} already has {PENDING_QUESTIONS_MAX} pending questions",
-            container.key()
+            "{} has {} pending questions; {count} more exceed the bound of \
+             {PENDING_QUESTIONS_MAX}",
+            container.key(),
+            pending.len()
         )));
     }
-    if payload.blocking && pending.iter().filter(|q| q.blocking).count() >= BLOCKING_QUESTIONS_MAX {
+    let mut blocking_units: Vec<&str> = pending
+        .iter()
+        .filter(|q| q.blocking)
+        .map(|q| q.group.as_deref().unwrap_or(&q.key))
+        .collect();
+    blocking_units.sort_unstable();
+    blocking_units.dedup();
+    if blocking && blocking_units.len() >= BLOCKING_QUESTIONS_MAX {
         return Err(limit(format!(
             "{} already has a pending blocking question",
             container.key()
         )));
     }
+    Ok(())
+}
+
+fn push(
+    state: &mut AgentRunState,
+    container: &ContainerRef,
+    origin: &RequestOrigin,
+    payload: AskPayload,
+    group: Option<String>,
+    route: QuestionWakeRoute,
+    now: Timestamp,
+) -> Opened {
     let key = question_key(container, state.questions.len() + 1);
     let identity = &origin.identity;
     state.questions.push(AgentQuestion {
         version: AGENT_RECORD_VERSION,
         key: key.clone(),
+        group,
         revision: 1,
         asked: QuestionAsked {
             request_id: origin.request_id.clone(),
@@ -168,11 +284,11 @@ pub fn open(
         unattended_at: None,
         terminal: None,
     });
-    Ok(Opened {
+    Opened {
         key,
         revision: 1,
         blocking: payload.blocking,
-    })
+    }
 }
 
 /// Retracts a pending question of the caller's own container and records the reason.

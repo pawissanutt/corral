@@ -33,27 +33,46 @@ export function receiptLookupTool(pm = false): CorralToolSpec {
   };
 }
 
+const Kind = Type.Union([
+  Type.Literal("clarification"), Type.Literal("technical_choice"), Type.Literal("owner_only"),
+  Type.Literal("permission"),
+], { description: "clarification or technical_choice the PM may answer; owner_only and permission always go to the owner" });
+
+const ASK_ITEM_KEYS = ["kind", "text", "options", "recommendation"] as const;
+
 export const askTool: CorralToolSpec = {
   name: "corral_ask",
   label: "Ask corral a question",
   description: "Record a question for the PM (or the owner) and return at once with its key. A blocking question "
     + "still returns immediately: keep working on anything independent, and wait for the answer message before "
-    + "relying on it. corral_done refuses while any of your questions is pending; withdraw one you no longer need.",
+    + "relying on it. corral_done refuses while any of your questions is pending; withdraw one you no longer need. "
+    + "Batch independent questions in one call: pass `questions` (1-4, each kind/text/options/recommendation) "
+    + "instead of kind/text; they open as one group the PM answers together, sharing blocking, context_refs "
+    + "and needed_by.",
   op: "ask",
   parameters: Type.Object({
-    kind: Type.Union([
-      Type.Literal("clarification"), Type.Literal("technical_choice"), Type.Literal("owner_only"),
-      Type.Literal("permission"),
-    ], { description: "clarification or technical_choice the PM may answer; owner_only and permission always go to the owner" }),
-    text: Text("The question, at most 4 KiB"),
+    kind: Type.Optional(Kind),
+    text: Type.Optional(Text("The question, at most 4 KiB")),
     blocking: Type.Optional(Type.Boolean({ description: "Whether your next step depends on the answer" })),
     options: Strings("Up to six concrete options", 6),
     recommendation: Type.Optional(Text("The option you recommend and why")),
+    questions: Type.Optional(Type.Array(Type.Object({
+      kind: Kind,
+      text: Text("The question, at most 4 KiB"),
+      options: Strings("Up to six concrete options", 6),
+      recommendation: Type.Optional(Text("The option you recommend and why")),
+    }), { minItems: 1, maxItems: 4, description: "A batch of 1-4 questions opened as one group; omit kind/text" })),
     context_refs: Strings("Up to sixteen refs (artifact refs, files, task IDs) that support the question", 16),
     needed_by: Type.Optional(Text("An RFC 3339 time the answer is needed by (a hint only)")),
   }),
-  payload: (params: Params) =>
-    pick(params, ["kind", "text", "blocking", "options", "recommendation", "context_refs", "needed_by"]),
+  payload: (params: Params) => {
+    if (params.questions === undefined) {
+      return pick(params, ["kind", "text", "blocking", "options", "recommendation", "context_refs", "needed_by"]);
+    }
+    // A batch carries only its own fields; stray single-question fields reach Rust, which refuses the mix.
+    const questions = (params.questions as Params[]).map((item) => pick(item, ASK_ITEM_KEYS));
+    return { ...pick(params, ["kind", "text", "options", "recommendation", "blocking", "context_refs", "needed_by"]), questions };
+  },
 };
 
 export const withdrawTool: CorralToolSpec = {

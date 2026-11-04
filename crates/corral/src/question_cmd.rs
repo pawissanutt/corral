@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use corral_core::agent::QuestionKind;
 use corral_ops::Ctx;
-use corral_ops::questions::{self, Actor, AnswerInput, Applied, QuestionView};
+use corral_ops::questions::{self, Actor, AnswerInput, Applied, GroupAnswer, QuestionView};
 
 #[derive(Args)]
 pub struct QuestionArgs {
@@ -70,6 +70,27 @@ pub(crate) enum QuestionCmd {
         #[arg(long)]
         scope_note: Option<String>,
         /// Answer as the owner: any pending question, or supersede an answer
+        #[arg(long)]
+        owner: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Answer several members of one question group (a batched ask) in one command
+    AnswerGroup {
+        /// The group key or any member's key
+        key: String,
+        /// JSON array of {"key", "rev", "text"?, "option"?}; omit to answer every pending
+        /// member at its current revision with --text
+        #[arg(long)]
+        answers: Option<String>,
+        /// Shared answer text for members without their own
+        #[arg(long, default_value = "")]
+        text: String,
+        /// Canonical basis ref (repeatable), shared by every member
+        #[arg(long = "basis")]
+        basis: Vec<String>,
+        #[arg(long)]
+        scope_note: Option<String>,
         #[arg(long)]
         owner: bool,
         #[arg(long)]
@@ -147,8 +168,13 @@ fn print_view(view: &QuestionView) {
         .closure
         .map(|c| format!(" [{}]", c.as_str()))
         .unwrap_or_default();
+    let group = q
+        .group
+        .as_deref()
+        .map(|g| format!("  group {g}"))
+        .unwrap_or_default();
     println!(
-        "{}  rev {}  {:?}{closure}  {:?}{}  {}",
+        "{}  rev {}  {:?}{closure}  {:?}{}{group}  {}",
         q.key,
         q.revision,
         view.effective_state,
@@ -178,6 +204,10 @@ pub fn run(ctx: &Ctx, args: QuestionArgs) -> Result<()> {
             } else {
                 print_view(&view);
                 println!("{}", serde_json::to_string_pretty(&view.question)?);
+                if view.question.group.is_some() {
+                    println!("group members:");
+                    questions::group(ctx, &key)?.iter().for_each(print_view);
+                }
             }
             Ok(())
         }
@@ -201,6 +231,40 @@ pub fn run(ctx: &Ctx, args: QuestionArgs) -> Result<()> {
                 &questions::answer(ctx, &key, rev, actor(owner), input)?,
                 json,
             )
+        }
+        QuestionCmd::AnswerGroup {
+            key,
+            answers,
+            text,
+            basis,
+            scope_note,
+            owner,
+            json,
+        } => {
+            let answers: Vec<GroupAnswer> = match answers {
+                Some(raw) => serde_json::from_str(&raw)
+                    .context("--answers is not a JSON array of {key, rev, text?, option?}")?,
+                None => questions::group(ctx, &key)?
+                    .into_iter()
+                    .filter(|view| view.pending)
+                    .map(|view| GroupAnswer {
+                        key: view.question.key,
+                        rev: view.question.revision,
+                        text: None,
+                        option: None,
+                    })
+                    .collect(),
+            };
+            let shared = AnswerInput {
+                text,
+                option: None,
+                basis_refs: basis,
+                scope_note,
+            };
+            for applied in questions::answer_group(ctx, &key, owner, &shared, &answers)? {
+                print_applied(&applied, json)?;
+            }
+            Ok(())
         }
         QuestionCmd::Escalate {
             key,

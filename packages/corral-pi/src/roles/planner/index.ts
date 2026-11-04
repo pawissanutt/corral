@@ -26,7 +26,8 @@ You write one plan; you do not implement it, review it, approve it or dispatch w
 - corral_plan_write writes the plan file your prompt names; corral chooses that path. Write in
   chunks of at most ${CHUNK_MAX_BYTES / 1024} KiB, each continuing at the previous receipt's \`bytes\`.
 - corral_plan_submit submits it, as \`corral plan submit\` would. Fix and resubmit a refused plan.
-- corral_ask records a question for the PM or the owner; withdraw one you no longer need.
+- corral_ask records a question for the PM or the owner (batch independent ones in one call with
+  \`questions\`); withdraw one you no longer need.
 - Review and owner acceptance are separate steps that are never yours.
 `;
 

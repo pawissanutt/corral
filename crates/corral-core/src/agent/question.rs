@@ -11,7 +11,10 @@ pub const QUESTION_OPTIONS_MAX: usize = 6;
 pub const QUESTION_CONTEXT_REFS_MAX: usize = 16;
 pub const QUESTION_TRIAGE_MAX: usize = 16;
 pub const ANSWER_TEXT_MAX_BYTES: usize = 8 * 1024;
+/// Pending blocking questions, counting one question group (one batched ask) as one.
 pub const BLOCKING_QUESTIONS_MAX: usize = 1;
+/// Questions one batched ask opens together as a group.
+pub const QUESTION_GROUP_MAX: usize = 4;
 /// Open plus escalated questions per asking run or review child.
 pub const PENDING_QUESTIONS_MAX: usize = 8;
 
@@ -142,6 +145,9 @@ pub struct AgentQuestion {
     pub version: u32,
     /// `<task>/<run>[/<review-child>]/Q<n>`, globally unique.
     pub key: String,
+    /// The key of the group's first question when one batched ask opened it with siblings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     pub revision: u32,
     pub asked: QuestionAsked,
     pub kind: QuestionKind,

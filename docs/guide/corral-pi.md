@@ -1317,7 +1317,10 @@ A free-text `channel_id` wait requires an explicit receipt; only its deadline is
 pending manual wait appears in PM attention after 30 minutes. The tool requires a deadline.
 When the wait leaves `pending`, sync posts one `wait_wake` for it.
 
-**Questions.** `corral_ask` returns at once, blocking or not, and the worker may keep working;
+**Questions.** `corral_ask` returns at once, blocking or not, and the worker may keep working.
+A `questions` batch (1-4 items sharing `blocking`, `context_refs` and `needed_by`) opens as one
+group keyed by its first member: the PM gets one wake, the group counts once against the blocking
+limit, and `corral question answer-group <key>` answers its members, each at its own revision;
 the task reaches Blocked only when a question is escalated or becomes unattended. While any of
 the run's questions is pending, `corral_done` is refused `question_state` with the question keys,
 and the run stays live.
