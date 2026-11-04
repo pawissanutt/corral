@@ -24,7 +24,7 @@ const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker"
 const UPSTREAM = ["read", "edit", "write", "bash", "grep", "find", "ls"];
 const CORRAL_TOOLS = [
   "corral_memory_list", "corral_memory_read", "corral_memory_put", "corral_memory_remove",
-  "corral_receipt_lookup", "corral_ask", "corral_withdraw", "corral_wait", "corral_progress", "corral_checkpoint", "corral_evidence",
+  "corral_receipt_lookup", "corral_content_read", "corral_ask", "corral_withdraw", "corral_wait", "corral_progress", "corral_checkpoint", "corral_evidence",
   "corral_artifact", "corral_gate", "corral_done",
 ];
 const LSP_TOOLS = ["lsp_diagnostics", "lsp_definition", "lsp_references"];
@@ -85,7 +85,7 @@ test("the package's worker role is the OD3 loadout and allows only the worker's 
   const tools = worker.tools(context);
   expect(tools.map((tool) => tool.name)).toEqual(CORRAL_TOOLS);
   expect([...worker.corralOps].sort()).toEqual(
-    ["hello", "event", "receipt_lookup", "ask", "withdraw", "wait", "progress", "checkpoint", "evidence", "artifact",
+    ["hello", "event", "receipt_lookup", "read_content", "ask", "withdraw", "wait", "progress", "checkpoint", "evidence", "artifact",
       "gate", "done", "todo", "job", "job_monitor", "memory_list", "memory_read", "memory_put", "memory_remove"].sort(),
   );
   expect(tools.every((tool) => worker.corralOps.includes(tool.op))).toBeTrue();
