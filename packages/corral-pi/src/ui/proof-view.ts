@@ -1,14 +1,12 @@
 // Proof (F10) split layout: criterion list with an I T R A ladder and MORE sections beside the selected row's detail.
 // Below SPLIT_MIN columns the list collapses to a one-line picker above the same detail.
 // Read-only presentation of the canonical inspection; freshness comes only from corral.
-import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Inspection, InspectionStore } from "./inspection.ts";
 import { box, pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, PANEL_RULE, PANEL_SELECTED, PANEL_WARNING, PANEL_ERROR, RESET } from "./panels-view.ts";
 import { splitRow } from "./panels-chrome.ts";
-import {
-  ago, BG_END, bold, chip, chipRows, clock, glyphs, ladder, proofItems, sectionCount, SECTION_LABEL, sectionRule, short, stepChips,
-  toneColor, topChips, type Criterion, type ProofItem, type SectionId,
-} from "./proof-parts.ts";
+import { glyphs, ladder, proofItems, sectionCount, SECTION_LABEL, short, stepChips, topChips, type Criterion, type ProofItem, type SectionId } from "./proof-parts.ts";
+import { ago, bold, chip, chipRows, clock, field, hintRow, listRow as paneRow, sectionRule, toneColor, wrap } from "./panel-parts.ts";
 
 /** Main-area width at which Proof splits into list + detail; below it a one-line picker is used. */
 export const SPLIT_MIN = 105;
@@ -17,28 +15,16 @@ export const LIST_WIDTH = 42;
 export interface ProofFrame { readonly lines: string[]; readonly hits: Map<number, number>; readonly wide: boolean }
 
 const plainFit = (text: string, width: number) => stripTerminalSequences(truncateToWidth(plainLabel(text), Math.max(0, width), "…"));
-const wrap = (text: string, width: number) => wrapTextWithAnsi(text, Math.max(1, width));
-function field(label: string, value: string, width: number, labelWidth: number): string[] {
-  return wrap(plainLabel(value) || "—", width - labelWidth - 1)
-    .map((row, i) => `${PANEL_MUTED}${pad(i ? "" : label, labelWidth)}${PANEL_TEXT} ${row}`);
-}
 
 const HINTS: readonly (readonly [key: string, full: string, brief: string])[] = [
   ["j/k", "criterion", "criterion"], ["Enter", "expand section / open artifact", "expand / open artifact"], ["F7", "changes", "changes"],
 ];
 /** Key hints for the bottom row, shortening from full labels to bare keys before anything is cut. */
 export function proofHint(width: number, legend: boolean): string {
-  const help = legend ? "hide legend" : "what I T R A mean";
-  const forms = [[...HINTS.map(([key, full]) => `${key} ${full}`), `? ${help}`].join(" · "),
-    [...HINTS.map(([key, , brief]) => `${key} ${brief}`), `? ${legend ? "hide" : "legend"}`].join(" · "), [...HINTS.map(([key]) => key), "?"].join(" ")];
-  const text = forms.find(form => visibleWidth(form) + 2 <= width) ?? forms[forms.length - 1] ?? "";
-  return `${PANEL_BG}${PANEL_MUTED}${pad("  " + text, width)}${RESET}`;
+  return hintRow([...HINTS, ["?", legend ? "hide legend" : "what I T R A mean", legend ? "hide" : "legend"]], width);
 }
 
-function listRow(left: string, right: string, selected: boolean): string {
-  const body = splitRow(left, right, LIST_WIDTH - 3);
-  return selected ? `${PANEL_SELECTED}${PANEL_BLUE}▌${PANEL_TEXT} ${body} ${BG_END}` : `  ${body} `;
-}
+const listRow = (left: string, right: string, selected: boolean) => paneRow(left, right, selected, LIST_WIDTH);
 const tagOf = (c: Criterion) => c.required ? (c.live ? "req·live" : "req") : "opt";
 
 function header(store: InspectionStore, data: Inspection, width: number, legend: boolean, now: number): string[] {

@@ -1,8 +1,40 @@
+// Inbox (F11) split layout: item list beside the selected item's detail, matching Proof.
+// Below SPLIT_MIN columns the list collapses to a one-line picker above the same detail.
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { Text, matchesKey, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Text, matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { Role } from "../roles/types.ts";
 import { DecisionInbox, inboxIdentity, type InboxItem } from "./decision-inbox.ts";
-import { box, PANEL_BLUE, PANEL_MUTED, plainLabel } from "./panels-view.ts";
+import { ago, bold, chip, chipRows, clock, field, hintRow, listRow, sectionRule, toneColor, wrap, type Tone } from "./panel-parts.ts";
+import { splitRow } from "./panels-chrome.ts";
+import { box, pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_MUTED, PANEL_RULE, PANEL_TEXT, PANEL_WARNING, RESET } from "./panels-view.ts";
+import { LIST_WIDTH, SPLIT_MIN } from "./proof-view.ts";
+
+const fit = (text: string, width: number) => stripTerminalSequences(truncateToWidth(plainLabel(text), Math.max(0, width), "…"));
+const stateOf = (item: InboxItem): readonly [glyph: string, tone: Tone] => item.pending ? ["⚑", "warn"] : ["·", "none"];
+
+/** Key hints for the bottom row, shortening from full labels to bare keys before anything is cut. */
+export function inboxHint(width: number, history: boolean, legend: boolean): string {
+  return hintRow([["j/k", "item", "item"], ["Enter", "inspect", "inspect"], ["a", "answer flow (not sent)", "answer"],
+    ["h", history ? "pending only" : "history", history ? "pending" : "history"], ["/", "filter", "filter"], ["r", "reread", "reread"],
+    ["?", legend ? "hide legend" : "legend", legend ? "hide" : "legend"]], width);
+}
+
+function detail(item: InboxItem, width: number): string[] {
+  const [glyph, tone] = stateOf(item);
+  const tags = [chip(`${glyph} ${item.state}`, tone), chip(item.pm_eligible ? "PM may answer" : "owner only")];
+  const out = [`${PANEL_TEXT}${bold(fit(`${item.task} · ${item.kind}`, width - 2))}`, ...chipRows(tags, width)];
+  out.push(...field("Key", `${item.key} @${item.revision} (${item.revision_kind})`, width, 11),
+    ...field("Container", item.container ?? "none", width, 11), ...field("Scope", item.scope, width, 11),
+    ...field("Responsible", item.responsible, width, 11), ...field("Reason", item.reason, width, 11));
+  out.push(sectionRule("Detail", width));
+  if (!item.detail.length) out.push(`${PANEL_MUTED}· none recorded${PANEL_TEXT}`);
+  for (const line of item.detail) out.push(...wrap(PANEL_TEXT + plainLabel(line), width));
+  out.push(sectionRule("Inspect", width), ...wrap(PANEL_BLUE + plainLabel(item.inspect) + PANEL_TEXT, width));
+  out.push(sectionRule("Answer", width), ...wrap(item.response
+    ? `${PANEL_TEXT}a revalidates and opens the existing answer route${PANEL_MUTED} · nothing is sent${PANEL_TEXT}`
+    : `${PANEL_MUTED}· no answer route: closed, already resolved or inspection-only${PANEL_TEXT}`, width));
+  return out;
+}
 
 /** A read-only inspector with a separately opened, revalidated established-answer-flow sheet. */
 export class InboxView implements Component {
@@ -10,32 +42,59 @@ export class InboxView implements Component {
   private hits = new Map<number, string>(); readonly rows = new Map<string, number>();
   constructor(readonly store: DecisionInbox, private readonly role: Role, private readonly project: string,
     private readonly canInteract: () => boolean, private readonly changed: () => void,
-    private readonly focus: () => void) {}
+    private readonly focus: () => void, private readonly legend: () => boolean = () => false) {}
   bind(ui: ExtensionUIContext): void { this.ui = ui; }
   render(width: number): string[] {
-    const rows: string[] = []; this.hits.clear(); this.rows.clear();
-    const add = (text: string, accent = false) => rows.push(...new Text((accent ? PANEL_BLUE : PANEL_MUTED)
-      + text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " "), 0, 0).render(width));
-    add("Canonical attention & decisions · READ ONLY", true);
-    add(this.store.status);
-    add(`Workspace: ${this.store.snapshot?.workspace ?? "unavailable"}`);
-    add(`${this.store.history ? "All states" : "Pending only"} · h history · / filter · r refresh · Enter inspect · a answer flow`);
-    add("No panel action sends an answer or grants authority.");
-    if (this.store.query) add("Filter: " + this.store.query);
-    add("");
-    for (const item of this.store.visible) {
-      const id = inboxIdentity(item), start = rows.length; this.rows.set(id, start);
-      add(`${id === this.store.selected ? ">" : " "} ${item.task} · ${item.state} · ${item.kind}`, id === this.store.selected);
-      add(`  ${item.key} @${item.revision} (${item.revision_kind})`);
-      add(`  ${item.container ?? "No container"} · scope ${item.scope} · ${item.responsible}`);
-      add("  " + item.reason);
-      for (let row = start; row < rows.length; row++) this.hits.set(row, id);
-      add("");
+    const lines: string[] = []; this.hits.clear(); this.rows.clear();
+    const full = (text: string) => lines.push(...wrap(PANEL_TEXT + text, width));
+    const store = this.store, items = store.visible, snapshot = store.snapshot;
+    const chips = [chip("read only"), chip(`${store.history ? "all states" : "pending"} ${items.length}`, !store.history && items.length ? "warn" : "none"),
+      ...(store.query ? [chip(`filter ${store.query}`)] : [])];
+    const at = snapshot ? Date.parse(snapshot.observed_at) : Number.NaN, since = ago(at, Date.now());
+    const reads = since ? [`read ${clock(at)} (${since}) · r reread`, `read ${since} · r reread`, "r reread"] : ["not read · r reread", "r reread"];
+    const rows = chipRows(chips, width), last = rows.at(-1) ?? "";
+    const read = reads.find(r => visibleWidth(last) + 2 + visibleWidth(r) <= width);
+    lines.push(...rows.slice(0, -1), read ? splitRow(last, PANEL_MUTED + read + PANEL_TEXT, width) : last);
+    if (store.error) full(`${PANEL_WARNING}~ STALE / unavailable: ${plainLabel(store.error)}${PANEL_TEXT}`);
+    if (store.refreshing) full(`${PANEL_MUTED}Reading canonical inbox…${PANEL_TEXT}`);
+    if (this.legend()) {
+      full(`${PANEL_MUTED}Canonical attention and decisions for ${plainLabel(snapshot?.workspace ?? "an unavailable workspace")}. ⚑ pending · · closed or resolved.${PANEL_TEXT}`);
+      full(`${PANEL_MUTED}Enter opens read-only detail; a rereads, revalidates and opens the existing answer-flow instructions. No panel action sends an answer or grants authority.${PANEL_TEXT}`);
     }
-    if (!this.store.visible.length) add(this.store.snapshot ? this.store.error ? "Retained snapshot has no matching items; current state unavailable."
-      : "No matching items in this canonical snapshot." : "Canonical inbox unavailable; r to retry.");
-    if (this.store.selected && !this.store.current) add("Selected item no longer matches this view; choose an item with j/k.");
-    return rows;
+    if (store.selected && !store.current) full(`${PANEL_WARNING}! Selected item no longer matches this view; choose an item with j/k.${PANEL_TEXT}`);
+    const empty = snapshot ? store.error ? "Retained snapshot has no matching items; current state unavailable."
+      : "No matching items in this canonical snapshot." : "Canonical inbox unavailable; r to retry.";
+    const current = store.current, index = current ? items.indexOf(current) : -1;
+
+    if (width < SPLIT_MIN) {
+      if (!items.length) { full(PANEL_MUTED + empty + PANEL_TEXT); return lines; }
+      const shown = current ?? items[0];
+      if (!shown) return lines;
+      const [glyph, tone] = stateOf(shown), right = `${toneColor(tone)}${glyph} ${fit(shown.state, 14)}${PANEL_TEXT} `;
+      const head = `${PANEL_BLUE} ‹ ${PANEL_TEXT}${bold(fit(shown.task, 12))} ${PANEL_MUTED}${index < 0 ? "–" : index + 1}/${items.length}${PANEL_BLUE} › `;
+      this.rows.set(inboxIdentity(shown), lines.length); this.hits.set(lines.length, inboxIdentity(shown));
+      lines.push(`${PANEL_BG}${splitRow(`${head}${PANEL_TEXT}${fit(shown.kind, width)}`, right, width)}${RESET}`, `${PANEL_RULE}${"─".repeat(width)}${PANEL_TEXT}`);
+      lines.push(...detail(shown, width));
+      return lines;
+    }
+
+    lines.push(`${PANEL_RULE}${"─".repeat(LIST_WIDTH)}┬${"─".repeat(Math.max(0, width - LIST_WIDTH - 1))}${PANEL_TEXT}`);
+    const left: { text: string; id?: string }[] = [{ text: listRow(`${PANEL_MUTED}${store.history ? "ALL" : "PENDING"} ${items.length}`, `state${PANEL_TEXT}`, false, LIST_WIDTH) }];
+    for (const item of items) {
+      const [glyph, tone] = stateOf(item), state = `${toneColor(tone)}${glyph} ${fit(item.state, 12)}${PANEL_TEXT}`;
+      const label = `${PANEL_TEXT}${fit(item.task, 12)} ${PANEL_MUTED}${fit(item.kind, LIST_WIDTH - 3 - 15 - visibleWidth(state))}${PANEL_TEXT}`;
+      left.push({ text: listRow(label, state, item === current, LIST_WIDTH), id: inboxIdentity(item) });
+    }
+    if (!items.length) left.push({ text: listRow(`${PANEL_MUTED}none${PANEL_TEXT}`, "", false, LIST_WIDTH) });
+    const detailWidth = Math.max(20, width - LIST_WIDTH - 2);
+    const right = current ? detail(current, detailWidth) : wrap(PANEL_MUTED + (items.length ? "Choose an item with j/k or a click." : empty) + PANEL_TEXT, detailWidth);
+    const start = lines.length;
+    for (let i = 0; i < Math.max(left.length, right.length); i++) {
+      const l = left[i];
+      if (l?.id !== undefined) { this.hits.set(start + i, l.id); this.rows.set(l.id, start + i); }
+      lines.push(`${l?.text ?? " ".repeat(LIST_WIDTH)}${PANEL_RULE}│${PANEL_TEXT} ${pad(right[i] ?? "", detailWidth)}`);
+    }
+    return lines;
   }
   handleMouse(event: TuiMouseEvent): { handled: true } | undefined {
     if (!this.canInteract() || event.type !== "click" || event.button !== "left" || event.shift || event.alt || event.ctrl || (event.clickCount ?? 1) !== 1) return undefined;
