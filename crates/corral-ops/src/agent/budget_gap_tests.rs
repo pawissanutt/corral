@@ -4,6 +4,81 @@ use corral_core::agent::AgentRole;
 use serde_json::json;
 
 #[test]
+fn pm_resume_with_a_bound_legacy_generation_refuses_a_hard_budget_reservation() {
+    let mut fx = fx();
+    let target = BindTarget::Pm {
+        project: "corral".into(),
+    };
+    let old = bind(&fx, &target, "pm-pane", "old-session");
+    committed(&hello(&fx, &old));
+    corral_core::agent::pm_state::update(&fx.ctx.store, |pm| {
+        pm.as_mut()
+            .unwrap()
+            .state
+            .generation_mut(1)
+            .unwrap()
+            .capabilities
+            .as_mut()
+            .unwrap()
+            .catalog = 6;
+        Ok(((), true))
+    })
+    .unwrap();
+    fx.ctx
+        .store
+        .config
+        .agent
+        .capabilities
+        .set_settings(
+            AgentRole::Pm,
+            "budget",
+            [("max_tokens".into(), json!(100))].into(),
+        )
+        .unwrap();
+    let current = bind(&fx, &target, "pm-pane", "current-session");
+    committed(&hello(&fx, &current));
+    let before = state(&fx, &target.container());
+    assert!(before.generation(1).unwrap().bound.is_some());
+    assert!(before.generation(1).unwrap().fenced.is_some());
+    assert!(
+        before
+            .current_generation()
+            .unwrap()
+            .capabilities
+            .as_ref()
+            .unwrap()
+            .catalog
+            >= 7
+    );
+    assert_eq!(
+        before
+            .current_generation()
+            .unwrap()
+            .capabilities
+            .as_ref()
+            .unwrap()
+            .features["budget"]
+            .settings["max_tokens"],
+        100
+    );
+
+    let input = envelope(
+        &current,
+        "event",
+        "ev-2-1",
+        json!({
+            "kind":"budget", "action":"reserve", "request":"next",
+            "tokens":10, "priced":true
+        }),
+        false,
+    );
+    let reply = committed(&send(&fx, &input, "event"));
+    assert_eq!(reply.result["admitted"], false);
+    assert_eq!(reply.result["legacy_usage_gap"], true);
+    assert!(state(&fx, &target.container()).budget.requests.is_empty());
+}
+
+#[test]
 fn historical_unpriced_or_legacy_usage_cannot_claim_a_usd_cap() {
     let fx = fx();
     let task = worker_task(&fx, "p1");
