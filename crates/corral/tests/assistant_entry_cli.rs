@@ -298,6 +298,7 @@ const ROWS: &[(&str, &[&str], Class)] = &[
     ("evidence list", &["T-001"], Read),
     ("gate", &["T-001"], Refused),
     ("review-run", &["T-001"], Refused),
+    ("recover-infrastructure", &["T-001"], Refused),
     ("verdict", &["T-001", "approve", "--notes", "n"], Refused),
     (
         "dashboard set",
