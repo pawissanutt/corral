@@ -426,6 +426,7 @@ fn advance(
             {
                 bail!("{reason}");
             }
+            crate::repair_runtime::start_launch(store, &*current)?;
             current.status = Status::Running;
             current.queued = false;
             current.launch.as_mut().context("launch missing")?.stage = LaunchStage::Submitting;

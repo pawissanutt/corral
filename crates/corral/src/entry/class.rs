@@ -58,6 +58,13 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
             ExportCmd::Events { .. } => Read,
             ExportCmd::Tasks { .. } => Refused,
         },
+        Cmd::Repair(args) => match &args.cmd {
+            crate::repair_cmd::RepairCmd::Status { .. } => Read,
+            crate::repair_cmd::RepairCmd::Finding { .. }
+            | crate::repair_cmd::RepairCmd::Diagnose { .. }
+            | crate::repair_cmd::RepairCmd::Diagnosed { .. }
+            | crate::repair_cmd::RepairCmd::Renew { .. } => Refused,
+        },
         Cmd::Storage { cmd } => match cmd {
             StorageCmd::Check { .. } => Read,
             StorageCmd::Gc { yes, .. } => read_unless(*yes),

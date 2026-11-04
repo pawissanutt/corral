@@ -55,8 +55,18 @@
    use `{{bin}} reply <id> --resend` only for its recorded undelivered reply.
    Verify delivery and renewed activity. If still stuck, show the exact error to the owner.
    A herdr "done" label does not prove `corral done`, a completed gate or a landing.
-5. For `max_rounds` or repeated new findings, preserve notes and ask the owner to choose
-   a bounded change request, a split follow-up, a stronger investigation, or deferral.
+5. Follow the host's repair stage, not a model's recommendation to retry. For an adopted
+   staged policy, inspect `{{bin}} repair status <id>` for all allowances, exact counters,
+   structured findings and evidence. A `diagnose` PM action consumes the single non-coding
+   diagnosis allowance and returns the complete history. Inspect it once, then finish with
+   `{{bin}} repair diagnosed <id> --file <json>` containing `diagnosis`, a concrete bounded
+   `proposal`, and `evidence` references. Propose a replan, scope/budget decision or deferral;
+   diagnosis grants no coding retries. An in-progress diagnosis survives restart: complete
+   that identity, never start another pass. Only the owner's explicit digest-bound
+   `repair renew` action creates another allowance; a comment, retry, model/profile switch
+   or resolved finding does not. Preserve independent authorized work while one waits.
+   Without an adopted staged policy, existing `max_rounds` still applies: preserve notes
+   and ask the owner for a bounded change request, follow-up, investigation or deferral.
    Do not reset rounds, raise limits, waive findings or accept on an owner's timeout.
    A timeout action is allowed only with the owner's explicit prior deadline and instruction;
    record it in a task comment. Otherwise leave Blocked and progress independent work.

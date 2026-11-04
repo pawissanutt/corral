@@ -37,6 +37,11 @@ mod digest;
 mod dispatch;
 mod dispatch_policy;
 mod escalation;
+mod repair_runtime;
+pub use repair_runtime::{
+    FindingReport, repair_diagnose, repair_diagnose_owner, repair_diagnosed, repair_finding,
+    repair_renew, repair_status,
+};
 mod gate;
 mod gate_probe;
 mod gate_script;

@@ -103,7 +103,9 @@ pub struct PmWorkset {
 pub(crate) fn authority(kind: PmActionKind) -> Option<OperatingActionKind> {
     match kind {
         PmActionKind::GateLog | PmActionKind::Gate => Some(OperatingActionKind::Gate),
-        PmActionKind::StaleVerdict | PmActionKind::LoadFailure => Some(OperatingActionKind::Repair),
+        PmActionKind::StaleVerdict | PmActionKind::LoadFailure | PmActionKind::Diagnosis => {
+            Some(OperatingActionKind::Repair)
+        }
         PmActionKind::Review => Some(OperatingActionKind::Review),
         PmActionKind::Land => Some(OperatingActionKind::Accept),
         PmActionKind::Dispatch | PmActionKind::IdeaPromotion => Some(OperatingActionKind::Dispatch),
@@ -602,6 +604,8 @@ pub enum PmActionOutcome {
 pub struct PmActionResult {
     pub outcome: PmActionOutcome,
     pub workset: PmWorkset,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnosis: Option<corral_core::RepairLedger>,
 }
 
 /// Recompute a revision-bound action, then use the existing authorized sync executors.
@@ -612,6 +616,7 @@ pub fn pm_act(ctx: &Ctx, id: &str) -> Result<PmActionResult> {
         return Ok(PmActionResult {
             outcome: PmActionOutcome::Stale,
             workset: current,
+            diagnosis: None,
         });
     };
     let task = selected
@@ -619,6 +624,14 @@ pub fn pm_act(ctx: &Ctx, id: &str) -> Result<PmActionResult> {
         .task
         .as_deref()
         .context("automatic action has no task")?;
+    if selected.action.kind == PmActionKind::Diagnosis {
+        let diagnosis = crate::repair_runtime::repair_diagnose(ctx, task)?;
+        return Ok(PmActionResult {
+            outcome: PmActionOutcome::Progressed,
+            workset: pm_workset(ctx)?,
+            diagnosis: Some(diagnosis),
+        });
+    }
     let before = task_identity(&ctx.store.get(task)?)?;
     crate::sync(ctx)?;
     let after = task_identity(&ctx.store.get(task)?)?;
@@ -629,6 +642,7 @@ pub fn pm_act(ctx: &Ctx, id: &str) -> Result<PmActionResult> {
             PmActionOutcome::Progressed
         },
         workset: pm_workset(ctx)?,
+        diagnosis: None,
     })
 }
 

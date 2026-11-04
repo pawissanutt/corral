@@ -2,7 +2,40 @@ use super::*;
 use anyhow::Context;
 use corral_git::MergePreflight;
 
+pub(super) enum RepairBudget {
+    Legacy,
+    Coding {
+        switch: Option<corral_core::ProfileSwitch>,
+        max: u32,
+    },
+    Stop(Step),
+}
+
 impl Pilot<'_> {
+    pub(super) fn repair_budget(&self, digest: &str, summary: &str) -> Result<RepairBudget> {
+        let Some(ledger) =
+            crate::repair_runtime::observations(self.ctx, self.head, Some((digest, summary)))?
+        else {
+            return Ok(RepairBudget::Legacy);
+        };
+        match crate::repair_runtime::transition(self.ctx, self.head, &ledger, false)? {
+            corral_core::RepairTransition::Current { profile }
+            | corral_core::RepairTransition::Stronger { profile } => {
+                let switch = (profile != self.run.agent).then(|| corral_core::ProfileSwitch {
+                    from: self.run.agent.clone(), to: profile,
+                    reason: "host-enforced staged repair allowance".into(),
+                });
+                let corral_core::RepairPolicy::V1 { overall_limit, .. } = ledger.active()?.history.policy();
+                Ok(RepairBudget::Coding { switch, max: *overall_limit })
+            }
+            corral_core::RepairTransition::Diagnose => self.moved(AutoStage::Escalated,
+                run_head_sha(self.run), Some("Bounded PM diagnosis ready; no coding allowance remains"),
+                "PM must inspect repair history and propose a bounded recovery; no extra coding retries")
+                .map(RepairBudget::Stop),
+            corral_core::RepairTransition::Owner { reason } => self.escalate(&reason).map(RepairBudget::Stop),
+        }
+    }
+
     /// Re-evaluate exact SHAs before spending on gates/review, and again if main moves.
     pub(super) fn preflight(&self) -> Result<Option<Step>> {
         crate::plan_target::validate_run(&self.ctx.store, self.head, self.run)?;

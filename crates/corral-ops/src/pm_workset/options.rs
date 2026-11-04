@@ -23,6 +23,7 @@ pub(super) fn option_target<'a>(
         | PmActionKind::Question
         | PmActionKind::EvidenceOnly
         | PmActionKind::LoadFailure
+        | PmActionKind::Diagnosis
         | PmActionKind::ReviewInFlight
         | PmActionKind::Gate
         | PmActionKind::Review

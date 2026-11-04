@@ -366,6 +366,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
         Cmd::Automation(args) => crate::automation_cmd::run(&open(&root)?, args),
         Cmd::Selection(args) => crate::selection_cmd::run(&start_dir(&root)?, args),
         Cmd::Setup(args) => crate::setup_cmd::run(&start_dir(&root)?, args),
+        Cmd::Repair(args) => crate::repair_cmd::run(&start_dir(&root)?, args),
         Cmd::Up { session, yes } => crate::up::run(&start_dir(&root)?, session, yes, &entry),
         Cmd::Doctor { fix, json } => crate::doctor::run(&start_dir(&root)?, fix, json, &entry),
         Cmd::Pricing { cmd } => crate::pricing_cmd::run(&open(&root)?.store, cmd),

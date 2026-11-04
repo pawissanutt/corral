@@ -95,6 +95,55 @@ pub(crate) fn retry_plan_head(
     choice: &ProfileChoice,
     forced: bool,
 ) -> Result<RetryPlan> {
+    if let Some(profile) = crate::repair_runtime::next_profile(
+        ctx,
+        head,
+        forced || choice.profile.is_some() || choice.model.is_some() || choice.effort.is_some(),
+    )? {
+        if choice
+            .profile
+            .as_ref()
+            .is_some_and(|requested| requested != &profile)
+        {
+            bail!(
+                "repair policy requires profile {profile}; profile changes do not renew allowance"
+            );
+        }
+        let run = head.current_run.as_ref().context("missing run")?;
+        if forced && profile == run.agent {
+            bail!("current repair stage remains; --escalate cannot skip the adopted policy");
+        }
+        let mut plan = retry_plan_with(
+            ctx,
+            &head.shell_task()?,
+            &ProfileChoice {
+                profile: Some(profile.clone()),
+                ..choice.clone()
+            },
+            false,
+            || Ok(0),
+        )?;
+        plan.switch = (profile != run.agent).then(|| ProfileSwitch {
+            from: run.agent.clone(),
+            to: profile,
+            reason: "host-enforced staged repair allowance".into(),
+        });
+        plan.source = Some(RouteSource::Retry {
+            previous: Box::new(
+                if forced
+                    || choice.profile.is_some()
+                    || choice.model.is_some()
+                    || choice.effort.is_some()
+                {
+                    RouteSource::Override
+                } else {
+                    run.route.clone().unwrap_or(RouteSource::Fallback)
+                },
+            ),
+            switch: plan.switch.clone(),
+        });
+        return Ok(plan);
+    }
     retry_plan_with(ctx, &head.shell_task()?, choice, forced, || {
         failures_head(head)
     })
