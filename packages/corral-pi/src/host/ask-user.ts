@@ -34,20 +34,26 @@ function normalize(q: Question): DialogQuestion {
   return { ...q, options };
 }
 
-/** One dialog for the whole batch; Escape, abort or timeout keeps what was answered. */
+/** One dialog for the whole batch; Escape, abort or timeout keeps what was answered. Undefined when the
+ * host shows no custom component (a select-only or no-op UI context, or RPC mode). */
 async function dialog(ctx: ExtensionToolContext, questions: DialogQuestion[], signal?: AbortSignal) {
   let current: AskDialog | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stop = () => current?.finish(false);
   signal?.addEventListener("abort", stop, { once: true });
   try {
-    const result = await ctx.ui.custom<{ submitted: boolean; answers: (DialogAnswer | undefined)[] }>((tui, _theme, _keys, done) => {
+    const result = await ctx.ui.custom<{ submitted: boolean; answers: (DialogAnswer | undefined)[] } | undefined>((tui, _theme, _keys, done) => {
       const arm = () => { clearTimeout(timer); timer = setTimeout(stop, TIMEOUT_MS); };
       current = new AskDialog(questions, done, () => { arm(); tui.requestRender(); });
       arm();
       return current;
     }, { blocked: { kind: "question", message: "Waiting for your answers" } });
-    return result.answers;
+    return result?.answers;
+  } catch (error) {
+    // The host wraps every UI context with a `custom` that forwards to the context's own; one without
+    // a component throws here before showing anything, so the caller falls back to plain selects.
+    if (current === undefined) return undefined;
+    throw error;
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", stop);
@@ -84,7 +90,9 @@ export function askUserTool(record: (answer: string) => Promise<string>): ToolDe
       const noAnswer = () => ({ content: [{ type: "text" as const, text: "no answer" }], details: { status: "no answer" } });
       const questions = params.questions.map(normalize);
       if (!ctx.hasUI || signal?.aborted) return noAnswer();
-      const raw = typeof ctx.ui.custom === "function" ? await dialog(ctx, questions, signal) : await sequential(ctx, questions, signal);
+      const shown = typeof ctx.ui.custom === "function" ? await dialog(ctx, questions, signal) : undefined;
+      if (signal?.aborted && shown === undefined) return noAnswer();
+      const raw = shown ?? await sequential(ctx, questions, signal);
       const answers: Answer[] = [];
       const unanswered: string[] = [];
       raw.forEach((a, i) => {
