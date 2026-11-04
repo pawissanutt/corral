@@ -138,6 +138,8 @@ struct Counts {
     needs: usize,
     used: usize,
     limit: usize,
+    wip: usize,
+    wip_limit: usize,
     review: usize,
     /// Ready is the dispatch queue: authorized work waiting for admission.
     ready: usize,

@@ -601,6 +601,11 @@ pub(crate) fn blocked_reason(
     {
         return Ok(Some(reason));
     }
+    if !crate::plan_dispatch::needed(ctx, task, &crate::DispatchOpts::default())
+        && let Some(reason) = crate::wip::reason(store, task)?
+    {
+        return Ok(Some(reason));
+    }
     capacity_reason(ctx, store, task, force_resources)
 }
 

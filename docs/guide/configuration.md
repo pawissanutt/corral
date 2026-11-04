@@ -81,12 +81,15 @@ How many agents run at once.
 
 | Key | Default | Meaning |
 |---|---|---|
+| `wip` | `6` | Workspace-wide coding work in progress; `0` disables the limit. |
 | `running` | `3` | Global slots: each Running/Blocked task, running gate, active reviewer, and pending launch reservation counts once. Must be above 0. This is the hard limit. |
 | `running_target` | `running` | Soft target that automatic coding admission fills up to; see below. Must be within `1..=running`. |
 | `per_project.<project>` | none | Optional cap for one project. Must name a configured project and be above 0. |
 | `count_reviews` | `true` | Include active reviewer processes in global and project slots. |
 | `count_gates` | `true` | Include running gates in global and project slots. |
 | `review` | `2` | Additional combined gate/reviewer process cap, even when either counting switch is off. Must be above 0. |
+
+`limits.wip` limits new coding dispatches across the workspace. Running, Blocked and Review tasks with a current coding run count, including parked and gate-waiting runs, until landing or dropping. Planning runs do not count. Coding launch reservations count for admission while being created; retries, reviews and landings are never blocked. Red-main fixes may exceed the limit by one; P0 does not bypass it. The board shows WIP and the queue reports the waiting count. The PM or owner can change it with `corral config set limits.wip N`.
 
 `running_target` (default: unset, meaning `running`) is the soft coding-slot target. Automatic
 Backlog admission, Idea promotion and automatically queued Ready work fill coding slots only up
@@ -103,6 +106,7 @@ when capacity permits, reserving `limits.review` headroom for gates and reviews.
 
 ```toml
 [limits]
+wip = 6
 running = 3
 # running_target = 2   # optional soft target; keeps one slot for ad-hoc and P0 work
 

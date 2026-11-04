@@ -66,6 +66,9 @@ impl Admission {
         } else {
             None
         };
+        if reason.is_none() && !crate::plan_dispatch::needed(ctx, task, opts) {
+            reason = crate::wip::reason(store, &shell)?;
+        }
         if reason.is_none() {
             reason = crate::queue::capacity_reason(ctx, store, &shell, opts.force_resources)?;
         }

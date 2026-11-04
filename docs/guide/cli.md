@@ -4082,6 +4082,9 @@ Options:
 
 ### `corral config set`
 
+For example, `corral config set limits.wip 6` sets the workspace coding work-in-progress
+limit; `0` disables it. See [limits](configuration.md#limits) for admission semantics.
+
 ```text
 Change a setting in place, keeping comments; refused when the result would be invalid
 

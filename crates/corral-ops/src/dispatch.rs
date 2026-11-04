@@ -1,4 +1,4 @@
-mod admission;
+pub(crate) mod admission;
 #[cfg(all(test, target_os = "linux"))]
 mod metered_tests;
 mod pane;
