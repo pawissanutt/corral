@@ -59,9 +59,11 @@ Other targeted checks: `cargo check -p corral-tui -p corral-core --all-targets` 
 checks passed. The initial combined focused command exhausted its 200-second shell window
 while compiling ops; the remaining targeted tests were then run successfully, not skipped.
 
-Added persistent tests: **2**, one terminal transport regression and one SQLite reader/WAL
-regression, approximately **0.07 seconds combined** in focused runs. The first gate's **+3
-registrations** includes one renamed existing cadence test (net two new tests). No new end-to-end matrix,
+Added persistent tests: **3**: terminal transport, SQLite reader/WAL, and inventory pass-lifetime
+regressions. The first two take approximately **0.07 seconds combined** in focused runs; the
+new clock-driven lifetime test is part of a seven-case suite taking **0.17 seconds total**.
+Gate registration accounting also counts one renamed existing cadence test (four additions,
+net three new tests). No new end-to-end matrix,
 prose pins, large histories or slow/load tests. Existing pragma assertions now require NORMAL
 rather than FULL, as explicitly required by this task; the recovery FULL test is unchanged.
 
@@ -81,6 +83,22 @@ Attempt `ag-de6fb6eb783bfcca` passed formatting, size limits and Clippy, then st
 The gate's existing-test cost overruns were report-only, not failures; added registration costs
 were incomplete because fail-fast stopped later tests. No quarantine entry belongs to either
 repaired test. A new quick gate follows the committed/rebased repair.
+
+## Second quick-gate repair
+
+Attempt `ag-358fa22d848fa537` reached 1114 tests (1113 passed) and found an existing live cleanup
+journey using a reusable context whose pane inventory had installed a persistent ownership
+pass. The shorter view lifetime exposed that stale cache on later commands. An isolated
+replay reproduced `read view expired after 5.107372636s`; the missing capture was a downstream
+symptom, not a reason to loosen the cleanup assertions.
+
+Inventory now refreshes an explicitly begun pass but does not install a persistent pass on a
+reusable context. A small ManualClock regression fails first with the old inventory behavior
+at exactly six seconds, then passes while also asserting that deliberately begun passes still
+expire and fail closed. All seven session-binding cases pass. The unchanged real-terminal
+cleanup journey passes in its private plugin-free server (15.325s); no test timeout, wait or
+assertion changed, and the temporary failure diagnostics were removed. Logs:
+`cleanup-diagnostic.log`, `inventory-red.log`, `inventory-green.log`, `cleanup-repair.log`.
 
 ## Limits / not verified
 

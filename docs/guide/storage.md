@@ -37,7 +37,9 @@ Maintenance tries a non-waiting TRUNCATE checkpoint every two seconds and after 
 sync pass. The soft WAL limit is **16 MiB**, also the journal retention limit. If an active
 reader/writer prevents reset and the WAL exceeds that size, a diagnostic reports its byte
 count and checkpoint contention. This is not a hard quota that aborts writes or evicts another
-process's valid snapshot. Normal uncontended cycles reset the WAL to zero. Usage refresh batches
+process's valid snapshot. Inventory refreshes an explicitly begun ownership pass but does not
+leave a persistent read view on a reusable command context. Normal uncontended cycles reset
+the WAL to zero. Usage refresh batches
 per-run reviewer verdict cursor records, without combining transactions across external side
 effects. Costly periodic syncs back off to 19 times their CPU cost (2–60 seconds); explicit
 refresh triggers bypass that wait and bursts coalesce into one pass. Explicit session binding

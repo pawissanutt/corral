@@ -196,6 +196,19 @@ impl Store {
         Ok(Some(lease))
     }
 
+    /// Refresh an explicitly begun pass for inventory, without installing a persistent
+    /// read view on a reusable context that did not begin a pass.
+    pub fn try_inventory_session_pass(&self) -> Result<Option<SessionLease>> {
+        let Some(lease) = self.session_lease()? else {
+            return Ok(None);
+        };
+        let mut pass = guard(&self.session_pass.0);
+        if pass.is_some() {
+            *pass = Some(self.read_session_view()?);
+        }
+        Ok(Some(lease))
+    }
+
     fn session_lease(&self) -> Result<Option<SessionLease>> {
         // The claim already excludes binds and every other launch; the lease keeps it alive.
         if let Some(claim) = held_claim(self.dir()) {

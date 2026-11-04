@@ -176,7 +176,7 @@ pub(crate) fn inventory(ctx: &Ctx) -> Option<Inventory> {
     match ctx.herdr.pane_list() {
         // Ownership can be established by the first launch while pane_list is in flight.
         Ok(panes) if !panes.is_empty() => match (|| -> Result<Option<Inventory>> {
-            let Some(ownership) = ctx.store.try_begin_session_pass()? else {
+            let Some(ownership) = ctx.store.try_inventory_session_pass()? else {
                 return Ok(None);
             };
             if !crate::session_scope::owns_inventory(ctx)? {

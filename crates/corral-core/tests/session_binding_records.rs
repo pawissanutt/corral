@@ -113,6 +113,32 @@ fn cached_pass_ownership_expires_with_its_read_view() {
 }
 
 #[test]
+fn inventory_refresh_does_not_install_a_pass_on_a_reusable_store() {
+    let temp = tempfile::tempdir().unwrap();
+    let clock = Arc::new(ManualClock::new("2026-01-01T00:00:00Z".parse().unwrap()));
+    let backend = FakeBackend::new(BackendConfig::default(), clock.clone(), Arc::default());
+    let store = Store::init(temp.path())
+        .unwrap()
+        .with_backend(Box::new(backend));
+    let socket = temp.path().join("owner.sock");
+
+    // Inventory may temporarily lease a reusable command context; it is not a sync pass.
+    let lease = store.try_inventory_session_pass().unwrap().unwrap();
+    let sampled = store.session_view().unwrap();
+    drop(lease);
+    clock.advance(Duration::from_secs(6));
+    assert!(sampled.owns(&socket).is_err());
+    assert!(store.session_view().unwrap().owns(&socket).unwrap());
+
+    // A deliberately begun pass still stays pinned and fails closed after its own expiry.
+    store.begin_session_view().unwrap();
+    let lease = store.try_inventory_session_pass().unwrap().unwrap();
+    drop(lease);
+    clock.advance(Duration::from_secs(6));
+    assert!(store.session_view().is_err());
+}
+
+#[test]
 fn session_binding_record_process_b() {
     let (Some(root), Some(socket)) = (
         std::env::var_os("T323_BINDING_ROOT"),
