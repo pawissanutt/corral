@@ -105,7 +105,7 @@ pub(crate) fn container_of(identity: &RequestIdentity) -> ContainerRef {
     }
 }
 
-fn resolve(store: &Store, container: &ContainerRef) -> Result<Resolved> {
+fn resolve(store: &Store, container: &ContainerRef, envelope: &Envelope) -> Result<Resolved> {
     if let Some(id) = container.assistant() {
         if !store.assistant_exists(id)? {
             return Err(reject(
@@ -125,7 +125,18 @@ fn resolve(store: &Store, container: &ContainerRef) -> Result<Resolved> {
         return Ok(Resolved::Assistant(Box::new(state), ended));
     }
     let Some(id) = container.task() else {
-        return pm_state::load(store)?
+        let mut selection = pm_state::Selection::current()
+            .key(
+                "generations",
+                format!("gen:{}", envelope.identity.generation),
+            )
+            .key("receipts", format!("request:{}", envelope.request_id));
+        if envelope.op == "receipt_lookup"
+            && let Some(request) = envelope.payload["request_id"].as_str()
+        {
+            selection = selection.key("receipts", format!("request:{request}"));
+        }
+        return pm_state::load_selected(store, &selection)?
             .map(|pm| Resolved::Pm(Box::new(pm)))
             .ok_or_else(|| reject(RejectCode::ContainerNotFound, "no corral-pi PM is bound"));
     };
@@ -309,7 +320,7 @@ pub(crate) fn recheck_assistant(
 pub(crate) fn admit(ctx: &Ctx, envelope: &Envelope, mode: Mode) -> Result<Admission> {
     let identity = &envelope.identity;
     let container = container_of(identity);
-    let resolved = resolve(&ctx.store, &container)?;
+    let resolved = resolve(&ctx.store, &container, envelope)?;
     let bound = resolved
         .binding(&container)?
         .context("resolved container has no agent state")?;
@@ -585,27 +596,32 @@ pub fn open_generation_with(
     let store_id = paths::store_id(store);
     let container = target.container();
     let generation = match (target, container.task()) {
-        (BindTarget::Pm { project }, _) => pm_state::update(store, |pm| {
-            let pm = pm.get_or_insert_with(|| {
-                let state = AgentRunState::new(binding(AgentRole::Pm, &store_id, project, None));
-                AgentPm::new(pane.into(), state)
-            });
-            // Adoption moves only with an adopting launch; another pane drops it, the same keeps it.
-            if adopt {
-                pm.adopted_pane = Some(pane.into());
-            } else if pm.pane != pane {
-                pm.adopted_pane = None;
-            }
-            pm.pane = pane.into();
-            if pm.state.binding.project != *project {
-                pm.state.todo = None;
-            }
-            pm.state.binding.project = project.clone();
-            Ok((
-                next_generation(&mut pm.state, &digest, pane, &capabilities)?,
-                true,
-            ))
-        })?,
+        (BindTarget::Pm { project }, _) => pm_state::update_selected(
+            store,
+            &pm_state::Selection::default().family("generations"),
+            |pm| {
+                let pm = pm.get_or_insert_with(|| {
+                    let state =
+                        AgentRunState::new(binding(AgentRole::Pm, &store_id, project, None));
+                    AgentPm::new(pane.into(), state)
+                });
+                // Adoption moves only with an adopting launch; another pane drops it, the same keeps it.
+                if adopt {
+                    pm.adopted_pane = Some(pane.into());
+                } else if pm.pane != pane {
+                    pm.adopted_pane = None;
+                }
+                pm.pane = pane.into();
+                if pm.state.binding.project != *project {
+                    pm.state.todo = None;
+                }
+                pm.state.binding.project = project.clone();
+                Ok((
+                    next_generation(&mut pm.state, &digest, pane, &capabilities)?,
+                    true,
+                ))
+            },
+        )?,
         // The owner's pane moves with the generation, so a refused launch changes nothing.
         (BindTarget::Assistant { session }, _) => {
             store.update_assistant_container(session, |assistant| {
@@ -715,11 +731,15 @@ pub fn fence_generation(
             Ok(changed)
         }
         (None, None) => {
-            let changed = pm_state::update(store, |pm| {
-                let pm = pm.as_mut().context("no corral-pi PM is bound")?;
-                let changed = fence(&mut pm.state, generation, reason)?;
-                Ok((changed, changed))
-            })?;
+            let changed = pm_state::update_selected(
+                store,
+                &pm_state::Selection::default().key("generations", format!("gen:{generation}")),
+                |pm| {
+                    let pm = pm.as_mut().context("no corral-pi PM is bound")?;
+                    let changed = fence(&mut pm.state, generation, reason)?;
+                    Ok((changed, changed))
+                },
+            )?;
             if changed {
                 store.log_event(None, "agent_fenced", detail)?;
             }

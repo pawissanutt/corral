@@ -62,6 +62,17 @@ fn append(
     Ok(receipt)
 }
 
+pub(crate) fn pm_capacity(store: &Store) -> Result<()> {
+    if pm_state::child_count(store, "receipts")? >= RECEIPTS_MAX as u64 {
+        return Err(Rejection::new(
+            RejectCode::ReceiptLimit,
+            format!("the container already holds {RECEIPTS_MAX} receipts"),
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn new_receipt(origin: &RequestOrigin, commit: Commit) -> Result<RequestReceipt> {
     let bytes = serde_json::to_vec(&commit.result)?.len();
     anyhow::ensure!(
@@ -87,11 +98,31 @@ fn new_receipt(origin: &RequestOrigin, commit: Commit) -> Result<RequestReceipt>
     Ok(receipt)
 }
 
+pub(crate) fn pm_selection(origin: &RequestOrigin) -> pm_state::Selection {
+    let selection = pm_state::Selection::request(origin.binding.generation, &origin.request_id);
+    if origin.op == "ask" {
+        selection.family("questions")
+    } else {
+        selection
+    }
+}
+
 /// Commits `apply` and its receipt in one transaction of the named container. `apply` sees the
 /// container's closure reason, read in the same transaction.
 pub(crate) fn commit(
     ctx: &Ctx,
     admitted: &Admitted,
+    apply: impl FnOnce(&mut AgentRunState, Option<ClosureReason>) -> Result<Commit>,
+) -> Result<CallResponse> {
+    commit_selected(ctx, admitted, &pm_selection(&admitted.origin), apply)
+}
+
+/// PM callers name any additional child records their apply step consumes. Other roles
+/// retain their existing transaction boundaries.
+pub(crate) fn commit_selected(
+    ctx: &Ctx,
+    admitted: &Admitted,
+    selection: &pm_state::Selection,
     apply: impl FnOnce(&mut AgentRunState, Option<ClosureReason>) -> Result<Commit>,
 ) -> Result<CallResponse> {
     failpoint("agent_admitted_before_commit");
@@ -102,7 +133,7 @@ pub(crate) fn commit(
         return commit_assistant(ctx, admitted, |assistant| apply(&mut assistant.state, None));
     }
     match container.task() {
-        None => pm_state::update(&ctx.store, |pm| {
+        None => pm_state::update_selected(&ctx.store, selection, |pm| {
             let pm = pm.as_mut().ok_or_else(|| {
                 Rejection::new(RejectCode::ContainerNotFound, "the PM binding disappeared")
             })?;
@@ -112,6 +143,7 @@ pub(crate) fn commit(
                 return Ok(((), false));
             }
             admission::recheck_pm(pm, origin.binding.generation)?;
+            pm_capacity(&ctx.store)?;
             let commit = apply(&mut pm.state, None)?;
             outcome = Some((append(&mut pm.state, origin, commit)?, false));
             Ok(((), true))
@@ -260,12 +292,16 @@ pub(crate) fn commit_with_task(
 pub(crate) fn commit_native_event(
     ctx: &Ctx,
     admitted: &Admitted,
+    turn: u64,
     apply: impl FnOnce(&mut AgentRunState, Option<ClosureReason>) -> Result<Commit>,
 ) -> Result<CallResponse> {
     let container = &admitted.origin.binding.container;
     if container.task().is_none() {
-        // The distinct root document operations already carry T-625, not T-626.
-        return commit(ctx, admitted, apply);
+        let selection = pm_selection(&admitted.origin).key(
+            "turns",
+            format!("turn:{}:{turn}", admitted.origin.binding.generation),
+        );
+        return commit_selected(ctx, admitted, &selection, apply);
     }
     failpoint("agent_admitted_before_commit");
     commit_with_task_scope(
@@ -377,10 +413,15 @@ fn complete_post_pending(
         (Some(id), _) => {
             store.settle_assistant_container(id, |assistant, _| Ok(clear(&mut assistant.state)))?;
         }
-        (None, None) => pm_state::update(store, |pm| {
-            let changed = pm.as_mut().is_some_and(|pm| clear(&mut pm.state));
-            Ok(((), changed))
-        })?,
+        (None, None) => pm_state::update_selected(
+            store,
+            &pm_state::Selection::default()
+                .key("receipts", format!("request:{}", receipt.request_id)),
+            |pm| {
+                let changed = pm.as_mut().is_some_and(|pm| clear(&mut pm.state));
+                Ok(((), changed))
+            },
+        )?,
         (None, Some(task_id)) => {
             store.try_update_head(task_id, |task| {
                 let Some(mut stored) = task.agent_receipt(container, &receipt.request_id)? else {

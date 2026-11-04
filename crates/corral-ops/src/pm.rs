@@ -166,7 +166,7 @@ fn open_pm_with(
     // A fresh non-Pi PM replaces the old host's mutation authority, not its records.
     // Fencing owns the dispatch boundary; do it before startup takes that boundary.
     if !corral_core::is_corral_pi(&resolved.harness)
-        && let Some(pm) = corral_core::agent::pm_state::load(&ctx.store)?
+        && let Some(pm) = corral_core::agent::pm_state::load_current(&ctx.store)?
         && pm.state.binding.generation > 0
     {
         crate::agent::fence_generation(

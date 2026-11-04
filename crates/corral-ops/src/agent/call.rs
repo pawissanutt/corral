@@ -752,7 +752,7 @@ enum PmCall {
 fn pm_question(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallResponse> {
     let generation = envelope.identity.generation;
     let guard = |task: &Task| -> Result<()> {
-        let pm = pm_state::load(&ctx.store)?.ok_or_else(|| {
+        let pm = pm_state::load_current(&ctx.store)?.ok_or_else(|| {
             Rejection::new(RejectCode::ContainerNotFound, "no corral-pi PM is bound")
         })?;
         admission::recheck_pm(&pm, generation)?;

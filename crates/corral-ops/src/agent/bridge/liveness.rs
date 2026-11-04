@@ -342,7 +342,7 @@ pub fn record(store: &Store, container: &ContainerRef, probe: &Probe) -> Result<
             })
         })?,
         (None, _) => store.records_transaction(|| {
-            pm_state::update(store, |pm| {
+            pm_state::update_selected(store, &pm_state::Selection::current(), |pm| {
                 let changed = pm.as_mut().is_some_and(|pm| apply(&mut pm.state, probe));
                 if changed {
                     log_lost()?;

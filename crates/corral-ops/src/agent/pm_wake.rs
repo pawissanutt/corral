@@ -32,7 +32,7 @@ pub fn repost(ctx: &Ctx) -> Result<usize> {
     let Some(_outbox) = ctx.store.try_lock("pm-question-wake-outbox")? else {
         return Ok(0);
     };
-    let Some(pm) = pm_state::load(&ctx.store)?.filter(healthy) else {
+    let Some(pm) = pm_state::load_current(&ctx.store)?.filter(healthy) else {
         return Ok(0);
     };
     let inbox = Inbox::new(&ctx.store, Recipient::Pm)?;
@@ -76,7 +76,7 @@ fn post_one(
     pm: &AgentPm,
     view: &crate::questions::QuestionView,
 ) -> Result<bool> {
-    let Some(current_pm) = pm_state::load(&ctx.store)?.filter(healthy) else {
+    let Some(current_pm) = pm_state::load_current(&ctx.store)?.filter(healthy) else {
         return Ok(false);
     };
     let task = ctx.store.head(&view.task)?;
@@ -116,7 +116,7 @@ fn acknowledge(
     message: &Message,
 ) -> Result<bool> {
     let saved = ctx.store.try_update_head(&view.task, |task| {
-        let Some(current_pm) = pm_state::load(&ctx.store)?.filter(healthy) else {
+        let Some(current_pm) = pm_state::load_current(&ctx.store)?.filter(healthy) else {
             return Ok(false);
         };
         if !same_pm(pm, &current_pm)
@@ -234,7 +234,7 @@ impl DeliveryAdapter for ScopedPm {
         // unattempted-envelope retirement also repacks publications made before replacement.
         let inbox = Inbox::new(&ctx.store, Recipient::Pm)?;
         let posting = inbox.lock()?;
-        pm_state::update(&ctx.store, |pm| {
+        pm_state::update_selected(&ctx.store, &pm_state::Selection::current(), |pm| {
             let current = pm.as_ref().context("corral-pi PM is no longer bound")?;
             ensure!(
                 healthy(current) && same_pm(&self.0, current),
@@ -273,26 +273,28 @@ impl DeliveryAdapter for ScopedPm {
         CorralPiAdapter.observe(ctx, binding, cursor)
     }
     fn send(&self, ctx: &Ctx, binding: &SessionBinding, envelope: &Envelope) -> SendOutcome {
-        let checked = pm_state::update(&ctx.store, |pm| {
-            let current = pm.as_ref().context("corral-pi PM is no longer bound")?;
-            ensure!(
-                healthy(current) && same_pm(&self.0, current),
-                "PM binding changed"
-            );
-            let BindOutcome::Bound(expected) = CorralPiAdapter.bind(ctx, &Recipient::Pm)? else {
-                anyhow::bail!("PM session is no longer bound");
-            };
-            ensure!(*binding == expected, "PM delivery session changed");
-            let inbox = Inbox::new(&ctx.store, Recipient::Pm)?;
-            for seq in &envelope.members {
-                let message = inbox.message(*seq)?;
+        let checked =
+            pm_state::update_selected(&ctx.store, &pm_state::Selection::current(), |pm| {
+                let current = pm.as_ref().context("corral-pi PM is no longer bound")?;
                 ensure!(
-                    in_scope(ctx, &message, &current.state.binding.project)?,
-                    "question wake is out of scope"
+                    healthy(current) && same_pm(&self.0, current),
+                    "PM binding changed"
                 );
-            }
-            Ok((CorralPiAdapter.send(ctx, binding, envelope), false))
-        });
+                let BindOutcome::Bound(expected) = CorralPiAdapter.bind(ctx, &Recipient::Pm)?
+                else {
+                    anyhow::bail!("PM session is no longer bound");
+                };
+                ensure!(*binding == expected, "PM delivery session changed");
+                let inbox = Inbox::new(&ctx.store, Recipient::Pm)?;
+                for seq in &envelope.members {
+                    let message = inbox.message(*seq)?;
+                    ensure!(
+                        in_scope(ctx, &message, &current.state.binding.project)?,
+                        "question wake is out of scope"
+                    );
+                }
+                Ok((CorralPiAdapter.send(ctx, binding, envelope), false))
+            });
         match checked {
             Ok(outcome) => outcome,
             Err(error) => SendOutcome::Rejected {
@@ -332,7 +334,10 @@ mod tests {
             "s-pm",
         );
         ts::committed(&ts::hello(fx, &host));
-        (host, pm_state::load(&fx.ctx.store).unwrap().unwrap())
+        (
+            host,
+            pm_state::load_current(&fx.ctx.store).unwrap().unwrap(),
+        )
     }
 
     pub(super) fn question(fx: &Fx) -> crate::questions::QuestionView {

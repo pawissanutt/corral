@@ -41,7 +41,9 @@ impl Model {
         // PM inbox sweep 1 + root pass initial/reload 2 + outbox initial 1 +
         // ScopedPm readiness (update/load + native target/load) twice 4 + probe record 1
         // + delivery's unconditional bind/target load 1, even without pending messages.
-        model.opaque("T-625", "root_pm_load", 10, bytes[0], 10);
+        // Root PM head/current-generation reads are ordinary bounded work now. Their
+        // cells participate in the exact warm/fresh cross-history equality, not an
+        // opaque-document allowance. The core regression pins their exact read/write cost.
         // Delivery: recover_publication's head, observe_pass's open head, replacement head.
         model.opaque("T-669", "standalone_inbox_load", 3, bytes[1], 3);
         // Assistant probe: initial container, mutation's session + container, always-save.

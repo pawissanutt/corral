@@ -320,8 +320,12 @@ fn pm_replay(ctx: &Ctx, task: &Task, origin: &RequestOrigin) -> Result<Option<Re
         }
         return Ok(Some(stored.clone()));
     }
-    let in_pm = agent::pm_state::load(&ctx.store)?
-        .is_some_and(|pm| pm.state.receipts.iter().any(|r| same(&r)));
+    let in_pm = agent::pm_state::load_selected(
+        &ctx.store,
+        &agent::pm_state::Selection::default()
+            .key("receipts", format!("request:{}", origin.request_id)),
+    )?
+    .is_some_and(|pm| pm.state.receipts.iter().any(|r| same(&r)));
     let in_task = ctx
         .store
         .pm_request_receipt(&origin.request_id)?

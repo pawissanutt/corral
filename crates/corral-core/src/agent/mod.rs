@@ -14,6 +14,7 @@ mod lsp;
 pub(crate) mod native_inputs;
 mod native_record;
 pub mod paths;
+mod pm_records;
 pub mod pm_state;
 mod question;
 mod records;

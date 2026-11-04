@@ -85,6 +85,38 @@ impl Store {
         Ok(rows.into_values().collect())
     }
 
+    /// The first `limit` keys, including callback-local inserts/deletes. Unlike
+    /// `record_rows`, this never scans the rest of an ordered work/retention index.
+    pub(crate) fn first_record_rows(&self, area: &str, limit: u32) -> Result<Vec<StoredRecord>> {
+        let view = self.record_view()?;
+        view.ensure_fresh()?;
+        let staged = self.staged_record_writes(area);
+        let fetch = limit.saturating_add(u32::try_from(staged.len()).unwrap_or(u32::MAX));
+        let mut rows = std::collections::BTreeMap::new();
+        for row in view
+            .records(
+                &RecordQuery {
+                    area: Some(area.into()),
+                    key: None,
+                },
+                PageReq::first(fetch),
+            )?
+            .items
+        {
+            count(&row);
+            self.hold_record(area, &row.key, &Some(row.clone()));
+            rows.insert(row.key.clone(), row);
+        }
+        for write in staged {
+            if let Some(row) = staged_row(&write) {
+                rows.insert(write.key, row);
+            } else {
+                rows.remove(&write.key);
+            }
+        }
+        Ok(rows.into_values().take(limit as usize).collect())
+    }
+
     pub fn save_record(&self, area: &str, key: &str, value: &impl Serialize) -> Result<()> {
         anyhow::ensure!(
             !self.is_snapshot(),
