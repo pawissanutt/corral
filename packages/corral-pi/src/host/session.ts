@@ -322,6 +322,7 @@ export class HostSession {
       readInbox: signal => options.client.attentionSnapshot(signal),
       readHistory: request => options.client.history(request),
       readTranscript: id => this.readAgentTranscript(id),
+      ...(options.identity.task ? { readTask: () => options.client.taskSnapshot() } : {}),
     });
     this.unsubscribePanels = this.panels ? options.events.on(event => {
       if (event.kind === "terminal_input" && typeof event.input_sequence === "number" && event.input_sequence >= this.terminalInputSequence) {

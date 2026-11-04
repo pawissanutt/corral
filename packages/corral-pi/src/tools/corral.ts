@@ -129,6 +129,22 @@ export class CorralClient {
     });
   }
 
+  /** The bound task's spec and status for the Task view; read-only, never a mutation. */
+  taskSnapshot(signal?: AbortSignal): Promise<unknown> {
+    const { identity, corral, root } = this.options;
+    if (!identity.task) return Promise.reject(new CorralCallError("task_unbound", "No task bound to this session"));
+    return new Promise((resolve, reject) => {
+      const child = execFile(corral, ["show", identity.task ?? "", "--json"], {
+        cwd: root, timeout: CALL_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, signal,
+      }, (error, stdout) => {
+        if (error) { reject(new CorralCallError("task_read", error.message)); return; }
+        try { resolve(JSON.parse(stdout)); }
+        catch (error) { reject(new CorralCallError("task_read", error instanceof Error ? error.message : String(error))); }
+      });
+      child.stdin?.end();
+    });
+  }
+
   /** Bounded canonical read, deliberately not read_show/full task hydration or a mutation. */
   inspectionSnapshot(projection?: "lifecycle" | "artifacts"): Promise<unknown> {
     const { identity, corral, root } = this.options;
