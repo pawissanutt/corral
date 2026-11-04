@@ -9,6 +9,24 @@ use super::tx::{Applied, Owner, Tx, require};
 use crate::backend::*;
 use crate::blob_ref;
 
+impl crate::backend::question_events::QuestionEventTx for Tx<'_> {
+    fn question_record(&self, area: &str, key: &str) -> Applied<Option<StoredRecord>> {
+        first(
+            self.db,
+            "SELECT area, key, version, doc, updated FROM records WHERE area = ?1 AND key = ?2",
+            params![area, key],
+            load::record,
+        )
+        .or_io()
+    }
+    fn question_put(&mut self, write: RecordWrite) -> Applied<()> {
+        self.put_record(&write)
+    }
+    fn question_now(&self) -> jiff::Timestamp {
+        self.now
+    }
+}
+
 impl Tx<'_> {
     pub(super) fn put_record(&mut self, write: &RecordWrite) -> Applied<()> {
         let stored: Option<u64> = first(
@@ -414,6 +432,10 @@ impl Tx<'_> {
             self.insert_event(imported.event, imported.malformed)?;
         }
         for record in op.records {
+            use crate::backend::question_events::QuestionEventTx;
+            if self.question_import_skip(&record)? {
+                continue;
+            }
             self.put_record(&RecordWrite {
                 area: record.area,
                 key: record.key,

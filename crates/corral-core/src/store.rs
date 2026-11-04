@@ -53,6 +53,7 @@ mod native_worker_index;
 mod normalize;
 mod plan_member;
 mod plan_scope;
+mod question_events;
 mod read;
 mod readers;
 mod snapshot;

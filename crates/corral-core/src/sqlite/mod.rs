@@ -24,6 +24,7 @@ mod load;
 mod maintenance;
 pub mod migrate;
 mod plans;
+mod question_events;
 mod readers;
 mod row_indexes;
 mod run_worktrees;

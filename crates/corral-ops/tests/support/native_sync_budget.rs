@@ -2,7 +2,6 @@
 use crate::agent::{bridge::fixture as bridge, native_test_support as native};
 use corral_core::{
     agent::{AgentRole, paths},
-    backend::{TaskNum, TaskParts},
     inbox::Recipient,
     work::{self, Counter, HotScope},
 };
@@ -175,31 +174,7 @@ fn native_task_sync_fresh_process_child() {
 
 pub(super) fn observe(ctx: &crate::Ctx, id: &str) -> Cost {
     let oracle = corral_core::Store::open(ctx.store.root()).unwrap();
-    let doc = oracle
-        .view()
-        .unwrap()
-        .task(
-            TaskNum(id.trim_start_matches("T-").parse().unwrap()),
-            &TaskParts::All,
-        )
-        .unwrap()
-        .unwrap();
     let events = oracle.events().unwrap();
-    // Question replay reads only this task's question events (events_of).
-    let replayed: Vec<_> = events
-        .iter()
-        .filter(|e| {
-            e.task.as_deref() == Some(id)
-                && crate::questions::QUESTION_EVENT_KINDS.contains(&e.kind.as_str())
-        })
-        .collect();
-    let mut replay = native::full_read_cost(&doc);
-    *replay.get_mut(&Counter::ViewsOpened).unwrap() += 1;
-    replay.insert(Counter::EventDecodes, replayed.len() as u64);
-    *replay.get_mut(&Counter::DecodedDocBytes).unwrap() += replayed
-        .iter()
-        .map(|event| serde_json::to_vec(&event.detail).unwrap().len() as u64)
-        .sum::<u64>();
     let before = work::snapshot();
     let hot = HotScope::enter();
     let output = crate::agent::hooks::sync::task_id(ctx, id, ctx.store.now()).unwrap();
@@ -234,20 +209,10 @@ pub(super) fn observe(ctx: &crate::Ctx, id: &str) -> Cost {
         events,
         "steady pipeline must not append events"
     );
-    assert_eq!(delta.followup_calls.len(), 1, "{delta:?}");
-    assert_eq!(delta.followup_calls("T-623", "question_event_replay"), 3);
+    assert!(delta.followup_calls.is_empty(), "{delta:?}");
+    assert_eq!(delta.get(Counter::EventDecodes), 0, "{delta:?}");
     for counter in Counter::ALL {
         let cells = delta.cells(counter);
-        assert_eq!(
-            cells
-                .followup
-                .get(&("T-623".into(), "question_event_replay".into()))
-                .copied()
-                .unwrap_or(0),
-            3 * replay[&counter],
-            "{}: {delta:?}",
-            counter.name()
-        );
         assert_eq!(
             cells.total,
             cells.unattributed

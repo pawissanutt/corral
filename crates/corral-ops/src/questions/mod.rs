@@ -219,6 +219,7 @@ pub fn containers(task: &Task) -> Vec<ContainerRef> {
 
 /// A closed container whose run-end duties sync already settled (`InboxState.settled`): its
 /// questions, events and messages are final, so no sweep visits it again.
+#[cfg(test)]
 pub(crate) fn settled(task: &Task, container: &ContainerRef) -> bool {
     agent::container_run(task, container).is_some_and(|run| run.inbox.settled.is_some())
 }

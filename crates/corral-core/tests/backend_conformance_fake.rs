@@ -48,6 +48,7 @@ conformance!(
     head_documents_and_columns,
     lesson_artifact_projection,
     lesson_approval_projection,
+    question_event_outbox,
 );
 
 #[test]

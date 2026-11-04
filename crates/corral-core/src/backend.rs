@@ -14,6 +14,7 @@ pub(crate) mod lesson_approvals;
 pub(crate) mod lesson_artifacts;
 mod operation;
 mod query;
+pub(crate) mod question_events;
 mod rows;
 mod support;
 
