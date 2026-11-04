@@ -39,8 +39,12 @@ fn approved_plan_stays_bound_to_claim_and_refusal_releases_capacity() {
     assert_eq!(reservation.approved_plan.as_ref().unwrap().id, plan.id);
     assert!(!reservation.reserved);
 
-    // A persisted claim cannot turn a now-stale approval into permission to launch.
-    std::fs::write(&path, format!("{PLAN}Changed implementation.\n")).unwrap();
+    // Source files are disposable caches. A persisted claim still cannot turn an
+    // unavailable/corrupt approved snapshot into permission to launch.
+    let hash = corral_core::blob_ref::BlobHash::parse(&plan.artifact.sha256).unwrap();
+    let blob = f.ctx.store.blob_store().unwrap().path_of(&hash);
+    let approved_snapshot = std::fs::read(&blob).unwrap();
+    std::fs::write(&blob, b"corrupt approved plan snapshot").unwrap();
     let out = f.cli(&["dispatch", &task.id]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("stale plan"));
@@ -50,8 +54,8 @@ fn approved_plan_stays_bound_to_claim_and_refusal_releases_capacity() {
     assert_eq!(f.state()["creates"], 0);
     assert_eq!(corral_ops::slot_usage(&f.ctx).unwrap().total(), 0);
 
-    // Restoring the approved bytes recovers the same run and records the bound receipt.
-    std::fs::write(&path, PLAN).unwrap();
+    // Restoring the approved blob recovers the same run and records the bound receipt.
+    std::fs::write(&blob, approved_snapshot).unwrap();
     f.ok(&["dispatch", &task.id]);
     let started = f.ctx.store.get(&task.id).unwrap();
     assert_eq!(started.runs.len(), 1);
