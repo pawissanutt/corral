@@ -43,8 +43,9 @@ fn park(f: &Fixture, id: &str, on: &str) {
     ]);
 }
 
-fn wake(f: &Fixture, id: &str) -> std::process::Output {
-    // Derive the observation from the registration the subprocess recorded, not the wall clock.
+fn wake(f: &Fixture, id: &str) {
+    // Supply one explicit instant for both the receipt and its validation. The CLI's
+    // wall clock is independent of the process clock that registered the wait.
     let registered = f
         .ctx
         .store
@@ -63,8 +64,17 @@ fn wake(f: &Fixture, id: &str) -> std::process::Output {
         "delivery": "acknowledged",
         "observed_at": registered, "answer": null,
     });
-    let file = json_file(f, &format!("receipt-{id}.json"), &receipt);
-    f.ok(&["run", "resume", id, "--wait", "landing", "--file", &file])
+    let receipt = serde_json::from_value(receipt).unwrap();
+    // resume_run records the receipt and performs reacquisition synchronously; its
+    // return is the exact wake signal, not a timing-based poll.
+    corral_ops::resume_run(
+        &f.ctx,
+        id,
+        corral_ops::ResumeTarget::Wait("landing"),
+        receipt,
+        registered,
+    )
+    .unwrap();
 }
 
 fn queue(f: &Fixture) -> Value {
@@ -142,18 +152,14 @@ fn a_woken_run_waits_in_queue_then_reacquires_ahead_of_queued_work() {
     f.ok(&["queue", "add", &later.id]);
 
     // When A's wait fires with no slot free.
-    let out = wake(&f, &a);
+    wake(&f, &a);
 
     // Then A queues for a slot instead of taking one, and leads the queue.
-    assert!(String::from_utf8_lossy(&out.stderr).contains("queued to re-acquire a coding slot"));
     assert!(slot_wait(&f, &a));
     let task = f.ctx.store.get(&a).unwrap();
-    assert_eq!(
-        task.current_run().unwrap().obligations.waits[0]
-            .observation
-            .state,
-        WaitState::Ready
-    );
+    let wait = &task.current_run().unwrap().obligations.waits[0];
+    assert_eq!(wait.observation.state, WaitState::Ready);
+    assert_eq!(wait.receipt.as_ref().unwrap().id, "landed");
     assert_eq!(corral_ops::slot_usage(&f.ctx).unwrap().total(), LIMIT);
     let listed = queue(&f);
     assert_eq!(listed[0]["id"], a);
@@ -197,10 +203,9 @@ fn a_woken_run_with_a_free_slot_reacquires_it_at_once() {
     assert_eq!(corral_ops::slot_usage(&f.ctx).unwrap().total(), 0);
 
     // When the wait fires.
-    let out = wake(&f, &a);
+    wake(&f, &a);
 
-    // Then A holds a slot again before the command returns.
-    assert!(!String::from_utf8_lossy(&out.stderr).contains("queued"));
+    // Then A holds a slot again before the call returns.
     assert!(!slot_wait(&f, &a));
     assert_eq!(corral_ops::slot_usage(&f.ctx).unwrap().tasks, 1);
 }
