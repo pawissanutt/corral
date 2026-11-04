@@ -1,6 +1,6 @@
 # T-776: report-only budget observations
 
-Enforcement remains off. PM confirmed T-766 gardening is separate and re-holds enforcement until approximately ten quiet-load gates are available. No timing failure policy was activated in this round.
+Enforcement remains off. The amended T-776 scope is calibration only; T-818 owns enforcement and is held until at least ten quiet-load gates are available. T-766 gardening remains separate. No timing failure policy was activated in this round.
 
 The 44 supplied gate-log references and extracted phase/load lines are attached as `artifacts/T-776/R1/725eb245-gate-observations.txt`. Some entries predate the report-only instrumentation or have no measured test phase; failed or interrupted gates are partial observations. Most measured phases were busy-exempt, so they cannot establish quiet-host thresholds. High-load overruns must not be treated as quiet-host failures.
 
