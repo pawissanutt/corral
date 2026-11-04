@@ -67,6 +67,8 @@ export interface LspToolkitOptions {
 
 export interface LspToolkit {
   readonly tools: readonly ToolDefinition[];
+  /** Starts servers for project markers at the worktree root, without blocking the first turn. */
+  warm(): Promise<void>;
   /** Stops every server this toolkit started; the next tool call starts a fresh one. */
   shutdown(): Promise<void>;
 }
@@ -177,14 +179,16 @@ export function lspToolkit(options: LspToolkitOptions): LspToolkit {
       name: "lsp_diagnostics",
       label: "Language server diagnostics",
       description: "Errors and warnings the configured language server reports for one file in the worktree (for "
-        + `Rust, rust-analyzer including cargo check). At most ${MAX_ITEMS} items; complete is false when the server `
-        + "was still working at the deadline. Reads the file from disk, so save edits first.",
+        + `Rust, rust-analyzer including cargo check). At most ${MAX_ITEMS} items; waits for indexing and fresh diagnostics `
+        + "with a bounded deadline (lsp_timeout on expiry, not a clean bill of health). Reads disk, so save edits first.",
       parameters: Type.Object({ path: PathParam }),
       async execute(_id, params: { path: string }) {
         const { file, spec, languageId } = target(params.path);
         const server = await client(spec, file);
         const { uri, since } = server.sync(file, languageId);
         const complete = await server.settle(() => server.diagnostics(uri, since) !== undefined);
+        if (!complete) throw new LspError("lsp_timeout", `${spec.id} is still indexing or has not published fresh diagnostics `
+          + `after ${limits.readyTimeoutMs} ms; retry lsp_diagnostics when ready or use a targeted compiler check`);
         const diagnostics = (server.diagnostics(uri, since) ?? []).map((item: Diagnostic) => ({
           ...located(root, uri, item.range),
           severity: SEVERITY[item.severity ?? 0] || "unknown",
@@ -229,6 +233,18 @@ export function lspToolkit(options: LspToolkitOptions): LspToolkit {
 
   return {
     tools,
+    async warm() {
+      await Promise.all(servers.map(async (spec) => {
+        if (!Object.keys(spec.languages).some((ext) => servers.find((candidate) => candidate.languages[ext] !== undefined) === spec)) return;
+        const markers = spec.rootMarkers?.length ? spec.rootMarkers
+          : spec.languages[".rs"] ? ["Cargo.toml"]
+          : spec.languages[".ts"] || spec.languages[".js"] ? ["package.json", "tsconfig.json"] : [];
+        if (!markers.some((marker) => existsSync(join(root, marker)))) return;
+        // Use the same root and cache key as an eventual file query. Missing servers are
+        // surfaced by the tool on demand, never an unhandled startup rejection.
+        try { await client(spec, join(root, ".lsp-warmup")); } catch { /* opportunistic */ }
+      }));
+    },
     async shutdown() {
       const running = [...clients.values()];
       clients.clear();

@@ -3,7 +3,7 @@ name: corral-worker
 description: Procedure for a dispatched corral coding run - implement one task in its worktree, run the gate, attach evidence and finish with corral done. Use when your prompt carries a corral Run contract.
 ---
 <!-- managed by `corral skill install`; local edits are overwritten -->
-<!-- corral-skill: corral-worker version=0.3.0 sha256=797829dadcb9caea334a2506af35dcacf1d682c1ce42d91c6f9426bbab3011c3 -->
+<!-- corral-skill: corral-worker version=0.4.0 sha256=f6e52e7d082aa92f1041e1c89de4c9d797c014f394b46068b44833616fc24675 -->
 
 # corral worker
 
@@ -12,6 +12,16 @@ prompt is authoritative: it names your worktree, branch, base, gate command, art
 artifact globs and the `done` result and summary shapes. This skill explains how to carry it out. Where a
 step says "contract step N", follow that numbered step of the Run contract as written; this skill never
 restates or relaxes it. Read `corral <verb> --help` for exact flags.
+
+## Language server workflow
+
+When LSP tools are available, prefer `lsp_definition` and `lsp_references` for symbol
+navigation over grep; use grep for literal text or when the server cannot answer. After
+saving code edits, call `lsp_diagnostics` on the changed files before reaching for a
+compiler subprocess. It waits for indexing and fresh diagnostics with a bounded deadline.
+A timeout is not a clean result: retry when the server is ready or run the cheapest
+targeted compiler check and report the limitation. LSP does not replace the run’s gate
+or required tests. If LSP is disabled or unavailable, use the targeted check directly.
 
 ## Test cost and placement
 

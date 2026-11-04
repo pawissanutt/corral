@@ -689,7 +689,10 @@ export class HostSession {
         else await code.close();
       });
     }
-    if (this.additionalLsp) pi.on("session_shutdown", async () => { await this.additionalLsp?.shutdown(); });
+    if (this.additionalLsp) {
+      pi.on("session_start", () => { void this.additionalLsp?.warm(); });
+      pi.on("session_shutdown", async () => { await this.additionalLsp?.shutdown(); });
+    }
     const settings = this.options.capabilities?.mcp;
     const search = this.options.capabilities?.enabled.includes("tool_search") === true;
     if (settings) {
