@@ -26,7 +26,7 @@ const identity = {
   review: "R2-review1", callback: "g1:c1", generation: 1,
 };
 const UPSTREAM = ["read", "grep", "find", "ls", "bash"];
-const CORRAL_TOOLS = ["corral_receipt_lookup", "corral_ask", "corral_withdraw", "corral_evidence", "corral_artifact", "corral_verdict"];
+const CORRAL_TOOLS = ["corral_receipt_lookup", "corral_content_read", "corral_ask", "corral_withdraw", "corral_evidence", "corral_artifact", "corral_verdict"];
 const originalFetch = globalThis.fetch;
 
 let assets: FixtureInstall;
@@ -84,7 +84,7 @@ test("the package's reviewer role is read-only and allows only the reviewer's co
   const tools = reviewer.tools({ identity, cwd: "/tmp", model: "m" });
   expect(tools.map((tool) => tool.name)).toEqual(CORRAL_TOOLS);
   expect([...reviewer.corralOps].sort()).toEqual(
-    ["hello", "event", "receipt_lookup", "ask", "withdraw", "evidence", "artifact", "verdict"].sort(),
+    ["hello", "event", "receipt_lookup", "read_content", "ask", "withdraw", "evidence", "artifact", "verdict"].sort(),
   );
   expect(tools.every((tool) => reviewer.corralOps.includes(tool.op))).toBeTrue();
 });
