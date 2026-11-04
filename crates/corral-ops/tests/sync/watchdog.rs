@@ -83,6 +83,37 @@ fn long_idle_foreign_foreground_is_flagged_and_notified_once() {
 }
 
 #[test]
+fn live_gate_does_not_flag_idle_worker_as_stuck() {
+    let fx = Fx::new("omo");
+    let processes = Processes::default();
+    foreground(&fx, &processes, &[(42, &["cargo", "test"])], 700);
+    fx.herdr_says("idle");
+    sync(&fx, &processes, 0);
+    fx.ctx
+        .store
+        .update("T-001", |task| {
+            task.current_run_mut().unwrap().gate = Some(corral_core::GateRecord {
+                socket: None,
+                identity: None,
+                commands: Vec::new(),
+                log_sha256: None,
+                result: corral_core::GateResult::Running,
+                process_lost: false,
+                failed_cmd: None,
+                at: fx.at(0),
+                sha: "head".into(),
+                pane: None,
+                tier: None,
+            });
+            Ok(())
+        })
+        .unwrap();
+    let task = sync(&fx, &processes, 600);
+    assert!(task.current_run().unwrap().stuck.is_none());
+    assert_eq!(fx.events("stuck"), 0);
+}
+
+#[test]
 fn harness_and_known_helpers_are_never_stuck() {
     let fx = Fx::new("omo");
     let processes = Processes::default();

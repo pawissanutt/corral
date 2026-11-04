@@ -61,6 +61,12 @@ export function installToolControls(pi: ExtensionAPI, controls: ToolControls): v
   const hooked = new Set<string>();
   pi.on("tool_call", async (event) => {
     const nested = event.parentToolCallId !== undefined;
+    const secondsField = event.toolName === "bash" ? "timeout"
+      : event.toolName === "corral_job_monitor" ? "timeout_secs" : undefined;
+    const seconds = secondsField && (event.input as Record<string, unknown>)[secondsField];
+    if (typeof seconds === "number" && seconds < 5) {
+      return { block: true, reason: `${secondsField} is in seconds; ${seconds} looks like a unit slip, resend with whole seconds (e.g. 600); nothing ran` };
+    }
     const shell = SHELL_TOOLS.has(event.toolName);
     const fixed = shell ? controls.fixed?.(commandOf(event.input)) : undefined;
     if (fixed !== undefined) {
