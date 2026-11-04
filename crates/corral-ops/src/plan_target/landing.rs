@@ -57,6 +57,79 @@ impl LandingReceipt {
     }
 }
 
+/// Read the one exact prepared recovery landing without publishing it or repairing Git.
+/// The caller holds landing_lock and must prove the ref advancement before finalization.
+pub(crate) fn recovery_landing<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    candidate: &CandidateIdentity,
+    strategy: &str,
+) -> Result<(Target, String)> {
+    let binding = run
+        .plan_target
+        .as_ref()
+        .context("recovery Plan target missing")?;
+    let (plan, branch) =
+        super::integration_plan(&ctx.store, task)?.context("execution Plan changed")?;
+    let repo = ctx
+        .store
+        .project_path(task.project().as_deref().context("task project missing")?)?;
+    let target = Target::load(&repo, &branch)?.context("Plan target journal missing")?;
+    target.check_owner(&ctx.store, &plan)?;
+    ensure!(
+        target.binding(&plan)? == *binding
+            && run.base == branch
+            && run.branch != branch
+            && run.worktree != target.checkout,
+        "recovery Plan target binding changed"
+    );
+    let receipt = target
+        .pending
+        .iter()
+        .chain(target.receipts.iter())
+        .find(|receipt| receipt.task == *task.id() && receipt.run == run.id)
+        .context("exact Plan landing journal missing")?;
+    ensure!(
+        receipt.branch == run.branch
+            && receipt.worktree == run.worktree
+            && receipt.dispatch_base == run.base_sha
+            && receipt.contract == task.contract_revision()?
+            && receipt.target == *binding
+            && receipt.before == candidate.integration_base
+            && receipt.head == candidate.head
+            && receipt.strategy == strategy
+            && receipt.identity.is_none()
+            && !receipt.remove_worktree
+            && receipt.keep_branch,
+        "recovery Plan landing provenance differs"
+    );
+    ensure!(
+        target.initialized
+            && target
+                .pending
+                .as_ref()
+                .is_none_or(|pending| pending.key == receipt.key)
+            && target
+                .receipts
+                .iter()
+                .all(|other| other.key == receipt.key || other.published)
+            && (target.head == receipt.before || target.head == receipt.head),
+        "Plan journal has another unfinished landing"
+    );
+    let expected = crate::hooks::digest(&(
+        &target.owner,
+        binding,
+        task.id(),
+        &run.id,
+        &receipt.before,
+        &receipt.head,
+    ))?;
+    ensure!(receipt.key == expected, "Plan landing journal key differs");
+    let key = receipt.key.clone();
+    Ok((target, key))
+}
+
 impl Target {
     pub(crate) fn prepare_landing<T: TaskRef + ?Sized>(
         &mut self,

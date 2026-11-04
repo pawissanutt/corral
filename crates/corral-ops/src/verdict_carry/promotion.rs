@@ -102,6 +102,9 @@ fn check<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<Option<Promotion>> 
     else {
         return Ok(None);
     };
+    if crate::recovery::code_review_bound(ctx, task.id(), review)? {
+        return Ok(None);
+    }
     let Some(approved) = review.identity.as_ref() else {
         return Ok(None);
     };

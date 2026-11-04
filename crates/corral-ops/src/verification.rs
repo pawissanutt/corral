@@ -144,6 +144,42 @@ pub(crate) fn identity_with<T: TaskRef + ?Sized>(
             return Err(error);
         }
     }
+    identity_inputs(ctx, &store, task, run, attempt, environment, gate_tier)
+}
+
+/// The owning journal has already proved the exact target; its unpublished Plan receipt is
+/// not ordinary target freshness. All candidate inputs still re-derive unchanged.
+pub(crate) fn identity_after_landing<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    expected: &CandidateIdentity,
+    proof: &crate::recovery::LandingProof,
+) -> Result<CandidateIdentity> {
+    anyhow::ensure!(
+        proof.matches(task, run, expected),
+        "landing proof identity differs"
+    );
+    identity_inputs(
+        ctx,
+        &ctx.store.reopen()?,
+        task,
+        run,
+        &expected.attempt,
+        expected.environment.clone(),
+        expected.gate_tier.clone(),
+    )
+}
+
+fn identity_inputs<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    store: &corral_core::Store,
+    task: &T,
+    run: &RunHead,
+    attempt: &str,
+    environment: Vec<(String, Option<String>)>,
+    gate_tier: Option<Box<GateTierBinding>>,
+) -> Result<CandidateIdentity> {
     let policy = store.config.task_review_policy(task);
     let config = config_inputs(&store.config)?;
     let mut file_inputs = Vec::new();

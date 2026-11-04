@@ -14,7 +14,7 @@ use crate::Ctx;
 mod gate_carry;
 mod landing;
 pub(crate) use gate_carry::gate_carry;
-pub(crate) use landing::{LandingOptions, LandingReceipt, reconcile_all};
+pub(crate) use landing::{LandingOptions, LandingReceipt, reconcile_all, recovery_landing};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Target {
