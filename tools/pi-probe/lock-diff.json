@@ -17,12 +17,12 @@
   },
   "bun": {
     "lock": "tools/pi-probe/bun.lock",
-    "sha256": "292af16cf0f192abd1b8038754b48551994dddd5a2eee83f91dfa3bce9c9fd48",
-    "placements": 205,
-    "resolutions": 202,
+    "sha256": "60431ff118b00a8029a2164cb19c9d8ea932cb341456f26f76ba7aa849be50e9",
+    "placements": 208,
+    "resolutions": 205,
     "root": {
       "dependencies": {
-        "@earendil-works/pi-coding-agent": "1.3.0"
+        "@earendil-works/pi-coding-agent": "1.5.0"
       },
       "devDependencies": {
         "@modelcontextprotocol/sdk": "1.25.2",
@@ -33,11 +33,78 @@
   },
   "migratedFrom": "bun install migrated the T-136 package-lock.json, keeping its resolutions",
   "onlyBun": [
-    "typescript@6.0.2"
+    "@earendil-works/pi-agent-core@1.5.0",
+    "@earendil-works/pi-ai@1.5.0",
+    "@earendil-works/pi-codemode@1.5.0",
+    "@earendil-works/pi-coding-agent@1.5.0",
+    "@earendil-works/pi-mcp@1.5.0",
+    "@earendil-works/pi-schema@1.5.0",
+    "@earendil-works/pi-telemetry@1.5.0",
+    "@earendil-works/pi-tui@1.5.0",
+    "@isaacs/nonrecursive-glob-match@1.0.3",
+    "marked-cjk-friendly@0.1.2",
+    "minimatch@11.0.3",
+    "typescript@6.0.2",
+    "undici@8.12.3"
   ],
-  "onlyT136": [],
+  "onlyT136": [
+    "@earendil-works/pi-agent-core@1.3.0",
+    "@earendil-works/pi-ai@1.3.0",
+    "@earendil-works/pi-codemode@1.3.0",
+    "@earendil-works/pi-coding-agent@1.3.0",
+    "@earendil-works/pi-mcp@1.3.0",
+    "@earendil-works/pi-telemetry@1.3.0",
+    "@earendil-works/pi-tui@1.3.0",
+    "minimatch@10.2.6",
+    "undici@8.10.2"
+  ],
   "integrityMismatches": [],
   "placementDifferences": [
+    {
+      "placement": "@earendil-works/pi-agent-core",
+      "t136": "@earendil-works/pi-agent-core@1.3.0",
+      "bun": "@earendil-works/pi-agent-core@1.5.0"
+    },
+    {
+      "placement": "@earendil-works/pi-ai",
+      "t136": "@earendil-works/pi-ai@1.3.0",
+      "bun": "@earendil-works/pi-ai@1.5.0"
+    },
+    {
+      "placement": "@earendil-works/pi-codemode",
+      "t136": "@earendil-works/pi-codemode@1.3.0",
+      "bun": "@earendil-works/pi-codemode@1.5.0"
+    },
+    {
+      "placement": "@earendil-works/pi-coding-agent",
+      "t136": "@earendil-works/pi-coding-agent@1.3.0",
+      "bun": "@earendil-works/pi-coding-agent@1.5.0"
+    },
+    {
+      "placement": "@earendil-works/pi-mcp",
+      "t136": "@earendil-works/pi-mcp@1.3.0",
+      "bun": "@earendil-works/pi-mcp@1.5.0"
+    },
+    {
+      "placement": "@earendil-works/pi-schema",
+      "t136": null,
+      "bun": "@earendil-works/pi-schema@1.5.0"
+    },
+    {
+      "placement": "@earendil-works/pi-telemetry",
+      "t136": "@earendil-works/pi-telemetry@1.3.0",
+      "bun": "@earendil-works/pi-telemetry@1.5.0"
+    },
+    {
+      "placement": "@earendil-works/pi-tui",
+      "t136": "@earendil-works/pi-tui@1.3.0",
+      "bun": "@earendil-works/pi-tui@1.5.0"
+    },
+    {
+      "placement": "@isaacs/nonrecursive-glob-match",
+      "t136": null,
+      "bun": "@isaacs/nonrecursive-glob-match@1.0.3"
+    },
     {
       "placement": "gaxios/agent-base",
       "t136": "agent-base@7.1.4",
@@ -47,6 +114,16 @@
       "placement": "gaxios/https-proxy-agent/agent-base",
       "t136": null,
       "bun": "agent-base@7.1.4"
+    },
+    {
+      "placement": "marked-cjk-friendly",
+      "t136": null,
+      "bun": "marked-cjk-friendly@0.1.2"
+    },
+    {
+      "placement": "minimatch",
+      "t136": "minimatch@10.2.6",
+      "bun": "minimatch@11.0.3"
     },
     {
       "placement": "p-retry/retry",
@@ -67,11 +144,593 @@
       "placement": "typescript",
       "t136": null,
       "bun": "typescript@6.0.2"
+    },
+    {
+      "placement": "undici",
+      "t136": "undici@8.10.2",
+      "bun": "undici@8.12.3"
     }
   ],
   "dependencyEdges": {
     "t136": 408,
-    "bun": 408
+    "bun": 411
   },
-  "dependencyResolutionDifferences": []
+  "dependencyResolutionDifferences": [
+    {
+      "edge": "@earendil-works/pi-agent-core@1.3.0 -> @earendil-works/pi-ai",
+      "t136": [
+        "@earendil-works/pi-ai@1.3.0"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-agent-core@1.3.0 -> typebox",
+      "t136": [
+        "typebox@1.3.27"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-agent-core@1.5.0 -> @earendil-works/pi-ai",
+      "t136": [],
+      "bun": [
+        "@earendil-works/pi-ai@1.5.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-agent-core@1.5.0 -> @earendil-works/pi-schema",
+      "t136": [],
+      "bun": [
+        "@earendil-works/pi-schema@1.5.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.3.0 -> @anthropic-ai/sdk",
+      "t136": [
+        "@anthropic-ai/sdk@0.129.0"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.3.0 -> @aws-sdk/client-bedrock-runtime",
+      "t136": [
+        "@aws-sdk/client-bedrock-runtime@3.1127.0"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.3.0 -> @earendil-works/pi-telemetry",
+      "t136": [
+        "@earendil-works/pi-telemetry@1.3.0"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.3.0 -> @google/genai",
+      "t136": [
+        "@google/genai@2.21.0"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.3.0 -> @smithy/node-http-handler",
+      "t136": [
+        "@smithy/node-http-handler@4.12.1"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.3.0 -> http-proxy-agent",
+      "t136": [
+        "http-proxy-agent@9.1.0"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.3.0 -> https-proxy-agent",
+      "t136": [
+        "https-proxy-agent@9.1.0"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.3.0 -> openai",
+      "t136": [
+        "openai@7.19.0"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.3.0 -> partial-json",
+      "t136": [
+        "partial-json@0.1.7"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.3.0 -> typebox",
+      "t136": [
+        "typebox@1.3.27"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.5.0 -> @anthropic-ai/sdk",
+      "t136": [],
+      "bun": [
+        "@anthropic-ai/sdk@0.129.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.5.0 -> @aws-sdk/client-bedrock-runtime",
+      "t136": [],
+      "bun": [
+        "@aws-sdk/client-bedrock-runtime@3.1127.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.5.0 -> @earendil-works/pi-schema",
+      "t136": [],
+      "bun": [
+        "@earendil-works/pi-schema@1.5.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.5.0 -> @earendil-works/pi-telemetry",
+      "t136": [],
+      "bun": [
+        "@earendil-works/pi-telemetry@1.5.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.5.0 -> @google/genai",
+      "t136": [],
+      "bun": [
+        "@google/genai@2.21.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.5.0 -> @smithy/node-http-handler",
+      "t136": [],
+      "bun": [
+        "@smithy/node-http-handler@4.12.1"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.5.0 -> http-proxy-agent",
+      "t136": [],
+      "bun": [
+        "http-proxy-agent@9.1.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.5.0 -> https-proxy-agent",
+      "t136": [],
+      "bun": [
+        "https-proxy-agent@9.1.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.5.0 -> openai",
+      "t136": [],
+      "bun": [
+        "openai@7.19.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-ai@1.5.0 -> partial-json",
+      "t136": [],
+      "bun": [
+        "partial-json@0.1.7"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-codemode@1.3.0 -> quickjs-wasi",
+      "t136": [
+        "quickjs-wasi@3.6.2"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-codemode@1.5.0 -> quickjs-wasi",
+      "t136": [],
+      "bun": [
+        "quickjs-wasi@3.6.2"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> @earendil-works/pi-agent-core",
+      "t136": [
+        "@earendil-works/pi-agent-core@1.3.0"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> @earendil-works/pi-ai",
+      "t136": [
+        "@earendil-works/pi-ai@1.3.0"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> @earendil-works/pi-codemode",
+      "t136": [
+        "@earendil-works/pi-codemode@1.3.0"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> @earendil-works/pi-mcp",
+      "t136": [
+        "@earendil-works/pi-mcp@1.3.0"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> @earendil-works/pi-tui",
+      "t136": [
+        "@earendil-works/pi-tui@1.3.0"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> @silvia-odwyer/photon-node",
+      "t136": [
+        "@silvia-odwyer/photon-node@0.3.4"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> brace-expansion",
+      "t136": [
+        "brace-expansion@5.0.12"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> chalk",
+      "t136": [
+        "chalk@6.0.0"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> cross-spawn",
+      "t136": [
+        "cross-spawn@7.0.6"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> diff",
+      "t136": [
+        "diff@8.0.4"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> grok-mermaid",
+      "t136": [
+        "grok-mermaid@0.2.3"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> highlight.js",
+      "t136": [
+        "highlight.js@10.7.3"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> hosted-git-info",
+      "t136": [
+        "hosted-git-info@9.0.3"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> ignore",
+      "t136": [
+        "ignore@7.0.8"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> jiti",
+      "t136": [
+        "jiti@2.7.0"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> minimatch",
+      "t136": [
+        "minimatch@10.2.6"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> proper-lockfile",
+      "t136": [
+        "proper-lockfile@4.1.2"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> quickjs-wasi",
+      "t136": [
+        "quickjs-wasi@3.6.2"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> semver",
+      "t136": [
+        "semver@7.8.5"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> typebox",
+      "t136": [
+        "typebox@1.3.27"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> undici",
+      "t136": [
+        "undici@8.10.2"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.3.0 -> yaml",
+      "t136": [
+        "yaml@2.9.0"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> @earendil-works/pi-agent-core",
+      "t136": [],
+      "bun": [
+        "@earendil-works/pi-agent-core@1.5.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> @earendil-works/pi-ai",
+      "t136": [],
+      "bun": [
+        "@earendil-works/pi-ai@1.5.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> @earendil-works/pi-codemode",
+      "t136": [],
+      "bun": [
+        "@earendil-works/pi-codemode@1.5.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> @earendil-works/pi-mcp",
+      "t136": [],
+      "bun": [
+        "@earendil-works/pi-mcp@1.5.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> @earendil-works/pi-tui",
+      "t136": [],
+      "bun": [
+        "@earendil-works/pi-tui@1.5.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> @silvia-odwyer/photon-node",
+      "t136": [],
+      "bun": [
+        "@silvia-odwyer/photon-node@0.3.4"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> brace-expansion",
+      "t136": [],
+      "bun": [
+        "brace-expansion@5.0.12"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> chalk",
+      "t136": [],
+      "bun": [
+        "chalk@6.0.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> cross-spawn",
+      "t136": [],
+      "bun": [
+        "cross-spawn@7.0.6"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> diff",
+      "t136": [],
+      "bun": [
+        "diff@8.0.4"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> grok-mermaid",
+      "t136": [],
+      "bun": [
+        "grok-mermaid@0.2.3"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> highlight.js",
+      "t136": [],
+      "bun": [
+        "highlight.js@10.7.3"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> hosted-git-info",
+      "t136": [],
+      "bun": [
+        "hosted-git-info@9.0.3"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> ignore",
+      "t136": [],
+      "bun": [
+        "ignore@7.0.8"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> jiti",
+      "t136": [],
+      "bun": [
+        "jiti@2.7.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> minimatch",
+      "t136": [],
+      "bun": [
+        "minimatch@11.0.3"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> proper-lockfile",
+      "t136": [],
+      "bun": [
+        "proper-lockfile@4.1.2"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> quickjs-wasi",
+      "t136": [],
+      "bun": [
+        "quickjs-wasi@3.6.2"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> semver",
+      "t136": [],
+      "bun": [
+        "semver@7.8.5"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> typebox",
+      "t136": [],
+      "bun": [
+        "typebox@1.3.27"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> undici",
+      "t136": [],
+      "bun": [
+        "undici@8.12.3"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-coding-agent@1.5.0 -> yaml",
+      "t136": [],
+      "bun": [
+        "yaml@2.9.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-mcp@1.3.0 -> cross-spawn",
+      "t136": [
+        "cross-spawn@7.0.6"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-mcp@1.5.0 -> cross-spawn",
+      "t136": [],
+      "bun": [
+        "cross-spawn@7.0.6"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-tui@1.3.0 -> get-east-asian-width",
+      "t136": [
+        "get-east-asian-width@1.6.0"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-tui@1.3.0 -> marked",
+      "t136": [
+        "marked@18.0.11"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "@earendil-works/pi-tui@1.5.0 -> get-east-asian-width",
+      "t136": [],
+      "bun": [
+        "get-east-asian-width@1.6.0"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-tui@1.5.0 -> marked",
+      "t136": [],
+      "bun": [
+        "marked@18.0.11"
+      ]
+    },
+    {
+      "edge": "@earendil-works/pi-tui@1.5.0 -> marked-cjk-friendly",
+      "t136": [],
+      "bun": [
+        "marked-cjk-friendly@0.1.2"
+      ]
+    },
+    {
+      "edge": "marked-cjk-friendly@0.1.2 -> marked",
+      "t136": [],
+      "bun": [
+        "marked@18.0.11"
+      ]
+    },
+    {
+      "edge": "minimatch@10.2.6 -> brace-expansion",
+      "t136": [
+        "brace-expansion@5.0.12"
+      ],
+      "bun": []
+    },
+    {
+      "edge": "minimatch@11.0.3 -> @isaacs/nonrecursive-glob-match",
+      "t136": [],
+      "bun": [
+        "@isaacs/nonrecursive-glob-match@1.0.3"
+      ]
+    },
+    {
+      "edge": "minimatch@11.0.3 -> brace-expansion",
+      "t136": [],
+      "bun": [
+        "brace-expansion@5.0.12"
+      ]
+    },
+    {
+      "edge": "openai@7.19.0 -> undici",
+      "t136": [
+        "undici@8.10.2"
+      ],
+      "bun": [
+        "undici@8.12.3"
+      ]
+    }
+  ]
 }
