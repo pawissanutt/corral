@@ -177,6 +177,153 @@ fn interrupt_at<T>(point: &'static str, op: impl FnOnce() -> T) -> bool {
 }
 
 #[test]
+fn infrastructure_recovery_keeps_round_and_restarts_review() {
+    let mut fx = Fx::new();
+    fx.ctx.store.config.agents.insert(
+        "rev".into(),
+        corral_core::AgentCmd {
+            command: "true".into(),
+        },
+    );
+    fx.ctx.store.save_config().unwrap();
+    let id = fx.task();
+    crate::gate::gate_start(&fx.ctx, &id).unwrap();
+    fx.run_gate(&id);
+    crate::gate::gate_collect(&fx.ctx, &id).unwrap();
+    crate::reviewer::review_run(&fx.ctx, &id, Some("rev")).unwrap();
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            task.status = Status::NeedsMe;
+            task.rounds = 2;
+            let run = task.current_run_mut().unwrap();
+            run.outcome = Some(corral_core::RunOutcome::Done);
+            run.autopilot = Some(corral_core::AutopilotState {
+                stage: corral_core::AutoStage::Escalated,
+                reason: Some(
+                    "integration preflight error: Git operation ongoing: index.lock".into(),
+                ),
+                sha: None,
+                at: corral_core::clock::now(),
+            });
+            Ok(())
+        })
+        .unwrap();
+
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            task.current_run_mut()
+                .unwrap()
+                .autopilot
+                .as_mut()
+                .unwrap()
+                .reason = Some("integration preflight error: merge conflict".into());
+            Ok(())
+        })
+        .unwrap();
+    assert!(crate::autopilot::recover_infrastructure(&fx.ctx, &id).is_err());
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            task.current_run_mut()
+                .unwrap()
+                .gate
+                .as_mut()
+                .unwrap()
+                .result = GateResult::Fail;
+            task.status = Status::Review;
+            task.current_run_mut()
+                .unwrap()
+                .review
+                .as_mut()
+                .unwrap()
+                .process_lost = true;
+            task.infra_wait = Some(corral_core::InfraWait {
+                version: 1,
+                class: corral_core::InfraWaitClass::Contention,
+                marker: "index.lock".into(),
+                path: fx.app.join(".git/index.lock"),
+                first_seen: corral_core::clock::now(),
+                first_mtime: None,
+                held_at: None,
+            });
+            Ok(())
+        })
+        .unwrap();
+    assert!(crate::autopilot::recover_infrastructure(&fx.ctx, &id).is_err());
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            task.current_run_mut()
+                .unwrap()
+                .gate
+                .as_mut()
+                .unwrap()
+                .result = GateResult::Pass;
+            Ok(())
+        })
+        .unwrap();
+    crate::autopilot::recover_infrastructure(&fx.ctx, &id).unwrap();
+    let task = fx.ctx.store.get(&id).unwrap();
+    assert_eq!(task.status, Status::Review);
+    assert!(task.infra_wait.is_some());
+    assert!(task.current_run().unwrap().review.is_none());
+    assert_eq!(task.rounds, 2);
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            task.status = Status::NeedsMe;
+            task.infra_wait = None;
+            task.current_run_mut()
+                .unwrap()
+                .autopilot
+                .as_mut()
+                .unwrap()
+                .stage = corral_core::AutoStage::Escalated;
+            task.current_run_mut()
+                .unwrap()
+                .autopilot
+                .as_mut()
+                .unwrap()
+                .reason =
+                Some("integration preflight error: Git operation ongoing: index.lock".into());
+            Ok(())
+        })
+        .unwrap();
+    crate::autopilot::recover_infrastructure(&fx.ctx, &id).unwrap();
+    let task = fx.ctx.store.get(&id).unwrap();
+    assert_eq!(task.status, Status::Review);
+    assert_eq!(task.rounds, 2);
+    assert_eq!(
+        task.current_run()
+            .unwrap()
+            .autopilot
+            .as_ref()
+            .unwrap()
+            .stage,
+        corral_core::AutoStage::Reviewing
+    );
+    crate::reviewer::review_run(&fx.ctx, &id, Some("rev")).unwrap();
+    let task = fx.ctx.store.get(&id).unwrap();
+    assert_eq!(task.rounds, 2);
+    assert!(
+        task.current_run()
+            .unwrap()
+            .review
+            .as_ref()
+            .is_some_and(|review| review.verdict.is_none())
+    );
+    crate::reviewer::verdict(&fx.ctx, &id, corral_core::Verdict::Approve, "Reviewed").unwrap();
+    let task = fx.ctx.store.get(&id).unwrap();
+    assert_eq!(task.rounds, 2);
+    assert_eq!(
+        task.current_run().unwrap().review.as_ref().unwrap().verdict,
+        Some(corral_core::Verdict::Approve)
+    );
+}
+
+#[test]
 fn interrupted_collection_commits_nothing_and_the_next_start_collects_it_whole() {
     // Given a started gate whose runner finished.
     let fx = Fx::new();

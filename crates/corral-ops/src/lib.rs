@@ -19,6 +19,7 @@ pub mod attention;
 mod automation_controls;
 mod automation_status;
 mod autopilot;
+pub use autopilot::recover_infrastructure;
 mod availability;
 mod cleanup;
 mod cleanup_worktree;

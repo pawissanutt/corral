@@ -11,86 +11,87 @@ Project management control plane for agentic coding, inside herdr
 Usage: corral [OPTIONS] [COMMAND]
 
 Commands:
-  assistant       Inspect and manage durable assistant sessions (no coding slot)
-  mode            Select Assist or explicitly confirm scoped Autopilot for this workspace
-  inbox           Inspect and durably manage agent inbox messages without delivering them
-  attention       Inspect current task conditions and progress without changing state
-  agent           corral-pi agent host: authenticated host calls, launch, install and recovery
-  pi              Start corral-pi here: an assistant in this herdr pane, the PM with --pm, or plain Pi with --bare
-  question        Triage corral-pi agent questions by key and revision: list, show, answer, escalate, cancel, deadline
-  automation      Preview, explicitly confirm, or inspect finite operating authority
-  selection       Read current selection guidance or save a validated Auto receipt; JSON output
-  setup           Review and apply owner-approved profile setup; JSON output by default
-  digest          Generate and pin a deterministic digest of recent outcomes and cost/time totals
-  revert          Revert a task's exact landed commits on base and reopen it in Backlog; never push
-  review-sprint   Build and pin a sprint review from events, artifacts and recorded usage
-  idea            Record a reasoned idea disposition; owner ideas require explicit consent
-  lessons         Inspect project lessons, distill history, pin rules or delete them
-  memory          Read and explicitly edit scoped workspace memory; JSON output
-  plan            Submit, review and approve implementation plans independently of code review
-  build-identity  Print the immutable landed identity embedded by a post-land install
-  hooks           Inspect, reconcile and retry durable project post-land operations
-  run             Persist run progress, checkpoints, waits, decisions and resume receipts
-  hold            Suspend automatic processing and cancel gate/review work without stopping the worker
-  release         Restore processing for a held task
-  focus           Hold lower-priority work until this task lands or is dropped
-  queue           Authorize, pause, and inspect the coding dispatch queue
-  wait            Wait for the first matching event, starting at the current tail by default (timeout exits 124)
-  up              Start or attach the board; also the default when no command is given
-  doctor          Check the terminal engine and workspace setup
-  init            Create .corral/ in --root or the current directory
-  pricing         Inspect coverage of API-equivalent model prices
-  import          Import a Markdown plan as a tracker and dependent child tasks
-  export          Export the store's records in portable forms
-  migrate         Move a legacy file store into the database, roll it back, or finalize it
-  storage         Check storage integrity, report or reclaim storage by class, and take verified backups
-  stats           Outcome evidence grouped by profile (default), model, kind, project, task, size, mode or day
-  new             Create a task and print its id
-  list            List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
-  search          Search tasks or indexed artifact, specification and review content
-  log             Show one task's lifecycle timeline, oldest first
-  show            Show one task
-  comment         Append a comment to a task, optionally sending it to the agent
-  move            Move a task to another status
-  edit            Edit a task's Markdown form in $EDITOR and store it if the task did not change meanwhile
-  route           Explain the implementer and reviewer mapping without starting a run
-  dispatch        Start an agent run for a task
-  reply           Send a reply to the task's agent
-  unstick         Terminate a stuck foreign foreground process after confirmation, then retry the pending reply
-  done            Mark the run finished and move the task to Review
-  criteria        Manage explicit owner-reviewed criterion manifests
-  evidence        Record and inspect criterion-linked worker assertions
-  gate            Run the review gate commands in the current run's worktree (in a herdr pane)
-  review-run      Start an independent review of the current run (a reviewer profile in its own pane, or the PM)
-  verdict         Record a review verdict on the current run
-  dashboard       Configure recurring living-dashboard report tasks
-  artifact        Manage artifacts
-  pin             Pin a task (T-042) or artifact (T-042:R1:<file>) so it is one step away
-  unpin           Remove a pin (by ref or pin number)
-  pins            List pins in order
-  open            Open a pin (number or ref) or any task/artifact ref with its viewer: [viewers], else $CORRAL_OPENER, else terminal-browser for HTML inside herdr, else the system opener (WSL-aware)
-  review          Show the review summary of a task
-  approve         Merge the run and mark the task Done
-  changes         Request changes on a task in Review
-  retry           Start a fresh run for a task
-  discard         Discard the current run and drop the task
-  jump            Focus the task's herdr pane
-  sync            Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing every 2 s, headless)
-  autopilot       Compatibility alias: shared status, workspace pause, or guidance for scoped activation
-  hook            herdr plugin event hook: run sync once, always exit 0
-  bind-session    Bind legacy pane ownership using verified launch or plugin-registration evidence
-  pm              Open the PM pane, or inspect the next PM decision
-  focus-board     Go back to this workspace's board pane, opening one only if none is running (the back-to-board key)
-  board           Open the board TUI
-  capture         Open the capture popup
-  artifacts       Open the artifact finder
-  settings        Open the settings screen
-  harness         Installed agent harnesses, their versions and models
-  plugin          Manage the herdr plugin
-  skill           Print the corral agent skill (SKILL.md), or install it for your agents
-  config          Read, change and check layered user and workspace configuration
-  ext             Run or list external `corral-ext-<name>` commands found on PATH
-  help            Print this message or the help of the given subcommand(s)
+  assistant               Inspect and manage durable assistant sessions (no coding slot)
+  mode                    Select Assist or explicitly confirm scoped Autopilot for this workspace
+  inbox                   Inspect and durably manage agent inbox messages without delivering them
+  attention               Inspect current task conditions and progress without changing state
+  agent                   corral-pi agent host: authenticated host calls, launch, install and recovery
+  pi                      Start corral-pi here: an assistant in this herdr pane, the PM with --pm, or plain Pi with --bare
+  question                Triage corral-pi agent questions by key and revision: list, show, answer, escalate, cancel, deadline
+  automation              Preview, explicitly confirm, or inspect finite operating authority
+  selection               Read current selection guidance or save a validated Auto receipt; JSON output
+  setup                   Review and apply owner-approved profile setup; JSON output by default
+  digest                  Generate and pin a deterministic digest of recent outcomes and cost/time totals
+  revert                  Revert a task's exact landed commits on base and reopen it in Backlog; never push
+  review-sprint           Build and pin a sprint review from events, artifacts and recorded usage
+  idea                    Record a reasoned idea disposition; owner ideas require explicit consent
+  lessons                 Inspect project lessons, distill history, pin rules or delete them
+  memory                  Read and explicitly edit scoped workspace memory; JSON output
+  plan                    Submit, review and approve implementation plans independently of code review
+  build-identity          Print the immutable landed identity embedded by a post-land install
+  hooks                   Inspect, reconcile and retry durable project post-land operations
+  run                     Persist run progress, checkpoints, waits, decisions and resume receipts
+  hold                    Suspend automatic processing and cancel gate/review work without stopping the worker
+  release                 Restore processing for a held task
+  focus                   Hold lower-priority work until this task lands or is dropped
+  queue                   Authorize, pause, and inspect the coding dispatch queue
+  wait                    Wait for the first matching event, starting at the current tail by default (timeout exits 124)
+  up                      Start or attach the board; also the default when no command is given
+  doctor                  Check the terminal engine and workspace setup
+  init                    Create .corral/ in --root or the current directory
+  pricing                 Inspect coverage of API-equivalent model prices
+  import                  Import a Markdown plan as a tracker and dependent child tasks
+  export                  Export the store's records in portable forms
+  migrate                 Move a legacy file store into the database, roll it back, or finalize it
+  storage                 Check storage integrity, report or reclaim storage by class, and take verified backups
+  stats                   Outcome evidence grouped by profile (default), model, kind, project, task, size, mode or day
+  new                     Create a task and print its id
+  list                    List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
+  search                  Search tasks or indexed artifact, specification and review content
+  log                     Show one task's lifecycle timeline, oldest first
+  show                    Show one task
+  comment                 Append a comment to a task, optionally sending it to the agent
+  move                    Move a task to another status
+  edit                    Edit a task's Markdown form in $EDITOR and store it if the task did not change meanwhile
+  route                   Explain the implementer and reviewer mapping without starting a run
+  dispatch                Start an agent run for a task
+  reply                   Send a reply to the task's agent
+  unstick                 Terminate a stuck foreign foreground process after confirmation, then retry the pending reply
+  done                    Mark the run finished and move the task to Review
+  criteria                Manage explicit owner-reviewed criterion manifests
+  evidence                Record and inspect criterion-linked worker assertions
+  gate                    Run the review gate commands in the current run's worktree (in a herdr pane)
+  review-run              Start an independent review of the current run (a reviewer profile in its own pane, or the PM)
+  recover-infrastructure  Return an identifiable infrastructure escalation to Review without a change round
+  verdict                 Record a review verdict on the current run
+  dashboard               Configure recurring living-dashboard report tasks
+  artifact                Manage artifacts
+  pin                     Pin a task (T-042) or artifact (T-042:R1:<file>) so it is one step away
+  unpin                   Remove a pin (by ref or pin number)
+  pins                    List pins in order
+  open                    Open a pin (number or ref) or any task/artifact ref with its viewer: [viewers], else $CORRAL_OPENER, else terminal-browser for HTML inside herdr, else the system opener (WSL-aware)
+  review                  Show the review summary of a task
+  approve                 Merge the run and mark the task Done
+  changes                 Request changes on a task in Review
+  retry                   Start a fresh run for a task
+  discard                 Discard the current run and drop the task
+  jump                    Focus the task's herdr pane
+  sync                    Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing every 2 s, headless)
+  autopilot               Compatibility alias: shared status, workspace pause, or guidance for scoped activation
+  hook                    herdr plugin event hook: run sync once, always exit 0
+  bind-session            Bind legacy pane ownership using verified launch or plugin-registration evidence
+  pm                      Open the PM pane, or inspect the next PM decision
+  focus-board             Go back to this workspace's board pane, opening one only if none is running (the back-to-board key)
+  board                   Open the board TUI
+  capture                 Open the capture popup
+  artifacts               Open the artifact finder
+  settings                Open the settings screen
+  harness                 Installed agent harnesses, their versions and models
+  plugin                  Manage the herdr plugin
+  skill                   Print the corral agent skill (SKILL.md), or install it for your agents
+  config                  Read, change and check layered user and workspace configuration
+  ext                     Run or list external `corral-ext-<name>` commands found on PATH
+  help                    Print this message or the help of the given subcommand(s)
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -806,7 +807,7 @@ Run one corral-pi host request: a JSON envelope on stdin, one JSON receipt on st
 Usage: corral agent call [OPTIONS] --op <OP>
 
 Options:
-      --op <OP>      Enumerated v1 operation; must equal the envelope's op [possible values: hello, event, receipt_lookup, ask, withdraw, wait, progress, todo, checkpoint, evidence, artifact, gate, done, verdict, question_answer, question_escalate, question_cancel, reply, comment, capture, read_brief, read_next, read_show, read_list, read_search, read_route, read_artifacts, read_lessons, inbox_read, inbox_resolve, job, job_monitor, plan_write, plan_submit, plan_verdict, owner_action, write_permission, memory_list, memory_read, memory_put, memory_remove]
+      --op <OP>      Enumerated v1 operation; must equal the envelope's op [possible values: hello, event, receipt_lookup, ask, withdraw, wait, progress, todo, checkpoint, evidence, artifact, gate, done, verdict, question_answer, question_escalate, question_cancel, reply, comment, capture, read_brief, read_next, read_show, read_list, read_search, read_route, read_artifacts, read_lessons, inbox_read, inbox_resolve, job, job_monitor, plan_write, plan_submit, plan_verdict, owner_action, write_permission, assistant_plan, assistant_plan_review, assistant_handoff, memory_list, memory_read, memory_put, memory_remove]
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -2184,6 +2185,7 @@ Arguments:
 Options:
       --lifecycle    Read bounded dependency and append-order lifecycle data instead of evidence
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --artifacts    Read the bounded artifact catalog with available provenance instead of evidence
       --run <RUN>    Explicit bound run; never silently follows the latest run
   -h, --help         Print help
 ```
@@ -2855,6 +2857,7 @@ Arguments:
 Options:
       --json         
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --recorded     Read only the recorded task, without refreshing sessions, usage or gate state
   -h, --help         Print help
 ```
 
@@ -3140,6 +3143,21 @@ Options:
       --reviewer <REVIEWER>  "pm", "cross-vendor", "auto" or a profile; default: the configured `[review] reviewer`
       --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help                 Print help
+```
+
+## `corral recover-infrastructure`
+
+```text
+Return an identifiable infrastructure escalation to Review without a change round
+
+Usage: corral recover-infrastructure [OPTIONS] <ID>
+
+Arguments:
+  <ID>  Task to resume
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
 ```
 
 ## `corral verdict`

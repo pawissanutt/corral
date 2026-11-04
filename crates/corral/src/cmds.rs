@@ -617,6 +617,11 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
         Cmd::Criteria { cmd } => crate::completion_cmd::criteria(&open(&root)?, cmd),
         Cmd::Evidence { cmd } => crate::completion_cmd::evidence(&open(&root)?, cmd),
         Cmd::ReviewRun { id, reviewer } => review_run(&open(&root)?, &id, reviewer.as_deref()),
+        Cmd::RecoverInfrastructure { id } => {
+            corral_ops::recover_infrastructure(&open(&root)?, &id)?;
+            println!("{id} returned to Review; autopilot will resume it on sync");
+            Ok(())
+        }
         Cmd::Verdict {
             id,
             verdict: v,

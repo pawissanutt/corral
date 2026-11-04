@@ -438,6 +438,11 @@ pub enum Cmd {
         #[arg(long)]
         reviewer: Option<String>,
     },
+    /// Return an identifiable infrastructure escalation to Review without a change round
+    RecoverInfrastructure {
+        /// Task to resume
+        id: String,
+    },
     /// Record a review verdict on the current run
     Verdict {
         id: String,

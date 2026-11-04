@@ -195,6 +195,14 @@ corral verdict T-042 escalate --notes "Touches billing; needs the owner."
 A verdict belongs to one commit. If the worktree moved on after the review started, or the reviewer closed
 without recording a verdict, the task goes to you instead of being trusted.
 
+For a Needs me task escalated by an identifiable Git lock or operation in integration preflight,
+`corral recover-infrastructure T-042` returns the finished run to Review without spending a change
+round. It requires a fresh passing gate and refuses completed reviews and other escalations. The same
+command recognizes a typed infrastructure wait already in Review: it preserves an active or completed
+review, and restarts a lost reviewer. The wait remains until its markers clear. The next enabled
+autopilot sync starts a new review when needed; with autopilot disabled, use `corral review-run T-042`
+after the wait clears.
+
 An existing approve verdict can carry across corral's clean rebase when the patch is unchanged,
 ignoring blob IDs and hunk headers but retaining whitespace, paths, modes and binary payloads.
 The integrated gate must pass first, and the review's other inputs and completion evidence must

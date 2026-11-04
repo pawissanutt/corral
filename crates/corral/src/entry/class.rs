@@ -306,6 +306,7 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
         | Cmd::Unstick { .. }
         | Cmd::Gate { .. }
         | Cmd::ReviewRun { .. }
+        | Cmd::RecoverInfrastructure { .. }
         | Cmd::Verdict { .. }
         | Cmd::Pin { .. }
         | Cmd::Unpin { .. }
