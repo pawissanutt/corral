@@ -73,6 +73,7 @@ impl NativeRecord {
                 index.push(format!("generation:{}", t.generation));
                 if let Some(ended) = t.ended {
                     index.push(format!("ended:{}:{ended}", t.generation));
+                    index.push("turn:ended".into());
                 }
                 t.ended.is_none()
             }
@@ -84,6 +85,12 @@ impl NativeRecord {
                 active
             }
             Self::Receipt(r) => {
+                if matches!(r.op.as_str(), "done" | "verdict")
+                    && r.state == ReceiptState::Committed
+                    && let Some(turn) = r.identity.turn
+                {
+                    index.push(format!("report:{}:{}:{turn}", r.op, r.identity.generation));
+                }
                 if r.result["queued"] == true
                     && let Some(effect) = &r.effect
                 {

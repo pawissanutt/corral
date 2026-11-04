@@ -376,12 +376,15 @@ pub struct AttemptHead {
     pub facts: crate::ContainerFacts,
 }
 
-/// Fixed-size append positions and outstanding work for the seven native record families.
+/// Fixed-size append positions, retained counts and outstanding native work.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NativeRecordCounts {
     #[serde(with = "super::native_counts")]
     pub counts: [u64; 10],
+    /// Retained rows, distinct from monotonically increasing append positions.
+    #[serde(with = "super::native_counts")]
+    pub live: [u64; 10],
     #[serde(with = "crate::container_facts::fixed")]
     pub pending: u64,
 }
@@ -419,6 +422,7 @@ impl NativeRecordCounts {
             + state.jobs.iter().filter(|j| j.needs_reap()).count();
         Self {
             counts,
+            live: counts,
             pending: crate::container_facts::len_u64(pending),
         }
     }

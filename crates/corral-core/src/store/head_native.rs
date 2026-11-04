@@ -194,7 +194,7 @@ impl TaskHeadMut {
             .context("native container row disappeared")
     }
 
-    fn edit_native(
+    pub(super) fn edit_native(
         &mut self,
         container: &ContainerRef,
         edit: impl FnOnce(&mut Option<Box<AgentHostHead>>, Option<&mut ContainerFacts>) -> Result<()>,
@@ -360,6 +360,7 @@ impl TaskHeadMut {
             let head = slot.as_deref_mut().context("corral-pi host missing")?;
             if append {
                 head.records.counts[kind] = ordinal;
+                head.records.live[kind] += 1;
             }
             head.records.pending = head
                 .records
@@ -379,13 +380,16 @@ impl TaskHeadMut {
         }
         self.put(HistoryRow {
             part: TaskPart::AgentRecord,
-            key,
+            key: key.clone(),
             current: false,
             open,
             doc,
             index,
         });
         if let NativeRecord::Turn(turn) = &record {
+            if append {
+                self.put(super::codec::turn_order_row(&owner, turn, &key));
+            }
             let pointer = super::codec::latest_turn_row(&owner, turn.generation, turn.seq);
             let mut q = RowQuery::part(TaskPart::AgentRecord);
             q.key = Some(pointer.key.clone());
