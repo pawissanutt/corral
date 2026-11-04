@@ -161,6 +161,11 @@ pub(crate) fn continued_session(ctx: &Ctx, id: &str) -> Result<Option<std::path:
         .filter(|file| std::fs::metadata(file).is_ok_and(|meta| meta.is_file() && meta.len() > 0)))
 }
 
+/// The project session `id` is bound to; empty for a project-less session.
+pub(crate) fn session_project(ctx: &Ctx, id: &str) -> Result<String> {
+    Ok(ctx.store.get_assistant(id)?.project.unwrap_or_default())
+}
+
 /// Opens session `id`'s next generation in `pane` and writes its one-shot bootstrap.
 fn prepare(ctx: &Ctx, id: &str, pane: &str, resolved: &ResolvedProfile) -> Result<Prepared> {
     let session = ctx.store.get_assistant(id)?;
