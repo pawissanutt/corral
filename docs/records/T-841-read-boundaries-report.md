@@ -21,6 +21,31 @@ The receipted quick gate after commit/rebase supplies the final candidate-bound 
 
 ## Cost and limitations
 
-Two new small unit regressions, one per owning read boundary, took **0.195 seconds combined** in the focused nextest run. The fixtures contain two artifact rows and one task/wait respectively. There are no new end-to-end journeys, large histories, delays or load cases. The existing quarantine file has no entries for the fixed named cases.
+The initial two small unit regressions, one per owning read boundary, took **0.195 seconds combined** in the initial focused nextest run. Changes round 1 adds one attention host-boundary regression (three cumulative new tests). The fixtures contain two artifact rows and one task/wait respectively. There are no new end-to-end journeys, large histories, delays or load cases. The existing quarantine file has no entries for the fixed named cases.
 
 No deliberate load validation or production-server mutation was performed. The reported load-specific incidents were checked using deterministic clocks and the unchanged named tests, not reproduced by loading the shared host. `cxm context` and the required corral search timed out during discovery; direct source inspection was used instead. The full landing gate remains corral's responsibility.
+
+## Changes round 1: residual sync attention expiry
+
+The owner returned rebased candidate `eb2b6ae5` after its quick gate failed in `autopilot_ops::infra::changes_under_marker_still_requires_its_published_plan_prerequisite`, at the first sync after finishing a dependent candidate. The direct unchanged test passed once during investigation (58.913 seconds); this is not a claim of natural-load reproduction.
+
+Two retained-view hypotheses were examined. Reviewer `launch_profile` retains a head across role-command preparation, but its later `latest_review` access uses only already-materialized run fields, not keyed storage, so it was not patched. In contrast, the ordinary sync attention path opened a snapshot, called external host discovery, and then used that old snapshot for `recipients` (keyed review/plan children) and inbox rows. PM evaluation's captured admission did not protect this independent sync reconciliation path.
+
+The new regression calls the real owning `reconcile_snapshot` boundary with one task/run and a probe that advances the backend clock by 31 seconds. Before the fix it fails with `read view expired after 31s` (`round1-attention-red.log`). Host sampling now precedes acquisition of the attention read view; the same observation is reused if park-latch progress requires another read phase. No task transitions, park latches or submissions are retried by this change. Explicit snapshot callers still expire rather than advancing silently. The default 30-second lease and timeouts remain unchanged.
+
+### Requested variant coverage
+
+`round1-variants.log` records **15/15 passing** tests inside the private plugin-free `test-herdr.sh` environment, with no generated load:
+
+| Variant | Boundary and exercised coverage |
+| --- | --- |
+| pm_next observe | Initial short legacy pages / recovery-before-evaluation; all three named legacy cases plus injected-clock backfill test pass. |
+| sync_ops watchdog/obligation | Initial keyed obligation renewal and pre-process generation materialization, plus the corrected shared attention boundary; all five named existing cases and clock test pass. |
+| autopilot_ops tier_refusals | Shared sync attention boundary after gate/verdict work; the exact replaced-landing-gates refusal case passes unchanged (153.804 seconds). |
+| autopilot_ops infra | Newly fixed attention host boundary on the reported first-sync path; the exact changes-under-marker case passes unchanged (120.356 seconds), retaining the prerequisite and marker assertions. |
+| review_contracts | The existing quick-member contract journey passes unchanged (69.205 seconds). T-829's reviewer preparation read steps are retained; this task corrects the attention phase reached by its syncs, not the review contract semantics. |
+| Pi implement-now sync | `assistant_owner_action_cli::implement_now::one_land_now_answer_finishes_the_reported_candidate_and_approves_it` passes unchanged (67.517 seconds), exercising the Pi-bound fixture finish, independent verdict and final sync/landing. This is fixture coverage, not a live provider check. |
+
+The additional clock test passes in that run (22.889 seconds under ambient scheduling contention) and proves one probe per ordinary read plus explicit-snapshot refusal. No new end-to-end journey was added. T-831's quarantined renewed-approval failure and T-844's lesson-signals path are untouched and are not claimed as fixed.
+
+Test-cost justification: cumulative added-test wall time can exceed 30 seconds under the observed shared-host contention (the three tiny clock tests took about 69 seconds together in this focused run). Each catches a distinct retained-view boundary with only one task and at most two history rows. A sleep-based reproduction, large history or repeated end-to-end/load matrix would be more expensive and less deterministic; none was added. The next receipted gate supplies its own added-test count and measured cost.
