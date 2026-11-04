@@ -72,7 +72,14 @@ pub(crate) fn dispatch(
         plan: None,
         review: None,
         notes: changes_notes(task).map(str::to_string),
-        force_resources: opts.force_resources,
+        // Recovery is a transient one-stage grant, never a reusable queued force bit.
+        force_resources: opts.force_resources
+            && crate::recovery::admission_attempt(
+                ctx,
+                &task.id,
+                corral_core::RecoveryAdmissionStage::PlanDispatch,
+            )?
+            .is_none(),
         command: None,
         herdr: None,
     };
@@ -82,6 +89,7 @@ pub(crate) fn dispatch(
         origin,
         matches!(admission, Admission::Queued { .. }),
     )?;
+    crate::recovery::bind_active_journal(ctx, &authorization)?;
     plan.authorization =
         (origin == crate::operating::Origin::Owner).then(|| authorization.id.clone());
     claim.attempt = authorization.action.attempt;
@@ -336,9 +344,19 @@ fn launch(
                 store: store.clone(),
                 ..ctx.clone()
             };
-            if let Some(reason) =
-                crate::queue::capacity_reason(&fresh, store, &shell, claim.force_resources)?
-            {
+            let recovery_force = crate::recovery::admission_attempt(
+                &fresh,
+                &task.id,
+                corral_core::RecoveryAdmissionStage::PlanDispatch,
+            )?
+            .is_some();
+            crate::recovery::bind_active_journal(&fresh, &authorization)?;
+            if let Some(reason) = crate::queue::capacity_reason(
+                &fresh,
+                store,
+                &shell,
+                claim.force_resources || recovery_force,
+            )? {
                 bail!("{reason}");
             }
             ensure!(!task.dispatch_hold, "planner dispatch is held");
