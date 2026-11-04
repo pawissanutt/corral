@@ -87,3 +87,11 @@ to the existing task PM-receipt index; drain/reconcile retain unfinished-work
 selection. The unchanged killed-executor recovery regression passes all four
 capture/reply pre/post-effect cases (1.46s), recorded in
 `.evidence/pm-recovery-repair.log`. No tests or exemptions were added.
+
+## Third gate repair
+
+The PM policy fixture's fake launcher still treated the physical `agent-pm/current`
+head as a whole AgentPm. Its observer now uses `pm_state::load` to assemble the
+semantic PM state. Pane binding, policy submission ordering, rollback and scope
+assertions are unchanged. All **22 pm_policy tests pass** (4.17s), recorded in
+`.evidence/pm-launch-repair.log`; no test or assertion was removed.

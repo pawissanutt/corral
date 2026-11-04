@@ -77,7 +77,7 @@ fn observe_canonical_pm_records() {
         .read_only_snapshot()
         .unwrap();
     let value = json!({
-        "agent_pm": store.record::<Value>("agent-pm", "current").unwrap(),
+        "agent_pm": corral_core::agent::pm_state::load(&store).unwrap(),
         "pm": corral_core::records::RecordArea::<Value>::new("pm").load(&store, "state").unwrap(),
         "policy": corral_core::records::RecordArea::<Value>::new("pm-policy").load(&store, "state").unwrap(),
     });
