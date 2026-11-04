@@ -19,7 +19,7 @@ test("secret scan skips vanished files but scans survivors and propagates other 
       return readFileSync(path);
     })).toEqual([`${survivor}: plain secret`]);
     const denied = Object.assign(new Error("denied"), { code: "EACCES" });
-    expect(() => secretLeaks([root], {}, secrets, () => { throw denied; })).toThrow(denied);
+    expect(() => secretLeaks([root], {}, secrets, () => { throw denied; })).toThrow("denied");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
