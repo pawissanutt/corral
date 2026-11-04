@@ -9,7 +9,6 @@ use corral_core::{
     RunProgress, StepState, WaitRequest,
 };
 use corral_ops::{Ctx, ResumeTarget};
-use jiff::Timestamp;
 use serde::de::DeserializeOwned;
 
 #[derive(Subcommand)]
@@ -167,7 +166,7 @@ fn payload<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
 }
 
 pub fn run(ctx: &Ctx, cmd: RunCmd) -> Result<()> {
-    let now = Timestamp::now();
+    let now = corral_core::clock::now();
     let task = match cmd {
         RunCmd::Inspect {
             id,
