@@ -1,10 +1,29 @@
 import { expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { appendFileSync, linkSync, mkdirSync, mkdtempSync, readSync, renameSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readSync, renameSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { EventFollower, ok } from "./workspace.ts";
+import { EventFollower, ok, secretLeaks } from "./workspace.ts";
+
+test("secret scan skips vanished files but scans survivors and propagates other read errors", () => {
+  const root = mkdtempSync(join(tmpdir(), "corral-secrets-"));
+  const vanished = join(root, "holder");
+  const survivor = join(root, "survivor");
+  writeFileSync(vanished, "transient");
+  writeFileSync(survivor, "a secret");
+  const secrets = { plain: ["secret"], digests: [] };
+  try {
+    expect(secretLeaks([root], {}, secrets, (path) => {
+      if (path === vanished) rmSync(path);
+      return readFileSync(path);
+    })).toEqual([`${survivor}: plain secret`]);
+    const denied = Object.assign(new Error("denied"), { code: "EACCES" });
+    expect(() => secretLeaks([root], {}, secrets, () => { throw denied; })).toThrow(denied);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("a follower observes writes to its inode through a path outside the watched directory", async () => {
   const root = mkdtempSync(join(tmpdir(), "corral-follower-"));
