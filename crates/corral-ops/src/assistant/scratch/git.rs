@@ -63,16 +63,13 @@ pub(super) fn range(repo: &Path, from: &str, to: &str) -> Result<Vec<String>> {
 
 pub(super) fn branch_exists(repo: &Path, branch: &str) -> Result<bool> {
     let reference = format!("refs/heads/{branch}");
-    let output = command(repo, &["show-ref", "--verify", "--quiet", &reference], None)
-        .output()
+    let status = command(repo, &["show-ref", "--verify", "--quiet", &reference], None)
+        .status()
         .context("checking scratch branch")?;
-    match output.status.code() {
+    match status.code() {
         Some(0) => Ok(true),
         Some(1) => Ok(false),
-        _ => bail!(
-            "checking scratch branch {reference}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ),
+        _ => bail!("checking scratch branch {reference}: git exited {status}"),
     }
 }
 
