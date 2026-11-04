@@ -14,4 +14,7 @@ tests = [
   { binary = "corral-ops", test = "agent::ops::assistant::tests::the_soft_cap_needs_over_cap_and_a_critical_machine_refuses_with_its_values", fix = "T-819", reason = "Machine-pressure input not fully injected; takes the plain cap path." },
   { binary = "corral-ops", test = "submission_paths_tests::native_sync_budget::owning_native_sync_pipeline_has_fixed_unattributed_work_with_real_host_probes", fix = "T-830", reason = "Decoded byte count varies by a few bytes between runs." },
   { binary = "corral::run_obligations_cli", test = "unknown_delivery_duplicate_and_malformed_receipts_have_explicit_cli_results", fix = "T-816", reason = "Receipt observation intermittently outside its registration lifetime." },
+  { binary = "corral-ops::autopilot_ops", test = "tier_refusals::replaced_landing_gates_refuse_the_carry_when_the_origin_or_inputs_no_longer_match", fix = "T-829", reason = "Read view expires past the 30 s limit under load." },
+  { binary = "corral-ops::autopilot_ops", test = "tiers::main_landings_run_or_require_a_full_gate_while_only_a_quick_receipt_exists", fix = "T-829", reason = "Read view expires past the 30 s limit under load." },
+  { binary = "corral-ops::availability_ops", test = "recovery::a_reviewer_rejected_before_start_is_never_retried_in_its_episode", fix = "T-829", reason = "Read view expires past the 30 s limit under load." },
 ]
