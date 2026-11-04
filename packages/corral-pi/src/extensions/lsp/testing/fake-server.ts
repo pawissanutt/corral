@@ -24,6 +24,7 @@ function lines(uri: string): string[] {
 }
 
 function publish(uri: string): void {
+  if (flags.has("--withhold-diagnostics")) return;
   const diagnostics = lines(uri).flatMap((text, line) => {
     const at = text.indexOf("ERR");
     return at < 0 ? [] : [{ range: range(line, at, at + 3), severity: 1, code: "E0001", source: "fake", message: text.trim() }];

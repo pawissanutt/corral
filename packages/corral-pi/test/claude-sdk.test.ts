@@ -180,6 +180,8 @@ test("streamed tool_use blocks become Pi tool calls that Claude Code is denied f
   expect(options.tools).toEqual(["Read"]);
   const server = (options.mcpServers?.["custom-tools"] as unknown as { instance: { tools: { name: string; handler(): Promise<unknown> }[] } });
   expect(server.instance.tools.map((tool) => tool.name)).toEqual(["corral_task_show"]);
+  // Pi owns discovery: Claude's deferred tool search is not in this lane's loadout.
+  expect((server.instance as unknown as { alwaysLoad: boolean }).alwaysLoad).toBe(true);
   expect(await server.instance.tools[0]!.handler())
     .toEqual({ content: [{ type: "text", text: TOOL_EXECUTION_DENIED_MESSAGE }], isError: true });
   // Every execution attempt was denied, and the hook stops Claude Code's own loop.

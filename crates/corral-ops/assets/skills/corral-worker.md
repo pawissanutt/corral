@@ -12,6 +12,16 @@ artifact globs and the `done` result and summary shapes. This skill explains how
 step says "contract step N", follow that numbered step of the Run contract as written; this skill never
 restates or relaxes it. Read `corral <verb> --help` for exact flags.
 
+## Language server workflow
+
+When LSP tools are available, prefer `lsp_definition` and `lsp_references` for symbol
+navigation over grep; use grep for literal text or when the server cannot answer. After
+saving code edits, call `lsp_diagnostics` on the changed files before reaching for a
+compiler subprocess. It waits for indexing and fresh diagnostics with a bounded deadline.
+A timeout is not a clean result: retry when the server is ready or run the cheapest
+targeted compiler check and report the limitation. LSP does not replace the run’s gate
+or required tests. If LSP is disabled or unavailable, use the targeted check directly.
+
 ## Test cost and placement
 
 When fixing a test listed in `.config/gate-quarantine.toml`, remove its entry when the fix lands.

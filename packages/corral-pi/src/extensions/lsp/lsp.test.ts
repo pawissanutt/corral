@@ -82,6 +82,22 @@ test("LSP registration records the child identity and removes it on exit", async
   expect(JSON.parse(readFileSync(path, "utf8"))).toEqual([]);
 });
 
+test("warm starts the project server once; absent diagnostics time out instead of reporting empty success", async () => {
+  writeFileSync(join(root, "warm.marker"), "");
+  let starts = 0;
+  const made = lspToolkit({ root,
+    servers: [{ ...fake("--withhold-diagnostics"), rootMarkers: ["warm.marker"] }],
+    limits: { ...LIMITS, readyTimeoutMs: 0 },
+    registerCapability: () => { starts++; return () => {}; },
+  });
+  toolkits.push(made);
+  await made.warm();
+  expect(starts).toBe(1);
+  const error = await failure(call(made, "lsp_diagnostics", { path: "src/main.fk" }));
+  expect(error.code).toBe("lsp_timeout");
+  expect(starts).toBe(1);
+});
+
 test("framing round-trips split chunks and refuses a missing header or an oversize frame", () => {
   const frame = encodeFrame({ id: 1, text: "héllo" });
   const decoder = new FrameDecoder(1024);

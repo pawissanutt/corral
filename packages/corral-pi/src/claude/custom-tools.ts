@@ -80,6 +80,9 @@ export async function buildCustomToolServers(
   const server = sdk.createSdkMcpServer({
     name: CUSTOM_TOOLS_MCP_SERVER_NAME,
     version: "1.0.0",
+    // This lane disables Claude's ToolSearch: Pi owns the active tool set and execution.
+    // Otherwise Claude can defer MCP tools (including LSP) without a way to discover them.
+    alwaysLoad: true,
     tools: tools.map((tool) => ({
       name: tool.name,
       description: tool.description,

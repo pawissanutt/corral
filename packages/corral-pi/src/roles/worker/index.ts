@@ -67,6 +67,9 @@ export function workerRole(root: string, lsp: Omit<LspToolkitOptions, "root"> = 
       pi.on("resources_discover", () => ({ skillPaths: [skill] }));
       pi.on("session_shutdown", () => toolkit(context).shutdown());
       pi.on("session_start", (event, ctx) => {
+        const lspEnabled = !context.capabilities || context.capabilities.catalog < 5
+          || context.capabilities.enabled.includes("lsp");
+        if (lspEnabled) void toolkit(context).warm();
         const text = kickoff(context);
         const fresh = !ctx.sessionManager.getEntries().some((entry) => entry.type === "message");
         if (event.reason !== "startup" || !fresh || text === undefined) return;
