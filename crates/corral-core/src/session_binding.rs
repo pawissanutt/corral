@@ -280,7 +280,7 @@ impl Store {
         }
         self.check_runtime()?;
         let _ownership = self
-            .claim_session_ownership()?
+            .try_claim_session_ownership()?
             .context("pane inventory is being reconciled; retry binding")?;
         let _board = self.lock("dispatch")?;
         let view = self.read_session_view()?;

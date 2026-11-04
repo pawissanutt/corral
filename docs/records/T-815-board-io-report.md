@@ -60,9 +60,27 @@ checks passed. The initial combined focused command exhausted its 200-second she
 while compiling ops; the remaining targeted tests were then run successfully, not skipped.
 
 Added persistent tests: **2**, one terminal transport regression and one SQLite reader/WAL
-regression, approximately **0.07 seconds combined** in focused runs. No new end-to-end matrix,
+regression, approximately **0.07 seconds combined** in focused runs. The first gate's **+3
+registrations** includes one renamed existing cadence test (net two new tests). No new end-to-end matrix,
 prose pins, large histories or slow/load tests. Existing pragma assertions now require NORMAL
 rather than FULL, as explicitly required by this task; the recovery FULL test is unchanged.
+
+## First quick-gate repair
+
+Attempt `ag-de6fb6eb783bfcca` passed formatting, size limits and Clippy, then stopped after
+401 tests (399 passed). Two failures were addressed without weakening lease assertions:
+
+- The storage-default assertion now requires the new five-second lifetime, not the old 120.
+  `storage-repair.log`: the existing defaults test passes.
+- Explicit session binding previously waited ten seconds for a held ownership lease, outliving
+  the shorter read view. Per PM decision `T-815/R1/Q1`, binding now uses the immediate
+  `try_claim_session_ownership` and keeps its existing retryable refusal. Launches retain their
+  bounded wait. The existing two-process test's lease and pinned-state assertions are unchanged;
+  `binding-repair.log`: passes in 0.099 seconds. No test timeout was raised.
+
+The gate's existing-test cost overruns were report-only, not failures; added registration costs
+were incomplete because fail-fast stopped later tests. No quarantine entry belongs to either
+repaired test. A new quick gate follows the committed/rebased repair.
 
 ## Limits / not verified
 
