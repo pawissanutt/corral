@@ -142,7 +142,11 @@ for i in "${{!cmds[@]}}"; do
   command_millis=$(monotonic_millis)
   command_progress running null null null "$start"
   printf '\n$ %s\n' "$c" | tee -a "$log"
-  bash -o pipefail -c "$command_environment$c" </dev/null 2>&1 | tee -a "$log"
+  # Scrub role identity after applying captured inputs, only in the command shell.
+  # Keep the runner's ownership markers for process tracking and cancellation.
+  bash -o pipefail -c "$command_environment
+unset -v \${{!CORRAL_ASSISTANT@}} \${{!CORRAL_SANDBOX@}} \${{!CORRAL_AGENT@}} CORRAL_PM CORRAL_PROCESS_OWNER CORRAL_OWNER_ACTION AI_AGENT PI_CODING_AGENT
+$c" </dev/null 2>&1 | tee -a "$log"
   codes=("${{PIPESTATUS[@]}}")
   code="${{codes[0]}}"
   if [ "${{codes[1]}}" -ne 0 ]; then code="${{codes[1]}}"; fi

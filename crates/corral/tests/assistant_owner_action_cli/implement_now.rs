@@ -52,6 +52,15 @@ fn one_land_now_answer_finishes_the_reported_candidate_and_approves_it() {
     // Given A-1 reported scratch cache-fix at its candidate, and the owner answered "land it now".
     let fx = Fixture::new();
     fx.configure_cowork_shipping();
+    let mut store = fx.store();
+    let init_root = fx.root.join("gate-init");
+    std::fs::create_dir(&init_root).unwrap();
+    store.config.review.gate = Some(vec![format!(
+        "test -z \"${{CORRAL_ASSISTANT+x}}${{CORRAL_ASSISTANT_GENERATION+x}}${{CORRAL_PM+x}}${{CORRAL_PROCESS_OWNER+x}}${{CORRAL_SANDBOX_TASK+x}}${{CORRAL_SANDBOX_RUN+x}}${{AI_AGENT+x}}${{PI_CODING_AGENT+x}}\" && '{}' --root '{}' init",
+        env!("CARGO_BIN_EXE_corral"),
+        init_root.display()
+    )]);
+    store.save_config().unwrap();
     let (_, head) = reported_scratch(&fx);
     let mut host = Host::bind(&fx);
     let answer = host.journal("land it now", None);
