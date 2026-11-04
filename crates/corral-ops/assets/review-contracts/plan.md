@@ -22,6 +22,22 @@ Question: can another agent execute this plan without inventing missing decision
   verification commands and recorded owner decisions.
 - Identify omissions that would force the implementer to choose a materially different
   product or architecture. Request concrete changes rather than a preferred rewrite.
+- Require main-delivery waves by default for large plans: each wave is a separate tracker Plan
+  targeting main, with an explicit numeric member cap, enumerated members, observable exit
+  criteria and main green before the next wave. Later wave trackers must depend on earlier
+  wave acceptance; child Done status alone is not delivery. Request changes for an unbounded
+  tracker or a wave sequence that defers all delivery/verification until the end.
+- Atomic format or protocol activation still needs compatible main-delivery waves (flag,
+  dual-read or compatibility layer) and a small final flip wave with rollback. Request changes
+  when atomicity is used to justify accumulating the whole implementation off main without
+  assessing compatible staging.
+- An integration target needs an explicit reason why main-delivery waves and compatibility
+  staging are insufficient. Require bounded internal waves and a scheduled, owned step after
+  every wave to merge current main into the integration branch and run the full gate on that
+  merged head, recording green before the next wave starts (and after the last wave).
+  A long-lived integration branch with no per-wave main sync is a **blocking finding**: return
+  `changes`. Missing justification, sync ownership or full-gate scheduling also requires changes.
+  Member quick gates, advisory checkpoints and a final cutover gate are not substitutes.
 - For each scope `gate` of an integration-target plan, check that the tier fits the scope's risk,
   that declared `tests` cover the scope's acceptance (they replace the touched-crate default),
   and that every expected failure names one exact `<binary-id> <test-name>`, gives a reason it

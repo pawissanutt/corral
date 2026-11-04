@@ -190,6 +190,62 @@ An optional top-level `delivery_target` uses the tagged shape `{kind: main}` or
 tracker's target selects the base and landing destination of its coding runs.
 Design approval alone does not authorize execution.
 
+## Deliver large plans to main in waves
+
+The default is **main-delivery waves**, not one integration branch kept alive until the whole
+roadmap is complete. Each wave is a separate tracker Plan with `delivery_target: {kind: main}`
+(or the omitted default). In `decisions` and the implementation body, specify:
+
+- a numeric member cap chosen for that wave, its enumerated members and bounded outcome;
+- observable acceptance and verification that end with the wave delivered to main and main green;
+- the earlier wave trackers that later waves depend on, so the next wave waits for their
+  acceptance rather than merely for children to become Done.
+
+For example, a format migration could have three trackers, each capped at four members:
+compatible reader/writer foundations, staged data and caller migration, then a small activation
+and cleanup wave. Each has its own approved scope and acceptance; the second depends on the
+first tracker and the third on the second. Pick a smaller boundary if a wave cannot finish
+with main green. These are planning obligations, not a new schema or automatic size limit.
+Cross-wave tracker prerequisites are real task dependencies, not local scope labels inside a
+single plan's `dependencies` list. Plan review checks the declared boundaries and edges.
+
+Use existing decomposition or [tracker import](import.md) for each bounded wave. For a published
+oversized Plan, propose follow-up trackers and move eligible unstarted members with
+`corral plan move-member`; preserve acceptance coverage and dependency edges, and follow its
+[eligibility rules](acceptance.md#plan-aggregate-acceptance). Do not silently drop obligations
+from the original tracker. Scope amendments and execution grants remain separate owner boundaries;
+a planner only describes the sequence, not authorizes or executes it.
+
+### Atomic activation still lands incrementally
+
+Storage formats and protocol switches need atomic **activation**, not an atomic multi-day code
+landing. Ship compatible foundations on main behind a flag, dual-read or another compatibility
+layer. Follow with bounded migration/caller waves while old behavior remains safe, then a small
+final flip wave. State compatibility invariants, rollback conditions and when obsolete support
+can be removed. Verification must keep main green at each wave boundary, including before the flip.
+
+### Integration targets are an exception
+
+A plan choosing `{kind: integration, branch: <ref>}` must state why main-delivery waves are
+insufficient and why flag/dual-read/compatibility staging cannot solve it. It still needs bounded
+internal waves with numeric member caps. Schedule an explicit step **after every wave**, including
+the last, to merge current main into the integration branch and run the full gate on that merged
+head. Name the sync owner, gate command and retained result evidence in the plan. The next wave
+cannot start until this sync is green; a red result is repaired before continuing. Do not wait
+until cutover to discover integration failures. This is a plan/review obligation, not an automatic
+merge scheduler; sync work must respect the integration target's ownership and ref-movement rules.
+
+Member quick gates and advisory checkpoints do not replace the scheduled main merge plus full
+gate. Final aggregate verification and main landing checks still apply. Review must return
+`changes` for a long-lived integration branch without per-wave main sync (a blocking finding),
+or for missing justification, ownership or full-gate scheduling.
+
+**Anti-pattern: storage-v2.** More than 300 commits accumulated on one long-lived branch; main
+integration required two multi-day merges (T-337 and T-741), and the full gate was not run on the
+branch until cutover. Do not repeat that delivery shape. Prefer bounded, compatible waves that
+reach green main throughout; if an integration exception is justified, schedule main sync and
+full verification at every wave boundary, not just at the end.
+
 ### Member gates
 
 In an integration-target plan with two or more scopes, a scope may declare the

@@ -231,6 +231,13 @@ fn launch(
          Include goal/non-goals, alternatives, risks, contracts, owner decisions, verification, \
          and dependencies with task names, write_scope, depends_on and acceptance. \
          On revisions, identify scope additions and changed promises separately from technical-only edits.\n\
+         Deliver large plans to main in bounded waves by default: each wave is a main-delivery tracker Plan, \
+         declares a numeric member cap, ends with main green, and later waves depend on earlier wave trackers. \
+         Stage atomic changes behind a flag, dual-read or compatibility layer, then use a small final flip wave. \
+         An integration target is an exception: state why main-delivery waves are insufficient and schedule \
+         merging main into the integration branch and running the full gate there after every wave, before \
+         the next wave starts, not only at cutover. Record wave boundaries, caps, dependencies, sync ownership \
+         and verification in decisions and the plan body; see docs/guide/plans.md.\n\
          Finish by submitting the plan:\n\n    '{}' --root '{}' plan submit {} '{}'\n",
         task.id,
         task.title,
