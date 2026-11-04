@@ -150,9 +150,8 @@ fn classify(ctx: &Ctx, task: &str, artifact: &Artifact) -> Report {
 }
 
 fn ingested(ctx: &Ctx, task: &str, row: &str, artifact: &Artifact) -> Result<Report> {
-    if let Some(report) = ctx
-        .store
-        .record::<Report>(REPORTS, &report_key(task, row))?
+    if let Some(report) =
+        ctx.read_step(|read| read.store.record::<Report>(REPORTS, &report_key(task, row)))?
         && report.sha256 == artifact.sha256
         && report.run == artifact.run
     {
@@ -368,27 +367,18 @@ fn backfill(ctx: &Ctx, head: &TaskHead, run: &str, revision: &str) -> Result<Pre
     };
     let mut failures = BTreeMap::new();
     let mut reports = Vec::new();
-    let query = RowQuery::part(TaskPart::Artifact).with_index(format!("run-title:{run}:{TITLE}"));
-    let view = ctx.store.view()?;
-    let mut page = PageReq::first(256);
-    loop {
-        let found = view.rows(head.num, &query, page.clone())?;
-        for row in found.items {
-            corral_core::work::decoded(
-                corral_core::work::Counter::HistoryRowDecodes,
-                u64::try_from(serde_json::to_vec(&row.doc)?.len())?,
-                corral_core::work::Subject::Plain,
-            );
-            let artifact: Artifact = serde_json::from_value(row.doc)?;
-            let report = ingested(ctx, &head.id, &row.key, &artifact)?;
-            fold(&mut state, &mut failures, &row.key, &report);
-            reports.push((row.key, report));
-        }
-        match found.next {
-            Some(after) => page.after = Some(after),
-            None => break,
-        }
-    }
+    scan_reports(ctx, head, run, 256, |row| {
+        corral_core::work::decoded(
+            corral_core::work::Counter::HistoryRowDecodes,
+            u64::try_from(serde_json::to_vec(&row.doc)?.len())?,
+            corral_core::work::Subject::Plain,
+        );
+        let artifact: Artifact = serde_json::from_value(row.doc)?;
+        let report = ingested(ctx, &head.id, &row.key, &artifact)?;
+        fold(&mut state, &mut failures, &row.key, &report);
+        reports.push((row.key, report));
+        Ok(())
+    })?;
     let current = writer.head(&head.id)?;
     let seed_current = current.rev == head.rev
         && current.current_run.as_ref().is_some_and(|r| r.id == run)
@@ -438,6 +428,42 @@ fn backfill(ctx: &Ctx, head: &TaskHead, run: &str, revision: &str) -> Result<Pre
         generation: Some((writer, generation)),
     })
 }
+
+fn scan_reports(
+    ctx: &Ctx,
+    head: &TaskHead,
+    run: &str,
+    page_size: u32,
+    mut consume: impl FnMut(corral_core::backend::HistoryRow) -> Result<()>,
+) -> Result<()> {
+    let query = RowQuery::part(TaskPart::Artifact).with_index(format!("run-title:{run}:{TITLE}"));
+    let mut page = PageReq::first(page_size);
+    loop {
+        // Only the idempotent page read is retried, not artifact I/O. The publication
+        // lock and revision guard prevent mixing generations. Explicit snapshots stay pinned.
+        let found = ctx.read_step(|read| {
+            let current = read.store.head(&head.id)?;
+            if current.rev != head.rev {
+                bail!("PM load backfill input changed: {}", head.id);
+            }
+            read.store
+                .view()?
+                .rows(head.num, &query, page.clone())
+                .map_err(Into::into)
+        })?;
+        for row in found.items {
+            consume(row)?;
+        }
+        match found.next {
+            Some(after) => page.after = Some(after),
+            None => return Ok(()),
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "observe_lease_tests.rs"]
+mod lease_tests;
 
 /// Normal preparation reads one constant-size checkpoint per awaiting run, without opening
 /// report history or report bytes. Only a missing/stale legacy checkpoint enters recovery.

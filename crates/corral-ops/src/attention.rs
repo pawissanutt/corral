@@ -270,12 +270,13 @@ pub fn board_hot_heads(ctx: &Ctx, now: Timestamp) -> Result<(Vec<TaskHead>, Atte
     snapshot_heads::snapshot(ctx, now)
 }
 
-/// The same real projection plus its sampled admission, for the owning read operation.
+/// Project with the owning operation's captured host sample, including on a renewed read.
 pub(crate) fn board_hot_with_admission(
     ctx: &Ctx,
     now: Timestamp,
-) -> Result<(AttentionBoard, Option<String>)> {
-    snapshot_heads::snapshot_with_admission(ctx, now)
+    admission: &Option<String>,
+) -> Result<AttentionBoard> {
+    snapshot_heads::snapshot_with_admission(ctx, now, admission)
 }
 
 /// Cold complete-output compatibility, including empty terminal rows.

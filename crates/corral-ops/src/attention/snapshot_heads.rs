@@ -96,9 +96,10 @@ pub(super) fn reconcile_snapshot(
 pub(super) fn snapshot_with_admission(
     ctx: &Ctx,
     now: Timestamp,
-) -> Result<(AttentionBoard, Option<String>)> {
-    let (_, board, admission) = snapshot_inner(ctx, now, false, None)?;
-    Ok((board, admission))
+    admission: &Option<String>,
+) -> Result<AttentionBoard> {
+    let (_, board, _) = snapshot_inner(ctx, now, false, Some(admission))?;
+    Ok(board)
 }
 
 pub(super) fn reconcile_with_admission(

@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Context, Result};
-use corral_core::backend::HeadQuery;
 use corral_core::{AutoStage, Run, RunOutcome, Status, TaskHead};
 use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
@@ -414,15 +413,9 @@ fn sync_scoped(
     Ok(changes)
 }
 
-/// The open board's scalar projections; slow per-task work must open its own keyed view.
-fn open_heads(ctx: &Ctx) -> Result<Vec<TaskHead>> {
-    Ok(ctx
-        .store
-        .heads(&HeadQuery::Open { project: None })?
-        .into_iter()
-        .map(TaskHead::detach)
-        .collect())
-}
+#[path = "sync/read_phase.rs"]
+mod read_phase;
+use read_phase::{open_heads, watchdog_inputs};
 
 /// A held card has relinquished dispatch authority. Preserve its pane for inspection;
 /// membership moves remain permitted and do not themselves terminate a live worker.
@@ -510,6 +503,10 @@ fn reconcile(
     let Some(pane_id) = run.herdr.as_ref().map(|h| h.pane_id.clone()) else {
         return Ok(None);
     };
+    // Detach keyed inputs before herdr/process work, never after its unbounded wait.
+    let Some(watchdog_run) = watchdog_inputs(ctx, head, run)? else {
+        return Ok(None);
+    };
     let pane = panes.get(&pane_id);
     // Older runs have no seen_pane field; their recorded real status is still a sighting.
     let seen_pane = run.seen_pane
@@ -568,26 +565,25 @@ fn reconcile(
             .review
             .as_ref()
             .is_some_and(corral_core::ReviewRecord::holds_slot);
-    let stuck = if !parked
-        && herdr_idle_since.is_some_and(|since| now.duration_since(since) > stuck_after)
-    {
-        match ctx.herdr.pane_process_info(&pane_id).and_then(|info| {
-            let watchdog_run = crate::agent::hooks::sync::watchdog_run(head, run)?;
-            crate::watchdog::foreign_process(ctx, &watchdog_run, &info, processes)
-        }) {
-            Ok(process) => process,
-            Err(err) => {
-                crate::messages::report(
-                    Some(&task.id),
-                    "watchdog",
-                    format!("inspecting {} for stuck processes failed: {err:#}", task.id),
-                );
-                run.stuck.clone()
+    let stuck =
+        if !parked && herdr_idle_since.is_some_and(|since| now.duration_since(since) > stuck_after)
+        {
+            match ctx.herdr.pane_process_info(&pane_id).and_then(|info| {
+                crate::watchdog::foreign_process(ctx, &watchdog_run, &info, processes)
+            }) {
+                Ok(process) => process,
+                Err(err) => {
+                    crate::messages::report(
+                        Some(&task.id),
+                        "watchdog",
+                        format!("inspecting {} for stuck processes failed: {err:#}", task.id),
+                    );
+                    run.stuck.clone()
+                }
             }
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
     let newly_stuck = stuck.is_some() && stuck != run.stuck;
 
     let stall_key = crate::provider_stall::agent_key(&task.id, run);
@@ -901,3 +897,7 @@ mod agent_seam_tests;
 #[cfg(test)]
 #[path = "sync_guard_tests.rs"]
 mod guard_tests;
+
+#[cfg(test)]
+#[path = "sync_lease_tests.rs"]
+mod lease_tests;

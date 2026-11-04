@@ -19,7 +19,8 @@ pub(crate) fn reconcile_one(
     now: Timestamp,
     panes: Option<&HashMap<String, PaneInfo>>,
 ) -> Result<Option<Change>> {
-    reconcile_head(ctx, &ctx.store.head(id)?, now, panes)
+    let head = ctx.read_step(|read| Ok(read.store.head(id)?.detach()))?;
+    reconcile_head(ctx, &head, now, panes)
 }
 
 /// Re-observes only the current run's open obligations: a wait or decision with a resume
@@ -43,7 +44,16 @@ pub(crate) fn reconcile_head(
     let Some(run) = shell.current_run() else {
         return Ok(None);
     };
-    let open = head.open_obligations(&run.id)?;
+    let Some(open) = ctx.read_step(|read| {
+        let fresh = read.store.head(&head.id)?;
+        if fresh.rev != head.rev {
+            return Ok(None);
+        }
+        fresh.open_obligations(&run.id).map(Some)
+    })?
+    else {
+        return Ok(None);
+    };
     let mut next = open.clone();
     let mut transitions = Vec::new();
     let mut task_wakes = Vec::new();

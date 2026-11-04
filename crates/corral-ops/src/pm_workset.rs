@@ -247,16 +247,28 @@ fn project(
     ctx: &Ctx,
     attention: Option<&crate::attention::AttentionBoard>,
 ) -> Result<(PmWorkset, EffectivePolicy)> {
-    let frozen;
-    let ctx = if ctx.store.is_snapshot() {
-        ctx
+    if !ctx.store.is_snapshot() {
+        // Legacy recovery can read artifact files and wait for publication storage. Do not
+        // spend the evaluation's lease on that work. The pinned phase below still prepares
+        // its own revision-bound derivations; explicit snapshots never advance here.
+        let _prepare = corral_core::work::Preparation::enter();
+        crate::lesson_rows::prepare_coordination(ctx)?;
+        crate::pm_next::observe::prepare(ctx)?;
+    }
+    // A renewed projection reuses the real host observation, never repeats the probe.
+    let admission = if attention.is_none() {
+        Some(crate::resources::read_admission(ctx)?)
     } else {
-        frozen = Ctx {
-            store: ctx.store.read_only_snapshot()?,
-            ..ctx.clone()
-        };
-        &frozen
+        None
     };
+    ctx.read_step(|read| project_snapshot(read, attention, admission.as_ref()))
+}
+
+fn project_snapshot(
+    ctx: &Ctx,
+    attention: Option<&crate::attention::AttentionBoard>,
+    sampled_admission: Option<&Option<String>>,
+) -> Result<(PmWorkset, EffectivePolicy)> {
     {
         let _prepare = corral_core::work::Preparation::enter();
         crate::lesson_rows::prepare_coordination(ctx)?;
@@ -271,12 +283,15 @@ fn project(
         .map(crate::pm_next::heads::shell)
         .collect::<Result<Vec<_>>>()?;
     let fresh;
-    let admission;
-    let (board, sampled_admission) = if let Some(board) = attention {
-        (board, None)
+    let board = if let Some(board) = attention {
+        board
     } else {
-        (fresh, admission) = crate::attention::board_hot_with_admission(ctx, ctx.store.now())?;
-        (&fresh, Some(&admission))
+        fresh = crate::attention::board_hot_with_admission(
+            ctx,
+            ctx.store.now(),
+            sampled_admission.context("PM admission was not sampled")?,
+        )?;
+        &fresh
     };
     let assessments: Vec<_> = if policy.tasks.is_empty() {
         Vec::new()
