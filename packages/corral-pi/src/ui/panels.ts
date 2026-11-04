@@ -14,7 +14,7 @@ import { type Appearance, type Density, PACKAGED } from "./appearance.ts";
 import { ActionPalette, type HostAction } from "./action-palette.ts";
 import { setPanelAppearance } from "./panels-view.ts";
 import { setCanvasAppearance } from "./panel-canvas.ts";
-import { composerLayout, composerTitle, overviewLines, panelFooter, splitRow } from "./panels-chrome.ts";
+import { composerLayout, composerTitle, overviewLines, statusBar, splitRow } from "./panels-chrome.ts";
 import { pagerLabel, scrollWindow, selectionWindow, type PageWindow } from "./panels-pager.ts";
 import {
   box, pad, panelLines, plainLabel, diffLine, styledPanelLine, PANEL_TABS, PANEL_BG, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, RESET,
@@ -475,8 +475,7 @@ export class NativePanels implements PanelSurface {
           invalidate() {},
         }));
         return {
-          render: width => panelFooter(this.options.snapshot(), this.wide && this.tab === "Context" && (!this.focused || this.navigatingActivity),
-            data.getExtensionStatuses(), width),
+          render: width => statusBar(this.options.identity, this.options.snapshot(), data.getExtensionStatuses(), width),
           invalidate() {}, dispose: unsubscribe,
         };
       });

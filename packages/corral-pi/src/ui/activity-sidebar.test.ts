@@ -45,7 +45,7 @@ function fixture() {
 
 test("overview replaces Plan and mixed counters with distinct, actionable Agents and Jobs", () => {
   const rows = overviewLines(base, { kind: "ready", files: [] });
-  expect(rows.filter(row => row.heading).map(row => row.text)).toEqual(["Context", "Changed files", "Agents · 2 active", "Jobs · 1 running"]);
+  expect(rows.filter(row => row.heading).map(row => row.text)).toEqual(["Changed files", "Agents · 2 active", "Jobs · 1 running"]);
   expect(rows.find(row => row.text.includes("first callers"))?.action).toEqual({ kind: "helper", request: "first" });
   expect(rows.find(row => row.text.includes("bun test build"))?.action).toEqual({ kind: "job", job: "build" });
   expect(rows.some(row => row.text.includes("Helper slots"))).toBeFalse();
@@ -102,7 +102,7 @@ test("main navigation has no duplicate Agents or Jobs tab in any view or width",
     expect(stripTerminalSequences(rail[1] ?? "")).not.toContain("Agents");
     expect(plain(rail)).toContain("Agents · 2 active");
     expect(plain(rail)).toContain("Jobs · 1 running");
-    expect(plain(rail)).toContain("24% context");
+    expect(plain(rail)).not.toContain("24%"); // the bottom bar owns context
     h.physical.send("\r");
     expect(h.native.workbench.selectedActivity).toEqual({ kind: "helper", request: "first" });
   } finally { h.stop(); }
