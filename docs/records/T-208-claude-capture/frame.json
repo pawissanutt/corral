@@ -1,0 +1,9 @@
+{
+  "type": "user",
+  "session_id": "e40e5d00-5b42-4f74-94a4-fb0c2aa8e906",
+  "from": "corral-capture",
+  "message": {
+    "role": "user",
+    "content": "[corral envelope capture@env1]\n[corral capture#1 owner_note]\nCapture-only marker. Do not execute tools or change files."
+  }
+}
