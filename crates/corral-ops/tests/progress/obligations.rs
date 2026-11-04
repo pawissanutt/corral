@@ -124,75 +124,76 @@ fn a_new_native_decision_requires_a_fresh_handoff_without_rewriting_history() {
 
 #[test]
 #[cfg(unix)]
-fn done_with_large_history_and_evidence_scratch() {
-    let f = worker();
-    std::fs::write(f.repo.join(".gitignore"), ".evidence/\n").unwrap();
-    super::fixture::git(&f.repo, &["add", ".gitignore"]);
-    super::fixture::git(&f.repo, &["commit", "-qm", "ignore scratch"]);
-    let scratch = f.repo.join(".evidence");
-    std::fs::create_dir(&scratch).unwrap();
-    for n in 0..1637 {
-        use std::io::Write;
-        let mut file = std::fs::File::create(scratch.join(format!("{n}.bin"))).unwrap();
-        file.write_all(format!("{n:08}").as_bytes()).unwrap();
-        file.set_len(76_000).unwrap();
+fn done_work_is_independent_of_history_and_evidence_scratch() {
+    fn run(size: usize) -> (u64, u64) {
+        let f = worker();
+        std::fs::write(f.repo.join(".gitignore"), ".evidence/\n").unwrap();
+        super::fixture::git(&f.repo, &["add", ".gitignore"]);
+        super::fixture::git(&f.repo, &["commit", "-qm", "ignore scratch"]);
+        let scratch = f.repo.join(".evidence");
+        std::fs::create_dir(&scratch).unwrap();
+        for n in 0..size {
+            use std::io::Write;
+            let mut file = std::fs::File::create(scratch.join(format!("{n}.bin"))).unwrap();
+            file.write_all(format!("{n:08}").as_bytes()).unwrap();
+        }
+        f.seed_checkpoint();
+        f.ctx
+            .store
+            .update(&f.id, |task| {
+                let artifact = task.artifacts[0].clone();
+                for n in 0..size {
+                    let mut a = artifact.clone();
+                    a.path = format!("artifacts/synthetic-{n}");
+                    a.sha256 = format!("{n:064x}");
+                    task.artifacts.push(a);
+                }
+                let mut older = task.current_run().unwrap().clone();
+                older.checkpoints.clear();
+                older.progress = None;
+                older.id = "older-1".into();
+                task.runs.insert(0, older.clone());
+                older.id = "older-2".into();
+                task.runs.insert(0, older);
+                let run = task.current_run_mut().unwrap();
+                let latest = run.checkpoints[0].clone();
+                for n in 0..size {
+                    let mut c = latest.clone();
+                    c.artifact = format!("synthetic-{n}");
+                    c.checkpoint.input.next_action = "synthetic".into();
+                    run.checkpoints.insert(0, c);
+                }
+                Ok(())
+            })
+            .unwrap();
+        // A full task listing clones history even when decoding is cached. It must not
+        // happen once per scratch artifact; unlike timing or cache reads, this count
+        // does not depend on host load or the file-stamp settle window.
+        use corral_core::work::{Work, count};
+        let lists = count(Work::TaskList);
+        let gets = count(Work::TaskGet);
+        done(&f.ctx, &f.id, "Implemented").unwrap();
+        let lists = count(Work::TaskList) - lists;
+        let gets = count(Work::TaskGet) - gets;
+        eprintln!("size {size}: {lists} task listings, {gets} task lookups");
+        assert_eq!(f.task().status, Status::Review);
+        assert_eq!(
+            f.task()
+                .artifacts
+                .iter()
+                .filter(|a| a.title.ends_with(".bin"))
+                .count(),
+            size
+        );
+        (lists, gets)
     }
-    f.seed_checkpoint();
-    f.ctx
-        .store
-        .update(&f.id, |task| {
-            let artifact = task.artifacts[0].clone();
-            for n in 0..439 {
-                let mut a = artifact.clone();
-                a.path = format!("artifacts/synthetic-{n}");
-                a.sha256 = format!("{n:064x}");
-                task.artifacts.push(a);
-            }
-            let mut older = task.current_run().unwrap().clone();
-            older.checkpoints.clear();
-            older.progress = None;
-            older.id = "older-1".into();
-            task.runs.insert(0, older.clone());
-            older.id = "older-2".into();
-            task.runs.insert(0, older);
-            let run = task.current_run_mut().unwrap();
-            let latest = run.checkpoints[0].clone();
-            for n in 0..50 {
-                let mut c = latest.clone();
-                c.artifact = format!("synthetic-{n}");
-                c.checkpoint.input.next_action = "x".repeat(150_000);
-                run.checkpoints.insert(0, c);
-            }
-            Ok(())
-        })
-        .unwrap();
-    // A full task listing clones history even when decoding is cached. It must not
-    // happen once per scratch artifact; unlike timing or cache reads, this count
-    // does not depend on host load or the file-stamp settle window.
-    use corral_core::work::{Work, count};
-    let lists = count(Work::TaskList);
-    let gets = count(Work::TaskGet);
-    done(&f.ctx, &f.id, "Implemented").unwrap();
-    let lists = count(Work::TaskList) - lists;
-    let gets = count(Work::TaskGet) - gets;
-    eprintln!("large-history done: {lists} task listings, {gets} task lookups");
-    assert!(
-        lists < 100,
-        "task listings scaled with scratch artifacts: {lists}"
-    );
-    assert!(
-        gets < 100,
-        "task lookups scaled with scratch artifacts: {gets}"
-    );
-    assert_eq!(f.task().status, Status::Review);
-    assert_eq!(
-        f.task()
-            .artifacts
-            .iter()
-            .filter(|a| a.title.ends_with(".bin"))
-            .count(),
-        1637
-    );
+    for size in [1, 3] {
+        assert_eq!(
+            run(size),
+            (0, 0),
+            "unexpected task listings or lookups at size {size}"
+        );
+    }
 }
 
 #[test]
