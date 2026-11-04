@@ -15,6 +15,7 @@ import { agentRows } from "./agent-view.ts";
 import { HelperChat } from "./helper-chat.ts";
 import { activityKey, activityTitle, type ActivityTarget } from "./activity-sidebar.ts";
 import { InspectionStore, evidenceLines } from "./inspection.ts";
+import { proofSplit, SPLIT_MIN } from "./proof-view.ts";
 import { usageLines } from "./usage-view.ts";
 import { TaskStore, taskHeadline, taskLines } from "./task-view.ts";
 import { splitRow } from "./panels-chrome.ts";
@@ -77,7 +78,7 @@ export class NativeWorkbench {
   private chatPresentation: (() => InteractiveChatPresentation) | undefined;
   private chatStart = -1; private readonly helperChat: HelperChat;
   private toolsExpanded = false;
-  private legend = false;
+  private legend = false; private proofExpanded = false;
   private hunk = 0; private hunkRows: number[] = [];
   private hunkSources: number[] = []; private lastPatch = ""; private displayedPath: string | undefined;
   private displayedRoot: string | undefined;
@@ -553,6 +554,7 @@ export class NativeWorkbench {
       this.toolsExpanded = !this.toolsExpanded; this.helperChat.expandTools(this.toolsExpanded); this.options.changed(); return true;
     }
     if (this.view === "evidence" && data === "a") { this.setView("artifacts"); return true; }
+    if (this.view === "evidence" && data === "e") { this.proofExpanded = !this.proofExpanded; this.options.changed(); return true; }
     if (this.view === "artifacts" && this.artifacts.handleInput(data)) { this.artifactScroll?.scrollTo(0, { disableFollow: true }); return true; }
     if (matchesKey(data, "enter") || matchesKey(data, "tab")) { this.focused = false; this.options.changed(); return true; }
     if (this.view === "activity" && data === "a") { this.setView("agents"); return true; }
