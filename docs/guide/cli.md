@@ -317,13 +317,14 @@ Options:
 #### `corral assistant scratch gc`
 
 ```text
-Collect idle scratch of ended sessions, saving work as diff artifacts first (owner)
+Collect ended or idle hostless sessions' scratch, saving work first (owner or PM)
 
 Usage: corral assistant scratch gc [OPTIONS]
 
 Options:
-      --dry-run      List what would be collected without changing anything
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --stop-stale   Stop resident processes only for ended or idle hostless sessions
+      --dry-run      List what would be collected without changing anything
       --yes          Collect; required for a real run
       --json         
   -h, --help         Print help

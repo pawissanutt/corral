@@ -651,6 +651,62 @@ fn doctor_shows_the_resolved_assistant_column_and_its_digest() {
     assert!(line.message.contains(&expected), "{}", line.message);
 }
 
+#[test]
+fn scratch_gc_resume_startup_interleaving() {
+    // Deterministic lock-boundary interleaving: no threads, sleeps, or live server.
+    use crate::assistant::scratch;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let fx = assistant_fixture();
+    let ctx = f::ctx_at(fx.root());
+    ctx.store
+        .create_assistant("pm-pi", None, Some(PANE), None)
+        .unwrap();
+    let made = scratch::create(&ctx, "A-1", "corral", Some("race"), None).unwrap();
+    let checks = Arc::new(AtomicUsize::new(0));
+    let claimed = ctx.store.clone();
+    let count = checks.clone();
+    let guarded = Ctx {
+        store: ctx.store.with_submission_barrier(Arc::new(move |point| {
+            if point == "lock:dispatch" {
+                assert!(
+                    claimed.try_assistant_scratch_gc("A-1").unwrap().is_none(),
+                    "GC acquired its exclusive claim during resume/prepare"
+                );
+                count.fetch_add(1, Ordering::SeqCst);
+            }
+        })),
+        ..ctx.clone()
+    };
+    let (_, prepared) = resume(&guarded, "A-1", PANE, &Overrides::default()).unwrap();
+    assert!(checks.load(Ordering::SeqCst) > 0);
+    let bootstrap: launch::Bootstrap =
+        serde_json::from_slice(&std::fs::read(prepared.bootstrap).unwrap()).unwrap();
+    let now = corral_core::clock::now();
+    assert_eq!(
+        scratch::gc(&ctx, now, false).unwrap().items[0].action,
+        "skip"
+    );
+    let later = now
+        .checked_add(jiff::SignedDuration::from_hours(8 * 24))
+        .unwrap();
+    // Startup owns the same lease even before hello. An arbitrarily old generation stays safe.
+    let starting = startup_lease(&bootstrap).unwrap();
+    assert_eq!(
+        scratch::gc_with_options(&ctx, later, false, true)
+            .unwrap()
+            .items[0]
+            .action,
+        "skip"
+    );
+    assert!(made.path.is_dir());
+    drop(starting);
+    // An abandoned, unbound bootstrap is fenced before removal and can never start later.
+    let report = scratch::gc(&ctx, later, false).unwrap();
+    assert_eq!(report.items[0].action, "removed", "{report:?}");
+    assert!(startup_lease(&bootstrap).is_err());
+    assert!(!made.path.exists());
+}
+
 fn ts_fx(fx: &Fx) -> ts::Fx {
     ts::Fx {
         _tmp: tempfile::tempdir().unwrap(),

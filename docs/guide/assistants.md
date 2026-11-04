@@ -304,6 +304,7 @@ corral assistant scratch promote spike-cache --title "Cache layer"
 corral assistant scratch discard spike-cache
 corral assistant scratch gc --dry-run
 corral assistant scratch gc --yes
+corral assistant scratch gc --yes --stop-stale
 corral stats --storage
 ```
 
@@ -352,22 +353,35 @@ save fails, for example because a file is larger than `artifacts.max_bytes`, not
 removed. Saving reads the scratch without changing its files, index or refs. The calling
 shell may discard from inside its own scratch; a scratch that any other process uses refuses
 `scratch_busy`, and one that belongs to a task run or a co-work finish refuses
-`scratch_attached`.
+`scratch_attached`. Co-work attachments are released once their finish task is Done or Dropped;
+GC or discard can then remove them, including records whose directory is already missing.
 
 **Promote** files a Backlog task through the `corral new` path (default project: the
 scratch's; `--body-file` adds context) with the spike diff attached as an artifact. The
 scratch, its branch and its record stay unchanged. A scratch with nothing beyond its base
 refuses `scratch_empty`.
 
-**GC** is an owner command, refused from an assistant shell. A scratch is eligible once its
-session has ended and it has been idle for `assistant.scratch_idle_days` (default 7) days
-since the later of the session end and its newest commit. Corral saves its work as for
-discard before removing the worktree and branch. It skips, with the reason, any scratch that
-a task run or co-work finish holds, that any live process uses as its current directory
-(including the shell that runs GC and its parents), that a herdr pane has open, or whose
-repository is landing. `--dry-run` measures and lists without changing anything; `--yes`
-collects and records the measured size of each scratch it keeps. A run where some scratch
-could not be collected exits non-zero.
+**GC** is available to the owner and PM, but refused from an assistant shell. Ended sessions
+and open sessions without a live host are eligible after `assistant.scratch_idle_days`
+(default 7) days of inactivity. Activity includes session/scratch creation, session end,
+host generations, owner inputs, turns, requests and the newest commit. A live host or startup
+lease always protects the session's scratches. Admission and GC share a lifecycle lease;
+abandoned unbound generations are fenced before collection so an old bootstrap cannot start
+into a removed directory.
+
+Corral saves work as for discard before removing the worktree and branch. Missing directories
+are eligible immediately, subject to live-host and attachment protection; any remaining
+commits beyond the base are bundled before the branch and record are removed. A recent pending
+host startup also protects missing-directory records. Active task runs/co-work finishes and a
+landing in progress still block collection; open herdr panes block it unless `--stop-stale` is
+set for an eligible hostless session. Resident processes are listed with PID, command and age; by default GC reports and skips them.
+`--stop-stale` stops only scratch residents of an eligible hostless session, rechecking process
+identity and cwd, never the calling process or its ancestors. It never stops a live session's
+processes.
+
+`--dry-run` lists every scratch with keep/collect and its reason, without record updates or
+signals (including with `--stop-stale`). `--yes` collects and records measured sizes of kept,
+inactive scratches. A run where some scratch could not be collected exits non-zero.
 
 **Accounting.** `corral stats --storage` adds a row per scratch, measured by a bounded walk
 that never follows symlinks (a linked shared Cargo target is not counted) and reports
@@ -379,7 +393,7 @@ session record lists; corral never removes those itself.
 ```toml
 [assistant]
 scratch_max = 8         # scratch worktrees across all sessions
-scratch_idle_days = 7   # days an ended session's scratch stays idle before GC
+scratch_idle_days = 7   # idle days before ended/hostless-session scratch GC
 ```
 
 ## Shell entry: reads, filing and refusals

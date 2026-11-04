@@ -140,6 +140,55 @@ fn kinds(ctx: &Ctx, task: &str) -> Vec<String> {
 }
 
 #[test]
+fn terminal_cowork_with_missing_directory_can_be_discarded() {
+    let fx = Fx::new(None);
+    let made = fx.scratch("released");
+    fx.commit(&made.path, "work.txt");
+    let finished = scratch::finish(
+        &fx.ctx,
+        "A-1",
+        "released",
+        &Finish {
+            title: Some("Released work"),
+            ..Finish::default()
+        },
+    )
+    .unwrap();
+    std::fs::remove_dir_all(&made.path).unwrap();
+    fx.ctx
+        .store
+        .update(&finished.task, |task| {
+            task.status = Status::Dropped;
+            Ok(())
+        })
+        .unwrap();
+    let preview = scratch::gc(&fx.ctx, jiff::Timestamp::now(), true).unwrap();
+    assert_eq!(preview.items[0].action, "remove", "{preview:?}");
+    fx.ctx
+        .store
+        .update(&finished.task, |task| {
+            task.status = Status::Done;
+            Ok(())
+        })
+        .unwrap();
+    let removed = scratch::discard(&fx.ctx, "A-1", "released").unwrap();
+    assert!(
+        removed
+            .artifacts
+            .iter()
+            .any(|a| a.ends_with("commits.bundle"))
+    );
+    assert!(
+        fx.ctx
+            .store
+            .get_assistant("A-1")
+            .unwrap()
+            .scratch
+            .is_empty()
+    );
+}
+
+#[test]
 fn owner_finish_materializes_gated_reviewed_work_and_autopilot_lands_it() {
     // Given A-1's scratch cache-fix with one commit, while main moved on, in a project whose
     // policy names reviewer rev; A-1's transcript has usage before, during and after the work.
