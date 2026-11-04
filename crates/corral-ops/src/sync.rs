@@ -10,6 +10,7 @@ use crate::{Ctx, ProcessControl, SystemProcesses, omo};
 
 #[path = "sync_excerpt.rs"]
 mod excerpt;
+mod gate_watchdog;
 use excerpt::read_excerpt;
 
 #[cfg(test)]
@@ -567,17 +568,8 @@ fn reconcile(
             .review
             .as_ref()
             .is_some_and(corral_core::ReviewRecord::holds_slot);
-    let gate_pending = run
-        .gate
-        .as_ref()
-        .is_some_and(corral_core::GateRecord::holds_slot)
-        || head.queued_agent_gates()?.iter().any(|receipt| {
-            receipt.identity.role == corral_core::agent::AgentRole::Worker
-                && receipt.identity.task.as_deref() == Some(task.id.as_str())
-                && receipt.identity.run.as_deref() == Some(run.id.as_str())
-        });
     let stuck = if !parked
-        && !gate_pending
+        && !gate_watchdog::pending(head, run)?
         && herdr_idle_since.is_some_and(|since| now.duration_since(since) > stuck_after)
     {
         match ctx.herdr.pane_process_info(&pane_id).and_then(|info| {
