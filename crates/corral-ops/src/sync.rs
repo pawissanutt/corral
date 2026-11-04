@@ -205,10 +205,10 @@ fn sync_scoped(
     rebuild: &mut bool,
     attention: Option<&mut Option<crate::attention::AttentionBoard>>,
 ) -> Result<Vec<Change>> {
-    // The per-pass clone reads the binding once for every guard of this pass; nothing is
-    // cached on the caller's long-lived ctx. Inventory re-reads under its lease.
+    // Reuse short ownership views, but re-read an expired guard after a slow external
+    // step. This never retries the step; inventory still re-reads under its lease.
     let mut fresh = ctx.clone();
-    fresh.store.begin_session_view()?;
+    fresh.store.begin_refreshable_session_view()?;
     if !crate::session_scope::owns_inventory(&fresh)? {
         return Ok(Vec::new());
     }

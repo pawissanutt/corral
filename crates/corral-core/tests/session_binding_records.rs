@@ -139,6 +139,33 @@ fn inventory_refresh_does_not_install_a_pass_on_a_reusable_store() {
 }
 
 #[test]
+fn refreshable_ownership_guards_reuse_fresh_views_and_recheck_after_expiry() {
+    let temp = tempfile::tempdir().unwrap();
+    let clock = Arc::new(ManualClock::new("2026-01-01T00:00:00Z".parse().unwrap()));
+    let backend = FakeBackend::new(BackendConfig::default(), clock.clone(), Arc::default());
+    let store = Store::init(temp.path())
+        .unwrap()
+        .with_backend(Box::new(backend));
+    let owner = temp.path().join("owner.sock");
+    store.begin_refreshable_session_view().unwrap();
+    let before = store.session_view().unwrap();
+    assert!(before.owns(&owner).unwrap());
+    assert!(Arc::ptr_eq(&before, &store.session_view().unwrap()));
+
+    // A long external step outlives the five-second view; ownership may change meanwhile.
+    clock.advance(Duration::from_secs(6));
+    let foreign = temp.path().join("foreign.sock");
+    store
+        .bind_herdr_session(&foreign, "new launch evidence")
+        .unwrap();
+    let after = store.session_view().unwrap();
+    assert!(!Arc::ptr_eq(&before, &after));
+    assert!(!after.owns(&owner).unwrap());
+    assert!(before.owns(&owner).is_err(), "old snapshots never revive");
+    assert!(Arc::ptr_eq(&after, &store.session_view().unwrap()));
+}
+
+#[test]
 fn session_binding_record_process_b() {
     let (Some(root), Some(socket)) = (
         std::env::var_os("T323_BINDING_ROOT"),

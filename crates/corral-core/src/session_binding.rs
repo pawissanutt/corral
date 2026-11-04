@@ -13,7 +13,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::backend::{
-    AggregateName, PageReq, PaneOwner, ReadView, RecordQuery, SESSION_AREA, SESSION_KEY,
+    AggregateName, PageReq, PaneOwner, ReadView, RecordQuery, SESSION_AREA, SESSION_KEY, ViewError,
 };
 use crate::{Store, StoreLock, Task};
 
@@ -120,10 +120,16 @@ impl SessionView {
     }
 }
 
-/// The view of the pass begun on this store handle. A clone starts without one, so the view
-/// ends with the handle that began it: sync's per-pass context, dropped after the pass.
+#[derive(Debug)]
+struct PassView {
+    view: Arc<SessionView>,
+    refresh_expired: bool,
+}
+
+/// The view cache of the pass begun on this handle. A clone starts without one, so the
+/// cache ends with its opener; refreshable guard scopes can replace expired entries.
 #[derive(Debug, Default)]
-pub(crate) struct HandlePass(Mutex<Option<Arc<SessionView>>>);
+pub(crate) struct HandlePass(Mutex<Option<PassView>>);
 
 impl Clone for HandlePass {
     fn clone(&self) -> Self {
@@ -158,11 +164,21 @@ impl Store {
     }
 
     /// This pass's view: the pass begun on this handle, else this read-only snapshot's,
-    /// else a fresh read. Outside a pass every call reads afresh.
+    /// else a fresh read. Outside a pass every call reads afresh. Only a scope begun with
+    /// `begin_refreshable_session_view` renews an expired entry; ordinary passes fail closed.
     pub fn session_view(&self) -> Result<Arc<SessionView>> {
-        if let Some(view) = guard(&self.session_pass.0).as_ref() {
-            guard(&view.source).ensure_fresh()?;
-            return Ok(Arc::clone(view));
+        if let Some(pass) = guard(&self.session_pass.0).as_mut() {
+            let fresh = guard(&pass.view.source).ensure_fresh();
+            match fresh {
+                Ok(()) => {}
+                Err(ViewError::Expired { .. }) if pass.refresh_expired => {
+                    // Only the idempotent ownership read is repeated, never a sync step or
+                    // external effect. Old callers' snapshots stay expired and immutable.
+                    pass.view = self.read_session_view()?;
+                }
+                Err(error) => return Err(error.into()),
+            }
+            return Ok(Arc::clone(&pass.view));
         }
         if !self.is_snapshot() {
             return self.read_session_view();
@@ -177,7 +193,24 @@ impl Store {
     /// earlier guards share one read. The lease taken later by `try_begin_session_pass`
     /// replaces this view with a fresh one, which is the re-check inventory needs.
     pub fn begin_session_view(&self) -> Result<()> {
-        *guard(&self.session_pass.0) = Some(self.read_session_view()?);
+        *guard(&self.session_pass.0) = Some(PassView {
+            view: self.read_session_view()?,
+            refresh_expired: false,
+        });
+        Ok(())
+    }
+
+    /// Begins a guard-only cache whose expired summaries may be re-read by idempotent
+    /// ownership checks. Frozen snapshots and explicitly pinned passes do not use this mode.
+    pub fn begin_refreshable_session_view(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.is_snapshot(),
+            "a frozen snapshot cannot renew ownership views"
+        );
+        *guard(&self.session_pass.0) = Some(PassView {
+            view: self.read_session_view()?,
+            refresh_expired: true,
+        });
         Ok(())
     }
 
@@ -192,7 +225,12 @@ impl Store {
         let Some(lease) = self.session_lease()? else {
             return Ok(None);
         };
-        *guard(&self.session_pass.0) = Some(self.read_session_view()?);
+        let mut pass = guard(&self.session_pass.0);
+        let refresh_expired = pass.as_ref().is_some_and(|pass| pass.refresh_expired);
+        *pass = Some(PassView {
+            view: self.read_session_view()?,
+            refresh_expired,
+        });
         Ok(Some(lease))
     }
 
@@ -203,8 +241,8 @@ impl Store {
             return Ok(None);
         };
         let mut pass = guard(&self.session_pass.0);
-        if pass.is_some() {
-            *pass = Some(self.read_session_view()?);
+        if let Some(pass) = pass.as_mut() {
+            pass.view = self.read_session_view()?;
         }
         Ok(Some(lease))
     }
