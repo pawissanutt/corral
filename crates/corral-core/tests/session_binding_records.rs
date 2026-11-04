@@ -117,9 +117,10 @@ fn inventory_refresh_does_not_install_a_pass_on_a_reusable_store() {
     let temp = tempfile::tempdir().unwrap();
     let clock = Arc::new(ManualClock::new("2026-01-01T00:00:00Z".parse().unwrap()));
     let backend = FakeBackend::new(BackendConfig::default(), clock.clone(), Arc::default());
-    let store = Store::init(temp.path())
+    let mut store = Store::init(temp.path())
         .unwrap()
         .with_backend(Box::new(backend));
+    store.config.storage.view_max_age = 5; // Explicit expiry seam, not the global default.
     let socket = temp.path().join("owner.sock");
 
     // Inventory may temporarily lease a reusable command context; it is not a sync pass.
@@ -143,9 +144,10 @@ fn refreshable_ownership_guards_reuse_fresh_views_and_recheck_after_expiry() {
     let temp = tempfile::tempdir().unwrap();
     let clock = Arc::new(ManualClock::new("2026-01-01T00:00:00Z".parse().unwrap()));
     let backend = FakeBackend::new(BackendConfig::default(), clock.clone(), Arc::default());
-    let store = Store::init(temp.path())
+    let mut store = Store::init(temp.path())
         .unwrap()
         .with_backend(Box::new(backend));
+    store.config.storage.view_max_age = 5; // Keep the original short-view regression.
     let owner = temp.path().join("owner.sock");
     store.begin_refreshable_session_view().unwrap();
     let before = store.session_view().unwrap();
