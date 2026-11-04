@@ -185,10 +185,18 @@ pub(super) fn observe(ctx: &crate::Ctx, id: &str) -> Cost {
         .unwrap()
         .unwrap();
     let events = oracle.events().unwrap();
+    // Question replay reads only this task's question events (events_of).
+    let replayed: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            e.task.as_deref() == Some(id)
+                && crate::questions::QUESTION_EVENT_KINDS.contains(&e.kind.as_str())
+        })
+        .collect();
     let mut replay = native::full_read_cost(&doc);
     *replay.get_mut(&Counter::ViewsOpened).unwrap() += 1;
-    replay.insert(Counter::EventDecodes, events.len() as u64);
-    *replay.get_mut(&Counter::DecodedDocBytes).unwrap() += events
+    replay.insert(Counter::EventDecodes, replayed.len() as u64);
+    *replay.get_mut(&Counter::DecodedDocBytes).unwrap() += replayed
         .iter()
         .map(|event| serde_json::to_vec(&event.detail).unwrap().len() as u64)
         .sum::<u64>();
