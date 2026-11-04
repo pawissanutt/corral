@@ -29,6 +29,15 @@ fn queued_gate_survives_reconciliation_and_replays_without_another_request() {
     let fx = fixture(true);
     let o = fx.call(fx.bind(), "queued", "gate");
     queued(&fx, &o);
+    // The watchdog sees the indexed request only for its own run.
+    let head = fx.ctx.store.head(&fx.id).unwrap();
+    assert_eq!(head.queued_agent_gates().unwrap().len(), 1);
+    let task = fx.task();
+    let run = task.current_run().unwrap();
+    assert!(crate::sync::gate_watchdog::pending(&head, run).unwrap());
+    let mut other_run = run.clone();
+    other_run.id = "R2".into();
+    assert!(!crate::sync::gate_watchdog::pending(&head, &other_run).unwrap());
     // When sync reconciles the request and the same call is replayed.
     effects::reconcile_task(&fx.ctx, &fx.id).unwrap();
     effects::gate(&fx.ctx, &o).unwrap();

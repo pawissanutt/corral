@@ -11,4 +11,9 @@ test("short second-based timeouts are refused before execution", async () => {
   if (!result?.block) spawned = true;
   expect(spawned).toBe(false);
   expect(result.reason).toContain("seconds");
+  const shortMonitor = await handler!({ toolName: "corral_job_monitor", toolCallId: "2", input: { job: "j1", on: "exit", timeout_secs: 1 } });
+  expect(shortMonitor?.block).toBe(true);
+  expect(shortMonitor.reason).toContain("seconds");
+  const allowedMonitor = await handler!({ toolName: "corral_job_monitor", toolCallId: "3", input: { job: "j1", on: "exit", timeout_secs: 5 } });
+  expect(allowedMonitor?.block).not.toBe(true);
 });

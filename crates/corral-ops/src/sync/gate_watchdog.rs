@@ -2,7 +2,7 @@
 use anyhow::Result;
 use corral_core::{GateRecord, Run, TaskHead, agent::AgentRole};
 
-pub(super) fn pending(head: &TaskHead, run: &Run) -> Result<bool> {
+pub(crate) fn pending(head: &TaskHead, run: &Run) -> Result<bool> {
     if run.gate.as_ref().is_some_and(GateRecord::holds_slot) {
         return Ok(true);
     }

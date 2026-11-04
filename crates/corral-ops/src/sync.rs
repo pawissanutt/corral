@@ -10,7 +10,7 @@ use crate::{Ctx, ProcessControl, SystemProcesses, omo};
 
 #[path = "sync_excerpt.rs"]
 mod excerpt;
-mod gate_watchdog;
+pub(crate) mod gate_watchdog;
 use excerpt::read_excerpt;
 
 #[cfg(test)]
