@@ -188,6 +188,7 @@ const ROWS: &[(&str, &[&str], Class)] = &[
     ("lessons delete", &["L-1"], Refused),
     ("lessons due", &[], Read),
     ("plan progress", &["T-001"], Read),
+    ("plan recovery", &["T-001"], Read),
     ("plan verify", &["T-001"], Refused),
     ("plan checkpoint", &["T-001"], Refused),
     ("plan evidence", &["T-001", "--file", "e.json"], Refused),
