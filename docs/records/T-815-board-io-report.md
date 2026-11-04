@@ -196,6 +196,14 @@ moved unchanged into `agent/launch/fixture_assets.rs`. The parent is now **795 S
 child **15 SLOC**. No behavior, public API, test or size limit changed, and no tests were added
 for this refactor. Landing T-815 therefore also clears main's shared size-ceiling failure.
 
+### Upstream Pi fixture blocker
+
+The next quick gate passed all 2667 selected Rust tests, then exposed an upstream assistant
+write-guard fixture mismatch: its workspace is `cwd = work/ws`, but its CorralClient named
+`work` as the store root. Per PM answer `T-815/R1/Q3`, only that fixture's client root was
+corrected to `cwd`. Every main/task-write refusal and scratch/artifact assertion is unchanged;
+no production permissions, timeout or test count changed. A targeted Bun replay is attached.
+
 ## Limits / not verified
 
 No intentional host load, no owner-store mutation, and no owner herdr panes were used.
