@@ -775,6 +775,7 @@ struct PmCancel {
 
 enum PmCall {
     Answer(PmAnswer),
+    AnswerGroup(questions::PmAnswerGroup),
     Escalate(PmEscalate),
     Cancel(PmCancel),
 }
@@ -803,6 +804,12 @@ fn pm_question(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRespon
         Ok(())
     };
     let call = match op {
+        AgentOp::QuestionAnswer if envelope.payload.get("answers").is_some() => {
+            PmCall::AnswerGroup(parse(
+                envelope,
+                "key, answers, text?, basis_refs?, scope_note?",
+            )?)
+        }
         AgentOp::QuestionAnswer => PmCall::Answer(parse(
             envelope,
             "key, rev, text, option?, basis_refs?, scope_note?",
@@ -833,6 +840,10 @@ fn pm_question(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRespon
                 scope_note: p.scope_note,
             };
             questions::answer(ctx, &p.key, p.rev, actor(), input)?
+        }
+        PmCall::AnswerGroup(p) => {
+            let (receipt, replayed) = p.apply(ctx, actor())?;
+            return Ok(CallResponse::Receipt { receipt, replayed });
         }
         PmCall::Escalate(p) => questions::escalate(ctx, &p.key, p.rev, actor(), p.note, p.kind)?,
         PmCall::Cancel(p) => questions::cancel(ctx, &p.key, p.rev, actor(), &p.reason)?,

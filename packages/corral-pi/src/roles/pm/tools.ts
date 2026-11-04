@@ -72,10 +72,20 @@ export const pmTools: readonly CorralToolSpec[] = [
   tool("lessons", "read_lessons", "Read the approved projects' lessons.", {}),
   tool("question_answer", "question_answer",
     "Answer a clarification or technical_choice using cited evidence inside the approved scope and acceptance. "
-    + "Owner-only and permission questions must be escalated. The owner may supersede this answer.", {
-      ...Revision,
-      text: Text,
+    + "Owner-only and permission questions must be escalated. The owner may supersede this answer. "
+    + "For a question group (one batched ask), pass the group key and `answers` (one {key, rev, text?, option?} "
+    + "per member) instead of rev/option: every member commits in one receipt, each at its own revision, "
+    + "sharing text, basis_refs and scope_note.", {
+      key: Revision.key,
+      rev: Type.Optional(Revision.rev),
+      text: Type.Optional(Text),
       option: Type.Optional(Text),
+      answers: Type.Optional(Type.Array(Type.Object({
+        key: Revision.key,
+        rev: Revision.rev,
+        text: Type.Optional(Text),
+        option: Type.Optional(Text),
+      }, { additionalProperties: false }), { minItems: 1, maxItems: 4 })),
       basis_refs: Type.Optional(Type.Array(Text)),
       scope_note: Type.Optional(Text),
     }),
