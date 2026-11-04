@@ -40,7 +40,9 @@ count and checkpoint contention. This is not a hard quota that aborts writes or 
 process's valid snapshot. Normal uncontended cycles reset the WAL to zero. Usage refresh batches
 per-run reviewer verdict cursor records, without combining transactions across external side
 effects. Costly periodic syncs back off to 19 times their CPU cost (2–60 seconds); explicit
-refresh triggers bypass that wait and bursts coalesce into one pass.
+refresh triggers bypass that wait and bursts coalesce into one pass. Explicit session binding
+refuses a held ownership lease immediately with a retryable diagnostic; launch claims retain
+their bounded wait.
 
 ## Layout v2
 
