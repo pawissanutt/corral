@@ -151,6 +151,9 @@ fn planner_owns(task: &Task) -> bool {
 }
 
 fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
+    if crate::recovery::reconcile_pending(ctx, id)? {
+        return Ok(());
+    }
     let shell = ctx.store.head(id)?.to_shell_task()?;
     if shell.hold.is_some() || shell.park.is_some() || idle(ctx, &shell, now)? {
         return Ok(());

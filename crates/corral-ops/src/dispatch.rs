@@ -123,6 +123,13 @@ fn dispatch_with(
     opts: &DispatchOpts,
     admission: Admission,
 ) -> Result<DispatchOutcome<Box<TaskHead>>> {
+    crate::recovery::require_no_pending(ctx, id, None)?;
+    let recovery_stage = if opts.plan {
+        corral_core::RecoveryAdmissionStage::PlanDispatch
+    } else {
+        corral_core::RecoveryAdmissionStage::Dispatch
+    };
+    crate::recovery::admission_attempt(ctx, id, recovery_stage)?;
     let requested = ctx.store.head(id)?;
     corral_core::Park::require_unparked_ref(&requested)?;
     crate::tracker::check_action(&requested, "dispatch tracker")?;
@@ -349,9 +356,13 @@ fn dispatch_with(
         "launch",
     );
     let authorization = crate::operating::authorize_start(ctx, action, origin, queued_only)?;
+    crate::recovery::bind_active_journal(ctx, &authorization)?;
     plan.authorization =
         (origin == crate::operating::Origin::Owner).then(|| authorization.id.clone());
     let (claimed, reason) = ctx.store.dispatch_update_head(&task.id, |store, current| {
+        let mut local = ctx.clone();
+        local.store = store.clone();
+        crate::recovery::admission_attempt(&local, id, recovery_stage)?;
         crate::session_scope::check_launch_in(ctx, store)?;
         crate::queue::check_snapshot_head(ctx, store, &head, current.head())?;
         check_plan(ctx, &*current, &plan.route, approved_plan.as_ref())?;

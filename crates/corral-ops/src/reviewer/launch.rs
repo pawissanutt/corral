@@ -288,8 +288,38 @@ pub(super) fn review_run_origin(
     id: &str,
     reviewer: Option<&str>,
     origin: crate::operating::Origin,
+    recovery: Option<&corral_core::RecoveryRecord>,
 ) -> Result<ReviewRecord> {
     let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
+    crate::recovery::require_no_pending(ctx, id, recovery)?;
+    let reviewer_recovery = recovery.filter(|r| {
+        matches!(
+            r.preview.request.action,
+            corral_core::RecoveryAction::UseReviewer { .. }
+        )
+    });
+    let force_recovery = recovery.filter(|r| {
+        matches!(
+            r.preview.request.action,
+            corral_core::RecoveryAction::ForceAdmission { .. }
+        )
+    });
+    if let Some(record) = reviewer_recovery {
+        crate::recovery::check_code_launch(
+            ctx,
+            &ctx.store.get(id)?,
+            record,
+            reviewer.context("recovery reviewer missing")?,
+        )?;
+    }
+    if let Some(record) = force_recovery {
+        crate::recovery::check_resource(
+            ctx,
+            id,
+            record,
+            corral_core::RecoveryAdmissionStage::CodeReview,
+        )?;
+    }
     ctx.store.check_runtime()?;
     let mut fresh = ctx.clone();
     fresh.store.reload_config_if_changed()?;
@@ -299,7 +329,7 @@ pub(super) fn review_run_origin(
         ctx,
         id,
         crate::review_budget::Kind::Reviewer,
-        false,
+        force_recovery.is_some(),
         origin,
     )?;
     let automatic = matches!(origin, crate::operating::Origin::Automatic);
@@ -381,12 +411,19 @@ pub(super) fn review_run_origin(
     selected.route.round = corral_core::implementation_review_round_ref(&task)?;
     selected.route.scope = corral_core::review_scope(selected.route.round);
     let (name, mut resolved) = (selected.name, selected.resolved);
-    if reviewer != Reviewer::Pm {
+    if reviewer != Reviewer::Pm && reviewer_recovery.is_none() {
         let exclude = crate::availability::review_exclusion(ctx, &task, &run);
         resolved =
             crate::availability::bind_review(ctx, &task, &run, resolved, exclude.as_deref())?;
     }
-    crate::review_contracts::check_family(&policy, &run, vendor.as_deref(), &resolved)?;
+    if let Some(record) = reviewer_recovery {
+        crate::recovery::check_reviewer(record, &resolved)?;
+        if let Some(reason) = crate::routing::known_model_unavailability(ctx, &resolved) {
+            bail!("confirmed reviewer unavailable: {reason}");
+        }
+    } else {
+        crate::review_contracts::check_family(&policy, &run, vendor.as_deref(), &resolved)?;
+    }
     crate::agent::hooks::review::preflight(ctx, &resolved)?;
     instruction_guard::check(
         ctx,
@@ -454,6 +491,12 @@ pub(super) fn review_run_origin(
             candidate = format!("{}-review{number}", run.id);
         }
     })?;
+    if let Some(recovery) = reviewer_recovery {
+        anyhow::ensure!(
+            matches!(&recovery.preview.proposed_effect, corral_core::RecoveryEffect::ReviewAttempt { attempt, .. } if attempt == &review_id),
+            "recovery_stale: next review attempt changed"
+        );
+    }
     launch.bind(
         record
             .identity
@@ -534,6 +577,9 @@ pub(super) fn review_run_origin(
     });
     ctx.store.submission_effect_barrier("review_child_observed");
     let saved = ctx.store.update_head(&task.id, |t| {
+        if let Some(recovery) = recovery {
+            crate::recovery::validate_contract(ctx, &ctx.store.get(id)?, recovery)?;
+        }
         let r = review_parent_head(t, &run.id)?;
         if r.facts.children != children || r.review != run.review {
             bail!("review changed before preparing accounting child");
@@ -567,6 +613,9 @@ pub(super) fn review_run_origin(
     }
     std::fs::write(&prompt_file, text)
         .with_context(|| format!("writing {}", prompt_file.display()))?;
+    if let Some(recovery) = recovery {
+        launch.recovery_journal(recovery)?;
+    }
     let launched = match &reviewer {
         Reviewer::Profile(_) | Reviewer::CrossVendor | Reviewer::Auto => {
             launch_profile(ctx, &task, &run, &resolved, &prompt_file, &mut launch)

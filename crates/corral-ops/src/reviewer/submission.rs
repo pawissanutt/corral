@@ -102,6 +102,11 @@ fn assess<T: TaskRef + ?Sized>(
         .context("review record disappeared")?;
     let mut fresh = ctx.clone();
     fresh.store = store.clone();
+    crate::recovery::admission_attempt(
+        &fresh,
+        task.id(),
+        corral_core::RecoveryAdmissionStage::CodeReview,
+    )?;
     ensure!(
         verification::review_changes(&fresh, task, parent, record)?.is_empty()
             && corral_git::is_clean(&parent.worktree)?,
@@ -134,6 +139,35 @@ fn assess<T: TaskRef + ?Sized>(
     )?;
     // An availability fallback reviews on its own model; check the family that actually ran.
     let actual = family_at(record.at)?.unwrap_or_else(|| resolved.family());
+    if !crate::recovery::records(&fresh, task.id())?.is_empty()
+        && let Some(recovery) =
+            crate::recovery::code_review_record(&fresh, &store.get(task.id())?, record)?
+    {
+        crate::recovery::check_reviewer(&recovery, &resolved)?;
+        let child = parent
+            .current_child
+            .as_deref()
+            .context("recovered reviewer execution missing")?;
+        let corral_core::RecoveryEffect::ReviewAttempt { reviewer, .. } =
+            &recovery.preview.proposed_effect
+        else {
+            anyhow::bail!("invalid review recovery")
+        };
+        ensure!(
+            child.agent == reviewer.profile
+                && child.model.as_ref() == Some(&reviewer.model)
+                && child.vendor.as_ref() == Some(&reviewer.vendor),
+            "recovered reviewer execution changed"
+        );
+        if recovery
+            .preview
+            .request
+            .exceptions
+            .contains(&corral_core::RecoveryCheck::ReviewerFamilyPolicy)
+        {
+            return Ok(());
+        }
+    }
     policy.check_reviewer_family(author.as_ref(), actual.as_ref())
 }
 

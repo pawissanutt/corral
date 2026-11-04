@@ -3,8 +3,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use corral_core::{
-    Artifact, ArtifactKind, CandidateIdentity, CoworkReview, GateRecord, GateResult, ReviewPolicy,
-    Reviewer, Run, RunHead, RunOutcome, Status, Task, TaskRef, Verdict,
+    Artifact, ArtifactKind, CandidateIdentity, GateRecord, GateResult, Run, RunHead, RunOutcome,
+    Status, Task, TaskRef, Verdict,
 };
 use corral_git::{DiffStat, MergeStrategy};
 use serde_json::json;
@@ -404,79 +404,7 @@ pub(crate) fn landing_gate_passed<T: TaskRef + ?Sized>(
     }
 }
 
-/// A review must approve the candidate: the policy names a reviewer, or the owner finished the
-/// current co-work run with review required, which binds whatever the reviewer resolves to.
-fn review_needed<T: TaskRef + ?Sized>(policy: &ReviewPolicy, task: &T) -> bool {
-    policy.reviewer != Reviewer::None
-        || (task.cowork_run()).is_some_and(|cowork| cowork.review == CoworkReview::Required)
-}
-
-/// The reduced tier an approval is bound to while the current receipt is a failed full one.
-fn quick_approval_on_full_fail(run: &RunHead) -> Option<&str> {
-    let gate = run
-        .gate
-        .as_ref()
-        .filter(|g| matches!(g.result, GateResult::Fail | GateResult::Stale))?;
-    gate.identity.as_ref().filter(|i| i.gate_tier.is_none())?;
-    let review = run.review.as_ref()?;
-    let binding = review.identity.as_ref()?.gate_tier.as_deref()?;
-    (review.verdict == Some(Verdict::Approve)).then_some(binding.tier.as_str())
-}
-
-/// Owner acceptance can override a completed check's outcome, but not its candidate identity.
-/// Keep receipts as stale evidence after a rebase; retries must refresh every configured check.
-fn require_manual_receipts<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<()> {
-    let run = &*task.current_run_head()?.context("run disappeared")?;
-    let policy = verification::policy(ctx, task)?;
-    if task.reviewer().is_some()
-        || ctx
-            .store
-            .reopen()?
-            .config
-            .has_review_policy(task.project().as_deref(), *task.review())
-    {
-        verification::require_gate(&policy, task)?;
-    }
-    if !policy.gate.is_empty()
-        && !match &run.gate {
-            Some(gate) if gate.result != GateResult::Running => {
-                landing_gate_fresh(ctx, task, run, gate)?
-                    && crate::gate::gate_log_valid(ctx, task, run)?
-            }
-            _ => false,
-        }
-    {
-        bail!(
-            "stale_retry: gate missing, pending or stale; run `corral gate {}` then `corral approve {}`",
-            task.id(),
-            task.id()
-        );
-    }
-    if review_needed(&policy, task)
-        && (!verification::review_fresh(ctx, task, run)?
-            || run.review.as_ref().and_then(|r| r.verdict).is_none())
-    {
-        if policy.reviewer == Reviewer::None {
-            bail!(
-                "review_required: {0} was finished with review required, but no reviewer resolves for it; run `corral review-run {0} --reviewer <profile>`, then `corral approve {0}` after its verdict",
-                task.id()
-            );
-        }
-        if let Some(tier) = quick_approval_on_full_fail(run) {
-            bail!(
-                "stale_retry: the approval is bound to the {tier} receipt and promotion needs a full PASS, but the full landing gate failed; run `corral review-run {}` to review the failed full receipt, then `corral approve {}` after its verdict",
-                task.id(),
-                task.id()
-            );
-        }
-        bail!(
-            "stale_retry: semantic review missing, pending or stale; run `corral review-run {}` then `corral approve {}` after its verdict",
-            task.id(),
-            task.id()
-        );
-    }
-    Ok(())
-}
+pub(crate) use crate::recovery::{require_manual_receipts, review_needed};
 
 /// From Review, or Needs me after an autopilot escalation. FastForward/Rebase: `corral_git::land(project repo,
 /// worktree, branch, base, ...)`; then, when `remove_worktree`, `worktree_remove`. Always releases the task's
@@ -520,6 +448,39 @@ pub(crate) fn approve_landed(
     keep_branch: bool,
     expected: Option<&CandidateIdentity>,
 ) -> Result<(String, String)> {
+    approve_landed_inner(
+        ctx,
+        id,
+        strategy,
+        remove_worktree,
+        keep_branch,
+        expected,
+        None,
+    )
+}
+
+pub(crate) fn approve_recovery(
+    ctx: &Ctx,
+    id: &str,
+    strategy: ApproveStrategy,
+    recovery: &corral_core::RecoveryRecord,
+) -> Result<(String, String)> {
+    let _lock = ctx
+        .store
+        .try_lock(&format!("autopilot-{id}"))?
+        .context("approval already in progress")?;
+    approve_landed_inner(ctx, id, strategy, false, true, None, Some(recovery))
+}
+
+fn approve_landed_inner(
+    ctx: &Ctx,
+    id: &str,
+    strategy: ApproveStrategy,
+    remove_worktree: bool,
+    keep_branch: bool,
+    expected: Option<&CandidateIdentity>,
+    recovery: Option<&corral_core::RecoveryRecord>,
+) -> Result<(String, String)> {
     ctx.store.check_runtime()?;
     // `approved` is logged after the merge; record when this approval began.
     let started = corral_core::clock::now();
@@ -528,6 +489,13 @@ pub(crate) fn approve_landed(
         .current_run_head()?
         .with_context(|| format!("task {id} has no run"))?
         .into_owned();
+    if let Some(review) = &run.review
+        && !crate::recovery::records(ctx, id)?.is_empty()
+        && crate::recovery::code_review_record(ctx, &ctx.store.get(id)?, review)?.is_some()
+        && recovery.is_none()
+    {
+        bail!("recovery-bound review requires explicit owner recovery acceptance");
+    }
     let repo = main_repo(ctx, &task, &run)?;
     let _landing_lock = corral_git::landing_lock(&repo)?;
     crate::plan_target::recover_run(ctx, &task, &run)?;
@@ -587,6 +555,15 @@ pub(crate) fn approve_landed(
             bail!("stale_retry: task or run changed before landing");
         }
         crate::plan_target::validate_run(store, t, &run)?;
+        if let Some(recovery) = recovery {
+            let mut local = ctx.clone(); local.store = store.clone();
+            crate::recovery::validate_contract(&local, &t.shell_task()?, recovery)?;
+            require_manual_receipts(&local, t)?;
+            let corral_core::RecoveryEffect::CodeAcceptance { candidate, .. } = &recovery.preview.proposed_effect else { bail!("invalid code acceptance recovery") };
+            if verification::identity(&local, t, &run, candidate)? != *candidate {
+                bail!("recovery_stale: code candidate changed before landing");
+            }
+        }
         if let Some(expected) = expected {
             crate::operating::require(store, &*head, corral_core::OperatingActionKind::Accept)?;
             if Some(store.effective_operating_policy()?.revision) != authority_revision {
@@ -653,6 +630,10 @@ pub(crate) fn approve_landed(
                     {
                         bail!("stale_retry: rebase changed the accepted candidate; run a new gate and semantic review");
                     }
+                    if let Some(recovery) = recovery {
+                        let corral_core::RecoveryEffect::CodeAcceptance { candidate, .. } = &recovery.preview.proposed_effect else { bail!("invalid code recovery") };
+                        if verification::identity(ctx, t, &run, candidate)? != *candidate { bail!("recovery_stale: rebase changed the confirmed candidate"); }
+                    }
                     require_manual_receipts(ctx, t)?;
                     if let Some(target) = &mut target {
                         target.prepare_landing(t, &run, head, "rebase", expected, crate::plan_target::LandingOptions { contract: &contract, remove_worktree, keep_branch, started })?;
@@ -710,6 +691,9 @@ pub(crate) fn approve_landed(
         }
     };
     let (sha, action) = landed.context("landing transaction produced no result")?;
+    if let Some(recovery) = recovery {
+        crate::recovery::code_acceptance_link(ctx, id, recovery)?;
+    }
     if strategy != ApproveStrategy::KeepBranch
         && let Some(target) = &mut target
     {

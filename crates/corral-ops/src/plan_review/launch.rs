@@ -28,6 +28,7 @@ pub(super) fn review_with_origin(
     id: &str,
     reviewer: Option<&str>,
     origin: crate::operating::Origin,
+    recovery: Option<&corral_core::RecoveryRecord>,
 ) -> Result<PlanReview> {
     let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
     crate::session_scope::check_launch(ctx)?;
@@ -69,7 +70,24 @@ pub(super) fn review_with_origin(
             task.id
         );
     }
-    plan::independent_reviewer(&config, &task, &name)?;
+    let reviewer_recovery = recovery.filter(|r| {
+        matches!(
+            r.preview.request.action,
+            corral_core::RecoveryAction::UseReviewer { .. }
+        )
+    });
+    let force_recovery = recovery.filter(|r| {
+        matches!(
+            r.preview.request.action,
+            corral_core::RecoveryAction::ForceAdmission { .. }
+        )
+    });
+    crate::recovery::require_no_pending(ctx, id, recovery)?;
+    if let Some(record) = reviewer_recovery {
+        crate::recovery::check_plan_launch(ctx, &ctx.store.get(id)?, record, &name)?;
+    } else {
+        plan::independent_reviewer(&config, &task, &name)?;
+    }
     let mut route = crate::review_contracts::plan_route(
         &config,
         &task,
@@ -90,7 +108,15 @@ pub(super) fn review_with_origin(
         None,
         None,
     )?;
-    let resolved = crate::availability::plan_reviewer(&review_ctx, &task, name == "pm", preferred)?;
+    let resolved = if let Some(record) = reviewer_recovery {
+        crate::recovery::check_reviewer(record, &preferred)?;
+        if let Some(reason) = crate::routing::known_model_unavailability(&review_ctx, &preferred) {
+            bail!("confirmed reviewer unavailable: {reason}");
+        }
+        preferred
+    } else {
+        crate::availability::plan_reviewer(&review_ctx, &task, name == "pm", preferred)?
+    };
     let selected = task
         .plans
         .last()
@@ -206,7 +232,10 @@ pub(super) fn review_with_origin(
                 inbox: Default::default(),
                 id: attempt.clone(),
                 reviewer: name.clone(),
-                policy_digest: plan::policy_digest(&config, &task)?,
+                policy_digest: match reviewer_recovery {
+                    Some(record) => record.preview.contract_digest.clone(),
+                    None => plan::policy_digest(&config, &task)?,
+                },
                 verdict: None,
                 notes: None,
                 at,
@@ -230,7 +259,12 @@ pub(super) fn review_with_origin(
         if store.config != config {
             bail!("plan review configuration changed before admission; retry");
         }
-        if let Some(reason) = crate::resources::read_admission(ctx)? {
+        if let Some(record) = reviewer_recovery {
+            crate::recovery::check_plan_launch(ctx, &store.get(id)?, record, &name)?;
+        }
+        if let Some(record) = force_recovery {
+            crate::recovery::check_resource(ctx, id, record, corral_core::RecoveryAdmissionStage::PlanReview)?;
+        } else if let Some(reason) = crate::resources::read_admission(ctx)? {
             bail!("{reason}");
         }
         let heads = crate::pm_next::heads::open(store)?;
@@ -277,6 +311,9 @@ pub(super) fn review_with_origin(
         Ok(())
     })?;
     preparation.save(ctx, &task.id)?;
+    if let Some(record) = recovery {
+        crate::recovery::bind_journal(ctx, record, &preparation.authorization)?;
+    }
     close_plan_review(ctx, &previous)?;
     let mut launch = || -> Result<HerdrRef> {
         let herdr = if let Some(herdr) = preparation.live_pane(ctx)? {
@@ -346,8 +383,16 @@ pub(super) fn review_with_origin(
                 !crate::operating::is_automatic(&preparation.authorization) || !task.dispatch_hold,
                 "automatic plan review is held"
             );
+            if let Some(record) = force_recovery {
+                crate::recovery::check_resource(
+                    ctx,
+                    id,
+                    record,
+                    corral_core::RecoveryAdmissionStage::PlanReview,
+                )?;
+            }
             ensure!(
-                pressure.is_none(),
+                force_recovery.is_some() || pressure.is_none(),
                 "{}",
                 pressure.as_deref().unwrap_or_default()
             );
@@ -356,7 +401,14 @@ pub(super) fn review_with_origin(
             plan::fresh(ctx, task, plan)?;
             let review = plan.reviews.last().context("plan review missing")?;
             ensure!(
-                review.policy_digest == plan::policy_digest(&store.config, task)?
+                review.policy_digest
+                    == match reviewer_recovery {
+                        Some(record) => {
+                            crate::recovery::validate_contract(ctx, &store.get(id)?, record)?;
+                            record.preview.contract_digest.clone()
+                        }
+                        None => plan::policy_digest(&store.config, task)?,
+                    }
                     && review.route.as_deref().is_none_or(|route| {
                         crate::review_contracts::plan_route_changes(&store.config, task, route)
                             .is_empty()
