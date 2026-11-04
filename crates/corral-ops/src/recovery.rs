@@ -92,8 +92,9 @@ pub fn recover_history(ctx: &Ctx, task: &str) -> Result<Vec<RecoveryRecord>> {
 pub(crate) fn records(ctx: &Ctx, task: &str) -> Result<Vec<RecoveryRecord>> {
     use corral_core::backend::{HeadQuery, PageReq, RowQuery, TaskPart};
     let view = ctx.store.view()?;
+    let normalized = Store::normalize_id(task)?;
     let Some(head) = view
-        .heads(&HeadQuery::Ids(vec![task.into()]), PageReq::first(1))?
+        .heads(&HeadQuery::Ids(vec![normalized]), PageReq::first(1))?
         .items
         .into_iter()
         .next()
