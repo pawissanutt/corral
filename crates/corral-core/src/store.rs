@@ -49,6 +49,7 @@ mod heads;
 mod member_gate;
 pub(crate) mod migrate_rows;
 mod native_counts;
+mod native_turn_index;
 mod native_work_index;
 mod native_worker_index;
 mod normalize;

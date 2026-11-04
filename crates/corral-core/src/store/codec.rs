@@ -787,38 +787,7 @@ pub(crate) fn split_agent_host(
     Ok(())
 }
 
-/// Sequence-ordered deletion metadata; the canonical turn row stays in append order.
-pub(super) fn turn_order_row(owner: &str, turn: &crate::agent::AgentTurn, key: &str) -> HistoryRow {
-    row(
-        TaskPart::AgentRecord,
-        format!(
-            "{owner}/turn_order/{:010}/{:020}",
-            turn.generation, turn.seq
-        ),
-        false,
-        false,
-        json!({"key": key}),
-    )
-}
-
-pub(super) fn latest_turn_seq(doc: &Value) -> Result<u64> {
-    doc["seq"]
-        .as_str()
-        .context("native latest-turn pointer has no sequence")?
-        .parse()
-        .context("native latest-turn pointer sequence is malformed")
-}
-
-/// Derived max-sequence pointer. Turn storage order remains append order for full facades.
-pub(super) fn latest_turn_row(owner: &str, generation: u32, turn: u64) -> HistoryRow {
-    row(
-        TaskPart::AgentRecord,
-        format!("{owner}/latest_turn/{generation:010}"),
-        false,
-        false,
-        json!({"seq": format!("{turn:020}")}),
-    )
-}
+pub(super) use super::native_turn_index::{latest_turn_row, latest_turn_seq, turn_order_row};
 
 /// Moves an inbox's applied effects and scoped cursors out of a container document.
 pub(crate) fn split_inbox(
