@@ -373,7 +373,7 @@ impl DeliveryAdapter for OmoAdapter {
 }
 
 /// Incremental, complete-line reader. A shrunken file restarts from its origin.
-fn read_new_lines(path: &Path, cursor: &mut ObserveCursor) -> Result<Vec<Vec<u8>>> {
+pub(super) fn read_new_lines(path: &Path, cursor: &mut ObserveCursor) -> Result<Vec<Vec<u8>>> {
     let mut file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

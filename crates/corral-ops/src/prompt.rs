@@ -502,7 +502,11 @@ pub(crate) fn render_command_noticed(
     if let Some(notice) = notice {
         values.push((NOTICE_KEY, notice.to_string()));
     }
-    render_template(&resolved, &values)
+    render_template_with_delivery(
+        &resolved,
+        &values,
+        run.delivery == corral_core::inbox::DeliveryMode::Inbox,
+    )
 }
 
 /// Records referencing each run's rendered dispatch prompt blob, keyed `<task>/<run>`.
@@ -637,14 +641,35 @@ pub(crate) fn render_template(
     resolved: &ResolvedProfile,
     values: &[(&str, String)],
 ) -> Result<String> {
+    render_template_with_delivery(resolved, values, true)
+}
+
+fn render_template_with_delivery(
+    resolved: &ResolvedProfile,
+    values: &[(&str, String)],
+    enabled: bool,
+) -> Result<String> {
     let corral = shell_path(&corral_bin()?);
-    // No adapter is enabled in phase 1. Keep the slot optional for all legacy templates.
-    corral_core::validate_delivery_template(&resolved.command, false)?;
-    let command = resolved
-        .command
-        .replace(INLINE_PROMPT, PROMPT_REF)
-        .replace(" {delivery_args}", "")
-        .replace("{delivery_args}", "");
+    let delivery_args = if enabled {
+        resolved.delivery_args()?
+    } else {
+        Vec::new()
+    };
+    let command = resolved.command.replace(INLINE_PROMPT, PROMPT_REF);
+    let command = if delivery_args.is_empty() {
+        command
+            .replace(" {delivery_args}", "")
+            .replace("{delivery_args}", "")
+    } else {
+        command.replace(
+            "{delivery_args}",
+            &delivery_args
+                .iter()
+                .map(|a| sh_quote(a))
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+    };
     let mut out = if resolved.model_args.is_empty() {
         command
             .replace(" {model_args}", "")

@@ -333,6 +333,33 @@ pub struct ResolvedProfile {
     pub model_args: Vec<String>,
 }
 
+impl ResolvedProfile {
+    /// Adapter launch flags are a structured slot, never appended to a shell template.
+    pub fn delivery_args(&self) -> Result<Vec<String>> {
+        if self.harness != "claude" {
+            return Ok(Vec::new());
+        }
+        validate_delivery_template(&self.command, true)?;
+        if self.command.matches("{delivery_args}").count() != 1 {
+            bail!("Claude inbox launch requires exactly one {{delivery_args}} slot");
+        }
+        if self.command.contains("--settings")
+            || self
+                .model_args
+                .iter()
+                .any(|arg| arg == "--settings" || arg.starts_with("--settings="))
+        {
+            bail!(
+                "Claude inbox launch owns --settings; remove it from the harness template/profile args and keep a standalone {{delivery_args}} slot"
+            );
+        }
+        Ok(vec![
+            "--settings".into(),
+            r#"{"crossSessionInbound":"accept"}"#.into(),
+        ])
+    }
+}
+
 /// Execution settings captured once when a run is admitted, never re-bound on resume.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExecutionSnapshot {
@@ -773,7 +800,7 @@ impl Config {
                  model/effort/args cannot be passed (command: {command})"
             );
         }
-        Ok(ResolvedProfile {
+        let resolved = ResolvedProfile {
             profile: name,
             harness,
             command,
@@ -781,7 +808,9 @@ impl Config {
             vendor,
             effort: effort.as_deref().map(normalize_effort),
             model_args,
-        })
+        };
+        resolved.delivery_args()?;
+        Ok(resolved)
     }
 }
 

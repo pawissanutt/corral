@@ -542,7 +542,9 @@ fn a_closed_review_child_is_never_sent_its_messages_are_cancelled_recipient_clos
 fn omo_and_legacy_harnesses_keep_their_launch_mode_and_never_reach_this_adapter() {
     crate::agent::hooks::take_consulted();
     assert_eq!(owner::launch_mode("omo"), DeliveryMode::Inbox);
-    for harness in ["claude", "codex", "omp"] {
+    assert_eq!(owner::launch_mode("claude"), DeliveryMode::Inbox);
+    assert_eq!(owner::review_launch_mode("claude"), DeliveryMode::Legacy);
+    for harness in ["codex", "omp"] {
         assert_eq!(owner::launch_mode(harness), DeliveryMode::Legacy);
         assert_eq!(owner::review_launch_mode(harness), DeliveryMode::Legacy);
     }

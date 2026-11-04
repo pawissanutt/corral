@@ -337,7 +337,8 @@ fn finish_run(world: &OmoWorld) {
 #[test]
 fn legacy_runs_never_reach_the_inbox() {
     assert_eq!(launch_mode("omo"), DeliveryMode::Inbox);
-    for harness in ["claude", "omp", "codex", "generic"] {
+    assert_eq!(launch_mode("claude"), DeliveryMode::Inbox);
+    for harness in ["omp", "codex", "generic"] {
         assert_eq!(launch_mode(harness), DeliveryMode::Legacy);
     }
     let world = OmoWorld::new(Status::Running);
