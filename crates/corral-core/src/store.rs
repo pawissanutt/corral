@@ -115,6 +115,8 @@ pub struct Store {
     /// The session binding read by this handle's pass; see `Store::session_view`.
     pub(crate) session_pass: crate::session_binding::HandlePass,
     pub(crate) snapshot_view: Arc<crate::session_binding::SnapshotView>,
+    /// Startup upgrade decision, shared by this handle's clones, not a live PM-state cache.
+    pub(crate) pm_upgrade_checked: Arc<AtomicBool>,
 }
 
 /// Release the advisory lock at the operation boundary, even if a concurrent
@@ -358,6 +360,7 @@ impl Store {
             attribution,
             session_pass: Default::default(),
             snapshot_view: Arc::default(),
+            pm_upgrade_checked: Arc::default(),
         };
         store.check_schema()?;
         prepare(&store)?;
@@ -434,6 +437,7 @@ impl Store {
         let mut store = self.clone();
         store.db = db::Db::unguarded(backend);
         store.frozen = None;
+        store.pm_upgrade_checked = Arc::default();
         store
     }
 
