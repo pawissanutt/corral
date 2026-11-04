@@ -178,6 +178,7 @@ const ROWS: &[(&str, &[&str], Class)] = &[
         Refused,
     ),
     ("digest", &[], Refused),
+    ("report", &[], Refused),
     ("revert", &["T-001"], Refused),
     ("review-sprint", &[], Refused),
     ("idea", &["T-001", "drop", "--reason", "r"], Refused),
