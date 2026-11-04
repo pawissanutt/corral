@@ -535,6 +535,11 @@ export class NativePanels implements PanelSurface {
       }), { placement: "aboveEditor" });
       this.refresh();
     });
+    // Input from any source (editor, bridge submit_input, extensions) shows its turn in Chat.
+    pi.on("input", () => {
+      if (this.workbench.view !== "conversation") { this.workbench.setView("conversation"); this.workbench.focused = false; this.refresh(); }
+      return { action: "continue" };
+    });
     pi.on("agent_start", () => { this.refresh(); });
     pi.on("agent_end", () => { this.refresh(); });
     pi.on("turn_end", () => { this.refresh(); });
