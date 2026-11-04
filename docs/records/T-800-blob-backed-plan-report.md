@@ -1,0 +1,26 @@
+# T-800: durable plan and artifact reads
+
+## Delivered
+
+- Submitted plan freshness reads the recorded hash from blob storage, with a legacy snapshot fallback. The original source is no longer a freshness authority. Spec revision, content hash, parsed metadata, review policy and approval checks remain enforced.
+- Plan artifact readers likewise prefer the recorded blob, including bounded/confined reads. Existing general artifact readers already resolve absent migrated snapshots through blobs; their confinement and retention behavior is retained.
+- Worker design prompts, plan-review launches, PM plan-review prompts and autopilot change notices now resolve readable decoded copies through artifact storage instead of advertising deleted `.corral` paths. Code-review artifact inventories advertise durable refs and their read operations, not nonexistent regular files.
+- `corral_content_read` / `read_content` is available to workers, code reviewers, planners and plan reviewers. Task refs expose specs, criteria, review notes and manifests; `T-NNN@P1` reads immutable plan bytes; registered artifact refs read text content. Reads are project-scoped, authenticated, bounded, UTF-8-safe and paginated within the serialized receipt budget. Manifests exclude host receipts so reading them cannot recursively grow the document.
+- Binary artifacts remain viewer inputs, not UTF-8 text pages. Legacy pre-blob snapshots remain supported. No production task files were restored or changed by verification.
+
+## Acceptance evidence
+
+1. **Deleted plan caches:** `.evidence/regression-red.log` reproduces the original stale-source ENOENT at the shared freshness boundary before the fix. The final regression `deleted_plan_caches_preserve_show_review_and_member_dispatch_gate` submits a two-member design, verifies source-cache edits cannot replace submitted bytes, removes source/snapshot caches, reads the same record used by plan show, reads the stored artifact, launches a fake-engine plan review, records independent/owner approvals, publishes members and validates inherited owner approval at the member dispatch boundary. `.evidence/regression-green.log`: pass, 0.18s.
+2. **Read-only access:** `.evidence/content-tests.log`: all 15 native planning contract tests pass (2.62s total), including the new content test for exact snapshot/artifact bytes, task-spec/manifests, pagination, unchanged review verdict/notes and foreign-project refusal. This uses fake engine/store fixtures, not an owner herdr server.
+3. **Related readers/integrity:** `.evidence/plan-tests.log`: all 41 plan service tests pass. `.evidence/core-review-tests.log`: the core invalid-plan-resolution contract passes. Obsolete mutable-source rejection variants were replaced with recorded-hash/metadata corruption variants, because cache edits must now be harmless; integrity rejection was not removed.
+4. **Native tool wiring:** `.evidence/pi-plan-tests.log`: all six existing planning-host tests pass, including typed `read_content` payload forwarding and exact read-only role loadouts. `.evidence/pi-typecheck.log`: `bun run typecheck` passes.
+
+## Test cost and scope
+
+Two tests added: one plan workflow regression (fake engine, two minimal members) and one native read-op contract test. Existing host tests gained assertions; no new E2E matrix, history/performance fixture, wording pin or slow-profile test was added. The fake engine explicitly exposes its review pane rather than waiting for an unrelated observation timeout. Renamed source-integrity assertions now target stored metadata/hash integrity.
+
+No intentional load was generated. Live owner-board restoration, real model sessions and real member worktree/pane dispatch were not exercised; the shared approval boundary used by dispatch was exercised. The authoritative quick gate runs after commit/rebase and supplies its own receipt/log.
+
+## Investigation notes
+
+`cxm context` and the required prior-search command timed out without usable results; exact source searches were used. An interrupted local compilation produced linker-cache errors; cleaning only this worktree's `corral-ops` outputs restored successful builds. An exploratory full core-review invocation timed out after compilation and partial test execution; its changed invalid-resolution case was then run alone and passed. No test assertion or timeout was relaxed to obtain green output.

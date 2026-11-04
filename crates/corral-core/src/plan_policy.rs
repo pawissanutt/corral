@@ -27,7 +27,8 @@ pub fn read_plan(store: &Store, path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn read_plan_snapshot(store: &Store, artifact: &crate::Artifact, legacy: &Path) -> Result<Vec<u8>> {
+/// Read immutable submitted bytes by hash, falling back only for pre-blob snapshots.
+pub fn read_plan_snapshot(store: &Store, artifact: &crate::Artifact) -> Result<Vec<u8>> {
     if let Ok(hash) = crate::blob_ref::BlobHash::parse(&artifact.sha256)
         && let Some(reader) = store.blob_reader(&hash)?
     {
@@ -42,7 +43,7 @@ fn read_plan_snapshot(store: &Store, artifact: &crate::Artifact, legacy: &Path) 
         }
         return Ok(bytes);
     }
-    read_plan(store, legacy)
+    read_plan(store, &store.dir().join(&artifact.path))
 }
 
 pub fn expected_reviewer(config: &Config, task: &Task) -> Result<String> {
@@ -424,18 +425,13 @@ pub fn fresh(store: &Store, task: &Task, plan: &PlanRecord) -> Result<()> {
             plan.id
         );
     }
-    for (snapshot, path) in [
-        (true, store.dir().join(&plan.artifact.path)),
-        (false, Path::new(&plan.artifact.source).to_path_buf()),
-    ] {
-        let bytes = (if snapshot {
-            read_plan_snapshot(store, &plan.artifact, &path)
-        } else {
-            read_plan(store, &path)
-        })
-        .with_context(|| {
+    // Submitted bytes are immutable. The original planner output and the artifact path
+    // are disposable caches; neither can supersede the content addressed by the record.
+    {
+        let path = store.dir().join(&plan.artifact.path);
+        let bytes = read_plan_snapshot(store, &plan.artifact).with_context(|| {
             format!(
-                "stale plan {}: restore its source or submit a new plan",
+                "stale plan {}: stored snapshot unavailable; restore its blob or submit a new plan",
                 plan.id
             )
         })?;

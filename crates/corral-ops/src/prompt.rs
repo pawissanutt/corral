@@ -181,7 +181,7 @@ fn render_prompt(
             .context("linked approved plan revision is missing")?;
         prompt.push_str(&format!(
             "\n## Approved design plan\n\nPlan: {link}\nSnapshot: {}\nSHA-256: {}\n\nRead this approved plan before implementing the task's own scope.\n",
-            ctx.store.dir().join(&plan.artifact.path).display(), plan.artifact.sha256,
+            crate::artifact_path(ctx, &plan.artifact)?.display(), plan.artifact.sha256,
         ));
     }
     if lessons_included(ctx, task, run) {

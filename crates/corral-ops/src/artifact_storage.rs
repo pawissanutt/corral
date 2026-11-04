@@ -417,6 +417,11 @@ pub fn artifact_reader(ctx: &Ctx, a: &Artifact) -> Result<Box<dyn Read>> {
     if a.purged_at.is_some() {
         return Ok(Box::new(Cursor::new(stub(a))));
     }
+    if a.kind == corral_core::ArtifactKind::Plan
+        && let Some(reader) = blob_reader(ctx, a)?
+    {
+        return Ok(reader);
+    }
     let path = ctx.store.dir().join(&a.path);
     let meta = match fs::metadata(&path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -478,6 +483,16 @@ pub(crate) fn artifact_read_confined(ctx: &Ctx, a: &Artifact) -> Result<Vec<u8>>
 pub(crate) fn artifact_read_confined_limited(ctx: &Ctx, a: &Artifact, max: u64) -> Result<Vec<u8>> {
     if a.purged_at.is_some() {
         return Ok(stub(a));
+    }
+    if a.kind == corral_core::ArtifactKind::Plan
+        && let Some(reader) = blob_reader(ctx, a)?
+    {
+        let mut decoded = Vec::new();
+        reader
+            .take(max.saturating_add(1))
+            .read_to_end(&mut decoded)
+            .context("reading stored plan blob")?;
+        return Ok(decoded);
     }
     let file = match open_beneath_artifacts(ctx, &a.path) {
         Ok(file) => file,

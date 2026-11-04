@@ -622,7 +622,7 @@ fn prepare_prompt(ctx: &Ctx, task: &TaskHead) -> Result<()> {
             "\n## Approved implementation plan\n\nRead {} before editing. Follow this exact approved plan; \
              approval does not authorize scope changes or resolve owner-only decisions.\n\n\
              ```json\n{}\n```\n",
-            ctx.store.dir().join(&plan.artifact.path).display(),
+            crate::artifact_path(ctx, &plan.artifact)?.display(),
             serde_json::to_string_pretty(&json!({
                 "target":"plan", "plan":plan.id, "sha256":plan.artifact.sha256,
                 "spec_revision":plan.spec_revision, "path":plan.artifact.path,

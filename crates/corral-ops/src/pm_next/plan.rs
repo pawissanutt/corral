@@ -63,7 +63,7 @@ pub(super) fn observation(ctx: &Ctx, task: &Task) -> Result<Option<PmObservation
                 "plan {}; spec {}; snapshot {}; SHA-256 {}; final acceptance: none",
                 selected.id,
                 selected.spec_revision,
-                ctx.store.dir().join(&selected.artifact.path).display(),
+                crate::artifact_path(ctx, &selected.artifact)?.display(),
                 selected.artifact.sha256
             ),
             format!(

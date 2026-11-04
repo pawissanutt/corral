@@ -172,7 +172,7 @@ mod operating_plan_decisions {
             "changed-policy",
             "mismatched-policy",
             "detached",
-            "changed-source",
+            "changed-recorded-hash",
             "changed-snapshot",
             "replaced-review",
             "presentation-only",
@@ -210,7 +210,7 @@ mod operating_plan_decisions {
                         }
                         "changed-policy" => {}
                         "detached" => task.plan = None,
-                        "changed-source" => fs::write(&plan.artifact.source, "changed source")?,
+                        "changed-recorded-hash" => plan.artifact.sha256 = "0".repeat(64),
                         "changed-snapshot" => {
                             fs::write(store.dir().join(&plan.artifact.path), "changed snapshot")?
                         }

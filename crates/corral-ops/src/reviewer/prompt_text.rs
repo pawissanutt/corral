@@ -213,25 +213,21 @@ pub(super) fn gate_text<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHead)
     text
 }
 
-pub(super) fn artifacts_text<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHead) -> String {
+pub(super) fn artifacts_text<T: TaskRef + ?Sized>(_ctx: &Ctx, task: &T, run: &RunHead) -> String {
     let artifacts = match task.artifacts_of(&run.id) {
         Ok(artifacts) => artifacts,
         Err(error) => return format!("(artifacts unavailable: {error:#})"),
     };
     let rows: Vec<String> = artifacts
         .iter()
-        .map(|a| {
-            format!(
-                "- [{}] {}: {}",
-                a.kind.as_str(),
-                a.title,
-                ctx.store.dir().join(&a.path).display()
-            )
-        })
+        .map(|a| format!("- [{}] {}: {}", a.kind.as_str(), a.title, a.path))
         .collect();
     if rows.is_empty() {
         "(none)".to_string()
     } else {
-        rows.join("\n")
+        format!(
+            "Read these stored refs with corral_content_read (reference = the ref), or `corral artifact show <ref>`. They are not filesystem paths.\n{}",
+            rows.join("\n")
+        )
     }
 }

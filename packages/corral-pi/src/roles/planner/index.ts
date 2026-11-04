@@ -3,6 +3,7 @@
 // The source tree stays read-only; corral writes only this run's plan file. Submitting is the
 // planner's one completion step; it never reviews, approves or dispatches its plan.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { contentReadTool } from "../common/content.ts";
 
 import type { CorralOp, CorralToolSpec, RoleContext, RoleModule, UpstreamTool } from "../types.ts";
 import { receiptLookupTool, askTool, withdrawTool } from "../common/tools.ts";
@@ -11,7 +12,7 @@ import { requestMarker, sendOnce } from "./kickoff.ts";
 import { CHUNK_MAX_BYTES, planSubmitTool, planWriteTool } from "./tools.ts";
 
 const UPSTREAM: readonly UpstreamTool[] = ["read", "grep", "find", "ls"];
-const TOOLS: readonly CorralToolSpec[] = [receiptLookupTool(), askTool, withdrawTool, planWriteTool("plan"), planSubmitTool];
+const TOOLS: readonly CorralToolSpec[] = [receiptLookupTool(), contentReadTool, askTool, withdrawTool, planWriteTool("plan"), planSubmitTool];
 const OPS: readonly CorralOp[] = ["hello", "event", ...TOOLS.map((tool) => tool.op)];
 
 export const CONTRACT = `# corral planner contract (corral-pi)
@@ -20,6 +21,8 @@ You are the planner of corral task {{task}}, design run {{run}}, in project {{pr
 You write one plan; you do not implement it, review it, approve it or dispatch work.
 
 - The repository is read-only for you: you have read, grep, find and ls, and no shell or edit tool.
+- corral_content_read reads stored task specs, prior plans and artifacts by ref even when their
+  filesystem caches are absent. Read {{task}} for its spec and manifests; {{task}}@P1 reads plan P1.
 - corral_plan_write writes the plan file your prompt names; corral chooses that path. Write in
   chunks of at most ${CHUNK_MAX_BYTES / 1024} KiB, each continuing at the previous receipt's \`bytes\`.
 - corral_plan_submit submits it, as \`corral plan submit\` would. Fix and resubmit a refused plan.
