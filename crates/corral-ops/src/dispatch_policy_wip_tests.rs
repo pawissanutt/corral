@@ -7,6 +7,7 @@ fn coding_reservation_blocks_next_claim_until_landing() {
     fx.save();
     let first = fx.task("first", Status::Ready);
     let second = fx.task("second", Status::Ready);
+    let backlog = fx.task("backlog", Status::Backlog);
     fx.ctx
         .store
         .update(&first.id, |t| {
@@ -27,6 +28,14 @@ fn coding_reservation_blocks_next_claim_until_landing() {
             Ok(())
         })
         .unwrap();
+    let backlog = fx.ctx.store.get(&backlog.id).unwrap();
+    assert_eq!(
+        crate::queue::blocked_reason(&fx.ctx, &fx.ctx.store, &backlog, false).unwrap(),
+        None
+    );
+    fx.grant(&[&backlog]);
+    advance(&fx.ctx, Fixture::now()).unwrap();
+    assert_eq!(fx.ctx.store.get(&backlog.id).unwrap().status, Status::Ready);
     let candidate = fx.ctx.store.get(&second.id).unwrap();
     assert_eq!(
         crate::wip::reason(&fx.ctx.store, &candidate)

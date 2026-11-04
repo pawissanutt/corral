@@ -601,11 +601,6 @@ pub(crate) fn blocked_reason(
     {
         return Ok(Some(reason));
     }
-    if !crate::plan_dispatch::needed(ctx, task, &crate::DispatchOpts::default())
-        && let Some(reason) = crate::wip::reason(store, task)?
-    {
-        return Ok(Some(reason));
-    }
     capacity_reason(ctx, store, task, force_resources)
 }
 
@@ -771,6 +766,11 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
                         capacity_reason(&fresh, &store, &task, false)?
                     } else {
                         blocked_reason(&fresh, &store, &task, false)?
+                    };
+                    let blocked = if blocked.is_none() && !planning {
+                        crate::wip::reason(&store, &task)?
+                    } else {
+                        blocked
                     };
                     match blocked {
                         Some(reason) => Ok(Some(reason)),
