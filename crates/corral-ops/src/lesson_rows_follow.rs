@@ -36,6 +36,17 @@ fn prepare_at(
     root: PathBuf,
     signals: bool,
 ) -> Result<Prepared> {
+    // The cursor is invalidated before any cache writes. On expiry a retry rebuilds
+    // from committed inputs, never reapplies incremental counter updates to partial rows.
+    ctx.read_step(|read| prepare_view(read, selected, root.clone(), signals))
+}
+
+fn prepare_view(
+    ctx: &Ctx,
+    selected: &BTreeSet<String>,
+    root: PathBuf,
+    signals: bool,
+) -> Result<Prepared> {
     let path = root.join("cursor.json");
     let ctx = Ctx {
         store: ctx.store.read_only_snapshot()?,

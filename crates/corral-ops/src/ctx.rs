@@ -36,6 +36,31 @@ impl Ctx {
         }
     }
 
+    /// Evaluate one idempotent read step on a short snapshot. Only expiry retries the read;
+    /// callers must keep external effects outside this closure. Explicit snapshots remain
+    /// pinned and fail closed rather than silently observing another committed state.
+    pub fn read_step<T>(&self, mut read: impl FnMut(&Ctx) -> Result<T>) -> Result<T> {
+        loop {
+            let ctx = Ctx {
+                store: self.store.read_only_snapshot()?,
+                ..self.clone()
+            };
+            let result = read(&ctx).and_then(|value| {
+                ctx.store.view()?.ensure_fresh()?;
+                Ok(value)
+            });
+            match result {
+                Err(error)
+                    if !self.store.is_snapshot()
+                        && matches!(
+                            error.downcast_ref::<corral_core::backend::ViewError>(),
+                            Some(corral_core::backend::ViewError::Expired { .. })
+                        ) => {}
+                result => return result,
+            }
+        }
+    }
+
     /// Reloads config without retargeting an explicit client on unrelated edits.
     /// A changed session preference still applies, including settings edits.
     pub fn reload_config(&mut self) -> Result<bool> {
@@ -46,6 +71,54 @@ impl Ctx {
             self.herdr.set_session(selected);
         }
         Ok(changed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use corral_core::backend::{BackendConfig, ManualClock, ViewError, fake::FakeBackend};
+    use std::time::Duration;
+
+    #[test]
+    fn read_steps_retry_expiry_but_never_revive_explicit_snapshots() {
+        let dir = tempfile::tempdir().unwrap();
+        let clock = Arc::new(ManualClock::new(jiff::Timestamp::UNIX_EPOCH));
+        let ctx = Ctx::from_store(Store::init(dir.path()).unwrap().with_backend(Box::new(
+            FakeBackend::new(BackendConfig::default(), clock.clone(), Arc::default()),
+        )));
+        let task = ctx
+            .store
+            .create("Read", None, corral_core::Status::Ready, "")
+            .unwrap();
+        let mut reads = 0;
+        let title = ctx
+            .read_step(|read| {
+                reads += 1;
+                if reads == 1 {
+                    clock.advance(Duration::from_secs(31));
+                }
+                Ok(read.store.head(&task.id)?.title.clone())
+            })
+            .unwrap();
+        assert_eq!((title.as_str(), reads), ("Read", 2));
+        let frozen = Ctx {
+            store: ctx.store.read_only_snapshot().unwrap(),
+            ..ctx.clone()
+        };
+        clock.advance(Duration::from_secs(31));
+        let mut reads = 0;
+        let error = frozen
+            .read_step(|read| {
+                reads += 1;
+                read.store.head(&task.id)
+            })
+            .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<ViewError>(),
+            Some(ViewError::Expired { .. })
+        ));
+        assert_eq!(reads, 1);
     }
 }
 

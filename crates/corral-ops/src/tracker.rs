@@ -176,7 +176,9 @@ fn projection(ctx: &Ctx, id: &str) -> Result<(Projection, bool)> {
 /// # Errors
 /// Rejects non-trackers, missing members or dependencies, cycles, and invalid membership.
 pub fn plan_progress(ctx: &Ctx, id: &str) -> Result<PlanProgress> {
-    plan_progress_in(ctx, &plan_board(ctx)?, id)
+    // Each tracker is an idempotent read step, independent of frame preparation,
+    // other trackers and time spent waiting for the projection cache lock.
+    ctx.read_step(|read| plan_progress_in(read, &read.store, id))
 }
 
 /// The board [`plan_progress`] reads: freshly opened, then frozen, so one read answers every

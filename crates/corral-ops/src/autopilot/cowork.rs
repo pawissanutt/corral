@@ -126,22 +126,14 @@ impl Pilot<'_> {
     /// Do not rewrite/re-gate a candidate while something other than verification blocks it.
     pub(super) fn cowork_wait(&self) -> Result<Option<Step>> {
         if self.head.review_wait == Some(corral_core::ReviewWork::Reviewer)
-            && (crate::operating::require(&self.ctx.store, self.head, OperatingActionKind::Review)
-                .is_err()
+            && (self.require(OperatingActionKind::Review).is_err()
                 || crate::review_budget::reviewer_waiting(self.ctx, self.id())?)
         {
             return Ok(Some(Step::Wait));
         }
         match self.stage() {
             Some(AutoStage::Changes) => return Ok(Some(Step::Wait)),
-            Some(AutoStage::Reviewed)
-                if crate::operating::require(
-                    &self.ctx.store,
-                    self.head,
-                    OperatingActionKind::Accept,
-                )
-                .is_err() =>
-            {
+            Some(AutoStage::Reviewed) if self.require(OperatingActionKind::Accept).is_err() => {
                 return Ok(Some(Step::Wait));
             }
             Some(AutoStage::Reviewing)

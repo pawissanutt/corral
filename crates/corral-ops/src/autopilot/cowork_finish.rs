@@ -17,13 +17,7 @@ impl Pilot<'_> {
                 gate.result == GateResult::Fail
                     && run_head_sha(self.run).as_deref() == Some(&gate.sha)
             }) {
-                if crate::operating::require(
-                    &self.ctx.store,
-                    self.head,
-                    OperatingActionKind::Repair,
-                )
-                .is_err()
-                {
+                if self.require(OperatingActionKind::Repair).is_err() {
                     return Ok(Some(Step::Wait));
                 }
                 let (summary, details) = self.gate_failure(gate, "")?;
