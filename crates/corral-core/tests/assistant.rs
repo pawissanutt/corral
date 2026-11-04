@@ -6,6 +6,22 @@ use corral_core::{
 };
 
 #[test]
+fn legacy_sessions_default_to_projectless_without_a_linked_scratch() {
+    // Given a session record from before project and scratch links were recorded.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let session = store.create_assistant("pi", None, None, None).unwrap();
+    let mut legacy = serde_json::to_value(&session).unwrap();
+    let fields = legacy.as_object_mut().unwrap();
+    fields.remove("project");
+    fields.remove("linked_scratch");
+    // When the legacy record is decoded, then it retains workspace behavior.
+    let restored: corral_core::assistant::AssistantSession =
+        serde_json::from_value(legacy).unwrap();
+    assert_eq!((restored.project, restored.linked_scratch), (None, None));
+}
+
+#[test]
 fn sessions_and_containers_round_trip_and_end_retains_transcripts() {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();

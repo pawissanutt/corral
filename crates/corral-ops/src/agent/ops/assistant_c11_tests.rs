@@ -103,6 +103,7 @@ fn focused_assistant_c11_setup() {
         .unwrap();
     let (session, prepared, _) = open_focused(
         &ctx,
+        ctx.store.root(),
         input["pane"].as_str().unwrap(),
         &Overrides::default(),
         false,

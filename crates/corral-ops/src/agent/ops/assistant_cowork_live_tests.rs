@@ -63,6 +63,7 @@ fn cowork_live_setup() {
     let ctx = Ctx::from_store(Store::discover(root).unwrap());
     let (session, prepared, _) = open(
         &ctx,
+        ctx.store.root(),
         input["pane"].as_str().unwrap(),
         &Overrides::default(),
         false,

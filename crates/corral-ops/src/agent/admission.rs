@@ -113,8 +113,15 @@ fn resolve(store: &Store, container: &ContainerRef) -> Result<Resolved> {
                 format!("assistant session {id} not found"),
             ));
         }
-        let ended = store.get_assistant(id)?.ended.is_some();
+        let session = store.get_assistant(id)?;
+        let ended = session.ended.is_some();
         let state = store.get_assistant_container(id)?;
+        if state.state.binding.project != session.project.as_deref().unwrap_or("") {
+            return Err(reject(
+                RejectCode::ForeignProject,
+                "the assistant's recorded project differs from its binding",
+            ));
+        }
         return Ok(Resolved::Assistant(Box::new(state), ended));
     }
     let Some(id) = container.task() else {
@@ -527,6 +534,7 @@ pub fn open_generation_with(
     // project's text trust is recorded with them.
     let project = match (target, target.container().task()) {
         (BindTarget::Pm { project }, _) => (!project.is_empty()).then(|| project.clone()),
+        (BindTarget::Assistant { session }, _) => store.get_assistant(session)?.project,
         (_, Some(task)) => store.head(task)?.project.clone(),
         (_, None) => None,
     };
@@ -602,6 +610,7 @@ pub fn open_generation_with(
         (BindTarget::Assistant { session }, _) => {
             store.update_assistant_container(session, |assistant| {
                 assistant.pane = Some(pane.into());
+                assistant.state.binding.project = project.clone().unwrap_or_default();
                 next_generation(&mut assistant.state, &digest, pane, &capabilities)
             })?
         }

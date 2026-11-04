@@ -12,6 +12,16 @@ const message = {
   assets: "/assets", runtime_dir: "/runtime", session_dir: "/sessions", model: "gpt-6.1-sol",
 };
 
+test("assistant launch keeps its recorded project and accepts legacy projectless sessions", () => {
+  // Given an assistant bootstrap with either a project or its legacy empty binding.
+  const assistant = { ...message, role: "assistant", assistant: "A-1",
+    task: undefined, run: undefined, review: undefined, callback: undefined };
+  for (const project of ["demo", ""]) {
+    // When the launch is parsed, then the same project reaches the host identity.
+    expect(parseLaunchMessage(JSON.stringify({ ...assistant, project })).identity.project).toBe(project);
+  }
+});
+
 test("workspace PM launch has no project while legacy PM launches remain readable", () => {
   const pm = { ...message, role: "pm", task: undefined, run: undefined, review: undefined, callback: undefined };
   expect(parseLaunchMessage(JSON.stringify({ ...pm, project: "" })).identity.project).toBe("");

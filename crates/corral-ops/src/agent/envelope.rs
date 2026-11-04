@@ -184,13 +184,13 @@ pub(crate) fn request_id(value: &str, generation: u32) -> Result<(), Rejection> 
 
 fn identity(identity: &RequestIdentity) -> Result<(), Rejection> {
     token("identity.store", &identity.store, 64, "-")?;
-    // An assistant is workspace-scoped: it names its session and no project.
+    // An assistant names its session and optional recorded project; admission checks the match.
     match (identity.role, identity.assistant.as_deref()) {
         (AgentRole::Assistant, Some(session)) => {
             corral_core::assistant::validate_id(session)
                 .map_err(|_| bad("identity.assistant must be A-<n>"))?;
             if !identity.project.is_empty() {
-                return Err(bad("an assistant identity names no project"));
+                token("identity.project", &identity.project, 128, "._-")?;
             }
         }
         (AgentRole::Assistant, None) => return Err(bad("identity.assistant is required")),

@@ -99,6 +99,7 @@ pub fn run(start: &Path, args: PiArgs, entry: &Entry) -> Result<()> {
         }
         Invocation::Pm => pi::bound(start, &entry.open(start)?, &overrides),
         Invocation::Assistant { over_cap } => pi::assistant_focused(
+            start,
             &entry.open(start)?,
             &overrides,
             over_cap,

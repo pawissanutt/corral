@@ -94,8 +94,8 @@ pub struct Bootstrap {
     /// The generation's recorded capability snapshot; absent in legacy bootstraps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<corral_core::agent::CapabilitySnapshot>,
-    /// The PM's selected project checkout, whose text guidance it loads; its cwd is the
-    /// workspace root. Absent for roles that run in the project's own worktree.
+    /// The PM's guidance root or the assistant's effective project/scratch directory.
+    /// Absent for roles that already run in their task's worktree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_dir: Option<PathBuf>,
 }
@@ -326,7 +326,13 @@ pub fn prepare_bootstrap(
         BindTarget::Assistant { session } => {
             let file = super::ops::assistant::continued_session(ctx, session)?;
             fresh_session = file.is_none();
-            (String::new(), file)
+            (
+                ctx.store
+                    .get_assistant(session)?
+                    .project
+                    .unwrap_or_default(),
+                file,
+            )
         }
         BindTarget::Worker { .. } | BindTarget::Reviewer { .. } => {
             let task = ctx.store.get(
@@ -407,6 +413,7 @@ pub fn prepare_bootstrap(
     };
     let project_dir = match target {
         BindTarget::Pm { .. } => Some(ctx.store.root().to_path_buf()),
+        BindTarget::Assistant { .. } => Some(spec.cwd.clone()),
         _ => None,
     };
     let bootstrap = Bootstrap {

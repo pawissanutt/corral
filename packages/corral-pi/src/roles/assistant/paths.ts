@@ -13,6 +13,7 @@ import { PermissionBroker } from "./permissions.ts";
 export interface WriteSettings { readonly allow: readonly string[]; readonly deny: readonly string[] }
 export interface PathContext {
   workspace: string; session: string; temp?: string; home?: string; protectedDirs?: readonly string[];
+  cwd?: string;
   enabled: boolean; settings?: WriteSettings; scratch?: readonly string[];
 }
 export interface Classification {
@@ -57,7 +58,7 @@ export function classifyWrite(input: string, context: PathContext): Classificati
   const { workspace, session } = context;
   const home = context.home ?? homedir();
   const temp = context.temp ?? tmpdir();
-  const shown = resolveToolPath(input, workspace);
+  const shown = resolveToolPath(input, context.cwd ?? workspace);
   const canonical = real(shown);
   const result = (decision: Classification["decision"], rule: string): Classification => ({ decision, rule, shown, canonical });
   const own = [...(context.scratch ?? []), join(workspace, ".corral", "artifacts", "assistant", session)];

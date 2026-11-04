@@ -243,12 +243,13 @@ pub fn run(ctx: &Ctx, args: AssistantArgs) -> Result<()> {
                 })?;
             let usage = corral_ops::assistant_usage(&ctx.store, &session)?;
             let host = corral_ops::assistant::host::host_assets(&ctx.store, &container.state);
+            let directory = corral_ops::assistant::directory(&ctx.store, &session)?;
             if json {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
                         "session": session, "body": session.body, "container": container, "usage": usage,
-                        "host": host, "workflow": workflow,
+                        "host": host, "workflow": workflow, "directory": directory,
                     }))?
                 );
             } else {

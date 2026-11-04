@@ -8,7 +8,9 @@ import { classifyWrite, scopeCandidates, writeRefusal, type Classification, type
 import { utf8Prefix } from "./owner-action.ts";
 
 const CHOICES = { once: "Allow once", hour: "Allow for 1 hour", session: "Allow for this session", deny: "Deny" } as const;
-type UI = Pick<ExtensionContext, "hasUI" | "ui">;
+type UI = Pick<ExtensionContext, "hasUI"> & {
+  readonly ui: Pick<ExtensionContext["ui"], "notify" | "select">;
+};
 const block = (tag: string, text = "Ask the owner or use a scratch worktree.") => ({
   block: true as const, reason: `assistant rule: ${tag}; nothing was written. ${text}`,
 });
@@ -22,7 +24,7 @@ export class PermissionBroker {
 
   private async classify(path: string): Promise<Classification> {
     const c = this.context;
-    return classifyWrite(path, this.paths ?? { workspace: c.cwd, session: c.identity.assistant ?? "",
+    return classifyWrite(path, this.paths ?? { workspace: c.workspaceRoot ?? c.cwd, cwd: c.cwd, session: c.identity.assistant ?? "",
       scratch: await c.scratchRoots?.() ?? [],
       enabled: c.capabilities?.enabled.includes("write_permissions") === true,
       settings: c.writePermission?.settings });
@@ -49,7 +51,8 @@ export class PermissionBroker {
     }
     if (initial.decision === "refuse") {
       return initial.rule === "capability_off"
-        ? { block: true as const, reason: `${writeRefusal(path, this.context.cwd, this.context.identity.assistant ?? "")} [capability_off]` }
+        ? { block: true as const, reason: `${writeRefusal(initial.shown, this.context.workspaceRoot ?? this.context.cwd,
+          this.context.identity.assistant ?? "")} [capability_off]` }
         : block(initial.rule);
     }
     if (initial.decision === "allow") {
