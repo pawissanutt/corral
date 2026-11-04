@@ -65,3 +65,14 @@ No intentional load was generated. Full-history readback, explicit accounting
 family reads and the one-time legacy upgrade remain intentionally output-sized;
 steady hot PM discovery, authentication and named patches do not hydrate them.
 The run's quick gate is receipted separately after commit and final rebase.
+
+## First gate repair
+
+The first quick gate found that startup attempted to upgrade the intentionally
+opaque `{"fixture":"pm"}` legacy record in `migrate_workspace`. This was not an
+import-envelope mismatch: that fixture deliberately has no typed PM fields.
+Startup now upgrades only deserializable legacy AgentPm records; opaque imports
+remain untouched, and typed PM reads still reject invalid PM data. The existing
+failing test is unchanged. `.evidence/pm-migration-repair.log` records **10 passed**
+across migrate_workspace, profile_state_records and root_pm_bounded, including
+unchanged exact PM counters. No new test or timing exemption was added.

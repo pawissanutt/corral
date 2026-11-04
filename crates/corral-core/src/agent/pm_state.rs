@@ -41,7 +41,11 @@ impl AgentPm {
 pub(crate) fn migrate(store: &Store) -> Result<()> {
     if store
         .record::<serde_json::Value>("agent-pm", "current")?
-        .is_some_and(|doc| doc.get("layout").is_none())
+        .is_some_and(|doc| {
+            // Legacy import preserves opaque records too. Opening unrelated workspace
+            // data must not require a valid PM binding; typed PM reads still validate it.
+            doc.get("layout").is_none() && serde_json::from_value::<AgentPm>(doc).is_ok()
+        })
     {
         update(store, |_| Ok(((), true)))?;
     }
