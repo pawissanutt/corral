@@ -40,6 +40,11 @@ impl AgentPm {
 /// and owning-sync preparation call this; observational preflights must not probe or write
 /// PM state. Dispatch and PM locks serialize the upgrade with launch and fencing.
 pub fn migrate(store: &Store) -> Result<()> {
+    use std::sync::atomic::Ordering;
+
+    if store.pm_upgrade_checked.load(Ordering::Acquire) {
+        return Ok(());
+    }
     if store
         .record::<serde_json::Value>("agent-pm", "current")?
         .is_some_and(|doc| {
@@ -50,6 +55,9 @@ pub fn migrate(store: &Store) -> Result<()> {
     {
         update(store, |_| Ok(((), true)))?;
     }
+    // Current writers publish only layout-2 records. A later sync on this handle
+    // needs no repeat probe; all live PM reads still go through the record facade.
+    store.pm_upgrade_checked.store(true, Ordering::Release);
     Ok(())
 }
 

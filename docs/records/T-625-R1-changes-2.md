@@ -24,7 +24,11 @@ Unobserved opens now load configuration without probing or upgrading PM state.
 An owning sync, which can start from an unobserved open, explicitly performs the
 PM upgrade check only after confirming session ownership and before hot passes.
 Foreign sync and observational tracker reads therefore cannot upgrade PM state.
-No counters are suppressed, and no follow-up allowance or cache is added.
+No counters are suppressed, and no follow-up allowance or live-PM cache is added.
+The successful startup upgrade decision is remembered per store handle and its
+clones, so normal opens already checked at startup do not add a PM probe on each
+later sync tick. Replacing a handle's backend resets that startup decision; live
+PM reads continue to use the canonical record facade.
 
 ## Verification
 
@@ -39,15 +43,31 @@ No counters are suppressed, and no follow-up allowance or cache is added.
   Exact history-size 2/4 read/mutation/work counts remain 2/6/4 documents,
   544/1632/658 bytes and one view, with zero other counters or exemptions.
 - Existing whole-root sync guard: **passed** warm and truly separate-process
-  measurements at both scales 1 and 10. `.evidence/pm-views-sync-green.log`.
-  Raw cells match exactly: 31 record decodes, 41,351 bytes, 84 views,
-  2 event decodes, 16 file stats, zero full-task hydration. The single extra
-  bounded head probe belongs to owning-sync preparation, not each observational
-  reopen. T-625 root-document allowances remain absent.
+  measurements at both scales 1 and 10. Latest log:
+  `.evidence/pm-startup-probe-root-budget.log` (16.34s).
+  Raw cells match exactly: 30 record decodes, 40,444 bytes, 83 views,
+  2 event decodes, 16 file stats, zero full-task hydration. A cold unobserved
+  handle checks migration once when an owning sync first prepares; already-checked
+  handles do not probe again. T-625 root-document allowances remain absent.
 - `cargo fmt --all` and `git diff --check`: passed.
 
+## First quick follow-up
+
+The initial placement-only fix passed tracker guards but the quick gate exposed
+one extra view at baseline in existing Land/RepairTickLegacy action-budget cases.
+The once-per-handle startup decision above removes that repeated migration probe.
+Both unchanged exact-budget cases now pass (16.59s/35.23s), recorded in
+`.evidence/pm-startup-probe-action-budgets.log`.
+
+The same gate also reported read-view expiry at 53–54s in RecoveredPm/Land cold
+fixtures. Both unchanged targeted cases pass on rerun (9.33s/26.39s) in
+`.evidence/pm-view-expiry-targeted.log`; no expiry limit, timeout or test expectation
+was changed. This is not a claim to have fixed snapshot expiry under host load.
+Latest core and tracker reruns also pass, recorded in
+`.evidence/pm-one-time-upgrade-core.log` and `.evidence/pm-observational-final-green.log`.
+
 No new test registrations, fixtures, timeouts, retries or gate exemptions are
-added in this repair. The existing slow whole-root guard took 215.93s on this
-host invocation; it is not new suite cost and remains in its existing slow
-profile. No intentional load was generated. The worker's authoritative quick
-gate is receipted separately after commit and final rebase.
+added in this repair. Existing integration guards remain in their existing slow
+profile; their runtime is not new suite cost. No intentional load was generated.
+The worker's authoritative quick gate is receipted separately after commit and
+final rebase.
