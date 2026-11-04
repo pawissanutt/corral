@@ -679,6 +679,12 @@ fn batched_ask_opens_one_group_that_one_group_answer_settles() {
     assert_eq!(receipt.result["questions"][1]["key"], json!(q2));
     let members = super::group(&fx.ctx, &q2).unwrap();
     assert_eq!(members.len(), 2);
+    // The inbox presents the batch as one item carrying both members' answer identities.
+    let inbox = crate::attention::inbox::list(&fx.ctx, None, Timestamp::now()).unwrap();
+    let items: Vec<_> = inbox.items.iter().filter(|i| i.task == id).collect();
+    assert_eq!(items.len(), 1);
+    assert_eq!((items[0].kind, items[0].key.as_str()), ("question_group", q1.as_str()));
+    assert_eq!(items[0].revision, format!("{q1}@1,{q2}@1"));
     assert!(
         members
             .iter()
