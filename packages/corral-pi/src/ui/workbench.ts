@@ -16,14 +16,16 @@ import { HelperChat } from "./helper-chat.ts";
 import { activityKey, activityTitle, type ActivityTarget } from "./activity-sidebar.ts";
 import { InspectionStore, evidenceLines } from "./inspection.ts";
 import { usageLines } from "./usage-view.ts";
+import { TaskStore, taskHeadline, taskLines } from "./task-view.ts";
+import { splitRow } from "./panels-chrome.ts";
 import { DecisionInbox, inboxIdentity } from "./decision-inbox.ts";
 import { InboxView } from "./inbox-view.ts";
 import { HistoryNavigator, type HistoryRead } from "./history.ts";
-import { pad, plainLabel, diffLine, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, PANEL_BG, RESET, type PanelSnapshot, type PanelLine } from "./panels-view.ts";
+import { pad, plainLabel, diffLine, styledPanelLine, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, PANEL_BG, PANEL_WARNING, RESET, type PanelSnapshot, type PanelLine } from "./panels-view.ts";
 export function plainClick(event: TuiMouseEvent): boolean {
   return event.type === "click" && event.button === "left" && !event.shift && !event.alt && !event.ctrl && (event.clickCount ?? 1) === 1;
 }
-export type MainView = "conversation" | "changes" | "activity" | "agents" | "evidence" | "inbox" | "graph" | "timeline" | "usage" | "artifacts";
+export type MainView = "task" | "conversation" | "changes" | "activity" | "agents" | "evidence" | "inbox" | "graph" | "timeline" | "usage" | "artifacts";
 export interface WorkbenchOptions {
   readonly identity: HostIdentity;
   readonly inspection?: () => Promise<unknown>;
@@ -32,6 +34,7 @@ export interface WorkbenchOptions {
   readonly artifactViewer?: (reference: string, viewer: "show" | "serve") => Promise<string>;
   readonly exportSession?: () => Promise<string>;
   readonly readTranscript?: (id: string) => Promise<string>;
+  readonly readTask?: () => Promise<unknown>;
   readonly cwd: string; readonly snapshot: () => PanelSnapshot | null;
   readonly changed: () => void; readonly canInteract: () => boolean;
   readonly readInbox?: (signal: AbortSignal) => Promise<unknown>;
@@ -45,6 +48,8 @@ export class NativeWorkbench {
   view: MainView = "conversation"; focused = false;
   readonly review: ReviewStore;
   readonly inspection: InspectionStore;
+  readonly task: TaskStore;
+  private taskScroll: ScrollView | undefined;
   readonly lifecycle: LifecycleView;
   readonly history: HistoryNavigator;
   private lifecycleScroll: ScrollView | undefined;
@@ -91,6 +96,9 @@ export class NativeWorkbench {
     this.inspection = new InspectionStore(options.identity, options.inspection, () => options.changed());
     this.artifacts = new ArtifactView({ identity: options.identity, load: options.artifacts, viewer: options.artifactViewer, exportSession: options.exportSession,
       openImage: source => this.images.activate(source), bound: () => options.snapshot()?.bound ?? false, changed: options.changed, canInteract: options.canInteract });
+    this.task = new TaskStore(options.identity, options.readTask, () => options.changed());
+    // Task-bound roles open on their task; assistant and PM open on Chat. Typing still reaches the editor.
+    if (this.task.bound) this.view = "task";
     this.projectName = options.identity.project || undefined;
     this.review = new ReviewStore(options.projectDir ?? options.cwd, () => options.changed(), options.inspection && options.identity.task && options.identity.run ? async () => {
       await this.inspection.refresh();
@@ -101,7 +109,7 @@ export class NativeWorkbench {
     this.inboxView = new InboxView(this.inbox, options.identity.role, options.identity.project, options.canInteract, options.changed, () => { this.focused = true; });
   }
   async openHistory(): Promise<void> { if (this.ui) await this.history.open(this.ui); }
-  bind(ui: ExtensionUIContext): void { this.ui = ui; this.images.bind(); this.inboxView.bind(ui); }
+  bind(ui: ExtensionUIContext): void { this.ui = ui; this.images.bind(); this.inboxView.bind(ui); void this.task.refresh(); }
   invalidateFiles(): void {
     this.inspection.invalidate();
     if (this.debounce) clearTimeout(this.debounce);
@@ -116,6 +124,7 @@ export class NativeWorkbench {
     this.timer = undefined;
     if (view !== "conversation") {
       if (view === "changes") void this.review.refresh();
+      if (view === "task") void this.task.refresh(true);
       if (view === "evidence" || view === "usage") void this.inspection.refresh();
       if (view === "inbox") void this.inbox.refresh();
       if (view === "graph" || view === "timeline") { this.lifecycle.mode = view; void this.lifecycle.refresh(); }
@@ -126,6 +135,7 @@ export class NativeWorkbench {
         if (this.view === "changes" && ticks % 2 === 0) void this.review.refresh();
         if ((this.view === "evidence" || this.view === "usage") && ticks % 10 === 0) void this.inspection.refresh();
         if (this.view === "inbox" && ticks % 5 === 0) void this.inbox.refresh();
+        if (this.view === "task" && ticks % 15 === 0) void this.task.refresh();
         this.options.changed();
       }, 1000); this.timer.unref();
     }
@@ -163,7 +173,7 @@ export class NativeWorkbench {
       render: width => {
         this.anchorTranscript(width);
         const compact = width < 110, minimum = width < 52;
-        const labels: [MainView | "history", string][] = [["conversation", minimum ? " C " : compact ? " Chat " : " Conversation F9 "],
+        const labels: [MainView | "history", string][] = [...(this.task.bound ? [["task", minimum ? " T " : compact ? " Task " : " Task F5 "] as [MainView, string]] : []), ["conversation", minimum ? " C " : compact ? " Chat " : " Conversation F9 "],
           ["changes", minimum ? " D " : compact ? " Diff " : " Changes F7 "],
           ["evidence", minimum ? " E " : compact ? " Proof " : " Evidence F10 "], ["inbox", minimum ? " I " : compact ? " Inbox " : " Inbox F11 "],
           ["usage", width < 64 ? " U " : " Usage "], ["graph", width < 64 ? " G " : " Graph "], ["timeline", width < 64 ? " L " : " Timeline "], ["history", width < 64 ? " H " : " History "]];
@@ -175,9 +185,9 @@ export class NativeWorkbench {
         hits = labels.map(([view, label]) => ({ view, to: x += label.length }));
         return [PANEL_BG + pad(labels.map(([view, label]) => (this.view === view || view === "activity" && this.view === "agents" ? PANEL_BLUE : PANEL_MUTED) + label).join("") + PANEL_MUTED +
           (this.focused ? short ? "Esc Enter" : "· Esc chat · Enter compose" : ""), width) + RESET,
-        PANEL_BG + PANEL_TEXT + pad(this.view === "activity" && this.selectedActivity
+        PANEL_BG + PANEL_TEXT + (this.view !== "activity" && this.headline(width) || pad(this.view === "activity" && this.selectedActivity
           ? activityTitle(this.options.snapshot(), this.selectedActivity)
-          : `Files: ${plainLabel(this.scopeLabel)} · ` + PANEL_MUTED + `${this.options.identity.role.toUpperCase()} ${target(this.options.identity)} · g${this.options.identity.generation} · ${!this.ui ? "Initializing editor…" : this.options.snapshot()?.bound ? "Bound to Corral" : "Unbound"}`, width) + RESET];
+          : `Files: ${plainLabel(this.scopeLabel)} · ` + PANEL_MUTED + `${this.options.identity.role.toUpperCase()} ${target(this.options.identity)} · g${this.options.identity.generation} · ${!this.ui ? "Initializing editor…" : this.options.snapshot()?.bound ? "Bound to Corral" : "Unbound"}`, width)) + RESET];
       },
       handleMouse: event => {
         if (!this.options.canInteract() || !plainClick(event) || event.y !== 0) return undefined;
@@ -187,6 +197,13 @@ export class NativeWorkbench {
         return { handled: true };
       }, invalidate() {},
     };
+  }
+  /** `T-796 · title … ● running P1 xs`; undefined when no task is bound. */
+  private headline(width: number): string | undefined {
+    const head = taskHeadline(this.options.identity, this.task);
+    if (!head) return undefined;
+    const chips = head.chips.map(chip => (chip === "stale" ? PANEL_WARNING : PANEL_MUTED) + chip).join(PANEL_MUTED + " · ");
+    return splitRow("\x1b[1m" + PANEL_BLUE + plainLabel(head.id) + "\x1b[22m" + PANEL_TEXT + " · " + head.title, chips, width);
   }
   /**
    * Runs in the main-view bar's render, before Pi lays out the transcript at a new width. A reader
@@ -243,8 +260,14 @@ export class NativeWorkbench {
       return result;
     }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
     this.inboxScroll = new ScrollView(this.inboxView, { primary: true, follow: "none", scrollbar: "auto" });
+    this.taskScroll = new ScrollView({ render: width => taskLines(this.options.identity, this.task)
+      .flatMap(row => new Text(styledPanelLine(row), 0, 0).render(width)), handleMouse: event => {
+      if (!this.options.canInteract() || !plainClick(event)) return undefined;
+      this.focused = true; this.options.changed(); return { handled: true };
+    }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
     return new VStack([
       { component: this.nav(), basis: 2, shrink: 0 },
+      { component: this.taskScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "task" && !this.images.isOpen },
       { component: transcript, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "conversation" && !this.images.isOpen },
       { component: this.images, basis: 0, grow: 1, minSize: 1, visible: viewport => { this.images.setViewportHeight(Math.max(0, viewport.height - 2)); return this.images.isOpen; } },
       { component: this.changesScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "changes" },
@@ -477,6 +500,7 @@ export class NativeWorkbench {
   }
   handleInput(data: string): boolean {
     if (matchesKey(data, "f9")) { this.setView("conversation"); this.focused = false; return true; }
+    if (matchesKey(data, "f5") && this.task.bound) { this.setView("task"); return true; }
     if (matchesKey(data, "f7")) { this.setView("changes"); return true; }
     if (matchesKey(data, "f8")) { this.setView("activity"); return true; }
     if (matchesKey(data, "f10")) { this.setView("evidence"); return true; }
@@ -497,7 +521,7 @@ export class NativeWorkbench {
     if (this.view === "agents" && data === "b") { this.setView("activity"); return true; }
     if (this.view === "agents" && data === "t") { void this.openAgentTranscript(); return true; }
     if (this.view === "usage" && data === "c") { this.usageChart = !this.usageChart; this.options.changed(); return true; }
-    const scroll = this.view === "usage" ? this.usageScroll : this.view === "artifacts" ? this.artifactScroll : this.view === "graph" || this.view === "timeline" ? this.lifecycleScroll : this.view === "agents" ? this.agentsScroll : this.view === "changes" ? this.changesScroll : this.view === "evidence" ? this.evidenceScroll : this.view === "inbox" ? this.inboxScroll : this.activityScroll;
+    const scroll = this.view === "task" ? this.taskScroll : this.view === "usage" ? this.usageScroll : this.view === "artifacts" ? this.artifactScroll : this.view === "graph" || this.view === "timeline" ? this.lifecycleScroll : this.view === "agents" ? this.agentsScroll : this.view === "changes" ? this.changesScroll : this.view === "evidence" ? this.evidenceScroll : this.view === "inbox" ? this.inboxScroll : this.activityScroll;
     if (this.view === "inbox" && (data === "j" || data === "k" || matchesKey(data, "up") || matchesKey(data, "down"))) {
       this.inbox.move(data === "j" || matchesKey(data, "down") ? 1 : -1);
       const row = this.inbox.current && this.inboxView.rows.get(inboxIdentity(this.inbox.current));
@@ -518,6 +542,7 @@ export class NativeWorkbench {
       this.options.changed(); return true;
     }
     if ((this.view === "evidence" || this.view === "usage") && data === "r") { void this.inspection.refresh(true); return true; }
+    if (this.view === "task" && data === "r") { void this.task.refresh(true); return true; }
     if (this.view === "changes") {
       if (data === "/") { void this.search(); return true; }
       if (data === "o") { void this.repository(); return true; }
@@ -532,6 +557,6 @@ export class NativeWorkbench {
   dispose(): void {
     if (this.timer) clearInterval(this.timer); if (this.debounce) clearTimeout(this.debounce);
     this.helperChat.clear(); this.chatPresentation = undefined;
-    this.history.dispose(); this.scopeAbort.abort(); this.images.dispose(); this.review.dispose(); this.inspection.dispose(); this.inboxView.dispose(); this.lifecycle.dispose(); this.artifacts.dispose(); this.ui = undefined;
+    this.history.dispose(); this.scopeAbort.abort(); this.images.dispose(); this.review.dispose(); this.inspection.dispose(); this.task.dispose(); this.inboxView.dispose(); this.lifecycle.dispose(); this.artifacts.dispose(); this.ui = undefined;
   }
 }

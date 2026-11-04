@@ -30,6 +30,7 @@ export interface NativePanelsOptions {
   readonly artifactViewer?: (reference: string, viewer: "show" | "serve") => Promise<string>;
   readonly exportSession?: () => Promise<string>;
   readonly readTranscript?: (id: string) => Promise<string>;
+  readonly readTask?: () => Promise<unknown>;
   readonly snapshot: () => PanelSnapshot | null;
   readonly readInbox?: (signal: AbortSignal) => Promise<unknown>;
   readonly readHistory?: HistoryRead;
