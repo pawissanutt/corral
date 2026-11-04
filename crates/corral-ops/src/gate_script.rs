@@ -145,7 +145,7 @@ for i in "${{!cmds[@]}}"; do
   # Scrub role identity after applying captured inputs, only in the command shell.
   # Keep the runner's ownership markers for process tracking and cancellation.
   bash -o pipefail -c "$command_environment
-unset -v \${{!CORRAL_ASSISTANT@}} \${{!CORRAL_SANDBOX@}} \${{!CORRAL_AGENT@}} CORRAL_PM CORRAL_REVIEWER CORRAL_PROCESS_OWNER CORRAL_OWNER_ACTION AI_AGENT PI_CODING_AGENT
+unset -v \${{!CORRAL_ASSISTANT@}} \${{!CORRAL_SANDBOX@}} \${{!CORRAL_AGENT@}} CORRAL_PM CORRAL_REVIEWER CORRAL_OWNER_ACTION AI_AGENT PI_CODING_AGENT
 $c" </dev/null 2>&1 | tee -a "$log"
   codes=("${{PIPESTATUS[@]}}")
   code="${{codes[0]}}"
