@@ -105,6 +105,7 @@ const ROWS: &[(&str, &[&str], Class)] = &[
         &["q-1", "--rev", "1", "--text", "x"],
         Refused,
     ),
+    ("question answer-group", &["q-1", "--text", "x"], Refused),
     ("question escalate", &["q-1", "--rev", "1"], Refused),
     (
         "question cancel",
