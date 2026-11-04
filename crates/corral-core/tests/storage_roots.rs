@@ -120,7 +120,7 @@ fn defaults_load_on_fresh_and_migrated_workspaces() {
     assert_eq!(cfg.review_scratch_warn_bytes().unwrap(), 2 << 30);
     assert_eq!(cfg.review_evidence_max_bytes().unwrap(), 64 << 20);
     assert_eq!(cfg.blob_grace().as_secs(), 24 * 3600);
-    assert_eq!(cfg.view_max_age().as_secs(), 120);
+    assert_eq!(cfg.view_max_age().as_secs(), 5);
     let parsed: Config = toml::from_str("[storage]\ntranscript_retention_days = 30\n").unwrap();
     assert_eq!(
         parsed.storage.transcript_retention().unwrap().as_secs(),
