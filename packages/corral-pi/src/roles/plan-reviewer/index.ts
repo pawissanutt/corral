@@ -2,6 +2,7 @@
 // shell, edit or write tool, plus corral_ask, corral_withdraw, corral_plan_write (its notes
 // report) and corral_plan_verdict. It reviews one bound plan attempt and never accepts a plan.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { contentReadTool } from "../common/content.ts";
 
 import type { CorralOp, CorralToolSpec, RoleContext, RoleModule, UpstreamTool } from "../types.ts";
 import { receiptLookupTool, askTool, withdrawTool } from "../common/tools.ts";
@@ -11,7 +12,7 @@ import { planWriteTool } from "../planner/tools.ts";
 import { planVerdictTool } from "./tools.ts";
 
 const UPSTREAM: readonly UpstreamTool[] = ["read", "grep", "find", "ls"];
-const TOOLS: readonly CorralToolSpec[] = [receiptLookupTool(), askTool, withdrawTool, planWriteTool("notes"), planVerdictTool];
+const TOOLS: readonly CorralToolSpec[] = [receiptLookupTool(), contentReadTool, askTool, withdrawTool, planWriteTool("notes"), planVerdictTool];
 const OPS: readonly CorralOp[] = ["hello", "event", ...TOOLS.map((tool) => tool.op)];
 
 export const CONTRACT = `# corral plan reviewer contract (corral-pi)
@@ -20,6 +21,8 @@ You review plan {{run}} of corral task {{task}} (attempt {{review}}) in project 
 This is plan review, not implementation review.
 
 - The repository is read-only for you: you have read, grep, find and ls, and no shell or edit tool.
+- corral_content_read reads stored task specs, prior plans and artifacts by ref even when their
+  filesystem caches are absent. Read {{task}} for its spec and manifests; {{task}}@P1 reads plan P1.
 - corral_plan_verdict records approve, changes or escalate with your notes for this attempt only.
   An approval is never owner acceptance; owner decisions stay with the owner.
 - corral_plan_write drafts long notes into your notes report; corral chooses that path.

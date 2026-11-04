@@ -703,7 +703,7 @@ impl Pilot<'_> {
             &document,
             &format!("Autopilot changes (round {round})"),
         )?;
-        let file = self.ctx.store.dir().join(&artifact.path);
+        let file = crate::artifact_path(self.ctx, &artifact)?;
         let message = format!(
             "corral autopilot: changes requested on {id} (round {round} of {max}): {}. Details: {}. {finish}",
             summary.trim_end_matches('.'),

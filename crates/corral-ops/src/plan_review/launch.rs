@@ -167,7 +167,7 @@ pub(super) fn review_with_origin(
          Write concrete notes to {} and finish with:\n\n    {verdict_cmd}\n",
         task.id,
         task.title,
-        ctx.store.dir().join(&selected.artifact.path).display(),
+        crate::artifact_path(ctx, &selected.artifact)?.display(),
         selected.artifact.sha256,
         selected.spec_revision,
         task.body,

@@ -45,7 +45,7 @@ const REASON_MAX_BYTES: usize = 1024;
 pub(crate) fn lands(op: AgentOp) -> bool {
     matches!(
         op,
-        AgentOp::PlanWrite | AgentOp::PlanSubmit | AgentOp::PlanVerdict
+        AgentOp::ReadContent | AgentOp::PlanWrite | AgentOp::PlanSubmit | AgentOp::PlanVerdict
     )
 }
 
@@ -598,12 +598,16 @@ fn verdict(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
 
 pub(crate) fn call(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallResponse> {
     match op {
+        AgentOp::ReadContent => content::call(ctx, envelope),
         AgentOp::PlanWrite => write(ctx, envelope),
         AgentOp::PlanSubmit => submit(ctx, envelope),
         AgentOp::PlanVerdict => verdict(ctx, envelope),
         other => Err(super::unavailable(other, OWNER)),
     }
 }
+
+#[path = "content.rs"]
+mod content;
 
 #[cfg(test)]
 #[path = "planning_tests.rs"]

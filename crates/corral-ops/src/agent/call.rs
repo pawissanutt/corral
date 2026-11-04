@@ -48,6 +48,7 @@ pub enum AgentOp {
     ReadSearch,
     ReadRoute,
     ReadArtifacts,
+    ReadContent,
     ReadLessons,
     InboxRead,
     InboxResolve,
@@ -92,7 +93,7 @@ const ASSISTANT: &[AgentRole] = &[AgentRole::Assistant];
 const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm, AgentRole::Assistant];
 
 impl AgentOp {
-    pub const ALL: [AgentOp; 44] = [
+    pub const ALL: [AgentOp; 45] = [
         AgentOp::Hello,
         AgentOp::Event,
         AgentOp::ReceiptLookup,
@@ -120,6 +121,7 @@ impl AgentOp {
         AgentOp::ReadSearch,
         AgentOp::ReadRoute,
         AgentOp::ReadArtifacts,
+        AgentOp::ReadContent,
         AgentOp::ReadLessons,
         AgentOp::InboxRead,
         AgentOp::InboxResolve,
@@ -168,6 +170,7 @@ impl AgentOp {
             AgentOp::ReadSearch => "read_search",
             AgentOp::ReadRoute => "read_route",
             AgentOp::ReadArtifacts => "read_artifacts",
+            AgentOp::ReadContent => "read_content",
             AgentOp::ReadLessons => "read_lessons",
             AgentOp::InboxRead => "inbox_read",
             AgentOp::InboxResolve => "inbox_resolve",
@@ -201,7 +204,7 @@ impl AgentOp {
             | AgentOp::MemoryRead
             | AgentOp::MemoryPut
             | AgentOp::MemoryRemove => TODO,
-            AgentOp::Ask | AgentOp::Withdraw => ASKERS,
+            AgentOp::Ask | AgentOp::Withdraw | AgentOp::ReadContent => ASKERS,
             AgentOp::Evidence | AgentOp::Artifact => AGENTS,
             AgentOp::Wait | AgentOp::Progress | AgentOp::Checkpoint => WORKER,
             AgentOp::Gate | AgentOp::Done | AgentOp::Job | AgentOp::JobMonitor => WORKER,
@@ -271,9 +274,10 @@ impl AgentOp {
             | AgentOp::ReadLessons
             | AgentOp::InboxRead
             | AgentOp::InboxResolve => Some(Route::Pm),
-            AgentOp::PlanWrite | AgentOp::PlanSubmit | AgentOp::PlanVerdict => {
-                Some(Route::Planning)
-            }
+            AgentOp::ReadContent
+            | AgentOp::PlanWrite
+            | AgentOp::PlanSubmit
+            | AgentOp::PlanVerdict => Some(Route::Planning),
         }
     }
 

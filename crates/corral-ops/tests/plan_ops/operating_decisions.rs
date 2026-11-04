@@ -188,7 +188,7 @@ fn invalid_parent_answers_cannot_authorize_a_freshly_scoped_child() {
         "stale-spec",
         "stale-manifest",
         "stale-policy",
-        "changed-source",
+        "changed-recorded-hash",
         "changed-snapshot",
         "replaced-plan",
         "replaced-review",
@@ -230,7 +230,7 @@ fn invalid_parent_answers_cannot_authorize_a_freshly_scoped_child() {
                         .owner_decisions
                         .push("Choose backup".into()),
                     "stale-policy" => plan.approval.as_mut().unwrap().policy_digest.clear(),
-                    "changed-source" => std::fs::write(&plan.artifact.source, "Changed source")?,
+                    "changed-recorded-hash" => plan.artifact.sha256 = "0".repeat(64),
                     "changed-snapshot" => {
                         std::fs::write(
                             ctx.store.blob_store()?.path_of(

@@ -4,6 +4,7 @@
 // its current request after hello, even in a retained conversation. An observed attempt is not
 // submitted again when the same child recovers in another host generation.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { contentReadTool } from "../common/content.ts";
 
 import type { CorralOp, CorralToolSpec, RoleContext, RoleModule, UpstreamTool } from "../types.ts";
 import { assetRoot, readAsset, renderContract } from "../common/assets.ts";
@@ -13,7 +14,7 @@ import { verdictTool } from "./tools.ts";
 export const CONTRACT_ASSET = "assets/reviewer-contract.md";
 
 const UPSTREAM: readonly UpstreamTool[] = ["read", "grep", "find", "ls", "bash"];
-const TOOLS: readonly CorralToolSpec[] = [receiptLookupTool(), askTool, withdrawTool, evidenceTool, artifactTool, verdictTool];
+const TOOLS: readonly CorralToolSpec[] = [receiptLookupTool(), contentReadTool, askTool, withdrawTool, evidenceTool, artifactTool, verdictTool];
 const OPS: readonly CorralOp[] = ["hello", "event", ...TOOLS.map((tool) => tool.op)];
 
 /** The current review request: its prompt and how the commands map. */

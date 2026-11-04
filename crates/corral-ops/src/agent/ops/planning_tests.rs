@@ -18,6 +18,9 @@ dependencies: []\nverification: [cargo test -p widget]\nowner_decisions: []\n---
 ## Done scenarios\nCalling Widget.spin produces one clockwise rotation.\n\n\
 ## Implementation\nAdd Widget.spin in src/widget.rs and cover it with a unit test.\n";
 
+#[path = "content_tests.rs"]
+mod content_tests;
+
 /// A task in planning with native planner run D1 whose pane is p1.
 fn planning_task(fx: &ts::Fx) -> String {
     let id = ts::worker_task(fx, "p1");

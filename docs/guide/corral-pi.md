@@ -1421,6 +1421,16 @@ or write tool, so the source tree stays read-only even beyond the planner's read
   report file. A verdict always carries the launcher-bound plan and attempt, as `corral plan verdict --attempt` does, so it is never an
   owner verdict: an approval at most awaits owner acceptance.
 
+Both planning roles, workers and code reviewers also have `corral_content_read`. It reads
+same-project task specs and manifests (`T-123`), immutable plan snapshots (`T-123@P1`), and
+registered artifacts (`artifacts/T-123/R1/file.md` or `T-123:R1:file.md`) from storage, without
+requiring a shell or a restored `.corral` path. Task manifests include review notes and prior
+plan/artifact refs. Text pages are at most 4096 UTF-8 bytes (smaller when JSON escaping needs
+more receipt space); continue at `next_offset` until null. Binary artifacts use the viewer.
+Submitted plan bytes resolve by recorded hash; source and snapshot files are disposable
+caches, not freshness authorities. Prompts that still need a regular plan file receive a
+decoded cache copy resolved through artifact storage.
+
 Each host sends its dispatch prompt once per planning request. A revision round rewrites
 the prompt with its required changes and is sent again; relaunching the same request is not.
 Plan submission and verdicts reserve their receipt before the plan service commits, because
