@@ -10,6 +10,9 @@ use jiff::Timestamp;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
+#[path = "snapshot_lease_tests.rs"]
+mod lease_tests;
+#[cfg(test)]
 #[path = "snapshot_heads_tests.rs"]
 mod tests;
 
@@ -117,6 +120,12 @@ fn snapshot_inner(
     reconcile: bool,
     shared_admission: Option<&Option<String>>,
 ) -> Result<(Vec<TaskHead>, AttentionBoard, Option<String>)> {
+    // Host discovery is external work and can spend an entire read lease. Sample once
+    // before opening this phase's view; explicitly pinned callers still fail closed.
+    let admission = match shared_admission {
+        Some(sampled) => sampled.clone(),
+        None => crate::resources::read_admission(ctx)?,
+    };
     let frozen = ctx.store.read_only_snapshot()?;
     let mut roots = BTreeMap::new();
     for head in frozen
@@ -148,13 +157,9 @@ fn snapshot_inner(
     let context = context.into_values().collect::<Vec<_>>();
     let mut neighborhood = Neighborhood::new_heads(&context, &ctx.store.config, &policy)?;
     if reconcile && crate::park::latch_heads(ctx, &roots, &neighborhood, now)? {
-        return snapshot_inner(ctx, now, false, shared_admission);
+        return snapshot_inner(ctx, now, false, Some(&admission));
     }
     stopping::load(ctx, &mut neighborhood)?;
-    let admission = match shared_admission {
-        Some(sampled) => sampled.clone(),
-        None => crate::resources::read_admission(ctx)?,
-    };
     neighborhood.resource_wait = admission.clone();
     for task in roots
         .iter()
