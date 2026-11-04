@@ -186,6 +186,54 @@ fn digest_window_is_exclusive_start_inclusive_end_and_uses_historical_verdict() 
 }
 
 #[test]
+fn digest_joins_verdicts_in_record_order_even_with_equal_or_skewed_clocks() {
+    let (_temp, ctx) = fixture();
+    let mut task = ctx
+        .store
+        .create("ordering", None, Status::Done, "")
+        .unwrap();
+    task.runs.push(run("R1"));
+    task.runs[0].review = None;
+    let mut events = [
+        event(
+            &task,
+            "2026-01-01T00:10:00Z",
+            "verdict",
+            json!({"run":"R1","verdict":"approve"}),
+        ),
+        event(
+            &task,
+            "2026-01-01T00:10:00Z",
+            "approved",
+            json!({"run":"R1"}),
+        ),
+        event(
+            &task,
+            "2026-01-01T00:09:00Z",
+            "verdict",
+            json!({"run":"R1","verdict":"changes"}),
+        ),
+        event(
+            &task,
+            "2026-01-01T00:08:00Z",
+            "approved",
+            json!({"run":"R1"}),
+        ),
+    ];
+    for (index, event) in events.iter_mut().enumerate() {
+        event.seq = index as u64 + 1;
+    }
+    let digest = collect_digest(
+        &[task],
+        &events,
+        ts("2026-01-01T00:00:00Z"),
+        ts("2026-01-02T00:00:00Z"),
+    );
+    assert_eq!(digest.landed[1].verdict.as_deref(), Some("approve"));
+    assert_eq!(digest.landed[0].verdict.as_deref(), Some("changes"));
+}
+
+#[test]
 fn accounting_excludes_runs_outside_window_and_unknown_is_not_zero() {
     // Given an old run, an unknown run ending exactly at the cutoff, and a future run.
     let (_temp, ctx) = fixture();

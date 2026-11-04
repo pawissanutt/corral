@@ -127,12 +127,17 @@ pub fn collect_digest(
         let run_id = event.detail["run"]
             .as_str()
             .or_else(|| run.map(|r| r.id.as_str()));
-        let verdict = history
+        // The store supplies events in commit order. Wall clocks can tie or move
+        // backwards, so use the preceding records rather than timestamp order.
+        let position = events
+            .iter()
+            .position(|e| std::ptr::eq(e, event))
+            .unwrap_or(0);
+        let verdict = events[..position]
             .iter()
             .rev()
             .find(|e| {
-                e.ts <= event.ts
-                    && e.task == event.task
+                e.task == event.task
                     && e.kind == "verdict"
                     && match e.detail["run"].as_str() {
                         Some(id) => Some(id) == run_id,
