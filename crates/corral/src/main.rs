@@ -821,6 +821,7 @@ fn main() {
                 Some(arg) if arg.to_string_lossy().starts_with("--root=") => {}
                 Some(arg) if arg == "setup" => break Some("setup"),
                 Some(arg) if arg == "selection" => break Some("selection"),
+                Some(arg) if arg == "repair" => break Some("repair"),
                 Some(_) | None => break None,
             }
         };
@@ -841,6 +842,9 @@ fn main() {
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
     let setup_json = match &cli.cmd {
         Some(Cmd::Setup(args)) => Some(args.cmd.name()),
+        _ => None,
+    };
+    let repair_json = match &cli.cmd {
         Some(Cmd::Repair(args)) => Some(args.cmd.name()),
         _ => None,
     };
@@ -869,7 +873,14 @@ fn main() {
             eprintln!("error: {err}");
             std::process::exit(2);
         }
-        if let Some(command) = selection_json {
+        if let Some(command) = repair_json {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "command": format!("repair {command}"), "error": format!("{err:#}")
+                })
+            );
+        } else if let Some(command) = selection_json {
             eprintln!(
                 "{}",
                 serde_json::json!({

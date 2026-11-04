@@ -31,6 +31,7 @@ pub const RESERVED: &[&str] = &[
     "automation",
     "selection",
     "setup",
+    "repair",
     "runtime-probe",
     "digest",
     "revert",

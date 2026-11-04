@@ -64,9 +64,10 @@ while corrective starts still commit with the executor's final task mutation.
 - The run's receipted quick gate is requested only after commit and final rebase; its
   separate Corral receipt/log is the gate authority, not this pre-gate report.
 
-Test cost: **4 new deterministic lower-layer tests**; the existing inbox journey and
-exhaustive CLI-classification table were enhanced. No new end-to-end, slow, load or prose tests. The added tests took 1.11s together in the
-earlier recorded targeted run (compilation excluded); the existing inbox case took 0.20s and the two
+Test cost: **5 new deterministic tests** (4 service tests and 1 store-free CLI error
+contract); the existing inbox journey and exhaustive CLI-classification table were
+enhanced. No new end-to-end journeys, slow, load or prose tests. The four service tests
+took 1.11s together in an earlier recorded targeted run (compilation excluded); the existing inbox case took 0.20s and the two
 existing stronger-review cases 2.15s. The gate records its own candidate-added timing.
 
 Final runtime check: `902fdb68-repair-tests-final.log` passes all four service tests
@@ -89,6 +90,19 @@ to that existing table; no assertion or guard was relaxed. The targeted
 now passes in 4.50s (`0b2e76e0-assistant-classification.log`). The next receipted quick
 gate supplies the final candidate-wide result; the first stopped early and is not proof
 of the unrun tests. Its existing-test timing overruns remain report-only observations.
+
+The second quick gate (`ag-fce82644d6c589cd`, log
+`1e0c7a05-T-156-R1-ag-fce82644d6c589cd.log`) passed 585 tests before the existing
+extension-registry invariant caught `repair` missing from the reserved built-in list.
+Registered it; both extension unit tests pass (`a9d2e8a0-repair-reserved.log`). Checking
+that boundary also found a repair error incorrectly emitted as `setup status`. A single
+store-free CLI contract reproduced it (`4fdfe081-repair-error-red.log`) and passes after
+giving repair its own structured error identity (`0916c730-repair-error-green.log`, 0.01s).
+The exhaustive assistant-classification test still passes on these CLI changes
+(`2c3a39f4-assistant-classification-final.log`, 14.93s). Complete CLI diagnostics show no
+errors/warnings, only two existing platform-cfg hints (`8d251f59-cli-diagnostics.json`).
+These are CLI integration fixes for the new command, not changes to acceptance, retries
+or the gate contract. No failing assertion was weakened.
 
 Not exercised: live model/provider calls, paid execution, or load generation. None was
 required or authorized. This increment does not migrate the owner's live configuration,
