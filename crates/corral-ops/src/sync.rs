@@ -118,6 +118,8 @@ fn sync_passes(
     if !crate::session_scope::owns_inventory(ctx)? {
         return Ok(Vec::new());
     }
+    // Unobserved opens defer PM upgrades until this ownership check has succeeded.
+    corral_core::agent::pm_state::migrate(&ctx.store)?;
     // Recovery and derivation preparation run before the measured passes.
     crate::settling::recover(ctx)?;
     let mut rebuild = false;

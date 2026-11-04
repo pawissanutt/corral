@@ -36,9 +36,10 @@ impl AgentPm {
     }
 }
 
-/// Upgrade the former whole-document journal once, before serving hot readers. The dispatch
-/// and PM locks serialize the upgrade with launch, fencing, and task-level PM checks.
-pub(crate) fn migrate(store: &Store) -> Result<()> {
+/// Upgrade the former whole-document journal before serving hot readers. Observing opens
+/// and owning-sync preparation call this; observational preflights must not probe or write
+/// PM state. Dispatch and PM locks serialize the upgrade with launch and fencing.
+pub fn migrate(store: &Store) -> Result<()> {
     if store
         .record::<serde_json::Value>("agent-pm", "current")?
         .is_some_and(|doc| {
