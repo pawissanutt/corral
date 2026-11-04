@@ -326,6 +326,9 @@ fn gate_start_origin(
     request: Option<crate::review_budget::GateRequest>,
 ) -> Result<GateRecord> {
     ctx.store.check_runtime()?;
+    crate::recovery::require_no_pending(ctx, id, None)?;
+    let recovery_attempt =
+        crate::recovery::admission_attempt(ctx, id, corral_core::RecoveryAdmissionStage::Gate)?;
     // A running attempt belongs to an open task's current run.
     if let Some(inherited) = std::env::var_os("CORRAL_GATE_ATTEMPT")
         && ctx
@@ -395,15 +398,19 @@ fn gate_start_origin(
         );
     }
     let sha = corral_git::rev_sha(&run.worktree, "HEAD")?;
-    let attempt = launch.bound_attempt().or(requested).unwrap_or_else(|| {
-        // A fixed-width pid (Linux pids have at most seven digits): attempt ids, and the records
-        // that carry them, keep one size whichever process starts the gate.
-        format!(
-            "{:07}-{}",
-            std::process::id(),
-            jiff::Timestamp::now().as_nanosecond()
-        )
-    });
+    let attempt = launch
+        .bound_attempt()
+        .or(recovery_attempt)
+        .or(requested)
+        .unwrap_or_else(|| {
+            // A fixed-width pid (Linux pids have at most seven digits): attempt ids, and the records
+            // that carry them, keep one size whichever process starts the gate.
+            format!(
+                "{:07}-{}",
+                std::process::id(),
+                jiff::Timestamp::now().as_nanosecond()
+            )
+        });
     let origin = crate::gate_tier::origin_step(&run, &contract);
     let identity = match (launch.bound_candidate(), origin.promoted_from()) {
         (Some(candidate), _) => candidate,
@@ -600,11 +607,17 @@ fn gate_start_origin(
     let expected_status = task.status;
     ctx.herdr
         .pane_report_metadata(&pane, &title, &[("task", task.id.as_str())])?;
+    crate::recovery::active_journal(&launch)?;
     launch.submit_head(
         |store, head| {
             let mut fresh = ctx.clone();
             fresh.store = store.clone();
             let task = &*head;
+            crate::recovery::admission_attempt(
+                &fresh,
+                id,
+                corral_core::RecoveryAdmissionStage::Gate,
+            )?;
             let current = current_run_head(task)?;
             let expected = record.identity.as_ref().context("missing gate identity")?;
             if task.status != expected_status

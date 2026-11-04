@@ -562,6 +562,17 @@ impl<'a> ReviewLaunch<'a> {
         }))
     }
 
+    pub(crate) fn recovery_journal(&self, record: &corral_core::RecoveryRecord) -> Result<()> {
+        crate::recovery::bind_journal(
+            self.ctx,
+            record,
+            self.pending
+                .authorization
+                .as_ref()
+                .context("review launch authorization missing")?,
+        )
+    }
+
     /// Binds the agent request this launch executes, before either submit path runs.
     pub(crate) fn bind_request(&mut self, request: GateRequest) {
         self.request = Some(request);

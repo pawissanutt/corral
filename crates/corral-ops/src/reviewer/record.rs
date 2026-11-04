@@ -131,6 +131,7 @@ pub(super) fn record_verdict(
         }
         refuse_review_child(ctx, t, &run.id)?;
         let current = t.current_run().context("run disappeared")?;
+        crate::recovery::code_review_record(ctx, t, &record)?;
         let (changes, _) = verification::verdict_changes(ctx, t, &corral_core::RunHead::of(current)?, &record)?;
         if !changes.is_empty() {
             bail!("stale review: {}", serde_json::to_string(&changes)?);

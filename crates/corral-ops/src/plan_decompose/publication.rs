@@ -177,7 +177,11 @@ pub(super) fn children(
             child.queued = false;
             child.dispatch_plan = None;
             child.launch = None;
-            child.dispatch_hold = false;
+            child.dispatch_hold = crate::recovery::plan_recovery_bound(
+                &crate::Ctx::from_store(store.clone()),
+                &parent.id,
+                backlink.split_once('@').context("invalid plan backlink")?.1,
+            )?;
             child.review_reservation = None;
             child.review_wait = None;
             clear_inherited(&mut child);

@@ -76,12 +76,41 @@ pub(crate) fn next_plan_attempt<T: corral_core::TaskRef + ?Sized>(
 }
 
 pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanReview> {
-    review_with_origin(ctx, id, reviewer, crate::operating::Origin::Owner)
+    review_with_origin(ctx, id, reviewer, crate::operating::Origin::Owner, None)
 }
 
 pub(crate) fn review_auto(ctx: &Ctx, id: &str) -> Result<PlanReview> {
     let _action = corral_core::work::action(id, OperatingActionKind::PlanReview);
-    review_with_origin(ctx, id, None, crate::operating::Origin::Automatic)
+    review_with_origin(ctx, id, None, crate::operating::Origin::Automatic, None)
+}
+
+pub(crate) fn review_recovery(
+    ctx: &Ctx,
+    id: &str,
+    reviewer: &str,
+    recovery: &corral_core::RecoveryRecord,
+) -> Result<PlanReview> {
+    review_with_origin(
+        ctx,
+        id,
+        Some(reviewer),
+        crate::operating::Origin::Owner,
+        Some(recovery),
+    )
+}
+
+pub(crate) fn review_forced(
+    ctx: &Ctx,
+    id: &str,
+    recovery: &corral_core::RecoveryRecord,
+) -> Result<PlanReview> {
+    review_with_origin(
+        ctx,
+        id,
+        None,
+        crate::operating::Origin::Owner,
+        Some(recovery),
+    )
 }
 
 /// A suspended attempt owns its next action even when an older verdict remains
@@ -173,7 +202,17 @@ fn verdict_report_inner(
             "stale plan verdict: plan was replaced; inspect `corral plan show <id> --json`",
         )?;
         plan::fresh(ctx, task, selected)?;
-        let digest = plan::policy_digest(&config, task)?;
+        let recovery = match input.attempt.or_else(|| selected.reviews.last().map(|r| r.id.as_str())) {
+            Some(attempt) => crate::recovery::plan_review_record(ctx, task, input.plan, attempt)?,
+            None => None,
+        };
+        if recovery.is_some() && input.attempt.is_none() && input.verdict == Verdict::Approve {
+            bail!("recovery-bound plan requires trusted local owner confirmation through recover accept-plan");
+        }
+        let digest = match &recovery {
+            Some(record) => record.preview.contract_digest.clone(),
+            None => plan::policy_digest(&config, task)?,
+        };
         let required = config.plan_required(task.project.as_deref(), task.plan_required);
         let mut mismatch = false;
         let mut authorized = true;
@@ -196,10 +235,14 @@ fn verdict_report_inner(
                         bail!("stale plan verdict: review receipt {receipt} no longer validates; review again");
                     }
                 }
-                authorized = corral_core::plan_policy::plan_reviewer_authorized(
-                    &ctx.store, &config, task, review, &plan::expected_reviewer(&config, task)?)?
-                    && (review.reviewer != "pm"
-                        || crate::availability::pm_plan_reviewer(ctx, &config, task).is_ok());
+                authorized = if let Some(record) = &recovery {
+                    matches!(&record.preview.proposed_effect, corral_core::RecoveryEffect::ReviewAttempt { reviewer, .. } if reviewer.profile == review.reviewer)
+                        && review.herdr.is_some()
+                } else {
+                    corral_core::plan_policy::plan_reviewer_authorized(
+                        &ctx.store, &config, task, review, &plan::expected_reviewer(&config, task)?)?
+                        && (review.reviewer != "pm" || crate::availability::pm_plan_reviewer(ctx, &config, task).is_ok())
+                };
                 review.reviewer.clone()
             }
             None => {
@@ -208,18 +251,12 @@ fn verdict_report_inner(
             }
         };
         let owner = input.attempt.is_none();
-        let expected = plan::expected_reviewer(&config, task)?;
-        let reviewed = match selected.reviews.last() {
-            Some(r) => r.verdict == Some(Verdict::Approve)
-                && r.policy_digest == digest
-                && crate::review_contracts::plan_route_ok(&config, task, r)
-                && corral_core::plan_policy::plan_reviewer_authorized(&ctx.store, &config, task, r, &expected)?,
-            None => false,
-        };
+        let expected = if recovery.is_some() { "recovery-reviewer".into() } else { plan::expected_reviewer(&config, task)? };
+        let reviewed = crate::recovery::plan_review_valid(ctx, task, selected).is_ok();
         let decisions = plan::owner_decisions(task, selected);
         let mut notes = input.notes.to_string();
         let verdict = match input.verdict {
-            Verdict::Approve if owner && plan::expected_reviewer(&config, task)? != "owner" && !reviewed => {
+            Verdict::Approve if owner && expected != "owner" && !reviewed => {
                 bail!("independent review must approve before owner acceptance");
             }
             Verdict::Approve if !owner && !authorized => {
@@ -253,8 +290,11 @@ fn verdict_report_inner(
             crate::plan_decompose::check_attachment(&ctx.store, task, input.plan)?;
         }
         // An old queued intent must not turn approval into an automatic implementation launch.
-        if required {
+        if required || recovery.is_some() {
             task.queued = false;
+        }
+        if recovery.is_some() && accepted {
+            task.dispatch_hold = true;
         }
         let p = current(task, input.plan)?;
         p.approval = accepted.then(|| PlanApproval {
@@ -300,7 +340,7 @@ fn verdict_report_inner(
         let published = plan::published_design(task);
         if !cancelled && !published && verdict == Verdict::Approve && !accepted {
             let effective = ctx.store.effective_operating_policy()?;
-            task.status = if decisions || config.explicit_owner_acceptance(task, true)
+            task.status = if recovery.is_some() || decisions || config.explicit_owner_acceptance(task, true)
                 || !config.automation.authority.plan_accept
                 || effective.mode == OperatingMode::Assist {
                 corral_core::Status::NeedsMe
@@ -390,6 +430,10 @@ fn verdict_report_inner(
 /// Reconcile an already completed independent review under explicit automatic policy.
 pub(crate) fn accept_auto(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
     let _action = corral_core::work::action(id, OperatingActionKind::AcceptPlan);
+    anyhow::ensure!(
+        !crate::recovery::plan_recovery_bound(ctx, id, plan_id)?,
+        "recovery-bound plan requires explicit owner acceptance"
+    );
     let snapshot = ctx.store.head(id)?;
     let selected = snapshot
         .last_plan
@@ -413,6 +457,10 @@ pub(crate) fn accept_auto(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
         ctx,
         &authorization,
         |store, task| {
+            anyhow::ensure!(
+                !crate::recovery::plan_recovery_bound(ctx, id, plan_id)?,
+                "recovery-bound plan requires explicit owner acceptance"
+            );
             let config = &store.config;
             // The plan's planning run is read by key; the checks read the current plan and
             // its current review, which the head's shell holds.

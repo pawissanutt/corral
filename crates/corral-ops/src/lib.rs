@@ -108,6 +108,7 @@ pub mod questions;
 mod queue;
 mod queue_drain;
 mod reply_ack;
+pub mod recovery;
 mod resource_escalation;
 pub mod resources;
 mod resume;

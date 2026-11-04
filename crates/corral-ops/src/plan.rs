@@ -206,7 +206,11 @@ pub fn approved_plan<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<Option<
     let plan = shell.plans.last().context(
         "plan required: submit with `corral plan submit <id> <path>`, then review and approve it before dispatch",
     )?;
-    corral_core::plan_policy::validate_approval(&ctx.store, &config, &shell, plan)?;
+    if crate::recovery::records(ctx, task.id())?.is_empty()
+        || !crate::recovery::recovered_approval(ctx, &ctx.store.get(task.id())?, plan)?
+    {
+        corral_core::plan_policy::validate_approval(&ctx.store, &config, &shell, plan)?;
+    }
     Ok(Some(plan.clone()))
 }
 

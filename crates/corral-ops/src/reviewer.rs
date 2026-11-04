@@ -73,7 +73,7 @@ fn pane_alive(ctx: &Ctx, pane: &str) -> Result<bool> {
 /// run's `pending_reply`. Known authorization refusals retain the exact prepared attempt.
 /// A previous reviewer pane is closed first (never the PM pane).
 pub fn review_run(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<ReviewRecord> {
-    launch::review_run_origin(ctx, id, reviewer, crate::operating::Origin::Owner)
+    launch::review_run_origin(ctx, id, reviewer, crate::operating::Origin::Owner, None)
 }
 
 pub(crate) fn review_run_automatic(
@@ -81,7 +81,36 @@ pub(crate) fn review_run_automatic(
     id: &str,
     reviewer: Option<&str>,
 ) -> Result<ReviewRecord> {
-    launch::review_run_origin(ctx, id, reviewer, crate::operating::Origin::Automatic)
+    launch::review_run_origin(ctx, id, reviewer, crate::operating::Origin::Automatic, None)
+}
+
+pub(crate) fn review_recovery(
+    ctx: &Ctx,
+    id: &str,
+    reviewer: &str,
+    recovery: &corral_core::RecoveryRecord,
+) -> Result<ReviewRecord> {
+    launch::review_run_origin(
+        ctx,
+        id,
+        Some(reviewer),
+        crate::operating::Origin::Owner,
+        Some(recovery),
+    )
+}
+
+pub(crate) fn review_forced(
+    ctx: &Ctx,
+    id: &str,
+    recovery: &corral_core::RecoveryRecord,
+) -> Result<ReviewRecord> {
+    launch::review_run_origin(
+        ctx,
+        id,
+        None,
+        crate::operating::Origin::Owner,
+        Some(recovery),
+    )
 }
 
 /// Resolve under the task lock and preserve the first successful historical vendor snapshot.
@@ -336,6 +365,7 @@ fn verdict_inner(
     let mut moved = None;
     let (verdict, notes) = match started.as_ref() {
         Some(s) => {
+            crate::recovery::code_review_record(ctx, &task, s)?;
             let mut changes;
             (changes, moved) = verification::verdict_changes(ctx, &task, &run_head, s)?;
             if changes.is_empty()
