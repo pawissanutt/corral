@@ -683,7 +683,10 @@ fn batched_ask_opens_one_group_that_one_group_answer_settles() {
     let inbox = crate::attention::inbox::list(&fx.ctx, None, Timestamp::now()).unwrap();
     let items: Vec<_> = inbox.items.iter().filter(|i| i.task == id).collect();
     assert_eq!(items.len(), 1);
-    assert_eq!((items[0].kind, items[0].key.as_str()), ("question_group", q1.as_str()));
+    assert_eq!(
+        (items[0].kind, items[0].key.as_str()),
+        ("question_group", q1.as_str())
+    );
     assert_eq!(items[0].revision, format!("{q1}@1,{q2}@1"));
     assert!(
         members
