@@ -44,11 +44,12 @@ export function navRows(source: NavSource, now = Date.now()): NavRow[] {
       ...(current ? { sub: PANEL_BLUE + "● " + PANEL_MUTED + plainLabel(current.label) + (waiting ? PANEL_WARNING + " ⏸" : "") } : {}) });
   }
   rows.push({ view: "conversation", key: "F9", label: "Chat", badge: snapshot?.streaming ? PANEL_BLUE + "●" : "" });
-  let added = 0, removed = 0;
-  for (const stat of review.stats.values()) { added += stat.added ?? 0; removed += stat.removed ?? 0; }
+  // Untracked and binary files have no line counts: never show them as +0−0.
+  let added = 0, removed = 0, counted = 0;
+  for (const stat of review.stats.values()) { if (stat.added === null) continue; counted++; added += stat.added; removed += stat.removed ?? 0; }
   const files = review.checkedAt ? review.files.length : 0;
   rows.push({ view: "changes", key: "F7", label: "Changes",
-    badge: review.scopeRequired ? PANEL_WARNING + "?" : files ? PANEL_SUCCESS + `+${added}` + PANEL_ERROR + `−${removed}` : "",
+    badge: review.scopeRequired ? PANEL_WARNING + "?" : files ? counted ? PANEL_SUCCESS + `+${added}` + PANEL_ERROR + `−${removed}` : PANEL_TEXT + `Δ${files}` : "",
     ...(review.scopeRequired ? { sub: "choose project" } : review.error ? { sub: PANEL_WARNING + plainLabel(review.error) }
       : files ? { sub: `${files} file${files === 1 ? "" : "s"} · ${plainLabel(basename(review.files[0]?.path ?? ""))}` } : {}) });
   const jobs = (snapshot?.jobs ?? []).filter(job => job.state === "running");
