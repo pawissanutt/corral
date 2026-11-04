@@ -4,7 +4,7 @@ import type { ContextUsage, Theme } from "@earendil-works/pi-coding-agent";
 import type { HostIdentity } from "../roles/types.ts";
 import type { TodoProgress } from "./todo-widget.ts";
 import { inspectorActivity, inspectorContext, type InspectorSnapshot } from "./inspector.ts";
-import { ansi, PACKAGED, type Appearance } from "./appearance.ts";
+import { ansi, tint, PACKAGED, type Appearance } from "./appearance.ts";
 
 export const PANEL_TABS = ["Context", "Files", "Plan"] as const;
 export type PanelTab = typeof PANEL_TABS[number];
@@ -53,11 +53,19 @@ export let PANEL_SUCCESS = ansi(PACKAGED.dark.success);
 export let PANEL_WARNING = ansi(PACKAGED.dark.warning);
 export let PANEL_ERROR = ansi(PACKAGED.dark.error);
 export let PANEL_SELECTED = ansi(PACKAGED.dark.selected, true);
+/** Tinted backgrounds (chips, diff rows, hunk bars), derived from the same packaged palette. */
+export interface PanelTints { readonly raised: string; readonly accent: string; readonly success: string; readonly warning: string; readonly error: string }
+function panelTints(appearance: Appearance): PanelTints {
+  const p = PACKAGED[appearance], bg = (color: string, amount: number) => ansi(tint(p.background, color, amount), true);
+  return { raised: bg(p.text, 0.06), accent: bg(p.accent, 0.12), success: bg(p.success, 0.14), warning: bg(p.warning, 0.14), error: bg(p.error, 0.14) };
+}
+export let PANEL_TINT = panelTints("dark");
 /** One native host per process; live bindings keep every panel on the same packaged palette. */
 export function setPanelAppearance(appearance: Appearance): void {
   const p = PACKAGED[appearance];
   PANEL_BG = ansi(p.background, true); PANEL_TEXT = ansi(p.text); PANEL_MUTED = ansi(p.muted);
   PANEL_BLUE = ansi(p.accent); PANEL_RULE = ansi(p.rule); PANEL_SUCCESS = ansi(p.success); PANEL_WARNING = ansi(p.warning); PANEL_ERROR = ansi(p.error); PANEL_SELECTED = ansi(p.selected, true);
+  PANEL_TINT = panelTints(appearance);
 }
 export function styledPanelLine(row: PanelLine): string {
   const color = row.tone === "muted" ? PANEL_MUTED : row.tone === "success" ? PANEL_SUCCESS

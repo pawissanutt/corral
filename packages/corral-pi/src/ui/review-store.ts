@@ -28,6 +28,8 @@ export class ReviewStore {
   candidateBase: string | undefined;
   root: string; branch = "unknown"; head: string | undefined; patchPath: string | undefined; patchComparison: Comparison = "all"; patchAt: number | undefined; comparison: Comparison = "all"; query = "";
   files: readonly PanelFile[] = []; selected: string | undefined;
+  /** Working-tree status at the last read (also in candidate mode), for the other-comparison counts. */
+  worktree: readonly PanelFile[] | undefined;
   patch = "Select a file to inspect its diff."; error: string | undefined;
   checkedAt: number | undefined; refreshing = false; revision = 0;
   stats: ReadonlyMap<string, FileStat> = new Map();
@@ -49,7 +51,7 @@ export class ReviewStore {
     this.explicitScope = true; this.strictRoot = true;
     this.epoch++; this.patchEpoch++; this.root = resolve(this.root, path); this.scopeRequired = false; this.comparison = "all"; this.candidateBase = undefined;
     this.head = undefined; this.branch = "unknown"; this.error = undefined; this.stats = new Map(); this.query = ""; this.patchSnapshot = undefined;
-    this.files = []; this.selected = undefined; this.patchPath = undefined; this.checkedAt = undefined; this.patch = "Loading repository…";
+    this.files = []; this.worktree = undefined; this.selected = undefined; this.patchPath = undefined; this.checkedAt = undefined; this.patch = "Loading repository…";
     this.changed();
     // Wait for an old read before refreshing the newly selected scope.
     await this.active; await this.refresh();
@@ -84,7 +86,7 @@ export class ReviewStore {
       const files = parseStatus(status);
       const statText = await panelGit(root, ["diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z", ...comparisonArgs(comparison)], this.abort.signal).catch(() => "");
       if (this.disposed || epoch !== this.epoch) return;
-      this.root = root; this.head = head.trim() || undefined; this.branch = branch.trim(); this.files = files; this.stats = parseNumstat(statText);
+      this.root = root; this.head = head.trim() || undefined; this.branch = branch.trim(); this.files = files; this.worktree = files; this.stats = parseNumstat(statText);
       this.error = undefined; this.checkedAt = Date.now(); this.revision++;
       if (this.selected === undefined) this.selected = this.visible[0]?.path;
       await this.loadSelected();
@@ -96,13 +98,14 @@ export class ReviewStore {
     if (!this.candidate) throw new Error("No task/run candidate bound to this session; c selects working changes");
     const data = await this.candidate();
     const root = await repositoryRoot(data.root, this.abort.signal);
-    const [paths, stats] = await Promise.all([
+    const [paths, stats, status] = await Promise.all([
       panelGit(root, ["diff", "--no-ext-diff", "--no-textconv", "--find-renames", "--name-status", "-z", data.base, data.head], this.abort.signal),
       panelGit(root, ["diff", "--no-ext-diff", "--no-textconv", "--find-renames", "--numstat", "-z", data.base, data.head], this.abort.signal),
+      panelGit(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], this.abort.signal).then(parseStatus, () => undefined),
     ]);
     if (this.disposed || epoch !== this.epoch) return;
     this.root = root; this.head = data.head; this.candidateBase = data.base; this.branch = data.task + "/" + data.run;
-    this.files = parseChangedPaths(paths); this.stats = parseNumstat(stats); this.error = undefined;
+    this.files = parseChangedPaths(paths); this.worktree = status; this.stats = parseNumstat(stats); this.error = undefined;
     this.checkedAt = Date.now(); this.revision++;
     if (this.selected === undefined) this.selected = this.visible[0]?.path;
     await this.loadSelected();

@@ -174,3 +174,15 @@ test("export reaches the existing flow; refusals and stale reads stay visible", 
     expect(foreign.handleInput("\r")).toBe(false);
   } finally { rmSync(store, { recursive: true, force: true }); }
 });
+
+test("openPath opens the artifact registered at that path, not the catalog's first row", async () => {
+  const { store, catalog } = fixture();
+  try {
+    const { view, calls } = harness(catalog);
+    await view.openPath("artifacts/T-001/R1/2222-report.md");
+    expect(calls).toEqual(["show T-001:R1:2222-report.md"]);
+    await view.openPath("artifacts/T-001/R1/missing.log");
+    expect(calls).toHaveLength(1);
+    expect(view.notice).toContain("not opened");
+  } finally { rmSync(store, { recursive: true, force: true }); }
+});

@@ -71,6 +71,8 @@ export interface JobInspection {
   readonly startedAt: number | undefined; readonly endedAt: number | undefined;
   readonly exitCode: number | null; readonly signal: string | null; readonly groupClear: boolean;
   readonly bytes: number; readonly truncated: boolean; readonly tail: string; readonly monitorAttempts: number;
+  /** Process-group leader, finished output lines and launch directory; absent from legacy observations. */
+  readonly pid?: number; readonly lines?: number; readonly cwd?: string;
   readonly watches: readonly { wait: string; pattern: string; armed: boolean; matched: string | undefined; reportQueued: boolean; deadline: string }[];
 }
 interface Watcher {
@@ -499,6 +501,7 @@ export class JobRuntime {
       job: job.id, command: job.command, state: job.state, startedAt: job.startedAt, endedAt: job.endedAt,
       exitCode: job.exitCode, signal: job.signal, groupClear: job.groupClear,
       bytes: job.bytes, truncated: job.bytes > job.stored, tail: job.tail.subarray(-8192).toString("utf8"), monitorAttempts: job.monitors,
+      pid: job.pid, lines: job.lines, cwd: this.options.cwd,
       watches: job.watchers.map(w => ({ wait: w.wait, pattern: w.regex.source, armed: w.armed, matched: w.matched, reportQueued: w.reported, deadline: w.deadline })),
     }));
   }
