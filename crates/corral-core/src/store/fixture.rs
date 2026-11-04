@@ -13,7 +13,7 @@ impl Store {
     fn event_fixture(&self) -> Result<&crate::sqlite::SqliteBackend> {
         self.db
             .sqlite
-            .as_ref()
+            .as_deref()
             .context("this store has no database file")
     }
 

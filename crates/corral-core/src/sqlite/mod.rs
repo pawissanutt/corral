@@ -1,7 +1,7 @@
 //! The SQLite implementation of the storage contract (plan T-253 sections 1-2 and 11), and the
 //! only place in corral that names SQL or a database mechanism.
 //!
-//! The database is `.corral/db/corral.db` in WAL mode with `synchronous = FULL` and foreign keys
+//! The database is `.corral/db/corral.db` in WAL mode with `synchronous = NORMAL` and foreign keys
 //! on. Every `apply` is one `BEGIN IMMEDIATE` transaction holding the operation's rows, events,
 //! blob references, aggregates and change entry; every precondition is a logical check inside
 //! that transaction (revision, version or `from` state), so correctness never depends on SQLite
@@ -21,8 +21,10 @@ mod install_notices;
 mod lesson_approvals;
 mod lesson_artifacts;
 mod load;
+mod maintenance;
 pub mod migrate;
 mod plans;
+mod readers;
 mod row_indexes;
 mod run_worktrees;
 mod schema;
@@ -31,6 +33,8 @@ mod tx_blobs;
 mod tx_storage;
 mod tx_tasks;
 mod view;
+#[cfg(test)]
+mod wal_tests;
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -44,6 +48,7 @@ pub use artifact_reviews::TABLES as ARTIFACT_REVIEW_TABLES;
 pub use fs::{FilesystemProbe, is_refused_filesystem, statfs_probe};
 pub use lesson_approvals::TABLES as LESSON_APPROVAL_TABLES;
 pub use lesson_artifacts::TABLES as LESSON_ARTIFACT_TABLES;
+pub use maintenance::WAL_LIMIT_BYTES;
 pub use schema::{BACKEND_TABLES, SCHEMA_VERSION, SECTION_11};
 
 use crate::backend::*;
@@ -71,6 +76,8 @@ pub struct SqliteOptions {
     pub faults: Arc<FaultInjector>,
     pub filesystem: FilesystemProbe,
     pub barrier: Option<Barrier>,
+    /// Explicit throwaway-database seam; never selected by production openers.
+    pub fixture_no_sync: bool,
 }
 
 impl Default for SqliteOptions {
@@ -81,6 +88,7 @@ impl Default for SqliteOptions {
             faults: Arc::new(FaultInjector::default()),
             filesystem: statfs_probe,
             barrier: None,
+            fixture_no_sync: false,
         }
     }
 }
@@ -130,6 +138,7 @@ pub struct SqliteBackend {
     options: SqliteOptions,
     writer: Mutex<Connection>,
     readers: Arc<Mutex<Vec<Connection>>>,
+    active_readers: readers::ActiveReaders,
     /// Unfinished JSONL fixture input, never consulted by database readers.
     fixture_event_input: Mutex<String>,
     /// Kept alive by every view this handle opens (the store gate of its opener).
@@ -165,7 +174,7 @@ fn connect(path: &Path) -> Result<Connection> {
         Connection::open(path).with_context(|| format!("open database {}", path.display()))?;
     conn.busy_handler(Some(busy_wait))
         .context("install busy handler")?;
-    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL;")
+    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL; PRAGMA journal_size_limit = 16777216;")
         .context("configure connection")?;
     Ok(conn)
 }
@@ -207,6 +216,9 @@ impl SqliteBackend {
         }
         let mut writer = connect(path)?;
         enable_wal(&writer)?;
+        if options.fixture_no_sync {
+            writer.execute_batch("PRAGMA synchronous = OFF")?;
+        }
         let seed = format!(
             "{}:{}:{}",
             path.display(),
@@ -226,6 +238,7 @@ impl SqliteBackend {
             options,
             writer: Mutex::new(writer),
             readers: Arc::new(Mutex::new(Vec::new())),
+            active_readers: Mutex::default(),
             fixture_event_input: Mutex::new(String::new()),
             retain: None,
         })
@@ -265,6 +278,9 @@ impl SqliteBackend {
             Some(conn) => Ok(conn),
             None => {
                 let conn = connect(&self.path)?;
+                if self.options.fixture_no_sync {
+                    conn.execute_batch("PRAGMA synchronous = OFF")?;
+                }
                 conn.execute_batch("PRAGMA query_only = ON")
                     .context("make the read connection query-only")?;
                 Ok(conn)
@@ -273,10 +289,7 @@ impl SqliteBackend {
     }
 
     fn give_back(&self, conn: Connection) {
-        self.readers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(conn);
+        readers::recycle(&self.readers, conn);
     }
 
     pub fn pragmas(&self) -> Result<Pragmas> {
@@ -412,6 +425,7 @@ impl SqliteBackend {
 
     /// Runs a `TRUNCATE` checkpoint on this handle's writer connection.
     pub fn checkpoint_truncate(&self) -> Result<WalCheckpoint> {
+        readers::expire_idle(&self.active_readers)?;
         let conn = self.writer();
         let (busy, wal_frames, checkpointed): (i64, i64, i64) = conn
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
@@ -440,6 +454,12 @@ impl StoreBackend for SqliteBackend {
             max_age,
             self.retain.clone(),
         )?;
+        let mut active = self
+            .active_readers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        active.retain(|reader| reader.strong_count() > 0);
+        active.push(view.lease());
         Ok(Box::new(view))
     }
 
@@ -450,15 +470,25 @@ impl StoreBackend for SqliteBackend {
             op: op.kind(),
         };
         let mut conn = self.writer();
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let in_write = guard::WriteScope::enter();
-        let now = self.options.clock.now();
-        let committed = tx::run(&tx, op, now, &hooks)?;
-        hooks.point("commit");
-        tx.commit()?;
-        drop(in_write);
-        hooks.point("committed");
-        Ok(committed)
+        let full = !self.options.fixture_no_sync && maintenance::requires_full(&conn, &op)?;
+        if full {
+            conn.execute_batch("PRAGMA synchronous = FULL")?;
+        }
+        let result = (|| {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let in_write = guard::WriteScope::enter();
+            let now = self.options.clock.now();
+            let committed = tx::run(&tx, op, now, &hooks)?;
+            hooks.point("commit");
+            tx.commit()?;
+            drop(in_write);
+            hooks.point("committed");
+            Ok(committed)
+        })();
+        if full {
+            conn.execute_batch("PRAGMA synchronous = NORMAL")?;
+        }
+        result
     }
 
     fn check(&self) -> Result<IntegrityReport> {

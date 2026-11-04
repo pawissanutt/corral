@@ -73,6 +73,7 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     };
     let mut changes = Vec::new();
     for task in output::review_tasks(&ctx)? {
+        let task = ctx.store.head(&task.id)?;
         if crate::plan_pilot::handles_ref(&task)? {
             continue;
         }
@@ -83,6 +84,7 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         {
             return Err(error);
         }
+        let task = task.detach();
         match advance(&ctx, &task.id, now) {
             Ok(Some(c)) => changes.extend(c),
             Ok(None) => {}

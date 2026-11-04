@@ -39,7 +39,7 @@ const FIXED_PATHS: &[&str] = &[
 /// `[storage]`. Defaults: `cache_root` = `$XDG_CACHE_HOME/corral/<workspace-id>/cache` and
 /// `scratch_root` = `.../scratch` (`$HOME/.cache` without `XDG_CACHE_HOME`); no
 /// `transcript_retention_days` keeps transcripts forever; `review_scratch_warn` = `"2GiB"`;
-/// `review_evidence_max` = `"64MiB"`; `blob_grace_hours` = `24`; `view_max_age` = `120`
+/// `review_evidence_max` = `"64MiB"`; `blob_grace_hours` = `24`; `view_max_age` = `5`
 /// seconds. Relative roots are resolved against the workspace root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -65,7 +65,7 @@ impl Default for StorageCfg {
             review_scratch_warn: "2GiB".into(),
             review_evidence_max: "64MiB".into(),
             blob_grace_hours: 24,
-            view_max_age: 120,
+            view_max_age: 5,
         }
     }
 }

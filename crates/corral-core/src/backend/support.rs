@@ -64,7 +64,7 @@ pub struct BackendConfig {
 impl Default for BackendConfig {
     fn default() -> Self {
         Self {
-            view_max_age: Duration::from_secs(120),
+            view_max_age: Duration::from_secs(5),
         }
     }
 }

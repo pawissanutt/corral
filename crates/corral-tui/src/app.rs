@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use corral_core::{AutoStage, Status};
 use corral_ops::{Change, Ctx, Message};
+use ratatui::Frame;
 use ratatui::crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind,
@@ -12,7 +13,6 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
-use ratatui::{DefaultTerminal, Frame};
 
 use crate::artifacts::ArtifactsView;
 use crate::board::BoardView;
@@ -42,6 +42,9 @@ mod comments_tests;
 mod draw;
 mod footer;
 mod input;
+mod presentation;
+#[cfg(test)]
+mod presentation_tests;
 mod update;
 mod worker;
 #[cfg(test)]
@@ -123,37 +126,12 @@ pub fn open(root: &std::path::Path) -> Result<Ctx> {
 /// `mouse` turns on mouse capture (see [`crate::mouse_wanted`]).
 /// `ctx` comes from [`open`], which establishes attribution and validates startup configuration.
 pub fn run(ctx: Ctx, mode: Mode, mouse: bool) -> Result<()> {
-    let mut app = App::with_nav(ctx, mode, NavKeys::load())?;
-    app.start_tour_if_new();
-    let _messages = corral_ops::capture_messages(app.message_tx.clone());
-    let worker =
-        (app.mode == Mode::Board).then(|| spawn_worker(app.ctx.clone(), app.message_tx.clone()));
-    if let Some((tx, _)) = &worker {
-        app.trigger = Some(tx.clone());
-    }
-    let mut terminal = ratatui::try_init().context("initializing the terminal")?;
-    if !matches!(app.mode, Mode::Capture(_)) {
-        crate::artifacts::image::init_picker();
-    }
-    let guard = match mouse.then(crate::term::MouseGuard::enable).transpose() {
-        Ok(g) => g,
-        Err(e) => {
-            ratatui::restore();
-            return Err(e);
-        }
-    };
-    let result = app.event_loop(&mut terminal, worker.as_ref().map(|(_, rx)| rx));
-    drop(guard);
-    ratatui::restore();
-    if corral_ops::artifact_server_used()
-        && let Err(e) = corral_ops::stop_server(&app.ctx)
-    {
-        eprintln!("corral: could not stop the artifact server: {e:#}");
-    }
-    result
+    presentation::run(ctx, mode, mouse)
 }
 
-use worker::{WorkerMsg, spawn_worker};
+use worker::WorkerMsg;
+#[cfg(test)]
+use worker::spawn_worker;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Counts {
@@ -250,32 +228,5 @@ impl App {
         };
         app.load_counts();
         Ok(app)
-    }
-
-    fn event_loop(
-        &mut self,
-        terminal: &mut DefaultTerminal,
-        worker: Option<&Receiver<WorkerMsg>>,
-    ) -> Result<()> {
-        while !self.quit {
-            terminal
-                .draw(|f| self.draw(f))
-                .context("drawing the terminal")?;
-            if event::poll(Duration::from_millis(200)).context("polling terminal events")? {
-                match event::read().context("reading terminal events")? {
-                    Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
-                    Event::Mouse(ev) => self.handle_mouse(ev),
-                    _ => {}
-                }
-            }
-            if let Some(rx) = worker {
-                while let Ok(msg) = rx.try_recv() {
-                    self.on_worker(msg);
-                }
-            }
-            self.drain_messages();
-            self.toasts.retain(|(_, at)| at.elapsed() < TOAST_FOR);
-        }
-        Ok(())
     }
 }

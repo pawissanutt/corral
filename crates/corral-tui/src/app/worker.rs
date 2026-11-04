@@ -1,5 +1,9 @@
 //! Background synchronization transport.
 use std::path::Path;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use super::*;
 
@@ -52,17 +56,49 @@ impl WorkerMsg {
 
 /// Sync runs off the UI thread so slow herdr calls never freeze input; a `()` on the returned sender triggers an
 /// immediate sync. The thread ends when the app drops its channel ends.
+#[cfg(test)]
 pub(super) fn spawn_worker(
+    ctx: Ctx,
+    messages: Sender<Message>,
+) -> (Sender<()>, Receiver<WorkerMsg>) {
+    spawn_worker_with_status(ctx, messages, Arc::new(AtomicBool::new(false)))
+}
+
+pub(super) fn spawn_worker_with_status(
     mut ctx: Ctx,
     messages: Sender<Message>,
+    syncing: Arc<AtomicBool>,
 ) -> (Sender<()>, Receiver<WorkerMsg>) {
     let (trigger_tx, trigger_rx) = mpsc::channel::<()>();
     let (msg_tx, msg_rx) = mpsc::channel();
     std::thread::spawn(move || {
         let _messages = corral_ops::capture_messages(messages.clone());
+        // This independent, low-frequency worker can revoke expired idle views even while
+        // sync/autopilot is waiting on a long external command or the writer is busy.
+        let (maintenance_stop, stopped) = mpsc::channel::<()>();
+        let maintenance_store = ctx.store.clone();
+        let maintenance_messages = messages.clone();
+        std::thread::spawn(move || {
+            let _capture = corral_ops::capture_messages(maintenance_messages.clone());
+            while matches!(
+                stopped.recv_timeout(SYNC_EVERY),
+                Err(RecvTimeoutError::Timeout)
+            ) {
+                if let Err(error) = maintenance_store.maintain_database() {
+                    let _ = maintenance_messages.send(Message {
+                        task: None,
+                        file: None,
+                        source: "Database maintenance",
+                        text: format!("{error:#}"),
+                    });
+                }
+            }
+        });
+        let _maintenance_stop = maintenance_stop;
         let installed = ctx.store.installed_executable().to_path_buf();
         let mut herdr_checked: Option<Instant> = None;
         loop {
+            syncing.store(true, Ordering::Release);
             let (started, cpu_before) = (Instant::now(), process_cpu());
             if let Err(error) = ctx.reload_config()
                 && messages
@@ -85,10 +121,17 @@ pub(super) fn spawn_worker(
                     return;
                 }
             }
-            if msg_tx
-                .send(WorkerMsg::pass(&ctx, &messages, &installed))
-                .is_err()
-            {
+            let update = WorkerMsg::pass(&ctx, &messages, &installed);
+            if let Err(error) = ctx.store.maintain_database() {
+                let _ = messages.send(Message {
+                    task: None,
+                    file: None,
+                    source: "Database maintenance",
+                    text: format!("{error:#}"),
+                });
+            }
+            syncing.store(false, Ordering::Release);
+            if msg_tx.send(update).is_err() {
                 return;
             }
             // A handed-off pass spends its CPU in the child, so its wall time bounds the cost.
@@ -97,7 +140,8 @@ pub(super) fn spawn_worker(
                 _ => started.elapsed(),
             };
             match trigger_rx.recv_timeout(periodic_wait(spent)) {
-                Ok(()) | Err(RecvTimeoutError::Timeout) => {}
+                Ok(()) => for () in trigger_rx.try_iter() {},
+                Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return,
             }
         }
@@ -106,13 +150,12 @@ pub(super) fn spawn_worker(
 }
 
 /// The longest wait between periodic syncs; it bounds how late autopilot reacts on its own.
-const SYNC_MAX_WAIT: Duration = Duration::from_secs(15);
+const SYNC_MAX_WAIT: Duration = Duration::from_secs(60);
 
-/// The wait before the next periodic sync: nine times the CPU the last pass cost, between
-/// [`SYNC_EVERY`] and [`SYNC_MAX_WAIT`], so an idle board on a costly store stays near a tenth of
-/// a core (T-547). A trigger from a user action still syncs at once.
+/// Back off costly idle passes to about 5% of a core (before the one-minute latency cap).
+/// Explicit user triggers bypass the wait and are coalesced, never replayed as a pass per key.
 pub(super) fn periodic_wait(pass_cpu: Duration) -> Duration {
-    pass_cpu.saturating_mul(9).clamp(SYNC_EVERY, SYNC_MAX_WAIT)
+    pass_cpu.saturating_mul(19).clamp(SYNC_EVERY, SYNC_MAX_WAIT)
 }
 
 /// CPU time used so far by this whole process (every thread), where /proc provides it.
@@ -133,13 +176,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn periodic_sync_waits_nine_times_pass_cpu_between_two_and_fifteen_seconds() {
+    fn periodic_sync_waits_nineteen_times_pass_cpu_between_two_and_sixty_seconds() {
         let ms = Duration::from_millis;
         assert_eq!(periodic_wait(Duration::ZERO), SYNC_EVERY);
         assert_eq!(periodic_wait(ms(100)), SYNC_EVERY);
-        assert_eq!(periodic_wait(ms(500)), ms(4_500));
-        assert_eq!(periodic_wait(ms(1_500)), ms(13_500));
-        assert_eq!(periodic_wait(ms(2_000)), SYNC_MAX_WAIT);
+        assert_eq!(periodic_wait(ms(500)), ms(9_500));
+        assert_eq!(periodic_wait(ms(1_500)), ms(28_500));
+        assert_eq!(periodic_wait(ms(2_000)), ms(38_000));
+        assert_eq!(periodic_wait(ms(4_000)), SYNC_MAX_WAIT);
         assert_eq!(periodic_wait(Duration::MAX), SYNC_MAX_WAIT);
     }
 

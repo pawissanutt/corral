@@ -10,6 +10,38 @@ The database is the only authority for every task field, title, body and accepta
 corral doesn't write a mirror of `tasks/*.md` or `events.jsonl`. When you need files, ask for them
 with `corral export`, `corral log --json`, `corral show --json` or `corral wait`.
 
+## Interactive database I/O
+
+The terminal driver paints owned in-memory cells and queues input to the board model worker.
+View construction, key handlers, reloads and writes run on that worker; sync/autopilot and WAL
+maintenance run separately. While work is pending the terminal shows **Saving/syncing**. Ctrl-C
+quits immediately; at the board root, `q` can offer an immediate leave while work is pending.
+Leaving immediately does not wait for pending saves. The input queue holds at most 32 events;
+if it fills, the terminal reports that a key was not queued rather than blocking.
+
+One process-shared database backend owns one writer and at most two **idle** readers. Active
+read views use additional handles only for their lifetime. Displayed board heads are detached
+from their source view. The default read lifetime is five seconds; a two-second maintenance
+sweep revokes expired idle views and closes their file handles, even while sync is waiting on
+an external command. A query already executing is not interrupted. Custom `view_max_age`
+overrides retain their configured lifetime, so long overrides can still retain WAL frames.
+
+WAL connections use `synchronous = NORMAL`: committed data survives a process crash, but the
+most recent commits can be lost on power loss. Recovery-bearing task writes (including recovery
+intent, outcomes, imports and subsequent rewrites) temporarily use FULL to preserve their
+fsync-before-success contract. No other database operations explicitly select FULL. Filesystem
+publication protocols still perform their own required fsyncs. Throwaway backend fixtures can
+explicitly opt into OFF with `SqliteOptions::fixture_no_sync`; production openers do not.
+
+Maintenance tries a non-waiting TRUNCATE checkpoint every two seconds and after each board
+sync pass. The soft WAL limit is **16 MiB**, also the journal retention limit. If an active
+reader/writer prevents reset and the WAL exceeds that size, a diagnostic reports its byte
+count and checkpoint contention. This is not a hard quota that aborts writes or evicts another
+process's valid snapshot. Normal uncontended cycles reset the WAL to zero. Usage refresh batches
+per-run reviewer verdict cursor records, without combining transactions across external side
+effects. Costly periodic syncs back off to 19 times their CPU cost (2–60 seconds); explicit
+refresh triggers bypass that wait and bursts coalesce into one pass.
+
 ## Layout v2
 
 ```

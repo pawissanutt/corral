@@ -158,6 +158,14 @@ fn one(rows: Vec<HistoryRow>) -> Option<HistoryRow> {
 }
 
 impl TaskHead {
+    /// Keep scalar projections between frames without retaining the source WAL snapshot.
+    /// Keyed reads require a newly loaded head after detaching.
+    #[must_use]
+    pub fn detach(mut self) -> Self {
+        self.view = None;
+        self
+    }
+
     /// Reads the head of `num` on `view`: the head row, the current containers and their
     /// current children.
     pub(crate) fn read(view: &dyn ReadView, num: TaskNum) -> Result<Option<TaskHead>> {

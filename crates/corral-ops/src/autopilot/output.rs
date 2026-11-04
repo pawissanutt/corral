@@ -23,6 +23,7 @@ pub(super) fn review_tasks(ctx: &Ctx) -> Result<Vec<TaskHead>> {
         .heads(&corral_core::backend::HeadQuery::Open { project: None })?
         .into_iter()
         .filter(|head| head.status == corral_core::Status::Review && head.hold.is_none())
+        .map(TaskHead::detach)
         .collect())
 }
 

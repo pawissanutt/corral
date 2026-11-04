@@ -124,7 +124,10 @@ impl BoardSnapshot {
             attention: attention.unwrap_or_else(|| crate::attention::load(&resource_ctx, now)),
             ctx: live_ctx,
             tasks,
-            heads: heads.into_iter().map(|h| (h.id.clone(), h)).collect(),
+            heads: heads
+                .into_iter()
+                .map(|h| (h.id.clone(), h.detach()))
+                .collect(),
             obligations,
             status_counts,
             slot_usage,

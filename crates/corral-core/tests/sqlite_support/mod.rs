@@ -81,6 +81,7 @@ pub fn options(
         faults: Arc::clone(faults),
         filesystem: statfs_probe,
         barrier,
+        fixture_no_sync: false,
     }
 }
 
