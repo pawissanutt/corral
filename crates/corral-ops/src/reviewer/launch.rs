@@ -381,21 +381,34 @@ pub(super) fn review_run_origin(
     if !run.worktree.is_dir() {
         bail!("{}: worktree {} is gone", task.id, run.worktree.display());
     }
-    let identity = match launch.bound_candidate() {
-        Some(candidate) => candidate,
-        None => verification::review_identity(
-            ctx,
-            &task,
-            &run,
-            run.gate
-                .as_ref()
-                .and_then(|g| g.identity.as_ref())
-                .map(|i| i.attempt.as_str())
-                .unwrap_or(&format!(
-                    "review-{}",
-                    jiff::Timestamp::now().as_nanosecond()
-                )),
-        )?,
+    let identity = if let Some(recovery) = reviewer_recovery {
+        let corral_core::RecoveryIdentity::Code { candidate, .. } =
+            &recovery.preview.request.target.identity
+        else {
+            bail!("recovery candidate missing")
+        };
+        anyhow::ensure!(
+            verification::identity(ctx, &task, &run, candidate)? == *candidate,
+            "recovery candidate changed before review"
+        );
+        candidate.clone()
+    } else {
+        match launch.bound_candidate() {
+            Some(candidate) => candidate,
+            None => verification::review_identity(
+                ctx,
+                &task,
+                &run,
+                run.gate
+                    .as_ref()
+                    .and_then(|g| g.identity.as_ref())
+                    .map(|i| i.attempt.as_str())
+                    .unwrap_or(&format!(
+                        "review-{}",
+                        jiff::Timestamp::now().as_nanosecond()
+                    )),
+            )?,
+        }
     };
     let mut selected = read_step(ctx, id, &run.id, |read, task, current| {
         crate::review_contracts::implementation_route(

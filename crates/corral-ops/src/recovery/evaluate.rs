@@ -1,5 +1,4 @@
 use super::*;
-use serde_json::json;
 
 pub(super) fn task_revision(task: &Task) -> Result<String> {
     let mut task = task.clone();
@@ -37,6 +36,7 @@ impl Evaluation {
                         c.check,
                         RecoveryCheck::ReviewerFamilyPolicy
                             | RecoveryCheck::ConfiguredReviewerBinding
+                            | RecoveryCheck::ResourcePressure
                     )
                 })
                 .cloned()
@@ -64,6 +64,117 @@ impl Evaluation {
             proposed_disposition: None,
             ordinary_command: None,
         });
+    }
+    fn admission(&mut self, ctx: &Ctx, task: &Task, stage: RecoveryAdmissionStage) {
+        self.hard("park", corral_core::Park::require_unparked(task));
+        self.hard(
+            "dependencies",
+            crate::queue::dependency_check(&ctx.store, task).and_then(|r| {
+                ensure!(r.is_none(), "{}", r.unwrap_or_default());
+                Ok(())
+            }),
+        );
+        match stage {
+            RecoveryAdmissionStage::Dispatch | RecoveryAdmissionStage::PlanDispatch => {
+                self.hard(
+                    "dispatch-admission",
+                    crate::queue::capacity_reason(ctx, &ctx.store, task, true).and_then(|r| {
+                        ensure!(r.is_none(), "{}", r.unwrap_or_default());
+                        Ok(())
+                    }),
+                );
+                self.hard(
+                    "launch-integrity",
+                    (|| {
+                        ensure!(
+                            task.launch
+                                .as_ref()
+                                .is_none_or(|l| l.stage != LaunchStage::Submitting),
+                            "uncertain dispatch delivery cannot be forced"
+                        );
+                        Ok(())
+                    })(),
+                );
+                if stage == RecoveryAdmissionStage::Dispatch {
+                    self.hard("implementation-plan", crate::approved_plan(ctx, task).and_then(|_| { ensure!(!crate::plan_dispatch::needed(ctx, task, &crate::DispatchOpts::default()), "implementation requires a plan; use ordinary planning dispatch first"); Ok(()) }));
+                }
+            }
+            RecoveryAdmissionStage::Gate
+            | RecoveryAdmissionStage::CodeReview
+            | RecoveryAdmissionStage::PlanReview => {
+                self.hard(
+                    "review-capacity",
+                    (|| {
+                        let heads = crate::pm_next::heads::open(&ctx.store)?;
+                        let usage =
+                            crate::slots::SlotUsage::from_heads(&heads, &ctx.store.config.limits);
+                        ensure!(
+                            usage.reviews + usage.gates < ctx.store.config.limits.review,
+                            "review process limit reached"
+                        );
+                        if ctx.store.config.limits.count_reviews {
+                            ensure!(
+                                crate::slots::capacity_reason(&ctx.store, task, 0)?.is_none(),
+                                "coding capacity is unavailable"
+                            );
+                        }
+                        Ok(())
+                    })(),
+                );
+                if stage == RecoveryAdmissionStage::PlanReview {
+                    self.hard(
+                        "plan-freshness",
+                        task.plans
+                            .last()
+                            .context("submit a plan before review")
+                            .and_then(|p| crate::plan::fresh(ctx, task, p)),
+                    );
+                    self.hard(
+                        "reviewer-policy",
+                        crate::plan::expected_reviewer(&ctx.store.config, task).and_then(|name| {
+                            crate::plan::independent_reviewer(&ctx.store.config, task, &name)
+                        }),
+                    );
+                } else {
+                    self.hard(
+                        "candidate-clean",
+                        task.current_run()
+                            .context("code run missing")
+                            .and_then(|r| {
+                                ensure!(
+                                    corral_git::is_clean(&r.worktree)?,
+                                    "candidate has uncommitted changes"
+                                );
+                                Ok(())
+                            }),
+                    );
+                    if stage == RecoveryAdmissionStage::CodeReview {
+                        self.hard(
+                            "reviewer-policy",
+                            (|| {
+                                let run =
+                                    RunHead::of(task.current_run().context("code run missing")?)?;
+                                let name = policy::expected_code(&ctx.store.config, task)?;
+                                let resolved = ctx.store.config.resolve_profile(
+                                    &ProfileChoice {
+                                        profile: Some(name),
+                                        ..Default::default()
+                                    },
+                                    None,
+                                    None,
+                                )?;
+                                crate::review_contracts::check_family(
+                                    &ctx.store.config.task_review_policy(task),
+                                    &run,
+                                    run.vendor.as_deref(),
+                                    &resolved,
+                                )
+                            })(),
+                        );
+                    }
+                }
+            }
+        }
     }
     fn predicate(
         &mut self,
@@ -255,7 +366,10 @@ pub(super) fn preview(ctx: &Ctx, task: &Task, input: &RecoveryInput) -> Result<R
             );
             e.predicate(
                 RecoveryCheck::ConfiguredReviewerBinding,
-                policy.expected_reviewer.as_ref() == Some(reviewer),
+                // Code review already permits an explicit one-attempt profile; only plan
+                // callbacks impose the configured-profile binding. Do not invent a code failure.
+                *stage == RecoveryReviewStage::CodeReview
+                    || policy.expected_reviewer.as_ref() == Some(reviewer),
                 vec![format!(
                     "expected={:?}; selected={reviewer:?}; resolution={:?}",
                     policy.expected_reviewer, policy.resolution_failure
@@ -463,13 +577,14 @@ pub(super) fn preview(ctx: &Ctx, task: &Task, input: &RecoveryInput) -> Result<R
             pressure_episode,
             thresholds_digest,
         } => {
+            e.admission(ctx, task, *stage);
             let pressure = crate::resources::read_status(ctx)?;
             let thresholds = hash(&ctx.store.config.resources)?;
             e.hard(
                 "pressure-episode",
                 (|| {
                     ensure!(
-                        *pressure_episode == pressure_id(&pressure)?
+                        super::admission::resource_binding(ctx)?.as_ref() == Some(pressure_episode)
                             && *thresholds_digest == thresholds,
                         "pressure episode or thresholds changed"
                     );
@@ -479,7 +594,10 @@ pub(super) fn preview(ctx: &Ctx, task: &Task, input: &RecoveryInput) -> Result<R
             e.predicate(
                 RecoveryCheck::ResourcePressure,
                 !pressure.held,
-                pressure.reason.into_iter().collect(),
+                vec![format!(
+                    "resources/state; severe={}; thresholds={thresholds}",
+                    pressure.severe
+                )],
                 false,
             );
             let attempt = match stage {
@@ -490,12 +608,18 @@ pub(super) fn preview(ctx: &Ctx, task: &Task, input: &RecoveryInput) -> Result<R
                     let run = task.current_run().context("no code run")?;
                     format!("{}-review{}", run.id, run.review_runs.len() + 1)
                 }
-                RecoveryAdmissionStage::Dispatch => format!("R{}", task.runs.len() + 1),
+                RecoveryAdmissionStage::Dispatch => task
+                    .launch
+                    .as_ref()
+                    .and_then(|_| task.current_run().map(|r| r.id.clone()))
+                    .unwrap_or_else(|| format!("R{}", task.runs.len() + 1)),
                 RecoveryAdmissionStage::PlanDispatch => format!("D{}", task.plan_runs.len() + 1),
-                RecoveryAdmissionStage::Gate => format!(
-                    "recovery-gate-{}",
-                    task.current_run().context("no code run")?.id
-                ),
+                RecoveryAdmissionStage::Gate => crate::review_budget::adoptable_attempt(
+                    ctx,
+                    &task.id,
+                    &task.current_run().context("no code run")?.id,
+                )?
+                .unwrap_or(format!("recovery-{}", &task_revision(task)?[..24])),
             };
             (
                 RecoveryIdentity::Admission {
@@ -503,10 +627,16 @@ pub(super) fn preview(ctx: &Ctx, task: &Task, input: &RecoveryInput) -> Result<R
                     attempt: attempt.clone(),
                     run: task.current_run().map(|r| r.id.clone()),
                     plan: task.plans.last().map(|p| p.id.clone()),
-                    candidate: task
-                        .current_run()
-                        .map(|r| RunHead::of(r).and_then(|r| code_candidate(ctx, task, &r)))
-                        .transpose()?,
+                    candidate: if matches!(
+                        stage,
+                        RecoveryAdmissionStage::Gate | RecoveryAdmissionStage::CodeReview
+                    ) {
+                        task.current_run()
+                            .map(|r| RunHead::of(r).and_then(|r| code_candidate(ctx, task, &r)))
+                            .transpose()?
+                    } else {
+                        None
+                    },
                 },
                 RecoveryEffect::Admission {
                     stage: *stage,
@@ -607,7 +737,4 @@ pub(super) fn code_candidate(ctx: &Ctx, task: &Task, run: &RunHead) -> Result<Ca
         "recovery_stale: candidate/base/receipt changed"
     );
     Ok(current)
-}
-pub(super) fn pressure_id(pressure: &ResourceState) -> Result<String> {
-    hash(&json!({"held":pressure.held,"severe":pressure.severe}))
 }

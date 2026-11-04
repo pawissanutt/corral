@@ -48,9 +48,39 @@ pub(crate) fn validate_contract(ctx: &Ctx, task: &Task, record: &RecoveryRecord)
             candidate,
             run,
             plan,
-            ..
+            stage,
+            attempt,
         } => {
-            if let Some(candidate) = candidate {
+            if matches!(
+                stage,
+                RecoveryAdmissionStage::Dispatch | RecoveryAdmissionStage::PlanDispatch
+            ) {
+                let actual = match stage {
+                    RecoveryAdmissionStage::Dispatch => {
+                        task.current_run().filter(|r| &r.id == attempt).map(|r| {
+                            serde_json::json!([r.agent, r.harness, r.model, r.vendor, r.effort])
+                        })
+                    }
+                    RecoveryAdmissionStage::PlanDispatch => {
+                        task.plan_runs.last().filter(|r| &r.id == attempt).map(|r| {
+                            serde_json::json!([r.profile, r.harness, r.model, r.vendor, r.effort])
+                        })
+                    }
+                    _ => None,
+                };
+                if let Some(actual) = actual {
+                    ensure!(
+                        record.preview.policy.inputs.get("prospective_execution") == Some(&actual),
+                        "recovery_stale: launched execution differs from preview"
+                    );
+                } else {
+                    ensure!(
+                        evaluate::task_revision(task)?
+                            == record.preview.request.target.task_revision,
+                        "recovery_stale: admission task changed before its reservation"
+                    );
+                }
+            } else if let Some(candidate) = candidate {
                 let current = task
                     .current_run()
                     .filter(|r| r.id == candidate.run)
@@ -94,11 +124,29 @@ pub(crate) fn plan_review_record(
     plan: &str,
     attempt: &str,
 ) -> Result<Option<RecoveryRecord>> {
-    let record = records(ctx, &task.id)?.into_iter().filter(|r| !matches!(state(r), Ok(RecoveryState::Failed))).find(|r| matches!(&r.preview.proposed_effect, RecoveryEffect::ReviewAttempt { stage: RecoveryReviewStage::PlanReview, attempt: a, .. } if a == attempt) && matches!(&r.preview.request.target.identity, RecoveryIdentity::Plan { plan: p, .. } if p == plan));
+    let record = records(ctx, &task.id)?.into_iter().filter(|r| !matches!(state(r), Ok(RecoveryState::Failed))).find(|r| {
+        matches!((&r.preview.proposed_effect, &r.preview.request.target.identity), (RecoveryEffect::ReviewAttempt { stage: RecoveryReviewStage::PlanReview, attempt:a, .. }, RecoveryIdentity::Plan { plan:p, .. }) if a == attempt && p == plan)
+        || matches!((&r.preview.proposed_effect, &r.preview.request.target.identity), (RecoveryEffect::Admission { stage: RecoveryAdmissionStage::PlanReview, attempt:a }, RecoveryIdentity::Admission { plan:Some(p), .. }) if a == attempt && p == plan)
+    });
     if let Some(record) = &record {
         validate_contract(ctx, task, record)?;
     }
     Ok(record)
+}
+
+pub(crate) fn plan_recovery_digest(
+    config: &Config,
+    task: &Task,
+    record: &RecoveryRecord,
+) -> Result<String> {
+    if matches!(
+        record.preview.request.action,
+        RecoveryAction::UseReviewer { .. }
+    ) {
+        Ok(record.preview.contract_digest.clone())
+    } else {
+        crate::plan::policy_digest(config, task)
+    }
 }
 
 pub(crate) fn plan_review_valid(ctx: &Ctx, task: &Task, plan: &PlanRecord) -> Result<()> {
@@ -112,10 +160,9 @@ pub(crate) fn plan_review_valid(ctx: &Ctx, task: &Task, plan: &PlanRecord) -> Re
         crate::review_contracts::plan_route_ok(&config, task, review),
         "review contract or capability changed"
     );
-    if let Some(record) = plan_review_record(ctx, task, &plan.id, &review.id)? {
-        let RecoveryEffect::ReviewAttempt { reviewer, .. } = &record.preview.proposed_effect else {
-            anyhow::bail!("invalid recovered review effect")
-        };
+    if let Some(record) = plan_review_record(ctx, task, &plan.id, &review.id)?
+        && let RecoveryEffect::ReviewAttempt { reviewer, .. } = &record.preview.proposed_effect
+    {
         ensure!(
             review.reviewer == reviewer.profile
                 && review.policy_digest == record.preview.contract_digest
@@ -187,7 +234,7 @@ pub(crate) fn check_reviewer(record: &RecoveryRecord, resolved: &ResolvedProfile
 }
 
 pub(crate) fn plan_recovery_bound(ctx: &Ctx, id: &str, plan: &str) -> Result<bool> {
-    Ok(records(ctx,id)?.iter().any(|r| matches!(&r.preview.request.target.identity, RecoveryIdentity::Plan { plan: p, .. } if p == plan) && !matches!(state(r), Ok(RecoveryState::Failed))))
+    Ok(records(ctx,id)?.iter().any(|r| !matches!(state(r), Ok(RecoveryState::Failed)) && (matches!(&r.preview.request.target.identity, RecoveryIdentity::Plan { plan:p, .. } if p == plan) || matches!(&r.preview.request.target.identity, RecoveryIdentity::Admission { stage:RecoveryAdmissionStage::PlanReview, plan:Some(p), .. } if p == plan))))
 }
 
 /// A recovered acceptance is checked independently; never manufacture ordinary passing data.

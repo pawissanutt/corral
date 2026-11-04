@@ -3,6 +3,46 @@ use std::cell::RefCell;
 
 thread_local! { static ACTIVE: RefCell<Option<RecoveryRecord>> = const { RefCell::new(None) }; }
 
+/// Prepare only the input: reading this never starts an observation or writes a proposal.
+pub fn recover_resource_input(ctx: &Ctx, stage: RecoveryAdmissionStage) -> Result<RecoveryInput> {
+    let mut fresh = ctx.clone();
+    fresh.store = Store::open_unobserved(ctx.store.root())?;
+    Ok(RecoveryInput {
+        action: RecoveryAction::ForceAdmission {
+            stage,
+            pressure_episode: resource_binding(&fresh)?.unwrap_or_default(),
+            thresholds_digest: hash(&fresh.store.config.resources)?,
+        },
+        exceptions: BTreeSet::from([RecoveryCheck::ResourcePressure]),
+        notes: String::new(),
+    })
+}
+
+pub(super) fn resource_binding(ctx: &Ctx) -> Result<Option<String>> {
+    let Some(episode) = crate::resources::pressure_episode(ctx)? else {
+        return Ok(None);
+    };
+    let state = crate::resources::read_status(ctx)?;
+    let cfg = &ctx.store.config.resources;
+    let memory =
+        u128::from(state.snapshot.mem_available) * 10 < u128::from(cfg.min_mem_bytes()?) * 11;
+    let min_disk = cfg.min_disk_bytes()?;
+    let low_disks: Vec<_> = state
+        .snapshot
+        .disks
+        .iter()
+        .filter(|d| u128::from(d.free_bytes) * 10 < u128::from(min_disk) * 11)
+        .map(|d| &d.path)
+        .collect();
+    Ok(Some(hash(&(
+        episode,
+        state.severe,
+        state.snapshot.load_per_core > cfg.max_load_per_core * 0.9,
+        memory,
+        low_disks,
+    ))?))
+}
+
 pub(super) fn with_admission<T>(
     record: &RecoveryRecord,
     apply: impl FnOnce() -> Result<T>,
