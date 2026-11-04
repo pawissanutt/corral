@@ -60,7 +60,11 @@ pub(super) fn budget(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     receipts::commit_selected(
         ctx,
         &admitted,
-        &receipts::pm_selection(&admitted.origin).family("budget_requests"),
+        // Hard caps fail closed if any bound generation predates accounting. The
+        // current generation alone cannot establish that historical guarantee.
+        &receipts::pm_selection(&admitted.origin)
+            .family("budget_requests")
+            .family("generations"),
         move |state, _| {
             let feature = state
                 .current_generation()
