@@ -1,14 +1,28 @@
 // The owner's question dialog: every question of one ask_user call in one component, one tab per
 // question plus Submit. Questions are answered in any order and revisable until Submit; Escape (or
 // the caller's timeout) ends the dialog keeping whatever was answered, so a partial batch survives.
-import { matchesKey, truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { decodeKittyPrintable, matchesKey, truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 export type Choice = { label: string; description?: string };
 export type DialogQuestion = { question: string; header?: string; options: Choice[]; multiSelect?: boolean; freeText?: boolean };
 export type DialogAnswer = { selected: string[]; text: string };
 export type DialogResult = { submitted: boolean; answers: (DialogAnswer | undefined)[] };
 
-const printable = (data: string) => data.length === 1 && data >= " " && data !== "\x7f";
+const PASTE_START = "\x1b[200~";
+const PASTE_END = "\x1b[201~";
+
+/** Text an input event adds to a note: a typed key, a bracketed paste, or an unbracketed multi-character
+ * chunk (terminals deliver fast typing and plain paste as one event). Line breaks become spaces, so a
+ * pasted multi-line note is kept whole; control sequences add nothing. */
+export function noteText(data: string): string | undefined {
+  let body = data;
+  if (data.startsWith(PASTE_START)) body = data.slice(PASTE_START.length).replace(PASTE_END, "");
+  else if (data.includes("\x1b")) return decodeKittyPrintable(data);
+  // A lone line break is the Enter key, not text.
+  if (data === body && /^(\r\n|\r|\n)$/.test(body)) return undefined;
+  const text = body.replace(/\r\n|\r|\n/g, " ").replace(/[\x00-\x1f\x7f]/g, "");
+  return text.length > 0 ? text : undefined;
+}
 
 export class AskDialog implements Component {
   tab = 0;
@@ -75,13 +89,15 @@ export class AskDialog implements Component {
     if (option === undefined) {
       // The note row of a free-text question: typing edits it, Enter confirms the question.
       const answer = this.answers[i];
-      if (matchesKey(data, "backspace")) this.notes[i] = (this.notes[i] ?? "").slice(0, -1);
+      const typed = noteText(data);
+      if (typed !== undefined) this.notes[i] = (this.notes[i] ?? "") + typed;
+      else if (matchesKey(data, "backspace")) this.notes[i] = (this.notes[i] ?? "").slice(0, -1);
       else if (matchesKey(data, "enter")) {
         if (answer) this.advance();
         else if (!q.multiSelect) this.cursor = 0;
         else this.confirm(i, q.options.map((o) => o.label).filter((l) => this.picks[i]!.has(l)));
         return;
-      } else if (printable(data)) this.notes[i] = (this.notes[i] ?? "") + data;
+      }
       if (answer) answer.text = this.notes[i] ?? "";
       return;
     }
