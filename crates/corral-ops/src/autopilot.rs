@@ -32,7 +32,9 @@ mod cowork;
 mod cowork_finish;
 mod infra;
 mod output;
+mod recover;
 mod repair;
+pub use recover::recover_infrastructure;
 #[cfg(test)]
 mod tests;
 mod tiers;
