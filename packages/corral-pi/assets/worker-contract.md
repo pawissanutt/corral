@@ -73,6 +73,8 @@ changes state, call the tool above instead.
 that does not depend on the answer; the answer arrives as a message in this session. When nothing
 else can move, end your turn: corral wakes you with the answer. A question you no longer need is
 withdrawn with `corral_withdraw`. `corral_done` refuses while any of your questions is pending.
+Batch independent questions into one `corral_ask` call with `questions` (1-4, each with its own
+kind, text, options and recommendation): they open as one group that the PM answers together.
 The PM answers clarification and technical_choice questions; owner_only and permission questions
 go to the owner.
 

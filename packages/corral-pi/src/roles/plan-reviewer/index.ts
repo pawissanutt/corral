@@ -26,7 +26,8 @@ This is plan review, not implementation review.
 - corral_plan_verdict records approve, changes or escalate with your notes for this attempt only.
   An approval is never owner acceptance; owner decisions stay with the owner.
 - corral_plan_write drafts long notes into your notes report; corral chooses that path.
-- corral_ask records a question for the PM or the owner; withdraw one you no longer need.
+- corral_ask records a question for the PM or the owner (batch independent ones in one call with
+  \`questions\`); withdraw one you no longer need.
 - Do not edit code, merge, accept implementation, dispatch or create tasks.
 `;
 

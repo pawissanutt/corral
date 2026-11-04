@@ -7,6 +7,7 @@
 mod ask;
 mod basis;
 mod events;
+mod group;
 #[cfg(test)]
 mod heads_tests;
 #[cfg(test)]
@@ -35,13 +36,14 @@ use jiff::Timestamp;
 use serde::Serialize;
 
 pub use ask::{
-    AskPayload, NOTE_MAX_BYTES, OPTION_MAX_BYTES, Opened, REF_MAX_BYTES, WithdrawPayload, open,
-    validate_ask, wake_route, withdraw,
+    AskBatchPayload, AskItem, AskPayload, NOTE_MAX_BYTES, OPTION_MAX_BYTES, Opened, REF_MAX_BYTES,
+    WithdrawPayload, open, open_group, validate_ask, validate_batch, wake_route, withdraw,
 };
 #[cfg(test)]
 pub(crate) use events::pending_keys;
 pub(crate) use events::pending_keys_ref;
 pub use events::{QUESTION_EVENT_KINDS, reconcile_events, reconcile_question};
+pub use group::{GroupAnswer, answer_group, group};
 pub use lifecycle::{expire_deadlines, terminalize, unattended};
 pub use triage::{
     Actor, AnswerInput, Applied, Outcome, PmRequest, answer, cancel, deadline, escalate,

@@ -640,18 +640,40 @@ fn reconciled(ctx: &Ctx, response: CallResponse) -> Result<CallResponse> {
     let effect = response.receipt().and_then(|r| r.effect.as_ref());
     if let Some(effect) = effect.filter(|e| e.kind == "question") {
         questions::reconcile_question(&ctx.store, &effect.reference)?;
+        let members = response
+            .receipt()
+            .and_then(|r| r.result["questions"].as_array());
+        for key in members.into_iter().flatten().skip(1) {
+            if let Some(key) = key["key"].as_str() {
+                questions::reconcile_question(&ctx.store, key)?;
+            }
+        }
     }
     Ok(response)
 }
 
+#[derive(Clone)]
+enum AskShape {
+    Single(questions::AskPayload),
+    Batch(questions::AskBatchPayload),
+}
+
 /// ask: opens Q<n> on the caller's own run or review child and returns its key and revision at
-/// once, blocking or not (OD6).
+/// once, blocking or not (OD6). A `questions` batch opens 1-4 questions as one group.
 fn ask(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
-    let payload: questions::AskPayload = parse(
-        envelope,
-        "kind, blocking?, text, options?, recommendation?, context_refs?, needed_by?",
-    )?;
-    questions::validate_ask(&payload)?;
+    let shape = if envelope.payload.get("questions").is_some() {
+        let payload: questions::AskBatchPayload =
+            parse(envelope, "questions, blocking?, context_refs?, needed_by?")?;
+        questions::validate_batch(&payload)?;
+        AskShape::Batch(payload)
+    } else {
+        let payload: questions::AskPayload = parse(
+            envelope,
+            "kind, blocking?, text, options?, recommendation?, context_refs?, needed_by?",
+        )?;
+        questions::validate_ask(&payload)?;
+        AskShape::Single(payload)
+    };
     let route = questions::wake_route(ctx)?;
     let container = admission::container_of(&envelope.identity);
     let admitted = match admission::admit(ctx, envelope, Mode::Mutation { settles_turn: None })? {
@@ -663,13 +685,24 @@ fn ask(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     let origin = admitted.origin.clone();
     let response = receipts::commit(ctx, &admitted, |state, _| {
         let now = corral_core::clock::now();
-        let question = questions::open(state, &container, &origin, payload, route, now)?;
+        let opened = |q: &questions::Opened| json!({"key": q.key, "revision": q.revision, "state": "open", "blocking": q.blocking});
+        let (result, key) = match shape.clone() {
+            AskShape::Single(payload) => {
+                let question = questions::open(state, &container, &origin, payload, route, now)?;
+                (opened(&question), question.key)
+            }
+            AskShape::Batch(batch) => {
+                let (group, members) =
+                    questions::open_group(state, &container, &origin, batch, route, now)?;
+                let mut result = opened(&members[0]);
+                result["group"] = json!(group);
+                result["questions"] = members.iter().map(opened).collect();
+                (result, group)
+            }
+        };
         Ok(Commit {
-            result: json!({
-                "key": question.key, "revision": question.revision, "state": "open",
-                "blocking": question.blocking,
-            }),
-            effect: question_effect(&question.key),
+            result,
+            effect: question_effect(&key),
             post_pending: Vec::new(),
         })
     })?;

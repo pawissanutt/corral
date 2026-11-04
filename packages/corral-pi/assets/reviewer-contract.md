@@ -54,7 +54,8 @@ the terminal `</dev/null`.
 
 ## Questions
 
-`corral_ask` returns at once with the question's key, blocking or not. Keep reviewing anything
+`corral_ask` returns at once with the question's key, blocking or not. Batch independent questions
+into one call with `questions` (1-4); they open as one group the PM answers together. Keep reviewing anything
 that does not depend on the answer; the answer arrives as a message in this session. When nothing
 else can move, end your turn: corral wakes you with the answer. A question you no longer need is
 withdrawn with `corral_withdraw`. `corral_verdict` refuses while any of your questions is pending

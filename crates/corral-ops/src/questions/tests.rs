@@ -664,3 +664,77 @@ fn native_pm_claim_effect_readback_outcome_continues_past_owner_wait_and_replays
         1
     );
 }
+
+#[test]
+fn batched_ask_opens_one_group_that_one_group_answer_settles() {
+    let fx = fx();
+    let (id, worker) = worker(&fx);
+    let batch = json!({"blocking": true, "context_refs": ["spec"], "questions": [
+        {"kind": "clarification", "text": "Which flag?", "options": ["a", "b"]},
+        {"kind": "technical_choice", "text": "Which crate?"},
+    ]});
+    let receipt = ask(&fx, &worker, "batch", batch).receipt().unwrap().clone();
+    let (q1, q2) = (format!("{id}/R1/Q1"), format!("{id}/R1/Q2"));
+    assert_eq!(receipt.result["group"], json!(q1));
+    assert_eq!(receipt.result["questions"][1]["key"], json!(q2));
+    let members = super::group(&fx.ctx, &q2).unwrap();
+    assert_eq!(members.len(), 2);
+    assert!(
+        members
+            .iter()
+            .all(|m| m.question.group.as_deref() == Some(q1.as_str()) && m.question.blocking)
+    );
+    // The batch is one blocking unit; another blocking ask is still refused.
+    assert_eq!(
+        code(&ask(
+            &fx,
+            &worker,
+            "more",
+            json!({"kind": "clarification", "blocking": true, "text": "x?"})
+        )),
+        Some("question_limit")
+    );
+
+    let shared = AnswerInput {
+        text: "use the default".into(),
+        ..Default::default()
+    };
+    let answers = [
+        super::GroupAnswer {
+            key: q1.clone(),
+            rev: 1,
+            text: None,
+            option: Some("b".into()),
+        },
+        super::GroupAnswer {
+            key: q2.clone(),
+            rev: 1,
+            text: Some("corral-ops".into()),
+            option: None,
+        },
+    ];
+    // A stale member revision refuses the whole group before anything is answered.
+    let mut stale = answers.clone();
+    stale[1].rev = 9;
+    assert_eq!(
+        refusal(&super::answer_group(&fx.ctx, &q1, true, &shared, &stale).unwrap_err()),
+        "stale_revision"
+    );
+    assert!(pending(&fx, &q1));
+
+    super::answer_group(&fx.ctx, &q1, true, &shared, &answers).unwrap();
+    let (a, b) = (question(&fx, &q1), question(&fx, &q2));
+    assert_eq!(
+        (a.state, b.state),
+        (QuestionState::Answered, QuestionState::Answered)
+    );
+    assert_eq!(a.answer.unwrap().option.as_deref(), Some("b"));
+    assert_eq!(b.answer.unwrap().text, "corral-ops");
+    assert_eq!(
+        messages(&fx, &id, "R1")
+            .iter()
+            .filter(|m| m.kind == "question_answer")
+            .count(),
+        2
+    );
+}

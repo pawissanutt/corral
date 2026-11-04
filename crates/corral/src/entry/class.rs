@@ -126,6 +126,7 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
         Cmd::Question(args) => match &args.cmd {
             QuestionCmd::List { .. } | QuestionCmd::Show { .. } => Read,
             QuestionCmd::Answer { .. }
+            | QuestionCmd::AnswerGroup { .. }
             | QuestionCmd::Escalate { .. }
             | QuestionCmd::Cancel { .. }
             | QuestionCmd::Deadline { .. } => Refused,

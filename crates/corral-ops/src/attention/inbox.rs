@@ -53,6 +53,11 @@ fn questions(task: &Task, bin: &str, items: &mut Vec<Item>) {
             "{:?}; blocking={}",
             question.kind, question.blocking
         )];
+        if let Some(group) = &question.group {
+            detail.push(format!(
+                "Group: {group} (one batched ask; answer together with question answer-group)"
+            ));
+        }
         if let Some(closure) = view.closure {
             detail.push(format!("Container closed: {}", closure.as_str()));
         }
@@ -100,6 +105,13 @@ fn questions(task: &Task, bin: &str, items: &mut Vec<Item>) {
                 "In a separate trusted owner terminal: {bin} question answer {} --rev {} --owner --text <answer>",
                 q(&question.key), question.revision
             );
+            let owner = match &question.group {
+                Some(group) => format!(
+                    "{owner}\nWhole group: {bin} question answer-group {} --owner --text <answer> (or --answers JSON per member)",
+                    q(group)
+                ),
+                None => owner,
+            };
             format!("{owner}\nPM: use the existing authenticated corral_question_answer tool with this key and revision, canonical basis_refs and scope_note. Rust validates authority and scope again; the panel supplies no basis or permission.")
         });
         items.push(Item {

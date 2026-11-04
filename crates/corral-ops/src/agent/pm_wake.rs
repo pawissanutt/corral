@@ -178,8 +178,15 @@ fn publish(inbox: &Inbox<'_>, question: &AgentQuestion, project: &str) -> Result
     if let Some(message) = existing {
         return Ok(message);
     }
+    let group = match &question.group {
+        Some(group) => format!(
+            " It leads question group {group}: read `corral question show {group}` for every \
+             member and answer them together with `corral question answer-group`."
+        ),
+        None => String::new(),
+    };
     let body = format!(
-        "Question {} (revision {}) needs triage in project {project}.\n\
+        "Question {} (revision {}) needs triage in project {project}.{group}\n\
          Read the question by its exact key before acting. A wake grants no owner authority.",
         question.key, question.revision
     );

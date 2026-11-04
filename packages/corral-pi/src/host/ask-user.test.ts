@@ -38,3 +38,25 @@ test("cancel or timeout at either dialog is no answer and records no consent", a
   expect(second.content).toEqual([{ type: "text", text: "no answer" }]);
   expect(recorded).toEqual([]);
 });
+
+test("the batch dialog keeps answered questions when the owner escapes and lists the unanswered", async () => {
+  const recorded: string[] = [];
+  const batch = { questions: [
+    { question: "Scope?", header: "Scope", options: [{ label: "Small", description: "one crate" }, "Large"] },
+    { question: "Lanes?", options: ["Quick", "Full", "Slow"], multiSelect: true },
+  ] };
+  const ctx = { hasUI: true, ui: {
+    custom: async (factory: (...args: unknown[]) => { handleInput(data: string): void; render(width: number): string[] }) => {
+      let result: unknown;
+      const dialog = factory({ requestRender() {} }, {}, {}, (r: unknown) => { result = r; });
+      expect(dialog.render(60).join("\n")).toContain("one crate");
+      dialog.handleInput("\x1b[B"); // down to Large
+      dialog.handleInput("\r"); // answer Scope, move to Lanes
+      dialog.handleInput("\x1b"); // escape without answering Lanes
+      return result;
+    },
+  } } as unknown as ExtensionToolContext;
+  const result = await askUserTool(async (answer) => { recorded.push(answer); return answer; }).execute("id", batch, undefined, undefined, ctx);
+  expect(result.details).toEqual({ status: "partial", answers: [{ question: "Scope?", option: "Large" }], unanswered: ["Lanes?"] });
+  expect(recorded).toEqual(["Scope?: Large\nUnanswered (no consent): Lanes?"]);
+});
