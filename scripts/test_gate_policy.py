@@ -195,6 +195,30 @@ class PolicyTests(unittest.TestCase):
             gate_timer.cost_audit(config, rows)
         self.assertIn("cap-fixture existing", Path(".evidence/ratchet-fixture-existing-test-costs.md").read_text())
 
+    def test_under_limit_candidate_is_reported_but_not_gardening_overrun(self):
+        metrics = Path('case-metrics.jsonl')
+        result = {'exit_code': 0, 'budget_exceeded': False, 'report_only': True,
+                  'enforcement_load': None, 'seconds': 0.1,
+                  'load_before': {'load_per_core': 0.2},
+                  'load_after': {'load_per_core': 0.3}, 'busy_exempt': False}
+        with patch.object(gate_timer, 'execute', return_value=result):
+            self.assertEqual(gate_case.guarded(['unused'], 10, ['fixture', 'candidate'], metrics), 0)
+            self.assertEqual(gate_case.guarded(['unused'], 10, ['fixture', 'existing'], metrics,
+                                               'existing-report'), 0)
+        rows = [json.loads(line) for line in metrics.read_text().splitlines()]
+        self.assertEqual([row['test'] for row in rows], [['fixture', 'candidate']])
+        self.write('budget.json', json.dumps({'tier': 'quick', 'measured': 1, 'budgeted': 1,
+                                              'compile': 0, 'limit': 180}))
+        self.write('case.json', json.dumps({'ratchet_base': 'fixture'}))
+        with tempfile.TemporaryFile(mode='w+') as output, patch.dict(os.environ, {'CORRAL_GATE_ATTEMPT': 'fixture'}):
+            with contextlib.redirect_stdout(output):
+                gate_timer.report(Path('budget.json'))
+            output.seek(0)
+            self.assertIn('"test": ["fixture", "candidate"]', output.read())
+        audit = Path('.evidence/fixture-existing-test-costs.md').read_text()
+        self.assertNotIn('fixture candidate', audit)
+        self.assertNotIn('fixture existing', audit)
+
     def test_prebuilt_nextest_runs_without_compiler_or_source(self):
         self.write("Cargo.toml", '[package]\nname="reuse-fixture"\nversion="0.0.0"\nedition="2024"\n[workspace]\n[lib]\npath="src.rs"\n')
         self.write("src.rs", "#[test] fn cached() {}\n")
