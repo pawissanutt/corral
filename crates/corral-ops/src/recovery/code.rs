@@ -9,12 +9,63 @@ pub(crate) fn code_review_record(
     let record = records(ctx,&task.id)?.into_iter().find(|r| matches!(&r.preview.proposed_effect, RecoveryEffect::ReviewAttempt { stage: RecoveryReviewStage::CodeReview, attempt: a, reviewer } if Some(a.as_str()) == attempt && reviewer.profile == review.reviewer));
     if let Some(record) = &record {
         validate_contract(ctx, task, record)?;
+        let RecoveryIdentity::Code { candidate, .. } = &record.preview.request.target.identity
+        else {
+            anyhow::bail!("review recovery candidate missing")
+        };
+        ensure!(
+            review.identity.as_ref() == Some(candidate),
+            "recovery callback candidate differs from its one-attempt contract"
+        );
     }
     Ok(record)
 }
 
-pub(crate) fn code_acceptance_link(ctx: &Ctx, id: &str, record: &RecoveryRecord) -> Result<()> {
+/// Persist a reverse link to the existing landing journal before Git advances.
+pub(crate) fn bind_landing(
+    ctx: &Ctx,
+    record: &RecoveryRecord,
+    journal: Option<&str>,
+) -> Result<()> {
+    let value = (reference(record), &record.preview.proposed_effect, journal);
+    corral_core::records::RecordArea::new("recovery-landings")
+        .save_intent(&ctx.store, &record.id, &value)
+}
+
+/// Join the existing task/landing transaction, not a second task write. A restart after Done
+/// but before receipt finalization can prove even KeepBranch without guessing from status.
+pub(crate) fn code_acceptance_committed(
+    ctx: &Ctx,
+    record: &RecoveryRecord,
+    sha: &str,
+) -> Result<()> {
     let RecoveryEffect::CodeAcceptance { candidate, .. } = &record.preview.proposed_effect else {
+        anyhow::bail!("invalid code acceptance effect")
+    };
+    ensure!(
+        sha == candidate.head,
+        "recovery landed a different candidate"
+    );
+    ctx.store.save_record(
+        "recovery-code-committed",
+        &record.id,
+        &(
+            reference(record),
+            record.preview.proposed_effect.clone(),
+            sha,
+        ),
+    )
+}
+
+pub(super) fn code_committed(ctx: &Ctx, record: &RecoveryRecord) -> Result<bool> {
+    let saved: Option<(RecoveryReference, RecoveryEffect, String)> =
+        ctx.store.record("recovery-code-committed", &record.id)?;
+    Ok(saved.is_some_and(|(r,e,sha)| r == reference(record) && e == record.preview.proposed_effect && matches!(e, RecoveryEffect::CodeAcceptance { candidate, .. } if candidate.head == sha)))
+}
+
+pub(crate) fn code_acceptance_link(ctx: &Ctx, id: &str, record: &RecoveryRecord) -> Result<()> {
+    let RecoveryEffect::CodeAcceptance { candidate, merge } = &record.preview.proposed_effect
+    else {
         anyhow::bail!("invalid code acceptance recovery")
     };
     let mut saved = records(ctx, id)?
@@ -30,8 +81,21 @@ pub(crate) fn code_acceptance_link(ctx: &Ctx, id: &str, record: &RecoveryRecord)
             receipt,
             acceptance: Some(acceptance(record)),
         });
-        ctx.store.save_recovery_record(id, &saved)?;
     }
+    if *merge != RecoveryMerge::Keep {
+        let receipt = RecoveryReceipt::LandingJournal {
+            run: candidate.run.clone(),
+            candidate: candidate.clone(),
+        };
+        if !saved.links.iter().any(|l| l.receipt == receipt) {
+            saved.links.push(RecoveryLink {
+                recovery: reference(record),
+                receipt,
+                acceptance: None,
+            });
+        }
+    }
+    ctx.store.save_recovery_record(id, &saved)?;
     Ok(())
 }
 
@@ -88,7 +152,7 @@ pub(crate) fn check_resource(
     validate_contract(ctx, &task, record)?;
     ensure!(
         hash(&ctx.store.reopen()?.config.resources)? == *thresholds_digest
-            && evaluate::pressure_id(&crate::resources::read_status(ctx)?)? == *pressure_episode,
+            && super::admission::resource_binding(ctx)?.as_ref() == Some(pressure_episode),
         "recovery_stale: pressure episode or thresholds changed"
     );
     Ok(())

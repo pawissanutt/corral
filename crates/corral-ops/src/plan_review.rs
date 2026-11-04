@@ -210,7 +210,7 @@ fn verdict_report_inner(
             bail!("recovery-bound plan requires trusted local owner confirmation through recover accept-plan");
         }
         let digest = match &recovery {
-            Some(record) => record.preview.contract_digest.clone(),
+            Some(record) => crate::recovery::plan_recovery_digest(&config, task, record)?,
             None => plan::policy_digest(&config, task)?,
         };
         let required = config.plan_required(task.project.as_deref(), task.plan_required);
@@ -235,9 +235,9 @@ fn verdict_report_inner(
                         bail!("stale plan verdict: review receipt {receipt} no longer validates; review again");
                     }
                 }
-                authorized = if let Some(record) = &recovery {
-                    matches!(&record.preview.proposed_effect, corral_core::RecoveryEffect::ReviewAttempt { reviewer, .. } if reviewer.profile == review.reviewer)
-                        && review.herdr.is_some()
+                authorized = if let Some(record) = &recovery
+                    && let corral_core::RecoveryEffect::ReviewAttempt { reviewer, .. } = &record.preview.proposed_effect {
+                    reviewer.profile == review.reviewer && review.herdr.is_some()
                 } else {
                     corral_core::plan_policy::plan_reviewer_authorized(
                         &ctx.store, &config, task, review, &plan::expected_reviewer(&config, task)?)?

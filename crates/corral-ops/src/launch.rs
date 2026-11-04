@@ -394,6 +394,12 @@ fn advance(
                 store: store.clone(),
                 ..ctx.clone()
             };
+            crate::recovery::admission_attempt(
+                &fresh,
+                &current.id,
+                corral_core::RecoveryAdmissionStage::Dispatch,
+            )?;
+            crate::recovery::bind_active_journal(&fresh, &authorization)?;
             let plan = current
                 .dispatch_plan
                 .clone()

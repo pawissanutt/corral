@@ -593,6 +593,7 @@ fn approve_landed_inner(
             } else {
                 operation = crate::hooks::prepare(ctx, t, &run, &repo, &base_before, &head)?;
             }
+            if let Some(recovery) = recovery { crate::recovery::bind_landing(ctx, recovery, operation.as_ref().map(|op|op.key.as_str()))?; }
         }
     let (sha, action) = match strategy {
         ApproveStrategy::FastForward => {
@@ -640,6 +641,7 @@ fn approve_landed_inner(
                     } else {
                         operation = crate::hooks::prepare(ctx, t, &run, &repo, base_before, head)?;
                     }
+                    if let Some(recovery) = recovery { crate::recovery::bind_landing(ctx, recovery, operation.as_ref().map(|op|op.key.as_str()))?; }
                     Ok(())
                 },
             )?;
@@ -679,6 +681,7 @@ fn approve_landed_inner(
         current.stuck = None;
         head.status = Status::Done;
         head.queued = false;
+        if let Some(recovery) = recovery { crate::recovery::code_acceptance_committed(ctx, recovery, &sha)?; }
         crate::cleanup_worktree::retained::record(ctx, head.head(), &run, &sha, strategy, remove_worktree)?;
         landed = Some((sha, action));
         Ok(())
@@ -769,14 +772,19 @@ fn approve_landed_inner(
         Some(&task.id),
         "approved",
         // `cleanup` records the requested worktree cleanup for lifecycle GC (T-334).
-        json!({ "run": run.id, "strategy": strategy_name, "sha": sha, "previous_sha":previous_sha, "base":run.base, "project":task.project, "branch": run.branch, "worktree_removed": removed, "branch_deleted": branch_deleted, "reason": reason, "cleanup": { "v": 1, "remove_worktree": remove_worktree }, "acceptance_mode": if expected.is_some() {"autonomous"} else {"owner_override"}, "identity":expected, "started":started }),
+        json!({ "run": run.id, "strategy": strategy_name, "sha": sha, "previous_sha":previous_sha, "base":run.base, "project":task.project, "branch": run.branch, "worktree_removed": removed, "branch_deleted": branch_deleted, "reason": reason, "cleanup": { "v": 1, "remove_worktree": remove_worktree }, "acceptance_mode": if recovery.is_some() {"owner_recovery"} else if expected.is_some() {"autonomous"} else {"owner_override"}, "policy_satisfied": if recovery.is_some() {Some(false)} else {expected.map(|_|true)}, "recovery":recovery.map(|r|corral_core::RecoveryReference { operation:r.id.clone(), contract_digest:r.preview.contract_digest.clone() }), "identity":expected, "started":started }),
     )?;
     ctx.store.clear_condition(Some(&task.id), "landing_stale")?;
     if strategy != ApproveStrategy::KeepBranch {
         crate::assistant::scratch::record_landing(ctx, &task, &run, previous_sha.as_deref(), &sha);
     }
+    let recovery_note = recovery.map_or_else(String::new, |r| {
+        format!("; owner recovery {} (not ordinary policy success)", r.id)
+    });
     Ok((
         sha,
-        format!("{action}; worktree {worktree_note}; {branch_note}{operational_note}"),
+        format!(
+            "{action}; worktree {worktree_note}; {branch_note}{operational_note}{recovery_note}"
+        ),
     ))
 }

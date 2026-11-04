@@ -12,7 +12,17 @@ use jiff::Timestamp;
 
 use crate::Ctx;
 
+// Keep the legacy observation shape: old records deserialize with no episode, and old
+// readers ignore the additive field. An episode starts only on a persisted observation.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Observation {
+    #[serde(flatten)]
+    state: ResourceState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pressure_episode: Option<String>,
+}
 const OBSERVATIONS: RecordArea<ResourceState> = RecordArea::new("resources");
+const EPISODE_OBSERVATIONS: RecordArea<Observation> = RecordArea::new("resources");
 
 mod system;
 #[cfg(test)]
@@ -71,8 +81,32 @@ pub fn observe(ctx: &Ctx, now: Timestamp) -> Result<ResourceState> {
         .open(&lock_path)
         .with_context(|| format!("opening {}", lock_path.display()))?;
     lock.lock().context("locking resource observations")?;
+    let previous = EPISODE_OBSERVATIONS.load(&ctx.store, "state")?;
     let state = evaluate(ctx, now)?;
-    OBSERVATIONS.save(&ctx.store, "state", &state)?;
+    let pressure_episode = if state.held {
+        match previous
+            .filter(|p| p.state.held)
+            .and_then(|p| p.pressure_episode)
+        {
+            Some(episode) => Some(episode),
+            None => {
+                let mut entropy = [0_u8; 32];
+                getrandom::fill(&mut entropy)
+                    .map_err(|e| anyhow::anyhow!("creating resource episode: {e}"))?;
+                Some(crate::verification::digest(&entropy))
+            }
+        }
+    } else {
+        None
+    };
+    EPISODE_OBSERVATIONS.save(
+        &ctx.store,
+        "state",
+        &Observation {
+            state: state.clone(),
+            pressure_episode,
+        },
+    )?;
     // Closing this non-inherited descriptor releases its advisory lock.
     drop(lock);
     Ok(state)
@@ -150,6 +184,18 @@ pub fn status(ctx: &Ctx) -> Result<ResourceState> {
 /// Sample against the last persisted latch without mutating the store or creating locks.
 pub fn read_status(ctx: &Ctx) -> Result<ResourceState> {
     evaluate(ctx, corral_core::clock::now())
+}
+
+/// Stable persisted pressure episode, not a diagnostic sampling timestamp. A legacy held
+/// record must be observed once by the normal resource path before it can be authorized.
+pub(crate) fn pressure_episode(ctx: &Ctx) -> Result<Option<String>> {
+    if !read_status(ctx)?.held {
+        return Ok(None);
+    }
+    Ok(EPISODE_OBSERVATIONS
+        .load(&ctx.store, "state")?
+        .filter(|p| p.state.held)
+        .and_then(|p| p.pressure_episode))
 }
 
 pub fn read_admission(ctx: &Ctx) -> Result<Option<String>> {

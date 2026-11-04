@@ -232,7 +232,7 @@ pub fn recover_reconcile(ctx: &Ctx, id: &str, operation: &str) -> Result<Recover
         project_event(ctx, id, &record)?;
         return Ok(record);
     }
-    let landed = matches!(&record.preview.proposed_effect, RecoveryEffect::CodeAcceptance { candidate, .. } if task.landed.as_ref().is_some_and(|l|l.run == candidate.run && l.sha == candidate.head));
+    let landed = super::code::code_committed(ctx, &record)?;
     if !landed {
         validate_contract(ctx, &task, &record)?;
     }
@@ -265,10 +265,12 @@ pub fn recover_reconcile(ctx: &Ctx, id: &str, operation: &str) -> Result<Recover
                 false
             }
         }
-        RecoveryEffect::CodeAcceptance { candidate, .. } => task
-            .landed
-            .as_ref()
-            .is_some_and(|l| l.run == candidate.run && l.sha == candidate.head),
+        RecoveryEffect::CodeAcceptance { .. } => {
+            if landed {
+                code_acceptance_link(ctx, id, &record)?;
+            }
+            landed
+        }
         RecoveryEffect::ReviewAttempt {
             stage: RecoveryReviewStage::CodeReview,
             ..
@@ -347,6 +349,19 @@ fn project_event(ctx: &Ctx, id: &str, record: &RecoveryRecord) -> Result<()> {
         }
         Ok(())
     })?;
+    // A pending code review's packet binds its artifact inputs. The canonical recovery
+    // record and event are already durable; publishing another artifact now would stale
+    // the genuine callback. Acceptance/readback can materialize the receipt after verdict.
+    if ctx
+        .store
+        .head(id)?
+        .current_run
+        .as_deref()
+        .and_then(|r| r.review.as_ref())
+        .is_some_and(|r| r.verdict.is_none())
+    {
+        return Ok(());
+    }
     let temp = tempfile::tempdir().context("creating recovery receipt staging")?;
     let path = temp.path().join("owner-recovery-receipt.json");
     std::fs::write(&path, serde_json::to_vec_pretty(record)?)

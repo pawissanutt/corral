@@ -2,6 +2,7 @@ use super::*;
 use std::path::PathBuf;
 
 mod code;
+mod resources;
 mod waiver;
 
 const PLAN: &str = "---\ngoal: recover fixture\nnon_goals: []\ndecisions: []\naffected_paths: [a.rs]\ncontracts: []\ndependencies: []\nacceptance: [{scenario: check, expected: passes}]\nverification: [check]\nowner_decisions: []\n---\n";
@@ -330,6 +331,47 @@ fn binding_only_preview_and_recovery_model_floor_are_distinct() {
                 .any(|b| b.code == "recovery-model-floor")
         );
     }
+    // The binding-only variant belongs at the callback contract, not a second F end-to-end
+    // journey: seed one exact authorized execution and collect its canonical verdict.
+    let record = RecoveryRecord {
+        version: RECOVERY_VERSION,
+        id: format!("REC-{}", preview.digest),
+        preview: preview.clone(),
+        authorization: confirmation(&preview).authorization,
+        outcomes: vec![
+            outcome(RecoveryState::Authorized, "fixture intent", None),
+            outcome(RecoveryState::Applying, "fixture separate execution", None),
+        ],
+        links: vec![],
+    };
+    f.ctx.store.save_recovery_record(&f.id, &record).unwrap();
+    f.ctx
+        .store
+        .update(&f.id, |task| {
+            task.plans[0].reviews.push(PlanReview {
+                id: "PR1".into(),
+                reviewer: "gpt-astra".into(),
+                policy_digest: preview.contract_digest.clone(),
+                verdict: None,
+                notes: None,
+                at: corral_core::clock::now(),
+                herdr: Some(HerdrRef {
+                    workspace_id: "w1".into(),
+                    pane_id: "w1:p1".into(),
+                    socket: Some(f.ctx.herdr.socket_path()?),
+                }),
+                pending_reply: None,
+                route: None,
+                cancelled: false,
+                agent_host: None,
+                delivery: Default::default(),
+                inbox: Default::default(),
+            });
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(f.callback("PR1").verdict, Some(Verdict::Approve));
+    assert!(f.ctx.store.get(&f.id).unwrap().reviewer.is_none());
 }
 
 #[test]

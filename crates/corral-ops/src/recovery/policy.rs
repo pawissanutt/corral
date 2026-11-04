@@ -37,6 +37,16 @@ pub(super) fn expected_code(config: &Config, task: &Task) -> Result<String> {
     crate::review_routing::resolve(config, &choice, family.as_ref()).map(|(name, _)| name)
 }
 
+pub(super) fn execution(resolved: &ResolvedProfile) -> serde_json::Value {
+    json!([
+        resolved.profile,
+        resolved.harness,
+        resolved.model,
+        resolved.vendor,
+        resolved.effort
+    ])
+}
+
 /// Raw effective inputs are hashed *before* resolution, so a selector failure remains evidence.
 pub(super) fn capture(
     config: &Config,
@@ -116,7 +126,24 @@ pub(super) fn capture(
     if let Some(planner) = crate::plan::planner(task)? {
         names.insert(planner.profile.clone());
     }
-    if let Some(run) = task.current_run() {
+    if matches!(
+        action,
+        RecoveryAction::ForceAdmission {
+            stage: RecoveryAdmissionStage::Dispatch | RecoveryAdmissionStage::PlanDispatch,
+            ..
+        }
+    ) {
+        let resolved = match &task.dispatch_plan {
+            Some(plan) => config.resolve_route(&plan.route)?,
+            None => config.resolve_route(&config.route_task(
+                task,
+                &ProfileChoice::default(),
+                |_| None,
+            )?)?,
+        };
+        names.insert(resolved.profile.clone());
+        inputs.insert("prospective_execution".into(), execution(&resolved));
+    } else if let Some(run) = task.current_run() {
         names.insert(run.agent.clone());
     }
     if !matches!(effective.reviewer, Reviewer::Profile(_) | Reviewer::Pm) {

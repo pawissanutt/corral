@@ -8,6 +8,7 @@ use crate::Ctx;
 
 mod admission;
 mod apply;
+pub use admission::recover_resource_input;
 pub(crate) use admission::{
     active_journal, admission_attempt, bind_active_journal, require_no_pending,
 };
