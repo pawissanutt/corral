@@ -571,8 +571,12 @@ fn gate(ctx: &Ctx, task: &str) -> String {
     }
 }
 
+fn scratch_cleaned(repo: &Path, run: &corral_core::RunHead) -> Result<bool> {
+    Ok(!run.worktree.exists() && !git::branch_exists(repo, &run.branch)?)
+}
+
 /// After `approve` landed a co-work run: its session lists the landed task, run and commits,
-/// and forgets the scratch whose lifecycle the task run took over. The landing is durable
+/// and forgets a scratch only after both its directory and branch are gone. The landing is durable
 /// already, so a failure here is reported, never returned.
 pub(crate) fn record_landing<T: corral_core::TaskRef + ?Sized>(
     ctx: &Ctx,
@@ -598,12 +602,12 @@ pub(crate) fn record_landing<T: corral_core::TaskRef + ?Sized>(
             commits,
             at: Timestamp::now(),
         };
+        let cleaned = scratch_cleaned(&repo, run)?;
         ctx.store.update_assistant(&cowork.session, |session| {
-            // Keep a released record for GC when cleanup was deferred or failed. Missing
-            // directories must not keep consuming the session's scratch allowance.
+            // Retained/failed-cleanup branches remain discoverable for preserving GC/discard.
             session
                 .scratch
-                .retain(|entry| entry.branch != run.branch || entry.path.exists());
+                .retain(|entry| entry.branch != run.branch || !cleaned);
             if !session
                 .landed
                 .iter()
@@ -631,18 +635,24 @@ pub(crate) fn record_landing<T: corral_core::TaskRef + ?Sized>(
     }
 }
 
-/// A discarded co-work run took its worktree with it, so its session forgets the scratch
-/// record, which would otherwise count against `assistant.scratch_max` for good.
+/// Forget a discarded co-work scratch only after its directory and branch cleanup succeeded.
+/// A retained branch or a failed cleanup stays discoverable for preserving GC/discard.
 pub(crate) fn release_discarded(ctx: &Ctx, task: &Task) {
     let (Some(cowork), Some(run)) = (task.cowork_run(), task.current_run()) else {
         return;
     };
-    let released = ctx.store.update_assistant(&cowork.session, |session| {
-        session
-            .scratch
-            .retain(|entry| entry.branch != run.branch || entry.path.exists());
+    let released = (|| -> Result<()> {
+        let run = corral_core::RunHead::of(run)?;
+        let repo = crate::review::main_repo(ctx, task, &run)?;
+        let cleaned = scratch_cleaned(&repo, &run)?;
+        ctx.store.update_assistant(&cowork.session, |session| {
+            session
+                .scratch
+                .retain(|entry| entry.branch != run.branch || !cleaned);
+            Ok(())
+        })?;
         Ok(())
-    });
+    })();
     if let Err(error) = released {
         crate::messages::report(
             Some(&task.id),

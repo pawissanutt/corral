@@ -63,12 +63,17 @@ pub(super) fn range(repo: &Path, from: &str, to: &str) -> Result<Vec<String>> {
 
 pub(super) fn branch_exists(repo: &Path, branch: &str) -> Result<bool> {
     let reference = format!("refs/heads/{branch}");
-    Ok(
-        command(repo, &["show-ref", "--verify", "--quiet", &reference], None)
-            .status()
-            .context("checking scratch branch")?
-            .success(),
-    )
+    let output = command(repo, &["show-ref", "--verify", "--quiet", &reference], None)
+        .output()
+        .context("checking scratch branch")?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => bail!(
+            "checking scratch branch {reference}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    }
 }
 
 /// What removing a scratch would lose, read at the moment of the check.

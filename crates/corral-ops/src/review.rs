@@ -832,6 +832,7 @@ pub fn discard_with_decision(
             if !warnings.is_empty() {
                 bail!("panes could not be closed");
             }
+            let _scratch = crate::assistant::scratch::preserve_discarded(ctx, &task)?;
             crate::cleanup_worktree::remove(
                 ctx,
                 &task,

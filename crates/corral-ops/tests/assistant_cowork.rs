@@ -143,7 +143,7 @@ fn kinds(ctx: &Ctx, task: &str) -> Vec<String> {
 fn terminal_cowork_with_missing_directory_can_be_discarded() {
     let fx = Fx::new(None);
     let made = fx.scratch("released");
-    fx.commit(&made.path, "work.txt");
+    let head = fx.commit(&made.path, "work.txt");
     let finished = scratch::finish(
         &fx.ctx,
         "A-1",
@@ -155,29 +155,47 @@ fn terminal_cowork_with_missing_directory_can_be_discarded() {
     )
     .unwrap();
     std::fs::remove_dir_all(&made.path).unwrap();
-    fx.ctx
-        .store
-        .update(&finished.task, |task| {
-            task.status = Status::Dropped;
-            Ok(())
-        })
-        .unwrap();
+    // Actual task-discard bookkeeping must retain a missing-directory record while the
+    // requested retained branch still holds unique work, rather than orphaning that branch.
+    corral_ops::discard_with_options(&fx.ctx, &finished.task, true).unwrap();
+    assert_eq!(fx.kind("released").as_deref(), Some(scratch::COWORK));
+    assert_eq!(git(&fx.app, &["rev-parse", &made.branch]), head);
     let preview = scratch::gc(&fx.ctx, jiff::Timestamp::now(), true).unwrap();
     assert_eq!(preview.items[0].action, "remove", "{preview:?}");
-    fx.ctx
-        .store
-        .update(&finished.task, |task| {
-            task.status = Status::Done;
-            Ok(())
-        })
-        .unwrap();
-    let removed = scratch::discard(&fx.ctx, "A-1", "released").unwrap();
+    // A subsequent ordinary task discard must bundle those commits before branch deletion.
+    corral_ops::discard(&fx.ctx, &finished.task).unwrap();
     assert!(
-        removed
-            .artifacts
-            .iter()
-            .any(|a| a.ends_with("commits.bundle"))
+        git(
+            &fx.app,
+            &[
+                "for-each-ref",
+                "--format=%(objectname)",
+                &format!("refs/heads/{}", made.branch)
+            ]
+        )
+        .is_empty()
     );
+    let session = fx.ctx.store.get_assistant("A-1").unwrap();
+    let bundle = session
+        .artifacts
+        .iter()
+        .find(|a| a.path.ends_with("commits.bundle"))
+        .expect("task discard must preserve unique co-work commits before deleting the branch");
+    assert_eq!(bundle.tier_override, Some(corral_core::ArtifactTier::Keep));
+    let saved = fx.app.join("saved.bundle");
+    std::fs::write(&saved, corral_ops::artifact_read(&fx.ctx, bundle).unwrap()).unwrap();
+    git(&fx.app, &["bundle", "verify", saved.to_str().unwrap()]);
+    git(
+        &fx.app,
+        &[
+            "fetch",
+            "-q",
+            saved.to_str().unwrap(),
+            &format!("refs/heads/{}:refs/heads/restored", made.branch),
+        ],
+    );
+    assert_eq!(git(&fx.app, &["rev-parse", "restored"]), head);
+    assert_eq!(git(&fx.app, &["show", "restored:work.txt"]), "work.txt");
     assert!(
         fx.ctx
             .store

@@ -426,6 +426,32 @@ fn remove(
     })
 }
 
+/// A co-work task's discard must use the same recoverable export as scratch discard before
+/// removing its directory or branch. Hold the scratch lock through the caller's cleanup.
+pub(crate) fn preserve_discarded(ctx: &Ctx, task: &Task) -> Result<Option<std::fs::File>> {
+    let Some(cowork) = task.cowork_run() else {
+        return Ok(None);
+    };
+    let guard = lock(
+        ctx,
+        &format!("scratch-{}-{}", cowork.session, cowork.scratch),
+    )?;
+    let scratch = find(ctx, &cowork.session, &cowork.scratch)?;
+    let run = task
+        .current_run()
+        .context("co-work task has no current run")?;
+    if scratch.path != run.worktree || scratch.branch != run.branch {
+        bail!("co-work scratch does not match its task run; nothing was removed");
+    }
+    let repo = repo_of(&scratch)?;
+    crate::cleanup_worktree::validate_scratch(&repo, &scratch.path, &scratch.branch)?;
+    let work = git::work(&repo, &scratch)?;
+    if work.any() {
+        preserve(ctx, &cowork.session, &scratch, &repo, &work)?;
+    }
+    Ok(Some(guard))
+}
+
 /// The session's own disposal: no confirmation, work saved first. Its own shell and this
 /// command may run from inside the scratch.
 pub fn discard(ctx: &Ctx, session: &str, slug: &str) -> Result<Removed> {
