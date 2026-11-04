@@ -86,10 +86,12 @@ fn changes_loop_back_when_another_reviewed_task_lands_before_sync() {
         .iter()
         .find(|a| a.title == "Autopilot changes (round 1)")
         .unwrap();
+    let decoded = corral_ops::artifact_path(&fx.ctx, artifact).unwrap();
     assert!(
         fx.herdr_log("prompts.log")
-            .contains(fx.ctx.store.dir().join(&artifact.path).to_str().unwrap())
+            .contains(decoded.to_str().unwrap())
     );
+    assert!(std::fs::read_to_string(decoded).unwrap().contains(NOTES));
     assert_eq!(fx.events("gate_started"), gates);
     assert_eq!(fx.events("review_started"), reviews);
     assert_eq!(
