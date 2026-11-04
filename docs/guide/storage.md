@@ -38,8 +38,10 @@ sync pass. The soft WAL limit is **16 MiB**, also the journal retention limit. I
 reader/writer prevents reset and the WAL exceeds that size, a diagnostic reports its byte
 count and checkpoint contention. This is not a hard quota that aborts writes or evicts another
 process's valid snapshot. Inventory refreshes an explicitly begun ownership pass but does not
-leave a persistent read view on a reusable command context. Normal uncontended cycles reset
-the WAL to zero. Usage refresh batches
+leave a persistent read view on a reusable command context. Long syncs reuse fresh ownership
+guards but re-read an expired summary before the next check; completed steps and external
+effects are never retried by that renewal. Explicit pinned passes and frozen snapshots still
+expire normally. Normal uncontended cycles reset the WAL to zero. Usage refresh batches
 per-run reviewer verdict cursor records, without combining transactions across external side
 effects. Costly periodic syncs back off to 19 times their CPU cost (2–60 seconds); explicit
 refresh triggers bypass that wait and bursts coalesce into one pass. Explicit session binding

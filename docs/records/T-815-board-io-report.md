@@ -59,11 +59,11 @@ Other targeted checks: `cargo check -p corral-tui -p corral-core --all-targets` 
 checks passed. The initial combined focused command exhausted its 200-second shell window
 while compiling ops; the remaining targeted tests were then run successfully, not skipped.
 
-Added persistent tests: **3**: terminal transport, SQLite reader/WAL, and inventory pass-lifetime
-regressions. The first two take approximately **0.07 seconds combined** in focused runs; the
-new clock-driven lifetime test is part of a seven-case suite taking **0.17 seconds total**.
-Gate registration accounting also counts one renamed existing cadence test (four additions,
-net three new tests). No new end-to-end matrix,
+Added persistent tests: **4**: terminal transport, SQLite reader/WAL, inventory pass lifetime,
+and expired ownership-guard renewal. The first two take approximately **0.07 seconds combined**
+in focused runs; the two clock-driven lifetime tests are included in an eight-case suite taking
+**0.20 seconds total**. Gate registration accounting also counts one renamed existing cadence
+test (five additions, net four new tests). No new end-to-end matrix,
 prose pins, large histories or slow/load tests. Existing pragma assertions now require NORMAL
 rather than FULL, as explicitly required by this task; the recovery FULL test is unchanged.
 
@@ -99,6 +99,36 @@ expire and fail closed. All seven session-binding cases pass. The unchanged real
 cleanup journey passes in its private plugin-free server (15.325s); no test timeout, wait or
 assertion changed, and the temporary failure diagnostics were removed. Logs:
 `cleanup-diagnostic.log`, `inventory-red.log`, `inventory-green.log`, `cleanup-repair.log`.
+
+## Changes round 1: landing-gate sync expiry
+
+The landing gate (`artifacts/T-815/R1/1d3dca7a-T-815-R1-0161971-1793774047981942616.log`)
+found three Plan journeys failing at `sync_at` after a retained read view expired. An isolated
+failing-first replay of the audited Plan case reproduced expiry at 6.143833118s. Its backtrace
+identified the sync-wide `SessionView`: post-autopilot attention reconciliation called
+`owner_notice::drain_heads`, which reused the ownership view captured before the landing work.
+
+Sync now explicitly opts into a refreshable **guard-only** cache. Fresh ownership summaries
+are reused, but `session_view` re-reads an expired summary on the next guard check. This repeats
+only an idempotent ownership read, not gate collection, a sync step, or an external side effect.
+The expired SQLite lease closes its connection and old references remain expired; the new
+summary rechecks current ownership, including a newly foreign binding. Inventory's leased
+re-read preserves this mode. Explicit pinned passes and frozen snapshots retain their strict
+expiry semantics. The default remains five seconds, and no test timeout was changed.
+
+One small ManualClock regression fails first at exactly six seconds with the old behavior,
+then checks fresh-cache reuse, expiry renewal, foreign-binding refusal and old-reference expiry.
+No additional Plan E2E variants or histories were added. All eight existing ownership tests
+pass. The unchanged ownership cost check also passes: reads/scans remain independent of one
+versus sixteen reconciliation writes, with at most three binding reads for an ordinary sync.
+
+The owner's requested alternative to another worker-run full tier was executed:
+`cargo nextest run -p corral-ops --test gate_tiers_e2e --no-fail-fast` in the private plugin-free
+server passed **all eight tests, zero skipped**, including all three landing failures. Execution
+was 30.576s; the slowest existing Plan case took 30.575s (report-only observation, not a timeout
+change). The contracted quick gate follows the committed/rebased fix. Evidence:
+`plan-sync-red.log`, `guard-renewal-red.log`, `guard-renewal-green.log`, `plan-sync-green.log`,
+and `sync-ownership-cost.log`.
 
 ## Limits / not verified
 
