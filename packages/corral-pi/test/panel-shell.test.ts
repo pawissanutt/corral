@@ -52,8 +52,13 @@ function expectIntact(h: PanelHost): void {
   expect(screen.overflow).toBe(0);
   if (!h.panels.wide) return;
   for (let row = 0; row < screen.rows; row++) {
-    expect("┌│└").toContain(screen.slice(row, 106, 107));
-    expect("┐│┘").toContain(screen.slice(row, 139, 140));
+    // The separator column never carries main-pane text.
+    expect(screen.slice(row, 105, 106)).toBe(" ");
+    if (h.panels.focused) {
+      // F6 opens the boxed inspector in place.
+      expect("┌│└").toContain(screen.slice(row, 106, 107));
+      expect("┐│┘").toContain(screen.slice(row, 139, 140));
+    } else expect(" ▌").toContain(screen.slice(row, 106, 107)); // nav rows: blank or the current-view marker
   }
 }
 function pager(h: PanelHost): { row: number; first: number; total: number; previous: number; next: number } | undefined {

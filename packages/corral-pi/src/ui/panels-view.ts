@@ -52,11 +52,12 @@ export let PANEL_RULE = ansi(PACKAGED.dark.rule);
 export let PANEL_SUCCESS = ansi(PACKAGED.dark.success);
 export let PANEL_WARNING = ansi(PACKAGED.dark.warning);
 export let PANEL_ERROR = ansi(PACKAGED.dark.error);
+export let PANEL_SELECTED = ansi(PACKAGED.dark.selected, true);
 /** One native host per process; live bindings keep every panel on the same packaged palette. */
 export function setPanelAppearance(appearance: Appearance): void {
   const p = PACKAGED[appearance];
   PANEL_BG = ansi(p.background, true); PANEL_TEXT = ansi(p.text); PANEL_MUTED = ansi(p.muted);
-  PANEL_BLUE = ansi(p.accent); PANEL_RULE = ansi(p.rule); PANEL_SUCCESS = ansi(p.success); PANEL_WARNING = ansi(p.warning); PANEL_ERROR = ansi(p.error);
+  PANEL_BLUE = ansi(p.accent); PANEL_RULE = ansi(p.rule); PANEL_SUCCESS = ansi(p.success); PANEL_WARNING = ansi(p.warning); PANEL_ERROR = ansi(p.error); PANEL_SELECTED = ansi(p.selected, true);
 }
 export function styledPanelLine(row: PanelLine): string {
   const color = row.tone === "muted" ? PANEL_MUTED : row.tone === "success" ? PANEL_SUCCESS

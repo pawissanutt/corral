@@ -6,10 +6,15 @@ import { PanelCanvas, CANVAS_STYLE } from "./panel-canvas.ts";
 
 export const PANEL_BREAKPOINT = 105;
 export const PANEL_WIDTH = 34;
+/** A navigation list needs no more than 40 columns; the main pane always keeps 70. */
+export const RAIL_MIN = 24;
+export const RAIL_MAX = 40;
+export const MIN_MAIN = 70;
 const SYNC_END = "\x1b[?2026l";
 
 export interface PanelSurface {
   readonly sidebarEnabled: boolean;
+  readonly sidebarWidth?: number;
   renderSidebar(width: number, height: number): readonly string[];
   handleInput(data: string): boolean;
   layoutChanged(): void;
@@ -25,10 +30,15 @@ export class PanelTerminal implements Terminal {
 
   constructor(readonly physical: Terminal, private readonly surface: PanelSurface) {}
 
-  get sidebarVisible(): boolean {
-    return this.fullscreen && this.surface.sidebarEnabled && this.physical.columns >= PANEL_BREAKPOINT;
+  /** The requested width, clamped so the main pane keeps MIN_MAIN columns. */
+  get railWidth(): number {
+    const max = Math.min(RAIL_MAX, this.physical.columns - MIN_MAIN - 1);
+    return Math.max(0, Math.min(max, Math.max(RAIL_MIN, this.surface.sidebarWidth ?? PANEL_WIDTH)));
   }
-  get columns(): number { return this.physical.columns - (this.sidebarVisible ? PANEL_WIDTH + 1 : 0); }
+  get sidebarVisible(): boolean {
+    return this.fullscreen && this.surface.sidebarEnabled && this.physical.columns >= PANEL_BREAKPOINT && this.railWidth >= RAIL_MIN;
+  }
+  get columns(): number { return this.physical.columns - (this.sidebarVisible ? this.railWidth + 1 : 0); }
   get rows(): number { return this.physical.rows; }
   get kittyProtocolActive(): boolean { return this.physical.kittyProtocolActive; }
 
@@ -52,11 +62,12 @@ export class PanelTerminal implements Terminal {
   private rail(): string {
     if (!this.active || !this.sidebarVisible || !this.canvas.atBoundary) return "";
     const column = this.columns + 2;
-    const lines = this.surface.renderSidebar(PANEL_WIDTH, this.rows);
+    const width = this.railWidth;
+    const lines = this.surface.renderSidebar(width, this.rows);
     let data = "\x1b7\x1b[?7l";
     for (let row = 0; row < this.rows; row++) {
       // Never erase a whole physical line: Pi's main screen is on the left.
-      data += `\x1b[${row + 1};${column - 1}H\x1b[0m${CANVAS_STYLE} \x1b[${row + 1};${column}H${lines[row] ?? " ".repeat(PANEL_WIDTH)}`;
+      data += `\x1b[${row + 1};${column - 1}H\x1b[0m${CANVAS_STYLE} \x1b[${row + 1};${column}H${lines[row] ?? " ".repeat(width)}`;
     }
     return data + "\x1b[0m\x1b8" + (this.autowrap ? "\x1b[?7h" : "");
   }

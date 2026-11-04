@@ -1,6 +1,7 @@
 // One host-side copy of the canonical ledger, read by the rich-mode widget and, for PM and
 // assistant sessions, by the model's request summary, so both name the same plan and revision.
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { z } from "zod";
 
 import type { HostIdentity } from "../roles/types.ts";
@@ -124,7 +125,8 @@ export class TodoLedger {
 }
 
 /** The rich-mode widget and `/todo`; `restoreOnStart` re-reads the ledger when the pane opens. */
-export function installTodo(pi: ExtensionAPI, ledger: TodoLedger, restoreOnStart: boolean): void {
+/** `hidden`: the side panel's Task row carries the plan, so the widget yields while it is visible. */
+export function installTodo(pi: ExtensionAPI, ledger: TodoLedger, restoreOnStart: boolean, hidden: () => boolean = () => false): void {
   let widget: TodoWidget | undefined;
   let ui: ExtensionUIContext | undefined;
   ledger.onChange((failure) => {
@@ -142,7 +144,10 @@ export function installTodo(pi: ExtensionAPI, ledger: TodoLedger, restoreOnStart
       widget = new TodoWidget(theme, () => tui.terminal.rows, () => tui.requestRender());
       if (ledger.current) widget.update(ledger.current);
       else if (ledger.unavailable) widget.failed();
-      return widget;
+      const shown = widget;
+      return { render: (width: number) => hidden() ? [] : shown.render(width),
+        handleMouse: (event: TuiMouseEvent) => hidden() ? undefined : shown.handleMouse(event),
+        invalidate: () => shown.invalidate() };
     }, { placement: "aboveEditor" });
     if (restoreOnStart) await ledger.restore().catch(() => false);
   });
