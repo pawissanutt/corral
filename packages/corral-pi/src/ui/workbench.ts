@@ -187,7 +187,7 @@ export class NativeWorkbench {
           (this.focused ? short ? "Esc Enter" : "· Esc chat · Enter compose" : ""), width) + RESET,
         PANEL_BG + PANEL_TEXT + (this.view !== "activity" && this.headline(width) || pad(this.view === "activity" && this.selectedActivity
           ? activityTitle(this.options.snapshot(), this.selectedActivity)
-          : `Files: ${plainLabel(this.scopeLabel)} · ` + PANEL_MUTED + `${this.options.identity.role.toUpperCase()} ${target(this.options.identity)} · g${this.options.identity.generation} · ${!this.ui ? "Initializing editor…" : this.options.snapshot()?.bound ? "Bound to Corral" : "Unbound"}`, width)) + RESET];
+          : `Files: ${plainLabel(this.scopeLabel)} · ` + PANEL_MUTED + target(this.options.identity) + (this.ui ? "" : " · Initializing editor…"), width)) + RESET];
       },
       handleMouse: event => {
         if (!this.options.canInteract() || !plainClick(event) || event.y !== 0) return undefined;

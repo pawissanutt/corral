@@ -6,8 +6,8 @@ import { execFileSync } from "node:child_process";
 import { visibleWidth, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { PanelTerminal, type PanelSurface } from "./panel-terminal.ts";
 import { NativePanels } from "./panels.ts";
-import { box, panelLines, diffLine, type PanelSnapshot } from "./panels-view.ts";
-import { composerBar, contextLabel, overviewLines, panelFooter, panelHeader } from "./panels-chrome.ts";
+import { box, panelLines, diffLine, PANEL_WARNING, type PanelSnapshot } from "./panels-view.ts";
+import { composerBar, contextLabel, contextSegment, overviewLines, statusBar } from "./panels-chrome.ts";
 import { STATUS_BINDING, STATUS_ALERTS } from "./chrome.ts";
 import { parseStatus, readPanelDiff, readPanelFiles } from "./panels-git.ts";
 import { RecordingTerminal } from "../../test/support/panel-terminal.ts";
@@ -130,20 +130,32 @@ test("ambient context inspection does not repeat composer model or context-usage
   expect(context).not.toContain("1,234 / 10,000");
 });
 test("model and measured context have one ambient owner, with binding and refusals retained", () => {
-  for (const width of [52, 80, 105, 140]) for (const inRail of [false, true]) {
+  for (const width of [40, 52, 80, 105, 140]) {
     const statuses = new Map([[STATUS_BINDING, "● corral g3"], [STATUS_ALERTS, "2 tool denied"]]);
-    const header = panelHeader(identity, "/repo/demo", "main", snapshot, width);
-    const footer = panelFooter(snapshot, inRail, statuses, width);
-    const inspector = (inRail ? overviewLines(snapshot, { kind: "ready", files: [] })
-      : panelLines("Context", identity, snapshot, { kind: "unread" })).map(row => row.text);
-    const screen = stripTerminalSequences([...header, composerBar(snapshot, width), ...footer, ...inspector].join("\n"));
+    const bar = statusBar(identity, snapshot, statuses, width);
+    const rail = overviewLines(snapshot, { kind: "ready", files: [] }).map(row => row.text);
+    const screen = stripTerminalSequences([composerBar(snapshot, width), ...bar, ...rail].join("\n"));
     expect(screen.match(/example/g)).toHaveLength(1);
-    expect(screen.match(/12% context/g)).toHaveLength(1);
-    expect(screen).toContain("Bound to Corral");
+    expect(screen.match(/12%/g)).toHaveLength(1);
+    expect(screen).toMatch(/1\.2k \/ 10k|1k\/10k/);
     expect(screen).toContain("2 tool denied");
+    expect(screen).toContain("●");
     expect(screen).not.toContain("● corral g3");
-    for (const line of [...header, composerBar(snapshot, width), ...footer]) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    if (width >= 80) expect(screen).toContain("WORKER");
+    expect(bar.length).toBe(width < 52 ? 2 : 1);
+    for (const line of [composerBar(snapshot, width), ...bar]) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
   }
+});
+test("context segment shortens in steps, warns at 80% and stays explicit when unknown", () => {
+  const at = (percent: number | null) => ({ ...snapshot, context: { tokens: 172000, contextWindow: 200000, percent } });
+  expect(stripTerminalSequences(contextSegment(at(86), 80))).toContain("ctx ▰");
+  expect(stripTerminalSequences(contextSegment(at(86), 80))).toContain("86% · 172k / 200k");
+  expect(stripTerminalSequences(contextSegment(at(86), 22))).toBe("ctx ▰▰▰▱ 86% 172k/200k");
+  expect(stripTerminalSequences(contextSegment(at(86), 5))).toBe("86% 172k/200k");
+  expect(contextSegment(at(86), 80)).toContain(PANEL_WARNING);
+  expect(stripTerminalSequences(contextSegment(at(null), 80))).toContain("usage unknown");
+  expect(stripTerminalSequences(contextSegment(at(null), 80))).not.toContain("0%");
+  expect(stripTerminalSequences(contextSegment(null, 80))).toBe("Context unavailable");
 });
 test("narrow metadata is one row at rest; focused and expanded details are bounded and retain selection", () => {
   const native = new NativePanels({ identity, cwd: work, snapshot: () => snapshot });

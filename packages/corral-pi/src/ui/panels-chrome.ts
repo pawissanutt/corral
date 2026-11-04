@@ -1,11 +1,11 @@
-// One owner per ambient datum: model in the composer, context in rail OR footer.
+// One owner per ambient datum: model in the composer; role, context window and alerts in the bottom bar.
 import { basename } from "node:path";
 import { stripTerminalSequences, visibleWidth, Text } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
 import { STATUS_BINDING, STATUS_ALERTS, target } from "./chrome.ts";
 import { activitySidebar } from "./activity-sidebar.ts";
 import {
-  pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_MUTED, PANEL_TEXT, RESET,
+  pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_MUTED, PANEL_TEXT, PANEL_RULE, PANEL_SUCCESS, PANEL_WARNING, PANEL_ERROR, RESET,
   type PanelSnapshot, type FilesState, type PanelLine,
 } from "./panels-view.ts";
 
@@ -60,23 +60,63 @@ export function composerTitle(snapshot: PanelSnapshot | null): string {
     : input.disposition === "handled" ? "consumed; not execution" : input.reason ?? "not admitted";
   return `Last typed input: ${input.disposition} · ${plainLabel(meaning)}`;
 }
-export function panelFooter(snapshot: PanelSnapshot | null, contextInRail: boolean,
-  statuses: ReadonlyMap<string, string>, width: number): string[] {
-  const lines = contextInRail ? [] : [PANEL_MUTED + pad(contextLabel(snapshot), width) + RESET];
-  // Binding already lives in the header. Never lose refusals or other extension statuses.
-  const alerts = [...statuses].filter(([key]) => key !== STATUS_BINDING)
-    .sort(([a], [b]) => Number(b === STATUS_ALERTS) - Number(a === STATUS_ALERTS));
-  for (const [, value] of alerts) {
-    const text = plainLabel(stripTerminalSequences(value));
-    lines.push(...new Text(text, 0, 0).render(Math.max(1, width)).map(line => PANEL_TEXT + line + RESET));
+const compact1 = (n: number) => n >= 1000 ? `${Number((n / 1000).toFixed(1))}k` : String(n);
+const compact0 = (n: number) => n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+/**
+ * The context window in the widest form that fits `room`, shortening in steps and never dropped:
+ * `ctx ▰▰▰▰▱▱ 62% · 124.1k / 200k` → `ctx ▰▰▱▱ 62% 124k/200k` → `62% 124k/200k`.
+ */
+export function contextSegment(snapshot: PanelSnapshot | null, room: number): string {
+  const usage = snapshot?.context;
+  if (usage?.tokens == null) return PANEL_MUTED + "Context unavailable";
+  const window = usage.contextWindow;
+  if (usage.percent == null) {
+    return PANEL_TEXT + (room >= 40 ? `ctx usage unknown · ${compact1(usage.tokens)} / ${compact1(window)}`
+      : `? ${compact0(usage.tokens)}/${compact0(window)}`);
   }
-  return lines;
+  const percent = Math.round(usage.percent);
+  const tone = percent >= 95 ? PANEL_ERROR : percent >= 80 ? PANEL_WARNING : PANEL_TEXT;
+  const fill = percent >= 80 ? tone : PANEL_BLUE;
+  const bar = (cells: number) => {
+    const filled = Math.max(0, Math.min(cells, Math.round(cells * percent / 100)));
+    return fill + "▰".repeat(filled) + PANEL_RULE + "▱".repeat(cells - filled) + tone;
+  };
+  const full = ` ${percent}% · ${compact1(usage.tokens)} / ${compact1(window)}`;
+  if (room >= 4 + 10 + visibleWidth(full)) return tone + "ctx " + bar(Math.min(24, room - 4 - visibleWidth(full))) + full;
+  const mid = ` ${percent}% ${compact0(usage.tokens)}/${compact0(window)}`;
+  if (room >= 4 + 4 + visibleWidth(mid)) return tone + "ctx " + bar(4) + mid;
+  return tone + mid.trimStart();
+}
+/**
+ * The bottom bar owns only what matters in every view: role and binding, the context window and
+ * alerts. Below 52 columns the context takes its own row; alerts that do not fit wrap, never drop.
+ */
+export function statusBar(identity: HostIdentity, snapshot: PanelSnapshot | null,
+  statuses: ReadonlyMap<string, string>, width: number): string[] {
+  const role = identity.role.replaceAll("_", " ").toUpperCase();
+  const bound = snapshot?.bound ?? false;
+  const dot = bound ? PANEL_SUCCESS + "●" : PANEL_WARNING + "○";
+  const badge = width >= 80
+    ? "\x1b[1m" + PANEL_BLUE + "▌" + role + "\x1b[22m " + dot + PANEL_MUTED + ` g${identity.generation}` + (bound ? "" : PANEL_WARNING + " unbound")
+    : "\x1b[1m" + PANEL_BLUE + "▌" + (role[0] ?? "") + "\x1b[22m " + dot;
+  // Binding is the dot; every other status (refusals first) is kept.
+  const alerts = [...statuses].filter(([key]) => key !== STATUS_BINDING)
+    .sort(([a], [b]) => Number(b === STATUS_ALERTS) - Number(a === STATUS_ALERTS))
+    .map(([, value]) => plainLabel(stripTerminalSequences(value))).filter(Boolean).join(" · ");
+  const sep = PANEL_MUTED + " │ ";
+  const row = (text: string) => PANEL_BG + pad(" " + text, width) + RESET;
+  const wrapped = (text: string) => new Text(text, 0, 0).render(Math.max(1, width - 1)).map(line => row(PANEL_WARNING + line));
+  if (width < 52) return [row(badge + (alerts ? sep + PANEL_WARNING + alerts : "")), row(contextSegment(snapshot, width - 1))];
+  const room = width - 1 - visibleWidth(badge) - 3;
+  const shortest = visibleWidth(contextSegment(snapshot, 0));
+  const inline = alerts && visibleWidth(alerts) + 3 + shortest <= room;
+  const context = contextSegment(snapshot, room - (inline ? visibleWidth(alerts) + 3 : 0));
+  return [row(badge + sep + context + (inline ? sep + PANEL_WARNING + alerts : "")), ...(alerts && !inline ? wrapped(alerts) : [])];
 }
 export function overviewLines(snapshot: PanelSnapshot | null, files: FilesState, scope?: { readonly name: string; readonly required: boolean },
   selected?: string, history = false): PanelLine[] {
   if (!snapshot) return [{ text: "Session state unavailable" }];
-  const rows: PanelLine[] = [{ text: "Context", heading: true }, { text: contextLabel(snapshot) },
-    { text: "" }, { text: "Changed files", heading: true }];
+  const rows: PanelLine[] = [{ text: "Changed files", heading: true }];
   if (scope) rows.push({ text: scope.required ? "Choose project · /panels project" : plainLabel(scope.name), tone: "muted", action: { kind: "scope" } });
   if (scope?.required) rows.push({ text: "Workspace changes are hidden", tone: "muted" });
   else switch (files.kind) {
