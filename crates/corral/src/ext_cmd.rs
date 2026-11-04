@@ -72,6 +72,7 @@ pub const RESERVED: &[&str] = &[
     "evidence",
     "gate",
     "review-run",
+    "recover-infrastructure",
     "verdict",
     "dashboard",
     "artifact",
