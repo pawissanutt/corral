@@ -2,7 +2,9 @@ use super::*;
 use std::path::PathBuf;
 
 mod code;
+mod landing;
 mod planning;
+mod rebinding;
 mod resources;
 mod waiver;
 
@@ -130,6 +132,9 @@ fn isolated(name: &str) -> bool {
         "CORRAL_INTEGRATION_BASE",
     ] {
         child.env_remove(key);
+    }
+    if name.starts_with("landing::") {
+        child.env("GIT_TRACE2_EVENT", tmp.path().join("git-events.jsonl"));
     }
     let output = child.output().unwrap();
     assert!(

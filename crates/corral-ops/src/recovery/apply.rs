@@ -240,8 +240,25 @@ pub fn recover_reconcile(ctx: &Ctx, id: &str, operation: &str) -> Result<Recover
         project_event(ctx, id, &record)?;
         return Ok(record);
     }
-    let landed = super::code::code_committed(ctx, &record)?;
-    if !landed {
+    let code_acceptance = matches!(
+        record.preview.proposed_effect,
+        RecoveryEffect::CodeAcceptance { .. }
+    );
+    let mut uncertain = None;
+    let landed = if code_acceptance {
+        match super::landing::reconcile(ctx, &record) {
+            Ok(observed) => observed,
+            Err(error) => {
+                uncertain = Some(format!(
+                    "Landing proof unavailable; no command replayed: {error:#}"
+                ));
+                false
+            }
+        }
+    } else {
+        false
+    };
+    if !code_acceptance {
         validate_contract(ctx, &task, &record)?;
     }
     let observed = match &record.preview.proposed_effect {
@@ -302,7 +319,9 @@ pub fn recover_reconcile(ctx: &Ctx, id: &str, operation: &str) -> Result<Recover
     } else if state(&record)? != RecoveryState::Unknown {
         record.outcomes.push(outcome(
             RecoveryState::Unknown,
-            "No definitive receipt; external delivery must not be replayed",
+            uncertain.unwrap_or_else(|| {
+                "No definitive receipt; external delivery must not be replayed".into()
+            }),
             None,
         ));
     }

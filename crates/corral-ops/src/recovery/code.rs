@@ -5,8 +5,7 @@ pub(crate) fn code_review_record(
     task: &Task,
     review: &ReviewRecord,
 ) -> Result<Option<RecoveryRecord>> {
-    let attempt = review.route.as_deref().and_then(|r| r.attempt.as_deref());
-    let record = records(ctx,&task.id)?.into_iter().find(|r| matches!(&r.preview.proposed_effect, RecoveryEffect::ReviewAttempt { stage: RecoveryReviewStage::CodeReview, attempt: a, reviewer } if Some(a.as_str()) == attempt && reviewer.profile == review.reviewer));
+    let record = code_review_binding(ctx, &task.id, review)?;
     if let Some(record) = &record {
         validate_contract(ctx, task, record)?;
         let RecoveryIdentity::Code { candidate, .. } = &record.preview.request.target.identity
@@ -19,6 +18,33 @@ pub(crate) fn code_review_record(
         );
     }
     Ok(record)
+}
+
+/// Binding is historical, not a freshness check: stale recovery cannot acquire ordinary carry.
+fn code_review_binding(
+    ctx: &Ctx,
+    id: &str,
+    review: &ReviewRecord,
+) -> Result<Option<RecoveryRecord>> {
+    let attempt = review.route.as_deref().and_then(|r| r.attempt.as_deref());
+    Ok(records(ctx, id)?.into_iter().find(|r| matches!(&r.preview.proposed_effect, RecoveryEffect::ReviewAttempt { stage: RecoveryReviewStage::CodeReview, attempt: a, reviewer } if Some(a.as_str()) == attempt && reviewer.profile == review.reviewer)))
+}
+
+pub(crate) fn code_review_bound(ctx: &Ctx, id: &str, review: &ReviewRecord) -> Result<bool> {
+    Ok(code_review_binding(ctx, id, review)?.is_some())
+}
+
+pub(crate) fn require_ordinary_approval(ctx: &Ctx, id: &str) -> Result<()> {
+    let task = ctx.store.head(id)?;
+    if let Some(review) = task
+        .current_run
+        .as_deref()
+        .and_then(|run| run.review.as_ref())
+        && code_review_bound(ctx, &task.id, review)?
+    {
+        anyhow::bail!("recovery-bound review requires explicit owner recovery acceptance");
+    }
+    Ok(())
 }
 
 /// Persist a reverse link to the existing landing journal before Git advances.

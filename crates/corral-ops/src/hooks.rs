@@ -124,6 +124,11 @@ pub(crate) fn save(ctx: &Ctx, op: &PostLandOperation) -> Result<()> {
     OPERATIONS.save(&ctx.store, &op.key, op)
 }
 
+/// Point-read the owning journal bound by a recovery intent; never observe or run hooks.
+pub(crate) fn landing_operation(ctx: &Ctx, key: &str) -> Result<Option<PostLandOperation>> {
+    OPERATIONS.load(&ctx.store, key)
+}
+
 /// Inspect without executing commands or changing receipts.
 pub fn post_land_operations(ctx: &Ctx, project: Option<&str>) -> Result<Vec<PostLandOperation>> {
     let mut operations = Vec::new();

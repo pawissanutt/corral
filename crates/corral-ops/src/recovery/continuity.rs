@@ -2,6 +2,24 @@ use super::*;
 
 /// Validate the unmodified policy and exact plan bytes throughout the exception chain.
 pub(crate) fn validate_contract(ctx: &Ctx, task: &Task, record: &RecoveryRecord) -> Result<()> {
+    validate(ctx, task, record, None)
+}
+
+pub(super) fn validate_landed_contract(
+    ctx: &Ctx,
+    task: &Task,
+    record: &RecoveryRecord,
+    proof: &LandingProof,
+) -> Result<()> {
+    validate(ctx, task, record, Some(proof))
+}
+
+fn validate(
+    ctx: &Ctx,
+    task: &Task,
+    record: &RecoveryRecord,
+    landing: Option<&LandingProof>,
+) -> Result<()> {
     ensure!(
         record.preview.request.target.store == ctx.store.root()
             && record.preview.request.target.task == task.id,
@@ -38,9 +56,24 @@ pub(crate) fn validate_contract(ctx: &Ctx, task: &Task, record: &RecoveryRecord)
                 .current_run()
                 .filter(|r| r.id == candidate.run)
                 .context("recovery_stale: run replaced")?;
+            let run = RunHead::of(run)?;
+            let mut actual = if let Some(proof) = landing {
+                let actual =
+                    crate::verification::identity_after_landing(ctx, task, &run, candidate, proof)?;
+                ensure!(
+                    actual.integration_base == candidate.head,
+                    "landing base no longer matches its proof"
+                );
+                actual
+            } else {
+                crate::verification::identity(ctx, task, &run, candidate)?
+            };
+            if landing.is_some() {
+                // Only the exact proven advancement is normalized, never a replayed candidate.
+                actual.integration_base = candidate.integration_base.clone();
+            }
             ensure!(
-                crate::verification::identity(ctx, task, &RunHead::of(run)?, candidate)?
-                    == *candidate,
+                actual == *candidate,
                 "recovery_stale: candidate or base changed"
             );
         }

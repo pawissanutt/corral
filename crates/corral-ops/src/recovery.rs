@@ -14,7 +14,9 @@ pub(crate) use admission::{
 };
 mod authority;
 mod journal;
+mod landing;
 pub(crate) use journal::bind_journal;
+pub(crate) use landing::LandingProof;
 mod code;
 mod continuity;
 pub(crate) use code::*;

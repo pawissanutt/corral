@@ -435,6 +435,7 @@ pub fn approve(
     {
         bail!("gate_stale: rebase onto current main and run the gate once on the new base");
     }
+    crate::recovery::require_ordinary_approval(ctx, id)?;
     crate::verdict_carry::prepare_approval(ctx, id, strategy)?;
     approve_landed(ctx, id, strategy, remove_worktree, keep_branch, None).map(|(_, line)| line)
 }
@@ -489,12 +490,8 @@ fn approve_landed_inner(
         .current_run_head()?
         .with_context(|| format!("task {id} has no run"))?
         .into_owned();
-    if let Some(review) = &run.review
-        && !crate::recovery::records(ctx, id)?.is_empty()
-        && crate::recovery::code_review_record(ctx, &ctx.store.get(id)?, review)?.is_some()
-        && recovery.is_none()
-    {
-        bail!("recovery-bound review requires explicit owner recovery acceptance");
+    if recovery.is_none() {
+        crate::recovery::require_ordinary_approval(ctx, id)?;
     }
     let repo = main_repo(ctx, &task, &run)?;
     let _landing_lock = corral_git::landing_lock(&repo)?;

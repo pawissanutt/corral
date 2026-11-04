@@ -84,6 +84,9 @@ pub(crate) fn carry(ctx: &Ctx, id: &str) -> Result<bool> {
         let Some(review) = run.review.as_ref().filter(|r| r.verdict == Some(Verdict::Approve)) else {
             return Ok(false);
         };
+        if crate::recovery::code_review_bound(ctx, id, review)? {
+            return Ok(false);
+        }
         let Some(old) = &review.identity else { return Ok(false) };
         if review.sha != old.head || !corral_git::is_clean(&run.worktree)? {
             return Ok(false);
