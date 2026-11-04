@@ -5,8 +5,9 @@ import {
   getKeybindings, isKeyRelease, matchesKey, Text, TuiAltScreen, visibleWidth, type Component, type Keybinding, type Terminal, type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
-import { PanelTerminal, PANEL_WIDTH, type PanelSurface } from "./panel-terminal.ts";
-import { NativeWorkbench, plainClick } from "./workbench.ts";
+import { PanelTerminal, PANEL_WIDTH, RAIL_MIN, RAIL_MAX, MIN_MAIN, type PanelSurface } from "./panel-terminal.ts";
+import { ACTIVITY_VIEWS, NativeWorkbench, plainClick, type MainView } from "./workbench.ts";
+import { navRows, renderNav } from "./nav-panel.ts";
 import { activityKey, activitySidebar } from "./activity-sidebar.ts";
 import type { HistoryRead } from "./history.ts";
 import { panelTheme } from "./panels-theme.ts";
@@ -48,6 +49,10 @@ const VIEWPORT_KEYS: readonly Keybinding[] = ["tui.altScreen.pageUp", "tui.altSc
 export class NativePanels implements PanelSurface {
   readonly workbench: NativeWorkbench;
   sidebarEnabled = true;
+  sidebarWidth = PANEL_WIDTH;
+  private drag: { readonly start: number } | undefined;
+  private separatorAt = 0;
+  private navHits: ReadonlyMap<number, MainView> = new Map();
   appearance: Appearance = "dark";
   density: Density = "comfortable";
   private nativeAction: ((id: "app.model.select" | "app.thinking.cycle") => void) | undefined;
@@ -81,7 +86,7 @@ export class NativePanels implements PanelSurface {
   private inlinePager: PagerHit | undefined;
 
   constructor(private readonly options: NativePanelsOptions) {
-    this.workbench = new NativeWorkbench({ ...options, canInteract: () => this.canInteract && !this.activeSelection?.(), changed: () => {
+    this.workbench = new NativeWorkbench({ ...options, railVisible: () => this.wide, canInteract: () => this.canInteract && !this.activeSelection?.(), changed: () => {
       const review = this.workbench.review;
       this.files = review.error && !review.checkedAt ? { kind: "error", reason: plainLabel(review.error) }
         : review.refreshing && !review.checkedAt ? { kind: "loading" } : { kind: "ready", files: review.files };
@@ -194,6 +199,17 @@ export class NativePanels implements PanelSurface {
     return rows.map(styledPanelLine);
   }
   renderSidebar(width: number, height: number): readonly string[] {
+    // At rest the rail is quick navigation; F6 opens the detailed inspector in place.
+    if (this.tab === "Context" && !this.focused) {
+      const { identity } = this.options, wb = this.workbench;
+      const frame = renderNav(navRows({ taskBound: wb.task.bound, proof: !!identity.task && !!identity.run,
+        snapshot: this.options.snapshot(), review: wb.review, inspection: wb.inspection, inbox: wb.inbox, view: wb.view }),
+        view => view === wb.view || view === "activity" && ACTIVITY_VIEWS.has(wb.view), width, height,
+        this.drag ? `⇔ ${width} cols` : "GO TO");
+      this.navHits = frame.hits;
+      return frame.lines;
+    }
+    this.navHits = new Map();
     const inner = width - 4, { window, pager } = this.page(Math.max(0, height - 5), inner);
     const hint = this.focused ? "↑/↓ · Enter open · Esc" : "F8 agents/jobs · F6 context";
     this.railPager = pager ? { y: height - 2, from: inner - visibleWidth(pager), to: inner } : undefined;
@@ -227,7 +243,7 @@ export class NativePanels implements PanelSurface {
       const file = visible[Math.max(0, Math.min(visible.length - 1, index + delta))];
       if (file) { void this.workbench.openFile(file.path); this.workbench.focused = false; }
     } else if (this.capacity > 0) {
-      const { rows, overview } = this.wrapped(this.wide ? PANEL_WIDTH - 4 : Math.max(1, (this.terminal?.columns ?? 80) - 2));
+      const { rows, overview } = this.wrapped(this.wide ? (this.terminal?.railWidth ?? PANEL_WIDTH) - 4 : Math.max(1, (this.terminal?.columns ?? 80) - 2));
       const current = scrollWindow(rows, this.capacity, overview ? this.overviewOffset : this.offset).offset;
       const next = scrollWindow(rows, this.capacity, current + delta).offset;
       if (overview) this.overviewOffset = next; else this.offset = next;
@@ -352,9 +368,21 @@ export class NativePanels implements PanelSurface {
     if (isKeyRelease(data)) return false;
     const mouse = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
     if (mouse && this.wide && this.terminal) {
-      const x = Number(mouse[2]) - 1 - this.terminal.columns - 1;
+      const column = Number(mouse[2]) - 1, x = column - this.terminal.columns - 1;
       const button = Number(mouse[1]);
       const release = mouse[4] === "m" || (button & 3) === 3;
+      // The separator column (x = -1) resizes the rail: drag, Esc restores, double-click resets.
+      if (this.drag) {
+        if (release) { this.drag = undefined; this.refresh(); }
+        else if (button & 32) this.resizeRail(this.terminal.physical.columns - column - 1);
+        return true;
+      }
+      if (x === -1 && mouse[4] === "M" && button === 0 && this.canInteract) {
+        const now = Date.now();
+        if (now - this.separatorAt < 400) { this.separatorAt = 0; this.resizeRail(PANEL_WIDTH); }
+        else { this.separatorAt = now; this.drag = { start: this.terminal.railWidth }; this.refresh(); }
+        return true;
+      }
       if (mouse[4] === "M" && !(button & 96) && !release) this.pointerOrigin = x >= 0 ? "sidebar" : "main";
       const origin = this.pointerOrigin;
       if (release) this.pointerOrigin = undefined;
@@ -364,12 +392,17 @@ export class NativePanels implements PanelSurface {
         if (x >= 0 && this.canInteract && mouse[4] === "M") {
           const button = Number(mouse[1]);
           if (button & 64) this.move(button & 1 ? 3 : -3);
+          else if (button === 0 && this.navHits.size) { const view = this.navHits.get(Number(mouse[3]) - 1); if (view) this.openNav(view); }
           else if (button === 0) this.click(x - 2, Number(mouse[3]) - 1, false);
         }
         return true; // Physical rail cells must not enter Pi's smaller main viewport.
       }
     }
+    if (this.drag && matchesKey(data, "escape")) { const start = this.drag.start; this.drag = undefined; this.resizeRail(start); this.refresh(); return true; }
     if (!this.canInteract || mouse) return false;
+    if (this.wide && (matchesKey(data, "alt+,") || matchesKey(data, "alt+."))) {
+      this.resizeRail((this.terminal?.railWidth ?? this.sidebarWidth) + (matchesKey(data, "alt+.") ? 2 : -2)); return true;
+    }
     if (matchesKey(data, "f8")) { this.browseActivity(); return true; }
     if (matchesKey(data, "f7") || matchesKey(data, "f9") || matchesKey(data, "f10") || matchesKey(data, "f11")) {
       this.focused = false;
@@ -396,6 +429,16 @@ export class NativePanels implements PanelSurface {
     if (VIEWPORT_KEYS.some(key => keys.matches(data, key))) return false;
     // Typing/abort shortcuts return to the actual Pi editor; never silently lose pasted input.
     this.focused = false; this.refresh(); return false;
+  }
+  private openNav(view: MainView): void {
+    this.focused = false; this.workbench.setView(view); this.refresh();
+  }
+  /** Clamped to RAIL_MIN–RAIL_MAX and the main pane's MIN_MAIN; Pi re-lays its width. */
+  resizeRail(width: number): void {
+    const max = Math.max(RAIL_MIN, Math.min(RAIL_MAX, (this.terminal?.physical.columns ?? 0) - MIN_MAIN - 1));
+    const next = Math.max(RAIL_MIN, Math.min(max, Math.round(width)));
+    if (next === this.sidebarWidth) return;
+    this.sidebarWidth = next; this.terminal?.refreshLayout();
   }
   install(pi: ExtensionAPI, sdk: typeof Sdk): void {
     this.themeCtor = sdk.Theme;

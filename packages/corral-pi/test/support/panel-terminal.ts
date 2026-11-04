@@ -1,4 +1,4 @@
-import type { ProgramStatus, Terminal } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, type ProgramStatus, type Terminal } from "@earendil-works/pi-tui";
 import { within } from "./wait.ts";
 
 /** A real InteractiveMode's public terminal boundary, without touching process stdin/stdout. */
@@ -18,6 +18,10 @@ export class RecordingTerminal implements Terminal {
   resize(columns: number, rows: number): void { this.columns = columns; this.rows = rows; this.resizeInput?.(); }
   until(text: string, after = 0): Promise<void> {
     return this.whenWritten(() => this.writes.slice(after).join("").includes(text), JSON.stringify(text) + " on the native terminal");
+  }
+  /** Like `until`, but matches visible text: styled segments split by colour codes still match. */
+  untilVisible(text: string, after = 0): Promise<void> {
+    return this.whenWritten(() => stripTerminalSequences(this.writes.slice(after).join("")).includes(text), JSON.stringify(text) + " visible on the native terminal");
   }
   /** Rechecks `matches` after every terminal write until it holds. */
   async whenWritten(matches: () => boolean, what: string): Promise<void> {

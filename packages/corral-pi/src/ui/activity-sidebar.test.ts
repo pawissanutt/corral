@@ -37,6 +37,8 @@ function fixture() {
   const frame = (width = 80) => renderLayoutFrame(viewport.root, width, 30, () => {});
   return { native, physical, viewport, frame, text: () => plain(frame().lines), set(value: PanelSnapshot) { snapshot = value; },
     click(needle: string) {
+      // At rest the rail is navigation; F8 opens the activity browser in place.
+      if (!native.focused) physical.send("\x1b[19~");
       const rows = native.renderSidebar(34, 34), row = rows.findIndex(line => stripTerminalSequences(line).includes(needle));
       if (row < 0) throw new Error(`Missing rail target: ${needle}\n${plain(rows)}`);
       physical.send(`\x1b[<0;109;${row + 1}M`); physical.send(`\x1b[<0;109;${row + 1}m`);
@@ -87,6 +89,8 @@ test("main navigation has no duplicate Agents or Jobs tab in any view or width",
     for (const select of [() => h.native.workbench.setView("conversation"),
       () => h.native.workbench.openHelpers("first"), () => h.native.workbench.openJob("build")]) {
       select();
+      // Below the rail breakpoint the tabs row is the navigation.
+      h.physical.resize(100, 30);
       for (const width of [52, 80, 140]) {
         const bar = stripTerminalSequences(h.frame(width).lines[0] ?? "");
         expect(bar).not.toMatch(/\bAgents?\b|\bJobs?\b/);
@@ -95,6 +99,11 @@ test("main navigation has no duplicate Agents or Jobs tab in any view or width",
         expect(bar).toContain(width < 64 ? " A " : "Activity");
       }
     }
+    // With the rail visible it is the navigation: no tabs row, and the rail lists destinations.
+    h.physical.resize(140, 30);
+    expect(stripTerminalSequences(h.frame(105).lines[0] ?? "")).not.toContain(" Changes ");
+    const nav = plain(h.native.renderSidebar(34, 30));
+    expect(nav).toContain("GO TO"); expect(nav).toContain("Activity"); expect(nav).not.toMatch(/\bAgents?\b|\bJobs?\b/);
     h.physical.send("\x1b[19~");
     expect(h.native.focused).toBeTrue();
     expect(h.native.tab).toBe("Context");

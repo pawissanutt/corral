@@ -713,7 +713,8 @@ export class HostSession {
         identity: this.options.identity, provider: this.provider, model: this.options.model,
         cwd: this.options.cwd, ...(this.options.effort ? { effort: this.options.effort } : {}),
       }, this.options.events, () => this.bound, this.options.sdk.Theme);
-      if (this.ledger) installTodo(pi, this.ledger, this.request === undefined);
+      if (this.ledger) installTodo(pi, this.ledger, this.request === undefined,
+        () => !!this.options.identity.task && (this.panels?.wide ?? false));
       this.panels?.install(pi, this.options.sdk);
       const unsubscribe = this.ledger?.onChange(() => this.panels?.refresh());
       pi.on("session_shutdown", (event) => {

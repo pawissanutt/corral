@@ -27,7 +27,7 @@ export function plainClick(event: TuiMouseEvent): boolean {
 }
 export type MainView = "task" | "conversation" | "changes" | "activity" | "agents" | "evidence" | "inbox" | "graph" | "timeline" | "usage" | "artifacts";
 /** Views reached through Activity; its sub-tab row shows only while one of them is open. */
-const ACTIVITY_VIEWS: ReadonlySet<MainView> = new Set<MainView>(["activity", "agents", "graph", "timeline"]);
+export const ACTIVITY_VIEWS: ReadonlySet<MainView> = new Set<MainView>(["activity", "agents", "graph", "timeline"]);
 export interface WorkbenchOptions {
   readonly identity: HostIdentity;
   readonly inspection?: () => Promise<unknown>;
@@ -37,6 +37,8 @@ export interface WorkbenchOptions {
   readonly exportSession?: () => Promise<string>;
   readonly readTranscript?: (id: string) => Promise<string>;
   readonly readTask?: () => Promise<unknown>;
+  /** True while the side panel is visible; it is the navigation then, so the tabs row hides. */
+  readonly railVisible?: () => boolean;
   readonly cwd: string; readonly snapshot: () => PanelSnapshot | null;
   readonly changed: () => void; readonly canInteract: () => boolean;
   readonly readInbox?: (signal: AbortSignal) => Promise<unknown>;
@@ -169,7 +171,7 @@ export class NativeWorkbench {
   async openFile(path: string): Promise<void> {
     this.setView("changes"); await this.review.select(path); this.acceptPatch();
   }
-  private nav(): Component {
+  private nav(): { readonly tabs: Component; readonly head: Component } {
     type Target = MainView | "history";
     let hits: { readonly to: number; readonly view: Target }[] = [];
     let subHits: { readonly to: number; readonly view: Target }[] = [];
@@ -178,10 +180,11 @@ export class NativeWorkbench {
       const placed = labels.map(([view, label]) => ({ view, to: x += visibleWidth(label) }));
       return { placed, text: labels.map(([view, label]) => (active(view) ? PANEL_BLUE + "\x1b[1m" : PANEL_MUTED) + label + "\x1b[22m").join("") };
     };
-    return {
+    let compact = false;
+    const tabs: Component = {
       render: width => {
-        this.anchorTranscript(width);
-        const compact = width < 110, minimum = width < 64;
+        compact = width < 110;
+        const minimum = width < 64;
         const label = (short: string, mid: string, full: string) => minimum ? ` ${short} ` : compact ? ` ${mid} ` : ` ${full} `;
         const labels: (readonly [Target, string])[] = [
           ...(this.task.bound ? [["task", label("T", "Task", "Task F5")] as const] : []),
@@ -192,7 +195,21 @@ export class NativeWorkbench {
         const main = strip(labels, view => view === this.view || view === "activity" && ACTIVITY_VIEWS.has(this.view)
           || view === "evidence" && this.view === "artifacts");
         hits = main.placed;
-        const rows = [PANEL_BG + pad(main.text + PANEL_MUTED + (this.focused ? compact ? " Esc Enter" : " · Esc chat · Enter compose" : ""), width) + RESET];
+        return [PANEL_BG + pad(main.text + PANEL_MUTED + (this.focused ? compact ? " Esc Enter" : " · Esc chat · Enter compose" : ""), width) + RESET];
+      },
+      handleMouse: event => {
+        if (!this.options.canInteract() || !plainClick(event) || event.y !== 0) return undefined;
+        const hit = hits.find(hit => event.x < hit.to);
+        if (!hit) return undefined;
+        if (hit.view === "history") void this.openHistory(); else this.setView(hit.view);
+        return { handled: true };
+      }, invalidate() {},
+    };
+    const head: Component = {
+      render: width => {
+        // Renders before the transcript, so a paused reader keeps the same passage at a new width.
+        this.anchorTranscript(width);
+        const rows: string[] = [];
         if (ACTIVITY_VIEWS.has(this.view)) {
           const sub = strip([["activity", " Now "], ["graph", " Graph "], ["timeline", " Timeline "], ["history", " History "]],
             view => view === this.view || view === "activity" && this.view === "agents");
@@ -207,13 +224,14 @@ export class NativeWorkbench {
         return rows;
       },
       handleMouse: event => {
-        if (!this.options.canInteract() || !plainClick(event) || event.y > 1) return undefined;
-        const hit = (event.y === 0 ? hits : subHits).find(hit => event.x < hit.to);
+        if (!this.options.canInteract() || !plainClick(event) || event.y !== 0) return undefined;
+        const hit = subHits.find(hit => event.x < hit.to);
         if (!hit) return undefined;
         if (hit.view === "history") void this.openHistory(); else this.setView(hit.view);
         return { handled: true };
       }, invalidate() {},
     };
+    return { tabs, head };
   }
   /** `T-796 · title … ● running P1 xs`; undefined when no task is bound. */
   private headline(width: number): string | undefined {
@@ -282,11 +300,13 @@ export class NativeWorkbench {
       if (!this.options.canInteract() || !plainClick(event)) return undefined;
       this.focused = true; this.options.changed(); return { handled: true };
     }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
+    const nav = this.nav(), rail = () => this.options.railVisible?.() ?? false;
     return new VStack([
-      { component: this.nav(), basis: 2, shrink: 0 },
+      { component: nav.tabs, basis: 1, shrink: 0, visible: () => !rail() },
+      { component: nav.head, basis: 1, shrink: 0 },
       { component: this.taskScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "task" && !this.images.isOpen },
       { component: transcript, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "conversation" && !this.images.isOpen },
-      { component: this.images, basis: 0, grow: 1, minSize: 1, visible: viewport => { this.images.setViewportHeight(Math.max(0, viewport.height - 2)); return this.images.isOpen; } },
+      { component: this.images, basis: 0, grow: 1, minSize: 1, visible: viewport => { this.images.setViewportHeight(Math.max(0, viewport.height - (rail() ? 1 : 2))); return this.images.isOpen; } },
       { component: this.changesScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "changes" },
       { component: this.activityScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "activity" },
       { component: this.agentsScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "agents" },
