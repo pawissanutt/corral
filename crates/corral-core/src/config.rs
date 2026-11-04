@@ -129,11 +129,14 @@ pub struct LessonsCfg {
 pub struct DigestCfg {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub every: Option<String>,
+    /// Also regenerate the pinned HTML report (`corral report`) with each scheduled digest.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub report: bool,
 }
 
 impl DigestCfg {
     fn is_empty(&self) -> bool {
-        self.every.is_none()
+        self.every.is_none() && !self.report
     }
 }
 

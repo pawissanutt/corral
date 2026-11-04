@@ -301,6 +301,7 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
         }
         Cmd::Pi(_)
         | Cmd::Digest(_)
+        | Cmd::Report(_)
         | Cmd::Revert { .. }
         | Cmd::ReviewSprint(_)
         | Cmd::Idea(_)

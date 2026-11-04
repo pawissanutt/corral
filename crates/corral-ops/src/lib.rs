@@ -109,6 +109,7 @@ mod queue;
 mod queue_drain;
 pub mod recovery;
 mod reply_ack;
+mod report;
 mod resource_escalation;
 pub mod resources;
 mod resume;
@@ -270,6 +271,10 @@ pub use promotion::{PromotionCandidate, promotion_shortlist};
 pub use prompt::{PREVIEW_TASK, preview_command, render_command, task_prompt};
 pub use queue::{QueueEntry, admit_ready, dequeue, dispatch_pause, dispatch_queue, enqueue};
 pub use reply_ack::mark_reply_delivered;
+pub use report::{
+    REPORT_SCHEMA_VERSION, ReportModel, ReportOutput, collect_report, render_report_at, report,
+    report_at,
+};
 pub use resume::{ResumePacket, ResumeStatus, resume_packet};
 pub use revert::{RevertResult, revert};
 pub use review::{
