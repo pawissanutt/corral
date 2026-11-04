@@ -3,7 +3,7 @@
 //! key, and the launch guard compares the parent's `children` fact and its current review
 //! record: the full form's child count and record.
 use super::*;
-use corral_core::{RunHead, TaskHeadMut};
+use corral_core::{RunHead, TaskHead, TaskHeadMut};
 
 /// The current run of any task form, as its projection.
 fn current_run_head<T: corral_core::TaskRef + ?Sized>(task: &T) -> Result<RunHead> {
@@ -11,6 +11,33 @@ fn current_run_head<T: corral_core::TaskRef + ?Sized>(task: &T) -> Result<RunHea
         .current_run_head()?
         .with_context(|| format!("task {} has no run", task.id()))?
         .into_owned())
+}
+
+/// Retry only a read-only launch phase, never the launch's pane or accounting effects.
+fn read_step<T>(
+    ctx: &Ctx,
+    id: &str,
+    parent: &str,
+    mut read: impl FnMut(&Ctx, &TaskHead, &RunHead) -> Result<T>,
+) -> Result<T> {
+    ctx.read_step(|ctx| {
+        let head = ctx.store.head(id)?;
+        let run = current_run_head(&head)?;
+        anyhow::ensure!(
+            head.status == Status::Review && run.id == parent,
+            "review parent changed during preparation"
+        );
+        read(ctx, &head, &run)
+    })
+}
+
+fn prepare_prompt(ctx: &Ctx, task: &TaskHead, run: &RunHead) -> Result<(String, Option<String>)> {
+    read_step(ctx, &task.id, &run.id, |read, head, current| {
+        Ok((
+            review_prompt(read, head, current)?,
+            crate::round_notice::latest_review(head)?,
+        ))
+    })
 }
 
 fn review_parent_head<'a>(task: &'a mut TaskHeadMut, run_id: &str) -> Result<&'a mut RunHead> {
@@ -301,7 +328,7 @@ pub(super) fn review_run_origin(
         launch.commit()?;
         return Ok(record);
     }
-    let task = ctx.store.head(id)?;
+    let task = ctx.store.head(id)?.detach();
     if task.status != Status::Review {
         bail!(
             "{} is {}; only Review tasks can be reviewed",
@@ -340,15 +367,17 @@ pub(super) fn review_run_origin(
                 )),
         )?,
     };
-    let mut selected = crate::review_contracts::implementation_route(
-        ctx,
-        &task,
-        &run,
-        &reviewer,
-        explicit,
-        vendor.as_deref(),
-        &identity,
-    )?;
+    let mut selected = read_step(ctx, id, &run.id, |read, task, current| {
+        crate::review_contracts::implementation_route(
+            read,
+            task,
+            current,
+            &reviewer,
+            explicit,
+            vendor.as_deref(),
+            &identity,
+        )
+    })?;
     selected.route.round = corral_core::implementation_review_round_ref(&task)?;
     selected.route.scope = corral_core::review_scope(selected.route.round);
     let (name, mut resolved) = (selected.name, selected.resolved);
@@ -394,36 +423,37 @@ pub(super) fn review_run_origin(
         .map_or(0, |run| run.facts.children);
     // A failed, unrecorded launch may have left a closed or reclaimed registration.
     // Allocate a new identity only if no review child was ever recorded for the old one.
-    let head = ctx.store.head(id)?;
-    let mut number = children + 1;
     let bound = launch.bound_attempt();
-    let mut candidate = bound
-        .clone()
-        .unwrap_or_else(|| format!("{}-review{number}", run.id));
-    let review_id = loop {
-        let scratch = crate::scratch_reclaim::Attempt::Review {
-            task: &task.id,
-            run: &run.id,
-            child: &candidate,
-        };
-        let row = ctx.store.scratch_row_viewed(&scratch.id())?;
-        let recorded = head.review_child(&run.id, &candidate)?.is_some();
-        if (recorded && bound.as_deref() == Some(&candidate))
-            || (!recorded
-                && row.as_ref().is_none_or(|row| {
-                    row.state == corral_core::backend::ScratchState::Open
-                        && row.kind == corral_core::backend::ScratchKind::ImplementationReview
-                        && row.task.as_deref() == Some(&task.id)
-                        && row.subject.as_deref() == Some(&run.id)
-                        && row.attempt.as_deref() == Some(&candidate)
-                        && row.path == format!("reviews/{}-{candidate}", task.id)
-                }))
-        {
-            break candidate;
+    let review_id = read_step(ctx, id, &run.id, |read, head, _| {
+        let mut number = children + 1;
+        let mut candidate = bound
+            .clone()
+            .unwrap_or_else(|| format!("{}-review{number}", run.id));
+        loop {
+            let scratch = crate::scratch_reclaim::Attempt::Review {
+                task: &task.id,
+                run: &run.id,
+                child: &candidate,
+            };
+            let row = read.store.scratch_row_viewed(&scratch.id())?;
+            let recorded = head.review_child(&run.id, &candidate)?.is_some();
+            if (recorded && bound.as_deref() == Some(&candidate))
+                || (!recorded
+                    && row.as_ref().is_none_or(|row| {
+                        row.state == corral_core::backend::ScratchState::Open
+                            && row.kind == corral_core::backend::ScratchKind::ImplementationReview
+                            && row.task.as_deref() == Some(&task.id)
+                            && row.subject.as_deref() == Some(&run.id)
+                            && row.attempt.as_deref() == Some(&candidate)
+                            && row.path == format!("reviews/{}-{candidate}", task.id)
+                    }))
+            {
+                return Ok(candidate);
+            }
+            number += 1;
+            candidate = format!("{}-review{number}", run.id);
         }
-        number += 1;
-        candidate = format!("{}-review{number}", run.id);
-    };
+    })?;
     launch.bind(
         record
             .identity
@@ -433,8 +463,6 @@ pub(super) fn review_run_origin(
         Some(&review_id),
     )?;
     crate::watch::capture_review(ctx, &task, &run);
-    let captured_head = ctx.store.head(id)?;
-    let captured_run = current_run_head(&captured_head)?;
     let inherited = callback::inherited(&run, record.identity.as_ref());
     if let Some(route) = record.route.as_mut() {
         route.attempt = Some(review_id.clone());
@@ -448,15 +476,19 @@ pub(super) fn review_run_origin(
         child: &key,
     }
     .open(ctx)?;
-    let (packet_digest, packet_section) = crate::review_packet::write_with(
-        ctx,
-        &captured_head,
-        &captured_run,
-        &review_id,
-        &record,
-        route,
-        crate::review_packet::findings_of(&captured_head, &review_id)?,
-    )?;
+    let packet = read_step(ctx, id, &run.id, |read, head, current| {
+        crate::review_packet::build(
+            read,
+            head,
+            current,
+            (&review_id, route),
+            &record,
+            crate::review_packet::findings_of(head, &review_id)?,
+            None,
+        )
+    })?;
+    let (packet_digest, packet_section) =
+        crate::review_packet::write_built(ctx, &task, &run, (&review_id, route), packet)?;
     if let Some(route) = record.route.as_mut() {
         route.packet_digest = Some(packet_digest);
     }
@@ -483,7 +515,10 @@ pub(super) fn review_run_origin(
     let mut child = review_child(ctx, &run, &resolved, &reviewer, &review_id, &record)?;
     if reviewer != Reviewer::Pm {
         child.session = Some(crate::role_session::reviewer_head(
-            ctx, &task, &run, &child,
+            ctx,
+            &ctx.store.head(id)?,
+            &run,
+            &child,
         )?);
     }
     let previous_session = run.current_child.as_deref().and_then(|previous| {
@@ -492,7 +527,10 @@ pub(super) fn review_run_origin(
             run: run.id.clone(),
             review: previous.id.clone(),
         };
-        crate::role_session::capture_head(ctx, &task, previous, &container).ok()
+        ctx.store
+            .head(id)
+            .and_then(|head| crate::role_session::capture_head(ctx, &head, previous, &container))
+            .ok()
     });
     ctx.store.submission_effect_barrier("review_child_observed");
     let saved = ctx.store.update_head(&task.id, |t| {
@@ -514,6 +552,7 @@ pub(super) fn review_run_origin(
         review_parent_head(t, &run.id)?.review = Some(record.clone());
         Ok(())
     })?;
+    let saved = saved.detach();
     let saved_run = current_run_head(&saved)?;
     let saved_child = saved_run
         .current_child
@@ -521,10 +560,9 @@ pub(super) fn review_run_origin(
         .context("review snapshot was not saved")?;
     let review_id = saved_child.id.clone();
     crate::watch::start_review(ctx, &saved, saved_child)?;
-    let mut text = review_prompt(ctx, &saved, &saved_run)?
-        + &packet_section
-        + &crate::scratch_reclaim::prompt_section(ctx, &dir);
-    if let Some(notice) = crate::round_notice::latest_review(&saved)? {
+    let (prompt, notice) = prepare_prompt(ctx, &saved, &saved_run)?;
+    let mut text = prompt + &packet_section + &crate::scratch_reclaim::prompt_section(ctx, &dir);
+    if let Some(notice) = notice {
         text = format!("{notice}\n\n{text}");
     }
     std::fs::write(&prompt_file, text)
@@ -599,3 +637,7 @@ pub(super) fn review_run_origin(
     }
     Ok(record)
 }
+
+#[cfg(test)]
+#[path = "launch_tests.rs"]
+mod tests;

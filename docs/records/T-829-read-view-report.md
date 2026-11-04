@@ -12,6 +12,17 @@ The 30-second default is unchanged. No test timeout, work budget, retry policy, 
 
 This is not a blanket relaxation of immutable snapshots: explicit snapshot APIs, transaction preconditions and the storage lease limit are unchanged. Other short snapshot readers were not globally converted to renewable views.
 
+## Changes round 1: reviewer launch after replay
+
+The rebased candidate `75bfdf286fb2cbc1bce8bfcd937ccfa8c32449ea` failed quick gate attempt `0535760-1793813120166901935`: `review_contracts::tiers::quick_member_review_carries_one_gate_contract_and_needs_only_its_own_tier` returned `read view expired after 54.556277964s` from `review_run`. Its log is `artifacts/T-829/R1/326e4123-T-829-R1-0535760-1793813120166901935.log`. The earlier gate pass was historical, not a receipt for this changed candidate.
+
+Two retained-view hypotheses were checked: the original task head spanning Git route selection before `stronger_source`, and later captured/saved heads spanning packet/watch work before keyed evidence/comments. Both paths retained views across external work. Reviewer launch now detaches its scalar head and performs route selection, attempt lookup, packet construction and prompt rendering as separate renewable read steps. Packet file publication, accounting updates, pane operations and transport remain outside retries. Native session capture obtains a fresh keyed head at its own boundary. Existing child-count/review-record and submission identity guards remain intact.
+
+- One additional tiny fake-backend regression advances a manual clock by 31 seconds before prompt preparation. The old prompt path fails with expiry; the fixed preparation succeeds while the old head remains expired. It adds no real delay and pins no prompt wording.
+- The injected-clock unit and the exact reported review-contract journey passed together: **2/2** (`review-launch-green.log`).
+- Container-only check: five rounds of that existing journey and the new unit passed **10/10 executions** under the authorized 2-CPU/2-GiB/256-PID sandbox with two burners (`review-launch-container.log`). The first attempt was blocked by the worktree's unmounted parent Git admin directory; running the same binaries from the container's neutral `/tmp` cwd resolved it without extra mounts or host fallback. Owned-container inventory was empty afterward.
+- The same gate also observed the unrelated, non-blocking co-work usage quarantine failure owned by **T-832**. Its test and quarantine entry are untouched.
+
 ## Evidence
 
 Raw logs are attached separately from this report.
@@ -32,7 +43,7 @@ The required quick gate is run only through the receipted corral gate operation 
 
 ## Test cost
 
-The first gate confirms exactly **+3 Rust test registrations** (its fail-fast execution left their suite cost unmeasured). Three small unit/contract tests were added: autopilot diagnostic expiry, board resource-boundary expiry, and renewable-read versus explicit-snapshot behavior. There are no new end-to-end journeys, large histories, sleeps or timeout increases. Existing frame/history work counters were preserved, not relaxed.
+The first submission added three small unit/contract tests: autopilot diagnostic expiry, board resource-boundary expiry, and renewable-read versus explicit-snapshot behavior; its passing gate measured **1.002 seconds**. Changes round 1 adds one reviewer-prompt boundary regression (about **0.1 seconds**), for **four cumulative Rust registrations**. The original three were confirmed by the initial gate's registration audit. There are no new end-to-end journeys, large histories, sleeps or timeout increases. Existing frame/history work counters were preserved, not relaxed.
 
 Test-cost justification: restoring the 17 existing quarantined lifecycle tests can add over 30 seconds to execution. Those journeys already cover gate/verdict carry, cleanup and recovery, so they were reused rather than duplicated. The new expiry variants use tiny fake-backend clocks instead of expensive end-to-end delay/load matrices; the container check is attached evidence, not another committed suite.
 
