@@ -3,6 +3,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+pub use super::pm_records::Selection;
 use super::{AGENT_RECORD_VERSION, AgentRunState};
 use crate::Store;
 
@@ -35,13 +36,22 @@ impl AgentPm {
     }
 }
 
+/// Upgrade the former whole-document journal once, before serving hot readers. The dispatch
+/// and PM locks serialize the upgrade with launch, fencing, and task-level PM checks.
+pub(crate) fn migrate(store: &Store) -> Result<()> {
+    if store
+        .record::<serde_json::Value>("agent-pm", "current")?
+        .is_some_and(|doc| doc.get("layout").is_none())
+    {
+        update(store, |_| Ok(((), true)))?;
+    }
+    Ok(())
+}
+
 /// Reads the area without a lock. Inside a task's `Store::update` this is the consistent read:
 /// every AgentPm writer holds the dispatch lock that the task update already holds.
 pub fn load(store: &Store) -> Result<Option<AgentPm>> {
-    // T-625: PM-authorized known cost. Keep the canonical AgentPm document intact;
-    // normalization is a separate persistent design, not part of T-337 integration.
-    let _known = crate::work::followup("T-625", "root_pm_load");
-    store.record("agent-pm", "current")
+    load_selected(store, &Selection::all())
 }
 
 /// Read-modify-write under the dispatch lock, so a PM fence and a task transaction that reads
@@ -51,18 +61,47 @@ pub fn update<R>(
     store: &Store,
     f: impl FnOnce(&mut Option<AgentPm>) -> Result<(R, bool)>,
 ) -> Result<R> {
+    update_selected(store, &Selection::all(), f)
+}
+
+/// Reads only the head and explicitly selected children. Use `load` for history output.
+pub fn load_selected(store: &Store, selection: &Selection) -> Result<Option<AgentPm>> {
+    if store.has_record_unit() {
+        // Preserve staged writes and the enclosing task/record transaction's pinned view.
+        return Ok(super::pm_records::read(store, selection)?.map(|(_, pm)| pm));
+    }
+    let snapshot = store.read_only_snapshot()?;
+    Ok(super::pm_records::read(&snapshot, selection)?.map(|(_, pm)| pm))
+}
+
+/// The durable family size, including children omitted from a selected read.
+/// Call under the same transaction as a limit check and its append.
+pub fn child_count(store: &Store, kind: &str) -> Result<u64> {
+    super::pm_records::count(store, kind)
+}
+
+/// The binding and current host generation, independent of retained history.
+pub fn load_current(store: &Store) -> Result<Option<AgentPm>> {
+    load_selected(store, &Selection::current())
+}
+
+/// A serialized patch of the selected children and scalar head. Unselected history is
+/// preserved, including when the callback appends or removes a selected record.
+pub fn update_selected<R>(
+    store: &Store,
+    selection: &Selection,
+    f: impl FnOnce(&mut Option<AgentPm>) -> Result<(R, bool)>,
+) -> Result<R> {
     let _board = store.lock("dispatch")?;
     let _pm = store.lock("agent-pm")?;
     store.records_transaction(|| {
-        let mut pm = load(store)?;
+        let before = super::pm_records::read(store, selection)?;
+        let mut pm = before.as_ref().map(|(_, pm)| pm.clone());
         let (result, write) = f(&mut pm)?;
         if write {
             match pm {
-                Some(pm) => {
-                    let _known = crate::work::followup("T-625", "root_pm_save");
-                    store.save_record("agent-pm", "current", &pm)?;
-                }
-                None => store.delete_record("agent-pm", "current")?,
+                Some(pm) => super::pm_records::save(store, before.as_ref(), &pm)?,
+                None => super::pm_records::delete(store)?,
             }
         }
         Ok(result)

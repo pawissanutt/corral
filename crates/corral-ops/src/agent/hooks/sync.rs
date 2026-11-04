@@ -381,10 +381,10 @@ fn probe_one(ctx: &Ctx, recipient: &Recipient, container: &ContainerRef, state: 
 /// Once per sync pass: the PM wake outbox and the PM's host, while a corral-pi PM record exists,
 /// and the host of every open assistant session.
 pub fn pass(ctx: &Ctx) -> Result<()> {
-    if pm_state::load(&ctx.store)?.is_some() {
+    if pm_state::load_current(&ctx.store)?.is_some() {
         consulted("sync");
         super::super::pm_wake::repost(ctx)?;
-        if let Some(pm) = pm_state::load(&ctx.store)? {
+        if let Some(pm) = pm_state::load_current(&ctx.store)? {
             probe_one(ctx, &Recipient::Pm, &ContainerRef::Pm, &pm.state);
         }
     }

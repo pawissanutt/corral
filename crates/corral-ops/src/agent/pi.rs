@@ -86,13 +86,13 @@ pub(crate) fn host_alive(state: &AgentRunState) -> Result<bool> {
 /// True when `pane` is the saved PM pane `corral pi` adopted.
 pub(crate) fn adopted(ctx: &Ctx, container: &ContainerRef, pane: &str) -> Result<bool> {
     Ok(matches!(container, ContainerRef::Pm)
-        && pm_state::load(&ctx.store)?.is_some_and(|pm| pm.adopted() && pm.pane == pane))
+        && pm_state::load_current(&ctx.store)?.is_some_and(|pm| pm.adopted() && pm.pane == pane))
 }
 
 /// For the adopted PM pane, whether its bound host is verifiably running; `None` for any other
 /// pane. An adopted pane is the owner's, so only a live host makes it the PM's.
 pub(crate) fn adopted_alive(ctx: &Ctx, pane: &str) -> Result<Option<bool>> {
-    match pm_state::load(&ctx.store)? {
+    match pm_state::load_current(&ctx.store)? {
         Some(pm) if pm.adopted() && pm.pane == pane => host_alive(&pm.state).map(Some),
         _ => Ok(None),
     }
@@ -119,7 +119,8 @@ pub fn adopt(ctx: &Ctx, pane: &str, overrides: &Overrides) -> Result<Prepared> {
         ));
     }
     crate::pm::adopt_pm(ctx, pane, &resolved, || {
-        let bound = pm_state::load(&ctx.store)?.filter(|pm| pm.state.binding.generation > 0);
+        let bound =
+            pm_state::load_current(&ctx.store)?.filter(|pm| pm.state.binding.generation > 0);
         if let Some(pm) = &bound
             && host_alive(&pm.state)?
         {

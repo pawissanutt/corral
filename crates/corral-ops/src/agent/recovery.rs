@@ -484,8 +484,14 @@ pub(crate) fn wait_gone(executor: &Executor, deadline: Instant) -> Result<bool> 
 }
 
 fn receipts(ctx: &Ctx, container: &ContainerRef) -> Result<Vec<RequestReceipt>> {
-    let (state, _) = snapshot(ctx, container)?;
-    let mut all = state.receipts;
+    let mut all = if *container == ContainerRef::Pm {
+        pm_state::load_selected(&ctx.store, &pm_state::Selection::work())?
+            .context("no corral-pi PM is bound")?
+            .state
+            .receipts
+    } else {
+        snapshot(ctx, container)?.0.receipts
+    };
     if *container == ContainerRef::Pm {
         for task in ctx.store.list()? {
             all.extend(task.agent_pm_receipts);
@@ -517,7 +523,9 @@ fn reconcile(ctx: &Ctx, container: &ContainerRef, n: u32) -> Result<()> {
         effects::reconcile_task(ctx, task)?;
         return Ok(());
     }
-    let (state, _) = snapshot(ctx, container)?;
+    let state = pm_state::load_selected(&ctx.store, &pm_state::Selection::work())?
+        .context("no corral-pi PM is bound")?
+        .state;
     let reserved = state.receipts.iter().filter(|r| {
         r.state == ReceiptState::Reserved && r.identity.generation == n && r.executor.is_some()
     });

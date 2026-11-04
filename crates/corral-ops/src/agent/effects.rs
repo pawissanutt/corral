@@ -237,8 +237,11 @@ pub fn recheck(store: &Store, task: &Task, origin: &RequestOrigin, home: &Home) 
             if let Some((_, stored)) = pm_task_receipt(store, origin)? {
                 return Err(Replayed(Box::new(stored)).into());
             }
-            let pm = pm_state::load(store)?
-                .ok_or_else(|| reject(RejectCode::ContainerNotFound, "no corral-pi PM is bound"))?;
+            let pm = pm_state::load_selected(
+                store,
+                &pm_state::Selection::request(origin.binding.generation, id),
+            )?
+            .ok_or_else(|| reject(RejectCode::ContainerNotFound, "no corral-pi PM is bound"))?;
             if let Some(stored) = pm.state.receipt(id) {
                 admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
                 if stored.state != ReceiptState::Reserved {
@@ -748,48 +751,53 @@ pub fn pm_reserve(
     target: &str,
 ) -> Result<Receipted> {
     let me = executor()?;
-    pm_state::update(store, |pm| {
-        let pm = pm
-            .as_mut()
-            .ok_or_else(|| reject(RejectCode::ContainerNotFound, "no corral-pi PM is bound"))?;
-        if let Some(stored) = pm.state.receipt(&origin.request_id) {
-            admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
-            let receipt = stored.clone();
-            return Ok((
+    pm_state::update_selected(
+        store,
+        &pm_state::Selection::request(origin.binding.generation, &origin.request_id),
+        |pm| {
+            let pm = pm
+                .as_mut()
+                .ok_or_else(|| reject(RejectCode::ContainerNotFound, "no corral-pi PM is bound"))?;
+            if let Some(stored) = pm.state.receipt(&origin.request_id) {
+                admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
+                let receipt = stored.clone();
+                return Ok((
+                    Receipted {
+                        receipt,
+                        replayed: true,
+                    },
+                    false,
+                ));
+            }
+            if let Some((_, receipt)) = pm_task_receipt(store, origin)? {
+                return Ok((
+                    Receipted {
+                        receipt,
+                        replayed: true,
+                    },
+                    false,
+                ));
+            }
+            admission::recheck_pm(pm, origin.binding.generation)?;
+            super::receipts::pm_capacity(store)?;
+            let result = json!({"outcome": "reserved", "kind": kind, "target": target});
+            let receipt = new_receipt(
+                origin,
+                ReceiptState::Reserved,
+                result,
+                effect(kind, target),
+                Some(me),
+            )?;
+            push(&mut pm.state.receipts, receipt.clone())?;
+            Ok((
                 Receipted {
                     receipt,
-                    replayed: true,
+                    replayed: false,
                 },
-                false,
-            ));
-        }
-        if let Some((_, receipt)) = pm_task_receipt(store, origin)? {
-            return Ok((
-                Receipted {
-                    receipt,
-                    replayed: true,
-                },
-                false,
-            ));
-        }
-        admission::recheck_pm(pm, origin.binding.generation)?;
-        let result = json!({"outcome": "reserved", "kind": kind, "target": target});
-        let receipt = new_receipt(
-            origin,
-            ReceiptState::Reserved,
-            result,
-            effect(kind, target),
-            Some(me),
-        )?;
-        push(&mut pm.state.receipts, receipt.clone())?;
-        Ok((
-            Receipted {
-                receipt,
-                replayed: false,
-            },
-            true,
-        ))
-    })
+                true,
+            ))
+        },
+    )
 }
 
 fn pm_write(
@@ -799,24 +807,28 @@ fn pm_write(
     to: (ReceiptState, Value),
     source: &str,
 ) -> Result<RequestReceipt> {
-    pm_state::update(store, |pm| {
-        let pm = pm.as_mut().context("no corral-pi PM is bound")?;
-        let stored = pm
-            .state
-            .receipts
-            .iter_mut()
-            .find(|r| r.request_id == request);
-        let stored = stored.context("PM reservation disappeared")?;
-        if stored.state != ReceiptState::Reserved || stored.executor.as_ref() != seen {
-            return Ok((stored.clone(), false));
-        }
-        crate::review_budget::evidence(stored, &to.1, source, None);
-        (stored.state, stored.result) = to;
-        stored.executor = None;
-        let now = corral_core::clock::now();
-        stored.committed_at = (stored.state == ReceiptState::Committed).then_some(now);
-        Ok((stored.clone(), true))
-    })
+    pm_state::update_selected(
+        store,
+        &pm_state::Selection::default().key("receipts", format!("request:{request}")),
+        |pm| {
+            let pm = pm.as_mut().context("no corral-pi PM is bound")?;
+            let stored = pm
+                .state
+                .receipts
+                .iter_mut()
+                .find(|r| r.request_id == request);
+            let stored = stored.context("PM reservation disappeared")?;
+            if stored.state != ReceiptState::Reserved || stored.executor.as_ref() != seen {
+                return Ok((stored.clone(), false));
+            }
+            crate::review_budget::evidence(stored, &to.1, source, None);
+            (stored.state, stored.result) = to;
+            stored.executor = None;
+            let now = corral_core::clock::now();
+            stored.committed_at = (stored.state == ReceiptState::Committed).then_some(now);
+            Ok((stored.clone(), true))
+        },
+    )
 }
 
 /// The executor settles its own PM reservation after the effect.
@@ -840,7 +852,11 @@ pub fn pm_settle(
 /// does (creation and marker are one write); a legacy pane reply has no marker and stays
 /// uncertain. While the executor lives the reservation is unchanged. Nothing re-executes.
 pub fn reconcile_pm(ctx: &Ctx, request: &str) -> Result<RequestReceipt> {
-    let pm = pm_state::load(&ctx.store)?.context("no corral-pi PM is bound")?;
+    let pm = pm_state::load_selected(
+        &ctx.store,
+        &pm_state::Selection::default().key("receipts", format!("request:{request}")),
+    )?
+    .context("no corral-pi PM is bound")?;
     let receipt = pm
         .state
         .receipt(request)

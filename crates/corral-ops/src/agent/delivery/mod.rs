@@ -123,7 +123,7 @@ fn target(ctx: &Ctx, recipient: &Recipient) -> Result<Result<Target, String>> {
                 closed,
             }))
         }
-        None => Ok(pm_state::load(&ctx.store)?
+        None => Ok(pm_state::load_current(&ctx.store)?
             .map(|pm| {
                 let generation = pm.state.current_generation().cloned();
                 Target {

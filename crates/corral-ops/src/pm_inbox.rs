@@ -75,7 +75,8 @@ pub fn sweep(ctx: &Ctx) -> Result<()> {
             );
         }
     }
-    let healthy = pm_state::load(&ctx.store)?.is_some_and(|pm| crate::agent::pm_wake::healthy(&pm));
+    let healthy =
+        pm_state::load_current(&ctx.store)?.is_some_and(|pm| crate::agent::pm_wake::healthy(&pm));
     if healthy {
         for item in items
             .iter()
