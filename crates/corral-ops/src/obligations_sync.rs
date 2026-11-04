@@ -58,6 +58,10 @@ pub(crate) fn reconcile_head(
     let mut transitions = Vec::new();
     let mut task_wakes = Vec::new();
     for wait in &mut next.waits {
+        // Do not record an observation before registration after a wall-clock step.
+        if now < wait.registered_at {
+            continue;
+        }
         let (state, detail, receipt) = if wait.receipt.is_none()
             && wait.observation.state == WaitState::Pending
             && wait.request.run == run.id
