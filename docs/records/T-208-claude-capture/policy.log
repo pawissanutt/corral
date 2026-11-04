@@ -1,0 +1,52 @@
+=== accept ===
+2026-11-04T20:49:13.469Z [INFO] [uds-messaging] Listening: /home/pawis/miti-workspace/corral/.worktrees/T-208/.evidence/uds/cc.sock
+2026-11-04T20:49:13.471Z [INFO] [uds-messaging] Inject messages (auth line optional here): { echo '{"type":"auth","token":"[REDACTED]"$CLAUDE_CODE_MESSAGING_TOKEN"'"}'; echo '{"type":"user","message":{"role":"user","content":"hello"}}'; } | socat - UNIX-CONNECT:/home/pawis/miti-workspace/corral/.worktrees/T-208/.evidence/uds/cc.sock
+2026-11-04T20:49:13.474Z [INFO] [uds-messaging] Connect when the data is ready (e.g. out=$(cmd); printf '%s\n' "$out" | nc -N -U "$CLAUDE_CODE_MESSAGING_SOCKET" — or the socat form above): a connection that sends no complete line within 30000 ms is closed
+2026-11-04T20:49:28.083Z [INFO] [uds-messaging] Listening: /home/pawis/miti-workspace/corral/.worktrees/T-208/.evidence/uds/cc.sock
+2026-11-04T20:49:28.085Z [INFO] [uds-messaging] Inject messages (auth line optional here): { echo '{"type":"auth","token":"[REDACTED]"$CLAUDE_CODE_MESSAGING_TOKEN"'"}'; echo '{"type":"user","message":{"role":"user","content":"hello"}}'; } | socat - UNIX-CONNECT:/home/pawis/miti-workspace/corral/.worktrees/T-208/.evidence/uds/cc.sock
+2026-11-04T20:49:28.088Z [INFO] [uds-messaging] Connect when the data is ready (e.g. out=$(cmd); printf '%s\n' "$out" | nc -N -U "$CLAUDE_CODE_MESSAGING_SOCKET" — or the socat form above): a connection that sends no complete line within 30000 ms is closed
+2026-11-04T20:49:29.113Z [DEBUG] [uds-messaging] Client connected
+2026-11-04T20:49:29.266Z [DEBUG] "[uds-messaging] Routed user message to queue (priority=next): [corral envelope capture@env1]\n[corral capture#1 owner_note]\nCapture-only marker"
+2026-11-04T20:49:29.500Z [DEBUG] [uds-messaging] Client disconnected
+2026-11-04T20:49:46.335Z [DEBUG] [uds-messaging] Shutting down
+=== unset ===
+2026-11-04T20:50:40.488Z [INFO] [uds-messaging] Listening: /home/pawis/miti-workspace/corral/.worktrees/T-208/.evidence/uds/cc.sock
+2026-11-04T20:50:40.490Z [INFO] [uds-messaging] Inject messages (auth line optional here): { echo '{"type":"auth","token":"[REDACTED]"$CLAUDE_CODE_MESSAGING_TOKEN"'"}'; echo '{"type":"user","message":{"role":"user","content":"hello"}}'; } | socat - UNIX-CONNECT:/home/pawis/miti-workspace/corral/.worktrees/T-208/.evidence/uds/cc.sock
+2026-11-04T20:50:40.493Z [INFO] [uds-messaging] Connect when the data is ready (e.g. out=$(cmd); printf '%s\n' "$out" | nc -N -U "$CLAUDE_CODE_MESSAGING_SOCKET" — or the socat form above): a connection that sends no complete line within 30000 ms is closed
+2026-11-04T20:50:41.351Z [DEBUG] [uds-messaging] Client connected
+2026-11-04T20:50:41.351Z [DEBUG] [uds-messaging] Client connected
+2026-11-04T20:50:41.454Z [WARN] [uds-messaging] Dropping user message: session_id mismatch (got "wrong-session", expected "62f2f47c-a38f-4200-9778-c31cb2685d3d")
+2026-11-04T20:50:41.462Z [DEBUG] "[cross-session-inbound] held inbound peer message (1 held, cause=no-mode-asserted): from=corral-capture \"[corral envelope capture@env1]\n[corral capture#1 owner_note]\""
+2026-11-04T20:50:41.466Z [DEBUG] [uds-messaging] hold-receipt skipped: reply address unshaped or outside our socket namespace (corral-capture)
+2026-11-04T20:50:41.514Z [DEBUG] [uds-messaging] Client disconnected
+2026-11-04T20:50:41.514Z [DEBUG] [uds-messaging] Client disconnected
+2026-11-04T20:51:00.554Z [DEBUG] [uds-messaging] Shutting down
+2026-11-04T20:51:00.555Z [DEBUG] [cross-session-inbound] shutdown: settling 1 still-held peer message(s) as expired
+2026-11-04T20:51:00.555Z [DEBUG] [uds-messaging] hold-receipt skipped: reply address unshaped or outside our socket namespace (corral-capture)
+Delivered user records: []
+=== project-refuse ===
+2026-11-04T20:51:01.189Z [INFO] [uds-messaging] Listening: /home/pawis/miti-workspace/corral/.worktrees/T-208/.evidence/uds/cc.sock
+2026-11-04T20:51:01.191Z [INFO] [uds-messaging] Inject messages (auth line optional here): { echo '{"type":"auth","token":"[REDACTED]"$CLAUDE_CODE_MESSAGING_TOKEN"'"}'; echo '{"type":"user","message":{"role":"user","content":"hello"}}'; } | socat - UNIX-CONNECT:/home/pawis/miti-workspace/corral/.worktrees/T-208/.evidence/uds/cc.sock
+2026-11-04T20:51:01.193Z [INFO] [uds-messaging] Connect when the data is ready (e.g. out=$(cmd); printf '%s\n' "$out" | nc -N -U "$CLAUDE_CODE_MESSAGING_SOCKET" — or the socat form above): a connection that sends no complete line within 30000 ms is closed
+2026-11-04T20:51:01.969Z [DEBUG] [uds-messaging] Client connected
+2026-11-04T20:51:01.969Z [DEBUG] [uds-messaging] Client connected
+2026-11-04T20:51:02.034Z [WARN] [uds-messaging] Dropping user message: session_id mismatch (got "wrong-session", expected "f0985b53-04f1-4176-bf97-c057591f4d76")
+2026-11-04T20:51:02.036Z [DEBUG] [cross-session-inbound] refused inbound peer message (uds: dropped before attachment materialization)
+2026-11-04T20:51:02.036Z [DEBUG] [uds-messaging] hold-receipt skipped: reply address unshaped or outside our socket namespace (corral-capture)
+2026-11-04T20:51:02.067Z [DEBUG] [uds-messaging] Client disconnected
+2026-11-04T20:51:02.067Z [DEBUG] [uds-messaging] Client disconnected
+2026-11-04T20:51:19.244Z [DEBUG] [uds-messaging] Shutting down
+Delivered user records: []
+=== local-refuse ===
+2026-11-04T20:51:19.905Z [INFO] [uds-messaging] Listening: /home/pawis/miti-workspace/corral/.worktrees/T-208/.evidence/uds/cc.sock
+2026-11-04T20:51:19.907Z [INFO] [uds-messaging] Inject messages (auth line optional here): { echo '{"type":"auth","token":"[REDACTED]"$CLAUDE_CODE_MESSAGING_TOKEN"'"}'; echo '{"type":"user","message":{"role":"user","content":"hello"}}'; } | socat - UNIX-CONNECT:/home/pawis/miti-workspace/corral/.worktrees/T-208/.evidence/uds/cc.sock
+2026-11-04T20:51:19.911Z [INFO] [uds-messaging] Connect when the data is ready (e.g. out=$(cmd); printf '%s\n' "$out" | nc -N -U "$CLAUDE_CODE_MESSAGING_SOCKET" — or the socat form above): a connection that sends no complete line within 30000 ms is closed
+2026-11-04T20:51:20.933Z [DEBUG] [uds-messaging] Client connected
+2026-11-04T20:51:20.934Z [DEBUG] [uds-messaging] Client connected
+2026-11-04T20:51:20.998Z [WARN] [uds-messaging] Dropping user message: session_id mismatch (got "wrong-session", expected "34d8ff10-740d-438c-864f-6e3701d19a9c")
+2026-11-04T20:51:21.000Z [DEBUG] [cross-session-inbound] refused inbound peer message (uds: dropped before attachment materialization)
+2026-11-04T20:51:21.000Z [DEBUG] [uds-messaging] hold-receipt skipped: reply address unshaped or outside our socket namespace (corral-capture)
+2026-11-04T20:51:21.052Z [DEBUG] [uds-messaging] Client disconnected
+2026-11-04T20:51:21.052Z [DEBUG] [uds-messaging] Client disconnected
+2026-11-04T20:51:38.149Z [DEBUG] [uds-messaging] Shutting down
+Delivered user records: []

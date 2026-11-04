@@ -1,0 +1,21 @@
+{
+  "pid": 329761,
+  "sessionId": "e40e5d00-5b42-4f74-94a4-fb0c2aa8e906",
+  "cwd": "/home/pawis/miti-workspace/corral/.worktrees/T-208/.evidence/claude-capture/worktree",
+  "startedAt": 1793825368326,
+  "procStart": "37406594",
+  "version": "2.1.304",
+  "peerProtocol": 1,
+  "peerFeatures": [
+    "notify_idle",
+    "reply_across_default_dirs",
+    "artifact_yield"
+  ],
+  "kind": "interactive",
+  "entrypoint": "cli",
+  "pidDomain": "linux:7a7e9958a9cd40098bc1b1ca46012010:pid:[4026532214]",
+  "messagingSocketPath": "/home/pawis/miti-workspace/corral/.worktrees/T-208/.evidence/uds/cc.sock",
+  "name": "worktree-89",
+  "nameSource": "derived",
+  "nameSince": 1793825368327
+}
