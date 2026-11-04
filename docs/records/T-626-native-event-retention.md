@@ -19,4 +19,6 @@ PM/Assistant root-document storage remains on its existing separate path (T-625)
 
 Added tests: two inexpensive Core contracts (0.16 seconds combined in the final targeted run). One existing event cost test is renamed/strengthened, not duplicated; no new end-to-end journey, slow test or load test. The receipt gate supplies the authoritative added-test inventory and timing. No quarantine entry matches these tests.
 
-Final acceptance additionally requires the run's single post-rebase receipted quick gate; its attached log/receipt is authoritative, not these diagnostic commands. The full landing tier is reserved to corral.
+The first receipted quick gate (`ag-2828ebe8246fc9c4`) stopped before compilation/tests: `codec.rs` was 810 SLOC. Turn-index helpers were extracted without changing their behavior; the two retention/upgrade contracts pass afterward (`.evidence/retention-after-size-split.log`, 0.37 seconds). Its inventory reports three registrations: the two new contracts plus the renamed existing budget test; suite timing was unmeasured because of the early stop.
+
+Final acceptance requires the replacement post-rebase receipted quick gate; its attached log/receipt is authoritative, not these diagnostic commands. The full landing tier is reserved to corral.
