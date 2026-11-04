@@ -10,6 +10,22 @@ use crate::backend::support::{add, detail_digest};
 use crate::backend::*;
 use crate::blob_ref::{self, BlobHash};
 
+impl crate::backend::question_events::QuestionEventTx for Tx<'_> {
+    fn question_record(&self, area: &str, key: &str) -> Applied<Option<StoredRecord>> {
+        Ok(self
+            .state
+            .records
+            .get(&(area.to_owned(), key.to_owned()))
+            .cloned())
+    }
+    fn question_put(&mut self, write: RecordWrite) -> Applied<()> {
+        self.put_record(&write)
+    }
+    fn question_now(&self) -> jiff::Timestamp {
+        self.now
+    }
+}
+
 impl Tx<'_> {
     pub(super) fn put_record(&mut self, write: &RecordWrite) -> Applied<()> {
         let key = (write.area.clone(), write.key.clone());
@@ -721,6 +737,10 @@ impl Tx<'_> {
             self.insert_event(imported.event, imported.malformed)?;
         }
         for record in op.records {
+            use crate::backend::question_events::QuestionEventTx;
+            if self.question_import_skip(&record)? {
+                continue;
+            }
             self.put_record(&RecordWrite {
                 area: record.area,
                 key: record.key,

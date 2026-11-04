@@ -232,5 +232,19 @@ pub(super) fn init(conn: &mut Connection, workspace_id: &str) -> Result<()> {
     .context("create project updated index")?;
     tx.execute_batch(super::run_worktrees::INDEX)
         .context("create run worktree projection index")?;
+    let backfilled: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM meta WHERE key = 'question_event_outbox_v1')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !backfilled {
+        super::tx::backfill_question_events(&tx)
+            .map_err(anyhow::Error::new)
+            .context("backfill question event outbox")?;
+        tx.execute(
+            "INSERT INTO meta(key, value) VALUES ('question_event_outbox_v1', '1')",
+            [],
+        )?;
+    }
     tx.commit().context("commit schema transaction")
 }

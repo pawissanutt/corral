@@ -143,12 +143,20 @@ impl Tx<'_> {
         mut event: NewEvent,
         malformed: bool,
     ) -> Applied<EventSeq> {
+        use crate::backend::question_events::QuestionEventTx;
+        if !malformed && let Some(seq) = self.question_logged(&event)? {
+            self.acknowledge_question(&event, seq)?;
+            return Ok(seq);
+        }
         event.run = event
             .detail
             .get("run")
             .and_then(|run| run.as_str())
             .map(str::to_owned);
         let seq = EventSeq(self.state.events.last().map_or(0, |last| last.seq.0) + 1);
+        if !malformed {
+            self.acknowledge_question(&event, seq)?;
+        }
         let refs = blob_ref::scan(&event.detail);
         self.scope(ChangeScope::Events {
             task: event.task.clone(),
@@ -267,6 +275,10 @@ impl Tx<'_> {
     }
 
     fn put_row(&mut self, num: TaskNum, row: HistoryRow) -> Applied<()> {
+        use crate::backend::question_events::QuestionEventTx;
+        if row.part == TaskPart::AgentRecord && row.key.contains("/questions/") {
+            self.enqueue_question(&self.task_id(num)?, &row)?;
+        }
         self.maintain_artifact_count(num, row.part, &row.key, Some(&row))?;
         self.invalidate_accepted_proof(num, row.part, &row.key, Some(&row))?;
         if row.part == TaskPart::Artifact {

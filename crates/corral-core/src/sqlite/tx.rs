@@ -89,6 +89,24 @@ pub(super) fn run(
     })
 }
 
+/// Runs only within schema initialization's write transaction.
+pub(super) fn backfill_question_events(db: &Connection) -> Applied<()> {
+    let hooks = super::Hooks {
+        faults: std::sync::Arc::new(FaultInjector::default()),
+        barrier: None,
+        op: OpKind::ImportBatch,
+    };
+    let mut tx = Tx {
+        db,
+        now: crate::clock::now(),
+        hooks: &hooks,
+        scopes: BTreeSet::new(),
+        events: Vec::new(),
+        reservations: Vec::new(),
+    };
+    tx.backfill_question_events()
+}
+
 pub(super) fn scope_kind(scope: &ChangeScope) -> &'static str {
     match scope {
         ChangeScope::Task { .. } => "task",
@@ -202,6 +220,11 @@ impl Tx<'_> {
         mut event: NewEvent,
         malformed: bool,
     ) -> Applied<EventSeq> {
+        use crate::backend::question_events::QuestionEventTx;
+        if !malformed && let Some(seq) = self.question_logged(&event)? {
+            self.acknowledge_question(&event, seq)?;
+            return Ok(seq);
+        }
         event.run = event
             .detail
             .get("run")
@@ -213,6 +236,9 @@ impl Tx<'_> {
                     row.get(0)
                 })?;
         let seq = EventSeq(uint(last).or_io()? + 1);
+        if !malformed {
+            self.acknowledge_question(&event, seq)?;
+        }
         let refs = blob_ref::scan(&event.detail);
         self.scope(ChangeScope::Events {
             task: event.task.clone(),
@@ -418,6 +444,10 @@ impl Tx<'_> {
     }
 
     fn put_row(&mut self, num: TaskNum, row: HistoryRow) -> Applied<()> {
+        use crate::backend::question_events::QuestionEventTx;
+        if row.part == TaskPart::AgentRecord && row.key.contains("/questions/") {
+            self.enqueue_question(&self.task_id(num)?, &row)?;
+        }
         self.maintain_artifact_count(num, row.part, &row.key, Some(&row))?;
         self.invalidate_accepted_proof(num, row.part, &row.key, Some(&row))?;
         if row.part == TaskPart::Artifact {
