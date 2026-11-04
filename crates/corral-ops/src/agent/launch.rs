@@ -26,6 +26,9 @@ use super::bridge::assets::{
 use super::cli::LaunchArgs;
 use crate::Ctx;
 
+mod fixture_assets;
+use fixture_assets::explicit_assets;
+
 /// The T-252 child that lands the launcher and the launch command.
 pub const OWNER: &str = "host-bridge";
 pub const BOOTSTRAP_VERSION: u32 = 1;
@@ -756,21 +759,6 @@ pub fn check_with(
         bun_version,
         generation_dir: generation_dir.to_path_buf(),
     })
-}
-
-/// A fixture is accepted only from the directory the store's `[agent] assets_dir` names.
-fn explicit_assets(root: &Path, assets: &Path) -> bool {
-    let Ok(store) = Store::open_unobserved(root) else {
-        return false;
-    };
-    let canonical = |p: &Path| p.canonicalize().ok();
-    store
-        .config
-        .agent
-        .assets_dir
-        .as_deref()
-        .and_then(canonical)
-        .is_some_and(|dir| Some(dir) == canonical(assets))
 }
 
 /// The two directional secrets of one generation. Never logged; only digests persist.
