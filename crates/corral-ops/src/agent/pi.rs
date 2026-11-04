@@ -156,12 +156,13 @@ pub fn bound(start: &Path, ctx: &Ctx, overrides: &Overrides) -> Result<()> {
 }
 
 /// `corral pi [--over-cap]` in a workspace: a new assistant session in this pane.
-pub fn assistant(ctx: &Ctx, overrides: &Overrides, over_cap: bool) -> Result<()> {
-    assistant_focused(ctx, overrides, over_cap, None)
+pub fn assistant(start: &Path, ctx: &Ctx, overrides: &Overrides, over_cap: bool) -> Result<()> {
+    assistant_focused(start, ctx, overrides, over_cap, None)
 }
 
 /// Task focus supplies context only; admission and authority are unchanged.
 pub fn assistant_focused(
+    start: &Path,
     ctx: &Ctx,
     overrides: &Overrides,
     over_cap: bool,
@@ -171,9 +172,9 @@ pub fn assistant_focused(
     let pane = current_pane(std::env::var(PANE_ENV).ok().as_deref())?;
     let (session, prepared, warning) = match focus {
         Some(task) => {
-            super::ops::assistant::open_focused(ctx, &pane, overrides, over_cap, Some(task))?
+            super::ops::assistant::open_focused(ctx, start, &pane, overrides, over_cap, Some(task))?
         }
-        None => super::ops::assistant::open(ctx, &pane, overrides, over_cap)?,
+        None => super::ops::assistant::open(ctx, start, &pane, overrides, over_cap)?,
     };
     if let Some(warning) = warning {
         eprintln!("corral pi: {warning}");
@@ -200,6 +201,8 @@ pub fn resume_assistant(ctx: &Ctx, id: &str, overrides: &Overrides) -> Result<()
 
 /// Matched by the managed host's /new handoff; ordinary quit still exits 0.
 const NEW_ASSISTANT_EXIT: i32 = 75;
+/// The managed host settled its turn and requests the same conversation in its linked directory.
+const RELINK_ASSISTANT_EXIT: i32 = 76;
 
 fn supervise_assistant(
     ctx: &Ctx,
@@ -245,18 +248,41 @@ fn supervise_with(
             }
             Err(error)
         })?;
+        if status.code() == Some(RELINK_ASSISTANT_EXIT) {
+            anyhow::ensure!(
+                ctx.store
+                    .get_assistant_container(&id)?
+                    .state
+                    .binding
+                    .generation
+                    == generation,
+                "assistant_changed: {id} no longer has the stopped generation {generation}"
+            );
+            let (_, next_prepared) = super::ops::assistant::resume(ctx, &id, pane, overrides)?;
+            ctx.store.log_event(None, "assistant_relinked", serde_json::json!({
+                "session": id, "fenced": generation, "generation": generation + 1, "pane": pane,
+                "directory": crate::assistant::directory(&ctx.store, &ctx.store.get_assistant(&id)?)?,
+            }))?;
+            prepared = next_prepared;
+            continue;
+        }
         if status.code() != Some(NEW_ASSISTANT_EXIT) {
             return finish(ctx, &id, status);
         }
         super::ops::assistant::suspend(ctx, &id, generation)?;
         eprintln!("corral pi: assistant {id} suspended; `corral pi --resume {id}` resumes it");
         // Admission runs again after the old child stopped, so /new also works at the live cap.
-        let (next, next_prepared, warning) =
-            super::ops::assistant::open(ctx, pane, overrides, over_cap).with_context(|| {
-                format!(
-                    "/new could not open an assistant; resume {id} with `corral pi --resume {id}`"
-                )
-            })?;
+        let directory = crate::assistant::directory(&ctx.store, &ctx.store.get_assistant(&id)?)?;
+        let (next, next_prepared, warning) = super::ops::assistant::open(
+            ctx,
+            &directory.path,
+            pane,
+            overrides,
+            over_cap,
+        )
+        .with_context(|| {
+            format!("/new could not open an assistant; resume {id} with `corral pi --resume {id}`")
+        })?;
         if let Some(warning) = warning {
             eprintln!("corral pi: {warning}");
         }

@@ -70,15 +70,15 @@ test("the fixed-path loader finds the assistant role module", async () => {
   expect(loaded.role.role).toBe("assistant");
 });
 
-test("an assistant launch names its session and no project; no other role names one", () => {
+test("an assistant launch names its session and optional project; no other role names a session", () => {
   const parsed = parseLaunchMessage(JSON.stringify(message));
   expect([parsed.identity.role, parsed.identity.assistant, parsed.identity.project]).toEqual(["assistant", "A-1", ""]);
+  expect(parseLaunchMessage(JSON.stringify({ ...message, project: "demo" })).identity.project).toBe("demo");
   const reviewer = { ...message, assistant: undefined, role: "reviewer", project: "demo", task: "T-001", run: "R1", review: "R1-r", callback: "g1:c1" };
   for (const invalid of [
     { ...message, assistant: undefined },
     { ...message, assistant: "A-0" },
     { ...message, assistant: "B-1" },
-    { ...message, project: "demo" },
     { ...reviewer, assistant: "A-1" },
   ]) {
     expect(() => parseLaunchMessage(JSON.stringify(invalid))).toThrow(LaunchMessageInvalid);

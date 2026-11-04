@@ -173,6 +173,64 @@ fn c8_scratch_lifecycle_accounting_and_idle_gc() {
 }
 
 #[test]
+fn scratch_creation_links_the_session_directory() {
+    // Given an open assistant without a scratch.
+    let fx = Fixture::new();
+    // When its scratch is created.
+    let scratch = fx.create("A-1", "linked");
+    // Then that scratch is the session's selected working directory.
+    let session = fx.ctx.store.get_assistant("A-1").unwrap();
+    assert_eq!(
+        session.linked_scratch.as_deref(),
+        Some(scratch.slug.as_str())
+    );
+}
+
+#[test]
+fn discarding_the_linked_scratch_unlinks_the_session() {
+    // Given a session linked to a scratch.
+    let fx = Fixture::new();
+    fx.create("A-1", "linked");
+    fx.ctx
+        .store
+        .update_assistant("A-1", |session| {
+            session.linked_scratch = Some("linked".into());
+            Ok(())
+        })
+        .unwrap();
+    // When it discards that scratch.
+    scratch::discard(&fx.ctx, "A-1", "linked").unwrap();
+    // Then its working directory selection no longer names a scratch.
+    assert!(
+        fx.ctx
+            .store
+            .get_assistant("A-1")
+            .unwrap()
+            .linked_scratch
+            .is_none()
+    );
+}
+
+#[test]
+fn promoting_the_linked_scratch_unlinks_without_removing_its_work() {
+    // Given a linked scratch with work to promote.
+    let fx = Fixture::new();
+    let scratch = fx.create("A-1", "linked");
+    fx.commit(&scratch.path, "feature.rs", "fn feature() {}\n");
+    let before = fx.ctx.store.get_assistant("A-1").unwrap().scratch;
+    // When its work is filed for the normal queue.
+    scratch::promote(&fx.ctx, "A-1", "linked", "Feature", None, "").unwrap();
+    // Then the link is gone, while the recorded worktree and its contents stay intact.
+    let after = fx.ctx.store.get_assistant("A-1").unwrap();
+    assert!(after.linked_scratch.is_none());
+    assert_eq!(after.scratch, before);
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("feature.rs")).unwrap(),
+        "fn feature() {}\n"
+    );
+}
+
+#[test]
 fn gc_skips_a_scratch_with_a_live_process_cwd_or_a_pending_finish() {
     // Given two idle scratch of ended A-1: one a live process uses, one marked for co-work.
     let fx = Fixture::new();

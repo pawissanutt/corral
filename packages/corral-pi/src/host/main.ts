@@ -29,6 +29,7 @@ import { exportAssistantSession } from "../roles/assistant/env.ts";
 import { type AwsRoute, HostSession, authContext } from "./session.ts";
 import { subscriptionRoutes } from "./subscriptions.ts";
 import { guardTerminalStop } from "./terminal-stop.ts";
+import { NEW_ASSISTANT_EXIT, RELINK_ASSISTANT_EXIT } from "./assistant-relink.ts";
 
 function launchFd(argv: readonly string[]): number {
   const index = argv.indexOf("--launch-fd");
@@ -91,6 +92,14 @@ async function main(): Promise<void> {
   const agentDir = join(config.runtimeDir, "pi-agent");
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   let host: HostSession | undefined;
+  let physicalTerminal: ProcessTerminal | undefined;
+  const restart = (code: number) => {
+    // Leave the session callback before disposing its runtime.
+    setImmediate(() => { void restartAssistant(code).catch((error: unknown) => {
+      process.stderr.write(`corral: assistant handoff stopped: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.exit(2);
+    }); });
+  };
   const client = new CorralClient({
     corral: config.corral, root: config.root, identity: config.identity, hostCap: config.secrets.hostCap,
     sessionId: () => host?.sessionId() ?? "",
@@ -107,14 +116,9 @@ async function main(): Promise<void> {
     root: config.root, exportDir: join(config.sessionDir, "exports"), runtimeDir: config.runtimeDir,
     modules, client, events, network,
     ...(config.identity.role === "assistant" && process.argv.includes("--assistant-new")
-      && !headlessEnabled(config.capabilities) ? { newAssistant: () => {
-        // Leave the before-switch handler before disposing its runtime. Pi's normal shutdown
-        // exits 0 (ending the assistant), so this handoff uses the supervisor's reserved code.
-        setImmediate(() => { void startNewAssistant().catch((error: unknown) => {
-          process.stderr.write(`corral: /new stopped: ${error instanceof Error ? error.message : String(error)}\n`);
-          process.exit(2);
-        }); });
-      } } : {}),
+      ? { relinkAssistant: () => restart(RELINK_ASSISTANT_EXIT),
+        ...(!headlessEnabled(config.capabilities) ? { newAssistant: () => restart(NEW_ASSISTANT_EXIT) } : {}),
+      } : {}),
     ...herdrLifecycle(process.env, config.pane, config.identity, events, headlessEnabled(config.capabilities)),
     sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation, config.resumeSession, config.freshSession,
       config.resumeLeaf),
@@ -145,13 +149,13 @@ async function main(): Promise<void> {
       },
     },
   });
-  async function startNewAssistant(): Promise<void> {
-    await physicalTerminal.drainInput(1000);
+  async function restartAssistant(code: number): Promise<void> {
+    await physicalTerminal?.drainInput(1000);
     terminal?.stop();
     await session.runtime.dispose();
     await session.drained();
     await bridge.close();
-    process.exit(75); // NEW_ASSISTANT_EXIT in the Rust supervisor; never an ordinary quit.
+    process.exit(code); // 75 = /new, 76 = relink; neither is an ordinary quit.
   }
   await session.hello(config.secrets.bindNonce, config.pane, sha256Hex(config.secrets.ctlCap));
   if (headlessEnabled(config.capabilities)) {
@@ -159,7 +163,7 @@ async function main(): Promise<void> {
     return;
   }
   const panels = session.panels;
-  const physicalTerminal = new ProcessTerminal();
+  physicalTerminal = new ProcessTerminal();
   terminal = new sdk.InteractiveMode(session.runtime, {
     verbose: false, terminal: panels ? panels.wrap(physicalTerminal) : physicalTerminal,
     ...(panels ? { tuiMode: "fullscreen" as const, readOnlyQueue: true, mainView: (transcript, presentation) => panels.mainView(transcript, presentation) } : {}),

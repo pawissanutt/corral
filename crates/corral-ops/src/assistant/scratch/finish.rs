@@ -442,6 +442,9 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
         if let Some(entry) = s.scratch.iter_mut().find(|entry| entry.slug == slug) {
             entry.kind = COWORK.into();
         }
+        if s.linked_scratch.as_deref() == Some(slug) {
+            s.linked_scratch = None;
+        }
         Ok(())
     })?;
     snapshot_diff(ctx, &task.id, &scratch.path, &base_sha)?;

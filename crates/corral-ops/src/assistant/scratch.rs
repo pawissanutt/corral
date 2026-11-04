@@ -225,6 +225,7 @@ pub fn create(
             );
         }
         s.scratch.push(scratch.clone());
+        s.linked_scratch = Some(scratch.slug.clone());
         Ok(())
     });
     if let Err(error) = recorded {
@@ -390,6 +391,9 @@ fn remove(
     };
     crate::cleanup_worktree::remove_scratch(&repo, &scratch.path, &scratch.branch, callers)?;
     ctx.store.update_assistant(session, |s| {
+        if s.linked_scratch.as_deref() == Some(scratch.slug.as_str()) {
+            s.linked_scratch = None;
+        }
         s.scratch.retain(|x| x.slug != scratch.slug);
         Ok(())
     })?;
@@ -487,6 +491,12 @@ pub fn promote(
         &format!("Spike diff from scratch {session}/{slug}"),
     )
     .with_context(|| format!("filed {} but attaching the scratch diff failed", task.id))?;
+    ctx.store.update_assistant(session, |session| {
+        if session.linked_scratch.as_deref() == Some(slug) {
+            session.linked_scratch = None;
+        }
+        Ok(())
+    })?;
     ctx.store.log_event(
         Some(&task.id),
         "assistant_scratch_promoted",

@@ -75,6 +75,7 @@ import { OWNER_INPUT_TEXT_MAX, ownerInputText, utf8Prefix } from "../roles/assis
 import type { ConfirmUi } from "../tools/define.ts";
 import { memoryContext } from "./memory.ts";
 import { transcriptPreview } from "./transcript-preview.ts";
+import { AssistantRelink } from "./assistant-relink.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -113,6 +114,8 @@ export interface HostSessionOptions {
   readonly herdr?: HerdrLifecycle;
   /** Present only under the `corral pi` assistant supervisor; never switches Pi files in-process. */
   readonly newAssistant?: () => void;
+  /** The supervisor restarts this assistant on its linked directory, preserving its Pi file. */
+  readonly relinkAssistant?: () => void;
 }
 
 type TurnOrigin = { kind: "bridge" | "continuation"; idempotency_key: string } | { kind: "owner_terminal" }
@@ -252,6 +255,7 @@ export function providerErrorClass(message: string): string {
   return "provider";
 }
 
+// allow: SIZE_OK - Generation-bound Pi lifecycle state machine; relink decisions live in assistant-relink.ts.
 export class HostSession {
   runtime!: AgentSessionRuntime;
   readonly panels: NativePanels | undefined;
@@ -303,11 +307,18 @@ export class HostSession {
   /** Continuation rechecks, kept off `calls` so lifecycle reports and budget records never wait on one. */
   private continuations: Promise<void> = Promise.resolve();
   private closing = false;
+  private readonly relink: AssistantRelink | undefined;
 
   readonly provider: ProviderId;
 
   private constructor(private readonly options: HostSessionOptions) {
     this.provider = options.provider ?? "openai-codex";
+    this.relink = options.identity.role === "assistant" && options.identity.assistant && options.relinkAssistant
+      ? new AssistantRelink({
+        assistant: options.identity.assistant, generation: options.identity.generation, cwd: options.cwd,
+        manager: options.sessionManager, client: options.client, events: options.events,
+        request: () => { this.closing = true; options.relinkAssistant?.(); },
+      }) : undefined;
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
       identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
       ...(options.identity.project && options.guidance?.projectDir && options.guidance.projectDir !== options.client.workspaceRoot
@@ -352,7 +363,8 @@ export class HostSession {
     });
     const registerCapability = capabilityRegistry(() => this.session?.sessionFile);
     this.roleContext = {
-      identity: options.identity, cwd: options.cwd, model: options.model, registerCapability,
+      identity: options.identity, cwd: options.cwd, workspaceRoot: options.client.workspaceRoot,
+      model: options.model, registerCapability,
       todo: options.capabilities ? options.capabilities.enabled.includes("todo") : options.todo === true,
       ...(options.capabilities ? { capabilities: options.capabilities } : {}),
       ...(options.guidance?.settings.lsp ? { lspSettings: options.guidance.settings.lsp } : {}),
@@ -808,6 +820,7 @@ export class HostSession {
         : { action: "transform" as const, text: ownerInputText(event.text, id) };
     });
     this.options.modules.role.extend?.(pi, this.roleContext);
+    this.relink?.extend(pi);
     // Registered after the role's own handler: upstream keeps the first skill of each name, so
     // a home or repository skill can never replace the role's packaged one (corral-worker).
     pi.on("resources_discover", () => ({ skillPaths: [...this.guidance.skillPaths] }));
@@ -974,7 +987,11 @@ export class HostSession {
           this.stats.lastError = JSON.stringify(receipt.result).slice(0, 256);
         } else {
           this.stats.committed++;
-          if (payload.kind === "turn_ended" && receipt.state === "committed") this.turnRecorded(receipt.result, turn);
+          if (payload.kind === "turn_ended" && receipt.state === "committed") {
+            if (await this.relink?.check(() => !this.closing && !this.open && this.turn === turn
+              && !this.session.isStreaming && !this.session.isBashRunning)) return;
+            this.turnRecorded(receipt.result, turn);
+          }
         }
         return;
       } catch (error) {

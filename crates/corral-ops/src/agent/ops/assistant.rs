@@ -1,6 +1,7 @@
 //! Assistant sessions on the corral-pi host (T-544, member assistant-launch): the soft live cap
 //! and machine-load admission, a new session in the owner's pane, generation-fenced resume and
-//! host shutdown when a session ends. An assistant takes no coding slot and names no project;
+//! host shutdown when a session ends. An assistant takes no coding slot, optionally binds the
+//! project it opened in, and follows its linked scratch through generation-fenced restarts;
 //! its pane is the owner's, adopted like the PM's: corral never closes it or types into it.
 use anyhow::{Context, Result};
 use corral_core::agent::{AgentRole, ContainerRef};
@@ -162,17 +163,17 @@ pub(crate) fn continued_session(ctx: &Ctx, id: &str) -> Result<Option<std::path:
 
 /// Opens session `id`'s next generation in `pane` and writes its one-shot bootstrap.
 fn prepare(ctx: &Ctx, id: &str, pane: &str, resolved: &ResolvedProfile) -> Result<Prepared> {
+    let session = ctx.store.get_assistant(id)?;
     let model = resolved
         .model
         .clone()
         .context("an assistant needs a model")?;
     let spec = HostSpec {
-        cwd: ctx.store.root().to_path_buf(),
+        cwd: crate::assistant::directory(&ctx.store, &session)?.path,
         provider: launch::host_provider(resolved.vendor.as_deref(), &model),
         model,
         effort: resolved.effort.clone(),
         prompt_file: {
-            let session = ctx.store.get_assistant(id)?;
             if session.focus != "workspace" {
                 let brief = crate::assistant::task_brief(&ctx.store, &session.focus)?;
                 let dir = ctx.store.scratch_spool(
@@ -226,16 +227,18 @@ fn record_assets(ctx: &Ctx, id: &str, prepared: &Prepared) -> Result<()> {
 /// A failure after the record exists ends it again, so no half-open session is left behind.
 pub fn open(
     ctx: &Ctx,
+    start: &std::path::Path,
     pane: &str,
     overrides: &Overrides,
     over_cap: bool,
 ) -> Result<(AssistantSession, Prepared, Option<String>)> {
-    open_focused(ctx, pane, overrides, over_cap, None)
+    open_focused(ctx, start, pane, overrides, over_cap, None)
 }
 
 /// Open an assistant with optional read-only task context.
 pub fn open_focused(
     ctx: &Ctx,
+    start: &std::path::Path,
     pane: &str,
     overrides: &Overrides,
     over_cap: bool,
@@ -245,14 +248,22 @@ pub fn open_focused(
         ctx.store.get(task)?;
     }
     pane_known(ctx, pane)?;
+    let project = crate::assistant::project_at(&ctx.store, start)?;
     let resolved = profile(ctx, None, overrides)?;
     let warning = admit(ctx, over_cap)?;
     let socket = ctx.herdr.socket_path().ok();
-    let session = ctx
+    let created = ctx
         .store
         .create_assistant(&resolved.profile, focus, Some(pane), socket)?;
-    match prepare(ctx, &session.id, pane, &resolved) {
-        Ok(prepared) => {
+    let prepared: Result<_> = (|| {
+        let session = ctx.store.update_assistant(&created.id, |session| {
+            session.project = project;
+            Ok(())
+        })?;
+        Ok((session, prepare(ctx, &created.id, pane, &resolved)?))
+    })();
+    match prepared {
+        Ok((session, prepared)) => {
             ctx.store.log_event(
                 None,
                 "assistant_launched",
@@ -262,7 +273,7 @@ pub fn open_focused(
             Ok((session, prepared, warning))
         }
         Err(error) => {
-            ctx.store.end_assistant(&session.id)?;
+            ctx.store.end_assistant(&created.id)?;
             Err(error)
         }
     }
@@ -400,7 +411,7 @@ pub fn run_host(prepared: &Prepared) -> Result<std::process::ExitStatus> {
     let secrets = launch::Secrets::generate()?;
     launch::write_ctl_cap(&ready.generation_dir, &secrets.ctl_cap)?;
     let (mut command, inherited) = launch::host_command(&bootstrap, &ready, &secrets)?;
-    // This child has a `corral pi` supervisor capable of handling /new's reserved exit code.
+    // This child has a `corral pi` supervisor handling /new (75) and idle scratch relink (76).
     command.arg("--assistant-new");
     let mut child = command
         .spawn()

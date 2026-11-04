@@ -120,8 +120,9 @@ fn two_launches_open_separate_assistant_sessions_without_a_task_or_slot() {
     let tasks = fx.ctx.store.list().unwrap();
     // When `corral pi` opens an assistant in each pane.
     let ctx = f::ctx_at(fx.root());
-    let (first, _, warning) = open(&ctx, PANE, &Overrides::default(), false).unwrap();
-    let (second, _, _) = open(&ctx, OTHER, &Overrides::default(), false).unwrap();
+    let (first, _, warning) =
+        open(&ctx, ctx.store.root(), PANE, &Overrides::default(), false).unwrap();
+    let (second, _, _) = open(&ctx, ctx.store.root(), OTHER, &Overrides::default(), false).unwrap();
     // Then A-1 and A-2 are separate assistant records, each at generation 1 in its own pane.
     assert_eq!((first.id.as_str(), second.id.as_str()), ("A-1", "A-2"));
     assert!(warning.is_none());
@@ -148,6 +149,143 @@ fn two_launches_open_separate_assistant_sessions_without_a_task_or_slot() {
 }
 
 #[test]
+fn opening_inside_a_project_binds_the_longest_canonical_project() {
+    // Given nested configured projects, a nested worktree and a symlink to it.
+    let mut fx = assistant_fixture();
+    fx.ctx.store.config.projects.remove("app");
+    let app = fx.root().join("app");
+    let nested = app.join("nested");
+    let worktree = nested.join(".worktrees/topic/src");
+    std::fs::create_dir_all(&worktree).unwrap();
+    fx.ctx.store.config.projects.insert(
+        "nested".into(),
+        serde_json::from_value(json!({"path": "app/nested"})).unwrap(),
+    );
+    fx.ctx.store.save_config().unwrap();
+    let alias = fx.root().join("alias");
+    std::os::unix::fs::symlink(&worktree, &alias).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let ctx = f::ctx_at(fx.root());
+    for (start, expected) in [
+        (app.as_path(), Some("corral")),
+        (nested.as_path(), Some("nested")),
+        (worktree.as_path(), Some("nested")),
+        (alias.as_path(), Some("nested")),
+        (fx.root(), None),
+        (outside.path(), None),
+    ] {
+        // When opening an assistant from that directory.
+        let (session, _, _) = open(&ctx, start, PANE, &Overrides::default(), false).unwrap();
+        // Then its record, identity and host directory name that project, or the workspace.
+        assert_eq!(session.project.as_deref(), expected, "{}", start.display());
+        let saved = bootstrap(&fx, &session.id, 1);
+        assert_eq!(saved["project"], expected.unwrap_or(""));
+        let cwd = expected
+            .map(|p| ctx.store.project_path(p).unwrap())
+            .unwrap_or_else(|| ctx.store.root().to_owned());
+        assert_eq!(saved["cwd"], json!(cwd));
+        assert_eq!(saved["project_dir"], json!(cwd));
+        assert_eq!(
+            ctx.store
+                .get_assistant_container(&session.id)
+                .unwrap()
+                .state
+                .binding
+                .project,
+            expected.unwrap_or("")
+        );
+    }
+}
+
+#[test]
+fn prepare_prefers_existing_linked_scratch_then_project_then_workspace() {
+    // Given a session with each possible directory selection.
+    let fx = assistant_fixture();
+    let ctx = f::ctx_at(fx.root());
+    let project = ctx.store.project_path("corral").unwrap();
+    let scratch = project.join(".worktrees/A-1-linked");
+    std::fs::create_dir_all(&scratch).unwrap();
+    let session = ctx
+        .store
+        .create_assistant("pm-pi", None, Some(PANE), None)
+        .unwrap();
+    let resolved = profile(&ctx, None, &Overrides::default()).unwrap();
+    for (project_name, linked, exists, expected) in [
+        (Some("corral"), true, true, scratch.clone()),
+        (Some("corral"), true, false, project.clone()),
+        (Some("corral"), false, false, project.clone()),
+        (None, false, false, ctx.store.root().to_owned()),
+    ] {
+        if !exists && scratch.exists() {
+            std::fs::remove_dir(&scratch).unwrap();
+        }
+        ctx.store
+            .update_assistant(&session.id, |s| {
+                s.project = project_name.map(str::to_owned);
+                s.linked_scratch = linked.then(|| "linked".into());
+                s.scratch = vec![corral_core::assistant::AssistantScratch {
+                    slug: "linked".into(),
+                    project: "corral".into(),
+                    path: scratch.clone(),
+                    branch: "corral/A-1/linked".into(),
+                    base: "base".into(),
+                    created: s.created,
+                    kind: "spike".into(),
+                    bytes: None,
+                    measured_at: None,
+                }];
+                Ok(())
+            })
+            .unwrap();
+        // When the next generation is prepared.
+        let prepared = prepare(&ctx, &session.id, PANE, &resolved).unwrap();
+        let saved: Value =
+            serde_json::from_slice(&std::fs::read(prepared.bootstrap).unwrap()).unwrap();
+        // Then the same selection drives both tools and project guidance.
+        assert_eq!(saved["cwd"], json!(expected));
+        assert_eq!(saved["project_dir"], json!(expected));
+    }
+}
+
+#[test]
+fn matching_project_identity_is_admitted_but_foreign_project_is_refused() {
+    // Given an assistant with a recorded project.
+    let fx = assistant_fixture();
+    let session = fx
+        .ctx
+        .store
+        .create_assistant("pm-pi", None, Some(PANE), None)
+        .unwrap();
+    fx.ctx
+        .store
+        .update_assistant(&session.id, |s| {
+            s.project = Some("corral".into());
+            Ok(())
+        })
+        .unwrap();
+    let host = HostProc::spawn(true);
+    // When its matching identity completes hello.
+    let bound = fx.bind(&target(&session.id), PANE, &host);
+    // Then it carries that project, while another project cannot use its credentials.
+    assert_eq!(bound.identity.project, "corral");
+    let mut foreign = bound.clone();
+    foreign.identity.project = "foreign".into();
+    let refused = ts::send(
+        &ts_fx(&fx),
+        &ts::envelope(
+            &foreign,
+            "todo",
+            &crate::agent::tool_request_id(f::SESSION, "foreign"),
+            json!({"op":"init", "phases":[{"id":"p", "label":"Phase",
+            "steps":[{"id":"s", "label":"Step"}]}]}),
+            false,
+        ),
+        "todo",
+    );
+    assert_eq!(ts::code(&refused), Some("foreign_project"));
+}
+
+#[test]
 fn focused_launch_preloads_a_bounded_brief_without_task_binding_or_mutation() {
     let fx = assistant_fixture();
     let task = fx
@@ -162,8 +300,15 @@ fn focused_launch_preloads_a_bounded_brief_without_task_binding_or_mutation() {
         .unwrap();
     let before = fx.ctx.store.get(&task.id).unwrap();
     let ctx = f::ctx_at(fx.root());
-    let (session, _, _) =
-        open_focused(&ctx, PANE, &Overrides::default(), false, Some(&task.id)).unwrap();
+    let (session, _, _) = open_focused(
+        &ctx,
+        ctx.store.root(),
+        PANE,
+        &Overrides::default(),
+        false,
+        Some(&task.id),
+    )
+    .unwrap();
     assert_eq!(session.focus, task.id);
     let saved = bootstrap(&fx, &session.id, 1);
     let prompt = std::path::Path::new(saved["prompt_file"].as_str().unwrap());
@@ -174,7 +319,17 @@ fn focused_launch_preloads_a_bounded_brief_without_task_binding_or_mutation() {
     assert!(saved["task"].is_null());
     assert_eq!(fx.ctx.store.get(&task.id).unwrap(), before);
     let count = fx.ctx.store.list_assistants().unwrap().len();
-    assert!(open_focused(&ctx, OTHER, &Overrides::default(), false, Some("T-999999")).is_err());
+    assert!(
+        open_focused(
+            &ctx,
+            ctx.store.root(),
+            OTHER,
+            &Overrides::default(),
+            false,
+            Some("T-999999")
+        )
+        .is_err()
+    );
     assert_eq!(fx.ctx.store.list_assistants().unwrap().len(), count);
 }
 
@@ -183,18 +338,25 @@ fn a_launch_refused_before_its_record_leaves_nothing_and_a_late_failure_ends_it(
     let fx = assistant_fixture();
     let ctx = f::ctx_at(fx.root());
     // An unknown pane refuses before any record.
-    let error = open(&ctx, "w1:p99", &Overrides::default(), false).unwrap_err();
+    let error = open(
+        &ctx,
+        ctx.store.root(),
+        "w1:p99",
+        &Overrides::default(),
+        false,
+    )
+    .unwrap_err();
     assert_eq!(code(&error), Some("pane_unknown"), "{error}");
     // A missing role module refuses in preflight, also before any record.
     let module = fx.root().join("assets/src/roles/assistant/index.ts");
     std::fs::remove_file(&module).unwrap();
-    let error = open(&ctx, PANE, &Overrides::default(), false).unwrap_err();
+    let error = open(&ctx, ctx.store.root(), PANE, &Overrides::default(), false).unwrap_err();
     assert!(error.to_string().contains("role_unavailable"), "{error}");
     assert!(fx.ctx.store.list_assistants().unwrap().is_empty());
     // A failure after the record exists (the asset digest refuses a symlink) ends that record.
     std::fs::write(&module, "export {}").unwrap();
     std::os::unix::fs::symlink(&module, fx.root().join("assets/src/link.ts")).unwrap();
-    assert!(open(&ctx, PANE, &Overrides::default(), false).is_err());
+    assert!(open(&ctx, ctx.store.root(), PANE, &Overrides::default(), false).is_err());
     let sessions = fx.ctx.store.list_assistants().unwrap();
     assert_eq!(sessions.len(), 1);
     assert!(sessions[0].ended.is_some());
@@ -212,7 +374,7 @@ fn the_soft_cap_needs_over_cap_and_a_critical_machine_refuses_with_its_values() 
     let ctx = f::ctx_at(fx.root());
     assert_eq!(live(&ctx.store).unwrap().len(), 2);
     // When a third plain `corral pi` runs, it refuses naming the live sessions and changes nothing.
-    let error = open(&ctx, PANE, &Overrides::default(), false).unwrap_err();
+    let error = open(&ctx, ctx.store.root(), PANE, &Overrides::default(), false).unwrap_err();
     assert_eq!(code(&error), Some("assistant_cap"), "{error}");
     let text = error.to_string();
     assert!(
@@ -221,7 +383,8 @@ fn the_soft_cap_needs_over_cap_and_a_critical_machine_refuses_with_its_values() 
     );
     assert_eq!(fx.ctx.store.list_assistants().unwrap().len(), 2);
     // With --over-cap it opens A-3 and warns.
-    let (third, _, warning) = open(&ctx, PANE, &Overrides::default(), true).unwrap();
+    let (third, _, warning) =
+        open(&ctx, ctx.store.root(), PANE, &Overrides::default(), true).unwrap();
     assert_eq!(third.id, "A-3");
     assert!(warning.unwrap().contains("assistant.max_live is 2"));
     // At critical load even --over-cap refuses machine_load with the probe's values.
@@ -241,7 +404,14 @@ fn the_soft_cap_needs_over_cap_and_a_critical_machine_refuses_with_its_values() 
         resource_probe: Arc::new(crate::resources::FixedResourceProbe(critical)),
         ..f::ctx_at(fx.root())
     };
-    let error = open(&loaded, OTHER, &Overrides::default(), true).unwrap_err();
+    let error = open(
+        &loaded,
+        loaded.store.root(),
+        OTHER,
+        &Overrides::default(),
+        true,
+    )
+    .unwrap_err();
     assert_eq!(code(&error), Some("machine_load"), "{error}");
     assert!(
         error.to_string().contains("memory available 1024 bytes"),
@@ -420,16 +590,22 @@ fn assistant_calls_commit_on_the_session_container_and_end_closes_them() {
         ts::send(&ts_fx(&fx), &input, "todo").receipt(),
         Some(&stored)
     );
-    // A shape that names a project or omits the session is refused before admission.
+    // A foreign project is refused by project admission, even with valid session credentials.
     let mut foreign = bound.clone();
     foreign.identity.project = "corral".into();
     let other = crate::agent::tool_request_id(f::SESSION, "todo-2");
     let refused = ts::send(
         &ts_fx(&fx),
-        &ts::envelope(&foreign, "todo", &other, json!({}), false),
+        &ts::envelope(
+            &foreign,
+            "todo",
+            &other,
+            json!({"op":"start", "step":"s"}),
+            false,
+        ),
         "todo",
     );
-    assert_eq!(ts::code(&refused), Some("bad_request"));
+    assert_eq!(ts::code(&refused), Some("foreign_project"));
     // When the session ends while its host runs, the host cannot take the shutdown here (no
     // socket), which is reported, and every later call refuses.
     let ctx = f::ctx_at(fx.root());

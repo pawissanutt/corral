@@ -181,14 +181,20 @@ pub(crate) fn bind(fx: &Fx, target: &BindTarget, pane: &str, session: &str) -> H
         BindTarget::Pm { .. } => (AgentRole::Pm, None, None, None, None),
         BindTarget::Assistant { .. } => (AgentRole::Assistant, None, None, None, None),
     };
-    // An assistant session names no project; its identity carries the session instead.
+    // An assistant identity carries its session and that session's recorded project.
     let assistant = grant.container.assistant().map(str::to_owned);
     Host {
         identity: RequestIdentity {
             store: paths::store_id(&fx.ctx.store),
             project: match target {
                 BindTarget::Pm { project } => project.clone(),
-                _ if assistant.is_some() => String::new(),
+                BindTarget::Assistant { session } => fx
+                    .ctx
+                    .store
+                    .get_assistant(session)
+                    .unwrap()
+                    .project
+                    .unwrap_or_default(),
                 _ => "corral".into(),
             },
             role,

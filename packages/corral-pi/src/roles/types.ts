@@ -52,7 +52,7 @@ export interface HostIdentity {
   readonly run?: string;
   readonly review?: string;
   readonly callback?: string;
-  /** Assistant only: the session `A-<n>`; an assistant names no project (`project` is empty). */
+  /** Assistant only: the session `A-<n>`; `project` is its recorded project, or empty. */
   readonly assistant?: string;
   readonly generation: number;
 }
@@ -92,7 +92,9 @@ export interface RoleContext {
     emit(kind: string, data: Record<string, unknown>): void;
   };
   readonly registerCapability?: (pid: number) => () => void;
-  /** The worktree (worker, reviewer) or workspace root (pm, assistant) Pi works in. */
+  /** The store root, independent of a project's or assistant scratch's tool cwd. */
+  readonly workspaceRoot?: string;
+  /** The directory Pi's tools work in. */
   readonly cwd: string;
   /** The run's prompt file, when dispatch wrote one. */
   readonly promptFile?: string;

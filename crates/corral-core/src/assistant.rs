@@ -62,6 +62,12 @@ pub struct AssistantSession {
     /// `workspace` or a task ID. Focus does not grant task authority.
     pub focus: String,
     pub profile: String,
+    /// The configured project selected at open; absent on workspace and legacy sessions.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Slug of the scratch whose directory the next host generation uses.
+    #[serde(default)]
+    pub linked_scratch: Option<String>,
     #[serde(default)]
     pub scratch: Vec<AssistantScratch>,
     #[serde(default)]
@@ -372,6 +378,8 @@ impl Store {
             ended: None,
             focus: focus.unwrap_or("workspace").into(),
             profile: profile.into(),
+            project: None,
+            linked_scratch: None,
             scratch: Vec::new(),
             artifacts: Vec::new(),
             inbox_items: Vec::new(),
@@ -510,6 +518,14 @@ impl Store {
         f(&mut session)?;
         if session.id != id || session.version != ASSISTANT_VERSION {
             bail!("assistant identity is immutable");
+        }
+        // A removed or transferred scratch can never leave a dangling working-directory link.
+        if session
+            .linked_scratch
+            .as_deref()
+            .is_some_and(|slug| !session.scratch.iter().any(|scratch| scratch.slug == slug))
+        {
+            session.linked_scratch = None;
         }
         self.write_assistant(&session)?;
         Ok(session)

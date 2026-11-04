@@ -158,6 +158,7 @@ fn owner_authority_live_setup() {
         .unwrap();
     let (session, prepared, _) = open(
         &ctx,
+        ctx.store.root(),
         input["pane"].as_str().unwrap(),
         &Overrides::default(),
         false,
