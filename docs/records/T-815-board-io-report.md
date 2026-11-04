@@ -188,6 +188,14 @@ transition commit at 14.082s; its view no longer spans that I/O phase. Raw evide
   paths already exercised with large data. A future split must materialize coherent input
   records/cursor before slow extraction, not simply renew the cursor's source view.
 
+### Upstream size-gate blocker
+
+Rebasing onto `d9bf2efd` exposed its unrelated `agent/launch.rs` at 806 SLOC, stopping the
+quick gate before tests. Per PM answer `T-815/R1/Q2`, the private fixture-assets predicate was
+moved unchanged into `agent/launch/fixture_assets.rs`. The parent is now **795 SLOC** and the
+child **15 SLOC**. No behavior, public API, test or size limit changed, and no tests were added
+for this refactor. Landing T-815 therefore also clears main's shared size-ceiling failure.
+
 ## Limits / not verified
 
 No intentional host load, no owner-store mutation, and no owner herdr panes were used.
