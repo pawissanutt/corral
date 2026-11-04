@@ -90,8 +90,9 @@ test("main navigation has no duplicate Agents or Jobs tab in any view or width",
       for (const width of [52, 80, 140]) {
         const bar = stripTerminalSequences(h.frame(width).lines[0] ?? "");
         expect(bar).not.toMatch(/\bAgents?\b|\bJobs?\b/);
-        expect(bar).toContain(width < 90 ? "Chat" : "Conversation");
-        expect(bar).toContain(width < 90 ? "Diff" : "Changes");
+        expect(bar).toContain(width < 64 ? " C " : "Chat");
+        expect(bar).toContain(width < 64 ? " D " : "Changes");
+        expect(bar).toContain(width < 64 ? " A " : "Activity");
       }
     }
     h.physical.send("\x1b[19~");

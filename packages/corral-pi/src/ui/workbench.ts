@@ -4,7 +4,7 @@ import { chooseProject, projectScopes } from "./project-scopes.ts";
 import type { HostIdentity } from "../roles/types.ts";
 import { target } from "./chrome.ts";
 import { getMarkdownTheme, type ExtensionUIContext, type InteractiveChatPresentation } from "@earendil-works/pi-coding-agent";
-import { VStack, ScrollView, Text, getKeybindings, matchesKey, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { VStack, ScrollView, Text, getKeybindings, matchesKey, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { anchoredRow } from "./reading-anchor.ts";
 import { NativeImageViewer } from "./image-viewer.ts";
 import { ReviewStore, comparisonLabel, fileStatus, type PatchSnapshot } from "./review-store.ts";
@@ -26,6 +26,8 @@ export function plainClick(event: TuiMouseEvent): boolean {
   return event.type === "click" && event.button === "left" && !event.shift && !event.alt && !event.ctrl && (event.clickCount ?? 1) === 1;
 }
 export type MainView = "task" | "conversation" | "changes" | "activity" | "agents" | "evidence" | "inbox" | "graph" | "timeline" | "usage" | "artifacts";
+/** Views reached through Activity; its sub-tab row shows only while one of them is open. */
+const ACTIVITY_VIEWS: ReadonlySet<MainView> = new Set<MainView>(["activity", "agents", "graph", "timeline"]);
 export interface WorkbenchOptions {
   readonly identity: HostIdentity;
   readonly inspection?: () => Promise<unknown>;
@@ -168,30 +170,45 @@ export class NativeWorkbench {
     this.setView("changes"); await this.review.select(path); this.acceptPatch();
   }
   private nav(): Component {
-    let hits: { readonly to: number; readonly view: MainView | "history" }[] = [];
+    type Target = MainView | "history";
+    let hits: { readonly to: number; readonly view: Target }[] = [];
+    let subHits: { readonly to: number; readonly view: Target }[] = [];
+    const strip = (labels: readonly (readonly [Target, string])[], active: (view: Target) => boolean) => {
+      let x = 0;
+      const placed = labels.map(([view, label]) => ({ view, to: x += visibleWidth(label) }));
+      return { placed, text: labels.map(([view, label]) => (active(view) ? PANEL_BLUE + "\x1b[1m" : PANEL_MUTED) + label + "\x1b[22m").join("") };
+    };
     return {
       render: width => {
         this.anchorTranscript(width);
-        const compact = width < 110, minimum = width < 52;
-        const labels: [MainView | "history", string][] = [...(this.task.bound ? [["task", minimum ? " T " : compact ? " Task " : " Task F5 "] as [MainView, string]] : []), ["conversation", minimum ? " C " : compact ? " Chat " : " Conversation F9 "],
-          ["changes", minimum ? " D " : compact ? " Diff " : " Changes F7 "],
-          ["evidence", minimum ? " E " : compact ? " Proof " : " Evidence F10 "], ["inbox", minimum ? " I " : compact ? " Inbox " : " Inbox F11 "],
-          ["usage", width < 64 ? " U " : " Usage "], ["graph", width < 64 ? " G " : " Graph "], ["timeline", width < 64 ? " L " : " Timeline "], ["history", width < 64 ? " H " : " History "]];
-        const used = labels.reduce((n, [, label]) => n + label.length, 0), artifacts = " Artifacts ";
-        // Narrow bars keep every focus hint; Artifacts stays reachable with `a` from Evidence.
-        if (used + artifacts.length + 9 <= width) labels.push(["artifacts", artifacts]);
-        const short = compact || labels.reduce((n, [, label]) => n + label.length, 0) + 26 > width;
-        let x = 0;
-        hits = labels.map(([view, label]) => ({ view, to: x += label.length }));
-        return [PANEL_BG + pad(labels.map(([view, label]) => (this.view === view || view === "activity" && this.view === "agents" ? PANEL_BLUE : PANEL_MUTED) + label).join("") + PANEL_MUTED +
-          (this.focused ? short ? "Esc Enter" : "· Esc chat · Enter compose" : ""), width) + RESET,
-        PANEL_BG + PANEL_TEXT + (this.view !== "activity" && this.headline(width) || pad(this.view === "activity" && this.selectedActivity
-          ? activityTitle(this.options.snapshot(), this.selectedActivity)
-          : `Files: ${plainLabel(this.scopeLabel)} · ` + PANEL_MUTED + target(this.options.identity) + (this.ui ? "" : " · Initializing editor…"), width)) + RESET];
+        const compact = width < 110, minimum = width < 64;
+        const label = (short: string, mid: string, full: string) => minimum ? ` ${short} ` : compact ? ` ${mid} ` : ` ${full} `;
+        const labels: (readonly [Target, string])[] = [
+          ...(this.task.bound ? [["task", label("T", "Task", "Task F5")] as const] : []),
+          ["conversation", label("C", "Chat", "Chat F9")], ["changes", label("D", "Changes", "Changes F7")],
+          ["activity", label("A", "Activity", "Activity F8")], ["evidence", label("P", "Proof", "Proof F10")],
+          ["inbox", label("I", "Inbox", "Inbox F11")], ["usage", label("U", "Usage", "Usage")]];
+        // Artifacts opens with `a` from Proof, so Proof stays highlighted there.
+        const main = strip(labels, view => view === this.view || view === "activity" && ACTIVITY_VIEWS.has(this.view)
+          || view === "evidence" && this.view === "artifacts");
+        hits = main.placed;
+        const rows = [PANEL_BG + pad(main.text + PANEL_MUTED + (this.focused ? compact ? " Esc Enter" : " · Esc chat · Enter compose" : ""), width) + RESET];
+        if (ACTIVITY_VIEWS.has(this.view)) {
+          const sub = strip([["activity", " Now "], ["graph", " Graph "], ["timeline", " Timeline "], ["history", " History "]],
+            view => view === this.view || view === "activity" && this.view === "agents");
+          subHits = sub.placed;
+          const title = this.view === "activity" && this.selectedActivity ? activityTitle(this.options.snapshot(), this.selectedActivity) : "";
+          rows.push(PANEL_BG + pad(sub.text + (title ? PANEL_MUTED + " │ " + PANEL_TEXT + plainLabel(title) : ""), width) + RESET);
+        } else {
+          subHits = [];
+          rows.push(PANEL_BG + PANEL_TEXT + (this.headline(width) || pad(`Files: ${plainLabel(this.scopeLabel)} · ` + PANEL_MUTED
+            + target(this.options.identity) + (this.ui ? "" : " · Initializing editor…"), width)) + RESET);
+        }
+        return rows;
       },
       handleMouse: event => {
-        if (!this.options.canInteract() || !plainClick(event) || event.y !== 0) return undefined;
-        const hit = hits.find(hit => event.x < hit.to);
+        if (!this.options.canInteract() || !plainClick(event) || event.y > 1) return undefined;
+        const hit = (event.y === 0 ? hits : subHits).find(hit => event.x < hit.to);
         if (!hit) return undefined;
         if (hit.view === "history") void this.openHistory(); else this.setView(hit.view);
         return { handled: true };
