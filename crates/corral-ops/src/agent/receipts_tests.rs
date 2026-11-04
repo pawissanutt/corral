@@ -170,6 +170,7 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                 "artifact",
                 "gate",
                 "done",
+                "read_content",
                 "job",
                 "job_monitor",
                 "memory_list",
@@ -186,7 +187,8 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                     "withdraw",
                     "evidence",
                     "artifact",
-                    "verdict"
+                    "verdict",
+                    "read_content"
                 ])
             }
         };

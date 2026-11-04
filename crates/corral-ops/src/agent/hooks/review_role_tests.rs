@@ -368,7 +368,8 @@ fn review_run_binds_the_parent_run_review_child_and_callback_token_from_the_laun
             "withdraw",
             "evidence",
             "artifact",
-            "verdict"
+            "verdict",
+            "read_content"
         ])
     );
 }
