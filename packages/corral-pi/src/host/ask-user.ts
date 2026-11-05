@@ -1,6 +1,7 @@
 import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { OWNER_INPUT_TEXT_MAX } from "../roles/assistant/owner-action.ts";
+import { ASK_USER_GUIDELINES } from "../roles/common/ask-user.ts";
 import { AskDialog, type Choice, type DialogAnswer, type DialogQuestion } from "./ask-user-dialog.ts";
 
 const choice = Type.Union([
@@ -82,9 +83,11 @@ async function sequential(ctx: ExtensionToolContext, questions: DialogQuestion[]
 export function askUserTool(record: (answer: string) => Promise<string>): ToolDefinition {
   return {
     name: "ask_user", label: "Ask the owner", exposure: "model-only", executionMode: "sequential",
-    description: "Ask the owner 1-4 focused choice questions together in one dialog; batch related questions in "
-      + "one call. Each takes a short header, 2-4 options (string or {label, description}), optional multiSelect "
+    description: "Ask the owner 1-4 focused choice questions together in one dialog instead of asking only in chat; "
+      + "batch related questions in one call. Each takes a short header, 2-4 options (string or {label, description}), optional multiSelect "
       + "and freeText. The owner may answer only some: unanswered ones are listed. Cancellation or timeout is not consent.",
+    promptSnippet: "Present owner questions and clarifications as choices",
+    promptGuidelines: [...ASK_USER_GUIDELINES],
     parameters: Type.Object({ questions: Type.Array(question, { minItems: 1, maxItems: 4 }) }),
     async execute(_id, params: { questions: Question[] }, signal, _update, ctx) {
       const noAnswer = () => ({ content: [{ type: "text" as const, text: "no answer" }], details: { status: "no answer" } });

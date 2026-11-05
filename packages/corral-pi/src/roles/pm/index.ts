@@ -5,6 +5,7 @@ import type { CorralOp, RoleModule } from "../types.ts";
 import { pmTools } from "./tools.ts";
 import { operationalContext } from "./context.ts";
 import { requestContract, sessionTodoTool } from "../common/todo.ts";
+import { askUserContract } from "../common/ask-user.ts";
 
 export const CONTEXT_ASSET = "assets/pm-context.md";
 export const SKILL_ASSET = "src/roles/pm/skills/corral-pm/SKILL.md";
@@ -19,7 +20,7 @@ export function pmRole(root: string): RoleModule {
     corralOps: OPS,
     tools: (context) => context.todo === true ? [...tools, sessionTodoTool] : tools,
     contract: (context) => `${renderContract(readAsset(root, CONTEXT_ASSET), context.identity)}\n\n`
-      + requestContract(root, context.todo) + operationalContext(context.promptFile),
+      + requestContract(root, context.todo) + "\n\n" + askUserContract(context) + operationalContext(context.promptFile),
     extend(pi) {
       const skill = assetPath(root, SKILL_ASSET);
       pi.on("resources_discover", () => ({ skillPaths: [skill] }));
