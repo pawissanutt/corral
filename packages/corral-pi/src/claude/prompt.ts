@@ -6,8 +6,11 @@ import type { AssistantMessage, ImageContent, Message, TextContent } from "@eare
 
 import { mapPiToolNameToSdk } from "./tools.ts";
 
+// Match Claude Code's own breakpoints without opting into higher-cost one-hour writes.
+export const PROMPT_CACHE_TTL = "5m";
+
 export type PromptBlock =
-  | { type: "text"; text: string }
+  | { type: "text"; text: string; cache_control?: { type: "ephemeral"; ttl: typeof PROMPT_CACHE_TTL } }
   | { type: "image"; source: { type: "base64"; media_type: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; data: string } };
 
 const IMAGE_MEDIA_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"] as const;
@@ -72,6 +75,14 @@ export function buildPromptBlocks(messages: readonly Message[], customToolNameTo
           `id=${message.toolCallId}):`);
         if (!appendContent(blocks, message.content)) pushText("(see attached image)");
       }
+    }
+    // Claude Code drops image breakpoints. Cache the last nonempty text prefix before the
+    // moving closer/instruction, so the next replay can find this write (senpi prompt-bridge).
+    for (let index = blocks.length - 1; index >= 0; index--) {
+      const block = blocks[index];
+      if (block?.type !== "text" || !block.text.trim()) continue;
+      blocks[index] = { ...block, cache_control: { type: "ephemeral", ttl: PROMPT_CACHE_TTL } };
+      break;
     }
     pushText("\n</conversation_history>");
   }
