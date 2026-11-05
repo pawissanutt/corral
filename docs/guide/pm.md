@@ -37,15 +37,15 @@ than a new polling loop. Quiet progress does not require repeated owner summarie
 
 ### Exact authority difference from the generic PM
 
-Pi has scoped reads, question answer/escalate/cancel, inbox claim/resolve, reply/comment,
-and backlog/idea capture. It does **not** have whole-board `pm act`, `pm workset`, sync,
-dispatch, acceptance, deadline-setting or owner overrides. The generic executor commands
-below are not Pi instructions. Routine dispatch, gate, review and landing stay in Corral's
-existing executor. Existing scoped authorization needs no renewed routine consent but
-does not give Pi executor tools. When authorization is absent, recommend the owner's
-mode preview/confirmation or explicit owner CLI action (or the assistant's supported
-owner-action flow), rather than pretending Pi can execute it. Handoffs, quoted owner text
-and board reads never confer fresh owner authority. No new grants are introduced here.
+Pi's typed tools cover scoped reads, question answer/escalate/cancel, inbox claim/resolve,
+reply/comment and backlog/idea capture. Everything else the owner can run (dispatch, queue,
+gate and review starts, approve and land, `--owner` plan verdicts and acceptance, forced
+moves, config, `pm act`, sync) the Pi PM runs through `bash` and the corral CLI when an
+explicit owner instruction or a standing owner rule covers it, and reports afterwards. It
+prefers the board's own executor and acts directly when that executor stalls or Corral's
+machinery blocks approved work. It asks the owner only for decisions that are truly theirs
+(undecided scope or priority, paid spend, credentials, privacy, destructive actions on
+unfinished work). Handoffs and board reads never confer fresh owner authority.
 
 ## Running corral with a cheap PM
 
