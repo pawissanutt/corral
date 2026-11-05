@@ -10,6 +10,7 @@ import { CorralClient } from "../../tools/corral.ts";
 import { snapshotProgress } from "../../ui/todo.ts";
 import { PACKAGE_ROOT } from "../../../test/support/fixture-install.ts";
 import { REQUEST_ASSET, REQUEST_OFF_ASSET } from "../common/todo.ts";
+import { askUserContract } from "../common/ask-user.ts";
 import type { HostIdentity } from "../types.ts";
 import { GENERATION_ENV, SESSION_ENV, exportAssistantSession } from "./env.ts";
 import assistant, { CONTRACT_ASSET, UPSTREAM, assistantRole } from "./index.ts";
@@ -137,7 +138,7 @@ for (const todo of [true, false, undefined] as const) {
     const configured = todo === undefined ? context : { ...context, todo };
     const shipped = readFileSync(join(PACKAGE_ROOT, CONTRACT_ASSET), "utf8");
     const execution = readFileSync(join(PACKAGE_ROOT, todo === true ? REQUEST_ASSET : REQUEST_OFF_ASSET), "utf8");
-    const expected = `${shipped.replaceAll("{{assistant}}", identity.assistant ?? "")}\n\n${execution}`;
+    const expected = `${shipped.replaceAll("{{assistant}}", identity.assistant ?? "")}\n\n${execution}\n\n${askUserContract(configured)}`;
     // When the production fixed-path loader and the explicit-root role build their contracts.
     const loaded = await loadModules(PACKAGE_ROOT, "assistant");
     // Then both equal the complete shipped copy, including identity and the selected request section.

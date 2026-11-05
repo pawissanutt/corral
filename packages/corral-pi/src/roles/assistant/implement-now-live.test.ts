@@ -1,11 +1,10 @@
 // Implement-now interaction (T-653): the production assistant role, auth and HostSession in a private
 // live herdr pane, with the real corral binary as receipt client, shell and owner-action command. Only
-// the provider is scripted, and its question and choices are read from the contract the host actually
-// sent, so this proves the plumbing and its binding to the loaded contract, not real-model adherence.
+// the provider is scripted. Decisions use the registered ask_user UI rather than prose scraped from
+// a prompt: this proves interactive routing and owner provenance, not real-model adherence.
 import { expect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { zstdDecompressSync } from "node:zlib";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { EventLog } from "../../bridge/events.ts";
 import { parseLaunchMessage } from "../../host/config.ts";
@@ -14,7 +13,6 @@ import { guardedFetch, restrictEnvironment } from "../../host/restrict.ts";
 import { HostSession } from "../../host/session.ts";
 import { CorralClient, sha256Hex } from "../../tools/corral.ts";
 import { fakeCodexTransport } from "../../../test/fixtures/auth/fake-transport.ts";
-import { completionChoices, implementNowQuestion } from "../../../test/support/assistant-workflow.ts";
 import { exportAssistantSession } from "./env.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "../../../test/support/fixture-install.ts";
 import { corralBinary, ok, privateHerdr, privateRoot, probeBinary, run } from "../../../test/support/workspace.ts";
@@ -24,20 +22,6 @@ function syntheticAccess(): string {
   const part = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
   return `${part({ alg: "none", typ: "JWT" })}.${part({ exp: Math.floor(Date.now() / 1000) + 3600,
     "https://api.openai.com/auth": { chatgpt_account_id: "synthetic" } })}.synthetic-signature`;
-}
-
-/** Every string in a provider request body, joined: the system contract the host sent is among them. */
-function sentText(init: RequestInit | undefined): string {
-  let bytes = Buffer.from(typeof init?.body === "string" ? init.body : (init?.body as Uint8Array | undefined) ?? []);
-  if (new Headers(init?.headers).get("content-encoding") === "zstd") bytes = zstdDecompressSync(bytes);
-  const out: string[] = [];
-  const walk = (value: unknown): void => {
-    if (typeof value === "string") out.push(value);
-    else if (Array.isArray(value)) value.forEach(walk);
-    else if (value && typeof value === "object") Object.values(value).forEach(walk);
-  };
-  walk(JSON.parse(bytes.toString("utf8")));
-  return out.join("\n");
 }
 
 interface Fixture { session: string; bootstrap: string; launch: string; scratch: string[] }
@@ -84,8 +68,7 @@ test("live implement-now: one ambiguous question, scratch work, a candidate-boun
     process.env.XDG_DATA_HOME = join(workspace, "data");
     restrictEnvironment(process.env);
     const transport = fakeCodexTransport();
-    let sent = "";
-    const network = guardedFetch(async (input, init) => { sent = sentText(init); return transport.send(input, init); },
+    const network = guardedFetch(transport.send,
       undefined, "openai-codex", undefined,
       launch.capabilities?.web ? { settings: launch.capabilities.web, send: transport.send } : undefined,
       launch.capabilities?.mcp ? { origins: [], send: transport.send } : undefined);
@@ -104,14 +87,20 @@ test("live implement-now: one ambiguous question, scratch work, a candidate-boun
       sessionManager: sdk.SessionManager.create(workspace, bootstrap.session_dir) });
     await host.hello(bootstrap.bind_nonce, pane, sha256Hex("d".repeat(64)));
     const asked: string[] = [];
-    const ui = { confirm: async (_title: string, message: string) => { asked.push(message); return false; } };
-    await host.session.bindExtensions({ uiContext: ui as unknown as ExtensionUIContext });
+    let selected = "Implement now", extra = "implement it now";
+    const selections: string[] = [];
+    const ui = { confirm: async (_title: string, message: string) => { asked.push(message); return false; },
+      setStatus() {}, setWidget() {}, notify() {},
+      select: async (title: string) => { selections.push(title); return selected; }, input: async () => extra,
+    };
+    await host.session.bindExtensions({ mode: "tui", uiContext: ui as unknown as ExtensionUIContext });
     const live = host;
     const input = (n: number) => `${fixture.session}/g${identity.generation}/i${n}`;
     const quote = (s: string) => `'${s.replaceAll("'", "'\\''")}'`;
     const turn = async (text: string, script: Step[]) => {
       transport.script(script as never);
       await live.session.prompt(text, { source: "interactive" });
+      await live.session.waitForIdle();
       await live.drained();
     };
     const toolText = (callId: string): string => {
@@ -132,44 +121,61 @@ test("live implement-now: one ambiguous question, scratch work, a candidate-boun
     const scratch = join(app, ".worktrees", `${fixture.session}-${slug}`);
     const before = kinds();
 
-    // Given a change request that neither says now nor queue, the assistant asks the contract's question once.
-    await turn("the README should say how to run the app", [{ get text() { return implementNowQuestion(sent) ?? "NO_QUESTION"; } }]);
-    const question = implementNowQuestion(sent);
-    expect(question).toBeDefined();
-    expect(said().at(-1)).toBe(question as string);
+    const ask = (callId: string, question: string, options: string[]) => ({ toolCalls: [{ callId, name: "ask_user",
+      arguments: { nonBlocking: true, questions: [{ question, options, freeText: true }] } }] });
+    const pendingId = (callId: string): string => {
+      const result = live.session.messages.find(m => m.role === "toolResult" && m.toolCallId.split("|")[0] === callId);
+      const details = result?.role === "toolResult" ? result.details as { id?: string; status?: string } : undefined;
+      expect(details?.status).toBe("pending");
+      if (!details?.id) throw new Error("ask_user did not return a pending question ID");
+      return details.id;
+    };
+    const questionCount = () => live.session.messages.filter(m => m.role === "toolResult" && m.toolName === "ask_user").length;
+    // An ambiguous change request opens one actionable choice; nothing mutates before an actual answer.
+    const question = "Implement this change now or queue it?";
+    await turn("the README should say how to run the app", [
+      ask("implement-choice", question, ["Implement now", "File for the queue"]),
+      { text: "Waiting for the implement-or-queue choice." },
+    ]);
+    const implementation = pendingId("implement-choice");
+    expect(questionCount()).toBe(1);
+    expect(selections).toEqual([]);
     // Then nothing changed before the owner answered: no task, scratch, owner action or worktree.
     expect(tasks()).toHaveLength(0);
     expect([kinds(), ownerActions().length, existsSync(scratch)]).toEqual([before, 0, false]);
 
     // When the owner says to implement it now, the work happens in a new scratch and ends in a report
-    // built from the real candidate, diff and check, offering the contract's completion choices.
+    // built from the real candidate, diff and check, then offers actionable completion choices.
     const report = (): string => {
       const out = toolText("candidate");
       const sha = /\b[0-9a-f]{40}\b/.exec(out)?.[0] ?? "NO_SHA";
       const stat = out.split("\n").find((l) => l.includes("USAGE.md |"))?.trim() ?? "NO_STAT";
       const check = toolText("check").includes("CHECK_OK") ? "passed" : "failed";
       return [`Done in scratch ${slug}; candidate ${sha}.`, `Changed: ${stat}`, `Checks: test -s USAGE.md ${check}.`,
-        "Risks: documentation only.", ...completionChoices(sent).map((choice, i) => `${i + 1}. ${choice}`)].join("\n");
+        "Risks: documentation only."].join("\n");
     };
-    await turn("implement it now", [
+    const choices = ["Ship it", "Keep for later", "Drop it"];
+    await turn(`/questions ${implementation}`, [
       bash("scratch", `${quote(corral)} --root ${quote(workspace)} assistant scratch new -p corral --slug ${slug}`),
       { toolCalls: [{ callId: "edit", name: "write", arguments: { path: join(scratch, "USAGE.md"), content: "# Usage\n\nRun `app --help`.\n" } }] },
       bash("candidate", `git -C ${quote(scratch)} add USAGE.md && git -C ${quote(scratch)} commit -q -m 'Add a usage section' `
         + `&& git -C ${quote(scratch)} rev-parse HEAD && git -C ${quote(scratch)} diff --stat main`),
       bash("check", `test -s ${quote(join(scratch, "USAGE.md"))} && echo CHECK_OK`),
-      { get text() { return report(); } },
+      { get text() { return report(); }, ...ask("ship-choice", "Ship this candidate?", choices) },
+      { text: "Waiting for the shipping choice." },
     ]);
     const candidate = ok(["git", "-C", scratch, "rev-parse", "HEAD"]).trim();
-    const reported = said().at(-1) ?? "";
-    const choices = completionChoices(sent);
-    expect(choices).toHaveLength(3);
-    for (const part of [candidate, "USAGE.md |", "passed", "Risks:", ...choices]) expect(reported).toContain(part);
+    const reported = said().findLast(text => text.includes(candidate)) ?? "";
+    const shipping = pendingId("ship-choice");
+    for (const part of [candidate, "USAGE.md |", "passed", "Risks:"]) expect(reported).toContain(part);
     // Then still nothing is finished, and the question was not asked again.
     expect([tasks().length, kinds()[slug], ownerActions().length]).toEqual([0, "spike", 0]);
-    expect(said().filter((text) => text.includes(question as string))).toHaveLength(1);
+    expect(questionCount()).toBe(2);
+    expect(selections).toEqual([question]);
 
     // One owner answer finishes exactly the reported candidate; independent review still runs.
-    await turn("land it now", [
+    selected = "Ship it"; extra = "land it now";
+    await turn(`/questions ${shipping}`, [
       { toolCalls: [{ callId: "finish", name: "corral_owner_action", arguments: { kind: "finish", target: slug,
         args: ["--title", "Add a usage section", "--expected-head", candidate.slice(0, 12)], input: input(3) } }] },
       { text: "T-001 is gated and waiting for independent review." }]);
@@ -184,10 +190,12 @@ test("live implement-now: one ambiguous question, scratch work, a candidate-boun
     for (const kind of ["cowork_finished"]) {
       const event = storeEvents().find((e) => e.kind === kind && e.task === "T-001");
       const authority = event?.detail?.owner_authority as { input?: string; owner_message?: string } | undefined;
-      expect([authority?.input, authority?.owner_message]).toEqual([input(3), "land it now"]);
+      expect([authority?.input, authority?.owner_message]).toEqual([input(3),
+        `[ask_user answer ${shipping}]\nShip this candidate?: Ship it\nland it now`]);
     }
     expect(storeEvents().find((e) => e.kind === "cowork_finished")?.detail?.candidate).toBe(candidate);
-    expect(said().filter((text) => text.includes(question as string))).toHaveLength(1);
+    expect(questionCount()).toBe(2);
+    expect(selections).toEqual([question, "Ship this candidate?"]);
 
     const evidence = process.env.CORRAL_IMPLEMENT_NOW_EVIDENCE;
     if (evidence) {
