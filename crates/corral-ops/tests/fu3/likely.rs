@@ -200,12 +200,13 @@ pub(super) fn shortlist_variant(scale: usize, similar: bool) -> WorkSnapshot {
         vec![fixture.active.id.clone()]
     );
     assert_eq!(fixture.probe.samples(), 2);
-    // Observe uses a live store, while PM next binds all component reads to one view.
+    // PM admission remains hot even though it now precedes the pinned projection.
     assert_eq!(cells.followup_calls(FU, "sample"), 2);
     assert_eq!(cells.followup_hydrations(FU, "sample"), 0);
     assert_eq!(cells.followup_rows(FU, "sample"), 0);
     assert_eq!(cells.followup_doc_bytes(FU, "sample"), 0);
-    assert_eq!(cells.followup_views(FU, "sample"), 1);
+    // Pre-view admission and observe each own one live inventory read, independent of history.
+    assert_eq!(cells.followup_views(FU, "sample"), 2);
     assert_eq!(
         cells.followup_stats(FU, "sample"),
         2 * fixture.sample_stats()

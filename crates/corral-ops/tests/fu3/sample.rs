@@ -251,7 +251,8 @@ pub(super) fn workset_variant(scale: usize, existing: bool) -> WorkSnapshot {
     assert_eq!(cells.followup_hydrations(FU, "sample"), 0);
     assert_eq!(cells.followup_rows(FU, "sample"), 0);
     assert_eq!(cells.followup_doc_bytes(FU, "sample"), 0);
-    assert_eq!(cells.followup_views(FU, "sample"), 1);
+    // Pre-view admission and observe each own one live inventory read, independent of history.
+    assert_eq!(cells.followup_views(FU, "sample"), 2);
     assert_eq!(
         cells.followup_stats(FU, "sample"),
         2 * fixture.sample_stats()
