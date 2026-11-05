@@ -27,6 +27,46 @@ fn status(code: i32) -> std::process::ExitStatus {
 }
 
 #[test]
+fn clean_exit_suspends_and_resumes_until_explicitly_ended() {
+    let (fx, prepared) = setup();
+    let ctx = f::ctx_at(fx.root());
+    let runtime = launch::assistant_runtime_dir(&ctx.store, "A-1").join("g1");
+    let control = runtime.join(launch::CTL_CAP_FILE);
+    let socket = runtime.join(launch::SOCKET_FILE);
+    std::fs::write(&control, "fixture control credential").unwrap();
+    std::fs::write(&socket, "fixture socket").unwrap();
+    supervise_with(
+        &ctx,
+        PANE,
+        "A-1".into(),
+        prepared,
+        &Overrides::default(),
+        false,
+        |_| Ok(status(0)),
+    )
+    .unwrap();
+    assert!(ctx.store.get_assistant("A-1").unwrap().ended.is_none());
+    let container = ctx.store.get_assistant_container("A-1").unwrap();
+    assert!(container.state.generation(1).unwrap().fenced.is_some());
+    assert!(!control.exists() && !socket.exists());
+    let (fenced, _) = assistant::resume(&ctx, "A-1", PANE, &Overrides::default()).unwrap();
+    assert_eq!(fenced, 1);
+    assert_eq!(
+        ctx.store
+            .get_assistant_container("A-1")
+            .unwrap()
+            .state
+            .binding
+            .generation,
+        2
+    );
+    end_assistant(&ctx, "A-1").unwrap();
+    finish(&ctx, "A-1", 2, status(0)).unwrap();
+    assert!(ctx.store.get_assistant("A-1").unwrap().ended.is_some());
+    assert!(assistant::resume(&ctx, "A-1", PANE, &Overrides::default()).is_err());
+}
+
+#[test]
 fn new_suspends_the_old_identity_and_runs_a_fresh_assistant_in_the_same_pane() {
     let (fx, prepared) = setup();
     let ctx = f::ctx_at(fx.root());
@@ -69,7 +109,7 @@ fn new_suspends_the_old_identity_and_runs_a_fresh_assistant_in_the_same_pane() {
             .reason,
         "new assistant"
     );
-    assert!(ctx.store.get_assistant("A-2").unwrap().ended.is_some());
+    assert!(ctx.store.get_assistant("A-2").unwrap().ended.is_none());
     assert!(
         ctx.store
             .get_assistant_container("A-2")

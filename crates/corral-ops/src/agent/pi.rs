@@ -2,7 +2,7 @@
 //!
 //! In a workspace `corral pi` opens a new assistant session in the owner's herdr pane and
 //! `--resume A-<n>` continues one there (T-544); both run the host as a child so a clean exit
-//! ends the session. `--pm` is the PM's bound mode below, unchanged.
+//! suspends the session for later resume. `--pm` is the PM's bound mode below, unchanged.
 //!
 //! Bound mode adopts the herdr pane it runs in as the PM pane. It resolves the PM profile through
 //! the `corral pm` and resume checks, opens the next PM generation in that pane (taking over a dead
@@ -268,9 +268,9 @@ fn supervise_with(
             continue;
         }
         if status.code() != Some(NEW_ASSISTANT_EXIT) {
-            return finish(ctx, &id, status);
+            return finish(ctx, &id, generation, status);
         }
-        super::ops::assistant::suspend(ctx, &id, generation)?;
+        super::ops::assistant::suspend(ctx, &id, generation, "new assistant")?;
         eprintln!("corral pi: assistant {id} suspended; `corral pi --resume {id}` resumes it");
         // Admission runs again after the old child stopped, so /new also works at the live cap.
         let directory = crate::assistant::directory(&ctx.store, &ctx.store.get_assistant(&id)?)?;
@@ -296,15 +296,19 @@ fn supervise_with(
     }
 }
 
-/// A clean host exit (Pi's `/quit`) ends the session; any other exit leaves it resumable.
-fn finish(ctx: &Ctx, id: &str, status: std::process::ExitStatus) -> Result<()> {
+/// A stopped host leaves its conversation resumable unless the owner explicitly ended it.
+fn finish(ctx: &Ctx, id: &str, generation: u32, status: std::process::ExitStatus) -> Result<()> {
     if !status.success() {
         #[cfg(unix)]
         restore_terminal()?;
         anyhow::bail!("{id}'s host stopped ({status}); `corral pi --resume {id}` resumes it");
     }
-    end_assistant(ctx, id)?;
-    eprintln!("corral pi: assistant {id} ended");
+    // An explicit `assistant end` may have shut this host down and already closed its record.
+    if ctx.store.get_assistant(id)?.ended.is_some() {
+        return Ok(());
+    }
+    super::ops::assistant::suspend(ctx, id, generation, "host exited")?;
+    eprintln!("corral pi: assistant {id} suspended; `corral pi --resume {id}` resumes it");
     Ok(())
 }
 

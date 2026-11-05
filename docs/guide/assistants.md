@@ -89,9 +89,11 @@ started under the assistant supervisor. Headless hosts do not provide this inter
 ### Ending and resuming
 
 `corral pi` runs the host as a child of itself in the pane. When the host exits cleanly
-(Pi's `/quit`), the session ends. When the host dies (killed, crashed, the provider stopped it),
-`corral pi` prints `A-1's host stopped (...); corral pi --resume A-1 resumes it` and the
-session stays open.
+(Pi's `/quit`), its generation is fenced and its control credential and socket are removed,
+but the session stays open. `corral pi --resume A-1` reopens the conversation. When the host
+dies (killed, crashed, the provider stopped it), `corral pi` prints
+`A-1's host stopped (...); corral pi --resume A-1 resumes it` and the session also stays open.
+Only an explicit `corral assistant end A-1` permanently ends the session.
 
 `corral pi --resume A-1` in any herdr pane of the workspace refuses `assistant_alive` while
 the session's host still runs (the message names its pane), `assistant_ended` for an ended
@@ -710,7 +712,9 @@ For a session whose host predates the installed assets, the supported paths are:
 - **Finish from the owner's shell.** `corral assistant scratch finish` with `--session A-1`,
   `--title`, and `--review required` or `--expected-head` as wanted, then `corral approve`,
   works for open and ended sessions alike; the completed work is reused, not reimplemented.
-- **Start a new generation.** A host that stopped without a clean exit resumes with
+- **Start a new generation.** A stopped, open session resumes with
   `corral pi --resume A-1`, which loads the installed contract and tools and keeps the
-  conversation, scratch worktrees and records. A clean `/quit` ends the session instead;
-  corral has no in-place upgrade of a running host.
+  conversation, scratch worktrees and records. Current supervisors leave `/quit` resumable;
+  older supervisors may still end the session on clean exit. Sessions already ended by an
+  older version or by `corral assistant end` remain ended. Corral has no in-place upgrade
+  of a running host.
