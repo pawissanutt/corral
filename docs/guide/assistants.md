@@ -83,17 +83,63 @@ assistant fails, the old conversation remains resumable and the error names its 
 Normal live-cap and machine-load checks still apply. No additional pane is created or typed into.
 
 This is a between-host Corral transition, not Pi's native in-process session replacement.
-`/resume`, `/fork` and import remain fenced, as does `/new` in other bound roles or hosts not
-started under the assistant supervisor. Headless hosts do not provide this interactive command.
+`/fork` and import remain fenced, as do `/new` and `/resume` in other bound roles (PM, worker,
+reviewer) and in hosts not started under the assistant supervisor. Headless hosts do not provide
+these interactive commands.
+
+### Switching sessions with `/resume`
+
+In an assistant opened by `corral pi`, `/resume` opens Corral's own picker over the workspace's
+assistant sessions instead of Pi's file picker. Each row shows the `A-<n>` ID, the first line of
+its saved summary (or its task focus), its last recorded lifecycle activity and its availability:
+`current · this pane`, `stopped · resumable`, `live · host running elsewhere` or
+`ended · not resumable`. Type to search, ↑↓ to move, Enter to resume, Esc to cancel. An empty
+workspace, an unreadable list and a refused selection each show an explicit notice; cancelling
+or a refusal leaves the current conversation, draft and binding unchanged. Wait for active work
+to finish first. Only text typed in the pane runs `/resume`; a bridge delivery of it is rejected
+`owner_only_command`.
+
+Selecting a stopped session rechecks the list, writes a switch request in this generation's
+runtime directory and exits the host. The supervisor then:
+
+1. suspends the current session (its generation is fenced with reason
+   `resume another assistant`, its control credential and socket removed);
+2. claims the target (below) and runs `corral pi --resume`'s checks on it at that moment:
+   `assistant_ended`, `assistant_unknown`, `assistant_alive` and `assistant_claimed` refuse;
+3. opens the target's next generation in this pane on its recorded Pi conversation and
+   profile, and logs `assistant_switched`.
+
+The target runs under its own identity, profile, capability snapshot, todos, scratch and
+permission grants; nothing of the source session's credentials, receipts, owner inputs, todos,
+scratch access or grants carries over. Launch overrides (`--model`, `--provider`, `--effort`)
+apply only to sessions this `corral pi` opened or named, not to one selected with `/resume`.
+
+When the target is refused, the supervisor resumes the source session in the same pane and its
+host shows `corral: /resume did not switch: <reason>. Continuing A-<n>.` When the selected host
+cannot start, the target stays resumable and the owner returns to the source with a notice
+naming both resume commands. `/resume` again in the target returns to the source the same way.
+
+**Claims.** A `corral pi` supervisor holds an exclusive lock on the session it runs (under
+`$XDG_RUNTIME_DIR/corral/<store>/assistant-claims/`) from before its generation opens until its
+host exits. A second `corral pi --resume` or `/resume` of the same session refuses
+`assistant_claimed`, so a launch that has not bound yet cannot be stolen and two concurrent
+claims never open rival generations. The kernel releases the lock when the supervisor exits, so a
+crash never strands a session.
 
 ### Ending and resuming
 
 `corral pi` runs the host as a child of itself in the pane. When the host exits cleanly
-(Pi's `/quit`), its generation is fenced and its control credential and socket are removed,
-but the session stays open. `corral pi --resume A-1` reopens the conversation. When the host
-dies (killed, crashed, the provider stopped it), `corral pi` prints
-`A-1's host stopped (...); corral pi --resume A-1 resumes it` and the session also stays open.
-Only an explicit `corral assistant end A-1` permanently ends the session.
+(Pi's `/quit`), the session is suspended, not ended: its generation is fenced (reason `quit`)
+and it stays returnable with `corral pi --resume A-1` or `/resume` from another assistant. A
+session that never recorded a conversation (Pi had not written its file yet) has nothing to
+return to and ends instead. When the host dies (killed, crashed, the provider stopped it),
+`corral pi` prints `A-1's host stopped (...); corral pi --resume A-1 resumes it` and the
+session stays open.
+
+`corral assistant end A-<n>` remains the explicit, permanent end. Records ended before this
+change (including by an earlier clean `/quit`) stay ended: `/resume` lists them as
+`ended · not resumable` and `corral pi --resume` refuses them `assistant_ended`. Nothing revives
+an ended session; their transcripts and records stay readable.
 
 `corral pi --resume A-1` in any herdr pane of the workspace refuses `assistant_alive` while
 the session's host still runs (the message names its pane), `assistant_ended` for an ended
@@ -735,7 +781,6 @@ For a session whose host predates the installed assets, the supported paths are:
   works for open and ended sessions alike; the completed work is reused, not reimplemented.
 - **Start a new generation.** A stopped, open session resumes with
   `corral pi --resume A-1`, which loads the installed contract and tools and keeps the
-  conversation, scratch worktrees and records. Current supervisors leave `/quit` resumable;
-  older supervisors may still end the session on clean exit. Sessions already ended by an
-  older version or by `corral assistant end` remain ended. Corral has no in-place upgrade
-  of a running host.
+  conversation, scratch worktrees and records. A clean `/quit` suspends the session the
+  same way. Sessions already ended by an older version or by `corral assistant end`
+  remain ended. Corral has no in-place upgrade of a running host.

@@ -333,8 +333,8 @@ pub fn resume(ctx: &Ctx, id: &str, pane: &str, overrides: &Overrides) -> Result<
     Ok((fenced, prepared))
 }
 
-/// Leaves the conversation open, but its stopped host has no remaining authority.
-/// Only the supervisor calls this, after waiting for the child to exit.
+/// `/new`, `/resume` and a clean quit leave the outgoing conversation open, but its stopped host
+/// has no remaining authority. Only the supervisor calls this, after waiting for the child to exit.
 pub(crate) fn suspend(ctx: &Ctx, id: &str, generation: u32, reason: &str) -> Result<()> {
     let container = ctx.store.get_assistant_container(id)?;
     anyhow::ensure!(
@@ -354,6 +354,111 @@ pub(crate) fn suspend(ctx: &Ctx, id: &str, generation: u32, reason: &str) -> Res
         json!({"session": id, "generation": generation, "reason": reason}),
     )?;
     Ok(())
+}
+
+/// A supervisor's exclusive claim on one session: while it is held no other `corral pi` can open
+/// a generation of that session, so a pending launch that has not bound yet cannot be stolen.
+/// The kernel releases the lock when the supervisor exits, so a crash never strands a session.
+#[derive(Debug)]
+pub struct Claim {
+    pub id: String,
+    _file: std::fs::File,
+}
+
+/// Claims session `id` for this supervisor, or refuses `assistant_claimed` when another holds it.
+pub fn claim(store: &Store, id: &str) -> Result<Claim> {
+    corral_core::assistant::validate_id(id).map_err(|e| refuse("usage_error", format!("{e:#}")))?;
+    let dir = launch::runtime_root()
+        .join(corral_core::agent::paths::store_id(store))
+        .join("assistant-claims");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)
+            .with_context(|| format!("creating {}", dir.display()))?;
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let path = dir.join(format!("{id}.lock"));
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    match file.try_lock() {
+        Ok(()) => Ok(Claim {
+            id: id.into(),
+            _file: file,
+        }),
+        Err(std::fs::TryLockError::WouldBlock) => Err(refuse(
+            "assistant_claimed",
+            format!(
+                "another `corral pi` is opening or running {id}; continue in its pane, or retry \
+                 once it exits"
+            ),
+        )),
+        Err(std::fs::TryLockError::Error(error)) => {
+            Err(error).with_context(|| format!("locking {}", path.display()))
+        }
+    }
+}
+
+/// The file a host writes in its generation directory to ask its supervisor for `/resume`.
+pub const SWITCH_REQUEST_FILE: &str = "resume-request.json";
+/// The notice a supervisor leaves for the next generation's host to show its owner once.
+pub const SWITCH_NOTICE_FILE: &str = "resume-notice.txt";
+
+/// Leaves `text` beside `prepared`'s bootstrap, in the generation directory its host reads.
+pub(crate) fn write_switch_notice(prepared: &Prepared, text: &str) -> Result<()> {
+    let dir = (prepared.bootstrap.parent()).context("the bootstrap has no directory")?;
+    let path = dir.join(SWITCH_NOTICE_FILE);
+    let text: String = text.chars().take(2048).collect();
+    std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SwitchRequest {
+    version: u32,
+    assistant: String,
+    generation: u32,
+    target: String,
+}
+
+/// Takes (reads and removes) generation `generation`'s switch request: the target session ID.
+/// Only a request naming this very session and generation counts; it is a request, not authority.
+pub(crate) fn take_switch_request(ctx: &Ctx, id: &str, generation: u32) -> Result<String> {
+    let path = launch::assistant_runtime_dir(&ctx.store, id)
+        .join(format!("g{generation}"))
+        .join(SWITCH_REQUEST_FILE);
+    let bytes = std::fs::read(&path).map_err(|error| {
+        refuse(
+            "switch_request_missing",
+            format!("{id}'s host asked to resume another session but left no request ({error})"),
+        )
+    })?;
+    std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+    let request: SwitchRequest = serde_json::from_slice(&bytes)
+        .map_err(|_| refuse("switch_request_invalid", "the resume request is malformed"))?;
+    if request.version != 1 || request.assistant != id || request.generation != generation {
+        return Err(refuse(
+            "switch_request_invalid",
+            format!("the resume request does not name {id} generation {generation}"),
+        ));
+    }
+    corral_core::assistant::validate_id(&request.target)
+        .map_err(|e| refuse("usage_error", format!("{e:#}")))?;
+    if request.target == id {
+        return Err(refuse(
+            "assistant_current",
+            format!("{id} is the current session"),
+        ));
+    }
+    Ok(request.target)
 }
 
 /// A fenced generation's control credential and socket go: nobody reaches it again.

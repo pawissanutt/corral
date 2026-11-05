@@ -23,7 +23,7 @@ pub struct PiArgs {
     #[arg(short = 'c', long = "continue", requires = "pm",
         conflicts_with_all = ["bare", "resume", "over_cap", "task"])]
     continue_session: bool,
-    /// Resume assistant session A-<n> in this pane, fencing its previous generation
+    /// Resume stopped assistant session A-<n> in this pane, fencing its previous generation (inside an assistant, /resume picks one)
     #[arg(long, value_name = "A-N", conflicts_with = "over_cap")]
     resume: Option<String>,
     /// Open an assistant even when assistant.max_live assistants are already live

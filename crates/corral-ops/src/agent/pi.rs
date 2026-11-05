@@ -22,6 +22,7 @@ use super::bridge::assets::{bun_version, compiled_host, find_bun, read_compat, v
 use super::bridge::liveness::{bound_host, gone};
 use super::hooks::pm::Overrides;
 use super::launch::Prepared;
+use super::ops::assistant::Claim;
 use crate::Ctx;
 
 /// The variable herdr sets in every pane: the pane bound mode adopts.
@@ -179,6 +180,11 @@ pub fn assistant_focused(
         }
         None => super::ops::assistant::open(ctx, start, &pane, overrides, over_cap)?,
     };
+    // Claimed before the host starts; a claim that cannot be taken leaves no half-open record.
+    let claim = super::ops::assistant::claim(&ctx.store, &session.id).or_else(|error| {
+        ctx.store.end_assistant(&session.id)?;
+        Err(error)
+    })?;
     if let Some(warning) = warning {
         eprintln!("corral pi: {warning}");
     }
@@ -186,31 +192,34 @@ pub fn assistant_focused(
         "corral pi: assistant {} (role assistant) in pane {pane}; `corral pi --pm` opens the PM",
         session.id
     );
-    supervise_assistant(ctx, &pane, session.id, prepared, overrides, over_cap)
+    supervise_assistant(ctx, &pane, claim, prepared, overrides, over_cap)
 }
 
-/// `corral pi --resume A-<n>`: fence the session's generation and open the next in this pane.
+/// `corral pi --resume A-<n>`: claim the session, fence its generation and open the next here.
 pub fn resume_assistant(ctx: &Ctx, id: &str, overrides: &Overrides) -> Result<()> {
     platform()?;
     let pane = current_pane(std::env::var(PANE_ENV).ok().as_deref())?;
+    let claim = super::ops::assistant::claim(&ctx.store, id)?;
     let (fenced, prepared) = super::ops::assistant::resume(ctx, id, &pane, overrides)?;
     eprintln!(
         "corral pi: assistant {id} resumed in pane {pane} (generation {fenced} fenced, \
          generation {} opened)",
         fenced + 1
     );
-    supervise_assistant(ctx, &pane, id.into(), prepared, overrides, false)
+    supervise_assistant(ctx, &pane, claim, prepared, overrides, false)
 }
 
 /// Matched by the managed host's /new handoff; ordinary quit still exits 0.
 const NEW_ASSISTANT_EXIT: i32 = 75;
 /// The managed host settled its turn and requests the same conversation in its linked directory.
 const RELINK_ASSISTANT_EXIT: i32 = 76;
+/// The managed host's `/resume` picker chose another session (named in its switch request).
+const RESUME_ASSISTANT_EXIT: i32 = 77;
 
 fn supervise_assistant(
     ctx: &Ctx,
     pane: &str,
-    id: String,
+    claim: Claim,
     prepared: Prepared,
     overrides: &Overrides,
     over_cap: bool,
@@ -218,7 +227,7 @@ fn supervise_assistant(
     supervise_with(
         ctx,
         pane,
-        id,
+        claim,
         prepared,
         overrides,
         over_cap,
@@ -226,91 +235,200 @@ fn supervise_assistant(
     )
 }
 
-/// A /new transition happens between hosts, never by replacing the bound Pi file in-process.
+/// /new, /resume and relink happen between hosts, never by replacing the bound Pi file
+/// in-process. The supervisor holds the claim of the session it runs for the host's lifetime.
 fn supervise_with(
     ctx: &Ctx,
     pane: &str,
-    mut id: String,
+    mut claim: Claim,
     mut prepared: Prepared,
     overrides: &Overrides,
     over_cap: bool,
     mut run: impl FnMut(&Prepared) -> Result<std::process::ExitStatus>,
 ) -> Result<()> {
+    use super::ops::assistant as ops;
+    // Launch overrides belong to the sessions this command opened; a session selected with
+    // /resume runs on its own recorded profile.
+    let mut opened = vec![claim.id.clone()];
+    let defaults = Overrides::default();
+    let overrides_for = |opened: &[String], id: &str| -> Overrides {
+        if opened.iter().any(|o| o == id) {
+            overrides.clone()
+        } else {
+            defaults.clone()
+        }
+    };
+    // The session a /resume switched away from, while its target has not started yet.
+    let mut previous: Option<String> = None;
     loop {
+        let id = claim.id.clone();
         let generation = ctx
             .store
             .get_assistant_container(&id)?
             .state
             .binding
             .generation;
-        let status = run(&prepared).or_else(|error| {
-            // A fresh host that could not start is not left half-open. A resumed conversation
-            // remains recoverable, including when /new failed while shutting it down.
-            if generation == 1 {
-                ctx.store.end_assistant(&id)?;
+        let status = match run(&prepared) {
+            Ok(status) => status,
+            Err(error) => {
+                let Some(source) = previous.take() else {
+                    // A fresh host that could not start is not left half-open. A resumed
+                    // conversation remains recoverable, including when /new failed while
+                    // shutting it down.
+                    if generation == 1 {
+                        ctx.store.end_assistant(&id)?;
+                    }
+                    return Err(error);
+                };
+                // A selected session that could not start stays resumable; the owner returns.
+                let text = format!(
+                    "corral: {id} could not start ({error:#}); it stays resumable with /resume \
+                     or `corral pi --resume {id}`. Returned to {source}."
+                );
+                let returned = ops::claim(&ctx.store, &source).and_then(|next| {
+                    let (_, next_prepared) =
+                        ops::resume(ctx, &source, pane, &overrides_for(&opened, &source))?;
+                    Ok((next, next_prepared))
+                });
+                let (next, next_prepared) = returned.with_context(|| {
+                    format!(
+                        "{id} could not start and {source} could not be resumed; \
+                         `corral pi --resume {source}` or `corral pi --resume {id}` resumes one"
+                    )
+                })?;
+                ops::write_switch_notice(&next_prepared, &text)?;
+                eprintln!("{text}");
+                claim = next;
+                prepared = next_prepared;
+                continue;
             }
-            Err(error)
-        })?;
-        if status.code() == Some(RELINK_ASSISTANT_EXIT) {
-            anyhow::ensure!(
-                ctx.store
-                    .get_assistant_container(&id)?
-                    .state
-                    .binding
-                    .generation
-                    == generation,
-                "assistant_changed: {id} no longer has the stopped generation {generation}"
-            );
-            let (_, next_prepared) = super::ops::assistant::resume(ctx, &id, pane, overrides)?;
-            ctx.store.log_event(None, "assistant_relinked", serde_json::json!({
-                "session": id, "fenced": generation, "generation": generation + 1, "pane": pane,
-                "directory": crate::assistant::directory(&ctx.store, &ctx.store.get_assistant(&id)?)?,
-            }))?;
-            prepared = next_prepared;
-            continue;
+        };
+        previous = None;
+        match status.code() {
+            Some(RELINK_ASSISTANT_EXIT) => {
+                anyhow::ensure!(
+                    ctx.store
+                        .get_assistant_container(&id)?
+                        .state
+                        .binding
+                        .generation
+                        == generation,
+                    "assistant_changed: {id} no longer has the stopped generation {generation}"
+                );
+                let (_, next_prepared) = ops::resume(ctx, &id, pane, &overrides_for(&opened, &id))?;
+                ctx.store.log_event(None, "assistant_relinked", serde_json::json!({
+                    "session": id, "fenced": generation, "generation": generation + 1, "pane": pane,
+                    "directory": crate::assistant::directory(&ctx.store, &ctx.store.get_assistant(&id)?)?,
+                }))?;
+                prepared = next_prepared;
+            }
+            Some(RESUME_ASSISTANT_EXIT) => {
+                let target = ops::take_switch_request(ctx, &id, generation);
+                ops::suspend(ctx, &id, generation, "resume another assistant")?;
+                // Eligibility is decided here, at selection time, under the target's claim.
+                let switched = target.and_then(|target| {
+                    let next = ops::claim(&ctx.store, &target)?;
+                    let (fenced, next_prepared) =
+                        ops::resume(ctx, &target, pane, &overrides_for(&opened, &target))?;
+                    Ok((next, next_prepared, fenced))
+                });
+                match switched {
+                    Ok((next, next_prepared, fenced)) => {
+                        ctx.store.log_event(
+                            None,
+                            "assistant_switched",
+                            serde_json::json!({"from": id, "from_generation": generation,
+                                "to": next.id, "fenced": fenced, "generation": fenced + 1, "pane": pane}),
+                        )?;
+                        eprintln!(
+                            "corral pi: assistant {id} suspended; resumed {} in pane {pane}",
+                            next.id
+                        );
+                        previous = Some(id);
+                        claim = next;
+                        prepared = next_prepared;
+                    }
+                    Err(error) => {
+                        // The source's claim was never released: return to it unchanged.
+                        let text =
+                            format!("corral: /resume did not switch: {error:#}. Continuing {id}.");
+                        let (_, next_prepared) =
+                            ops::resume(ctx, &id, pane, &overrides_for(&opened, &id))
+                                .with_context(|| {
+                                    format!("{text} {id} could not be resumed; `corral pi --resume {id}` resumes it")
+                                })?;
+                        ops::write_switch_notice(&next_prepared, &text)?;
+                        eprintln!("{text}");
+                        prepared = next_prepared;
+                    }
+                }
+            }
+            Some(NEW_ASSISTANT_EXIT) => {
+                ops::suspend(ctx, &id, generation, "new assistant")?;
+                eprintln!(
+                    "corral pi: assistant {id} suspended; `corral pi --resume {id}` resumes it"
+                );
+                // Admission runs again after the old child stopped, so /new also works at the live cap.
+                let directory =
+                    crate::assistant::directory(&ctx.store, &ctx.store.get_assistant(&id)?)?;
+                let (next, next_prepared, warning) =
+                    ops::open(ctx, &directory.path, pane, overrides, over_cap).with_context(
+                        || {
+                            format!(
+                                "/new could not open an assistant; resume {id} with `corral pi --resume {id}`"
+                            )
+                        },
+                    )?;
+                let next_claim = ops::claim(&ctx.store, &next.id).or_else(|error| {
+                    ctx.store.end_assistant(&next.id)?;
+                    Err(error)
+                })?;
+                if let Some(warning) = warning {
+                    eprintln!("corral pi: {warning}");
+                }
+                eprintln!(
+                    "corral pi: assistant {} (role assistant) in pane {pane}",
+                    next.id
+                );
+                opened.push(next.id);
+                claim = next_claim;
+                prepared = next_prepared;
+            }
+            _ => return finish(ctx, &id, generation, status),
         }
-        if status.code() != Some(NEW_ASSISTANT_EXIT) {
-            return finish(ctx, &id, generation, status);
-        }
-        super::ops::assistant::suspend(ctx, &id, generation, "new assistant")?;
-        eprintln!("corral pi: assistant {id} suspended; `corral pi --resume {id}` resumes it");
-        // Admission runs again after the old child stopped, so /new also works at the live cap.
-        let directory = crate::assistant::directory(&ctx.store, &ctx.store.get_assistant(&id)?)?;
-        let (next, next_prepared, warning) = super::ops::assistant::open(
-            ctx,
-            &directory.path,
-            pane,
-            overrides,
-            over_cap,
-        )
-        .with_context(|| {
-            format!("/new could not open an assistant; resume {id} with `corral pi --resume {id}`")
-        })?;
-        if let Some(warning) = warning {
-            eprintln!("corral pi: {warning}");
-        }
-        eprintln!(
-            "corral pi: assistant {} (role assistant) in pane {pane}",
-            next.id
-        );
-        id = next.id;
-        prepared = next_prepared;
     }
 }
 
-/// A stopped host leaves its conversation resumable unless the owner explicitly ended it.
+/// Any host exit leaves a conversation returnable: a clean quit (Pi's `/quit`) suspends it, a
+/// crash leaves it resumable. Only a session that never recorded a conversation ends here;
+/// `corral assistant end` remains the explicit, permanent end.
 fn finish(ctx: &Ctx, id: &str, generation: u32, status: std::process::ExitStatus) -> Result<()> {
     if !status.success() {
         #[cfg(unix)]
         restore_terminal()?;
         anyhow::bail!("{id}'s host stopped ({status}); `corral pi --resume {id}` resumes it");
     }
-    // An explicit `assistant end` may have shut this host down and already closed its record.
     if ctx.store.get_assistant(id)?.ended.is_some() {
+        eprintln!("corral pi: assistant {id} ended");
         return Ok(());
     }
-    super::ops::assistant::suspend(ctx, id, generation, "host exited")?;
-    eprintln!("corral pi: assistant {id} suspended; `corral pi --resume {id}` resumes it");
+    if super::ops::assistant::continued_session(ctx, id)?.is_none() {
+        end_assistant(ctx, id)?;
+        eprintln!("corral pi: assistant {id} ended (no conversation to return to)");
+        return Ok(());
+    }
+    if let Err(error) = super::ops::assistant::suspend(ctx, id, generation, "quit") {
+        // `corral assistant end` may have closed it while the host shut down.
+        if ctx.store.get_assistant(id)?.ended.is_some() {
+            eprintln!("corral pi: assistant {id} ended");
+            return Ok(());
+        }
+        return Err(error);
+    }
+    eprintln!(
+        "corral pi: assistant {id} suspended; `corral pi --resume {id}` or /resume in another \
+         assistant returns to it; `corral assistant end {id}` ends it"
+    );
     Ok(())
 }
 
@@ -450,3 +568,7 @@ mod tests;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "pi_assistant_tests.rs"]
 mod assistant_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "pi_switch_tests.rs"]
+mod switch_tests;

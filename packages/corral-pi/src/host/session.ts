@@ -83,6 +83,7 @@ import type { ConfirmUi } from "../tools/define.ts";
 import { memoryContext } from "./memory.ts";
 import { transcriptPreview } from "./transcript-preview.ts";
 import { AssistantRelink } from "./assistant-relink.ts";
+import { AssistantResume } from "./assistant-resume.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -123,6 +124,8 @@ export interface HostSessionOptions {
   readonly newAssistant?: () => void;
   /** The supervisor restarts this assistant on its linked directory, preserving its Pi file. */
   readonly relinkAssistant?: () => void;
+  /** The supervisor resumes the session named in this generation's switch request (`/resume`). */
+  readonly resumeAssistant?: () => void;
 }
 
 type TurnOrigin = { kind: "bridge" | "continuation"; idempotency_key: string } | { kind: "owner_terminal" }
@@ -324,6 +327,7 @@ export class HostSession {
   private continuations: Promise<void> = Promise.resolve();
   private closing = false;
   private readonly relink: AssistantRelink | undefined;
+  private readonly resume: AssistantResume | undefined;
 
   readonly provider: ProviderId;
 
@@ -334,6 +338,13 @@ export class HostSession {
         assistant: options.identity.assistant, generation: options.identity.generation, cwd: options.cwd,
         manager: options.sessionManager, client: options.client, events: options.events,
         request: () => { this.closing = true; options.relinkAssistant?.(); },
+      }) : undefined;
+    this.resume = options.identity.role === "assistant" && options.identity.assistant && options.resumeAssistant && options.runtimeDir
+      ? new AssistantResume({
+        assistant: options.identity.assistant, generation: options.identity.generation, runtimeDir: options.runtimeDir,
+        events: options.events, read: request => options.client.history(request),
+        idle: () => this.bound && !this.closing && !this.open && !this.session.isBashRunning,
+        request: () => { this.closing = true; options.resumeAssistant?.(); },
       }) : undefined;
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
       identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
@@ -848,8 +859,13 @@ export class HostSession {
     // every in-process replacement (/new, /resume, /fork, import) is refused before it happens.
     const refuse = (operation: string, ui: { notify(message: string, type?: "info" | "warning" | "error"): void }) => {
       if (!this.bound) return undefined;
+      const role = this.options.identity.role;
+      const guidance = role === "assistant"
+        ? (this.resume ? "use /new for a new assistant or /resume to pick another assistant session" : "quit and run `corral pi` or `corral pi --resume A-<n>`")
+        : role === "pm" ? "continue here; a stopped PM resumes with `corral agent resume --pm`"
+        : "continue here; a stopped run resumes with `corral agent resume`";
       const message = `corral: ${operation} is refused while this pane is bound to corral session ${this.boundSessionId}; ` +
-        "corral observes and recovers only that session. Continue here, or stop the run and use `corral agent resume`.";
+        `corral observes and recovers only that session. ${guidance[0]?.toUpperCase()}${guidance.slice(1)}.`;
       this.options.events.emit("session_replacement_refused", { operation, session_id: this.boundSessionId, message });
       ui.notify(message, "warning");
       return { cancel: true };
@@ -900,6 +916,7 @@ export class HostSession {
     });
     this.options.modules.role.extend?.(pi, this.roleContext);
     this.relink?.extend(pi);
+    this.resume?.extend(pi);
     // Registered after the role's own handler: upstream keeps the first skill of each name, so
     // a home or repository skill can never replace the role's packaged one (corral-worker).
     pi.on("resources_discover", () => ({ skillPaths: [...this.guidance.skillPaths] }));
@@ -1254,6 +1271,8 @@ export class HostSession {
   async submit(input: SubmitInput, requestId: string): Promise<SubmitResult> {
     if (!this.bound) return { disposition: "rejected", reason: "host_not_bound" };
     if (this.closing) return { disposition: "rejected", reason: "host_closing" };
+    // Lifecycle transitions are the owner's: only text typed in the pane runs /resume.
+    if (this.resume && /^\/resume(\s|$)/.test(input.text.trim())) return { disposition: "rejected", reason: "owner_only_command" };
     try {
       await this.options.modules.delivery.accept({
         requestId, idempotencyKey: input.idempotencyKey, origin: input.origin, busyPolicy: input.busyPolicy,
