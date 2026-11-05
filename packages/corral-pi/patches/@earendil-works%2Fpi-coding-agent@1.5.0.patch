@@ -146,6 +146,15 @@ index 615a6ba..18b9522 100644
                  hint("app.clipboard.pasteImage", "to paste files on macOS, images, or text"),
                  rawKeyHint("drop files", "to attach"),
              ].join("\n");
+@@ -2727,7 +2736,7 @@ export class InteractiveMode {
+                 this.editor.setText("");
+                 return;
+             }
+-            if (text === "/resume") {
++            if (text === "/resume" && !this.isExtensionCommand(text)) {
+                 this.showSessionSelector();
+                 this.editor.setText("");
+                 return;
 @@ -3749,6 +3758,10 @@ export class InteractiveMode {
          }
      }

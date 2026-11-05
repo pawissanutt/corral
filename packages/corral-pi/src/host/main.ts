@@ -30,6 +30,7 @@ import { type AwsRoute, HostSession, authContext } from "./session.ts";
 import { subscriptionRoutes } from "./subscriptions.ts";
 import { guardTerminalStop } from "./terminal-stop.ts";
 import { NEW_ASSISTANT_EXIT, RELINK_ASSISTANT_EXIT } from "./assistant-relink.ts";
+import { RESUME_ASSISTANT_EXIT } from "./assistant-resume.ts";
 
 function launchFd(argv: readonly string[]): number {
   const index = argv.indexOf("--launch-fd");
@@ -117,7 +118,8 @@ async function main(): Promise<void> {
     modules, client, events, network,
     ...(config.identity.role === "assistant" && process.argv.includes("--assistant-new")
       ? { relinkAssistant: () => restart(RELINK_ASSISTANT_EXIT),
-        ...(!headlessEnabled(config.capabilities) ? { newAssistant: () => restart(NEW_ASSISTANT_EXIT) } : {}),
+        ...(!headlessEnabled(config.capabilities) ? { newAssistant: () => restart(NEW_ASSISTANT_EXIT),
+          resumeAssistant: () => restart(RESUME_ASSISTANT_EXIT) } : {}),
       } : {}),
     ...herdrLifecycle(process.env, config.pane, config.identity, events, headlessEnabled(config.capabilities)),
     sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation, config.resumeSession, config.freshSession,
@@ -155,7 +157,7 @@ async function main(): Promise<void> {
     await session.runtime.dispose();
     await session.drained();
     await bridge.close();
-    process.exit(code); // 75 = /new, 76 = relink; neither is an ordinary quit.
+    process.exit(code); // 75 = /new, 76 = relink, 77 = /resume; none is an ordinary quit.
   }
   await session.hello(config.secrets.bindNonce, config.pane, sha256Hex(config.secrets.ctlCap));
   if (headlessEnabled(config.capabilities)) {

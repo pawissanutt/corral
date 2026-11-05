@@ -808,7 +808,7 @@ Run one corral-pi host request: a JSON envelope on stdin, one JSON receipt on st
 Usage: corral agent call [OPTIONS] --op <OP>
 
 Options:
-      --op <OP>      Enumerated v1 operation; must equal the envelope's op [possible values: hello, event, receipt_lookup, ask, withdraw, wait, progress, todo, checkpoint, evidence, artifact, gate, done, verdict, question_answer, question_escalate, question_cancel, reply, comment, capture, read_brief, read_next, read_show, read_list, read_search, read_route, read_artifacts, read_lessons, inbox_read, inbox_resolve, job, job_monitor, plan_write, plan_submit, plan_verdict, owner_action, write_permission, assistant_plan, assistant_plan_review, assistant_handoff, memory_list, memory_read, memory_put, memory_remove]
+      --op <OP>      Enumerated v1 operation; must equal the envelope's op [possible values: hello, event, receipt_lookup, ask, withdraw, wait, progress, todo, checkpoint, evidence, artifact, gate, done, verdict, question_answer, question_escalate, question_cancel, reply, comment, capture, read_brief, read_next, read_show, read_list, read_search, read_route, read_artifacts, read_content, read_lessons, inbox_read, inbox_resolve, job, job_monitor, plan_write, plan_submit, plan_verdict, owner_action, write_permission, assistant_plan, assistant_plan_review, assistant_handoff, memory_list, memory_read, memory_put, memory_remove]
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -958,7 +958,7 @@ Options:
       --bare                 Plain unbound Pi in the current directory: no store, binding or corral tools
       --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
       --pm                   Open the workspace PM in this pane, or take over a dead one (plain `corral pi` opens an assistant)
-      --resume <A-N>         Resume assistant session A-<n> in this pane, fencing its previous generation
+      --resume <A-N>         Resume stopped assistant session A-<n> in this pane, fencing its previous generation (inside an assistant, /resume picks one)
       --over-cap             Open an assistant even when assistant.max_live assistants are already live
       --task <TASK-ID>       Preload bounded read-only context for this task in a new assistant
       --model <MODEL>        Model to run instead of the profile's (bare: Pi's default for the provider)

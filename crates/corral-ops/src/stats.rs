@@ -102,6 +102,11 @@ pub struct AssistantStats {
     pub landed: usize,
     pub usage: Option<corral_core::Usage>,
     pub cost: String,
+    /// The first line of the session's saved summary, at most 120 characters; empty when unset.
+    #[serde(default)]
+    pub summary: String,
+    /// The latest recorded lifecycle time: creation, a generation opening, binding or fence, or end.
+    pub last_activity: Timestamp,
 }
 
 /// Owner-instructed co-work finishes in the window, by the time they finished.
@@ -149,6 +154,29 @@ pub fn assistant_stats(store: &Store, since: Option<Timestamp>) -> Result<Vec<As
                 landed: session.landed.len(),
                 usage,
                 cost,
+                summary: session
+                    .summary
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .unwrap_or_default()
+                    .chars()
+                    .take(120)
+                    .collect(),
+                last_activity: container
+                    .state
+                    .generations
+                    .iter()
+                    .flat_map(|g| {
+                        [
+                            Some(g.created),
+                            g.bound.as_ref().map(|b| b.at),
+                            g.fenced.as_ref().map(|f| f.at),
+                        ]
+                    })
+                    .flatten()
+                    .chain(session.ended)
+                    .fold(session.created, |latest, at| latest.max(at)),
             })
         })
         .collect()

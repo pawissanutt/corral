@@ -74,7 +74,7 @@ fn new_suspends_the_old_identity_and_runs_a_fresh_assistant_in_the_same_pane() {
     supervise_with(
         &ctx,
         PANE,
-        "A-1".into(),
+        assistant::claim(&ctx.store, "A-1").unwrap(),
         prepared,
         &Overrides::default(),
         false,
@@ -140,7 +140,7 @@ fn failed_new_admission_leaves_the_old_conversation_open_with_a_resume_command()
     let error = supervise_with(
         &ctx,
         PANE,
-        "A-1".into(),
+        assistant::claim(&ctx.store, "A-1").unwrap(),
         prepared,
         &Overrides::default(),
         false,
@@ -166,7 +166,7 @@ fn failed_new_host_ends_only_its_fresh_record_and_a_crash_is_not_a_new_request()
         let result = supervise_with(
             &ctx,
             PANE,
-            "A-1".into(),
+            assistant::claim(&ctx.store, "A-1").unwrap(),
             prepared,
             &Overrides::default(),
             false,
@@ -203,7 +203,7 @@ fn relink_resumes_the_same_assistant_file_in_the_same_pane() {
     supervise_with(
         &ctx,
         PANE,
-        "A-1".into(),
+        assistant::claim(&ctx.store, "A-1").unwrap(),
         prepared,
         &Overrides::default(),
         false,
@@ -300,7 +300,7 @@ fn assistant_project_private_host_relink() {
     supervise_with(
         &ctx,
         pane,
-        session.id.clone(),
+        assistant::claim(&ctx.store, &session.id).unwrap(),
         prepared,
         &Overrides::default(),
         false,
