@@ -58,6 +58,14 @@ fixtures prove routing/lifecycle behavior, not a probabilistic guarantee of mode
 - `python3 .evidence/questions-pty.py`: PASS with a new owned PTY, private HOME/XDG,
   synthetic transport and receipt executable; no owner/PM/worker panes or herdr server used.
 - `git diff --check`: PASS before commit.
+- First required quick gate found four stale fixture failures: three complete-contract
+  assembly expectations omitted the new shared guidance, and the implement-now journey
+  scraped a removed prose-only question. The fixture now uses deferred `ask_user` choices
+  for both implement/queue and ship/later/drop, retaining real scratch/candidate/check,
+  owner-input, independent-review and landing assertions. The unused prose scraper is removed.
+- Repair check in a fresh plugin-free private herdr server: the 17 assistant/implement-now
+  tests PASS, including real UI-answer owner authority through independent review and landing
+  (`ask-user-gate-repair-tests.log`). Package typecheck also PASS. No quarantine entries apply.
 - Required quick gate: separate candidate-bound Corral receipt/log, not a manually run tier.
 
 No load testing, paid/live-provider questioning, actual owner decisions or in-place managed
