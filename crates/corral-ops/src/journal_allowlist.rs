@@ -55,7 +55,7 @@ pub const JOURNAL_ALLOWLIST: &[(&str, &str, &str, &str, &str)] = &[
     ),
     (
         "review.rs",
-        "approve_landed",
+        "approve_landed_inner",
         "landing_stale",
         "land_checked",
         "attempted checked Git landing; this failure audit has no committed task update",
@@ -125,7 +125,7 @@ pub const JOURNAL_ALLOWLIST: &[(&str, &str, &str, &str, &str)] = &[
     ),
     (
         "review.rs",
-        "approve_landed",
+        "approve_landed_inner",
         "approved",
         "cleanup_report_head",
         "closing panes and optional removal of the landed worktree and branch",
