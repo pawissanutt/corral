@@ -519,6 +519,12 @@ inbox outcomes, recovery notices and other programmatic input are never journale
 one refuses `not_owner_input`. The default-enabled `ask_user` tool also journals a completed
 interactive dialog answer with `dialog` provenance: its exact question, selected option and
 optional free text. A cancelled or timed-out dialog journals no answer and authorizes nothing.
+Use `ask_user` for real owner questions when available, with 2–4 meaningful choices and optional
+free text; chat can explain the decision but must not be its only actionable surface. Clear
+instructions need no redundant approval. Deferred questions (`nonBlocking: true`) return a pending
+ID immediately; `/questions`, Ctrl+Shift+Q, or the pending-question widget reopens their choices.
+Continue independent work, but keep dependent Todo steps waiting on that ID. See
+[owner choice questions](corral-pi.md#owner-choice-questions) for recovery and cancellation.
 Dialog answers carry an owner input ID and can be cited like pane-typed input. Corral checks
 only that the cited input is from this session, not that its words prove the exact action.
 The journal keeps the newest 64 entries.
@@ -671,7 +677,7 @@ The run's usage is a slice of the session's usage, not extra spending.
 
 The packaged contract has the assistant settle, once, whether a change the owner asks for is
 made now in the pane or filed for the normal queue. The owner's words decide ("fix it", "do it
-now" against "file it", "for later"); when they do not, the assistant asks one plain question
+now" against "file it", "for later"); when they do not, the assistant uses `ask_user` when available
 naming both options and does not ask again. It never both implements and files a change, so
 implement-now work is not handed to a worker to redo.
 
@@ -689,10 +695,11 @@ The owner's one ship answer authorizes the complete finish pipeline, including r
 returned to that assistant; it needs no separate approve call. Independent review and the
 landing lock, integration, size, freshness and gate checks are not relaxed. When the scratch moved
 after the report, the finish refuses `stale_candidate` and changes nothing, and the assistant
-reports the new candidate and asks again. Plain chat works for both decisions. When the
-generation exposes `ask_user`, the assistant can offer the same choices in its structured
-dialog; a completed answer carries an owner input ID, while cancellation or timeout
-authorizes nothing. Older generations without that tool use plain chat.
+reports the new candidate and asks again. When the generation exposes `ask_user`, the assistant
+must offer these choices through that tool, rather than leaving only a chat question. A completed
+answer carries an owner input ID; cancellation or timeout authorizes nothing. With the capability
+disabled or UI unavailable, state the unresolved decision and limitation, never infer approval or
+repeatedly bury the question in prose. Older generations without the tool retain their chat flow.
 
 ## Which host a session runs
 

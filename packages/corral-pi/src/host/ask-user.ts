@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { OWNER_INPUT_TEXT_MAX } from "../roles/assistant/owner-action.ts";
 import { ASK_USER_GUIDELINES } from "../roles/common/ask-user.ts";
 import { AskDialog, type Choice, type DialogAnswer, type DialogQuestion } from "./ask-user-dialog.ts";
+import type { ChoiceQuestion, PendingQuestions } from "./pending-questions.ts";
 
 const choice = Type.Union([
   Type.String({ minLength: 1, maxLength: 300 }),
@@ -19,6 +20,12 @@ const question = Type.Object({
   multiSelect: Type.Optional(Type.Boolean({ description: "Allow choosing several options" })),
   freeText: Type.Optional(Type.Boolean({ description: "Offer an optional text field after the choice" })),
 });
+
+const deferredQuestion = Type.Object({
+  question: Type.String({ minLength: 1, maxLength: 1000 }),
+  options: Type.Array(Type.String({ minLength: 1, maxLength: 300 }), { minItems: 2, maxItems: 4 }),
+  freeText: Type.Optional(Type.Boolean()),
+}, { additionalProperties: false });
 
 type Question = { question: string; header?: string; options: (string | Choice)[]; multiSelect?: boolean; freeText?: boolean };
 type Answer = { question: string; option: string; options?: string[]; text?: string };
@@ -80,19 +87,49 @@ async function sequential(ctx: ExtensionToolContext, questions: DialogQuestion[]
 }
 
 /** Dialogs are local to the owner's interactive pane, never a worker question flow. */
-export function askUserTool(record: (answer: string) => Promise<string>): ToolDefinition {
+export function askUserTool(record: (answer: string) => Promise<string>, pending?: Pick<PendingQuestions, "ask" | "withdraw">,
+  dialogBusy: () => boolean = () => false): ToolDefinition {
   return {
     name: "ask_user", label: "Ask the owner", exposure: "model-only", executionMode: "sequential",
     description: "Ask the owner 1-4 focused choice questions together in one dialog instead of asking only in chat; "
-      + "batch related questions in one call. Each takes a short header, 2-4 options (string or {label, description}), optional multiSelect "
-      + "and freeText. The owner may answer only some: unanswered ones are listed. Cancellation or timeout is not consent.",
+      + "batch related questions in one call. Synchronous questions support short headers, string or {label, description} options, "
+      + "multiSelect and freeText, including partial answers. Set nonBlocking:true for plain-string, single-selection questions "
+      + "with optional freeText: it returns a stable pending ID immediately; the owner answers via /questions while you continue "
+      + "independent work. key deduplicates retries; supersedes withdraws a pending question; withdraw closes an unneeded ID. "
+      + "Cancellation, timeout or no answer is never consent.",
     promptSnippet: "Present owner questions and clarifications as choices",
     promptGuidelines: [...ASK_USER_GUIDELINES],
-    parameters: Type.Object({ questions: Type.Array(question, { minItems: 1, maxItems: 4 }) }),
-    async execute(_id, params: { questions: Question[] }, signal, _update, ctx) {
+    parameters: Type.Union([
+      Type.Object({ questions: Type.Array(question, { minItems: 1, maxItems: 4 }),
+        nonBlocking: Type.Optional(Type.Literal(false)), key: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+        supersedes: Type.Optional(Type.String()) }, { additionalProperties: false }),
+      Type.Object({ questions: Type.Array(deferredQuestion, { minItems: 1, maxItems: 4 }),
+        nonBlocking: Type.Literal(true), key: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+        supersedes: Type.Optional(Type.String()) }, { additionalProperties: false }),
+      Type.Object({ withdraw: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
+    ]),
+    async execute(_id, params: { questions: Question[]; nonBlocking?: false; key?: string; supersedes?: string } | { questions: ChoiceQuestion[]; nonBlocking: true; key?: string; supersedes?: string } | { withdraw: string }, signal, _update, ctx) {
       const noAnswer = () => ({ content: [{ type: "text" as const, text: "no answer" }], details: { status: "no answer" } });
-      const questions = params.questions.map(normalize);
+      if ("withdraw" in params) {
+        if (!pending) throw new Error("pending_questions_unavailable");
+        const status = pending.withdraw(params.withdraw);
+        return { content: [{ type: "text", text: `${params.withdraw}: ${status}; no owner answer` }], details: { id: params.withdraw, status } };
+      }
       if (!ctx.hasUI || signal?.aborted) return noAnswer();
+      if (params.nonBlocking) {
+        if (ctx.mode !== "tui" || !pending) return { ...noAnswer(), details: { status: "no answer", reason: "pending UI unavailable" } };
+        for (const q of params.questions) {
+          if ("multiSelect" in q || "header" in q || q.options.some(option => typeof option !== "string")) {
+            throw new Error("deferred_questions_require_plain_single_selection; use the synchronous dialog for rich questions");
+          }
+          if (new Set(q.options).size !== q.options.length) throw new Error("Options must be distinct");
+        }
+        const q = pending.ask(_id, params.questions, params.key, params.supersedes);
+        return { content: [{ type: "text", text: `${q.id}: ${q.status}. Owner UI: /questions. Continue only independent work; no answer authorizes anything.` }],
+          details: { id: q.id, status: q.status, expires: q.expires } };
+      }
+      if (dialogBusy()) return { ...noAnswer(), details: { status: "no answer", reason: "another owner/permission dialog is open" } };
+      const questions = params.questions.map(normalize);
       const shown = typeof ctx.ui.custom === "function" ? await dialog(ctx, questions, signal) : undefined;
       if (signal?.aborted && shown === undefined) return noAnswer();
       const raw = shown ?? await sequential(ctx, questions, signal);

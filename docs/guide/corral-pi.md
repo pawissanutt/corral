@@ -79,6 +79,70 @@ explicitly select registered projects. Project reads respect project-text trust.
 Reusable evidence-backed project rules remain lessons, and unfinished work remains in
 inbox/tasks; link those records rather than copying mutable operational history.
 
+### Owner choice questions
+
+Only assistant and PM loadouts with `ask_user` enabled expose owner choices. Their contracts
+and tool guidance require it for real user-facing questions, decisions and clarifications,
+including implement-now/queue and ship/later/drop decisions. Offer 2–4 meaningful options,
+label a recommendation when useful, and optional free text/Other. Research discoverable facts
+instead of asking, batch independent decisions, and act on clear instructions without asking
+again. Generic choices never replace owner-action confirmations or file-permission dialogs,
+and do not change worker/reviewer/planner board-question routing or PM authority.
+
+Existing calls with `questions` alone keep their synchronous dialog behavior. To keep working:
+
+```json
+{"questions":[{"question":"Which scope?","options":["Small fix (recommended)","Broader change"],"freeText":true}],"nonBlocking":true,"key":"scope"}
+```
+
+The result contains `id`, `status: "pending"` and an expiry, without opening a modal, waiting
+for an answer, or retaining a tool/model/composer lock. A persistent widget and footer count
+remain beside the main composer in both rich and plain TUI. Use `/questions`, Ctrl+Shift+Q,
+or click the widget in fullscreen to reopen choices; `/questions <id>` opens a specific one.
+The owner can inspect output and keep typing while questions wait. Opening a dialog is an
+explicit owner action; it never replaces an already-open confirmation/permission dialog.
+
+Continue unrelated reads, research or implementation. Stop only steps dependent on the
+answer, especially permission/scope decisions. With Todo enabled, use its existing `wait`
+operation on those steps, naming the pending ID; when everything remaining waits, end the
+turn. The answer's normal follow-up resumes the conversation; do not busy-poll. Without
+interactive TUI support (including headless/RPC), the deferred call returns `no answer` and
+an unavailable-UI reason, not a fabricated pending question or approval.
+
+Lifecycle and recovery:
+
+- A repeated `key` (or the same tool-call ID when omitted) returns the original ID/status;
+  different questions with that key refuse. Up to 8 pending questions and 128 distinct
+  questions per Pi session are supported. Resume does not reset these bounds.
+- Escape or a five-minute answer-dialog timeout discards partial input and leaves the
+  question pending for reopening. `/questions cancel <id>` explicitly cancels; the model
+  can withdraw with `ask_user` input `{"withdraw":"<id>"}`. A new deferred call may name
+  `supersedes: "<id>"` to withdraw an obsolete pending question. Pending choices expire
+  after 24 hours, including time offline. Cancellation, expiry and withdrawal record no
+  owner consent; late or duplicate answers cannot reopen them.
+- The existing Pi session journal stores question state, actual selected answers and
+  delivery identity. A host exit suspends unresolved choices; reopening the same session
+  restores them. Session replacement closes them; a closed/stale host cannot deliver a
+  late reply. A canonically ended Corral session cannot rebind or restart from a reply.
+- Only an actual complete UI answer enters the authenticated host owner-input event path
+  (assistant `dialog` provenance). It includes the question ID, option and optional text,
+  then arrives via the existing delivery module and a normal follow-up user message. PM
+  answers remain PM-session input, not assistant owner-action authority. Status notifications
+  and pending IDs are never citable owner input. Current-generation owner-input receipts
+  are replayed with the same saved event ID after uncertain acknowledgement.
+- An answer saved before a crash but not consumed is delivered on resume. A successor
+  generation journals that genuine saved selection in its own generation before delivery.
+  The persisted user message is the consumption receipt: a consumed answer is never resent,
+  even after compaction/reload/resume. Delivery failures leave an answer-recorded indicator;
+  `/questions` or resume reconciles it without asking for another answer. Terminal records
+  remain in the session journal, not a second board-question store.
+
+Unavailable/disabled UI, missing answers, cancellation and timeout are never approval.
+Report the limitation and unresolved decision truthfully; do not silently proceed or
+repeatedly re-ask in prose. These changes require rebuilt/reinstalled managed assets and a
+new/resumed generation: editing source does not update an already-running compiled host.
+See [installation](#installing-the-host).
+
 ### Language servers
 
 Workers retain built-in Rust and TypeScript servers in every preset. Reviewer LSP is enabled
