@@ -103,12 +103,12 @@ pub const RESERVED: &[&str] = &[
     "config",
     "ext",
     "help",
+    "report",
     // Proposed or announced built-ins: `corral migrate` and `corral read` (T-339 and
-    // T-381 plans), `corral accept` and `corral report` (PM records).
+    // T-381 plans), `corral accept` (PM records).
     "accept",
     "migrate",
     "read",
-    "report",
 ];
 
 /// Run or list external `corral-ext-<name>` commands found on PATH
