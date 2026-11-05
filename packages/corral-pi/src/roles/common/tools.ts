@@ -69,7 +69,7 @@ export const evidenceTool: CorralToolSpec = {
   name: "corral_evidence",
   label: "Record criterion evidence",
   description: "Record one EvidenceObservation v1 against this task's criteria manifest (the JSON that "
-    + "`corral evidence record --file` takes; read `corral criteria list <task> --json` first).",
+    + "`corral evidence record <task> --file <json>` takes; read `corral criteria list <task>` first, which already returns JSON).",
   op: "evidence",
   parameters: Type.Object({
     observation: EvidenceObservation,

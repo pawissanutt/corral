@@ -11,7 +11,7 @@ enum Class {
 }
 use Class::{File, Read, Refused};
 
-const ROUTE: &str = "needs the owner; use corral_owner_action or corral pm inbox post";
+const ROUTE: &str = "needs the owner; route with corral pm inbox post, or use corral_owner_action only for a supported kind explicitly requested by the owner";
 
 /// Commands that clap hides from `--help`, so the help walk cannot list them.
 const HIDDEN: [&str; 1] = ["runtime-probe"];
@@ -571,6 +571,17 @@ fn every_command_variant_has_an_explicit_class() {
             "{args:?} is {class:?}: {stderr}"
         );
     }
+}
+
+#[test]
+fn criteria_list_json_flag_matches_default_output() {
+    let fx = Fixture::new();
+    let default = fx.ok(Some("A-1"), &["criteria", "list", "T-001"]);
+    let explicit = fx.ok(Some("A-1"), &["criteria", "list", "T-001", "--json"]);
+    assert_eq!(explicit, default);
+    let value: serde_json::Value = serde_json::from_str(&explicit).unwrap();
+    assert!(value.get("manifest").is_some());
+    assert!(value["spec_digest"].is_string());
 }
 
 #[test]
