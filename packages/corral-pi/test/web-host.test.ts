@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { z } from "zod";
 
 import { EventLog } from "../src/bridge/events.ts";
 import { loadModules } from "../src/host/modules.ts";
@@ -49,7 +50,10 @@ test("worker and reviewer web calls use the same transport directly and nested a
         name: "fixture_web", label: "Nested web read", description: "Exercises nested execution",
         parameters: Type.Object({}),
         async execute(_id, _params, signal, _update, ctx) {
-          return (await ctx.executeTool("web_fetch", { url: "https://nested.example.org/" }, { signal })).result;
+          const fetched = (await ctx.executeTool("web_fetch", { url: "https://nested.example.org/" }, { signal })).result;
+          const text = fetched.content.find((part) => part.type === "text");
+          const { content_id } = z.object({ content_id: z.string() }).parse(JSON.parse(text?.type === "text" ? text.text : "null"));
+          return (await ctx.executeTool("web_read", { content_id, limit: 4 }, { signal })).result;
         },
       };
       const identity = { store: "st-demo", project: "demo", role: roleName, generation: 1, task: "T-568", run: "R1" };
@@ -93,6 +97,9 @@ test("worker and reviewer web calls use the same transport directly and nested a
           const search = results.find((message) => message.role === "toolResult" && message.toolName === "web_search");
           const text = search?.role === "toolResult" ? search.content.find((part) => part.type === "text") : undefined;
           expect(JSON.parse(text?.type === "text" ? text.text : "null").configured).toBeFalse();
+          const nestedResult = results.find((message) => message.role === "toolResult" && message.toolName === nested.name);
+          const nestedText = nestedResult?.role === "toolResult" ? nestedResult.content.find((part) => part.type === "text") : undefined;
+          expect(JSON.parse(nestedText?.type === "text" ? nestedText.text : "null").body).toBe("publ");
         }
         expect(requested).toEqual([
           "https://docs.example.org/", "https://nested.example.org/", "https://docs.example.org/", "https://nested.example.org/",

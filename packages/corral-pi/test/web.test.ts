@@ -29,6 +29,20 @@ test("public GET has bounded output and no inherited credentials or cookies", as
   expect([...request?.headers.keys() ?? []]).toEqual(["accept"]);
 });
 
+test("unsupported binary MIME cancels the stream before downloading its body", async () => {
+  // Given an advertised binary response whose stream must not be decoded as text.
+  let read = false;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull() { read = true; }, cancel() { cancelled = true; },
+  }, { highWaterMark: 0 });
+  const web = createWebAccess(settings, async () => new Response(body, { headers: { "content-type": "application/pdf" } }), { lookup });
+  // When fetched, then the typed refusal closes the stream without consuming a chunk.
+  await expect(web.fetch("https://docs.example.org/file.pdf")).rejects.toThrow("web_unsupported_content");
+  expect(read).toBeFalse();
+  expect(cancelled).toBeTrue();
+});
+
 test("redirects reapply public address and optional named-host checks", async () => {
   // Given an allowed public first hop.
   for (const location of ["http://127.0.0.1/", "https://other.example.org/", "https://private.example.org/"]) {

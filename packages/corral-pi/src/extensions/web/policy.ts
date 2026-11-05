@@ -2,8 +2,8 @@ import { lookup } from "node:dns/promises";
 import { BlockList, isIP } from "node:net";
 
 export class WebError extends Error {
-  constructor(readonly code: string, message: string) {
-    super(`${code}: ${message}`);
+  constructor(readonly code: string, message: string, options?: ErrorOptions) {
+    super(`${code}: ${message}`, options);
   }
 }
 

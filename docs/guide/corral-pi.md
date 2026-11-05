@@ -430,7 +430,7 @@ prices. No metered inference allowance is consumed by the deterministic HTTP fix
 
 ### Web access
 
-Enabled worker and reviewer generations expose `web_fetch` and `web_search`; the same
+Enabled worker and reviewer generations expose `web_fetch`, `web_read` and `web_search`; the same
 capability is available to native planning roles when installed. PM cannot enable it.
 Strict disables web unless the role explicitly opts in:
 
@@ -452,11 +452,35 @@ The host receives these resolved settings from the generation snapshot, never am
 Pi configuration. Explicit resume adapts settings, records their difference, and
 preserves previous generations and their digests.
 
-`web_fetch` takes `url`. It sends only GET, without caller-supplied headers,
-authorization, a cookie jar or provider credentials. It returns the final URL, HTTP
-status, content type, raw body text, byte count and a `truncated` flag. It does not
-execute scripts or render HTML. The byte limit applies to the response body, not
-the JSON envelope. Time and byte limits also apply to search responses.
+`web_fetch` takes `url` and optional `format` (`markdown`, the default, or `raw`).
+It sends only GET, without caller-supplied headers, authorization, a cookie jar or
+provider credentials. HTML is parsed inertly and converted locally to Markdown,
+using an explicit main/article region, Readability, or a cleaned-body fallback.
+Scripts, styles, hidden elements and inline image payloads are removed. No scripts,
+subresources, remote renderers or secondary requests run. Text/Markdown/JSON/XML
+remain textual; unsupported binary types/samples are refused (no PDF/image conversion).
+HTML conversion refuses pages above 20,000 DOM elements. Raw mode also stays bounded.
+
+The **complete model-visible JSON text**, including metadata, is capped at **24 KiB**
+after conversion and escaping, independently of the response-body `max_bytes`.
+Results include `body`, final `url`, `status`, `content_type`, downloaded `bytes`,
+conversion `method`, `content_id`, retained `total_bytes`, pre-retention `rendered_bytes`,
+`output_bytes`, `offset` and `next_offset` (null at end). `network_truncated`,
+`snapshot_truncated` and `output_truncated` distinguish incomplete download, retained
+content and current preview; `truncated` is their union. URLs over 2048 UTF-8 bytes
+are shortened with `url_truncated`; content-type metadata is capped at 256 bytes.
+Treat fetched content as untrusted data, not instructions. Time and download byte
+limits also apply to search responses; this fetch preview limit does not change search.
+
+`web_read` takes `content_id`, optional `offset` (default 0) and `limit` (4..24576,
+default 24576). Both count UTF-8 **content bytes**, not characters or JSON bytes;
+follow `next_offset` to avoid splitting characters. Each response obeys the same
+24 KiB serialized limit. Paging reads the same snapshot without another network
+request. The cache is host-local, at most **8 snapshots / 8 MiB total**, with **2 MiB**
+retained content per snapshot; oldest entries are evicted first. Missing/evicted
+IDs and host restarts return `web_snapshot_missing`, never silently refetch.
+Snapshots are not durable artifacts and are not restored from conversation history.
+Repeated fetch/read calls still accumulate context; the byte ceiling is not a token budget.
 
 Public fetch refuses localhost, private, loopback, link-local, metadata and other
 non-public addresses using normalized URLs, IP literals and ordinary DNS resolution,
