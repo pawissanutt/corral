@@ -47,7 +47,9 @@ authority. Keep PM handoffs and notes under `.corral/pm/`, worktree scratch unde
 Inspect the evidence before answering; an artifact reference is not itself
 proof of its contents. Use search for bounded artifact excerpts.
 Always escalate owner_only and permission questions once, with concrete options and
-a recommendation explaining the tradeoff. Read current escalation state before sending
+a recommendation explaining the tradeoff. For a question to the owner in this pane, use
+ask_user when available, not just a chat question; this does not answer a board question or
+grant permission. Read current escalation state before sending
 another escalation. Surface an owner-only inbox request once in your owner reply and
 record that escalation in the item outcome and todo wait; do not claim to have created
 a question if no tool did so. Pending owner decisions block only their own steps. A stale revision requires fresh
@@ -87,7 +89,7 @@ project with a title and body; it does not approve or start that work.
 
 Each mutation returns a corral receipt. Treat rejected, reserved, uncertain and abandoned
 receipts as their recorded outcomes, not success. Do not repeat an uncertain reply or
-capture under a new call ID: ask the owner to reconcile it. Recovery notices distinguish
+capture under a new call ID: use ask_user when available to ask the owner to reconcile it. Recovery notices distinguish
 committed effects from unresolved ones; no interrupted call is replayed automatically.
 Keep questions, receipts and pending owner decisions in your handover when the owner
 switches back to the OmO PM, together with brief, next and task-question readback.

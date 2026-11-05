@@ -7,6 +7,7 @@ import { closeSync, openSync, readSync } from "node:fs";
 import { assetRoot, readAsset, renderContract } from "../common/assets.ts";
 import { receiptLookupTool } from "../common/tools.ts";
 import { requestContract, sessionTodoTool } from "../common/todo.ts";
+import { askUserContract } from "../common/ask-user.ts";
 import type { CorralOp, RoleModule, UpstreamTool } from "../types.ts";
 import { assistantShellRefusal } from "./guard.ts";
 import { ownerActionTool } from "./owner-action.ts";
@@ -25,7 +26,7 @@ export function assistantRole(root: string): RoleModule {
     tools: (context) => context.todo === true ? [LOOKUP, ownerActionTool, ...memoryTools, sessionTodoTool] : [LOOKUP, ownerActionTool, ...memoryTools],
     contract: (context) => {
       const contract = `${renderContract(readAsset(root, CONTRACT_ASSET), context.identity)}\n\n`
-        + requestContract(root, context.todo);
+        + requestContract(root, context.todo) + "\n\n" + askUserContract(context);
       if (!context.promptFile) return contract;
       // The Rust launcher writes this read-only task brief, not a worker prompt. Bound the
       // read again here so a replaced file cannot grow the model's system context.

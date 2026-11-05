@@ -10,6 +10,7 @@ import { writeFakeCorral } from "../../test/support/fake-corral.ts";
 import { loadModules } from "./modules.ts";
 import { guardedFetch } from "./restrict.ts";
 import { authContext, HostSession } from "./session.ts";
+import { ASK_USER_GUIDELINES } from "../roles/common/ask-user.ts";
 
 test("real role host loadouts expose ask_user only to assistant and PM", async () => {
   const assets = buildFixtureInstall({ omit: ["role"] });
@@ -30,7 +31,13 @@ test("real role host loadouts expose ask_user only to assistant and PM", async (
         model: "gpt-6.1-sol", modules, client, events: new EventLog(1), network: guardedFetch(transport),
         capabilities: { catalog: 8, digest: "d".repeat(64), preset: "standard", enabled: ["ask_user"] },
         sessionManager: sdk.SessionManager.create(work, join(work, `sessions-${role}`)) });
-      expect(host.loadout.includes("ask_user")).toBe(role === "assistant" || role === "pm");
+      const interactive = role === "assistant" || role === "pm";
+      expect(host.loadout.includes("ask_user")).toBe(interactive);
+      // Structural contract inclusion, not a claim of semantic model compliance.
+      for (const guideline of ASK_USER_GUIDELINES) {
+        expect(host.session.systemPrompt.includes(guideline)).toBe(interactive);
+      }
+      await host.close();
     }
   } finally {
     assets.cleanup();
