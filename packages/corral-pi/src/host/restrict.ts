@@ -37,6 +37,8 @@ export function restrictedSettings() {
     enableAnalytics: false,
     enableSkillCommands: false,
     quietStartup: true,
+    // Surface significant prompt-cache misses so a cache regression is visible at once.
+    showCacheMissNotices: true,
     transport: "sse" as const,
     extensions: [] as string[],
   };
