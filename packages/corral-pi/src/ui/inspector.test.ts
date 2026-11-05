@@ -3,7 +3,7 @@ import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-ag
 import { EventLog } from "../bridge/events.ts";
 import { InspectorActivity, inspectorActivity, inspectorContext, type InspectorSnapshot } from "./inspector.ts";
 import { TodoLedger } from "./todo.ts";
-import { panelLines, type PanelSnapshot } from "./panels-view.ts";
+import type { PanelSnapshot } from "./panels-view.ts";
 import { activityLines } from "./activity-view.ts";
 import { NativePanels } from "./panels.ts";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
@@ -101,15 +101,10 @@ test("disconnected/legacy inspectors and activity never present unknown as succe
     tokens: 0, tools: [], contextFiles: [], skills: [], ledger: ledger.current, ledgerStale: true, jobs: null,
     auxiliary: null, steering: 0, followUps: 0, inspector: info };
   expect(inspectorContext(info).join("\n")).toContain("legacy launch");
-  expect(panelLines("Context", identity, snapshot, { kind: "unread" }).map(row => row.text).join("\n")).toContain("Disconnected/unbound");
-  const plan = panelLines("Plan", identity, snapshot, { kind: "unread" }).map(row => row.text).join("\n");
-  expect(plan).toContain("stale"); expect(plan).toContain("Criterion: C1"); expect(plan).toContain("not gate evidence");
-  expect(panelLines("Context", identity, snapshot, { kind: "unread" }).map(row => row.text).join("\n")).toContain("No tool receipt observed");
-  expect(panelLines("Context", identity, null, { kind: "unread" })[0]?.text).toContain("unavailable");
+  expect(inspectorActivity(info).join("\n")).toContain("No tool receipt observed");
   const panels = new NativePanels({ identity, cwd: ".", snapshot: () => snapshot });
-  panels.focused = true; panels.tab = "Plan";
-  const rendered = stripTerminalSequences([...panels.renderSidebar(80, 20), ...panels.renderInline(80, 34)].join("\n"));
-  expect(rendered).toContain("Criterion: C1");
+  const rendered = stripTerminalSequences(panels.renderSidebar(80, 20).join("\n"));
+  expect(rendered).toContain("PLAN"); expect(rendered).toContain("stale");
   const evidence = resolve(import.meta.dirname, "../../../../.evidence");
   mkdirSync(evidence, { recursive: true });
   writeFileSync(resolve(evidence, "T-689-adapter-plan-render.txt"), rendered);

@@ -4,6 +4,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { codeHost } from "./support/code-host.ts";
+import { activityLines } from "../src/ui/activity-view.ts";
+import type { PanelSnapshot } from "../src/ui/panels-view.ts";
 
 const progress = (revision: number) => ({ revision, spec_revision: "spec", phases: [{ id: "p", label: "Implementation", steps: [
   { id: "s", label: `Work revision ${revision}`, status: { state: "in_progress" }, criteria: ["C1"] },
@@ -16,15 +18,12 @@ test("authenticated Code Mode children expose all receipt states and reconcile t
   const panels = fx.host.panels;
   if (!panels) throw new Error("rich fixture must provide native panels");
   const captured: string[] = [];
+  // Receipts render in the Activity view; the plan renders in the side panel.
+  const snapshot = () => (panels as unknown as { options: { snapshot: () => PanelSnapshot | null } }).options.snapshot();
   const render = (tab: "Context" | "Plan") => {
-    panels.tab = tab; panels.focused = true; panels.offset = 0;
-    const wide = stripTerminalSequences(panels.renderSidebar(110, 200).join("\n"));
-    captured.push(`WIDE ${tab}`, wide, `INLINE ${tab} (successive scroll positions)`);
-    for (let offset = 0; offset < 32; offset += 2) {
-      panels.offset = offset;
-      captured.push(stripTerminalSequences(panels.renderInline(80, 34).join("\n")));
-    }
-    return wide;
+    const text = stripTerminalSequences((tab === "Plan" ? panels.renderSidebar(110, 200) : activityLines(snapshot(), 0)).join("\n"));
+    captured.push(tab, text);
+    return text;
   };
   const child = async (id: string, code: string) => fx.turn([
     { toolCalls: [{ callId: id, name: "codemode", arguments: { code } }] }, { text: "Finished" },
@@ -48,7 +47,7 @@ test("authenticated Code Mode children expose all receipt states and reconcile t
     expect(context).toContain("Code Mode child");
     expect(context).not.toContain("No tool receipt observed");
     const plan = render("Plan");
-    expect(plan).toContain("revision 2"); expect(plan).toContain("Criterion: C1");
+    expect(plan).toContain("Work revision 2");
     expect(plan).not.toContain("stale");
     expect(fx.corral.calls().find(call => call.op === "progress" && call.payload.expected_revision === 1)?.identity.parent?.call).toBeDefined();
     expect(fx.journal().some(entry => entry.tool === "corral_progress" && entry.phase === "settled" && entry.effect === "committed")).toBeTrue();

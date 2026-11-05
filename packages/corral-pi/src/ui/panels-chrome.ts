@@ -3,10 +3,9 @@ import { basename } from "node:path";
 import { stripTerminalSequences, visibleWidth, Text } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
 import { STATUS_BINDING, STATUS_ALERTS, target } from "./chrome.ts";
-import { activitySidebar } from "./activity-sidebar.ts";
 import {
   pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_MUTED, PANEL_TEXT, PANEL_RULE, PANEL_SUCCESS, PANEL_WARNING, PANEL_ERROR, RESET,
-  type PanelSnapshot, type FilesState, type PanelLine,
+  type PanelSnapshot,
 } from "./panels-view.ts";
 
 export function splitRow(left: string, right: string, width: number): string {
@@ -113,23 +112,4 @@ export function statusBar(identity: HostIdentity, snapshot: PanelSnapshot | null
   const inline = alerts && visibleWidth(alerts) + 3 + shortest <= room;
   const context = contextSegment(snapshot, room - (inline ? visibleWidth(alerts) + 3 : 0));
   return [row(badge + cost + sep + context + (inline ? sep + PANEL_WARNING + alerts : "")), ...(alerts && !inline ? wrapped(alerts) : [])];
-}
-export function overviewLines(snapshot: PanelSnapshot | null, files: FilesState, scope?: { readonly name: string; readonly required: boolean },
-  selected?: string, history = false): PanelLine[] {
-  if (!snapshot) return [{ text: "Session state unavailable" }];
-  const rows: PanelLine[] = [{ text: "Changed files", heading: true }];
-  if (scope) rows.push({ text: scope.required ? "Choose project · /panels project" : plainLabel(scope.name), tone: "muted", action: { kind: "scope" } });
-  if (scope?.required) rows.push({ text: "Workspace changes are hidden", tone: "muted" });
-  else switch (files.kind) {
-    case "unread": rows.push({ text: "Open Files to read Git changes" }); break;
-    case "loading": rows.push({ text: "Reading Git status…" }); break;
-    case "error": rows.push({ text: files.reason }); break;
-    case "ready":
-      for (const file of files.files.slice(0, 4)) rows.push({ text: plainLabel(`${file.status} ${file.path}`), action: { kind: "diff", path: file.path } });
-      if (!files.files.length) rows.push({ text: "Working tree clean" });
-      if (files.files.length > 4) rows.push({ text: `${files.files.length - 4} more in Files`, action: { kind: "files" } });
-      break;
-  }
-  rows.push({ text: "" }, ...activitySidebar(snapshot, selected, history));
-  return rows;
 }

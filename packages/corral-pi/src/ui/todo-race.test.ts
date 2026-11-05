@@ -41,31 +41,28 @@ for (const [name, outcome] of [
     const panels = new NativePanels({ identity, cwd: ".", snapshot });
     const terminal = new RecordingTerminal();
     panels.wrap(terminal).start(() => {}, () => {});
-    panels.tab = "Plan"; panels.focused = true;
     const captured: string[] = [];
     const render = (label: string) => {
       terminal.resize(140, 24);
       const wide = stripTerminalSequences(panels.renderSidebar(80, 24).join("\n"));
-      terminal.resize(80, 24);
-      const inline = stripTerminalSequences(panels.renderInline(80, 24).join("\n"));
-      captured.push(label, "WIDE", wide, "INLINE", inline);
-      return { wide, inline };
+      captured.push(label, "WIDE", wide);
+      return { wide };
     };
     try {
-      expect(render("Uncertain receipt while earlier read is blocked").inline).toContain("stale");
+      expect(render("Uncertain receipt while earlier read is blocked").wide).toContain("stale");
       blocked.resolve(canonical);
       expect(await olderRead).toBeFalse();
       expect(ledger.current?.revision).toBe(1);
       expect(ledger.unavailable).toBeTrue();
       const retained = render("Earlier read completed; uncertainty must remain visible");
-      expect(retained.wide).toContain("stale"); expect(retained.inline).toContain("stale");
+      expect(retained.wide).toContain("stale");
 
       // A new read ordered after the uncertainty can establish freshness, even at the same revision.
       load = async () => canonical;
       expect(await ledger.restore()).toBeTrue();
       expect(ledger.unavailable).toBeFalse();
       const reconciled = render("Later canonical read completed; freshness established");
-      expect(reconciled.wide).not.toContain("stale"); expect(reconciled.inline).not.toContain("stale");
+      expect(reconciled.wide).not.toContain("stale");
       const evidence = resolve(import.meta.dirname, "../../../../.evidence");
       mkdirSync(evidence, { recursive: true });
       writeFileSync(resolve(evidence, `T-689-race-${name}-render.txt`), captured.join("\n"));

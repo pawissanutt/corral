@@ -37,6 +37,7 @@ import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from
 import { corralToolNames, defineCorralTool } from "../tools/define.ts";
 import { installChrome } from "../ui/chrome.ts";
 import { NativePanels } from "../ui/panels.ts";
+import { persistedBases } from "../ui/review-store.ts";
 import type { PanelJob, PanelSnapshot } from "../ui/panels-view.ts";
 import { InspectorActivity } from "../ui/inspector.ts";
 import { corralRenderers } from "../ui/render.ts";
@@ -255,6 +256,8 @@ export function providerErrorClass(message: string): string {
   return "provider";
 }
 
+/** Changes "since session" compares against the HEAD each root had when this session first read it. */
+const REVIEW_BASE_ENTRY = "corral_review_base";
 const panelStats = (stats: { readonly tokens: { readonly total: number }; readonly cost: number }) => ({ tokens: stats.tokens.total, cost: stats.cost });
 
 // allow: SIZE_OK - Generation-bound Pi lifecycle state machine; relink decisions live in assistant-relink.ts.
@@ -327,6 +330,9 @@ export class HostSession {
       ...(options.identity.project && options.guidance?.projectDir && options.guidance.projectDir !== options.client.workspaceRoot
         ? { projectDir: options.guidance.projectDir } : {}),
       readProjects: signal => options.client.projectScopes(signal),
+      reviewBases: persistedBases(
+        () => options.sessionManager.getEntries().flatMap(entry => entry.type === "custom" && entry.customType === REVIEW_BASE_ENTRY ? [entry.data] : []),
+        data => options.sessionManager.appendCustomEntry(REVIEW_BASE_ENTRY, data)),
       canRenderTool: name => exploreLoadout(this.loadout).includes(name),
       inspection: () => options.client.inspectionSnapshot(),
       lifecycle: () => options.client.inspectionSnapshot("lifecycle"),

@@ -6,8 +6,8 @@ import { execFileSync } from "node:child_process";
 import { visibleWidth, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { PanelTerminal, type PanelSurface } from "./panel-terminal.ts";
 import { NativePanels } from "./panels.ts";
-import { box, panelLines, diffLine, PANEL_WARNING, type PanelSnapshot } from "./panels-view.ts";
-import { composerBar, contextLabel, contextSegment, overviewLines, statusBar } from "./panels-chrome.ts";
+import { box, diffLine, PANEL_WARNING, type PanelSnapshot } from "./panels-view.ts";
+import { composerBar, contextLabel, contextSegment, statusBar } from "./panels-chrome.ts";
 import { STATUS_BINDING, STATUS_ALERTS } from "./chrome.ts";
 import { parseStatus, readPanelDiff, readPanelFiles } from "./panels-git.ts";
 import { RecordingTerminal } from "../../test/support/panel-terminal.ts";
@@ -115,26 +115,14 @@ test("native panel boxes are bounded at supported widths, sanitize controls and 
   }
 });
 test("view data uses measured values and explicit unavailable/empty states, never fixture quotas or progress", () => {
-  const context = panelLines("Context", identity, snapshot, { kind: "unread" }).map(line => line.text).join("\n");
-  expect(context).toContain("1 active tools · 0 skills"); expect(context).toContain("5,678 recorded session tokens");
-  expect(context).toContain("job-1 · running");
-  expect(panelLines("Plan", identity, snapshot, { kind: "unread" }).map(line => line.text)).toContain("No canonical plan recorded");
   expect(contextLabel(null)).toBe("Context unavailable");
   expect(contextLabel(snapshot)).toBe("1.2k/10k · 12% context");
-  expect(overviewLines(snapshot, { kind: "ready", files: [] }).map(row => row.text)).toContain("Working tree clean");
-  expect(stripTerminalSequences(context)).not.toContain("42%");
-});
-test("ambient context inspection does not repeat composer model or context-usage chrome", () => {
-  const context = panelLines("Context", identity, snapshot, { kind: "unread" }).map(line => line.text).join("\n");
-  expect(context).not.toContain("openai-codex/example");
-  expect(context).not.toContain("1,234 / 10,000");
 });
 test("model and measured context have one ambient owner, with binding and refusals retained", () => {
   for (const width of [40, 52, 80, 105, 140]) {
     const statuses = new Map([[STATUS_BINDING, "● corral g3"], [STATUS_ALERTS, "2 tool denied"]]);
     const bar = statusBar(identity, { ...snapshot, cost: 1.234 }, statuses, width);
-    const rail = overviewLines(snapshot, { kind: "ready", files: [] }).map(row => row.text);
-    const screen = stripTerminalSequences([composerBar(snapshot, width), ...bar, ...rail].join("\n"));
+    const screen = stripTerminalSequences([composerBar(snapshot, width), ...bar].join("\n"));
     expect(screen.match(/example/g)).toHaveLength(1);
     expect(screen.match(/12%/g)).toHaveLength(1);
     expect(screen).toMatch(/1\.2k \/ 10k|1k\/10k/);
@@ -158,24 +146,6 @@ test("context segment shortens in steps, warns at 80% and stays explicit when un
   expect(stripTerminalSequences(contextSegment(at(null), 80))).not.toContain("0%");
   expect(stripTerminalSequences(contextSegment(null, 80))).toBe("Context unavailable");
 });
-test("narrow metadata is one row at rest; focused and expanded details are bounded and retain selection", () => {
-  const native = new NativePanels({ identity, cwd: work, snapshot: () => snapshot });
-  const physical = new RecordingTerminal(); physical.resize(80, 34);
-  native.wrap(physical);
-  expect(native.renderInline(80, 34)).toHaveLength(1);
-  expect(native.handleInput("\x1b[17~")).toBeTrue();
-  expect(native.renderInline(80, 34)).toHaveLength(3);
-  native.handleInput("\x1b"); expect(native.renderInline(80, 34)).toHaveLength(1);
-  native.handleInput("\x02"); expect(native.renderInline(80, 34)).toHaveLength(5);
-  physical.resize(52, 24);
-  for (const line of native.renderInline(52, 24)) expect(visibleWidth(line)).toBe(52);
-  expect(native.tab).toBe("Context");
-  native.dispose();
-});
-test("overview file rows carry literal file actions rather than generic Context inspection", () => {
-  const rows = overviewLines(snapshot, { kind: "ready", files: [{ status: " M", path: "a  file.ts" }] });
-  expect(rows.find(row => row.text === "M a file.ts")).toEqual({ text: "M a file.ts", action: { kind: "diff", path: "a  file.ts" } });
-});
 test("diff syntax distinguishes additions/removals from headers and sanitizes controls", () => {
   const theme = { fg: (color: string, text: string) => `${color}:${text}` };
   expect(diffLine("+new line", theme)).toBe("toolDiffAdded:+new line");
@@ -184,8 +154,6 @@ test("diff syntax distinguishes additions/removals from headers and sanitizes co
   expect(diffLine("--- a/file.ts", theme)).toBe("muted:--- a/file.ts");
   expect(diffLine("@@ -1 +1 @@", theme)).toBe("accent:@@ -1 +1 @@");
   expect(diffLine("+unsafe\x1b[2J", theme)).not.toContain("\x1b");
-  const rows = overviewLines(snapshot, { kind: "ready", files: Array.from({ length: 5 }, (_, i) => ({ status: " M", path: `${i}.ts` })) });
-  expect(rows.find(row => row.text === "1 more in Files")).toEqual({ text: "1 more in Files", action: { kind: "files" } });
 });
 for (const [kind, payload] of Object.entries({
   OSC: "\x1b]52;c;SU5KRUNURUQ=\x07", CSI: "\x1b[2J", C0: "\x01\x08\x09\x0d\x7f", C1: "\x85\x90\x9b\x9d\x9f", newline: "\n",
@@ -199,7 +167,6 @@ for (const [kind, payload] of Object.entries({
   const physical = new RecordingTerminal(), terminal = native.wrap(physical);
   terminal.start(() => {}, () => {});
   try {
-    native.tab = "Files";
     await native.loadFiles();
     const review = native.workbench.review;
     expect(review.files.map(file => file.path)).toEqual([path]);
@@ -216,16 +183,6 @@ for (const [kind, payload] of Object.entries({
     safe(native.renderSidebar(34, 20));
     terminal.write("\x1b[?1049h");
     expect(physical.writes.join("")).not.toContain(payload);
-    // Click the rendered rail file row through the public terminal input boundary.
-    const fileRow = native.renderSidebar(34, 20).findIndex(line => stripTerminalSequences(line).includes("› "));
-    expect(fileRow).toBeGreaterThan(0);
-    review.selected = undefined;
-    physical.send(`\x1b[<0;109;${fileRow + 1}M`);
-    expect(review.selected).toBe(path);
-    physical.send(`\x1b[<0;109;${fileRow + 1}m`);
-    // Narrow output uses the same actions and never passes controls to the SDK renderer.
-    physical.resize(80, 24); native.focused = true;
-    safe(native.renderInline(80, 24));
     expect(action?.kind).toBe("diff");
     if (action?.kind !== "diff") throw new Error("missing literal file action");
     await native.workbench.openFile(action.path);

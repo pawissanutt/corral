@@ -35,7 +35,7 @@ export interface ChangesModel {
 /** The patch the workbench last accepted; it stays on screen until a matching newer read is applied. */
 export interface DisplayedPatch { readonly root: string | undefined; readonly path: string | undefined; readonly comparison: string; readonly text: string; readonly head: string | undefined; readonly base: string | undefined; readonly file: PanelFile | undefined }
 
-const NAMES: Record<Comparison, string> = { candidate: "candidate", all: "working tree", unstaged: "unstaged", staged: "staged" };
+const NAMES: Record<Comparison, string> = { candidate: "candidate", session: "since session", all: "working tree", unstaged: "unstaged", staged: "staged" };
 const LETTERS: Record<string, string> = { Conflict: "U", New: "?", Renamed: "R", Deleted: "D", Added: "A", Modified: "M" };
 const WORDS: Record<string, readonly [string, Tone]> = { U: ["conflict", "error"], "?": ["new", "ok"], R: ["renamed", "accent"], D: ["deleted", "error"], A: ["added", "ok"], M: ["modified", "warn"] };
 const fg = (tone: Tone) => tone === "ok" ? PANEL_SUCCESS : tone === "warn" ? PANEL_WARNING : tone === "error" ? PANEL_ERROR : tone === "accent" ? PANEL_BLUE : PANEL_MUTED;
@@ -51,11 +51,12 @@ export function ago(ms: number): string {
 export function changesModel(r: ReviewStore, shown: DisplayedPatch, scopeLabel: string, hunk: number, now: number): ChangesModel {
   const label = comparisonLabel(r.comparison);
   const sameScope = shown.root === r.root && shown.path === r.selected && shown.comparison === label;
-  const head = sameScope ? shown.head : r.head, base = sameScope ? shown.base : r.candidateBase;
-  const range = r.comparison === "candidate" ? `${short(base)} → ${short(head)}` : r.comparison === "all" ? `${short(head)} → worktree`
+  const head = sameScope ? shown.head : r.head, base = sameScope ? shown.base : r.comparison === "session" ? r.sessionBase : r.candidateBase;
+  const range = r.comparison === "candidate" ? `${short(base)} → ${short(head)}` : r.comparison === "session" ? `${short(base)} → worktree` : r.comparison === "all" ? `${short(head)} → worktree`
     : r.comparison === "unstaged" ? "index → worktree" : `${short(head)} → index`;
   const state: ChangesModel["state"] = r.scopeRequired ? { text: "no project", tone: "warn" } : r.error ? { text: "stale", tone: "error" }
     : !r.checkedAt ? { text: r.refreshing ? "checking…" : "not loaded", tone: "muted" }
+    : r.comparison === "session" ? r.baseRewritten ? { text: "base rewritten · from merge-base", tone: "warn" } : { text: "commits + worktree", tone: "muted" }
     : r.comparison !== "candidate" ? { text: "uncommitted", tone: "muted" }
     : r.worktree === undefined ? { text: "committed", tone: "muted" }
     : r.worktree.length ? { text: "committed · worktree dirty", tone: "warn" } : { text: "committed · clean", tone: "ok" };
@@ -64,7 +65,7 @@ export function changesModel(r: ReviewStore, shown: DisplayedPatch, scopeLabel: 
     return { path: file.path, letter: LETTERS[fileStatus(file)] ?? "M", added: stat?.added, removed: stat?.removed };
   });
   const others = r.comparisons.filter(value => value !== r.comparison).map(value => ({ label: NAMES[value],
-    count: value === "candidate" ? undefined : r.worktree?.filter(file => relevantFile(file, value)).length }));
+    count: value === "candidate" || value === "session" ? undefined : r.worktree?.filter(file => relevantFile(file, value)).length }));
   const notes = [...(r.error ? ["STALE / unavailable: " + plainLabel(r.error)] : []), ...(r.limitNotice ? [r.limitNotice] : [])];
   const model = { comparison: NAMES[r.comparison], range, state, scope: `${plainLabel(scopeLabel)} @ ${plainLabel(r.branch)}`,
     updated: r.checkedAt ? `updated ${ago(now - r.checkedAt)} ago` : r.refreshing ? "checking Git…" : "not loaded",

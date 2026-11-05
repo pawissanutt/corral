@@ -63,11 +63,22 @@ test("review refresh detects external edits without changing selected path or fi
     await store.setComparison("unstaged"); expect(store.visible).toHaveLength(1);
   } finally { store.dispose(); r.cleanup(); }
 });
+test("since-session Changes keep work the agent committed after the session started", async () => {
+  const r = repo(), store = new ReviewStore(r.root, () => {});
+  try {
+    await store.refresh(); expect(store.files).toEqual([]);
+    writeFileSync(join(r.root, "src/a.ts"), "committed\n"); r.git("add", "."); r.git("commit", "-qm", "agent commit");
+    await store.refresh();
+    expect(store.comparison).toBe("session");
+    expect(store.files.map(file => file.path)).toEqual(["src/a.ts"]);
+    expect(store.patch).toContain("+committed");
+  } finally { store.dispose(); r.cleanup(); }
+});
 test("patch provenance captures scope and base atomically through overlapping comparison refresh", async () => {
   const r = repo(), store = new ReviewStore(r.root, () => {});
   try {
     writeFileSync(join(r.root, "src/a.ts"), "two\n"); r.git("add", "."); writeFileSync(join(r.root, "src/a.ts"), "three\n");
-    await store.refresh(); const first = store.patchSnapshot;
+    await store.setComparison("all"); const first = store.patchSnapshot;
     expect(first?.comparison).toBe("all"); expect(first?.text).toContain("-one");
     const old = store.refresh(); const next = store.setComparison("unstaged"); await old; await next;
     expect(store.patchSnapshot?.comparison).toBe("unstaged"); expect(store.patchSnapshot?.text).toContain("-two");
