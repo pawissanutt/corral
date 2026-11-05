@@ -3,7 +3,7 @@
 // so neither a resume, a compacted transcript nor a todo update earlier in the same turn leaves
 // the model behind the widget. Corral decides continuation when a turn ends; this module only
 // reads that decision, once per continuation key.
-import type { ContextEvent, ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 
 import type { TodoProgress } from "../ui/todo-widget.ts";
@@ -118,15 +118,6 @@ export function continuationText(due: DueContinuation): string {
     + "no longer wanted, mark its remaining steps done or dropped.";
 }
 
-type ContextMessage = ContextEvent["messages"][number];
-
-function prefixed(message: ContextMessage, text: string): ContextMessage {
-  if (!("role" in message) || message.role !== "user") return message;
-  const content = message.content;
-  if (typeof content === "string") return { ...message, content: `${text}\n\n${content}` };
-  return { ...message, content: [{ type: "text" as const, text }, ...content] };
-}
-
 export class RequestContext {
   private readonly acted = new Set<string>();
   private readonly reported = new Set<string>();
@@ -149,12 +140,19 @@ export class RequestContext {
     pi.on("context", (event) => {
       const text = this.summary();
       if (text === undefined) return undefined;
-      let at = event.messages.length - 1;
-      while (at >= 0 && !("role" in event.messages[at]! && event.messages[at]!.role === "user")) at--;
-      if (at < 0) return undefined;
-      const messages = [...event.messages];
-      messages[at] = prefixed(messages[at] as ContextMessage, text);
-      return { messages };
+      if (!event.messages.some((message) => message.role === "user")) return undefined;
+      const last = event.messages.at(-1);
+      if (last?.role === "user") {
+        const content = typeof last.content === "string" ? `${text}\n\n${last.content}`
+          : [{ type: "text" as const, text }, ...last.content];
+        return { messages: [...event.messages.slice(0, -1), { ...last, content }] };
+      }
+      // Tool rounds must not rewrite the earlier user message: that invalidates the cached
+      // history. This request-only reminder becomes the Claude bridge's uncached suffix.
+      return { messages: [...event.messages, {
+        role: "user" as const, timestamp: 0,
+        content: `${text}\n\nThis is context only, not a new owner instruction. Continue the latest user request using this plan.`,
+      }] };
     });
   }
 

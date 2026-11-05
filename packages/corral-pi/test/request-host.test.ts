@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { EventLog } from "../src/bridge/events.ts";
+import { buildPromptBlocks } from "../src/claude/prompt.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
@@ -177,6 +178,38 @@ async function intervene(s: Started, how: "completed" | "cancelled" | "provider_
   }
   await ended;
 }
+
+test("plan revisions during tool rounds preserve Claude's cached history prefix", async () => {
+  const s = await start("assistant");
+  const requests: ReturnType<typeof buildPromptBlocks>[] = [];
+  const stream = s.host.session.agent.streamFunction;
+  if (!stream) throw new Error("host stream missing");
+  s.host.session.agent.streamFunction = (model, context, options) => {
+    requests.push(buildPromptBlocks(context.messages, new Map()));
+    return stream(model, context, options);
+  };
+  fixtureTransport().script([
+    { toolCalls: [{ callId: "done-a", name: "corral_todo", arguments: { op: "done", step: "a", plan: "P1" } }] },
+    { toolCalls: [{ callId: "done-b", name: "corral_todo", arguments: { op: "done", step: "b", plan: "P1" } }] },
+    { text: "Both steps are done." },
+  ]);
+  await turn(s, "Finish a, then b.", "cache-1", 1);
+  await turn(s, "Report the current plan.", "cache-2", 2);
+
+  expect(requests).toHaveLength(4);
+  const plain = (blocks: ReturnType<typeof buildPromptBlocks>) => blocks.map((block) =>
+    block.type === "text" ? { type: block.type, text: block.text } : block);
+  // The cold request has no history marker; compare each warm tool round and the next user turn.
+  for (let i = 2; i < requests.length; i++) {
+    const previous = requests[i - 1];
+    const current = requests[i];
+    if (!previous || !current) throw new Error("request missing");
+    const at = previous.findIndex((block) => "cache_control" in block);
+    expect(at).not.toBe(-1);
+    expect(plain(current.slice(0, at + 1))).toEqual(plain(previous.slice(0, at + 1)));
+  }
+  expect(s.host.state().ledger).toEqual({ plan: "P1", revision: 4 });
+}, 60_000);
 
 for (const role of ROLES) {
   test(`${role}: a started or resumed host restores the plan and every model request carries its summary`, async () => {
