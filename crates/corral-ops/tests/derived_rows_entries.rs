@@ -188,11 +188,8 @@ fn measured(ctx: &Ctx) -> (Value, WorkSnapshot) {
         "prepared scheduling values must not reopen shared rows: {counts:?}"
     );
     assert_eq!(counts.get(Counter::EventDecodes), 0);
-    assert_eq!(
-        counts.get(Counter::ViewsOpened),
-        0,
-        "the prepared view is reused"
-    );
+    // Admission now reads its latch on one live view before the prepared projection opens.
+    assert_eq!(counts.get(Counter::ViewsOpened), 1);
     let due = serde_json::from_str::<Value>(&workset.next.evidence[0]).unwrap();
     assert_eq!(json!([due.clone()]), oracle(ctx));
     (due, counts)
