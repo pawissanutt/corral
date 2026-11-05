@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { ReviewStore } from "./review-store.ts";
+import { ReviewStore, sessionFiles, fileStatus } from "./review-store.ts";
 import { readPanelFiles, readPanelDiff, parseNumstat } from "./panels-git.ts";
 import { activityLines } from "./activity-view.ts";
 import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
@@ -67,11 +67,36 @@ test("since-session Changes keep work the agent committed after the session star
   const r = repo(), store = new ReviewStore(r.root, () => {});
   try {
     await store.refresh(); expect(store.files).toEqual([]);
+    const base = r.git("rev-parse", "HEAD").trim();
     writeFileSync(join(r.root, "src/a.ts"), "committed\n"); r.git("add", "."); r.git("commit", "-qm", "agent commit");
     await store.refresh();
     expect(store.comparison).toBe("session");
     expect(store.files.map(file => file.path)).toEqual(["src/a.ts"]);
     expect(store.patch).toContain("+committed");
+    expect(store.patchSnapshot?.base).toBe(base);
+    expect(store.patchSnapshot?.head).toBe(r.git("rev-parse", "HEAD").trim());
+  } finally { store.dispose(); r.cleanup(); }
+});
+test("session status composition preserves every unmerged variant and deduplicates retained untracked paths", () => {
+  for (const status of ["DD", "AU", "UD", "UA", "DU", "AA", "UU"]) {
+    const files = sessionFiles([{ path: "a", status: "M" }], [{ path: "a", status }]);
+    expect(files).toEqual([{ path: "a", status }]);
+    expect(fileStatus(files[0]!)).toBe("Conflict");
+  }
+  expect(sessionFiles([{ path: "a", status: "D" }], [{ path: "a", status: "??" }]))
+    .toEqual([{ path: "a", status: "??" }]);
+});
+test("session changes preserve merge conflicts instead of relabeling them Modified", async () => {
+  const r = repo(), store = new ReviewStore(r.root, () => {});
+  try {
+    await store.refresh();
+    r.git("checkout", "-qb", "other");
+    writeFileSync(join(r.root, "src/a.ts"), "other\n"); r.git("commit", "-qam", "other");
+    r.git("checkout", "-q", "-");
+    writeFileSync(join(r.root, "src/a.ts"), "ours\n"); r.git("commit", "-qam", "ours");
+    expect(() => r.git("merge", "other")).toThrow();
+    await store.refresh();
+    expect(store.files.find(file => file.path === "src/a.ts")?.status).toBe("UU");
   } finally { store.dispose(); r.cleanup(); }
 });
 test("patch provenance captures scope and base atomically through overlapping comparison refresh", async () => {
