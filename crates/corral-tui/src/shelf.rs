@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 
 use anyhow::{Result, bail};
-use corral_core::{ArtifactKind, Pin, PinRef, PinTarget, Task, resolve_pin};
+use corral_core::{ArtifactKind, Pin, PinRef, PinTarget};
 use corral_ops::{Ctx, Preview};
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent};
@@ -41,19 +41,6 @@ const LEAD: &str = " ★ ";
 pub(crate) struct Entry {
     pub pin: Pin,
     pub target: PinTarget,
-}
-
-/// Pins resolved against task and session artifact owners (unreadable pins.toml shows as no pins).
-pub(crate) fn load(ctx: &Ctx, owners: &[Task]) -> Vec<Entry> {
-    ctx.store
-        .pins()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|pin| {
-            let target = resolve_pin(&pin, owners, ctx.store.dir());
-            Entry { pin, target }
-        })
-        .collect()
 }
 
 /// Resolve only the heads and keyed artifacts actually named by shelf pins.
