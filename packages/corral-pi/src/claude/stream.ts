@@ -14,7 +14,7 @@ import { registerApiProvider } from "@earendil-works/pi-ai/compat";
 import { buildCustomToolServers } from "./custom-tools.ts";
 import { type StreamEvent, applyStreamEvent, assistantFailure, emptyOutput, mapStopReason, resultFailure, updateUsage }
   from "./events.ts";
-import { buildPromptBlocks, promptStream } from "./prompt.ts";
+import { PROMPT_CACHE_TTL, buildPromptBlocks, promptStream } from "./prompt.ts";
 import { loadSdk, resolveClaudeCode } from "./sdk.ts";
 import { HOST_TOOL_DENIAL_HOOKS, canUseTool, resolveSdkTools } from "./tools.ts";
 
@@ -69,6 +69,8 @@ export function claudeEnvironment(parent: NodeJS.ProcessEnv, token: string, conf
   env.CLAUDE_CODE_OAUTH_TOKEN = token;
   env.CLAUDE_CONFIG_DIR = configDir;
   env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
+  // A one-hour history marker after Claude Code's five-minute marker is rejected by the API.
+  env.CLAUDE_CODE_PROMPT_CACHE_TTL = PROMPT_CACHE_TTL;
   env.CLAUDE_AGENT_SDK_CLIENT_APP = "corral-pi";
   return env;
 }
