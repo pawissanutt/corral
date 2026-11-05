@@ -200,7 +200,7 @@ fn ext_run_forwards_every_argument_after_name_including_corral_flags() {
 fn ext_list_names_candidates_without_executing_them() {
     let fx = Fixture::new();
     let foo = fx.ext("foo", 0);
-    let report = fx.ext("report", 0);
+    let accept = fx.ext("accept", 0);
     let plain = fx.bin.join("corral-ext-noexec");
     std::fs::write(&plain, "#!/bin/sh\n").expect("write");
     std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o644)).expect("chmod");
@@ -213,11 +213,11 @@ fn ext_list_names_candidates_without_executing_them() {
         .find(|line| line.starts_with("foo "))
         .expect("foo listed");
     assert!(foo_line.contains(&foo.display().to_string()), "{stdout}");
-    let report_line = stdout
+    let accept_line = stdout
         .lines()
-        .find(|line| line.starts_with("report "))
-        .expect("report listed");
-    assert!(report_line.contains("corral ext run report"), "{stdout}");
+        .find(|line| line.starts_with("accept "))
+        .expect("accept listed");
+    assert!(accept_line.contains("corral ext run accept"), "{stdout}");
     assert!(
         !stdout.contains("noexec"),
         "non-executable files are not candidates"
@@ -234,11 +234,11 @@ fn ext_list_names_candidates_without_executing_them() {
     };
     assert_eq!(row(&foo)["name"], "foo");
     assert_eq!(row(&foo)["reserved"], false);
-    assert_eq!(row(&report)["reserved"], true);
+    assert_eq!(row(&accept)["reserved"], true);
 
     assert_eq!(fx.argv("foo"), None, "listing never executes a candidate");
     assert_eq!(
-        fx.argv("report"),
+        fx.argv("accept"),
         None,
         "listing never executes a candidate"
     );
@@ -256,17 +256,17 @@ fn missing_and_reserved_names_give_clap_unknown_subcommand_error() {
     );
     assert!(missing.stdout.is_empty());
 
-    let ordinary = fx.run(&["report", "a"], "", false);
-    fx.ext("report", 0);
-    let reserved = fx.run(&["report", "a"], "", true);
+    let ordinary = fx.run(&["accept", "a"], "", false);
+    fx.ext("accept", 0);
+    let reserved = fx.run(&["accept", "a"], "", true);
     assert_eq!(reserved.status.code(), Some(2));
     assert_eq!(
         text(&reserved.stderr),
         text(&ordinary.stderr),
         "a reserved name never falls through to its extension"
     );
-    assert!(text(&reserved.stderr).contains("unrecognized subcommand 'report'"));
-    assert_eq!(fx.argv("report"), None);
+    assert!(text(&reserved.stderr).contains("unrecognized subcommand 'accept'"));
+    assert_eq!(fx.argv("accept"), None);
 
     let ext_run = fx.run(&["ext", "run", "nosuch-ext-zz"], "", true);
     assert_eq!(ext_run.status.code(), Some(1));
