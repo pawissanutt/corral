@@ -456,7 +456,9 @@ preserves previous generations and their digests.
 It sends only GET, without caller-supplied headers, authorization, a cookie jar or
 provider credentials. HTML is parsed inertly and converted locally to Markdown,
 using an explicit main/article region, Readability, or a cleaned-body fallback.
-Scripts, styles, hidden elements and inline image payloads are removed. No scripts,
+Scripts, styles, attribute-hidden elements, literal inline `display:none`/`visibility:hidden`
+subtrees and inline image payloads are removed. Empty landmarks fall back to useful
+content elsewhere. External stylesheets and computed CSS are not evaluated. No scripts,
 subresources, remote renderers or secondary requests run. Text/Markdown/JSON/XML
 remain textual; unsupported binary types/samples are refused (no PDF/image conversion).
 HTML conversion refuses pages above 20,000 DOM elements. Raw mode also stays bounded.

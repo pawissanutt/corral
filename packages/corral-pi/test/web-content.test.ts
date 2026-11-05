@@ -49,26 +49,34 @@ test("web fetch bounds the complete model result, even for escaped minified cont
 
 test("clean HTML preserves docs and safe links without scripts, hidden content or inline image payloads", async () => {
   // Given a documentation page with boilerplate and payloads that should never reach the model.
-  const web = fixture(`<html><head><style>STYLE_NOISE</style></head><body>
-    <nav>NAV_NOISE</nav><main><h1>Guide</h1><p>Read <a href="../api">API</a>.</p>
-    <pre><code class="language-ts">const x = 1;</code></pre><ul><li>First</li></ul>
-    <table><tr><th>Name</th><th>Value</th></tr><tr><td>Port</td><td>8080</td></tr></table>
-    <script>SCRIPT_NOISE</script><p hidden>HIDDEN_NOISE</p><p aria-hidden="true">ARIA_NOISE</p>
-    <img src="data:image/png;base64,IMAGE_PAYLOAD" alt="Diagram">
-    <a href="javascript:alert(1)">Unsafe link</a><iframe src="https://remote.example/">FRAME_NOISE</iframe>
-    </main><footer>FOOTER_NOISE</footer></body></html>`, "text/html");
-  // When fetched in the default mode, then only inert readable Markdown and useful structure remain.
-  const result = await page(web, "web_fetch", { url });
-  expect(result.method).toBe("main");
-  for (const useful of ["# Guide", "[API](https://docs.example.org/api)", "```ts", "const x = 1;", "| Name", "| Port", "Diagram"]) {
-    expect(result.body).toContain(useful);
+  for (const [open, close] of [["<main>", "</main>"], ['<div role="main">', "</div>"], ["<article>", "</article>"]]) {
+    const web = fixture(`<html><head><style>STYLE_NOISE</style></head><body>
+      <nav>NAV_NOISE</nav>${open}<h1>Guide</h1><p>Read <a href="../api">API</a>.</p>
+      <pre><code class="language-ts">const x = 1;</code></pre><ul><li>First</li></ul>
+      <table><tr><th>Name</th><th>Value</th></tr><tr><td>Port</td><td>8080</td></tr></table>
+      <script>SCRIPT_NOISE</script><p hidden>HIDDEN_NOISE</p><p aria-hidden="true">ARIA_NOISE</p>
+      <p style="display:none">DISPLAY_NOISE</p><p style="visibility:hidden">VISIBILITY_NOISE</p>
+      <section style="DISPLAY: /*hidden*/ NONE !important"><p>NESTED_NOISE</p></section>
+      <p style="visibility: hidden !important">IMPORTANT_NOISE</p>
+      <p style="display:none !important;display:block">CASCADE_NOISE</p>
+      <p style="display:none;display:block">Visible override</p>
+      <img src="data:image/png;base64,IMAGE_PAYLOAD" alt="Diagram">
+      <a href="javascript:alert(1)">Unsafe link</a><iframe src="https://remote.example/">FRAME_NOISE</iframe>
+      ${close}<footer>FOOTER_NOISE</footer></body></html>`, "text/html");
+    // When fetched in the default mode, then only inert readable Markdown and useful structure remain.
+    const result = await page(web, "web_fetch", { url });
+    expect(result.method).toBe("main");
+    for (const useful of ["# Guide", "[API](https://docs.example.org/api)", "```ts", "const x = 1;", "| Name", "| Port", "Diagram"]) {
+      expect(result.body).toContain(useful);
+    }
+    expect(result.body).toMatch(/^-\s+First$/m);
+    for (const noise of ["NOISE", "IMAGE_PAYLOAD", "javascript:", "data:image"]) expect(result.body).not.toContain(noise);
+    expect(result.body).toContain("Visible override");
+    expect(web.requests()).toBe(1);
   }
-  expect(result.body).toMatch(/^-\s+First$/m);
-  for (const noise of ["NOISE", "IMAGE_PAYLOAD", "javascript:", "data:image"]) expect(result.body).not.toContain(noise);
-  expect(web.requests()).toBe(1);
 });
 
-test("article extraction and cleaned fragment fallback do not require explicit main containers", () => {
+test("article extraction and cleaned fragment fallback do not require explicit main containers", async () => {
   // Given an ordinary article and a short fragment that is not Readability-shaped.
   const article = `<html><head><title>Article</title></head><body><div class="entry-content"><h1>Article</h1>
     <p>This article explains bounded web content, its benefits, and the implementation details. The reader should preserve these sentences.</p>
@@ -78,6 +86,16 @@ test("article extraction and cleaned fragment fallback do not require explicit m
   expect(readable.body).toContain("A second paragraph");
   const fragment = renderContent(source("<p>Small fragment</p><script>UNWANTED</script>"), "markdown");
   expect(fragment.body).toBe("Small fragment");
+  for (const empty of ["<main></main>", '<div role="main"> </div>', "<article></article>",
+    "<main><script>discard()</script></main>", '<main style="display:none">Hidden</main>',
+    "<main><nav>Navigation only</nav></main>"]) {
+    for (const useful of ["<p>Useful documentation</p>", "<main><h1>Useful documentation</h1></main>"]) {
+      const result = await page(fixture(`<html><body>${empty}${useful}</body></html>`, "text/html"), "web_fetch", { url });
+      expect(result.body).toContain("Useful documentation");
+      expect(result.body).not.toContain("Hidden");
+      expect(result.truncated).toBeFalse();
+    }
+  }
 });
 
 test("raw mode remains bounded, while textual non-HTML content stays verbatim", async () => {
