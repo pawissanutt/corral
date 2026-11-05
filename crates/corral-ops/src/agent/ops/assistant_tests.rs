@@ -493,9 +493,9 @@ fn new_fences_the_stopped_generation_preserving_its_transcript_and_resume() {
     let before = std::fs::read(&file).unwrap();
     let ctx = f::ctx_at(fx.root());
     // A live generation cannot be suspended by this post-exit operation.
-    assert!(suspend(&ctx, &id, 1).is_err());
+    assert!(suspend(&ctx, &id, 1, "new assistant").is_err());
     host.kill();
-    suspend(&ctx, &id, 1).unwrap();
+    suspend(&ctx, &id, 1, "new assistant").unwrap();
     assert!(ctx.store.get_assistant(&id).unwrap().ended.is_none());
     assert_eq!(std::fs::read(&file).unwrap(), before);
     let dir = assistant_runtime_dir(&ctx.store, &id).join("g1");
@@ -516,7 +516,7 @@ fn new_fences_the_stopped_generation_preserving_its_transcript_and_resume() {
     resume(&ctx, &id, OTHER, &Overrides::default()).unwrap();
     assert_eq!(bootstrap(&fx, &id, 2)["resume_session"], json!(file));
     // An old supervisor must not suspend the session's resumed generation.
-    assert!(suspend(&ctx, &id, 1).is_err());
+    assert!(suspend(&ctx, &id, 1, "new assistant").is_err());
     assert!(
         ctx.store
             .get_assistant_container(&id)

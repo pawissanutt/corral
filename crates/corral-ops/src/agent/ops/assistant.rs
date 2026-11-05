@@ -330,9 +330,9 @@ pub fn resume(ctx: &Ctx, id: &str, pane: &str, overrides: &Overrides) -> Result<
     Ok((fenced, prepared))
 }
 
-/// `/new` leaves the outgoing conversation open, but its stopped host has no remaining authority.
+/// Leaves the conversation open, but its stopped host has no remaining authority.
 /// Only the supervisor calls this, after waiting for the child to exit.
-pub(crate) fn suspend(ctx: &Ctx, id: &str, generation: u32) -> Result<()> {
+pub(crate) fn suspend(ctx: &Ctx, id: &str, generation: u32, reason: &str) -> Result<()> {
     let container = ctx.store.get_assistant_container(id)?;
     anyhow::ensure!(
         container.state.binding.generation == generation && !host_alive(&container.state)?,
@@ -342,13 +342,13 @@ pub(crate) fn suspend(ctx: &Ctx, id: &str, generation: u32) -> Result<()> {
         &ctx.store,
         &ContainerRef::Assistant { session: id.into() },
         generation,
-        "new assistant",
+        reason,
     )?;
     remove_control(&ctx.store, id, generation)?;
     ctx.store.log_event(
         None,
         "assistant_suspended",
-        json!({"session": id, "generation": generation, "reason": "new assistant"}),
+        json!({"session": id, "generation": generation, "reason": reason}),
     )?;
     Ok(())
 }
@@ -403,7 +403,7 @@ pub fn end(ctx: &Ctx, id: &str) -> Result<(AssistantSession, Option<String>)> {
 }
 
 /// Runs the prepared host as a child in this pane and waits: the checks and launch message of
-/// `corral agent launch`, without exec, so the session can end when the host exits cleanly.
+/// `corral agent launch`, without exec, so the supervisor can suspend the stopped host.
 #[cfg(unix)]
 pub fn run_host(prepared: &Prepared) -> Result<std::process::ExitStatus> {
     let args = prepared.launch_args();
