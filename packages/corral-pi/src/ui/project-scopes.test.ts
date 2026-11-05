@@ -96,7 +96,7 @@ test("project-less assistant shows actionable scope choice, not a misleading cle
     expect(panels.workbench.files().some(row => row.action?.kind === "scope")).toBeTrue();
     expect(panels.workbench.review.checkedAt).toBeUndefined();
     const plan = stripTerminalSequences(panels.renderSidebar(34, 26).join("\n"));
-    expect(plan).toContain("PLAN 0/2"); expect(plan).toContain("Implement project-aware panels");
+    expect(plan).toMatch(/Plan\s+0 of 2/); expect(plan).toContain("Implement project-aware panels");
   } finally { panels.dispose(); }
 });
 
@@ -111,6 +111,6 @@ test("the rail plan marks waiting steps and stays width-bounded without scrollin
       for (const line of lines) expect(visibleWidth(line)).toBe(34);
     }
     const text = stripTerminalSequences(panels.renderSidebar(34, 18).join("\n"));
-    expect(text).toContain("Verify"); expect(text).toContain("⏸");
+    expect(text).toContain("Verify"); expect(text).toMatch(/Verify\s+\?/);
   } finally { terminal.stop(); panels.dispose(); }
 });

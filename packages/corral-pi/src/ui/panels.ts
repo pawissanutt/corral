@@ -39,6 +39,14 @@ const PANEL_VIEWS: Readonly<Record<string, MainView>> = {
   agents: "agents", usage: "usage", evidence: "evidence", inbox: "inbox",
 };
 
+/** Who this pane is, in place of a generic heading: the task and role, the assistant, or the PM. */
+function railHeading(identity: HostIdentity): string {
+  const role = identity.role.replaceAll("_", " ");
+  if (identity.task) return `${identity.task} · ${role}`;
+  if (identity.role === "assistant") return identity.assistant ? `Assistant · ${identity.assistant}` : "Assistant";
+  if (identity.role === "pm") return identity.project ? `PM · ${identity.project}` : "PM";
+  return role[0]?.toUpperCase() + role.slice(1);
+}
 export class NativePanels implements PanelSurface {
   readonly workbench: NativeWorkbench;
   sidebarEnabled = true;
@@ -102,7 +110,7 @@ export class NativePanels implements PanelSurface {
     const source: NavSource = { taskBound: wb.task.bound, proof: !!identity.task && !!identity.run,
       snapshot: this.options.snapshot(), review: wb.review, inspection: wb.inspection, inbox: wb.inbox, view: wb.view };
     const frame = renderNav(navRows(source), view => view === wb.view || view === "activity" && ACTIVITY_VIEWS.has(wb.view),
-      width, height, this.drag ? `⇔ ${width} cols` : "GO TO", navSections(source));
+      width, height, this.drag ? `⇔ ${width} cols` : railHeading(identity), navSections(source));
     this.navHits = frame.hits;
     return frame.lines;
   }

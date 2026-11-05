@@ -104,7 +104,7 @@ test("disconnected/legacy inspectors and activity never present unknown as succe
   expect(inspectorActivity(info).join("\n")).toContain("No tool receipt observed");
   const panels = new NativePanels({ identity, cwd: ".", snapshot: () => snapshot });
   const rendered = stripTerminalSequences(panels.renderSidebar(80, 20).join("\n"));
-  expect(rendered).toContain("PLAN"); expect(rendered).toContain("stale");
+  expect(rendered).toContain("Plan"); expect(rendered).toContain("stale");
   const evidence = resolve(import.meta.dirname, "../../../../.evidence");
   mkdirSync(evidence, { recursive: true });
   writeFileSync(resolve(evidence, "T-689-adapter-plan-render.txt"), rendered);
