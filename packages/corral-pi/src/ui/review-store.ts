@@ -42,6 +42,14 @@ export function fileStatus(file: PanelFile): string {
   if (file.status.includes("A")) return "Added";
   return "Modified";
 }
+/** Base-relative changes retain live conflicts and untracked files, with one row per path. */
+export function sessionFiles(changed: readonly PanelFile[], worktree: readonly PanelFile[]): PanelFile[] {
+  const files = new Map(changed.map(file => [file.path, file]));
+  for (const file of worktree) {
+    if (file.status === "??" || fileStatus(file) === "Conflict") files.set(file.path, file);
+  }
+  return [...files.values()].slice(0, FILE_LIMIT);
+}
 export interface FileStat { readonly added: number | null; readonly removed: number | null }
 export interface PatchSnapshot { readonly root: string; readonly path: string; readonly comparison: Comparison; readonly head: string | undefined; readonly base?: string; readonly at: number; readonly text: string; readonly file: PanelFile; readonly stat: FileStat | undefined }
 export class ReviewStore {
@@ -115,7 +123,7 @@ export class ReviewStore {
           panelGit(root, ["diff", "--no-ext-diff", "--no-textconv", "--find-renames", "--name-status", "-z", sessionBase], this.abort.signal),
           panelGit(root, ["diff", "--no-ext-diff", "--no-textconv", "--find-renames", "--numstat", "-z", sessionBase], this.abort.signal).catch(() => ""),
         ]);
-        files = [...parseChangedPaths(paths), ...worktree.filter(file => file.status === "??")].slice(0, FILE_LIMIT);
+        files = sessionFiles(parseChangedPaths(paths), worktree);
         statText = stats;
       } else statText = await panelGit(root, ["diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z", ...comparisonArgs(comparison === "session" ? "all" : comparison)], this.abort.signal).catch(() => "");
       if (this.disposed || epoch !== this.epoch) return;
@@ -157,13 +165,13 @@ export class ReviewStore {
   async select(path: string): Promise<void> { this.selected = path; this.changed(); await this.loadSelected(); }
   private async loadSelected(): Promise<void> {
     const file = this.current, epoch = ++this.patchEpoch, root = this.root, comparison = this.comparison;
-    const head = comparison === "session" ? this.sessionBase : this.head;
+    const head = this.head;
     if (!file) { this.patchSnapshot = undefined; this.patchPath = this.selected; this.patchComparison = comparison; this.patchAt = Date.now(); this.patch = this.error ?? (this.selected ? "Selected path is no longer in this comparison. Choose another file with j/k." : this.files.length ? "No files match the current filter." : comparison === "candidate" ? "No committed candidate changes." : "Working tree clean."); this.changed(); return; }
     try {
       const base = comparison === "session" ? this.sessionBase : this.candidateBase, stat = this.stats.get(file.path);
       const metadata = { file: { ...file }, stat: stat ? { ...stat } : undefined };
       const patch = comparison === "candidate" ? await readCandidateDiff(root, file, base, head, this.abort.signal)
-        : await readPanelDiff(root, file, this.abort.signal, comparison, head);
+        : await readPanelDiff(root, file, this.abort.signal, comparison, comparison === "session" ? base : head);
       if (!this.disposed && epoch === this.patchEpoch && root === this.root && comparison === this.comparison && file.path === this.selected) {
         this.patch = patch; this.patchComparison = comparison; this.patchPath = file.path; this.patchAt = Date.now();
         this.patchSnapshot = { ...metadata, root, path: file.path, comparison, head, ...((comparison === "candidate" || comparison === "session") && base ? { base } : {}), at: this.patchAt, text: patch }; this.changed();
