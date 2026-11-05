@@ -14,7 +14,12 @@ pub enum CriteriaCmd {
         file: PathBuf,
     },
     /// Show the registered manifest and current spec digest
-    List { id: String },
+    List {
+        id: String,
+        /// Output is always JSON; accepted for consistency with other read commands
+        #[arg(long = "json")]
+        _json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -46,7 +51,7 @@ pub fn criteria(ctx: &Ctx, cmd: CriteriaCmd) -> Result<()> {
             let task = corral_ops::register_criteria(ctx, &id, &manifest)?;
             println!("{}", serde_json::to_string_pretty(&task.completion)?);
         }
-        CriteriaCmd::List { id } => {
+        CriteriaCmd::List { id, .. } => {
             let task = ctx.store.get(&id)?;
             println!(
                 "{}",

@@ -20,7 +20,7 @@ impl std::fmt::Display for AssistantRefused {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "assistant_refused: {} needs the owner; use corral_owner_action or corral pm inbox post",
+            "assistant_refused: {} needs the owner; route with corral pm inbox post, or use corral_owner_action only for a supported kind explicitly requested by the owner",
             self.0
         )
     }
