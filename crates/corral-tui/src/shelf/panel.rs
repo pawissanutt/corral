@@ -41,8 +41,8 @@ impl ShelfPanel {
     }
 
     fn reload(&mut self, ctx: &Ctx) {
-        let tasks = ctx.store.list().unwrap_or_default();
-        self.entries = super::load(ctx, &tasks);
+        // The same head resolver as the strip and `open`: blob-backed snapshots are available.
+        self.entries = super::load_heads(ctx).unwrap_or_default();
         self.sel = self.sel.min(self.entries.len().saturating_sub(1));
     }
 

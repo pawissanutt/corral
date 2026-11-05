@@ -165,8 +165,16 @@ fn reports_keep_one_follow_latest_pin_that_opens_the_newest_page_live() {
     let ctx = Ctx::from_store(store);
     let now = corral_core::clock::now();
     let first = report_at(&ctx, "30d", None, now).unwrap();
-    let second = report_at(&ctx, "30d", None, now).unwrap();
-    assert_eq!(first.html, second.html);
+    // A later snapshot regenerates different content, as each real report does.
+    let second = report_at(
+        &ctx,
+        "30d",
+        None,
+        now.checked_add(jiff::SignedDuration::from_secs(60))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_ne!(first.html, second.html);
     let pins = ctx.store.pins().unwrap();
     assert_eq!(pins.len(), 1);
     // The board's Enter resolves pins through the head API (`shelf::open`).
