@@ -257,6 +257,8 @@ fn project(
     }
     // A renewed projection reuses the real host observation, never repeats the probe.
     let admission = if attention.is_none() {
+        // Moving discovery before the view must not hide its FU-3 work from accounting.
+        let _hot = corral_core::work::HotScope::enter();
         Some(crate::resources::read_admission(ctx)?)
     } else {
         None
