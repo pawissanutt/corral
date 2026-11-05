@@ -15,6 +15,15 @@ test("only interactive roles can enable the dialog in the host loadout", () => {
 
 const params = { questions: [{ question: "Which?", options: ["One", "Two"], freeText: true }] };
 
+test("non-blocking clarification returns pending without opening a modal", async () => {
+  const ctx = { hasUI: true, mode: "tui", ui: { select: async () => { throw new Error("modal opened before owner requested it"); } } } as unknown as ExtensionToolContext;
+  const pending = { ask: () => ({ version: 1 as const, id: "Q1", status: "pending" as const,
+    session: "test", generation: 1, key: "id", questions: params.questions, expires: 123 }), withdraw: () => "withdrawn" };
+  const tool = askUserTool(async () => { throw new Error("no answer exists"); }, pending);
+  const result = await tool.execute("id", { ...params, nonBlocking: true }, undefined, undefined, ctx);
+  expect(result.details).toMatchObject({ id: "Q1", status: "pending" });
+});
+
 test("dialog presents options and returns and records the owner's choice and text", async () => {
   const seen: unknown[] = [];
   const recorded: string[] = [];
@@ -37,6 +46,14 @@ test("cancel or timeout at either dialog is no answer and records no consent", a
   const second = await askUserTool(async (answer) => { recorded.push(answer); return answer; })
     .execute("id", params, undefined, undefined, duringText);
   expect(second.content).toEqual([{ type: "text", text: "no answer" }]);
+  for (const unavailable of [{ hasUI: false, mode: "print" }, { hasUI: true, mode: "rpc" }]) {
+    const result = await askUserTool(async answer => { recorded.push(answer); return answer; })
+      .execute("id", { ...params, nonBlocking: true }, undefined, undefined, unavailable as unknown as ExtensionToolContext);
+    expect(result.details).toMatchObject({ status: "no answer" });
+  }
+  const busy = await askUserTool(async () => "not called", undefined, () => true)
+    .execute("busy", params, undefined, undefined, duringText);
+  expect(busy.details).toMatchObject({ status: "no answer", reason: "another owner/permission dialog is open" });
   expect(recorded).toEqual([]);
 });
 

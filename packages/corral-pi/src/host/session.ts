@@ -46,6 +46,9 @@ import { type DueContinuation, RequestContext, continuationText } from "./reques
 import type { HostCapabilities, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
 import { askUserEnabled, askUserTool } from "./ask-user.ts";
+import { PendingQuestions, QUESTION_ENTRY } from "./pending-questions.ts";
+import { recordQuestionOwnerInput } from "./question-owner-input.ts";
+import { OwnerQuestionUi } from "../ui/owner-questions.ts";
 import { type HerdrLifecycle, answeredKeys } from "./herdr.ts";
 import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, guardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
@@ -273,6 +276,8 @@ export class HostSession {
   private readonly roleContext: RoleContext;
   private readonly localTools: readonly ToolDefinition[];
   private dialogPi: ExtensionAPI | undefined;
+  private readonly ownerQuestions: PendingQuestions | undefined;
+  private questionUi: OwnerQuestionUi | undefined;
   private readonly jobs: JobRuntime | undefined;
   /** The generation's Code Mode kernel and its nested-call bridge (T-683); absent when disabled. */
   private readonly code: CodeRuntime | undefined;
@@ -468,6 +473,26 @@ export class HostSession {
       });
     }
     const dialogEnabled = askUserEnabled(options.identity.role, options.capabilities?.enabled ?? []);
+    this.ownerQuestions = dialogEnabled ? new PendingQuestions({
+      session: () => options.sessionManager.getSessionId(), generation: options.identity.generation,
+      entries: () => options.sessionManager.getEntries(),
+      append: value => { options.sessionManager.appendCustomEntry(QUESTION_ENTRY, value); },
+      changed: question => {
+        if (question) options.events.emit("owner_question", { id: question.id, status: question.status });
+        this.questionUi?.changed(question);
+      },
+      record: async (text, question) => {
+        if (!this.bound || this.closing) throw new Error("question_host_unbound_or_closing");
+        return options.identity.role === "assistant" ? recordQuestionOwnerInput({
+          manager: options.sessionManager, client: options.client, events: options.events,
+          generation: options.identity.generation, turn: this.currentTurn(), question, text,
+        }) : text;
+      },
+      deliver: async (text, key) => {
+        const result = await this.submit({ text, idempotencyKey: key, origin: "ask-user", busyPolicy: "follow_up" }, key);
+        return result.disposition === "started" || result.disposition === "queued";
+      },
+    }) : undefined;
     this.localTools = [...(lspEnabled ? roleLocal : roleLocal.filter((tool) => !tool.name.startsWith("lsp_"))),
       ...(dialogEnabled ? [askUserTool(async (answer) => {
         if (!this.dialogPi) throw new Error("dialog session is unavailable");
@@ -475,7 +500,7 @@ export class HostSession {
         const message = id ? ownerInputText(answer, id) : answer;
         this.dialogPi.sendUserMessage(message, { deliverAs: "followUp" });
         return message;
-      })] : []),
+      }, this.ownerQuestions, () => this.questionUi?.busy === true)] : []),
       ...(this.additionalLsp?.tools ?? []), ...(webEnabled && options.network.web ? webTools(options.network.web,
         subscriptionSearch ? async (id, query, count, signal) => {
           if (!this.auxiliary) throw new Error("subscription search is disabled");
@@ -685,6 +710,10 @@ export class HostSession {
 
   private async extension(pi: ExtensionAPI): Promise<void> {
     this.dialogPi = pi;
+    if (this.ownerQuestions) {
+      this.questionUi = new OwnerQuestionUi(this.ownerQuestions, () => this.bound && !this.closing);
+      this.questionUi.install(pi);
+    }
     const code = this.code;
     if (code) {
       pi.registerTool(codemodeTool(code, (names) =>
@@ -889,7 +918,14 @@ export class HostSession {
     observeTerminalInput(session, this.options.events);
     this.panelStats = undefined;
     this.unsubscribe = session.subscribe((event) => {
-      if (event.type === "message_end") this.panelStats = undefined;
+      if (event.type === "message_end") {
+        this.panelStats = undefined;
+        if (event.message.role === "user") {
+          const content = event.message.content;
+          this.ownerQuestions?.observeUser(typeof content === "string" ? content
+            : content.map(p => p.type === "text" ? p.text : "").join(""));
+        }
+      }
       if (event.type === "agent_start") this.turnStarted();
       else if (event.type === "agent_settled") this.turnEnded(event.aborted);
       else if (event.type === "queue_update") {
@@ -1084,6 +1120,7 @@ export class HostSession {
 
   async close(): Promise<void> {
     this.closing = true;
+    this.questionUi?.close();
     this.unsubscribePanels?.();
     this.panels?.dispose();
     const released = this.options.herdr?.close();
@@ -1128,6 +1165,7 @@ export class HostSession {
     if ((this.options.capabilities?.catalog ?? 0) >= 7) await this.budget.refresh();
     await this.writePermissionNotice?.();
     this.options.events.emit("bound", { generation: this.options.identity.generation, session_id: sessionId });
+    await this.questionUi?.recover();
     return receipt;
   }
 
@@ -1279,6 +1317,8 @@ export class HostSession {
       },
       jobs: this.jobs?.state() ?? null,
       codemode: this.code?.state() ?? null,
+      owner_questions: this.ownerQuestions?.list().map(q => ({ id: q.id, status: this.ownerQuestions?.status(q.id),
+        session: q.session, generation: q.generation, expires: q.expires })) ?? null,
       checkpoints: this.checkpoints !== undefined,
       auxiliary: this.auxiliary?.state() ?? null,
       budget: (this.options.capabilities?.catalog ?? 0) >= 7 ? this.budget.state() : { unavailable: "legacy generation predates budget accounting" },
