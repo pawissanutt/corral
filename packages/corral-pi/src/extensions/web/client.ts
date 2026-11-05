@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Fetch } from "../../auth/types.ts";
 import { checkPublicTarget, type Lookup, resolveHost, WebError } from "./policy.ts";
 import type { WebSettings } from "./settings.ts";
+import { requireTextType } from "./mime.ts";
 
 export interface WebPage {
   readonly url: string;
@@ -113,8 +114,13 @@ export function createWebAccess(settings: WebSettings, send: Fetch, options: Web
           url = next;
           continue;
         }
+        const contentType = response.headers.get("content-type") ?? "";
+        try { requireTextType(contentType); } catch (error) {
+          await response.body?.cancel();
+          throw error;
+        }
         return {
-          url: url.href, status: response.status, content_type: response.headers.get("content-type") ?? "",
+          url: url.href, status: response.status, content_type: contentType,
           ...await readBody(response, settings.max_bytes, signal),
         };
       }

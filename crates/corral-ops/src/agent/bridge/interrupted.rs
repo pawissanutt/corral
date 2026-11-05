@@ -32,14 +32,15 @@ const TWO_PHASE: [&str; 6] = [
     "plan_verdict",
     "owner_action",
 ];
-// Public fetch is GET-only; tool_search and job_output read local caches. Search may
-// spend subscription quota, so a missing result is not proof of no effect.
-const NO_EFFECT: [&str; 7] = [
+// Public fetch is GET-only; web_read, tool_search and job_output read local caches.
+// Search may spend subscription quota, so a missing result is not proof of no effect.
+const NO_EFFECT: [&str; 8] = [
     "read",
     "grep",
     "find",
     "ls",
     "web_fetch",
+    "web_read",
     "tool_search",
     "job_output",
 ];
@@ -622,10 +623,12 @@ mod tests {
     #[test]
     fn get_only_web_tools_are_interrupted_without_local_effects() {
         // Public GET has no local effect; search may have consumed subscription quota.
-        assert_eq!(
-            classify_upstream("web_fetch", Some("saved.diff")),
-            (ResumeClass::InterruptedNoEffect, None)
-        );
+        for tool in ["web_fetch", "web_read"] {
+            assert_eq!(
+                classify_upstream(tool, Some("saved.diff")),
+                (ResumeClass::InterruptedNoEffect, None)
+            );
+        }
         assert_eq!(
             classify_upstream("web_post", None).0,
             ResumeClass::OutcomeUnknown
