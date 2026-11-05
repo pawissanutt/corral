@@ -54,7 +54,7 @@ test("every upstream built-in extension is disabled and resource discovery is of
   });
   expect(restrictedSettings()).toEqual({
     cacheWarming: "off", enableInstallTelemetry: false, enableAnalytics: false, enableSkillCommands: false,
-    quietStartup: true, transport: "sse", extensions: [],
+    quietStartup: true, showCacheMissNotices: true, transport: "sse", extensions: [],
   });
 });
 
