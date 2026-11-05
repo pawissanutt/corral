@@ -21,7 +21,6 @@ const adapter = panels.wrap(terminal); adapter.start(() => {}, () => {}); adapte
 const main = panels.mainView(new Text("No conversation attached", 0, 0));
 const root = new VStack([
   { component: main, basis: 0, grow: 1, minSize: 1 },
-  { component: { render: width => panels.renderInline(width, terminal.rows), invalidate() {} }, basis: "auto", shrink: 0 },
   { component: new Text("Read-only render capture · no host, editor or provider attached", 0, 0), basis: 2, shrink: 0 },
 ]);
 const results: Record<string, unknown> = { source: { task, run }, runtime: "production native components, isolated in-memory terminal; not a bound host", frames: [] };
@@ -51,17 +50,6 @@ try {
   await panels.workbench.selectRelative(1);
   if (panels.workbench.review.selected === firstSelected) throw new Error("Keyboard did not change the selected file");
   frame("changes-keyboard", 140, 46);
-  // Actual production sidebar hit routing opens a literal captured path, not a fabricated diff.
-  panels.tab = "Files";
-  const sidebar = panels.renderSidebar(34, 44).map(stripTerminalSequences);
-  const target = panels.workbench.review.files[0];
-  const y = target ? sidebar.findIndex(row => row.includes(target.path.slice(0, 14))) : -1;
-  if (y < 0) throw new Error("Real file pointer target not visible");
-  {
-    panels.handleInput(`\x1b[<0;110;${y + 1}M`);
-    await panels.loadFiles();
-    if (panels.workbench.review.selected !== target?.path) throw new Error("Pointer selected wrong diff");
-  }
   frame("changes-narrow", 80, 34);
   panels.handleInput("\x1b[21~"); await panels.workbench.inspection.refresh();
   let layout = frame("evidence-wide", 140, 46);
@@ -73,7 +61,7 @@ try {
   if (panels.workbench.view !== "evidence") throw new Error("Evidence pointer navigation failed");
   frame("evidence-narrow", 80, 34);
   panels.workbench.handleInput("\x1b[6~"); frame("evidence-narrow-details", 80, 34);
-  Object.assign(results, { status: "PASS", canonical_reads: reads, checks: ["canonical run inspection", "real committed file list and hunks", "keyboard file selection", "pointer file selection", "Evidence keyboard/pointer navigation", "140x46 and 80x34 width bounds"] });
+  Object.assign(results, { status: "PASS", canonical_reads: reads, checks: ["canonical run inspection", "real committed file list and hunks", "keyboard file selection", "Evidence keyboard/pointer navigation", "140x46 and 80x34 width bounds"] });
   writeFileSync(join(out, "result.json"), JSON.stringify(results, null, 2));
   console.log(JSON.stringify(results, null, 2));
 } finally { adapter.write("\x1b[?1049l"); adapter.stop(); panels.dispose(); }

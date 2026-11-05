@@ -5,7 +5,7 @@ import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import type { PanelFile } from "./panels-view.ts";
 const execute = promisify(execFile);
-export type Comparison = "candidate" | "all" | "unstaged" | "staged";
+export type Comparison = "candidate" | "session" | "all" | "unstaged" | "staged";
 export const FILE_LIMIT = 500;
 export async function panelGit(cwd: string, args: readonly string[], signal?: AbortSignal, different = false): Promise<string> {
   try {
@@ -44,6 +44,7 @@ export function parseStatus(output: string): PanelFile[] {
 export function comparisonArgs(comparison: Comparison): string[] {
   switch (comparison) {
     case "candidate": throw new Error("Candidate comparison requires captured base and HEAD");
+    case "session": throw new Error("Session comparison requires its recorded base");
     case "all": return ["HEAD"];
     case "unstaged": return [];
     case "staged": return ["--cached"];
@@ -52,6 +53,7 @@ export function comparisonArgs(comparison: Comparison): string[] {
 export function relevantFile(file: PanelFile, comparison: Comparison): boolean {
   switch (comparison) {
     case "candidate":
+    case "session":
     case "all": return true;
     case "unstaged": return file.status === "??" || file.status[1] !== " ";
     case "staged": return file.status !== "??" && file.status[0] !== " ";
@@ -74,6 +76,8 @@ export async function readPanelFiles(cwd: string, signal?: AbortSignal): Promise
   return parseStatus(await panelGit(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], signal));
 }
 export async function readPanelDiff(cwd: string, file: PanelFile, signal?: AbortSignal, comparison: Comparison = "all", head?: string): Promise<string> {
+  // A session diff is the working tree against its recorded base, which arrives as `head`.
+  if (comparison === "session") comparison = "all";
   const root = await repositoryRoot(cwd, signal);
   if (file.status === "??") {
     if ((await lstat(join(root, file.path))).isDirectory()) return "Directory entry; choose an individual file.";

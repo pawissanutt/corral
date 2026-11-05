@@ -35,88 +35,13 @@ function pagerOf(line: string): { first: number; total: number; from: number; to
 }
 const click = (x: number, y: number): TuiMouseEvent => ({ type: "click", button: "left", x, y, screenX: x, screenY: y, width: 80, height: 1, shift: false, alt: false, ctrl: false });
 
-test("viewport scrolling and jump-to-live keys pass through without taking focus from the inspector", () => {
-  for (const [columns, rows] of [[52, 24], [80, 34], [140, 46]] as const) {
-    const { native } = panels(columns, rows);
-    native.handleInput(KEY.f6);
-    expect(native.focused).toBeTrue();
-    for (const key of [KEY.pageUp, KEY.pageDown, KEY.bottom, KEY.top]) {
-      expect(native.handleInput(key)).toBeFalse();
-      expect(native.focused).toBeTrue();
-    }
-    expect(native.handleInput("x")).toBeFalse();
-    expect(native.focused).toBeFalse(); // Typing still returns to the real editor.
-    native.dispose();
-  }
-});
-
-test("short narrow inspector pages every item; keyboard and pointer move it identically", () => {
-  for (const [columns, rows] of [[52, 14], [80, 14]] as const) {
-    const { native } = panels(columns, rows);
-    native.handleInput(KEY.f6);
-    expect(plain(native.renderInline(columns, rows))).toHaveLength(2);
-    const start = pagerOf(native.renderInline(columns, rows)[0] ?? "");
-    if (!start) throw new Error("pager missing at " + columns);
-    expect(start.first).toBe(1);
-    const seen = new Set<string>();
-    for (let item = 1; item <= start.total; item++) {
-      const lines = native.renderInline(columns, rows);
-      for (const line of lines) expect(visibleWidth(line)).toBe(columns);
-      expect(pagerOf(lines[0] ?? "")?.first).toBe(item);
-      seen.add(plain(lines)[1]?.trim() ?? "");
-      if (item % 2) native.handleInput(KEY.down);
-      else {
-        const current = pagerOf(lines[0] ?? "");
-        if (!current) throw new Error("pager missing while navigating");
-        expect(native.inlineMouse(click(current.to - 1, 0))).toEqual({ handled: true });
-      }
-    }
-    expect(seen.size).toBe(start.total);
-    expect([...seen].join("\n")).toContain("界面");
-    // The pager grows when its current position crosses a digit boundary.
-    const end = pagerOf(native.renderInline(columns, rows)[0] ?? "");
-    if (!end) throw new Error("pager missing at end");
-    expect(native.inlineMouse(click(end.from, 0))).toEqual({ handled: true });
-    expect(pagerOf(native.renderInline(columns, rows)[0] ?? "")?.first).toBe(start.total - 1);
-    native.dispose();
-  }
-});
-
-test("relocation preserves the selected activity through narrow drawer and wide rail", () => {
-  const { native, physical } = panels(80, 14);
-  native.handleInput("\x1b[19~");
-  expect(native.tab).toBe("Context");
-  native.handleInput(KEY.down);
-  expect(plain(native.renderInline(80, 14)).join("\n")).toContain("› job-2");
-  physical.resize(140, 14);
-  expect(plain(native.renderSidebar(34, 14)).join("\n")).toContain("› job-2");
-  physical.resize(80, 14);
-  expect(plain(native.renderInline(80, 14)).join("\n")).toContain("› job-2");
-  native.handleInput("\r");
-  expect(native.workbench.selectedActivity).toEqual({ kind: "job", job: "job-2" });
-  native.dispose();
-});
-
-test("a tall rail pages overflowing metadata through its footer pager", () => {
-  const { native, physical } = panels(140, 9);
-  native.handleInput(KEY.f6);
-  const lines = native.renderSidebar(34, 9);
-  for (const line of lines) expect(visibleWidth(line)).toBe(34);
-  const footer = lines[7] ?? "", pager = pagerOf(footer);
-  if (!pager) throw new Error("rail pager missing:\n" + plain(lines).join("\n"));
-  const before = plain(lines)[3];
-  physical.send(`\x1b[<0;${106 + pager.to};8M`); physical.send(`\x1b[<0;${106 + pager.to};8m`);
-  expect(pagerOf(native.renderSidebar(34, 9)[7] ?? "")?.first).toBe(pager.first + 1);
-  expect(plain(native.renderSidebar(34, 9))[3]).not.toBe(before);
-  native.dispose();
-});
-
 test("a non-Git launch directory reads as an explicit, readable unavailable state", async () => {
   const { native } = panels(140, 46);
   await native.loadFiles();
-  const rail = plain(native.renderSidebar(34, 46)).join("\n");
-  expect(rail).toContain("Not a Git repository");
-  expect(rail).not.toContain("Command failed");
+  expect(native.workbench.review.error).toBe("Not a Git repository");
+  const changes = native.workbench.files().map(row => row.text).join("\n");
+  expect(changes).toContain("Not a Git repository"); expect(changes).not.toContain("Command failed");
+  expect(plain(native.renderSidebar(34, 46)).find(line => line.includes("Changes"))).toContain("!");
   native.dispose();
 });
 

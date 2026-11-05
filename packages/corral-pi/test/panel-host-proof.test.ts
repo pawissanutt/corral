@@ -93,16 +93,11 @@ test("panel layout streams a held reply and tool output, keeps one binding throu
     expect(count("turn_ended")).toBe(0);
     expect(binding().turn).toEqual({ current: 1, open: true });
 
-    // Inspection while the reply is held: Context metadata overlay and Conversation again.
+    // Inspection while the reply is held: Activity, then Conversation again.
     mark = physical.writes.length;
-    physical.send("\x1b[17~");
-    expect(panels.tab).toBe("Context");
-    await physical.until("generation 1", mark);
-    await physical.until("Working · Bound to Corral", mark);
-    physical.send("\r");
-    await physical.until("Context · Esc close", mark);
-    physical.send("\x1b");
-    await physical.whenWritten(() => panels.canInteract, "the detail overlay to release input");
+    physical.send("\x1b[19~");
+    expect(panels.workbench.view).toBe("activity");
+    await physical.until("Message main conversation", mark); // the composer title while Activity is shown
     mark = physical.writes.length;
     physical.send("\x1b[20~");
     expect(panels.workbench.view).toBe("conversation");

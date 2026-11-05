@@ -54,11 +54,7 @@ function expectIntact(h: PanelHost): void {
   for (let row = 0; row < screen.rows; row++) {
     // The separator column never carries main-pane text.
     expect(screen.slice(row, 105, 106)).toBe(" ");
-    if (h.panels.focused) {
-      // F6 opens the boxed inspector in place.
-      expect("┌│└").toContain(screen.slice(row, 106, 107));
-      expect("┐│┘").toContain(screen.slice(row, 139, 140));
-    } else expect(" ▌").toContain(screen.slice(row, 106, 107)); // nav rows: blank or the current-view marker
+    expect(" ▌").toContain(screen.slice(row, 106, 107)); // nav rows: blank or the current-view marker
   }
 }
 function pager(h: PanelHost): { row: number; first: number; total: number; previous: number; next: number } | undefined {
@@ -126,23 +122,18 @@ test("follow pauses for reading through a stream and relocation; jump-to-live is
       expectIntact(h);
     }
 
-    // Narrow keyboard route: viewport keys scroll the transcript but never take focus from the inspector.
+    // Narrow keyboard route: viewport keys scroll the transcript.
     h.resize(80, 34);
-    await frame(h, screen => screen.includes("F6 inspect"), "narrow frame");
-    h.physical.send(KEY.f6);
-    expect(h.panels.focused).toBeTrue();
+    await h.physical.whenWritten(() => !h.panels.wide, "narrow frame");
     h.physical.send(KEY.pageUp);
-    expect(h.panels.focused).toBeTrue();
     expect(h.transcript.isFollowingEnd).toBeFalse();
     h.physical.send(KEY.bottom);
     await frame(h, screen => screen.includes("LIVE_TAIL"), "jump to live by keyboard");
     expect(h.transcript.isFollowingEnd).toBeTrue();
-    expect(h.panels.focused).toBeTrue();
 
-    // Wide pointer route: wheel pauses follow; clicking the jump control resumes it, focus unchanged.
+    // Wide pointer route: wheel pauses follow; clicking the jump control resumes it, .
     h.resize(140, 46);
     await frame(h, screen => screen.includes("LIVE_TAIL"), "wide live frame");
-    expect(h.panels.focused).toBeTrue();
     for (let i = 0; i < 6; i++) h.physical.send("\x1b[<64;20;12M");
     await frame(h, screen => screen.includes("Jump to latest message"), "wheel pauses follow");
     expect(h.transcript.isFollowingEnd).toBeFalse();
@@ -151,7 +142,6 @@ test("follow pauses for reading through a stream and relocation; jump-to-live is
     click(h, jump.col + 2, jump.row);
     await frame(h, screen => screen.includes("LIVE_TAIL") && !screen.includes("Jump to latest message"), "jump to live by pointer");
     expect(h.transcript.isFollowingEnd).toBeTrue();
-    expect(h.panels.focused).toBeTrue();
     expect(h.screen().text()).toContain(DRAFT);
     expectIntact(h);
   } finally {
@@ -159,66 +149,6 @@ test("follow pauses for reading through a stream and relocation; jump-to-live is
   }
   expect(h.physical.writes.join("")).toContain("\x1b[?1049l");
   expect(h.panels.canInteract).toBeFalse();
-}, 30_000);
-
-test("short terminals page metadata with agreeing keyboard and pointer routes, isolated from dialogs, across relocation", async () => {
-  let answer: boolean | undefined;
-  const h = await startPanelHost(pi => {
-    pi.registerCommand("shell-confirm", { description: "Owned fixture confirmation", handler: async (_args, ctx) => {
-      answer = await ctx.ui.confirm("Shell confirmation", "Cancel this owned fixture prompt.");
-    } });
-  });
-  try {
-    for (const char of DRAFT) h.physical.send(char);
-    h.resize(80, 14);
-    await frame(h, screen => screen.includes("F6 inspect"), "short narrow frame");
-    h.physical.send(KEY.f6);
-    await h.physical.whenWritten(() => pager(h) !== undefined, "compact inspector pager");
-    const start = pager(h);
-    if (!start) throw new Error("pager missing");
-    expect(start.first).toBe(1);
-    expect(start.total).toBeGreaterThan(1);
-
-    h.physical.send(KEY.down);
-    await h.physical.whenWritten(() => pager(h)?.first === 2, "keyboard next item");
-    click(h, start.previous, start.row);
-    await h.physical.whenWritten(() => pager(h)?.first === 1, "pointer previous item");
-    click(h, start.next, start.row);
-    await h.physical.whenWritten(() => pager(h)?.first === 2, "pointer next item");
-    const reading = h.screen().slice(start.row + 1, 0, 80).trim();
-    expect(reading.length).toBeGreaterThan(0);
-
-    // A foreground dialog owns input: pager clicks and inspector keys change nothing underneath it.
-    const confirmed = h.host.session.prompt("/shell-confirm", { source: "interactive" });
-    await frame(h, screen => screen.includes("Shell confirmation"), "dialog frame");
-    expect(h.panels.focused).toBeFalse(); // The prompt owns input focus while it is open.
-    const offset = h.panels.offset;
-    click(h, start.next, start.row); h.physical.send(KEY.f6); h.physical.send(KEY.ctrlB); h.physical.send(KEY.down);
-    expect(h.panels.focused).toBeFalse();
-    expect(h.panels.expanded).toBeFalse();
-    expect(h.panels.offset).toBe(offset);
-    h.physical.send(KEY.esc);
-    await within(confirmed, 10_000, "dialog cancellation");
-    expect(answer).toBeFalse();
-    await h.physical.whenWritten(() => h.panels.canInteract, "the dialog to release input");
-    h.physical.send(KEY.f6);
-    await h.physical.whenWritten(() => pager(h)?.first === 2, "the same item after the dialog");
-
-    // Relocation to the wide rail, and the manual inline toggle, keep tab, item, focus, draft and binding.
-    const tab = h.panels.tab;
-    h.resize(140, 46);
-    await frame(h, screen => screen.includes(reading), "rail shows the same item");
-    expect(h.panels.wide).toBeTrue();
-    expect(h.panels.tab).toBe(tab);
-    expect(h.panels.focused).toBeTrue();
-    h.physical.send(KEY.ctrlB);
-    await h.physical.whenWritten(() => !h.panels.wide && rows(h).join("\n").includes(reading), "manual inline relocation");
-    expect(h.screen().text()).toContain(DRAFT);
-    expect(h.host.sessionId()).toBe(h.bound);
-    expectIntact(h);
-  } finally {
-    await h.stop();
-  }
 }, 30_000);
 
 test("the plain host keeps its fallback: no native panels are created", async () => {

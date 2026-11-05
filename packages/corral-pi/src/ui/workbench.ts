@@ -7,7 +7,7 @@ import { getMarkdownTheme, type ExtensionUIContext, type InteractiveChatPresenta
 import { VStack, ScrollView, Text, getKeybindings, matchesKey, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { anchoredRow } from "./reading-anchor.ts";
 import { NativeImageViewer } from "./image-viewer.ts";
-import { ReviewStore, comparisonLabel, fileStatus, type PatchSnapshot } from "./review-store.ts";
+import { ReviewStore, comparisonLabel, fileStatus, type PatchSnapshot, type ReviewBases } from "./review-store.ts";
 import { ChangesView, changesModel, type ChangesModel } from "./changes-view.ts";
 import { LifecycleView } from "./lifecycle-view.ts";
 import { ArtifactView } from "./artifact-view.ts";
@@ -50,6 +50,7 @@ export interface WorkbenchOptions {
   readonly projectDir?: string;
   readonly readProjects?: (signal: AbortSignal) => Promise<unknown>;
   readonly canRenderTool?: (name: string) => boolean;
+  readonly reviewBases?: ReviewBases;
 }
 /** Main-area composition via the packaged SDK's public mainView hook; editor stays SDK-owned. */
 export class NativeWorkbench {
@@ -108,7 +109,7 @@ export class NativeWorkbench {
       await this.inspection.refresh();
       if (this.inspection.stale || !this.inspection.current) throw new Error(this.inspection.error ?? "Canonical candidate unavailable; r to reconcile");
       return this.inspection.current;
-    } : undefined, !!options.readProjects && !options.identity.task && !options.projectDir, !!options.projectDir);
+    } : undefined, !!options.readProjects && !options.identity.task && !options.projectDir, !!options.projectDir, options.reviewBases);
     this.inbox = new DecisionInbox(options.readInbox, options.changed);
     this.inboxView = new InboxView(this.inbox, options.identity.role, options.identity.project, options.canInteract, options.changed, () => { this.focused = true; }, () => this.legend);
   }
@@ -448,6 +449,7 @@ export class NativeWorkbench {
       { text: r.branch, tone: "muted" },
       { text: "o project / worktree", tone: "accent", action: { kind: "scope" } },
       ...(r.comparison === "candidate" ? [{ text: `Base ${r.candidateBase ?? "unavailable"}` }, { text: `HEAD ${r.head ?? "unavailable"}` }] : []),
+      ...(r.comparison === "session" ? [{ text: `Session base ${r.sessionBase ?? "unavailable"}${r.baseRewritten ? " (merge-base)" : ""}` }] : []),
       { text: "" },
       { text: `${r.checkedAt ? r.visible.length + " matching" : "Loading / unavailable"} · ${r.comparison}${r.query ? " · /" + r.query : ""}`, tone: "muted" }];
     if (r.error) rows.push({ text: "STALE: " + plainLabel(r.error) });

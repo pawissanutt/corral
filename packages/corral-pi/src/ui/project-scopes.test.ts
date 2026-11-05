@@ -80,7 +80,7 @@ test("workspace Git is not read before choosing a project; switching never leaks
     expect(store.files).toEqual([]); expect(store.error).toContain("parent workspace changes are not shown");
     expect(store.comparisons).not.toContain("candidate");
     await store.setComparison("candidate");
-    expect(store.comparison).toBe("all");
+    expect(store.comparison).toBe("session");
     await store.setRepository(join(root, "missing"));
     expect(store.files).toEqual([]); expect(store.patchSnapshot).toBeUndefined(); expect(store.error).toBeDefined();
   } finally { store.dispose(); rmSync(root, { recursive: true, force: true }); }
@@ -90,33 +90,27 @@ test("project-less assistant shows actionable scope choice, not a misleading cle
   const panels = new NativePanels({ identity, cwd: tmpdir(), readProjects: async () => ({}), snapshot: () => snapshot });
   try {
     panels.wrap(new RecordingTerminal());
-    await panels.loadFiles(); panels.tab = "Files";
+    await panels.loadFiles();
     const text = panels.workbench.files().map(row => row.text).join("\n");
     expect(text).toContain("Workspace changes are hidden"); expect(text).not.toContain("Working tree clean");
     expect(panels.workbench.files().some(row => row.action?.kind === "scope")).toBeTrue();
     expect(panels.workbench.review.checkedAt).toBeUndefined();
-    panels.tab = "Plan";
     const plan = stripTerminalSequences(panels.renderSidebar(34, 26).join("\n"));
-    expect(plan).toContain("Session plan"); expect(plan).toContain("A-22"); expect(plan).toContain("does not filter");
+    expect(plan).toContain("PLAN 0/2"); expect(plan).toContain("Implement project-aware panels");
   } finally { panels.dispose(); }
 });
 
-test("wrapped plan waits remain readable and reachable through keyboard paging at rail and inline widths", () => {
+test("the rail plan marks waiting steps and stays width-bounded without scrolling", () => {
   const panels = new NativePanels({ identity, cwd: tmpdir(), snapshot: () => snapshot });
   const physical = new RecordingTerminal(); physical.resize(140, 18);
   const terminal = panels.wrap(physical); terminal.start(() => {}, () => {});
   try {
-    panels.tab = "Plan"; panels.focused = true;
-    const seen: string[] = [];
-    for (let i = 0; i < 60; i++) {
-      const lines = panels.renderSidebar(34, 18);
+    for (const height of [8, 18]) {
+      const lines = panels.renderSidebar(34, height);
+      expect(lines).toHaveLength(height);
       for (const line of lines) expect(visibleWidth(line)).toBe(34);
-      seen.push(stripTerminalSequences(lines.join("\n")));
-      panels.handleInput("\x1b[B");
     }
-    expect(seen.join("\n")).toContain("landing it.");
-    physical.resize(52, 24); panels.expanded = true;
-    for (const line of panels.renderInline(52, 24)) expect(visibleWidth(line)).toBe(52);
-    expect(snapshot.ledger?.revision).toBe(9); expect(snapshot.ledger?.phases[0]?.steps[0]?.status.state).toBe("in_progress");
+    const text = stripTerminalSequences(panels.renderSidebar(34, 18).join("\n"));
+    expect(text).toContain("Verify"); expect(text).toContain("⏸");
   } finally { terminal.stop(); panels.dispose(); }
 });

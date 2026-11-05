@@ -78,7 +78,7 @@ test("other-comparison counts come from the worktree status, not the current com
     const snap = store.patchSnapshot;
     const model = changesModel(store, { root: snap?.root, path: snap?.path, comparison: comparisonLabel(store.comparison), text: snap?.text ?? "",
       head: snap?.head, base: snap?.base, file: snap?.file }, "fixture", 0, Date.now());
-    expect(model.others).toEqual([{ label: "unstaged", count: 1 }, { label: "staged", count: 1 }]);
+    expect(model.others).toEqual([{ label: "working tree", count: 2 }, { label: "unstaged", count: 1 }, { label: "staged", count: 1 }]);
     expect(model.files.map(file => file.letter)).toEqual(["M", "M"]);
     expect(model.diff.kind).toBe("patch");
   } finally { store.dispose(); rmSync(root, { recursive: true, force: true }); }

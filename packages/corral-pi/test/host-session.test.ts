@@ -76,22 +76,13 @@ afterAll(() => {
 function captureInspector(bound: boolean): void {
   const panels = host.panels;
   if (!panels) throw new Error("rich host supplies native panels");
-  panels.focused = true;
-  const output: string[] = [];
-  for (const tab of ["Context", "Plan"] as const) {
-    panels.tab = tab;
-    output.push(`WIDE · ${tab}`, ...panels.renderSidebar(100, 200), `INLINE · ${tab}`, ...panels.renderInline(80, 34));
-  }
-  const text = stripTerminalSequences(output.join("\n"));
-  expect(host.session.model?.id).toBe("gpt-6.1-sol"); // The model label belongs to the real composer, not Context.
-  expect(text).toContain(host.sessionId());
-  expect(text).toContain("Budget unavailable");
-  expect(text).toContain(bound ? "Bound" : "Disconnected/unbound");
-  expect(text).toContain("Turn 0");
+  const text = stripTerminalSequences(panels.renderSidebar(34, 30).join("\n"));
+  expect(host.session.model?.id).toBe("gpt-6.1-sol");
+  expect(text).toContain("GO TO"); expect(text).toContain("Chat");
+  expect(text).not.toContain("gpt-6.1-sol"); // The model label belongs to the real composer, not the rail.
   const evidence = resolve(import.meta.dirname, "../../../.evidence");
   mkdirSync(evidence, { recursive: true });
   writeFileSync(join(evidence, `T-689-host-${bound ? "bound" : "disconnected"}-render.txt`), text);
-  panels.focused = false;
 }
 
 test("host inspector renders real disconnected state in wide and inline layouts without model calls", () => captureInspector(false));
