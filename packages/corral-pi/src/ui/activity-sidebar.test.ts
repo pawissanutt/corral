@@ -54,7 +54,7 @@ test("history collapses successful completions but keeps failures and uncertain 
   expect(activitySidebar({ ...base, bound: false, helpers: null, jobs: null }).map(row => row.text).join("\n")).toContain("observations may be stale");
 });
 
-test("rail RUNNING rows and F8 open Activity, leaving the draft and parent intact", () => {
+test("rail Running rows and F8 open Activity, leaving the draft and parent intact", () => {
   const h = fixture();
   try {
     h.physical.resize(140, 30);
@@ -87,8 +87,8 @@ test("main navigation has no duplicate Agents or Jobs tab in any view or width",
     h.physical.resize(140, 30);
     expect(stripTerminalSequences(h.frame(105).lines[0] ?? "")).not.toContain(" Changes ");
     const nav = plain(h.native.renderSidebar(34, 30));
-    expect(nav).toContain("GO TO"); expect(nav).toContain("Activity"); expect(nav).not.toMatch(/\bAgents?\b|\bJobs?\b/);
-    expect(nav).toContain("RUNNING 3"); expect(nav).toContain("Explore · Find first callers"); expect(nav).toContain("bun test build");
+    expect(nav).toContain("Assistant · A-demo"); expect(nav).toContain("Activity"); expect(nav).not.toMatch(/\bAgents?\b|\bJobs?\b/);
+    expect(nav).toMatch(/Running\s+3/); expect(nav).toContain("Explore · Find first callers"); expect(nav).toContain("bun test build");
     expect(nav).not.toContain("24%"); // the bottom bar owns context
   } finally { h.stop(); }
 });

@@ -78,7 +78,7 @@ function captureInspector(bound: boolean): void {
   if (!panels) throw new Error("rich host supplies native panels");
   const text = stripTerminalSequences(panels.renderSidebar(34, 30).join("\n"));
   expect(host.session.model?.id).toBe("gpt-6.1-sol");
-  expect(text).toContain("GO TO"); expect(text).toContain("Chat");
+  expect(text).toContain("T-001 · worker"); expect(text).toContain("Chat");
   expect(text).not.toContain("gpt-6.1-sol"); // The model label belongs to the real composer, not the rail.
   const evidence = resolve(import.meta.dirname, "../../../.evidence");
   mkdirSync(evidence, { recursive: true });
