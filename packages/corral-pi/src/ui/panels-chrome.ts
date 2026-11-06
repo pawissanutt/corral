@@ -41,8 +41,8 @@ export function composerLayout(snapshot: PanelSnapshot | null, width: number, hi
   const label = pad(model, Math.min(room, visibleWidth(model))).trimEnd();
   const modelEnd = 2 + visibleWidth(label), effortEnd = modelEnd + visibleWidth(effort);
   return {
-    line: PANEL_MUTED + "└ " + PANEL_TEXT + splitRow(label + PANEL_MUTED + effort,
-      PANEL_MUTED + hint, Math.max(0, width - 4)) + PANEL_MUTED + " ┘",
+    line: PANEL_MUTED + "  " + PANEL_TEXT + splitRow(label + PANEL_MUTED + effort,
+      PANEL_MUTED + hint, Math.max(0, width - 4)) + PANEL_MUTED + "  ",
     ...(full && label ? { model: { from: 2, to: modelEnd } } : {}),
     ...(snapshot?.effortAvailable && effortEnd < width - 2 ? { effort: { from: modelEnd, to: effortEnd } } : {}),
   };
