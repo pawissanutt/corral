@@ -216,6 +216,7 @@ fn relaunch(ctx: &Ctx, container: &ContainerRef, state: &AgentRunState) -> Resul
         effort: run.effort.clone(),
         prompt_file: Some(prompt),
         adopt: false,
+        fresh_session: false,
     };
     Ok(Relaunch {
         pane,
@@ -237,7 +238,7 @@ pub(crate) fn recover(
     ctx: &Ctx,
     container: &ContainerRef,
     replace: bool,
-    adopt: Option<(&str, &corral_core::ResolvedProfile)>,
+    adopt: Option<(&str, &corral_core::ResolvedProfile, bool)>,
 ) -> Result<(Value, Prepared)> {
     recover_with(ctx, container, replace, adopt, None)
 }
@@ -248,7 +249,7 @@ pub(crate) fn recover_with(
     ctx: &Ctx,
     container: &ContainerRef,
     replace: bool,
-    adopt: Option<(&str, &corral_core::ResolvedProfile)>,
+    adopt: Option<(&str, &corral_core::ResolvedProfile, bool)>,
     mut restore: Option<&mut dyn FnMut() -> Result<()>>,
 ) -> Result<(Value, Prepared)> {
     let (state, _) = open(ctx, container)?;
@@ -265,7 +266,7 @@ pub(crate) fn recover_with(
     // Refuse unavailable assets, profiles or scope without stopping or fencing the old host.
     let pm_profile = if matches!(container, ContainerRef::Pm) {
         let resolved =
-            adopt.map_or_else(|| super::hooks::pm::profile(ctx), |(_, r)| Ok(r.clone()))?;
+            adopt.map_or_else(|| super::hooks::pm::profile(ctx), |(_, r, _)| Ok(r.clone()))?;
         super::hooks::pm::project(ctx)?;
         Some(resolved)
     } else {
@@ -273,7 +274,7 @@ pub(crate) fn recover_with(
     };
     let mut plan = relaunch(ctx, container, &state)?;
     let adopted = adopt.is_none() && super::pi::adopted(ctx, container, &plan.pane)?;
-    if let Some((pane, _)) = adopt {
+    if let Some((pane, _, _)) = adopt {
         plan.pane = pane.into();
     }
     if ctx.herdr.pane_get(&plan.pane)?.is_none() {
@@ -315,9 +316,13 @@ pub(crate) fn recover_with(
     }
     let prepared = match (&plan.target, pm_profile) {
         (Some((target, spec)), _) => prepare_bootstrap(ctx, target, &plan.pane, spec)?,
-        (None, Some(resolved)) => {
-            super::hooks::pm::prepared(ctx, &plan.pane, &resolved, adopt.is_some())?
-        }
+        (None, Some(resolved)) => super::hooks::pm::prepared(
+            ctx,
+            &plan.pane,
+            &resolved,
+            adopt.is_some(),
+            adopt.is_none_or(|(_, _, continued)| continued),
+        )?,
         (None, None) => bail!("the PM relaunch command is missing"),
     };
     let command = match &plan.exit_receipt {

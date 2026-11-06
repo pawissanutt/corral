@@ -236,6 +236,8 @@ pub struct HostSpec {
     pub prompt_file: Option<PathBuf>,
     /// The PM launch adopts the owner's own pane (`corral pi`); recorded with the generation move.
     pub adopt: bool,
+    /// Start a new conversation even when a previous generation wrote a transcript.
+    pub fresh_session: bool,
 }
 
 pub use super::hooks::launch::host_provider;
@@ -309,7 +311,7 @@ pub fn prepare_bootstrap(
     let container = target.container();
     let mut session_dir = paths::container_sessions_dir(&ctx.store, &container);
     let mut resume_session = None;
-    let mut fresh_session = false;
+    let mut fresh_session = spec.fresh_session;
     let mut resume_leaf = None;
     let latest_bound = |state: &AgentRunState| {
         state
@@ -321,10 +323,14 @@ pub fn prepare_bootstrap(
     };
     let (project, recovery) = match target {
         BindTarget::Pm { project } => {
-            let file = pm_state::load(&ctx.store)?.and_then(|pm| latest_bound(&pm.state));
-            let file =
-                super::ops::pm::recovery_session(file, &mut session_dir, &mut fresh_session)?;
-            (project.clone(), file)
+            if spec.fresh_session {
+                (project.clone(), None)
+            } else {
+                let file = pm_state::load(&ctx.store)?.and_then(|pm| latest_bound(&pm.state));
+                let file =
+                    super::ops::pm::recovery_session(file, &mut session_dir, &mut fresh_session)?;
+                (project.clone(), file)
+            }
         }
         BindTarget::Assistant { session } => {
             let file = super::ops::assistant::continued_session(ctx, session)?;
