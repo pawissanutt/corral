@@ -15,9 +15,6 @@ use crate::artifacts::{add_artifact, scan_artifacts};
 use crate::cleanup::Cleanup;
 use crate::verification;
 
-mod discard;
-pub use discard::{discard, discard_with_decision, discard_with_options};
-
 mod audit;
 pub(crate) use audit::audit_artifact;
 mod display;
