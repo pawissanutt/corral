@@ -83,6 +83,13 @@ pub fn report_at(
     write_report(ctx, since, project, now)
 }
 
+pub(crate) fn scheduled_digest_and_report_at(ctx: &Ctx, now: Timestamp) -> Result<()> {
+    if crate::digest::scheduled_digest_at(ctx, now)?.is_some() {
+        scheduled_report_at(ctx, now)?;
+    }
+    Ok(())
+}
+
 /// Called after a scheduled digest when `[digest] report = true`; skips while another runs.
 pub(crate) fn scheduled_report_at(ctx: &Ctx, now: Timestamp) -> Result<Option<ReportOutput>> {
     if !ctx.store.config.digest.report {
