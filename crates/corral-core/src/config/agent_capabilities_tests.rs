@@ -648,13 +648,7 @@ fn background_shell_is_available_to_worker_and_interactive_roles_with_recorded_b
     .unwrap();
     let narrowed = config.capabilities.resolve(AgentRole::Worker, None);
     assert_eq!(
-        serde_json::Value::Object(
-            narrowed.features["background_shell"]
-                .settings
-                .clone()
-                .into_iter()
-                .collect()
-        ),
+        serde_json::to_value(&narrowed.features["background_shell"].settings).unwrap(),
         serde_json::json!({"max_jobs": 2, "max_output_bytes": 8388608, "max_runtime_secs": 600, "wait_ms": 10000})
     );
     let standard = AgentCapabilities::default().resolve(AgentRole::Worker, None);
