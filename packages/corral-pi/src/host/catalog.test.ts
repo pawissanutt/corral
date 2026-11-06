@@ -40,6 +40,21 @@ function writeConfig(path: string, models: readonly { readonly id: string; reado
 }
 
 describe("shared model catalog", () => {
+  test("Astra defaults to 600k across refresh while explicit context overrides win", async () => {
+    const modelsPath = config([]);
+    const runtime = await createModelCatalog(NO_CATALOG_CREDENTIALS, { providers: ["openai-codex"], modelsPath });
+    expect(runtime.getModel("openai-codex", "gpt-6-astra")?.contextWindow).toBe(600000);
+    expect(runtime.getModel("openai-codex", "gpt-6-astra")?.maxTokens).toBe(128000);
+    await runtime.refresh();
+    expect(runtime.getModel("openai-codex", "gpt-6-astra")?.contextWindow).toBe(600000);
+
+    writeFileSync(modelsPath, JSON.stringify({ providers: { "openai-codex": {
+      modelOverrides: { "gpt-6-astra": { contextWindow: 400000 } },
+    } } }));
+    await runtime.refresh();
+    expect(runtime.getModel("openai-codex", "gpt-6-astra")?.contextWindow).toBe(400000);
+  });
+
   test("defaults to corral-owned metadata instead of ambient Pi configuration", async () => {
     // Given
     const ambientPath = config([{ id: "ambient-pi-model" }]);
