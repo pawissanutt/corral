@@ -288,6 +288,24 @@ fn cancelled_aborted_failed_and_exhausted_turns_are_held_without_a_nudge() {
 }
 
 #[test]
+fn a_pending_command_holds_continuation_without_spending_the_no_progress_nudge() {
+    for pm in [true, false] {
+        let mut s = session(pm);
+        committed(&s.todo("init", init(&["build"])));
+        let first = s.owner_turn();
+        let key = first["continuation"]["key"].as_str().unwrap().to_owned();
+        let waiting = s.turn_with(
+            json!({"kind": "continuation", "idempotency_key": key}),
+            &[],
+            json!({"pending_commands": true}),
+        );
+        assert_eq!(waiting["end"], "waiting_command");
+        assert_eq!(state(&waiting), "held");
+        assert!(s.ledger().continued.unwrap().stopped.is_none());
+    }
+}
+
+#[test]
 fn event_and_owner_waits_hold_only_the_steps_that_wait_on_them() {
     for pm in [true, false] {
         // Given a plan with an owner question on one step and an independent step.

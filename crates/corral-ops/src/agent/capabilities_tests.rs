@@ -539,7 +539,7 @@ fn background_shell_bounds_reach_the_worker_launch_only_when_installed() {
     // Then the resolved bounds travel with the snapshot settings only where the host has the key.
     assert_eq!(
         fx.message(&current)["capabilities"]["settings"]["background_shell"],
-        json!({"max_jobs": 4, "max_output_bytes": 8388608, "max_runtime_secs": 3600})
+        json!({"max_jobs": 4, "max_output_bytes": 8388608, "max_runtime_secs": 3600, "wait_ms": 10000})
     );
     assert!(
         fx.message(&current)["capabilities"]["enabled"]

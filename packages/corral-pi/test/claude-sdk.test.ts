@@ -13,7 +13,7 @@ import { Type } from "typebox";
 
 import { type SdkBoundary, overrideSdk, resolveClaudeCode } from "../src/claude/sdk.ts";
 import { CLAUDE_SDK_API, claudeSystemPrompt } from "../src/claude/stream.ts";
-import { PRE_TOOL_USE_DENIAL, TOOL_EXECUTION_DENIED_MESSAGE } from "../src/claude/tools.ts";
+import { PRE_TOOL_USE_DENIAL, TOOL_EXECUTION_DENIED_MESSAGE, mapToolArgs } from "../src/claude/tools.ts";
 import { guardedFetch } from "../src/host/restrict.ts";
 import { restrictProvider } from "../src/host/session.ts";
 
@@ -145,6 +145,7 @@ test("streamed tool_use blocks become Pi tool calls that Claude Code is denied f
     const calls = [
       { id: "toolu_read", name: "Read", input: { file_path: "/w/notes.md", offset: 3 } },
       { id: "toolu_corral", name: "mcp__custom-tools__corral_task_show", input: { id: "T-1", json: true } },
+      { id: "toolu_managed", name: "mcp__custom-tools__bash", input: { command: "echo managed", timeout: 600, wait_ms: 0 } },
     ];
     for (const [index, call] of calls.entries()) {
       yield { type: "stream_event", event: { type: "content_block_start", index, content_block: { type: "tool_use", id: call.id, name: call.name, input: {} } } };
@@ -168,24 +169,28 @@ test("streamed tool_use blocks become Pi tool calls that Claude Code is denied f
   const tools = [
     { name: "read", description: "Read a file", parameters: Type.Object({ path: Type.String(), offset: Type.Optional(Type.Number()) }) },
     { name: "corral_task_show", description: "Show a task", parameters: Type.Object({ id: Type.String(), json: Type.Optional(Type.Boolean()) }) },
+    { name: "bash", description: "Managed Bash", parameters: Type.Object({ command: Type.String(), timeout: Type.Number(), wait_ms: Type.Number() }) },
   ];
   const { message } = await send({ systemPrompt: "s", messages: [user("look at T-1")], tools });
   expect(message.stopReason).toBe("toolUse");
   expect(message.content).toEqual([
     { type: "toolCall", id: "toolu_read", name: "read", arguments: { path: "/w/notes.md", offset: 3 } },
     { type: "toolCall", id: "toolu_corral", name: "corral_task_show", arguments: { id: "T-1", json: true } },
+    { type: "toolCall", id: "toolu_managed", name: "bash", arguments: { command: "echo managed", timeout: 600, wait_ms: 0 } },
   ]);
   // Claude Code sees Pi's built-in as its own Read and the corral tool through the deny-only MCP server.
   const options = run.options[0]!;
   expect(options.tools).toEqual(["Read"]);
   const server = (options.mcpServers?.["custom-tools"] as unknown as { instance: { tools: { name: string; handler(): Promise<unknown> }[] } });
-  expect(server.instance.tools.map((tool) => tool.name)).toEqual(["corral_task_show"]);
+  expect(server.instance.tools.map((tool) => tool.name)).toEqual(["corral_task_show", "bash"]);
+  expect(mapToolArgs("bash", { command: "legacy", timeout: 600000, run_in_background: true }))
+    .toEqual({ command: "legacy", timeout: 600, wait_ms: 0 });
   // Pi owns discovery: Claude's deferred tool search is not in this lane's loadout.
   expect((server.instance as unknown as { alwaysLoad: boolean }).alwaysLoad).toBe(true);
   expect(await server.instance.tools[0]!.handler())
     .toEqual({ content: [{ type: "text", text: TOOL_EXECUTION_DENIED_MESSAGE }], isError: true });
   // Every execution attempt was denied, and the hook stops Claude Code's own loop.
-  expect(attempts.map((attempt) => attempt.tool)).toEqual(["Read", "mcp__custom-tools__corral_task_show"]);
+  expect(attempts.map((attempt) => attempt.tool)).toEqual(["Read", "mcp__custom-tools__corral_task_show", "mcp__custom-tools__bash"]);
   for (const attempt of attempts) {
     expect(attempt.hook).toEqual(PRE_TOOL_USE_DENIAL);
     expect(PRE_TOOL_USE_DENIAL).toEqual({ continue: false, hookSpecificOutput: {

@@ -91,7 +91,8 @@ function jobDetail(job: PanelJob, input: ActivityViewInput, width: number, heigh
       ...(d ? [`Process group ${d.groupClear ? "observed clear" : "not confirmed clear"}.`, `Monitoring · ${d.monitorAttempts} attempts (not active-wait count).`] : []),
       ...(d?.watches ?? []).flatMap(w => [`Watch ${plainLabel(w.wait)} /${plainLabel(w.pattern)}/ · deadline ${plainLabel(w.deadline)}${w.reportQueued ? " · report queued, settlement unknown" : ""}`,
         ...(w.matched !== undefined ? ["Matched: " + plainLabel(w.matched)] : [])]),
-      "A line match is not service health. There are no stop or restart controls."], width));
+      "p Peek is nonblocking; b Background releases observation, not the process. x Stop confirms before signalling the owned group. No restart control.",
+      "A line match is not service health. Stale, foreign or denied controls never signal a process."], width));
   }
   if (job.state === "lost" || !d) return [...rows, PANEL_MUTED + "Detailed output unavailable for this job source."];
   if (!bound) return [...rows, PANEL_WARNING + "Output unavailable: stale/disconnected host"];

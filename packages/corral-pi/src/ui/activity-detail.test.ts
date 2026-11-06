@@ -91,6 +91,28 @@ test("workbench keys walk the shared list, pause follow and expand helper tool c
   } finally { wb.dispose(); }
 });
 
+test("job control keys preserve the captured target through Stop confirmation and do not treat Background as Stop", async () => {
+  const scoped: PanelSnapshot = { ...snapshot, inspector: { session: "session", boundSession: "session", turn: 1, turnOpen: false,
+    capabilities: null, guidance: { projectText: false, skillPaths: [], promptPaths: [], prompts: [], skills: [] },
+    settings: [], budget: [], events: { events: [], next: 0, omitted: 0 } as never, receipts: [], receiptsOmitted: 0 } };
+  const calls: { job: string; action: string }[] = [];
+  let confirmations = 0;
+  const wb = new NativeWorkbench({ identity, cwd: "/tmp", snapshot: () => scoped, changed() {}, canInteract: () => true,
+    jobControl: async (target, action) => { calls.push({ job: target.job, action }); return { state: "running", text: "current output" }; } });
+  wb.bind({ notify() {}, custom: async () => undefined, confirm: async () => {
+    confirmations++; wb.openJob("j-2"); return true;
+  } } as never);
+  try {
+    wb.openJob("j-1");
+    wb.handleInput("b"); await Promise.resolve();
+    wb.handleInput("p"); await Promise.resolve();
+    wb.handleInput("x"); await Promise.resolve(); await Promise.resolve();
+    expect(confirmations).toBe(1);
+    expect(calls).toEqual([{ job: "j-1", action: "background" }, { job: "j-1", action: "peek" }, { job: "j-1", action: "stop" }]);
+    expect(wb.selectedActivity).toEqual({ kind: "job", job: "j-2" });
+  } finally { wb.dispose(); }
+});
+
 test("unavailable job/helper sources are never shown as empty at narrow or wide widths", () => {
   const unknown: PanelSnapshot = { ...snapshot, jobs: null, helpers: null };
   for (const width of [140, 80, 52]) {

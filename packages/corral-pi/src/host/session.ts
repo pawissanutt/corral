@@ -23,6 +23,7 @@ import { nestedChild } from "../extensions/codemode/child.ts";
 import { CODE_CALL_ENTRY, CodeRuntime } from "../extensions/codemode/runtime.ts";
 import { HOOK_ENTRY, Hooks } from "../capabilities/hooks.ts";
 import { CHECKPOINT_ENTRY, Checkpoints } from "../capabilities/checkpoints.ts";
+import { jobControl, type JobControl } from "./job-controls.ts";
 import { type HostControls, installToolControls, parseControls } from "./tool-controls.ts";
 import { type CapabilityGuidance, type Guidance, selectGuidance } from "../capabilities/guidance.ts";
 import { PROVIDERS, type ProviderId, hostDestinations } from "../auth/providers.ts";
@@ -67,6 +68,8 @@ import { MCP_CONTROLS } from "./mcp-tools.ts";
 import { toolSearch } from "./tool-search.ts";
 import { JOB_MONITOR_TOOL, jobTools } from "../extensions/jobs/index.ts";
 import { JobRuntime } from "../extensions/jobs/runtime.ts";
+import { COMMAND_ENTRY, Commands, type CommandFact } from "../extensions/jobs/commands.ts";
+import { MONITOR_ENTRY, type MonitorFact } from "../extensions/jobs/monitors.ts";
 import { JobSettingsSchema } from "../extensions/jobs/settings.ts";
 import { toolRequestId } from "../tools/corral.ts";
 import { AuxiliaryRuntime } from "../extensions/subagent/runtime.ts";
@@ -279,6 +282,8 @@ export class HostSession {
   private readonly ownerQuestions: PendingQuestions | undefined;
   private questionUi: OwnerQuestionUi | undefined;
   private readonly jobs: JobRuntime | undefined;
+  private readonly commands: Commands | undefined;
+  private readonly controlJob: JobControl | undefined;
   /** The generation's Code Mode kernel and its nested-call bridge (T-683); absent when disabled. */
   private readonly code: CodeRuntime | undefined;
   private writePermissionNotice: (() => Promise<void>) | undefined;
@@ -335,6 +340,7 @@ export class HostSession {
       ...(options.identity.project && options.guidance?.projectDir && options.guidance.projectDir !== options.client.workspaceRoot
         ? { projectDir: options.guidance.projectDir } : {}),
       readProjects: signal => options.client.projectScopes(signal),
+      jobControl: (target, action) => this.controlJob?.(target, action) ?? Promise.resolve({ state: "denied", reason: "managed commands are unavailable" }),
       reviewBases: persistedBases(
         () => options.sessionManager.getEntries().flatMap(entry => entry.type === "custom" && entry.customType === REVIEW_BASE_ENTRY ? [entry.data] : []),
         data => options.sessionManager.appendCustomEntry(REVIEW_BASE_ENTRY, data)),
@@ -426,6 +432,17 @@ export class HostSession {
       this.additionalLsp = lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp), registerCapability });
     }
     this.jobs = this.jobRuntime(registerCapability);
+    this.commands = this.jobs ? new Commands({
+      jobs: this.jobs, generation: options.identity.generation, worker: options.identity.role === "worker",
+      waitMs: JobSettingsSchema.parse(options.guidance?.settings.background_shell).wait_ms,
+      journal: fact => options.sessionManager.appendCustomEntry(COMMAND_ENTRY, fact),
+      monitorJournal: fact => options.sessionManager.appendCustomEntry(MONITOR_ENTRY, fact),
+      changed: () => this.panels?.refresh(),
+      settled: result => options.events.emit("command_settled", result),
+      canNotify: () => !this.open,
+      noticeSeen: key => this.commandNoticeSeen(key),
+      notify: (key, text) => this.commandNotice(key, text),
+    }) : undefined;
     this.code = options.capabilities?.enabled.includes("codemode") ? new CodeRuntime({
       generation: options.identity.generation,
       emit: (kind, data) => { options.events.emit(kind, data); },
@@ -506,7 +523,7 @@ export class HostSession {
           if (!this.auxiliary) throw new Error("subscription search is disabled");
           return (await this.auxiliary.run("web_search", id, JSON.stringify({ query, count }), signal)).text;
         } : undefined) : []),
-      ...(this.jobs ? jobTools(this.jobs, options.identity.role === "worker") : []),
+      ...(this.jobs ? jobTools(this.jobs, true, this.commands).filter(tool => tool.name !== "bash" || role.upstreamTools.includes("bash")) : []),
       ...(this.auxiliary && auxiliary.explore ? [exploreTool(this.auxiliary)] : []),
       ...(this.auxiliary && auxiliary.oracle ? [oracleTool(this.auxiliary)] : []),
       ...(browser ? browserTools(browser, { cwd: options.cwd, registerCapability }) : [])];
@@ -516,7 +533,7 @@ export class HostSession {
       throw new Error("module_invalid: mcp.enabled needs its generation-bound settings");
     }
     const search = options.capabilities?.enabled.includes("tool_search") === true;
-    this.baseLoadout = [...role.upstreamTools, ...corralToolNames(specs), ...local,
+    this.baseLoadout = [...role.upstreamTools.filter(name => !local.includes(name)), ...corralToolNames(specs), ...local,
       ...(mcp ? MCP_CONTROLS : []), ...(mcp && search ? ["mcp_activate"] : []), ...(search ? ["tool_search"] : []),
       ...(options.capabilities?.enabled.includes("codemode") ? ["codemode"] : [])];
     if (new Set(this.loadout).size !== this.loadout.length) throw new Error("module_invalid: the loadout names a tool twice");
@@ -535,6 +552,19 @@ export class HostSession {
       record: (entry) => this.session.sessionManager.appendCustomEntry(HOOK_ENTRY, entry),
     });
     this.permissions = this.controls.bashRules && new BashPermissions();
+    this.controlJob = this.jobs && this.commands ? jobControl({
+      jobs: this.jobs, commands: this.commands, generation: options.identity.generation,
+      session: () => !this.closing && this.bound && this.session.sessionId === this.boundSessionId ? this.boundSessionId : undefined,
+      allowed: tool => this.loadout.includes(tool) && this.session.getActiveToolNames().includes(tool),
+      record: entry => { options.sessionManager.appendCustomEntry("corral_job_control", entry); options.events.emit("job_control", entry); },
+      before: (toolCallId, job) => this.hooks?.wraps("job_kill")
+        ? this.hooks.before({ tool: "job_kill", toolCallId, input: { job }, ...(this.currentTurn() === undefined ? {} : { turn: this.currentTurn() }) })
+        : Promise.resolve(undefined),
+      after: async (toolCallId, job, failed) => {
+        if (this.hooks?.wraps("job_kill")) await this.hooks.after({ tool: "job_kill", toolCallId, input: { job },
+          ...(this.currentTurn() === undefined ? {} : { turn: this.currentTurn() }) }, failed);
+      },
+    }) : undefined;
     const run = options.identity.run;
     if (options.capabilities?.enabled.includes("checkpoints") === true) {
       if (options.identity.role !== "worker" || !run) throw new Error("module_invalid: checkpoints needs a worker run");
@@ -546,8 +576,8 @@ export class HostSession {
   }
 
   /**
-   * Worker jobs are receipted against their run. Interactive jobs live only as long as this host;
-   * they have no task-scoped monitor or durable wake.
+   * Worker jobs are receipted against their run. Interactive jobs are session-owned; Commands
+   * journals their completion and monitor wakes through the session delivery path.
    */
   private jobRuntime(registerCapability: (pid: number) => () => void): JobRuntime | undefined {
     const { options } = this;
@@ -562,6 +592,11 @@ export class HostSession {
     return new JobRuntime({
       cwd: options.cwd, runtimeDir: options.runtimeDir, generation: options.identity.generation,
       settings: settings.data, registerCapability,
+      environment: () => ({ ...process.env, PI_SESSION_ID: this.sessionId(), PI_SESSION_FILE: this.session.sessionFile,
+        PI_PROVIDER: this.session.model?.provider, PI_MODEL: this.session.model?.id, PI_REASONING_LEVEL: this.session.thinkingLevel }),
+      onPrepared: job => options.sessionManager.appendCustomEntry(COMMAND_ENTRY, {
+        job, generation: options.identity.generation, consumed: false,
+      } satisfies CommandFact),
       onEvent: (kind, data) => options.events.emit(kind, data),
       call: (op, key, payload) => worker ? options.client.call(op, {
         requestId: toolRequestId(this.sessionId(), key), payload, turn: this.currentTurn(),
@@ -714,6 +749,7 @@ export class HostSession {
       this.questionUi = new OwnerQuestionUi(this.ownerQuestions, () => this.bound && !this.closing);
       this.questionUi.install(pi);
     }
+    pi.on("session_start", () => { if (this.bound) this.commands?.bound(); });
     const code = this.code;
     if (code) {
       pi.registerTool(codemodeTool(code, (names) =>
@@ -870,6 +906,7 @@ export class HostSession {
       // Await the release here, but keep reporting through extension reloads.
       if (event.reason === "quit") await this.options.herdr?.close();
       if (event.reason === "reload") await this.auxiliary?.cancelAll(); else await this.auxiliary?.close();
+      this.commands?.pause();
       await this.jobs?.shutdown();
     });
   }
@@ -988,6 +1025,7 @@ export class HostSession {
     if (this.bound) this.checkpoint("end");
     this.report("turn_ended", { aborted, cancelled, owner_input: ownerInput });
     this.options.herdr?.turnEnded();
+    this.commands?.flush();
   }
 
   private checkpoint(phase: "start" | "end"): void {
@@ -1017,6 +1055,7 @@ export class HostSession {
     if (kind === "budget_exhausted") payload.budget = data.budget;
     if (kind === "turn_ended" && data.owner_input === true) payload.owner_input = true;
     if (kind === "turn_ended" && data.cancelled === true) payload.cancelled = true;
+    if (kind === "turn_ended" && this.commands?.pending()) payload.pending_commands = true;
     const role = this.options.identity.role;
     if (kind === "turn_ended" && data.aborted === true && (role === "pm" || role === "assistant")) payload.aborted = true;
     const requestId = eventRequestId(this.options.identity.generation, event.seq);
@@ -1121,6 +1160,7 @@ export class HostSession {
   async close(): Promise<void> {
     this.closing = true;
     this.questionUi?.close();
+    this.commands?.pause();
     this.unsubscribePanels?.();
     this.panels?.dispose();
     const released = this.options.herdr?.close();
@@ -1160,13 +1200,44 @@ export class HostSession {
       bind_nonce_sha256: sha256Hex(bindNonce),
     });
     this.boundSessionId = sessionId;
+    const commandFacts: CommandFact[] = [], monitorFacts: MonitorFact[] = [];
+    for (const entry of this.session.sessionManager.getEntries()) {
+      if (entry.type === "custom" && entry.customType === COMMAND_ENTRY) commandFacts.push(entry.data as CommandFact);
+      if (entry.type === "custom" && entry.customType === MONITOR_ENTRY) monitorFacts.push(entry.data as MonitorFact);
+    }
     const bound = (receipt.result ?? {}) as { herdr_seq_epoch_ms?: unknown; questions?: unknown };
     this.options.herdr?.bind({ sessionId, sessionFile, epochMs: bound.herdr_seq_epoch_ms, questions: bound.questions });
     if ((this.options.capabilities?.catalog ?? 0) >= 7) await this.budget.refresh();
     await this.writePermissionNotice?.();
     this.options.events.emit("bound", { generation: this.options.identity.generation, session_id: sessionId });
+    this.commands?.bound(commandFacts, monitorFacts);
     await this.questionUi?.recover();
     return receipt;
+  }
+
+  /** Only a journaled command-origin input can acknowledge a completion, never quoted log text. */
+  private commandNoticeSeen(key: string): boolean {
+    const hashes = new Set<string>();
+    for (const entry of this.session.sessionManager.getEntries()) {
+      if (entry.type !== "custom" || !["corral_delivery", "corral_fixture_delivery"].includes(entry.customType)) continue;
+      const data = entry.data;
+      if (!data || typeof data !== "object" || !("origin" in data) || data.origin !== "command") continue;
+      const hash = "text_sha256" in data ? data.text_sha256 : "textSha256" in data ? data.textSha256 : undefined;
+      if (typeof hash === "string") hashes.add(hash);
+    }
+    const marker = `[corral notice ${key}]`;
+    const texts = [...this.session.getFollowUpMessages(), ...this.session.getSteeringMessages(),
+      ...this.session.messages.flatMap(message => message.role === "user" ? [typeof message.content === "string" ? message.content
+        : message.content.filter(part => part.type === "text").map(part => part.text).join("\n")] : [])];
+    return texts.some(text => text.split("\n").includes(marker) && hashes.has(sha256Hex(text)));
+  }
+
+  /** Queued notices are retried on restart unless the actual transcript already contains them. */
+  private async commandNotice(key: string, text: string): Promise<string> {
+    if (this.commandNoticeSeen(key)) return "duplicate";
+    const tagged = `[corral notice ${key}]\n${text}`;
+    const sent = await this.submit({ text: tagged, busyPolicy: "follow_up", idempotencyKey: key, origin: "command" }, key);
+    return sent.disposition;
   }
 
   deliveryHost(): DeliveryHost {
@@ -1238,7 +1309,8 @@ export class HostSession {
     const session = this.session;
     const leaf = session.sessionManager.getLeafId();
     if (leaf !== this.panelTokenLeaf) { this.panelTokenLeaf = leaf; this.panelStats = undefined; }
-    const jobs: PanelJob[] | null = this.jobs ? this.jobs.inspection().map(detail => ({ job: detail.job, state: detail.state, detail })) : null;
+    const jobs: PanelJob[] | null = this.jobs ? [...this.jobs.inspection().map(detail => ({ job: detail.job, state: detail.state, detail })),
+      ...this.commands?.recovered() ?? []] : null;
     return {
       budget: (this.options.capabilities?.catalog ?? 0) >= 7 ? this.budget.state() : undefined,
       bound: this.bound, model: session.model ? `${session.model.provider}/${session.model.id}` : null,
@@ -1316,6 +1388,7 @@ export class HostSession {
         context_files: resources.getAgentsFiles().agentsFiles.length,
       },
       jobs: this.jobs?.state() ?? null,
+      commands: this.commands?.state() ?? null,
       codemode: this.code?.state() ?? null,
       owner_questions: this.ownerQuestions?.list().map(q => ({ id: q.id, status: this.ownerQuestions?.status(q.id),
         session: q.session, generation: q.generation, expires: q.expires })) ?? null,

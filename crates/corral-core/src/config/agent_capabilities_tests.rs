@@ -655,7 +655,7 @@ fn background_shell_is_available_to_worker_and_interactive_roles_with_recorded_b
                 .into_iter()
                 .collect()
         ),
-        serde_json::json!({"max_jobs": 2, "max_output_bytes": 8388608, "max_runtime_secs": 600})
+        serde_json::json!({"max_jobs": 2, "max_output_bytes": 8388608, "max_runtime_secs": 600, "wait_ms": 10000})
     );
     let standard = AgentCapabilities::default().resolve(AgentRole::Worker, None);
     assert_ne!(narrowed.digest, standard.digest);
@@ -664,6 +664,7 @@ fn background_shell_is_available_to_worker_and_interactive_roles_with_recorded_b
         "[capabilities.reviewer]\nbackground_shell = true",
         "[capabilities.worker.background_shell]\nmax_jobs = 0",
         "[capabilities.worker.background_shell]\nmax_output_bytes = 10",
+        "[capabilities.worker.background_shell]\nwait_ms = 600001",
         "[capabilities.worker.background_shell]\nshell = \"zsh\"",
     ] {
         assert!(

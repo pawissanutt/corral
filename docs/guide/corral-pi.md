@@ -205,7 +205,7 @@ error. The catalog today, as strict / standard / full:
 | `codemode` | worker off / on / on; PM off / off / on | off / on / on |
 | `hooks` | worker off / off / on; not available to PM | not available |
 | `bash_rules` | worker off / off / on; not available to PM | reviewer off / off / on; not available to planning roles |
-| `background_shell` | worker off / on / on; not available to PM | not available |
+| `background_shell` | off / on / on (also assistant) | not available |
 | `role_enabled` | not available | planner and plan reviewer off / on / on; not available to reviewer |
 | `browser` | worker off / on / on; not available to PM | not available |
 | `checkpoints` | worker off / off / on; not available to PM | not available |
@@ -239,7 +239,9 @@ branch_summary = { reserve_tokens = 16384, skip_prompt = false }
 ```
 
 `[agent.capabilities.worker.background_shell]` takes `max_jobs` (default 4, at most 16),
-`max_output_bytes` (retained per job, default 8 MiB) and `max_runtime_secs` (default 3600).
+`max_output_bytes` (retained per job, default 8 MiB), `max_runtime_secs` (default 3600),
+and `wait_ms` (foreground observation budget, default 10000, range 0–600000). PM and assistant
+use the same settings under their existing role capability; this does not enable the capability.
 
 `user_dirs` entries are absolute or `~/` directories; a missing directory is skipped. Web takes
 its own `[agent.capabilities.<role>.web]` table (below).
@@ -796,46 +798,84 @@ changes nothing stops continuation, and so does a run of 8; the stop is shown in
 Board activity alone never starts a continuation. `corral agent state --pm` shows the
 request record as `todo_requests`.
 
-### Background jobs
+### Managed commands
 
-Worker generations with `background_shell` expose `job_start`, `job_output`, `job_kill` and
-`corral_job_monitor`. `job_start` runs `bash -c <command>` in the worktree in its own process
-group and returns a job ID (`j<generation>-<n>`) at once. A job is that whole process group.
-Before spawning, the host records the job with corral. The spawned launcher then waits on its
-stdin while the host records its pid and kernel start time; only after that commit does the
-host release it to run the command. A host that dies in between leaves no running command, and
-a refused record means nothing ran. The launcher stays the group's leader while the command
-runs as its child, so the recorded identity keeps anchoring the group; it reports the command's
-exit status to the host on its own stdout, and the command's stdout and stderr both become the
-job's output. If the host goes away after the command finished, the launcher kills its group. `job_output` returns state, exit code and up to 64 KiB of output
-per call, paging with `offset`/`next_offset`. Output is written to the generation's runtime
-directory up to `max_output_bytes`; if that file is lost, the last 64 KiB still come from
-memory. `job_kill` sends SIGTERM to the group, then SIGKILL after two seconds; the runtime
-limit kills the same way. With `bash_rules`, a `job_start` command is decided exactly like
-a `bash` command: a denied or not-yet-permitted command is refused before any job is recorded.
-Whenever the command ends (normally, killed, or at the runtime
-limit), the host SIGKILLs the still-anchored group, including descendants that ignore SIGTERM
-or redirect their output, and reports the exit only after the group is gone (`group_clear`).
+With the existing `background_shell` capability, worker, PM and assistant Bash calls use one
+owned execution from launch. Other roles, or generations without that capability, retain
+blocking Bash. No configuration or role authority is silently expanded.
 
-`corral_job_monitor` takes `job`, `on` (`exit` or `line` with a JavaScript `pattern`) and
-`timeout_secs` (default 3600). It is a receipted corral operation, callable only at top level,
-that registers a run wait with a deadline and its wake in one transaction. Exactly one inbox
-wake answers each monitor: when the job exits (ready for exit code 0, failed otherwise), when
-a matching line is printed after registration, when the job is reaped (lost), or at the
-deadline. A monitor on a job that already ended wakes at once. While a monitor is armed, an
-ended turn is classified `waiting_external`. End the turn after the call instead of polling.
+- `bash({command, wait_ms?, timeout?})` waits up to `wait_ms` (default 10000 milliseconds),
+  then returns a stable `j<generation>-<n>` handle and current output **without restarting or
+  killing the command**. `wait_ms: 0` backgrounds immediately. `timeout` remains a separate
+  hard deadline in **seconds**, capped by `max_runtime_secs`, fixed from process launch.
+- `job_output({job, tail_lines?, cursor?, max_bytes?})` is a **nonblocking peek**, even while
+  running. Default: latest 50 lines within 16 KiB; maximum 64 KiB. Readers have independent
+  UTF-8-aligned cursors. `cursor` cannot be combined with `tail_lines` or legacy `offset`;
+  `offset`/`next_offset` remain supported. Reads never acknowledge completion. A retention
+  `gap` is explicit: the capped file prefix is never misrepresented as the current tail.
+- `job_wait({job?, wait_ms?})` awaits one owned job, or the next unconsumed completion among
+  current eligible jobs. It returns immediately when none exist. The default wait budget is
+  60000 milliseconds; expiry or wait cancellation releases observation, not the process.
+- `job_kill({job})` stops the verified owned process group, retaining final output. It uses
+  SIGTERM then SIGKILL after two seconds. Terminal calls are idempotent. `termination`
+  distinguishes normal exit, cancellation, hard deadline and owning-host shutdown;
+  `group_clear` is a local cleanup observation, not gate PASS or canonical task settlement.
+- `job_start({command})` remains a compatibility alias for immediate-background Bash.
+  New workflows should use Bash plus wait/peek rather than a separate launch engine.
 
-Jobs belong to their generation. Sync reaps a running job whose generation was fenced or
-replaced (an explicit resume after host loss) or whose run ended. It also sweeps an exited job
-whose group was never verified empty. A group is the job's only while its recorded leader still
-holds the pid (running or an unreaped zombie) with the recorded start time. A group whose leader
-is gone cannot be told apart from a later group that reused the ID, so it is never signalled,
-whatever its members; neither is a group led by a reused pid. Such jobs are reported `lost`
-with the reason, and are not revisited. Bash, jobs and their network traffic run outside the
-in-process network guard, as `bash` always has. Recovery reports an interrupted `job_start`
-or `job_kill` as `outcome_unknown` and `job_output` as `interrupted_no_effect`. The durable
-records live in the run's `agent_host.jobs`; the host's bridge state lists its live jobs and
-emits `job_started` and `job_exited` events.
+Default nested `await tools.bash(...)` waits for actual completion before the next JavaScript
+statement. Code Mode owns yielding the enclosing cell and its filtered final notification;
+explicit `wait_ms: 0` requests an independent background handle. Cancelling an awaited Bash
+stops its owned group; cancelling `job_wait` does not. Ordinary turn endings do not stop work.
+
+Before executable work is released, a worker records prepare and process identity with
+corral; PM/assistant record a session fact. The launcher waits on stdin until that handshake
+succeeds, stays the process-group leader, reports status on a separate channel, and kills its
+group if the host disappears. Commands run in the worktree with the usual Pi session identity.
+Bash rules, fixed refusals, permissions, hooks and Code Mode child attribution still apply.
+Tool-return hooks observe a yielded tool result, not command exit; `command_settled` is a
+separate host event. Notifications never replay commands or mutating hooks.
+
+Completion is journaled before automatic delivery. A foreground result, explicit wait/stop
+or exit monitor claims the completion instead of also posting an automatic duplicate. Notices
+use the existing follow-up delivery path, queue during work and wake idle sessions. Failed
+submissions retry with the same identity; bind/turn end also retries pending delivery.
+Already-ready completions coalesce in groups of at most four without waiting for other work;
+notice excerpts are capped at 2 KiB each while full retained pages remain available through peek.
+Recovery deduplicates against observed or still-queued messages, rather than assuming an old
+queue acknowledgement means the model saw the result. A turn with unfinished commands holds
+request continuation (`waiting_command`) without spending a no-progress nudge.
+
+`corral_job_monitor({job,on,pattern?,timeout_secs?})` retains explicit exit and future-line
+(JavaScript regex) watches, default timeout 3600 seconds. Worker monitors keep their canonical
+run wait/inbox receipt and deadline semantics, including calls from journaled Code Mode;
+arbitrary unjournaled nesting remains refused. PM/assistant watches are session-owned and
+journaled, not fake task waits. Exit, line match, deadline or owning-host interruption wakes
+once per watch. A line match is not service health; a deadline does not kill work.
+
+The host retains at most 64 command results/process records, including running commands;
+only acknowledged terminal entries can be evicted to admit another command. A full unread
+completion cache refuses new work instead of silently dropping it. Per-job file storage is
+capped by `max_output_bytes`, with a rolling 64 KiB in-memory tail even after that cap. Evicted
+IDs report expired, never fabricated empty success. Host loss does not create daemons: the
+next bind reports lost executions/monitors without replay, and retries committed pending
+completion notices. Worker sync still reaps fenced/lost-generation/run-ended jobs and sweeps
+unverified groups. Signalling requires the recorded leader and kernel start time; leaderless,
+foreign or reused groups are never claimed.
+
+Activity → Now has distinct **p Peek**, **b Background** and **x Stop** controls. Peek opens
+current logs immediately. Background releases the current foreground observer without
+changing its deadline. Stop confirms first, then uses the same owned-stop path and configured
+hooks. The adapter rechecks session, generation, capability/loadout and selected job after
+any dialog/hook; stale/foreign/denied selections never signal. An uncertain acknowledgement
+is reported without automatic retry. There is no arbitrary PID or restart control.
+
+Bash and jobs remain outside the in-process network guard. Interrupted Bash/start/kill calls
+remain `outcome_unknown`; output/wait are `interrupted_no_effect` unless hooks may have acted.
+Worker canonical records remain in `agent_host.jobs`; bridge state additionally exposes
+command observation/delivery state and `job_started`, `job_exited`, `command_settled` events.
+Claude receives the managed Bash schema with seconds-based timeout; legacy Claude built-in
+Bash still translates its milliseconds to Pi seconds.
 
 ### Checkpoints and rewind
 

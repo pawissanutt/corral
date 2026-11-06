@@ -60,6 +60,8 @@ pub enum Disposition {
 #[serde(rename_all = "snake_case")]
 pub enum TurnEnd {
     Normal,
+    /// The host still owns a managed command; its completion wake resumes the session.
+    WaitingCommand,
     Cancelled,
     ProviderFailed,
     BudgetExhausted,

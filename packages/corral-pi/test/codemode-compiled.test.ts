@@ -46,5 +46,6 @@ test("compiled codemode runs cells on the embedded Corral kernel worker, includi
   expect([code, signal, stderr]).toEqual([0, null, ""]);
   expect(stdout).toContain("COMPILED_CODEMODE startup passed");
   expect(stdout).toContain("COMPILED_CODEMODE reload passed");
+  expect(stdout).toContain("COMPILED_COMMAND launch/yield/peek/wait passed");
   expect(stdout).toMatch(/COMPILED_CODEMODE kernel file:\/\/\/\$bunfs\/root\/src\/extensions\/codemode\/kernel-worker\.js/);
 }, 60_000);

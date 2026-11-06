@@ -12,6 +12,7 @@ pub(crate) fn turn_ended(
     state: &mut AgentRunState,
     index: usize,
     aborted: bool,
+    pending_commands: bool,
     now: Timestamp,
 ) -> Option<(Value, bool)> {
     if !matches!(state.binding.role, AgentRole::Pm | AgentRole::Assistant) {
@@ -30,6 +31,8 @@ pub(crate) fn turn_ended(
         TurnEnd::BudgetExhausted
     } else if turn.provider_error.is_some() {
         TurnEnd::ProviderFailed
+    } else if pending_commands {
+        TurnEnd::WaitingCommand
     } else {
         TurnEnd::Normal
     };

@@ -7,11 +7,12 @@
 // file capped at max_output_bytes plus an in-memory tail that survives the file's loss. Line
 // monitors match in this process; corral settles every monitor's wait and posts its one wake.
 import { type ChildProcess, spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeSync } from "node:fs";
 import { constants } from "node:os";
 import { join } from "node:path";
 
 import type { JobSettings } from "./settings.ts";
+import { readOutput, type OutputOptions } from "./output.ts";
 import type { RegisterCapability } from "../registry.ts";
 
 export const OUTPUT_READ_DEFAULT = 16 * 1024;
@@ -60,6 +61,9 @@ export interface JobRuntimeOptions {
   readonly settings: JobSettings;
   readonly call: JobCall;
   readonly shell?: string;
+  readonly environment?: () => NodeJS.ProcessEnv;
+  /** Durable session fact before the launcher can execute anything. */
+  readonly onPrepared?: (job: string) => void;
   readonly schedule?: Schedule;
   readonly registerCapability?: RegisterCapability;
   /** Bridge events: `job_started` once identity is recorded, `job_exited` once the exit is. */
@@ -114,6 +118,7 @@ interface Job {
   cancelKill?: () => void;
   status: string;
   commandStatus?: number;
+  reason?: "deadline" | "cancelled" | "host_stopped";
 }
 
 interface Stat {
@@ -174,6 +179,7 @@ export class JobError extends Error {}
 export class JobRuntime {
   private readonly jobs = new Map<string, Job>();
   private seq = 0;
+  private readonly lineListeners = new Set<(job: string, line: string) => void>();
   private shutdownEpoch = 0;
   private shutdownOperation?: Promise<void>;
   private readonly starting = new Set<Promise<unknown>>();
@@ -189,7 +195,13 @@ export class JobRuntime {
 
   private job(id: string): Job {
     const job = this.jobs.get(id);
-    if (!job) throw new JobError(`unknown job ${id}; job_start returns the job ID`);
+    if (!job) {
+      const prefix = `j${this.options.generation}-`;
+      if (id.startsWith(prefix) && /^\d+$/.test(id.slice(prefix.length)) && Number(id.slice(prefix.length)) <= this.seq) {
+        throw new JobError(`expired job ${id}; its terminal output is no longer retained`);
+      }
+      throw new JobError(`unknown job ${id}; bash returns the job ID`);
+    }
     return job;
   }
 
@@ -211,9 +223,11 @@ export class JobRuntime {
     job.reports = job.reports.then(() => this.report(key, payload));
   }
 
-  async start(command: string, key: string): Promise<Record<string, unknown>> {
+  async start(command: string, key: string, timeoutSecs?: number): Promise<Record<string, unknown>> {
     if (this.shutdownOperation) throw new JobError("job runtime is shutting down");
-    const starting = this.startJob(command, key, this.shutdownEpoch);
+    if (this.live() + this.starting.size >= this.options.settings.max_jobs) throw new JobError("job_limit: wait for a job to finish");
+    if (timeoutSecs !== undefined && (!Number.isFinite(timeoutSecs) || timeoutSecs <= 0)) throw new JobError("timeout must be positive seconds");
+    const starting = this.startJob(command, key, this.shutdownEpoch, timeoutSecs);
     this.starting.add(starting);
     try {
       return await starting;
@@ -222,7 +236,7 @@ export class JobRuntime {
     }
   }
 
-  private async startJob(command: string, key: string, epoch: number): Promise<Record<string, unknown>> {
+  private async startJob(command: string, key: string, epoch: number, timeoutSecs?: number): Promise<Record<string, unknown>> {
     const { settings } = this.options;
     if (this.live() >= settings.max_jobs) {
       throw new JobError(`job_limit: ${settings.max_jobs} jobs are already running; wait for one or kill it`);
@@ -231,6 +245,7 @@ export class JobRuntime {
     const prepared = await this.options.call("job", `${key}/prepare`, { action: "prepare", job: id, command });
     if (prepared.state !== "committed") return { job: id, state: "refused", result: prepared.result };
     if (epoch !== this.shutdownEpoch) return { job: id, state: "not_started", reason: "job runtime shut down" };
+    this.options.onPrepared?.(id);
     const dir = join(this.options.runtimeDir, "jobs");
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const file = join(dir, `${id}.log`);
@@ -238,6 +253,7 @@ export class JobRuntime {
     const shell = this.options.shell ?? "/bin/bash";
     const child = spawn(shell, ["-c", LAUNCHER, shell, command], {
       cwd: this.options.cwd, detached: true, stdio: ["pipe", "pipe", "pipe"],
+      ...(this.options.environment ? { env: this.options.environment() } : {}),
     });
     const spawned = await new Promise<Error | undefined>((resolve) => {
       child.once("spawn", () => resolve(undefined));
@@ -270,7 +286,7 @@ export class JobRuntime {
     child.stdin?.on("error", () => undefined);
     child.stdout?.on("data", (chunk: Buffer) => this.statusLine(job, chunk));
     child.stderr?.on("data", (chunk: Buffer) => this.capture(job, chunk));
-    const cancelDeadline = this.schedule(() => void this.kill(id), settings.max_runtime_secs * 1000);
+    const cancelDeadline = this.schedule(() => void this.kill(id, "deadline"), Math.min(timeoutSecs ?? settings.max_runtime_secs, settings.max_runtime_secs) * 1000);
     child.once("close", (code, signal) => {
       cancelDeadline();
       if (job.partial) this.line(job, job.partial);
@@ -309,10 +325,10 @@ export class JobRuntime {
     // The open stdin is the launcher's lifeline: it is closed only when this host goes away.
     await new Promise<void>((resolve) => {
       if (!child.stdin) resolve();
-      else if (recorded) { job.startedAt = Date.now(); child.stdin.write("run\n", () => resolve()); }
+      else if (recorded && epoch === this.shutdownEpoch) { job.startedAt = Date.now(); child.stdin.write("run\n", () => resolve()); }
       else child.stdin.end(() => resolve());
     });
-    if (!recorded) return { job: id, state: "not_started", reason: "corral did not record the job's process identity" };
+    if (!recorded || epoch !== this.shutdownEpoch) return { job: id, state: "not_started", reason: "launch refused or owning host stopped" };
     this.options.onEvent?.("job_started", { job: id, pid: child.pid });
     return { job: id, state: job.state, pid: child.pid, output_file: file };
   }
@@ -369,6 +385,7 @@ export class JobRuntime {
   private line(job: Job, text: string): void {
     job.lines++;
     const candidate = text.slice(0, LINE_MATCH_MAX);
+    for (const listener of this.lineListeners) listener(job.id, candidate);
     for (const watcher of job.watchers) {
       if (watcher.matched !== undefined || job.lines <= watcher.afterLine || !watcher.regex.test(candidate)) continue;
       watcher.matched = candidate;
@@ -426,30 +443,20 @@ export class JobRuntime {
   }
 
   output(id: string, offset?: number, maxBytes = OUTPUT_READ_DEFAULT): Record<string, unknown> {
+    return this.peek(id, { ...(offset === undefined ? {} : { offset }), max_bytes: maxBytes });
+  }
+
+  peek(id: string, options: OutputOptions = {}): Record<string, unknown> {
     const job = this.job(id);
-    const max = Math.min(Math.max(1, maxBytes), OUTPUT_READ_MAX);
-    const base = {
-      job: id, state: job.state, exit_code: job.exitCode, signal: job.signal,
+    return { job: id, state: job.state, exit_code: job.exitCode, signal: job.signal,
+      group_clear: job.groupClear, termination: job.reason ?? (job.state === "exited" ? "exit" : null),
       bytes_total: job.bytes, bytes_stored: job.stored, truncated: job.bytes > job.stored,
-    };
-    let fd: number | undefined;
-    try {
-      fd = openSync(job.file, "r");
-    } catch {
-      const start = job.bytes - job.tail.length;
-      return {
-        ...base, output_file: "missing", offset: start, next_offset: job.bytes,
-        text: job.tail.subarray(Math.max(0, job.tail.length - max)).toString("utf8"),
-      };
-    }
-    try {
-      const from = offset === undefined ? Math.max(0, job.stored - max) : Math.min(Math.max(0, offset), job.stored);
-      const buffer = Buffer.alloc(Math.min(max, job.stored - from));
-      const read = buffer.length === 0 ? 0 : readSync(fd, buffer, 0, buffer.length, from);
-      return { ...base, offset: from, next_offset: from + read, text: buffer.subarray(0, read).toString("utf8") };
-    } finally {
-      closeSync(fd);
-    }
+      ...readOutput(job, options) };
+  }
+
+  onLine(listener: (job: string, line: string) => void): () => void {
+    this.lineListeners.add(listener);
+    return () => this.lineListeners.delete(listener);
   }
 
   /** Signals the job's group only while its recorded leader anchors it: never a reused pid. */
@@ -462,15 +469,25 @@ export class JobRuntime {
     }
   }
 
-  async kill(id: string): Promise<Record<string, unknown>> {
+  async kill(id: string, reason: "cancelled" | "deadline" = "cancelled"): Promise<Record<string, unknown>> {
     const job = this.job(id);
+    if (job.state === "running" && job.commandStatus === undefined) job.reason ??= reason;
     if (!job.groupClear) {
       this.groupSignal(job, "SIGTERM");
       job.cancelKill?.();
       job.cancelKill = this.schedule(() => this.groupSignal(job, "SIGKILL"), KILL_GRACE_MS);
       await job.exited;
     }
-    return { job: id, state: job.state, exit_code: job.exitCode, signal: job.signal, group_clear: job.groupClear };
+    return { ...this.peek(id), group_clear: job.groupClear };
+  }
+
+  /** Only acknowledged terminal results are eligible for bounded cache eviction. */
+  forget(id: string): void {
+    const job = this.jobs.get(id);
+    if (!job) return;
+    if (job.state !== "exited" || !job.groupClear || job.inflight) throw new JobError(`cannot evict live or unsettled job ${id}`);
+    rmSync(job.file, { force: true });
+    this.jobs.delete(id);
   }
 
   async shutdown(): Promise<void> {
@@ -488,6 +505,7 @@ export class JobRuntime {
   private async stopJobs(): Promise<void> {
     await Promise.allSettled([...this.starting]);
     await Promise.all([...this.jobs.values()].filter((job) => !job.groupClear).map(async (job) => {
+      if (job.state === "running" && job.commandStatus === undefined) job.reason ??= "host_stopped";
       this.groupSignal(job, "SIGTERM");
       job.cancelKill?.();
       job.cancelKill = this.schedule(() => this.groupSignal(job, "SIGKILL"), KILL_GRACE_MS);

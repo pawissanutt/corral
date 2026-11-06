@@ -23,7 +23,7 @@ export type StreamEvent =
   | { type: "message_delta"; delta: { stop_reason?: string | null }; usage?: SdkUsage }
   | { type: "message_stop" };
 
-type Indexed<T> = T & { index?: number; partialJson?: string };
+type Indexed<T> = T & { index?: number; partialJson?: string; custom?: boolean };
 type OpenBlock = Indexed<TextContent> | Indexed<ThinkingContent> | Indexed<ToolCall>;
 
 export interface EventContext {
@@ -88,7 +88,7 @@ export function applyStreamEvent(context: EventContext, event: StreamEvent): voi
     } else if (start.type === "tool_use") {
       open(context, {
         type: "toolCall", id: start.id ?? "", name: mapSdkToolNameToPi(start.name ?? "", context.customToolNameToPi),
-        arguments: {}, partialJson: "", index: event.index,
+        arguments: {}, partialJson: "", index: event.index, custom: context.customToolNameToPi.has(start.name ?? ""),
       }, "toolcall");
     }
   } else if (event.type === "content_block_delta") {
@@ -112,8 +112,9 @@ export function applyStreamEvent(context: EventContext, event: StreamEvent): voi
     else if (block?.type === "thinking") {
       stream.push({ type: "thinking_end", contentIndex, content: block.thinking, partial: output });
     } else if (block?.type === "toolCall") {
-      block.arguments = mapToolArgs(block.name, record(parseStreamingJson(block.partialJson))) as ToolCall["arguments"];
+      block.arguments = mapToolArgs(block.name, record(parseStreamingJson(block.partialJson)), block.custom) as ToolCall["arguments"];
       delete block.partialJson;
+      delete block.custom;
       stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
     }
     if (block) delete block.index;
