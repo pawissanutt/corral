@@ -100,28 +100,8 @@ pub struct PmWorkset {
     pub next: PmAction,
 }
 
-pub(crate) fn authority(kind: PmActionKind) -> Option<OperatingActionKind> {
-    match kind {
-        PmActionKind::GateLog | PmActionKind::Gate => Some(OperatingActionKind::Gate),
-        PmActionKind::StaleVerdict | PmActionKind::LoadFailure | PmActionKind::Diagnosis => {
-            Some(OperatingActionKind::Repair)
-        }
-        PmActionKind::Review => Some(OperatingActionKind::Review),
-        PmActionKind::Land => Some(OperatingActionKind::Accept),
-        PmActionKind::Dispatch | PmActionKind::IdeaPromotion => Some(OperatingActionKind::Dispatch),
-        PmActionKind::LessonsDistill
-        | PmActionKind::Question
-        | PmActionKind::EvidenceOnly
-        | PmActionKind::ReviewInFlight
-        | PmActionKind::Owner
-        | PmActionKind::Wait
-        | PmActionKind::AgentQuestion
-        | PmActionKind::OwnerQuestion
-        | PmActionKind::Inbox => None,
-    }
-}
-
 mod options;
+pub(crate) use options::authority;
 use options::{option_authority, option_target};
 
 fn project_permissions(action: &mut PmAction, policy: &EffectivePolicy) {
