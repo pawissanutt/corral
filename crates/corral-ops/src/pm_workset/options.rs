@@ -1,12 +1,33 @@
 use super::*;
 
+pub(crate) fn authority(kind: PmActionKind) -> Option<OperatingActionKind> {
+    match kind {
+        PmActionKind::GateLog | PmActionKind::Gate => Some(OperatingActionKind::Gate),
+        PmActionKind::StaleVerdict | PmActionKind::LoadFailure | PmActionKind::Diagnosis => {
+            Some(OperatingActionKind::Repair)
+        }
+        PmActionKind::Review => Some(OperatingActionKind::Review),
+        PmActionKind::Land => Some(OperatingActionKind::Accept),
+        PmActionKind::Dispatch | PmActionKind::IdeaPromotion => Some(OperatingActionKind::Dispatch),
+        PmActionKind::LessonsDistill
+        | PmActionKind::Question
+        | PmActionKind::EvidenceOnly
+        | PmActionKind::ReviewInFlight
+        | PmActionKind::Owner
+        | PmActionKind::Wait
+        | PmActionKind::AgentQuestion
+        | PmActionKind::OwnerQuestion
+        | PmActionKind::Inbox => None,
+    }
+}
+
 pub(super) fn option_authority(id: &str, kind: PmActionKind) -> Option<OperatingActionKind> {
     match id {
         "independent_review" => Some(OperatingActionKind::Review),
         "review_plan" => Some(OperatingActionKind::PlanReview),
         "approve_plan" => Some(OperatingActionKind::AcceptPlan),
         "ask_owner" | "inspect_plan" | "request_plan_changes" | "file_flake" | "wait" => None,
-        _ => authority(kind),
+        _ => super::authority(kind),
     }
 }
 
