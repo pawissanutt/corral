@@ -2,6 +2,9 @@ import { expect, test } from "bun:test";
 import { AuxiliaryRuntime, type AuxiliaryResult, type Invocation } from "../src/extensions/subagent/runtime.ts";
 import { ExploreSettingsSchema, OracleSettingsSchema } from "../src/extensions/subagent/settings.ts";
 import { executionRefusal, exploreLoadout } from "../src/roles/common/execution.ts";
+import { exploreTool } from "../src/extensions/subagent/index.ts";
+import { researchBudget, researchResult } from "../src/extensions/subagent/research.ts";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 function barrier<T = void>() {
   let resolve!: (value: T) => void;
@@ -130,6 +133,47 @@ test("Explore priority is validated and scoped without changing Oracle or other 
   const standard = new AuxiliaryRuntime({ ...options, settings: { explore: { ...explore, service_tier: "default" } } });
   await standard.run("explore", "one", "standard research"); expect(invocations.at(-1)?.serviceTier).toBeUndefined();
   await Promise.all([runtime.close(), other.close(), standard.close()]);
+});
+
+test("research presets stay within configured ceilings and results expose partial status, identity and truncation", async () => {
+  expect(researchBudget({ effort: "quick" }, 12)).toEqual({ maxTurns: 4, thinkingLevel: "off" });
+  expect(researchBudget({ effort: "quick" }, 2).maxTurns).toBe(2);
+  expect(researchBudget({ effort: "deep" }, 12)).toEqual({ maxTurns: 12, thinkingLevel: "high" });
+  const invocations: Invocation[] = [];
+  const fx = fixture(async invocation => {
+    invocations.push(invocation);
+    return { text: "e".repeat(32769), outcome: "completed", report: { status: "partial", stopReason: "turn_limit" } };
+  });
+  try {
+    const tool = exploreTool(fx.runtime);
+    const result = await tool.execute("docs", { prompt: "Verify API", profile: "docs", effort: "quick",
+      starting_points: "https://example.com/docs", constraints: "Version 2 only" }, undefined, undefined, undefined as never);
+    expect(invocations[0]).toMatchObject({ maxTurns: 4, model: "normal", provider: "openai-codex",
+      research: { profile: "docs", effort: "quick", constraints: "Version 2 only" } });
+    expect(result.details).toMatchObject({ generation: 7, truncated: true, report: { status: "partial" } });
+    const text = result.content.filter(block => block.type === "text").map(block => block.text).join("\n");
+    const identity = fx.records[0]?.request;
+    expect(typeof identity).toBe("string");
+    expect(text).toContain(String(identity));
+    expect(text).toContain("partial");
+    expect(text).toContain("turn_limit");
+    expect(text).toContain(`/private/${identity}.jsonl`);
+    expect(text).not.toContain("e".repeat(32769));
+    await expect(tool.execute("oversized", { prompt: "p".repeat(32768), constraints: "x" }, undefined, undefined, undefined as never)).rejects.toThrow("total");
+    expect(invocations).toHaveLength(1);
+  } finally { await fx.runtime.close(); }
+});
+
+test("empty and token-limited research cannot masquerade as completed findings", () => {
+  expect(researchResult([], "completed").report).toEqual({ status: "failed", stopReason: "empty_response" });
+  const cutOff: AssistantMessage = { role: "assistant", api: "openai-responses", provider: "fixture", model: "fixture", timestamp: 1,
+    content: [{ type: "thinking", thinking: "PRIVATE_REASONING" }, { type: "text", text: "source.ts:3 shows a partial" }],
+    stopReason: "length", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+  const result = researchResult([cutOff], "completed");
+  expect(result.report).toEqual({ status: "partial", stopReason: "output_limit" });
+  expect(result.text).toContain("source.ts:3");
+  expect(result.text).not.toContain("PRIVATE_REASONING");
 });
 
 test("child ceiling denies writes, shell, MCP, hooks, recursive spawn and Corral at every depth", () => {
