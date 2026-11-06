@@ -19,13 +19,16 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done; });
   return { promise, resolve };
 }
-function fixture(options: { worker?: boolean; schedule?: Schedule; waitMs?: number } = {}) {
+function fixture(options: { worker?: boolean; schedule?: Schedule; waitMs?: number; started?: () => Promise<void> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "corral-commands-"));
   const facts: CommandFact[] = [], monitors: MonitorFact[] = [], notices: string[] = [];
   const tracked = deferred<string>();
   const jobs = new JobRuntime({ cwd: dir, runtimeDir: join(dir, "runtime"), generation: 3,
     settings: { max_jobs: 2, max_output_bytes: 1024, max_runtime_secs: 60 },
-    call: async () => ({ state: "committed", result: {} }), ...(options.schedule ? { schedule: options.schedule } : {}) });
+    call: async (_op, _key, payload) => {
+      if (payload.action === "started") await options.started?.();
+      return { state: "committed", result: {} };
+    }, ...(options.schedule ? { schedule: options.schedule } : {}) });
   const commands = new Commands({ jobs, generation: 3, worker: options.worker ?? false,
     waitMs: options.waitMs ?? 10000, journal: fact => { facts.push(fact); tracked.resolve(fact.job); },
     monitorJournal: fact => monitors.push(fact), notify: async (_key, text) => { notices.push(text); return "queued"; } });
@@ -109,6 +112,45 @@ test("wait-next claims exactly one completion, while cancellation releases waiti
   expect(fx.notices).toEqual([]);
   expect(await fx.commands.wait(undefined, 0)).toMatchObject({ state: "none" });
   expect(() => fx.jobs.peek("j999-1")).toThrow("unknown job");
+});
+
+test("Background releases wait-next across its snapshot without consuming or stopping either job", async () => {
+  const fx = fixture();
+  const gates = [fx.fifo("next-a"), fx.fifo("next-b")] as const;
+  const starts = await Promise.all(gates.map((gate, i) => fx.commands.run(`cat ${gate} >/dev/null; echo ${i}`, `next-${i}`, { wait_ms: 0 })));
+  const waiting = fx.commands.wait();
+  expect(fx.commands.state().every(job => job.observation === "attached")).toBeTrue();
+  fx.commands.background(String(starts[1]?.job));
+  await Promise.resolve();
+  expect(fx.commands.state().every(job => job.observation === "background")).toBeTrue();
+  expect(await waiting).toMatchObject({ state: "waiting" });
+  expect(fx.jobs.state().every(job => job.state === "running")).toBeTrue();
+  const next = fx.commands.wait();
+  await writeFile(gates[0], "go");
+  expect(await next).toMatchObject({ job: starts[0]?.job, state: "exited" });
+  await writeFile(gates[1], "go");
+  expect(await fx.commands.wait()).toMatchObject({ job: starts[1]?.job, state: "exited" });
+});
+
+test("runtime deadline starts at executable release, not during ownership acknowledgement", async () => {
+  const entered = deferred<void>(), acknowledgement = deferred<void>();
+  const schedules: { ms: number; run: () => void }[] = [];
+  const fx = fixture({ started: async () => { entered.resolve(); await acknowledgement.promise; },
+    schedule: (run, ms) => { schedules.push({ run, ms }); return () => {}; } });
+  const gate = fx.fifo("deadline"), executed = fx.line("EXECUTED");
+  const launch = fx.commands.run(`echo EXECUTED; cat ${gate} >/dev/null`, "delayed", { timeout: 10, wait_ms: 0 });
+  await entered.promise;
+  const before = schedules.length;
+  const startedAt = fx.jobs.inspection()[0]?.startedAt;
+  acknowledgement.resolve();
+  const { job } = await launch;
+  await executed;
+  expect(startedAt).toBeUndefined();
+  expect(before).toBe(0);
+  expect(schedules.map(timer => timer.ms)).toEqual([10000]);
+  schedules[0]?.run();
+  await fx.jobs.settled(String(job));
+  expect(fx.jobs.peek(String(job))).toMatchObject({ termination: "deadline", text: "EXECUTED\n", group_clear: true });
 });
 
 test("peeks page independent UTF-8 cursors, expose gaps, and show the rolling tail beyond the file cap", () => {
