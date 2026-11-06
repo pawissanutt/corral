@@ -9,7 +9,7 @@ use super::AgentQuestion;
 pub const AGENT_RECORD_VERSION: u32 = 1;
 /// Largest serialized `RequestReceipt::result` a container stores.
 pub const RESULT_MAX_BYTES: usize = 8 * 1024;
-pub const RECEIPTS_MAX: usize = 2048;
+pub const RECEIPTS_MAX: usize = 16 * 1024;
 pub const GENERATIONS_MAX: usize = 64;
 /// Ended turns beyond this count are evicted oldest first; open turns are never evicted.
 pub const TURNS_MAX: usize = 512;

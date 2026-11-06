@@ -91,6 +91,7 @@ fn pi_command<T: corral_core::TaskRef + ?Sized>(
         effort: child.effort.clone(),
         prompt_file: Some(review_prompt_file(ctx, task.id(), &run.id)?),
         adopt: false,
+        fresh_session: false,
     };
     let target = BindTarget::Reviewer {
         task: task.id().clone(),

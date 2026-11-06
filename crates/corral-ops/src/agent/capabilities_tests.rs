@@ -106,6 +106,7 @@ impl Fixture {
             effort: None,
             prompt_file: None,
             adopt: false,
+            fresh_session: false,
         }
     }
 

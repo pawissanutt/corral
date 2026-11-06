@@ -125,6 +125,7 @@ fn memory_dispatch_writes_private_generation_file_and_launch_reference() {
             effort: None,
             prompt_file: None,
             adopt: false,
+            fresh_session: false,
         },
     )
     .unwrap();

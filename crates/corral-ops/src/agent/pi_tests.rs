@@ -193,8 +193,8 @@ fn a_dead_pm_is_taken_over_with_resume_fencing_and_its_recovery_never_types_into
 }
 
 #[test]
-fn dead_pm_recovery_selects_written_or_fresh_session_for_both_entry_points() {
-    for takeover in [true, false] {
+fn pm_startup_is_fresh_unless_explicitly_continued() {
+    for (takeover, continue_session) in [(true, false), (true, true), (false, true)] {
         for written in [false, true] {
             let fx = fixture();
             owner_pane(&fx);
@@ -206,7 +206,15 @@ fn dead_pm_recovery_selects_written_or_fresh_session_for_both_entry_points() {
             }
             host.kill();
             if takeover {
-                adopt(&f::ctx_at(fx.root()), PANE, &Overrides::default()).unwrap();
+                adopt(
+                    &f::ctx_at(fx.root()),
+                    PANE,
+                    &Overrides {
+                        continue_session,
+                        ..Overrides::default()
+                    },
+                )
+                .unwrap();
             } else {
                 crate::agent::recovery::resume_container(
                     &f::ctx_at(fx.root()),
@@ -220,12 +228,16 @@ fn dead_pm_recovery_selects_written_or_fresh_session_for_both_entry_points() {
                 .join(BOOTSTRAP_FILE);
             let bootstrap: serde_json::Value =
                 serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-            assert_eq!(bootstrap["fresh_session"], !written, "takeover={takeover}");
+            let continued = continue_session && written;
+            assert_eq!(
+                bootstrap["fresh_session"], !continued,
+                "takeover={takeover}"
+            );
             assert_eq!(
                 bootstrap["session_dir"],
                 file.parent().unwrap().to_str().unwrap()
             );
-            if written {
+            if continued {
                 assert_eq!(bootstrap["resume_session"], file.to_str().unwrap());
             } else {
                 assert!(bootstrap["resume_session"].is_null(), "{bootstrap}");

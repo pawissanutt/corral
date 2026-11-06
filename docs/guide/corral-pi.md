@@ -1487,7 +1487,8 @@ host it starts depends on where it runs and its flags:
 |---|---|
 | `corral pi` in a herdr pane inside a workspace | a new [assistant session](assistants.md) in this pane |
 | `corral pi --resume A-<n>` | that assistant's next generation in this pane |
-| `corral pi --pm` | the PM in this pane (below) |
+| `corral pi --pm` | a fresh PM conversation in this pane (below) |
+| `corral pi --pm -c` | continue the previous PM conversation in this pane |
 | `corral pi` outside a workspace, or `corral pi --bare` | plain Pi; outside a workspace with a one-line notice |
 
 The launch line names what opened (`assistant A-1 (role assistant) in pane ...`). `--pm`,
@@ -1504,6 +1505,9 @@ launch. It then opens the PM's next generation in this pane, writes the one-shot
 launches it in-process: the same consume, check and exec `corral agent launch` performs, so the
 bootstrap is gone before Bun starts and no path is shown or typed. The host binds with hello as
 usual, and `corral agent state --pm` shows the new generation bound to this pane.
+Each launch starts a fresh conversation by default. Pass `-c` or `--continue` with `--pm`
+to resume the previous written transcript. `corral agent resume --pm` remains an explicit
+recovery command and continues that transcript.
 
 It refuses, before writing anything, with:
 
@@ -1520,6 +1524,10 @@ The launch itself then refuses exactly as `corral agent launch` does. When the b
 --pm` semantics (the lost generation is fenced, its calls drained and reconciled, one
 `recovery_notice` posted), and generation n+1 opens in this pane. A changed approved project is
 refused `out_of_scope`, as resume refuses it.
+
+Stored tool receipts have a separate limit of 16,384 per container (previously 2,048).
+They preserve operation replay and recovery across launches; starting a fresh conversation
+does not discard them. This count is not a conversation-message or model-context limit.
 
 The pane stays yours: see [session ownership](../session-ownership.md). corral never closes it,
 treats it as the PM pane only while its bound host is verifiably running, and never types into

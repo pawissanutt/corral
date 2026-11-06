@@ -54,6 +54,7 @@ impl Fixture {
             effort: Some("high".into()),
             prompt_file: None,
             adopt: false,
+            fresh_session: false,
         }
     }
 
