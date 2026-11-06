@@ -212,6 +212,9 @@ pub(super) fn reconcile(ctx: &Ctx, record: &RecoveryRecord) -> Result<bool> {
         let task = head.shell_task()?;
         let run = head.current_run_head()?.context("landing run missing")?.into_owned();
         let Some((journal, proof)) = journal(&local, &task, &run, record, &repo)? else { return Ok(()) };
+        if let Some(plan) = store.execution_plan_ref(&task)? {
+            crate::plan_recovery::require_active(store, &plan)?;
+        }
         if !committed {
             super::continuity::validate_landed_contract(&local, &task, record, &proof)?;
             crate::hold::require_clear(store, &task)?;
