@@ -6,11 +6,17 @@ set -euo pipefail
 exec </dev/null
 cd "$(dirname "$0")/.."
 
+repo=$PWD
 package=packages/corral-pi
 timer="$PWD/scripts/gate_timer.py"
 compile() {
+  local label="pi-$1"
+  if [[ $1 == cargo ]]; then
+    shift
+    set -- bash "$repo/scripts/cargo.sh" "$@"
+  fi
   if [[ -n ${CORRAL_TEST_BUDGET_STATE:-} ]]; then
-    python3 "$timer" compile "$CORRAL_TEST_BUDGET_STATE" "pi-$1" -- "$@"
+    python3 "$timer" compile "$CORRAL_TEST_BUDGET_STATE" "$label" -- "$@"
   else
     "$@"
   fi

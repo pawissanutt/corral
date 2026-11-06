@@ -78,6 +78,10 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
   `python3 scripts/test_gate_select.py`, `python3 scripts/test_gate_policy.py` and
   `python3 scripts/test_slow_lane.py`.
 - The Linux concurrent-dequeue regression requires `python3` and `strace`. It traces only disposable fixture processes and synchronizes on lock syscalls, never timing sleeps.
+- Compilation in the gate goes through `scripts/cargo.sh`, which is plain Cargo unless
+  `CORRAL_BUILD_CACHE=mbx` opts into the shared mbx 1.29.2 cache pilot. Bare `cargo` is not
+  intercepted; use `bash scripts/cargo.sh <args>` to share artifacts. See
+  [build cache](docs/guide/build-cache.md) for settings, policy capture and rollback.
 
 ### Load testing: container only
 

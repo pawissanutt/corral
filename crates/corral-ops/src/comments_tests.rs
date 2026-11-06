@@ -91,6 +91,34 @@ fn fixture() -> (tempfile::TempDir, Ctx, Task) {
 }
 
 #[test]
+fn candidate_identity_captures_build_cache_and_cargo_inputs() {
+    let (_tmp, ctx, task) = fixture();
+    let run = task.current_run().unwrap();
+    let identity =
+        verification::capture_identity(&ctx, &task, &run_head(run), "attempt-1").unwrap();
+    let policy = ctx.store.config.task_review_policy(&task);
+
+    for name in [
+        "CARGO",
+        "CARGO_BUILD_BUILD_DIR",
+        "CORRAL_BUILD_CACHE",
+        "CORRAL_MBX_BIN",
+        "CORRAL_MBX_CACHE_DIR",
+    ] {
+        let expected =
+            policy.env.get(name).cloned().or_else(|| {
+                std::env::var_os(name).map(|value| value.to_string_lossy().into_owned())
+            });
+        let actual = identity
+            .environment
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.clone());
+        assert_eq!(actual, Some(expected), "captured {name}");
+    }
+}
+
+#[test]
 fn adding_comments_preserves_spec_candidate_gate_and_review_identities() {
     // Given a candidate with a gate and review bound to its current inputs.
     let (_tmp, ctx, task) = fixture();

@@ -66,6 +66,9 @@ step_active=0
 repair_profile=""
 trap on_error ERR
 cd "$(dirname "$0")/.."
+if [[ ${CORRAL_BUILD_CACHE:-off} == mbx ]]; then
+  printf 'Build cache: mbx 1.29.2 local profile (verified on invocation)\n'
+fi
 # Keep Cargo's worktree-local default: shared top-level CLI executable paths can be
 # overwritten by a concurrent candidate after Cargo releases its build lock.
 # An explicit caller target remains supported; an empty override means the default.
@@ -123,7 +126,7 @@ prepare_test_binaries() {
     --output "$CORRAL_GATE_CARGO_METADATA" -- cargo metadata --format-version 1 || return
   CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_timer.py compile \
     "$CORRAL_TEST_BUDGET_STATE" nextest-binaries --output "$CORRAL_GATE_BINARIES_METADATA" -- \
-    cargo nextest list "$@" --list-type binaries-only --message-format json || return
+    bash scripts/cargo.sh nextest list "$@" --list-type binaries-only --message-format json || return
   CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_case.py prepare "$gate_dir/case.json" \
     "$CORRAL_GATE_CARGO_METADATA" "$CORRAL_GATE_BINARIES_METADATA" >"$gate_dir/runner.sh" || return
   # shellcheck disable=SC1091
@@ -165,7 +168,7 @@ if [[ $tier == quick ]]; then
   if ((${#scope[@]})); then
     begin_step "cargo clippy ${scope[*]} -- -D warnings"
     python3 scripts/gate_timer.py compile "$CORRAL_TEST_BUDGET_STATE" clippy -- \
-      cargo clippy "${scope[@]}" -- -D warnings
+      bash scripts/cargo.sh clippy "${scope[@]}" -- -D warnings
     end_step
   fi
 
@@ -261,7 +264,7 @@ elif command -v rustup >/dev/null 2>&1; then
       begin_step "cargo check --workspace --all-targets --target $target"
       printf 'Rust-only check: skipping SQLite/zstd C compilation (no Apple SDK required).\n'
       LIBSQLITE3_SYS_USE_PKG_CONFIG=1 python3 scripts/gate_timer.py compile \
-        "$CORRAL_TEST_BUDGET_STATE" "$target" -- cargo check --workspace --all-targets --target "$target" \
+        "$CORRAL_TEST_BUDGET_STATE" "$target" -- bash scripts/cargo.sh check --workspace --all-targets --target "$target" \
         --config "target.$target.zstd.rustc-link-lib=[]"
       end_step
     else
@@ -274,7 +277,7 @@ fi
 
 begin_step "cargo clippy --workspace --all-targets -- -D warnings"
 python3 scripts/gate_timer.py compile "$CORRAL_TEST_BUDGET_STATE" clippy -- \
-  cargo clippy --workspace --all-targets -- -D warnings
+  bash scripts/cargo.sh clippy --workspace --all-targets -- -D warnings
 end_step
 
 nextest_args=()
@@ -293,7 +296,7 @@ CORRAL_HERDR_SESSION=corral-test CORRAL_GATE_REPAIR_PROFILE=default python3 scri
 end_step
 
 begin_step "CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc"
-CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc
+CORRAL_HERDR_SESSION=corral-test bash scripts/cargo.sh test --workspace --doc
 end_step
 
 begin_step "scripts/work-budget.sh"
@@ -307,7 +310,7 @@ else
 fi
 
 begin_step "cargo build -p corral && scripts/check-docs.sh $docs_binary"
-python3 scripts/gate_timer.py compile "$CORRAL_TEST_BUDGET_STATE" candidate-build -- cargo build -p corral
+python3 scripts/gate_timer.py compile "$CORRAL_TEST_BUDGET_STATE" candidate-build -- bash scripts/cargo.sh build -p corral
 scripts/check-docs.sh "$docs_binary"
 end_step
 
