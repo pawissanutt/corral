@@ -36,6 +36,13 @@ test("Claude replay caches an unchanged text prefix before its moving suffix, wi
       .toBe(false);
     expect(first.at(-1)).toEqual({ type: "text", text: "first question" });
   }
+  // Removing a custom tool cannot change the bytes of its historical results.
+  const removed: Message[] = [result([{ type: "text", text: "answer" }]), user("continue")];
+  const entry = removed[0];
+  if (entry?.role !== "toolResult") throw new Error("missing result");
+  entry.toolName = "lookup_notes";
+  expect(buildPromptBlocks(removed, new Map([["lookup_notes", "mcp__custom-tools__lookup_notes"]])))
+    .toEqual(buildPromptBlocks(removed, new Map()));
   // A cold request has no historical prefix to mark.
   expect(buildPromptBlocks([user("hello")], new Map()).some((block) => "cache_control" in block)).toBe(false);
 });

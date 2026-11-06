@@ -3,6 +3,7 @@
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { McpClient, StdioTransport, StreamableHttpTransport, toLlmContent, type Tool } from "@earendil-works/pi-mcp";
 import { Type } from "typebox";
+import { z } from "zod";
 
 import type { Fetch } from "../auth/types.ts";
 import {
@@ -10,6 +11,15 @@ import {
 } from "../host/mcp-settings.ts";
 import { mcpControlTools } from "../host/mcp-tools.ts";
 import { sha256Hex } from "../tools/corral.ts";
+
+const SchemaObject = z.record(z.string(), z.unknown());
+
+function canonicalSchema(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalSchema);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+    .map(([key, item]) => [key, canonicalSchema(item)]));
+}
 
 type Connection = {
   readonly settings: McpServer;
@@ -143,9 +153,11 @@ export class McpAccess {
       .map((tool): ToolDefinition => ({
         name: mcpToolName(name, tool.name), label: `${name}: ${tool.title ?? tool.name}`,
         description: tool.description ?? `${name}/${tool.name}`,
-        parameters: Type.Unsafe<Record<string, unknown>>({
+        // Pi compares declarations by JSON serialization. Equivalent remote key ordering must
+        // not publish a new schema; preserve arrays and all actual semantic changes.
+        parameters: Type.Unsafe<Record<string, unknown>>(SchemaObject.parse(canonicalSchema({
           ...tool.inputSchema, type: "object", properties: tool.inputSchema.properties ?? {},
-        }),
+        }))),
         exposure: deferred ? "deferred" : "direct",
         async execute(_id, params: Record<string, unknown>, signal) {
           const result = await access.call(name, tool.name, params, signal);

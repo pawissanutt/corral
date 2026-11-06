@@ -4,7 +4,7 @@
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AssistantMessage, ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
 
-import { mapPiToolNameToSdk } from "./tools.ts";
+import { historicalToolName } from "./tools.ts";
 
 // Match Claude Code's own breakpoints without opting into higher-cost one-hour writes.
 export const PROMPT_CACHE_TTL = "5m";
@@ -31,6 +31,9 @@ function appendContent(blocks: PromptBlock[], content: string | readonly (TextCo
     const mediaType = IMAGE_MEDIA_TYPES.find((candidate) => candidate === entry.mimeType);
     if (mediaType) {
       blocks.push({ type: "image", source: { type: "base64", media_type: mediaType, data: entry.data } });
+      // SDK image breakpoints are dropped. A stable text boundary lets the rolling cache
+      // frontier traverse even a batch containing more than twenty images.
+      blocks.push({ type: "text", text: "[attached image]" });
     } else {
       blocks.push({ type: "text", text: `[image block omitted: unsupported media type ${entry.mimeType}]` });
       hasText = true;
@@ -39,16 +42,16 @@ function appendContent(blocks: PromptBlock[], content: string | readonly (TextCo
   return hasText;
 }
 
-function assistantText(message: AssistantMessage, customToolNameToSdk: ReadonlyMap<string, string>): string {
+function assistantText(message: AssistantMessage): string {
   return message.content.map((block) => {
     if (block.type === "text") return block.text;
     if (block.type === "thinking") return block.thinking;
-    return `Historical tool call (non-executable): ${mapPiToolNameToSdk(block.name, customToolNameToSdk)} ` +
+    return `Historical tool call (non-executable): ${historicalToolName(block.name)} ` +
       `args=${JSON.stringify(block.arguments)}`;
   }).join("\n");
 }
 
-export function buildPromptBlocks(messages: readonly Message[], customToolNameToSdk: ReadonlyMap<string, string>): PromptBlock[] {
+export function buildPromptBlocks(messages: readonly Message[], _customToolNameToSdk: ReadonlyMap<string, string>): PromptBlock[] {
   const blocks: PromptBlock[] = [];
   const pushText = (text: string) => blocks.push({ type: "text", text });
   const turns = messages.filter((message) => message.role !== "system");
@@ -68,10 +71,10 @@ export function buildPromptBlocks(messages: readonly Message[], customToolNameTo
         if (!appendContent(blocks, message.content)) pushText("(see attached image)");
       } else if (message.role === "assistant") {
         prefix("ASSISTANT:");
-        const text = assistantText(message, customToolNameToSdk);
+        const text = assistantText(message);
         if (text.length > 0) pushText(text);
       } else if (message.role === "toolResult") {
-        prefix(`TOOL RESULT (historical ${mapPiToolNameToSdk(message.toolName, customToolNameToSdk)}, ` +
+        prefix(`TOOL RESULT (historical ${historicalToolName(message.toolName)}, ` +
           `id=${message.toolCallId}):`);
         if (!appendContent(blocks, message.content)) pushText("(see attached image)");
       }

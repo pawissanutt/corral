@@ -12,6 +12,7 @@ import {
 import { registerApiProvider } from "@earendil-works/pi-ai/compat";
 
 import { buildCustomToolServers } from "./custom-tools.ts";
+import { ReplayCache, cacheScope } from "./cache.ts";
 import { type StreamEvent, applyStreamEvent, assistantFailure, emptyOutput, mapStopReason, resultFailure, updateUsage }
   from "./events.ts";
 import { PROMPT_CACHE_TTL, buildPromptBlocks, promptStream } from "./prompt.ts";
@@ -91,6 +92,7 @@ function thinkingOptions(model: Model<string>, options: SimpleStreamOptions | un
 
 export function streamClaudeSdk(
   config: ClaudeLaneConfig, model: Model<string>, context: TranscriptContext, options?: SimpleStreamOptions,
+  cache = new ReplayCache(),
 ): AssistantMessageEventStream {
   const stream = createAssistantMessageEventStream();
   void (async () => {
@@ -101,6 +103,7 @@ export function streamClaudeSdk(
     let aborted = false;
     let started = false;
     let sawStreamEvent = false;
+    let succeeded = false;
     const close = () => {
       if (closed || !query) return;
       closed = true;
@@ -146,7 +149,11 @@ export function streamClaudeSdk(
         ...(toolLess ? { maxTurns: 1 } : {}),
         ...thinkingOptions(model, options),
       };
-      query = sdk.query({ prompt: promptStream(buildPromptBlocks(messages, tools.customToolNameToSdk)), options: queryOptions });
+      const prompt = cache.prepare(buildPromptBlocks(messages, tools.customToolNameToSdk), options?.sessionId
+        ? cacheScope([options.sessionId, model.provider, model.id, queryOptions.cwd, queryOptions.systemPrompt,
+          tools.sdkTools, tools.customTools, queryOptions.thinking, queryOptions.effort,
+          queryOptions.maxThinkingTokens]) : undefined);
+      query = sdk.query({ prompt: promptStream(prompt.blocks), options: queryOptions });
       if (aborted) interrupt();
       for await (const message of query) {
         const failure = message.type === "assistant" ? assistantFailure(message)
@@ -161,6 +168,7 @@ export function streamClaudeSdk(
           applyStreamEvent({ model, output, blocks, stream, customToolNameToPi: tools.customToolNameToPi },
             message.event as StreamEvent);
         } else if (message.type === "result" && message.subtype === "success") {
+          succeeded = true;
           updateUsage(model, output, message.usage);
           // A terminal result never downgrades a tool-use turn, or Pi would not run the calls.
           if (message.stop_reason != null && output.stopReason !== "toolUse") output.stopReason = mapStopReason(message.stop_reason);
@@ -172,6 +180,7 @@ export function streamClaudeSdk(
         output.errorMessage = "Operation aborted";
         stream.push({ type: "error", reason: "aborted", error: output });
       } else {
+        if (succeeded) prompt.commit();
         const reason = output.stopReason === "toolUse" ? "toolUse" : output.stopReason === "length" ? "length" : "stop";
         stream.push({ type: "done", reason, message: output });
       }
@@ -189,7 +198,8 @@ export function streamClaudeSdk(
 }
 
 export function registerClaudeSdkApi(config: ClaudeLaneConfig): void {
+  const cache = new ReplayCache();
   const run = (model: Model<string>, context: TranscriptContext, options?: SimpleStreamOptions) =>
-    streamClaudeSdk(config, model, context, options);
+    streamClaudeSdk(config, model, context, options, cache);
   registerApiProvider({ api: CLAUDE_SDK_API, stream: run, streamSimple: run }, "corral-claude-sdk");
 }
