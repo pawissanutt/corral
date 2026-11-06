@@ -199,7 +199,7 @@ export class NativePanels implements PanelSurface {
             const hint = `F2 actions${followUp ? ` · ${followUp} follow-up` : ""}`;
             const label = pad(` ${title}${hint && visibleWidth(title) + visibleWidth(hint) + 7 <= width ? ` · ${hint}` : ""} `,
               Math.max(0, width - 3)).trimEnd();
-            return PANEL_MUTED + "┌─" + label + "─".repeat(Math.max(0, width - visibleWidth(label) - 3)) + "┐";
+            return PANEL_MUTED + "──" + label + "─".repeat(Math.max(0, width - visibleWidth(label) - 2));
           }
           protected renderBottomBorder(width: number, hidden: number): string {
             const snapshot = owner.options.snapshot();
@@ -223,11 +223,8 @@ export class NativePanels implements PanelSurface {
             this.borderColor = text => ctx.ui.theme.fg("borderAccent", text);
             const lines = super.render(width);
             this.bottomRow = this.composer ? lines.indexOf(this.composer.line) : -1;
-            return lines.map(line => {
-              const framed = line.startsWith(" ") && line.endsWith(" ")
-                ? PANEL_MUTED + "│" + PANEL_TEXT + line.slice(1, -1) + PANEL_MUTED + "│" : line;
-              return ctx.ui.theme.bg("userMessageBg", pad(framed, width));
-            });
+            // No side rules: terminal row selection would copy them into the message text.
+            return lines.map(line => ctx.ui.theme.bg("userMessageBg", pad(line, width)));
           }
         }(tui, theme, keys);
         editor.setPaddingX(2);
