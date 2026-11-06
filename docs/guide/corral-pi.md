@@ -1564,8 +1564,35 @@ above `subagents.max_parallel` (default 3). Standard enables it for workers and 
 roles; reviewers need full or an explicit override, and PM cannot use it. Children inherit only
 parent-enabled read/grep/find/ls and read LSP/web tools. They have no shell, writes, MCP, hooks,
 Corral operations or recursive delegation. Both direct and nested calls use the final execution
-check. Each result names its request and initiating generation; output is capped at 32,768
-characters. Turn cancellation, host shutdown and parent fencing cancel outstanding work.
+check. Each model-visible result names its request, initiating generation, transcript, status
+(`completed`, `partial`, `failed`) and stop reason; findings are capped at 32,768 characters with
+an explicit truncation notice. Partial or failed results are not proof that the question is answered.
+Turn cancellation, host shutdown and parent fencing cancel outstanding work.
+
+The last allowed research request is reserved for tool-free synthesis, within the existing turn
+ceiling, not an extra call after exhaustion. Near the deadline, the next request also switches to
+synthesis (a five-second reserve, not a promise that synthesis can finish). If interrupted first,
+visible notes and up to four bounded successful tool excerpts survive as labelled partial evidence;
+no recovery model request runs after cancellation. Accounting uncertainty remains separate from
+research completeness: a bounded partial answer can have known completed usage.
+
+`explore({prompt})` remains supported. Optional `profile: "code" | "docs"` selects execution-path
+research or official/version-specific documentation research. Optional `effort: "quick" | "standard" |
+"deep"` selects off/low/high reasoning (clamped by the SDK to model support); quick uses at most four
+turns, including synthesis, while standard/deep use the configured turn ceiling. All presets use the
+same configured child model and bound provider; they never expand time/turn limits or switch
+credentials. Optional `scope`, `starting_points` and `constraints` build a compact mission packet
+with the worktree root and available tools. Supply relevant project rules and required evidence:
+children do not inherit the conversation or automatically load the parent's project instructions.
+These input fields together are capped at 32,768 characters. Scope is a research instruction, not
+an additional filesystem sandbox. The docs profile uses only parent-enabled web tools and reports
+missing search configuration rather than inventing sources; it does not enable web access itself.
+
+Use direct tools for trivial lookups. For substantial independent research, give two or three
+children non-overlapping questions and run them concurrently (for example using codemode
+`Promise.all`), while doing separate useful work in the parent. Collect and reconcile cited findings
+and coverage before answering. Helpers are not Corral independent reviewers. This API is still
+one-shot; persistent background handles and child follow-up are not provided.
 
 `oracle` is a single tool-free consultation, full-only by default for every role. It requires a
 configured model; an absent model gives setup guidance without a provider request. Both tools

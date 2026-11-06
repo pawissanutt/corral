@@ -42,6 +42,55 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
     expect(toolResults.map((r) => [r.toolName, r.isError])).toEqual([["read", false], ["write", true], ["explore", true]]);
     expect(existsSync(join(cwd, "bad.txt"))).toBeFalse();
     expect(child.some((e) => e.message?.role === "assistant" && e.message.usage?.input > 0)).toBeTrue();
+    // Regression: tool-only research used all its turns and returned no findings. The final
+    // allowed request must instead have no tools, without adding a thirteenth request.
+    const beforeResearch = transport.requests;
+    settings.explore.max_turns = 2;
+    transport.script([
+      { toolCalls: [{ callId: "bounded-read", name: "read", arguments: { path: "source.txt" } }] },
+      { text: "source.txt:1 contains fixture source; further coverage is incomplete" },
+    ]);
+    const bounded = await runtime.run("explore", "bounded", "Find the source and report evidence");
+    expect(transport.requests - beforeResearch).toBe(2);
+    const boundedChild = readFileSync(join(cwd, `${bounded.request}.jsonl`), "utf8").split("\n").filter(Boolean).map(s => JSON.parse(s));
+    expect(boundedChild.flatMap(entry => entry.message?.toolsRemoved ?? []).map(tool => tool.name)).toContain("read");
+    expect(bounded.text).toContain("source.txt:1");
+    expect(bounded.report).toMatchObject({ status: "partial", stopReason: "turn_limit" });
+    transport.script([{ text: "source.txt:1 already answers the narrow question" }]);
+    const early = await runtime.run("explore", "early", "Answer from supplied context");
+    expect(early.report).toMatchObject({ status: "completed", stopReason: "completed" });
+    // A provider that ignores tool removal still cannot execute tools or spend another turn.
+    transport.script([
+      { toolCalls: [{ callId: "evidence", name: "read", arguments: { path: "source.txt" } }] },
+      { toolCalls: [{ callId: "ignored-removal", name: "read", arguments: { path: "missing.txt" } }] },
+    ]);
+    const beforeFallback = transport.requests;
+    const fallback = await runtime.run("explore", "fallback", "Research source");
+    expect(transport.requests - beforeFallback).toBe(2);
+    expect(fallback.report).toMatchObject({ status: "partial", stopReason: "turn_limit" });
+    expect(fallback.text).toContain("fixture source");
+    expect(fallback.text).toContain("source.txt");
+    expect(fallback.outcome).toBe("uncertain");
+    // Time-reserve synthesis is also a single final request, even before the turn ceiling.
+    settings.explore.max_turns = 12;
+    settings.explore.timeout_secs = 4;
+    transport.script([{ toolCalls: [{ callId: "reserve", name: "read", arguments: { path: "source.txt" } }] }]);
+    const beforeReserve = transport.requests;
+    const reserved = await runtime.run("explore", "reserve", "Answer from supplied context");
+    expect(transport.requests - beforeReserve).toBe(1);
+    expect(reserved.report?.stopReason).toBe("time_reserve");
+    settings.explore.timeout_secs = 30;
+    // Interrupt an actual research stream: no tool-free synthesis may follow the cancellation.
+    const stopResearch = new AbortController();
+    transport.script([{ text: "held research" }]);
+    transport.holdNext();
+    const researchHeld = transport.whenHeld();
+    const beforeCancel = transport.requests;
+    const interrupted = runtime.run("explore", "cancelled", "Research source", stopResearch.signal);
+    await researchHeld;
+    stopResearch.abort();
+    expect((await interrupted).report).toMatchObject({ status: "failed", stopReason: "cancelled" });
+    expect(transport.requests - beforeCancel).toBe(1);
     const cancel = new AbortController();
     transport.script([{ text: "oracle partial response" }]);
     transport.holdNext();

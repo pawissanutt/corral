@@ -3,6 +3,7 @@
 import { createHash } from "node:crypto";
 import type { AuxiliarySettings } from "./settings.ts";
 import { AuxiliaryHistory, type HelperEvent } from "./inspection.ts";
+import { researchBudget, type ResearchOptions, type ResearchReport } from "./research.ts";
 
 export type AuxiliaryKind = "explore" | "oracle" | "web_search";
 export type Outcome = "completed" | "uncertain" | "not_started";
@@ -15,10 +16,22 @@ export interface Invocation {
   readonly sessionFile: string;
   readonly sessionId: string;
   readonly maxTurns: number;
+  readonly research?: ResearchOptions;
+  readonly deadlineAt?: number;
   readonly serviceTier?: "priority";
   readonly observe?: (event: HelperEvent) => void;
 }
-export interface AuxiliaryResult { readonly text: string; readonly outcome: "completed" | "uncertain" }
+export interface AuxiliaryResult {
+  readonly text: string;
+  readonly outcome: "completed" | "uncertain";
+  readonly report?: ResearchReport;
+}
+export interface AuxiliaryResponse extends AuxiliaryResult {
+  readonly request: string;
+  readonly generation: number;
+  readonly truncated: boolean;
+  readonly sessionFile?: string;
+}
 export interface AuxiliaryOptions {
   readonly settings: AuxiliarySettings;
   readonly generation: number;
@@ -72,17 +85,17 @@ export class AuxiliaryRuntime {
   private readonly oracle = new Slots(1);
   private readonly webSearch = new Slots(1);
   private readonly controllers = new Set<AbortController>();
-  private readonly requests = new Map<string, Promise<AuxiliaryResult & { request: string; generation: number }>>();
+  private readonly requests = new Map<string, Promise<AuxiliaryResponse>>();
   private stopped = false;
   constructor(private readonly options: AuxiliaryOptions) {
     this.explore = new Slots(options.settings.explore?.max_parallel ?? 1);
     this.history = new AuxiliaryHistory(options.changed);
   }
-  run(kind: AuxiliaryKind, id: string, prompt: string, signal?: AbortSignal) {
+  run(kind: AuxiliaryKind, id: string, prompt: string, signal?: AbortSignal, research?: ResearchOptions) {
     const key = createHash("sha256").update(JSON.stringify([this.options.sessionId(), this.options.generation, kind, id])).digest("hex");
     const previous = this.requests.get(key);
     if (previous) return previous;
-    const request = this.perform(kind, key, prompt, signal);
+    const request = this.perform(kind, key, prompt, signal, research);
     this.requests.set(key, request);
     return request;
   }
@@ -93,7 +106,7 @@ export class AuxiliaryRuntime {
       case "web_search": return this.webSearch;
     }
   }
-  private async perform(kind: AuxiliaryKind, request: string, prompt: string, outer?: AbortSignal) {
+  private async perform(kind: AuxiliaryKind, request: string, prompt: string, outer?: AbortSignal, research?: ResearchOptions): Promise<AuxiliaryResponse> {
     const { options } = this;
     const settings = options.settings[kind];
     if (!settings) throw new Error(`${kind} is disabled`);
@@ -113,6 +126,7 @@ export class AuxiliaryRuntime {
     this.history.begin(request, kind, `${provider}/${model}`, options.generation, prompt, serviceTier);
     const controller = new AbortController();
     this.controllers.add(controller);
+    const deadlineAt = Date.now() + settings.timeout_secs * 1000;
     const timeout = AbortSignal.timeout(settings.timeout_secs * 1000);
     const signal = AbortSignal.any([controller.signal, timeout, ...(outer ? [outer] : [])]);
     const observation: AuxiliaryObservation = { request, parent: options.sessionId(), kind, model: `${provider}/${model}`, state: "preparing" };
@@ -142,12 +156,19 @@ export class AuxiliaryRuntime {
       signal.throwIfAborted();
       result = await options.execute({ request, kind, provider, model, prompt,
         sessionFile: reference.session_file, sessionId: request,
-        maxTurns: kind === "explore" ? options.settings.explore?.max_turns ?? 1 : 1,
+        maxTurns: kind === "explore" ? researchBudget(research ?? {}, options.settings.explore?.max_turns ?? 1).maxTurns : 1,
+        ...(kind === "explore" ? { research: research ?? {}, deadlineAt } : {}),
         ...(serviceTier ? { serviceTier } : {}),
         observe: event => { if (!signal.aborted) this.history.observe(request, event); } }, signal);
       outcome = result.outcome;
     } catch (error) {
-      this.history.error(request, error); throw error;
+      this.history.error(request, error);
+      if (kind === "explore") {
+        const reason = timeout.aborted ? "timeout" : signal.aborted ? "cancelled" : "failed";
+        throw new Error(`Research ${reason} during ${observation.state}; request ${request}; generation ${options.generation}. `
+          + `${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      }
+      throw error;
     } finally {
       // Release only after the terminal record; failure to record must not re-admit work while
       // its canonical record still says running. Admission will refuse rather than double-spend.
@@ -165,7 +186,11 @@ export class AuxiliaryRuntime {
       }
     }
     if (!result) throw new Error("auxiliary request did not finish");
-    return { ...result, text: kind === "web_search" ? result.text : result.text.slice(0, 32768), request, generation: options.generation };
+    return { ...result, text: kind === "web_search" ? result.text : result.text.slice(0, 32768),
+      truncated: kind !== "web_search" && result.text.length > 32768,
+      request, generation: options.generation,
+      ...(observation.sessionFile ? { sessionFile: observation.sessionFile } : {}),
+    };
   }
   /** Fence/close is permanent. Ordinary turn cancellation uses each tool's operation signal. */
   async close(): Promise<void> {
