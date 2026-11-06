@@ -452,6 +452,18 @@ pub fn run_host(prepared: &Prepared) -> Result<std::process::ExitStatus> {
 }
 
 #[cfg(unix)]
+pub(crate) fn wait_host_checked(
+    command: std::process::Command,
+    inherited: std::io::PipeReader,
+) -> Result<()> {
+    anyhow::ensure!(
+        wait_host(command, inherited)?.success(),
+        "assistant host failed"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
 pub(crate) fn wait_host(
     mut command: std::process::Command,
     inherited: std::io::PipeReader,

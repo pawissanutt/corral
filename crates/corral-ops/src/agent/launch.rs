@@ -206,11 +206,7 @@ pub fn launch(_start: &Path, args: &LaunchArgs) -> Result<()> {
     let (mut command, inherited) = host_command(&bootstrap, &ready, &secrets)?;
     if bootstrap.assistant.is_some() {
         // Keep the admission lease through this host's lifetime, including before hello.
-        anyhow::ensure!(
-            super::ops::assistant::wait_host(command, inherited)?.success(),
-            "assistant host failed"
-        );
-        return Ok(());
+        return super::ops::assistant::wait_host_checked(command, inherited);
     }
     let error = command.exec();
     Err(error).with_context(|| format!("executing {}", ready.bun.display()))
