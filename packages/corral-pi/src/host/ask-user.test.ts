@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
 import { Check } from "typebox/value";
+import { Type } from "typebox";
+import { stream } from "@earendil-works/pi-ai/api/anthropic-messages";
+import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { askUserEnabled, askUserTool } from "./ask-user.ts";
 import { AskDialog, type DialogResult } from "./ask-user-dialog.ts";
@@ -21,6 +25,24 @@ test("non-blocking clarification returns pending without opening a modal", async
   const pending = { ask: () => ({ version: 1 as const, id: "Q1", status: "pending" as const,
     session: "test", generation: 1, key: "id", questions: params.questions, expires: 123 }), withdraw: () => "withdrawn" };
   const tool = askUserTool(async () => { throw new Error("no answer exists"); }, pending);
+  const [model] = anthropicProvider().getModels();
+  if (!model) throw new Error("Anthropic fixture model unavailable");
+  let payload: unknown;
+  let network = 0;
+  await stream(model, normalizeContext({ messages: [
+    { role: "system", content: "Offline schema check", toolsAdded: [tool], timestamp: 0 },
+    { role: "user", content: "Ask a question", timestamp: 1 },
+  ] }), {
+    apiKey: "offline-placeholder",
+    onPayload: value => { payload = value; throw new Error("OFFLINE_CAPTURE_ONLY"); },
+    fetch: async () => { network++; throw new Error("NETWORK_FORBIDDEN"); },
+  }).result();
+  expect(network).toBe(0);
+  expect(Check(Type.Object({ tools: Type.Array(Type.Unknown(), { contains: Type.Object({
+    name: Type.Literal("ask_user"), input_schema: Type.Object({ type: Type.Literal("object"),
+      properties: Type.Object({ questions: Type.Object({}), nonBlocking: Type.Object({}), withdraw: Type.Object({}) }),
+    }),
+  }) }) }), payload)).toBeTrue();
   const result = await tool.execute("id", { ...params, nonBlocking: true }, undefined, undefined, ctx);
   expect(result.details).toMatchObject({ id: "Q1", status: "pending" });
   const rich = { questions: [{ question: "Which?", options: [{ label: "One", description: "First" }, "Two"], multiSelect: true }] };
