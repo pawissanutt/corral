@@ -785,7 +785,9 @@ export class HostSession {
     this.ledger = this.loadout.includes("corral_todo")
       ? new TodoLedger(this.options.identity, () => this.options.client.todoSnapshot()) : undefined;
     this.ledger?.extend(pi);
-    this.request = this.ledger && (role === "pm" || role === "assistant") ? new RequestContext(this.ledger) : undefined;
+    this.request = this.ledger && (role === "pm" || role === "assistant") ? new RequestContext(this.ledger,
+      (message) => { this.session.sessionManager.appendCustomMessageEntry(message.customType,
+        message.content, message.display, message.details); }) : undefined;
     this.request?.extend(pi);
     for (const spec of specs) {
       const tool = defineCorralTool(spec, {

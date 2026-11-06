@@ -48,6 +48,11 @@ export function mapPiToolNameToSdk(name: string, customToolNameToSdk?: ReadonlyM
     pascalCase(name);
 }
 
+/** Replay identity must not depend on whether a formerly available custom tool is active now. */
+export function historicalToolName(name: string): string {
+  return PI_TO_SDK_TOOL_NAME[name.toLowerCase()] ?? `${CUSTOM_TOOLS_MCP_PREFIX}${name}`;
+}
+
 export function mapSdkToolNameToPi(name: string, customToolNameToPi?: ReadonlyMap<string, string>): string {
   const normalized = name.toLowerCase();
   return SDK_TO_PI_TOOL_NAME[normalized] ?? customToolNameToPi?.get(name) ?? customToolNameToPi?.get(normalized) ??

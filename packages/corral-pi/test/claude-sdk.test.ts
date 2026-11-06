@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Options } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { type AssistantMessage, type Context, type Credential, normalizeContext } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 
@@ -30,7 +30,7 @@ type Script = (options: Options, control: { interrupted: Promise<void> }) => Asy
 
 interface FakeRun {
   options: Options[];
-  prompts: unknown[];
+  prompts: SDKUserMessage[];
   interrupts: number;
   closes: number;
 }
@@ -107,7 +107,8 @@ function* textReply(text: string) {
 test("a streamed text reply becomes one Pi assistant message", async () => {
   const run = fakeSdk(async function* () { yield* textReply("Hello there"); });
   const { send, guard } = await anthropic();
-  const { events, message } = await send({ systemPrompt: "You are a corral worker.", messages: [user("hi")] });
+  const context = { systemPrompt: "You are a corral worker.", messages: [user("hi")] };
+  const { events, message } = await send(context, { sessionId: "cache-sequence" });
   expect(events).toEqual(["start", "text_start", "text_delta", "text_delta", "text_end", "done"]);
   expect(message.content).toEqual([{ type: "text", text: "Hello there" }]);
   expect([message.stopReason, message.api, message.provider, message.model])
@@ -122,6 +123,21 @@ test("a streamed text reply becomes one Pi assistant message", async () => {
   // The host process itself made no request.
   expect(guard.ledger()).toEqual({ allowed: 0, refused: 0, refusedDestinations: [] });
   expect(run.closes).toBe(1);
+  // Exercise the actual provider's session-scoped frontier, not only the pure renderer.
+  const history = [...context.messages, message];
+  await send({ ...context, messages: [...history, user("continue")] }, { sessionId: "cache-sequence" });
+  await send({ ...context, messages: [...history, user("continue"),
+    ...Array.from({ length: 25 }, (_, index) => ({ role: "toolResult" as const, toolName: "read",
+      toolCallId: `r${index}`, content: [{ type: "text" as const, text: `result ${index}` }], isError: false, timestamp: 0 })),
+    user("next")] }, { sessionId: "cache-sequence" });
+  const warm = run.prompts[1]?.message.content;
+  const batch = run.prompts[2]?.message.content;
+  if (!Array.isArray(warm) || !Array.isArray(batch)) throw new Error("prompt blocks missing");
+  const before = warm.findIndex((block) => "cache_control" in block);
+  const after = batch.findIndex((block) => "cache_control" in block);
+  expect(before).toBeGreaterThanOrEqual(0);
+  expect(after - before + 1).toBeLessThanOrEqual(20);
+  expect(after).toBeGreaterThan(before);
 });
 
 test("the system prompt keeps Claude Code's preset and appends only corral's sections, without Pi's harness identity", () => {

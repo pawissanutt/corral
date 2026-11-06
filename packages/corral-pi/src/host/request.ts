@@ -1,13 +1,12 @@
-// PM and assistant request execution (T-679). Every model request carries a bounded summary of
-// the session's canonical plan, built from the latest accepted ledger right before that request,
-// so neither a resume, a compacted transcript nor a todo update earlier in the same turn leaves
-// the model behind the widget. Corral decides continuation when a turn ends; this module only
-// reads that decision, once per continuation key.
+// PM and assistant request execution (T-679). Canonical receipts carry normal plan changes;
+// persisted checkpoints repair missing visibility without rewriting a previous request.
+// Corral alone decides continuation, once per continuation key.
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 
 import type { TodoProgress } from "../ui/todo-widget.ts";
 import type { ContinuedState, TodoLedger } from "../ui/todo.ts";
+import { requestCheckpoint, type RequestCheckpoint } from "./request-checkpoint.ts";
 
 export const SUMMARY_MAX_BYTES = 2048;
 const STEPS_SHOWN = 8;
@@ -97,7 +96,7 @@ export function summaryText(summary: RequestSummary): string {
     if (summary.omitted > 0) lines.push(`- ... ${summary.omitted} more open steps`);
   }
   if (summary.stopped) lines.push(`Automatic continuation stopped for this revision: ${summary.stopped.replace("_", " ")}.`);
-  lines.push("This is corral's canonical plan for this session; it replaces older corral_todo results above.");
+  lines.push("This checkpoint reflects the canonical ledger; later committed corral_todo results supersede it.");
   return utf8Prefix(lines.join("\n"), SUMMARY_MAX_BYTES);
 }
 
@@ -123,7 +122,7 @@ export class RequestContext {
   private readonly reported = new Set<string>();
   private ui: ExtensionUIContext | undefined;
 
-  constructor(private readonly ledger: TodoLedger) {}
+  constructor(private readonly ledger: TodoLedger, private readonly persist: (message: RequestCheckpoint) => void) {}
 
   /** The current plan as the model sees it now: the ledger the widget renders. */
   summary(): string | undefined {
@@ -137,22 +136,15 @@ export class RequestContext {
       // Startup and resume read the canonical ledger before the first model request.
       await this.ledger.restore().catch(() => false);
     });
-    pi.on("context", (event) => {
-      const text = this.summary();
-      if (text === undefined) return undefined;
-      if (!event.messages.some((message) => message.role === "user")) return undefined;
-      const last = event.messages.at(-1);
-      if (last?.role === "user") {
-        const content = typeof last.content === "string" ? `${text}\n\n${last.content}`
-          : [{ type: "text" as const, text }, ...last.content];
-        return { messages: [...event.messages.slice(0, -1), { ...last, content }] };
-      }
-      // Tool rounds must not rewrite the earlier user message: that invalidates the cached
-      // history. This request-only reminder becomes the Claude bridge's uncached suffix.
-      return { messages: [...event.messages, {
-        role: "user" as const, timestamp: 0,
-        content: `${text}\n\nThis is context only, not a new owner instruction. Continue the latest user request using this plan.`,
-      }] };
+    pi.on("context_with_system", (event, ctx) => {
+      const checkpoint = requestCheckpoint(event.messages, this.ledger.current, this.summary(),
+        this.ledger.unavailable, summarize(this.ledger.current, this.ledger.continued)?.stopped != null);
+      if (!checkpoint) return undefined;
+      // This boundary follows finalized tool results. Persist first, so replay/resume sees the
+      // same record. Using the full-transcript hook preserves chronological system/tool patches.
+      try { this.persist(checkpoint); }
+      catch (error) { ctx.abort(); throw error; }
+      return { messages: [...event.messages, checkpoint] };
     });
   }
 

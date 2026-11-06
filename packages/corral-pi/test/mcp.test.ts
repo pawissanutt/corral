@@ -22,6 +22,10 @@ test("configured policy, not MCP annotations, controls tools and resources acros
       if (revision === 2) peer.revise();
       // When connecting/reconnecting, calling an approved identity and attempting bypasses.
       await access.refresh();
+      const schema = JSON.stringify(access.definitions(false)[0]?.parameters);
+      peer.reorder();
+      await access.refresh();
+      expect(JSON.stringify(access.definitions(false)[0]?.parameters)).toBe(schema);
       const result = await access.call("docs", "lookup", { key: "note", ...(revision === 2 ? { version: 2 } : {}) });
       const before = peer.calls.length;
       await expect(access.call("docs", "write_file", {})).rejects.toThrow("mcp_denied");

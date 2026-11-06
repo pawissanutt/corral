@@ -1,9 +1,11 @@
-// Real PM and assistant hosts over the fake corral and the fake model: the canonical plan reaches
-// every model request, and corral's turn_ended decision starts at most one continuation turn.
+// Real hosts over fake Corral/model: immutable receipts or recovery checkpoints keep the current
+// plan visible; Corral's turn_ended decision starts at most one continuation turn.
 import { afterEach, expect, test } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import type { Message } from "@earendil-works/pi-ai";
 
 import { EventLog } from "../src/bridge/events.ts";
 import { buildPromptBlocks } from "../src/claude/prompt.ts";
@@ -14,6 +16,7 @@ import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
 import { type FakeCorral, writeFakeCorral } from "./support/fake-corral.ts";
 import { PACKAGE_ROOT, buildFixtureInstall } from "./support/fixture-install.ts";
+import { modelPlan } from "./support/model-plan.ts";
 import { nextEvent, within } from "./support/wait.ts";
 
 type SessionRole = "pm" | "assistant";
@@ -66,6 +69,7 @@ interface Started {
   readonly corral: FakeCorral;
   readonly client: GatedClient;
   readonly events: EventLog;
+  readonly contexts: Message[][];
   /** Budget hosts only: the next settlement reports the run's budget exhausted. */
   exhaust(): void;
 }
@@ -124,9 +128,16 @@ async function start(role: SessionRole, options: {
     sdk, identity, cwd, agentDir: join(work, "agent"), model: "gpt-6.1-sol", ...launch,
     modules, client, events, network, sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
   });
+  const contexts: Message[][] = [];
+  const stream = host.session.agent.streamFunction;
+  if (!stream) throw new Error("host stream missing");
+  host.session.agent.streamFunction = (model, context, options) => {
+    contexts.push(structuredClone(context.messages));
+    return stream(model, context, options);
+  };
   await host.session.bindExtensions({});
   await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
-  return { host, corral, client, events, exhaust: () => writeFileSync(join(work, "exhaust"), "yes") };
+  return { host, corral, client, events, contexts, exhaust: () => writeFileSync(join(work, "exhaust"), "yes") };
 }
 
 /** Submits one bridge prompt and returns once its turn ended and corral answered it. */
@@ -149,6 +160,7 @@ const lifecycle = (s: Started) => s.corral.calls().map((call) => call.envelope)
   .filter((envelope) => envelope.op === "event").map((envelope) => envelope.payload);
 const started = (s: Started) => lifecycle(s).filter((payload) => payload.kind === "turn_started");
 const lastPrompt = () => fixtureTransport().prompts.at(-1) ?? "";
+const visiblePlan = (s: Started) => modelPlan(s.contexts.at(-1) ?? []);
 const origins = (s: Started) => started(s).map((payload) => (payload.origin as { kind: string }).kind);
 const skipped = (s: Started) => s.events.since(0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events
   .filter((event) => event.kind === "continuation_skipped").map((event) => event.reason);
@@ -182,11 +194,17 @@ async function intervene(s: Started, how: "completed" | "cancelled" | "provider_
 test("plan revisions during tool rounds preserve Claude's cached history prefix", async () => {
   const s = await start("assistant");
   const requests: ReturnType<typeof buildPromptBlocks>[] = [];
+  const inputs: unknown[][] = [];
   const stream = s.host.session.agent.streamFunction;
   if (!stream) throw new Error("host stream missing");
   s.host.session.agent.streamFunction = (model, context, options) => {
     requests.push(buildPromptBlocks(context.messages, new Map()));
-    return stream(model, context, options);
+    return stream(model, context, { ...options, onPayload: async (payload, selected) => {
+      if (payload && typeof payload === "object" && "input" in payload && Array.isArray(payload.input)) {
+        inputs.push(structuredClone(payload.input));
+      }
+      return options?.onPayload?.(payload, selected);
+    } });
   };
   fixtureTransport().script([
     { toolCalls: [{ callId: "done-a", name: "corral_todo", arguments: { op: "done", step: "a", plan: "P1" } }] },
@@ -197,6 +215,12 @@ test("plan revisions during tool rounds preserve Claude's cached history prefix"
   await turn(s, "Report the current plan.", "cache-2", 2);
 
   expect(requests).toHaveLength(4);
+  expect(inputs).toHaveLength(4);
+  for (let i = 1; i < inputs.length; i++) {
+    const previous = inputs[i - 1];
+    if (!previous) throw new Error("request missing");
+    expect(inputs[i]?.slice(0, previous.length)).toEqual(previous);
+  }
   const plain = (blocks: ReturnType<typeof buildPromptBlocks>) => blocks.map((block) =>
     block.type === "text" ? { type: block.type, text: block.text } : block);
   // The cold request has no history marker; compare each warm tool round and the next user turn.
@@ -209,10 +233,12 @@ test("plan revisions during tool rounds preserve Claude's cached history prefix"
     expect(plain(current.slice(0, at + 1))).toEqual(plain(previous.slice(0, at + 1)));
   }
   expect(s.host.state().ledger).toEqual({ plan: "P1", revision: 4 });
+  expect(s.host.session.sessionManager.getEntries().filter((entry) =>
+    entry.type === "custom_message" && entry.customType === "corral-request-checkpoint")).toHaveLength(1);
 }, 60_000);
 
 for (const role of ROLES) {
-  test(`${role}: a started or resumed host restores the plan and every model request carries its summary`, async () => {
+  test(`${role}: startup restores a persisted context-only checkpoint without rewriting the owner input`, async () => {
     // Given a canonical plan P2 at revision 5 whose second step waits on an event.
     const waits = [{ step: "b", on: { kind: "event", event: "T-12 lands" } }];
     const s = await start(role, { state: snapshot(role, progress(5, "P2", { waits })) });
@@ -223,9 +249,14 @@ for (const role of ROLES) {
     expect(prompt).toContain("[corral request P2 revision 5");
     expect(prompt).toContain("next step a");
     expect(prompt).toContain("T-12 lands");
-    expect(prompt).toContain("Reply only READY.");
-    // And the summary is context only: Pi's session file never records it.
-    expect(readFileSync(s.host.session.sessionFile!, "utf8")).not.toContain("[corral request P2 revision 5");
+    expect(JSON.stringify(s.contexts.at(-1))).toContain("Reply only READY.");
+    // The hidden checkpoint survives replay; owner input remains a separate unmodified message.
+    expect(readFileSync(s.host.session.sessionFile!, "utf8")).toContain("[corral request P2 revision 5");
+    const recorded = s.host.session.sessionManager.getEntries().find((entry) =>
+      entry.type === "message" && entry.message.role === "user");
+    if (recorded?.type !== "message" || recorded.message.role !== "user") throw new Error("owner message missing");
+    expect(s.contexts.at(-1)?.find((message) => message.role === "user")?.content)
+      .toEqual(recorded.message.content);
   }, 60_000);
 
   test(`${role}: newer receipts replace the summary while stale receipts and compaction cannot lose it`, async () => {
@@ -237,8 +268,9 @@ for (const role of ROLES) {
     ]);
     await turn(s, "Finish step a.", "k1", 1);
     // Then the turn's next model request already carries revision 3, as the widget's ledger does.
-    expect(lastPrompt()).toContain("[corral request P1 revision 3: actionable; next step b]");
-    expect(lastPrompt()).not.toContain("[in_progress] a");
+    expect(visiblePlan(s)?.revision).toBe(3);
+    expect(visiblePlan(s)?.progress?.phases[0]?.steps.map((step) => [step.id, step.status.state]))
+      .toEqual([["a", "done"], ["b", "pending"]]);
     expect(s.host.state().ledger).toEqual({ plan: "P1", revision: 3 });
     // When a stale snapshot is replayed through a later receipt.
     s.corral.snapshot(snapshot(role, progress(1)));
@@ -247,7 +279,7 @@ for (const role of ROLES) {
       { text: "Started." },
     ]);
     await turn(s, "Reply only SECOND.", "k2", 2);
-    expect(lastPrompt()).toContain("[corral request P1 revision 3");
+    expect(visiblePlan(s)?.revision).toBe(3);
     // And the transcript is compacted before the next turn.
     fixtureTransport().script([{ text: "SUMMARY of the session" }]);
     await s.host.session.compact();
@@ -256,8 +288,7 @@ for (const role of ROLES) {
     expect(entries.some((entry) => entry.type === "compaction")).toBeTrue();
     await turn(s, "Reply only THIRD.", "k3", 3);
     // Then the model still gets the newest canonical revision, not the stale receipt's.
-    expect(lastPrompt()).toContain("[corral request P1 revision 3");
-    expect(lastPrompt()).not.toContain("revision 1");
+    expect(visiblePlan(s)?.revision).toBe(3);
     expect(s.host.state().ledger).toEqual({ plan: "P1", revision: 3 });
   }, 60_000);
 
@@ -271,17 +302,17 @@ for (const role of ROLES) {
       { toolCalls: [{ callId: "next", name: "corral_todo", arguments: init("y") }] },
       { text: "Rolled over." },
     ]);
-    const before = fixtureTransport().prompts.length;
+    const before = s.contexts.length;
     // When that turn runs.
     await turn(s, "Plan two requests.", "k1", 1);
     // Then each model request carries the plan the previous receipt committed, and the host ledger
     // the widget renders ends on the same identity and revision.
-    const prompts = fixtureTransport().prompts.slice(before);
-    expect(prompts).toHaveLength(4);
-    expect(prompts[0]).not.toContain("[corral request");
-    expect(prompts[1]).toContain("[corral request P1 revision 1: actionable; next step x]");
-    expect(prompts[2]).toContain("[corral request P1 revision 2: complete]");
-    expect(prompts[3]).toContain("[corral request P2 revision 3: actionable; next step y]");
+    const plans = s.contexts.slice(before).map((messages) => modelPlan(messages));
+    expect(plans.map((plan) => plan ? [plan.plan, plan.revision] : null))
+      .toEqual([null, ["P1", 1], ["P1", 2], ["P2", 3]]);
+    expect(plans[1]?.progress?.phases[0]?.steps[0]?.id).toBe("x");
+    expect(plans[2]?.progress?.phases[0]?.steps[0]?.status.state).toBe("done");
+    expect(plans[3]?.progress?.phases[0]?.steps[0]?.id).toBe("y");
     expect(s.host.state().ledger).toEqual({ plan: "P2", revision: 3 });
   }, 60_000);
 

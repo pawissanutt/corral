@@ -23,10 +23,12 @@ needs no plan.
   Ask the owner the question in your reply as well. A waiting step blocks only itself: keep
   working on every step that nothing waits on.
 
-Every model request carries a `[corral request ...]` summary of the current plan, updated as
-soon as a `corral_todo` call commits: its identity and revision, the outstanding steps, their
-waits and the next action. It is the canonical ledger and replaces older `corral_todo`
-results in the transcript.
+Committed `corral_todo` results carry the current plan, revision, steps and waits. The latest
+canonical revision supersedes older results and checkpoints; do not treat an older summary as
+current. Corral persists a context-only `[corral request ...]` checkpoint when the current state
+is missing after resume, compaction or a hidden nested update. Unchanged, visible state adds no
+reminder and never rewrites owner input. An unavailable-state checkpoint means freshness is
+unconfirmed: refresh the ledger, and never repeat an uncertain mutation merely to reconstruct it.
 
 When a turn ends with actionable steps left, corral may start one `[corral continuation ...]`
 turn for that plan revision. A continuation is a reminder from corral. It is not an owner
