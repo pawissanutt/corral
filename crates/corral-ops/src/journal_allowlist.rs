@@ -131,7 +131,7 @@ pub const JOURNAL_ALLOWLIST: &[(&str, &str, &str, &str, &str)] = &[
         "closing panes and optional removal of the landed worktree and branch",
     ),
     (
-        "review.rs",
+        "review/discard.rs",
         "discard_with_decision",
         "discarded",
         "cleanup_report",
