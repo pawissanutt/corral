@@ -71,8 +71,21 @@ fn editor_shows_harness_pills_efforts_and_preview() {
         assert!(effort.contains(level), "{level:?} missing: {effort}");
     }
     assert!(row(&s, "Model").contains("▾ choose"), "{s}");
-    let preview = row(&s, "$ claude");
-    assert!(preview.contains("$ claude 'Read "), "{preview}");
+    // The delivery setting lengthens the command, so reconstruct its displayed wrapped rows.
+    let preview = s
+        .lines()
+        .skip(line_of(&s, "$ claude"))
+        .map_while(|line| {
+            line.rsplit('│')
+                .nth(1)
+                .map(str::trim)
+                .filter(|body| !body.is_empty())
+        })
+        .collect::<String>();
+    assert!(
+        preview.contains("$ claude --settings '{\"crossSessionInbound\":\"accept\"}' 'Read "),
+        "{preview}"
+    );
     assert!(
         preview.contains("T-042-R1.md"),
         "rendered with the sample task\n{preview}"
@@ -108,7 +121,7 @@ fn model_picker_filters_and_picks() {
     assert!(row(&s, "Model").contains("opus"), "{s}");
     assert!(row(&s, "Effort").contains("[high]"), "{s}");
     assert!(
-        s.contains("$ claude --model opus --effort high 'Read "),
+        s.contains("$ claude --settings '{\"crossSessionInbound\":\"accept\"}' --model opus --effort high 'Read "),
         "the preview shows the flags a dispatch sends\n{s}"
     );
 }
@@ -353,7 +366,12 @@ fn mouse_creates_profile_picks_model_and_saves_default() {
     assert!(!s.contains("model for"), "a click on a row chooses it\n{s}");
     click(&mut app, find(&s, "Effort", " high "));
     let s = screen(&mut app);
-    assert!(s.contains("$ claude --model opus --effort high"), "{s}");
+    assert!(
+        s.contains(
+            "$ claude --settings '{\"crossSessionInbound\":\"accept\"}' --model opus --effort high"
+        ),
+        "{s}"
+    );
     click(&mut app, footer(&s, "* set default"));
     let s = screen(&mut app);
     click(&mut app, footer(&s, "s save"));
