@@ -2,16 +2,21 @@
 use serde::{Deserialize, Serialize};
 
 /// Inputs exported by gate scripts and compared by environment diagnostics.
-pub const VERIFICATION_ENV: [&str; 9] = [
+pub const VERIFICATION_ENV: [&str; 14] = [
     "PATH",
     "RUSTUP_TOOLCHAIN",
     "RUSTC",
     "RUSTC_WRAPPER",
     "RUSTFLAGS",
     "CARGO_HOME",
+    "CARGO",
     "RUSTUP_HOME",
     "CARGO_TARGET_DIR",
+    "CARGO_BUILD_BUILD_DIR",
     "CORRAL_HERDR_SESSION",
+    "CORRAL_BUILD_CACHE",
+    "CORRAL_MBX_BIN",
+    "CORRAL_MBX_CACHE_DIR",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
