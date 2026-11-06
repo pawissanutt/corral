@@ -87,6 +87,8 @@ pub struct Overrides {
     /// A Pi provider id (`openai-codex`, `anthropic`); it selects the vendor whose login runs.
     pub provider: Option<String>,
     pub effort: Option<String>,
+    /// Continue the previous PM transcript only when explicitly requested.
+    pub continue_session: bool,
 }
 
 pub fn profile(ctx: &Ctx) -> Result<ResolvedProfile> {
@@ -172,7 +174,7 @@ pub(crate) fn apply(resolved: &mut ResolvedProfile, overrides: &Overrides) -> Re
 }
 
 pub fn command(ctx: &Ctx, pane: &str, resolved: &ResolvedProfile) -> Result<String> {
-    Ok(prepared(ctx, pane, resolved, false)?.command())
+    Ok(prepared(ctx, pane, resolved, false, false)?.command())
 }
 
 /// `command` without rendering it: the written bootstrap, for an in-process launch; `adopt`
@@ -182,6 +184,7 @@ pub fn prepared(
     pane: &str,
     resolved: &ResolvedProfile,
     adopt: bool,
+    continue_session: bool,
 ) -> Result<super::super::launch::Prepared> {
     consulted("pm");
     preflight(ctx, Some(resolved))?;
@@ -201,6 +204,7 @@ pub fn prepared(
         // Rebuild on resume too: never append the legacy harness's command runbook.
         prompt_file: Some(crate::pm::save_native_context(ctx)?),
         adopt,
+        fresh_session: !continue_session,
     };
     let prepared = super::super::launch::prepare_bootstrap(ctx, &target, pane, &spec)?;
     if resolved.vendor.as_deref() == Some("amazon-bedrock") {

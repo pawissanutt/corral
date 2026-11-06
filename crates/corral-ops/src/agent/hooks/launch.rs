@@ -34,6 +34,7 @@ pub fn worker_command(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
         effort: run.effort.clone(),
         prompt_file: Some(crate::prompt::run_prompt_file(ctx, &task.id, &run.id)?),
         adopt: false,
+        fresh_session: false,
     };
     let target = BindTarget::Worker {
         task: task.id.clone(),
@@ -63,6 +64,7 @@ pub fn plan_command(
         effort: resolved.effort.clone(),
         prompt_file: Some(prompt_file.to_path_buf()),
         adopt: false,
+        fresh_session: false,
     };
     prepare(ctx, target, pane, &spec)
 }

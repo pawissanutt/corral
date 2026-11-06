@@ -19,6 +19,10 @@ pub struct PiArgs {
     /// Open the workspace PM in this pane, or take over a dead one (plain `corral pi` opens an assistant)
     #[arg(long, conflicts_with_all = ["resume", "over_cap"])]
     pm: bool,
+    /// Continue the previous PM conversation instead of starting fresh
+    #[arg(short = 'c', long = "continue", requires = "pm",
+        conflicts_with_all = ["bare", "resume", "over_cap", "task"])]
+    continue_session: bool,
     /// Resume assistant session A-<n> in this pane, fencing its previous generation
     #[arg(long, value_name = "A-N", conflicts_with = "over_cap")]
     resume: Option<String>,
@@ -85,6 +89,7 @@ pub fn run(start: &Path, args: PiArgs, entry: &Entry) -> Result<()> {
         model: args.model,
         provider: args.provider,
         effort: args.effort,
+        continue_session: args.continue_session,
     };
     match invocation {
         Invocation::Bare { notice } => {
@@ -132,6 +137,8 @@ mod tests {
             (&[], true, Some(Assistant { over_cap: false })),
             (&["--over-cap"], true, Some(Assistant { over_cap: true })),
             (&["--pm"], true, Some(Pm)),
+            (&["--pm", "-c"], true, Some(Pm)),
+            (&["--pm", "--continue"], true, Some(Pm)),
             (
                 &["--task", "T-42"],
                 true,
@@ -171,8 +178,21 @@ mod tests {
             &["--pm", "--resume", "A-1"],
             &["--pm", "--over-cap"],
             &["--resume", "A-1", "--over-cap"],
+            &["-c"],
+            &["--bare", "-c"],
+            &["--resume", "A-1", "-c"],
+            &["--over-cap", "-c"],
+            &["--task", "T-42", "-c"],
         ] {
             assert!(parse(argv).is_err(), "{argv:?}");
+        }
+    }
+
+    #[test]
+    fn pm_continuation_is_explicit() {
+        assert!(!parse(&["--pm"]).unwrap().continue_session);
+        for flag in ["-c", "--continue"] {
+            assert!(parse(&["--pm", flag]).unwrap().continue_session);
         }
     }
 }
