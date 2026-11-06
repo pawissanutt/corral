@@ -91,7 +91,7 @@ class GateTests(unittest.TestCase):
         self.repo = Path(temp.name)
         (self.repo / "scripts").mkdir()
         (self.repo / "src").mkdir()
-        for name in ("gate.sh", "gate_select.py", "gate_lanes.py", "gate_pi.py", "gate_timer.py", "gate_case.py", "gate_ratchet.py", "gate_repair.py", "gate_quarantine.py", "test_cost.py", "check-candidate.py", "work-budget.sh"):
+        for name in ("gate.sh", "cargo.sh", "cargo_cache.py", "cargo_config.py", "gate_select.py", "gate_lanes.py", "gate_pi.py", "gate_timer.py", "gate_case.py", "gate_ratchet.py", "gate_repair.py", "gate_quarantine.py", "test_cost.py", "check-candidate.py", "work-budget.sh"):
             _ = shutil.copy2(SCRIPTS / name, self.repo / "scripts" / name)
         (self.repo / ".config").mkdir()
         for file in ("gate.toml", "nextest.toml"):
@@ -113,11 +113,19 @@ class GateTests(unittest.TestCase):
         _ = subprocess.run(args, cwd=self.repo, stdin=subprocess.DEVNULL,
                            capture_output=True, check=True)
 
+    def fixture_env(self, overrides: dict[str, str]) -> dict[str, str]:
+        env = {key: value for key, value in os.environ.items() if not key.startswith("MBX_")}
+        _ = env.pop("CARGO", None)
+        env.update(CONTEXT)
+        env["CORRAL_BUILD_CACHE"] = "off"
+        env.update(overrides)
+        return env
+
     def gate(self, **extra_env: str) -> subprocess.CompletedProcess[str]:
         # Supply pipe input deliberately: the gate must replace it with null stdin.
         result = subprocess.run(
             ["bash", str(self.repo / "scripts/gate.sh")],
-            cwd=self.repo / "src", env={**os.environ, **CONTEXT, **extra_env},
+            cwd=self.repo / "src", env=self.fixture_env(extra_env),
             input="must not reach a gate command\n", capture_output=True,
             text=True, check=False, timeout=60,
         )
@@ -201,6 +209,10 @@ key = entry["command"] + ":" + " ".join(visible)
 failure = os.environ.get("FAIL_COMMAND")
 if failure and (key == failure or key.startswith(failure + " ")):
     sys.exit(23)
+if entry["args"][:3] == ["metadata", "--offline", "--no-deps"]:
+    print(json.dumps({{"workspace_root": os.getcwd(), "target_directory": str(Path.cwd() / "target"),
+                       "build_directory": str(Path.cwd() / "target")}}))
+    sys.exit(0)
 if entry["args"][:2] == ["nextest", "list"]:
     print(Path(os.environ["LIST_JSON"]).read_text() if os.environ.get("LIST_JSON") else json.dumps({{"rust-suites": {{}}}}))
 """
@@ -216,6 +228,27 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
             path.chmod(0o755)
         return str(bin_dir) + os.pathsep + os.environ["PATH"]
 
+    def test_mbx_backend_failure_stops_gate_without_fallback(self) -> None:
+        path = self.install_command_recorder()
+        self.write("bin/mbx", f"""#!{sys.executable}
+import sys
+if sys.argv[1:] == ["--version"]:
+    print("mbx 1.29.2")
+else:
+    sys.exit(31)
+""")
+        (self.repo / "bin" / "mbx").chmod(0o755)
+        with tempfile.TemporaryDirectory(prefix="corral-mbx-config-") as config:
+            result = self.gate(
+                PATH=path,
+                XDG_CONFIG_HOME=config,
+                CARGO_HOME=config,
+                CORRAL_BUILD_CACHE="mbx",
+                CORRAL_MBX_BIN=str(self.repo / "bin" / "mbx"),
+                CORRAL_MBX_CACHE_DIR=str(Path(config) / "cache"),
+            )
+        self.assertEqual(result.returncode, 31, result.stderr)
+
     def gate_as_runner(self, command: str = RUNNER_COMMAND,
                        **extra_env: str) -> tuple[bytes, int, int, int]:
         """Run the gate the way corral's runner logs one command: header, output, footer."""
@@ -225,7 +258,7 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
             log.flush()
             code = subprocess.run(
                 ["bash", "-o", "pipefail", "-c", command], cwd=self.repo,
-                env={**os.environ, **CONTEXT, **extra_env}, stdin=subprocess.DEVNULL,
+                env=self.fixture_env(extra_env), stdin=subprocess.DEVNULL,
                 stdout=log, stderr=subprocess.STDOUT, check=False, timeout=60,
             ).returncode
             end = log.tell()
@@ -353,8 +386,8 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
         self.command("git", "worktree", "add", "--detach", str(linked), "HEAD")
         for override in ("", str(self.repo / "explicit-target")):
             result = subprocess.run(["bash", str(linked / "scripts/gate.sh")], cwd=linked,
-                                    env={**os.environ, **CONTEXT, "PATH": path,
-                                         "CARGO_TARGET_DIR": override},
+                                    env=self.fixture_env({"PATH": path,
+                                                          "CARGO_TARGET_DIR": override}),
                                     stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                     check=False, timeout=60)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -566,7 +599,7 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
     def quick_gate(self, env: dict[str, str], timeout: int = 60) -> subprocess.CompletedProcess[str]:
         result = subprocess.run(
             ["bash", str(self.repo / "scripts/gate.sh"), "--tier", "quick"],
-            cwd=self.repo / "crates", env={**os.environ, **CONTEXT, **env},
+            cwd=self.repo / "crates", env=self.fixture_env(env),
             input="must not reach a gate command\n", capture_output=True,
             text=True, check=False, timeout=timeout,
         )
@@ -788,6 +821,13 @@ printf '%s\\n' '{"target_directory":"/unused"}'
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn("Isolated herdr startup failed", result.stderr)
                 self.assert_startup_isolated()
+
+
+def load_tests(
+    loader: unittest.TestLoader, tests: unittest.TestSuite, _pattern: str | None,
+) -> unittest.TestSuite:
+    tests.addTests(loader.discover(str(SCRIPTS), pattern="test_cargo_cache.py"))
+    return tests
 
 
 if __name__ == "__main__":

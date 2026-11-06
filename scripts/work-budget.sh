@@ -33,5 +33,5 @@ for test in \
   if [[ -n "${WORK_BUDGET_REPORT:-}" ]]; then args+=(--nocapture); fi
   # Match the workspace gate's dev-dependency feature union; otherwise this step
   # rebuilds core/ops/TUI just to disable test-clock after nextest enabled it.
-  cargo test -p corral-tui --lib --features corral-core/test-clock -- "${args[@]}"
+  bash scripts/cargo.sh test -p corral-tui --lib --features corral-core/test-clock -- "${args[@]}"
 done
