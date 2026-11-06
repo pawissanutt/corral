@@ -69,6 +69,13 @@ export async function createModelCatalog(
       refreshOnCreate: false,
       allowModelNetwork: false,
     });
+    // Correct the bundled subscription limit before Pi composes models.json, so explicit
+    // user overrides still win. Keep all other model metadata and native behavior intact.
+    const { openaiCodexProvider } = await import("@earendil-works/pi-ai/providers/openai-codex");
+    const codex = openaiCodexProvider();
+    const getModels = () => codex.getModels().map((model) => model.id === "gpt-6-astra"
+      ? { ...model, contextWindow: 600000 } : model);
+    loaded.registerNativeProvider({ ...codex, getModels, getAllModels: getModels });
     const error = loaded.getError();
     if (error !== undefined) throw new ModelCatalogInvalid(error);
     return loaded;
