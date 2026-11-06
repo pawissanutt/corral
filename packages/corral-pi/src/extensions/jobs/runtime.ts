@@ -286,7 +286,7 @@ export class JobRuntime {
     child.stdin?.on("error", () => undefined);
     child.stdout?.on("data", (chunk: Buffer) => this.statusLine(job, chunk));
     child.stderr?.on("data", (chunk: Buffer) => this.capture(job, chunk));
-    const cancelDeadline = this.schedule(() => void this.kill(id, "deadline"), Math.min(timeoutSecs ?? settings.max_runtime_secs, settings.max_runtime_secs) * 1000);
+    let cancelDeadline = () => {};
     child.once("close", (code, signal) => {
       cancelDeadline();
       if (job.partial) this.line(job, job.partial);
@@ -325,10 +325,14 @@ export class JobRuntime {
     // The open stdin is the launcher's lifeline: it is closed only when this host goes away.
     await new Promise<void>((resolve) => {
       if (!child.stdin) resolve();
-      else if (recorded && epoch === this.shutdownEpoch) { job.startedAt = Date.now(); child.stdin.write("run\n", () => resolve()); }
+      else if (recorded && epoch === this.shutdownEpoch && job.state === "running") {
+        job.startedAt = Date.now();
+        cancelDeadline = this.schedule(() => void this.kill(id, "deadline"), Math.min(timeoutSecs ?? settings.max_runtime_secs, settings.max_runtime_secs) * 1000);
+        child.stdin.write("run\n", () => resolve());
+      }
       else child.stdin.end(() => resolve());
     });
-    if (!recorded || epoch !== this.shutdownEpoch) return { job: id, state: "not_started", reason: "launch refused or owning host stopped" };
+    if (job.startedAt === undefined || !recorded || epoch !== this.shutdownEpoch) return { job: id, state: "not_started", reason: "launch refused or owning host stopped" };
     this.options.onEvent?.("job_started", { job: id, pid: child.pid });
     return { job: id, state: job.state, pid: child.pid, output_file: file };
   }

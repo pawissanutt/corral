@@ -213,11 +213,18 @@ export class Commands {
     try {
       const completed = () => candidates.find(command => command.result && !command.consumed);
       if (!completed() && ms > 0 && !signal?.aborted) await new Promise<void>(resolve => {
-        const finish = () => { clearTimeout(timer); this.changes.delete(changed); signal?.removeEventListener("abort", finish); resolve(); };
+        const finish = () => {
+          clearTimeout(timer);
+          this.changes.delete(changed);
+          for (const candidate of candidates) candidate.release.delete(finish);
+          signal?.removeEventListener("abort", finish);
+          resolve();
+        };
         const changed = () => { if (completed()) finish(); };
         const timer = setTimeout(finish, ms);
         cancel = finish;
         this.changes.add(changed);
+        for (const candidate of candidates) candidate.release.add(finish);
         signal?.addEventListener("abort", finish, { once: true });
         changed();
       });
