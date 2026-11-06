@@ -105,6 +105,17 @@ impl Fx {
         self.run(&task, "main", &main, None)
     }
 
+    pub(crate) fn main_plan_member(&self) -> (Task, String) {
+        let source = self.repo.parent().unwrap().join("main-plan.md");
+        std::fs::write(&source, "---\ntitle: Main Plan\nproject: app\napproved_scope:\n  goal: Main change\n  acceptance: [{scenario: together, expected: pass}]\n  delivery_target: {kind: main}\ntasks:\n  - {key: first, title: First}\n---\n").unwrap();
+        let imported = crate::import_plan(&self.ctx, &source, false, Origin::Agent).unwrap();
+        let main = corral_git::rev_sha(&self.repo, "main").unwrap();
+        (
+            self.run(&imported.tasks[0], "main", &main, None),
+            imported.tracker.id,
+        )
+    }
+
     /// The first member of an imported integration Plan, bound to its owned target.
     fn member(&self) -> (Task, String) {
         let (mut members, tracker) = self.members(1);

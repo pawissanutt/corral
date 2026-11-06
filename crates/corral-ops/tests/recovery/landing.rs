@@ -24,18 +24,22 @@ fn exact_landing_journal_reconciles_without_the_task_commit_marker() {
     if isolated("landing::exact_landing_journal_reconciles_without_the_task_commit_marker") {
         return;
     }
-    // Main and Plan targets have different owning journals. FF/rebase share this final boundary.
-    for plan_target in [false, true] {
+    // Both journal kinds must preserve cancellation at the Git/task commit boundary.
+    for (plan_target, cancelled) in [(false, false), (true, false), (false, true), (true, true)] {
         let mut f = crate::gate_tier::tests::fixture(false);
         let hook_marker = f.repo.parent().unwrap().join("hook-must-not-run");
         f.ctx.store.config.projects.get_mut("app").unwrap().post_land.push(serde_json::from_value(serde_json::json!({
             "name":"no-replay", "argv":["touch", hook_marker], "cwd":".", "env":{}, "timeout_secs":1, "max_attempts":1
         })).unwrap());
         f.ctx.store.save_config().unwrap();
-        let task = if plan_target {
-            f.members(1).0.remove(0)
+        let (task, plan) = if plan_target {
+            let (mut members, plan) = f.members(1);
+            (members.remove(0), Some(plan))
+        } else if cancelled {
+            let (member, plan) = f.main_plan_member();
+            (member, Some(plan))
         } else {
-            f.main_bound()
+            (f.main_bound(), None)
         };
         let id = task.id;
         f.ctx
@@ -142,6 +146,49 @@ fn exact_landing_journal_reconciles_without_the_task_commit_marker() {
         assert_eq!(f.current(&id).0.status, Status::Review);
         assert!(!super::super::code::code_committed(&f.ctx, &record).unwrap());
         let before = corral_git::rev_sha(&f.repo, &run.base).unwrap();
+        if cancelled {
+            let plan = plan.as_ref().unwrap();
+            crate::plan_cancel(&f.ctx, plan).unwrap();
+            // The durable inventory is terminal even if the card's status is later edited.
+            f.ctx
+                .store
+                .update(plan, |task| {
+                    task.status = Status::Ready;
+                    Ok(())
+                })
+                .unwrap();
+            let rejected = recover_reconcile(&f.ctx, &id, &record.id).unwrap();
+            assert_eq!(
+                state(&rejected).unwrap(),
+                RecoveryState::Unknown,
+                "{:?}",
+                rejected.outcomes
+            );
+            let member = f.current(&id).0;
+            assert_eq!(member.status, Status::Review);
+            assert!(member.landed.is_none());
+            assert!(!super::super::code::code_committed(&f.ctx, &record).unwrap());
+            assert!(
+                f.ctx
+                    .store
+                    .last_event_where(Some(&id), &["approved"], Some(&run.id), |_| true)
+                    .unwrap()
+                    .is_none()
+            );
+            if plan_target {
+                let (target, _) = crate::plan_target::recovery_landing(
+                    &f.ctx, &member, &run, candidate, "rebase",
+                )
+                .unwrap();
+                assert!(target.landed(&id, &run.id).is_none());
+            } else {
+                assert!(!crate::post_land_operations(&f.ctx, None).unwrap()[0].landed);
+            }
+            assert_eq!(corral_git::rev_sha(&f.repo, &run.base).unwrap(), before);
+            assert_eq!(landing_commands(), commands_before + 1);
+            assert!(!hook_marker.exists());
+            continue;
+        }
         // A different reverse link cannot borrow this exact Git/journal effect.
         let area = corral_core::records::RecordArea::<(
             RecoveryReference,
