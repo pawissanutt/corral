@@ -140,10 +140,12 @@ pub fn adopt(ctx: &Ctx, pane: &str, overrides: &Overrides) -> Result<Prepared> {
                 ctx,
                 &ContainerRef::Pm,
                 false,
-                Some((pane, &resolved)),
+                Some((pane, &resolved, overrides.continue_session)),
             )?
             .1),
-            None => super::hooks::pm::prepared(ctx, pane, &resolved, true),
+            None => {
+                super::hooks::pm::prepared(ctx, pane, &resolved, true, overrides.continue_session)
+            }
         }
     })
 }

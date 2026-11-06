@@ -195,6 +195,7 @@ fn prepare(ctx: &Ctx, id: &str, pane: &str, resolved: &ResolvedProfile) -> Resul
             }
         },
         adopt: true,
+        fresh_session: false,
     };
     let target = BindTarget::Assistant { session: id.into() };
     let prepared = launch::prepare_bootstrap(ctx, &target, pane, &spec)?;
