@@ -12,10 +12,17 @@ export const JOB_MONITOR_TOOL = "corral_job_monitor";
 function text(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: undefined };
 }
-async function guarded(run: () => Promise<unknown> | unknown, commandResult = false) {
+async function guarded(run: () => Promise<unknown> | unknown, commandResult = false, bashStdout = false) {
   try {
     const value = await run();
-    const result = text(value);
+    // Terminal Bash keeps the built-in stdout contract; metadata is not a stdout envelope.
+    const result = bashStdout && value !== null && typeof value === "object" && "state" in value && value.state === "exited" && "text" in value && typeof value.text === "string"
+      ? { content: [{ type: "text" as const, text: value.text || "(no output)" }], details: value, structuredContent: {
+        output: value.text, state: "exited", exit_code: "exit_code" in value && typeof value.exit_code === "number" ? value.exit_code : null,
+        signal: "signal" in value && typeof value.signal === "string" ? value.signal : null,
+        truncated: "truncated" in value && value.truncated === true,
+      } }
+      : text(value);
     if (commandResult && value !== null && typeof value === "object" && "state" in value && value.state === "exited" &&
       ("exit_code" in value && value.exit_code !== 0 || "signal" in value && value.signal !== null)) return { ...result, isError: true };
     return result;
@@ -37,7 +44,7 @@ export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands):
         timeout: Type.Optional(Type.Number({ minimum: 1 })), wait_ms: waitBudget }),
       async execute(id: string, params: { command: string; timeout?: number; wait_ms?: number }, signal?: AbortSignal) {
         return guarded(() => commands.run(params.command, callKey("bash", id), {
-          ...params, ...(signal ? { signal } : {}), nested: nestedChild("bash", id) !== undefined }), true);
+          ...params, ...(signal ? { signal } : {}), nested: nestedChild("bash", id) !== undefined }), true, true);
       },
     } satisfies ToolDefinition] : []),
     {

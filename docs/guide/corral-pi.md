@@ -802,7 +802,10 @@ request record as `todo_requests`.
 
 With the existing `background_shell` capability, worker, PM and assistant Bash calls use one
 owned execution from launch. Other roles, or generations without that capability, retain
-blocking Bash. No configuration or role authority is silently expanded.
+blocking Bash. No configuration or role authority is silently expanded. Completed Bash retains
+raw stdout (last 2000 lines within 50 KiB) with status in result metadata, so CLI JSON and
+line-oriented consumers are not wrapped in a second JSON envelope. Running handles and the
+explicit job tools remain structured.
 
 - `bash({command, wait_ms?, timeout?})` waits up to `wait_ms` (default 10000 milliseconds),
   then returns a stable `j<generation>-<n>` handle and current output **without restarting or
