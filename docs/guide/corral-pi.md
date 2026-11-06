@@ -89,7 +89,10 @@ instead of asking, batch independent decisions, and act on clear instructions wi
 again. Generic choices never replace owner-action confirmations or file-permission dialogs,
 and do not change worker/reviewer/planner board-question routing or PM authority.
 
-Existing calls with `questions` alone keep their synchronous dialog behavior. To keep working:
+Existing calls with `questions` alone keep their synchronous batched dialog, including headers,
+label/description options, multi-select and partial answers. Deferred questions use plain-string,
+single-selection options with optional free text; richer batches must use the synchronous dialog.
+The deferred schema rejects unsupported rich fields rather than silently dropping them. To keep working:
 
 ```json
 {"questions":[{"question":"Which scope?","options":["Small fix (recommended)","Broader change"],"freeText":true}],"nonBlocking":true,"key":"scope"}

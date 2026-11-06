@@ -45,7 +45,26 @@ permission grant, dispatch or plan-mode workflow was added.
 Paths above are relative to `packages/corral-pi/` unless otherwise noted. Synthetic provider
 fixtures prove routing/lifecycle behavior, not a probabilistic guarantee of model compliance.
 
-## Checks
+## Integration on current main (2026-11-06)
+
+The three original commits were preserved and rebased onto `15276f64`. The ask-user
+conflicts retained main's rich batched synchronous dialog: string or label/description
+options, headers, multi-select, partial answers, and its existing cancellation behavior.
+The new deferred path remains plain-string, single-selection questions with optional free
+text. Its explicit discriminated schema and execution guard reject unsupported rich fields
+instead of silently discarding them. The tool guidance and guide document this boundary.
+No pending-record format or owner-input/delivery lifecycle was changed for this integration.
+
+Fresh package TypeScript check and 12 focused tool/state/UI/loadout tests pass (89 assertions).
+The existing non-blocking unit case additionally checks that rich input is accepted for the
+synchronous API but rejected before pending publication for the deferred API; no registration
+was added. The production-host deferred/resume/attribution journey passes separately (21
+assertions) under a fresh private plugin-free herdr environment. Original synchronous rich
+batch/partial-answer tests also pass. Missing local web packages were restored with the
+existing frozen lockfile; no dependency or lockfile change. No live provider call or runtime
+installation. Matching native gate and fresh review remain separate required evidence.
+
+## Original worker checks (historical candidate)
 
 - Failing-first `ask-user.test.ts` regression: deferred request opened a modal before the fix
   (`ask-user-red.log`).

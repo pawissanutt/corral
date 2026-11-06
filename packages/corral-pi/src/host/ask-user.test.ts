@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Check } from "typebox/value";
 import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { askUserEnabled, askUserTool } from "./ask-user.ts";
 import { AskDialog, type DialogResult } from "./ask-user-dialog.ts";
@@ -22,6 +23,11 @@ test("non-blocking clarification returns pending without opening a modal", async
   const tool = askUserTool(async () => { throw new Error("no answer exists"); }, pending);
   const result = await tool.execute("id", { ...params, nonBlocking: true }, undefined, undefined, ctx);
   expect(result.details).toMatchObject({ id: "Q1", status: "pending" });
+  const rich = { questions: [{ question: "Which?", options: [{ label: "One", description: "First" }, "Two"], multiSelect: true }] };
+  expect(Check(tool.parameters, rich)).toBeTrue();
+  expect(Check(tool.parameters, { ...rich, nonBlocking: true })).toBeFalse();
+  await expect(tool.execute("rich", { ...rich, nonBlocking: true }, undefined, undefined, ctx))
+    .rejects.toThrow("deferred_questions_require_plain_single_selection");
 });
 
 test("dialog presents options and returns and records the owner's choice and text", async () => {
