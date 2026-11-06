@@ -159,7 +159,7 @@ export function pickerRow(entries: readonly ActivityEntry[], selected: ActivityE
 }
 
 const HINTS = {
-  job: [["j/k", "select"], ["f", "follow on/off"], ["Enter", "output pager"], ["/", "search output"], ["?", "legend"], ["Esc", "chat"]],
+  job: [["j/k", "select"], ["p", "Peek"], ["b", "Background"], ["x", "Stop"], ["f", "follow on/off"], ["Enter", "output pager"], ["/", "search output"], ["?", "legend"], ["Esc", "chat"]],
   helper: [["j/k", "select"], ["Enter", "expand tool calls"], ["t", "open transcript (read-only)"], ["?", "legend"], ["Esc", "chat"]],
 } as const;
 /** The pinned key-hint row; narrower widths shorten descriptions, then keep keys only, so every key stays listed. */

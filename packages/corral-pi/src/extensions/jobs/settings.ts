@@ -5,6 +5,7 @@ export const JobSettingsSchema = z.object({
   max_jobs: z.number().int().min(1).max(16),
   max_output_bytes: z.number().int().min(1024).max(1024 * 1024 * 1024),
   max_runtime_secs: z.number().int().min(1).max(7 * 24 * 3600),
+  wait_ms: z.number().int().min(0).max(600000).optional(),
 }).strict().readonly();
 
 export type JobSettings = z.infer<typeof JobSettingsSchema>;

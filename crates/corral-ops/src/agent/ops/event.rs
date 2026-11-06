@@ -49,6 +49,9 @@ struct EventPayload {
     /// never continues its plan automatically.
     #[serde(default)]
     aborted: bool,
+    /// The generation owns unfinished managed commands or undelivered completions.
+    #[serde(default)]
+    pending_commands: bool,
 }
 
 fn bad(reason: &str) -> anyhow::Error {
@@ -96,7 +99,9 @@ fn validate(envelope: &Envelope, payload: &EventPayload) -> Result<()> {
     if payload.budget.is_some() && payload.kind != EventKind::BudgetExhausted {
         return Err(bad("only budget_exhausted carries budget state"));
     }
-    if (payload.cancelled || payload.aborted) && payload.kind != EventKind::TurnEnded {
+    if (payload.cancelled || payload.aborted || payload.pending_commands)
+        && payload.kind != EventKind::TurnEnded
+    {
         return Err(bad("only turn_ended carries cancelled or aborted"));
     }
     let key = payload
@@ -186,9 +191,19 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         owner_input,
         cancelled,
         aborted,
+        pending_commands,
     } = payload;
     receipts::commit_native_event(ctx, &admitted, n, seq, move |state, closure| {
         let now = corral_core::clock::now();
+        if pending_commands
+            && !state
+                .generation(n)
+                .is_some_and(|g| g.capability("background_shell"))
+        {
+            return Err(bad(
+                "pending_commands requires background_shell in this generation",
+            ));
+        }
         let index = state
             .turns
             .iter()
@@ -218,9 +233,12 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                     state.turns[i].class = Some(TurnClass::Cancelled);
                 }
                 crate::agent::turns::classify_ended(state, closure, i);
+                if pending_commands && state.turns[i].class == Some(TurnClass::NoReport) {
+                    state.turns[i].class = Some(TurnClass::WaitingExternal);
+                }
                 post_pending.push("event:agent_turn_ended".into());
                 if let Some((value, stopped)) =
-                    crate::agent::requests::turn_ended(state, i, aborted, now)
+                    crate::agent::requests::turn_ended(state, i, aborted, pending_commands, now)
                 {
                     if stopped {
                         post_pending.push("event:todo_continuation_stopped".into());

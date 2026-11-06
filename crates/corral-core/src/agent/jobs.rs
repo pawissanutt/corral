@@ -22,6 +22,8 @@ pub struct JobSettings {
     pub max_output_bytes: u64,
     /// Wall-clock limit after which the host kills the job's process group.
     pub max_runtime_secs: u64,
+    /// Foreground observation budget in milliseconds; expiration backgrounds without killing.
+    pub wait_ms: u64,
 }
 
 impl Default for JobSettings {
@@ -30,6 +32,7 @@ impl Default for JobSettings {
             max_jobs: 4,
             max_output_bytes: 8 * 1024 * 1024,
             max_runtime_secs: 3600,
+            wait_ms: 10_000,
         }
     }
 }
@@ -46,6 +49,9 @@ impl JobSettings {
         }
         if self.max_runtime_secs == 0 || self.max_runtime_secs > 7 * 24 * 3600 {
             return Err("background_shell.max_runtime_secs must be between 1 and 604800".into());
+        }
+        if self.wait_ms > 600_000 {
+            return Err("background_shell.wait_ms must be between 0 and 600000".into());
         }
         Ok(())
     }

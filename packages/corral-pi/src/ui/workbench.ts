@@ -33,6 +33,7 @@ export type MainView = "task" | "conversation" | "changes" | "activity" | "agent
 /** Views reached through Activity; its sub-tab row shows only while one of them is open. */
 export const ACTIVITY_VIEWS: ReadonlySet<MainView> = new Set<MainView>(["activity", "agents", "graph", "timeline"]);
 export interface WorkbenchOptions {
+  readonly jobControl?: import("../host/job-controls.ts").JobControl;
   readonly identity: HostIdentity;
   readonly inspection?: () => Promise<unknown>;
   readonly lifecycle?: () => Promise<unknown>;
@@ -189,6 +190,21 @@ export class NativeWorkbench {
       if (start < 0) { ui.notify(`No match for ${JSON.stringify(plainLabel(query))} in retained output`, "info"); return; }
     }
     await openOutputPager(ui, `Job ${id} · retained output · ${lines.length} lines`, lines, start);
+  }
+  private async controlJob(job: string, action: "peek" | "background" | "stop"): Promise<void> {
+    const ui = this.ui, snapshot = this.options.snapshot(), session = snapshot?.inspector?.session;
+    if (!ui || !this.options.canInteract()) return;
+    if (!snapshot?.bound || !session || !this.options.jobControl) { ui.notify("Command control unavailable: stale or unsupported host", "warning"); return; }
+    const target = { job, session, generation: this.options.identity.generation };
+    if (action === "stop" && !await ui.confirm("Stop command?", "Stop the owned process group for " + plainLabel(job) + "? Output is retained.")) return;
+    try {
+      const result = await this.options.jobControl(target, action);
+      if (action === "peek" && typeof result.text === "string") {
+        const lines = result.text.split("\n").map(plainLabel);
+        await openOutputPager(ui, "Peek " + plainLabel(job) + " · " + plainLabel(String(result.state)) + " · current logs", lines, lines.length);
+      } else ui.notify(plainLabel(JSON.stringify(result)), result.state === "denied" || result.state === "outcome_unknown" ? "warning" : "info");
+    } catch (error) { ui.notify("Command control outcome unknown; inspect before retrying: " + plainLabel(String(error)), "warning"); }
+    this.options.changed();
   }
   private openActivity(): void {
     const selected = this.selectedActivity;
@@ -528,6 +544,9 @@ export class NativeWorkbench {
     if (data === "j" || data === "k") { this.moveActivity(data === "j" ? 1 : -1); return true; }
     const target = this.shownActivity()?.target;
     if (target?.kind === "job") {
+      if (data === "p" || data === "b" || data === "x") {
+        void this.controlJob(target.job, data === "p" ? "peek" : data === "b" ? "background" : "stop"); return true;
+      }
       if (data === "f") {
         const job = this.options.snapshot()?.jobs?.find(item => item.job === target.job);
         this.jobFreeze = this.jobFreeze?.job === target.job || !job?.detail ? undefined

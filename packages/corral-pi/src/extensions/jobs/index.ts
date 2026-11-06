@@ -1,83 +1,97 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { callKey } from "../codemode/child.ts";
+import { callKey, nestedChild } from "../codemode/child.ts";
+import { type Commands } from "./commands.ts";
 import { JobError, type JobRuntime, OUTPUT_READ_MAX } from "./runtime.ts";
+import type { OutputOptions } from "./output.ts";
 
-export const JOB_TOOL_NAMES = ["job_start", "job_output", "job_kill", "corral_job_monitor"] as const;
+export const JOB_TOOL_NAMES = ["job_start", "job_output", "job_wait", "job_kill", "corral_job_monitor"] as const;
 export const JOB_MONITOR_TOOL = "corral_job_monitor";
 
 function text(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: undefined };
 }
-
-async function guarded(run: () => Promise<unknown> | unknown) {
+async function guarded(run: () => Promise<unknown> | unknown, commandResult = false) {
   try {
-    return text(await run());
+    const value = await run();
+    const result = text(value);
+    if (commandResult && value !== null && typeof value === "object" && "state" in value && value.state === "exited" &&
+      ("exit_code" in value && value.exit_code !== 0 || "signal" in value && value.signal !== null)) return { ...result, isError: true };
+    return result;
   } catch (error) {
-    if (error instanceof JobError) return text({ error: error.message });
+    if (error instanceof JobError) return { ...text({ error: error.message }), isError: true };
     throw error;
   }
 }
+const waitBudget = Type.Optional(Type.Integer({ minimum: 0, maximum: 600000 }));
 
-export function jobTools(jobs: JobRuntime, monitor = true): readonly ToolDefinition[] {
+export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands): readonly ToolDefinition[] {
   const tools: ToolDefinition[] = [
+    ...(commands ? [{
+      name: "bash", label: "Run a managed command",
+      description: "Execute bash in the worktree. wait_ms releases observation after 10000 ms by default, returning a job handle without restarting or killing the command. "
+        + "timeout is a separate hard deadline in SECONDS from launch (bounded by the configured runtime cap). Completion is announced automatically. "
+        + "Use job_output for a nonblocking log peek; job_wait to await one job or the next result. In Code Mode, the default awaits actual completion; explicit wait_ms:0 backgrounds immediately.",
+      parameters: Type.Object({ command: Type.String({ minLength: 1, maxLength: 4096 }),
+        timeout: Type.Optional(Type.Number({ minimum: 1 })), wait_ms: waitBudget }),
+      async execute(id: string, params: { command: string; timeout?: number; wait_ms?: number }, signal?: AbortSignal) {
+        return guarded(() => commands.run(params.command, callKey("bash", id), {
+          ...params, ...(signal ? { signal } : {}), nested: nestedChild("bash", id) !== undefined }), true);
+      },
+    } satisfies ToolDefinition] : []),
     {
-      name: "job_start",
-      label: "Start a background job",
-      description: "Run a shell command in the background in the worktree and return its job ID at once. "
-        + "Use it for builds, tests and servers that take a while, then keep working. Output is captured "
-        + "and bounded; the job is killed at its runtime limit, when you call job_kill, or when this run ends.",
+      name: "job_start", label: "Start a background command",
+      description: "Compatibility adapter for bash with wait_ms:0: launch one managed command and return its job ID immediately. "
+        + "Turn endings do not stop it. The hard runtime cap, job_kill, or owning host teardown stops its process group. Completion is announced automatically.",
       parameters: Type.Object({ command: Type.String({ minLength: 1, maxLength: 4096 }) }),
-      async execute(id, params: { command: string }) {
-        return guarded(() => jobs.start(params.command, callKey("job_start", id)));
+      async execute(id, params: { command: string }, signal) {
+        return guarded(() => commands ? commands.run(params.command, callKey("job_start", id), { wait_ms: 0, ...(signal ? { signal } : {}) })
+          : jobs.start(params.command, callKey("job_start", id)));
       },
     },
     {
-      name: "job_output",
-      label: "Read background job output",
-      description: "Read a job's state, exit code and captured output. Without offset it returns the latest "
-        + `output; with offset it pages forward from there (next_offset). At most ${OUTPUT_READ_MAX} bytes per call.`,
-      parameters: Type.Object({
-        job: Type.String(),
-        offset: Type.Optional(Type.Integer({ minimum: 0 })),
-        max_bytes: Type.Optional(Type.Integer({ minimum: 1, maximum: OUTPUT_READ_MAX })),
-      }),
-      async execute(_id, params: { job: string; offset?: number; max_bytes?: number }) {
-        return guarded(() => jobs.output(params.job, params.offset, params.max_bytes));
+      name: "job_output", label: "Peek command output",
+      description: "Nonblocking peek: return current logs and state now, even while the command is running. "
+        + "Default is the latest 50 lines within 16 KiB; tail_lines selects recent lines. cursor (or legacy offset) pages independently for each reader. "
+        + `At most ${OUTPUT_READ_MAX} bytes; retention gaps are explicit. Peeking never consumes completion.`,
+      parameters: Type.Object({ job: Type.String(), offset: Type.Optional(Type.Integer({ minimum: 0 })),
+        cursor: Type.Optional(Type.String()), tail_lines: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
+        max_bytes: Type.Optional(Type.Integer({ minimum: 1, maximum: OUTPUT_READ_MAX })) }),
+      async execute(_id, params: { job: string } & OutputOptions) {
+        return guarded(() => commands ? commands.output(params.job, params) : jobs.peek(params.job, params));
       },
     },
+    ...(commands ? [{
+      name: "job_wait", label: "Await command completion",
+      description: "Await one owned job, or omit job for the next unconsumed completion. Return immediately if none exist. "
+        + "wait_ms (default 60000) limits observation only: expiry or cancellation never kills work. Completed output remains readable; no polling is needed.",
+      parameters: Type.Object({ job: Type.Optional(Type.String()), wait_ms: waitBudget }),
+      async execute(_id: string, params: { job?: string; wait_ms?: number }, signal?: AbortSignal) {
+        return guarded(() => commands.wait(params.job, params.wait_ms, signal), true);
+      },
+    } satisfies ToolDefinition] : []),
     {
-      name: "job_kill",
-      label: "Stop a background job",
-      description: "Stop a job's whole process group (SIGTERM, then SIGKILL after a short grace) and return its "
-        + "final state.",
+      name: "job_kill", label: "Stop a command",
+      description: "Stop this host's owned process group (SIGTERM then SIGKILL after a short grace), retaining output. Never signals a stale or reused PID.",
       parameters: Type.Object({ job: Type.String() }),
-      async execute(_id, params: { job: string }) {
-        return guarded(() => jobs.kill(params.job));
-      },
+      async execute(_id, params: { job: string }) { return guarded(() => commands ? commands.kill(params.job) : jobs.kill(params.job)); },
     },
     {
-      name: JOB_MONITOR_TOOL,
-      label: "Wake when a job exits or prints a line",
-      description: "Ask corral to wake you once when a job exits (on: exit) or prints a line matching a "
-        + "JavaScript regular expression (on: line). The wake arrives as a message even if it already happened; "
-        + "end your turn after this call instead of polling job_output. Without a match before timeout_secs, "
-        + "the wake reports that the deadline expired.",
-      parameters: Type.Object({
-        job: Type.String(),
-        on: Type.Union([Type.Literal("exit"), Type.Literal("line")]),
+      name: JOB_MONITOR_TOOL, label: "Wake on command exit or matching line",
+      description: "Arm one exit or JavaScript-regex line wake for an owned job. End your turn rather than polling. "
+        + "A timeout_secs deadline wakes without killing work. Worker waits remain receipted by corral; PM/assistant watches are session-owned and report interruption after host loss.",
+      parameters: Type.Object({ job: Type.String(), on: Type.Union([Type.Literal("exit"), Type.Literal("line")]),
         pattern: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
-        timeout_secs: Type.Optional(Type.Integer({ minimum: 1, maximum: 86400 })),
-      }),
+        timeout_secs: Type.Optional(Type.Integer({ minimum: 1, maximum: 86400 })) }),
       async execute(id, params: { job: string; on: "exit" | "line"; pattern?: string; timeout_secs?: number }) {
         return guarded(async () => {
-          const receipt = await jobs.monitor(params.job, params.on, params.pattern, params.timeout_secs ?? 3600,
-            callKey(JOB_MONITOR_TOOL, id));
+          const runtime = commands ?? jobs;
+          const receipt = await runtime.monitor(params.job, params.on, params.pattern, params.timeout_secs ?? 3600, callKey(JOB_MONITOR_TOOL, id));
           return { state: receipt.state, result: receipt.result };
         });
       },
     },
   ];
-  return monitor ? tools : tools.filter((tool) => tool.name !== JOB_MONITOR_TOOL);
+  return monitor ? tools : tools.filter(tool => tool.name !== JOB_MONITOR_TOOL);
 }

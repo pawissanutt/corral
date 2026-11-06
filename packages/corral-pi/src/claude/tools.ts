@@ -61,8 +61,9 @@ function defined(value: Args): Args {
 }
 
 /** Translates Claude Code's built-in tool inputs into the arguments of Pi's tool `piName`. */
-export function mapToolArgs(piName: string, args: unknown): Args {
+export function mapToolArgs(piName: string, args: unknown, custom = false): Args {
   const input = (args !== null && typeof args === "object" && !Array.isArray(args) ? args : {}) as Args;
+  if (custom) return { ...input };
   switch (piName.toLowerCase()) {
     case "read":
       return defined({ path: input.file_path ?? input.path, offset: input.offset, limit: input.limit });
@@ -80,6 +81,7 @@ export function mapToolArgs(piName: string, args: unknown): Args {
       return defined({
         command: input.command,
         timeout: typeof input.timeout === "number" ? input.timeout / 1_000 : input.timeout,
+        wait_ms: input.run_in_background === true ? 0 : input.wait_ms,
       });
     case "grep":
       return defined({
@@ -111,7 +113,11 @@ export function resolveSdkTools(tools: readonly Tool[]): ResolvedSdkTools {
   for (const tool of tools) {
     const normalized = tool.name.toLowerCase();
     const sdkName = PI_TO_SDK_TOOL_NAME[normalized];
-    if (sdkName) {
+    // Managed Bash has Pi-native clocks/options. Publish its schema, not Claude Code's
+    // incompatible Bash timeout/background declaration. Legacy Bash retains ms mapping.
+    const properties = "properties" in tool.parameters ? tool.parameters.properties : undefined;
+    const managedBash = normalized === "bash" && properties !== null && typeof properties === "object" && "wait_ms" in properties;
+    if (sdkName && !managedBash) {
       sdkTools.add(sdkName);
       continue;
     }

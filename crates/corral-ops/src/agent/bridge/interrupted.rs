@@ -34,7 +34,7 @@ const TWO_PHASE: [&str; 6] = [
 ];
 // Public fetch is GET-only; web_read, tool_search and job_output read local caches.
 // Search may spend subscription quota, so a missing result is not proof of no effect.
-const NO_EFFECT: [&str; 8] = [
+const NO_EFFECT: [&str; 9] = [
     "read",
     "grep",
     "find",
@@ -43,6 +43,7 @@ const NO_EFFECT: [&str; 8] = [
     "web_read",
     "tool_search",
     "job_output",
+    "job_wait",
 ];
 pub const MUTATING: [&str; 5] = ["edit", "write", "bash", "job_start", "job_kill"];
 

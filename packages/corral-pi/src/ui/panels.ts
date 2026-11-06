@@ -8,6 +8,7 @@ import { ACTIVITY_VIEWS, NativeWorkbench, type MainView } from "./workbench.ts";
 import { navRows, navSections, renderNav, type NavSource } from "./nav-panel.ts";
 import type { HistoryRead } from "./history.ts";
 import type { ReviewBases } from "./review-store.ts";
+import type { JobControl } from "../host/job-controls.ts";
 import { panelTheme } from "./panels-theme.ts";
 import { type Appearance, type Density, PACKAGED } from "./appearance.ts";
 import { ActionPalette, type HostAction } from "./action-palette.ts";
@@ -24,6 +25,7 @@ export interface NativePanelsOptions {
   readonly artifactViewer?: (reference: string, viewer: "show" | "serve") => Promise<string>;
   readonly exportSession?: () => Promise<string>;
   readonly readTranscript?: (id: string) => Promise<string>;
+  readonly jobControl?: JobControl;
   readonly readTask?: () => Promise<unknown>;
   readonly snapshot: () => PanelSnapshot | null;
   readonly readInbox?: (signal: AbortSignal) => Promise<unknown>;
