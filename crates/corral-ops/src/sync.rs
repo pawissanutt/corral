@@ -222,9 +222,7 @@ fn sync_scoped(
     ctx.store.check_runtime()?;
     crate::hold::reconcile(ctx)?;
     crate::desktop_notifications::reconcile(ctx)?;
-    if crate::digest::scheduled_digest_at(ctx, now)?.is_some() {
-        crate::report::scheduled_report_at(ctx, now)?;
-    }
+    crate::report::scheduled_digest_and_report_at(ctx, now)?;
     let mut changes = crate::queue::migrate_backlog(ctx)?;
     changes.extend(crate::tracker::reconcile(ctx)?);
     let resources = crate::resources::observe(ctx, now)?;
