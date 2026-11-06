@@ -99,7 +99,13 @@ export function askUserTool(record: (answer: string) => Promise<string>, pending
       + "Cancellation, timeout or no answer is never consent.",
     promptSnippet: "Present owner questions and clarifications as choices",
     promptGuidelines: [...ASK_USER_GUIDELINES],
-    parameters: Type.Union([
+    // Legacy provider adapters publish root properties; a root union becomes an empty tool.
+    parameters: Type.Object({
+      questions: Type.Optional(Type.Array(question, { minItems: 1, maxItems: 4 })),
+      nonBlocking: Type.Optional(Type.Boolean()),
+      key: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+      supersedes: Type.Optional(Type.String()), withdraw: Type.Optional(Type.String({ minLength: 1 })),
+    }, { additionalProperties: false, anyOf: [
       Type.Object({ questions: Type.Array(question, { minItems: 1, maxItems: 4 }),
         nonBlocking: Type.Optional(Type.Literal(false)), key: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
         supersedes: Type.Optional(Type.String()) }, { additionalProperties: false }),
@@ -107,7 +113,7 @@ export function askUserTool(record: (answer: string) => Promise<string>, pending
         nonBlocking: Type.Literal(true), key: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
         supersedes: Type.Optional(Type.String()) }, { additionalProperties: false }),
       Type.Object({ withdraw: Type.String({ minLength: 1 }) }, { additionalProperties: false }),
-    ]),
+    ] }),
     async execute(_id, params: { questions: Question[]; nonBlocking?: false; key?: string; supersedes?: string } | { questions: ChoiceQuestion[]; nonBlocking: true; key?: string; supersedes?: string } | { withdraw: string }, signal, _update, ctx) {
       const noAnswer = () => ({ content: [{ type: "text" as const, text: "no answer" }], details: { status: "no answer" } });
       if ("withdraw" in params) {

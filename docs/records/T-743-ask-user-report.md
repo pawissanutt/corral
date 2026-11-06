@@ -64,6 +64,27 @@ batch/partial-answer tests also pass. Missing local web packages were restored w
 existing frozen lockfile; no dependency or lockfile change. No live provider call or runtime
 installation. Matching native gate and fresh review remain separate required evidence.
 
+### Provider-schema correction after external main advance
+
+Main advanced externally to `bafe5c5e` after the first native quick gate started on
+`44ec9841`/base `15276f64`. An offline production Anthropic-adapter capture then found
+that the integration's root union serialized as an empty tool (`properties: {}`): legacy
+adapters publish root properties rather than the union branches. The supported hold
+cancelled that known-invalid gate before source edits; its result is Cancelled, not PASS.
+The clean four-commit integration candidate was preserved and rebased onto `bafe5c5e`.
+
+The correction keeps an object-root property catalog for providers and retains the same
+three strict synchronous/deferred/withdraw validation alternatives in `anyOf`. Runtime
+rich-deferred rejection and all owner-input boundaries are unchanged. The existing
+non-blocking unit case now captures the real Anthropic request before fetch and checks
+that questions/nonBlocking/withdraw are actually advertised, with zero network attempts.
+It failed against the union root and passes against the object root; no test registration
+was added. Final package typecheck and 12 focused cases PASS (91 assertions), including
+rich synchronous compatibility, deferred rejection and pending-state safety. The same
+regression before repair is retained in the PM red log; a timed-out interim typecheck is
+not substituted for the final successful check. Matching native gates and fresh independent
+review remain required; no current runtime installation or live API claim.
+
 ## Original worker checks (historical candidate)
 
 - Failing-first `ask-user.test.ts` regression: deferred request opened a modal before the fix
