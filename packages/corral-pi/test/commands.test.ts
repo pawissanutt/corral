@@ -86,6 +86,8 @@ test("foreground and nested Bash return real completion; Code Mode sequencing is
   if (!bash) throw new Error("managed Bash missing");
   const failure = await bash.execute("fail", { command: "exit 7", wait_ms: 10000 }, undefined, undefined, {} as never);
   expect(failure.isError).toBeTrue();
+  const raw = await bash.execute("raw", { command: "seq 1 60", wait_ms: 10000 }, undefined, undefined, {} as never);
+  expect(raw.content).toEqual([{ type: "text", text: Array.from({ length: 60 }, (_, i) => `${i + 1}\n`).join("") }]);
 });
 
 test("wait-next claims exactly one completion, while cancellation releases waiting without killing the command", async () => {

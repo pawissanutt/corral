@@ -148,7 +148,7 @@ export class Commands {
     this.commands.set(job, record);
     this.fact(record);
     void record.done.then(() => {
-      record.result = this.options.jobs.peek(job);
+      record.result = this.options.jobs.peek(job, { max_bytes: 50 * 1024, tail_lines: 2000 });
       this.fact(record);
       this.options.settled?.(record.result);
       this.monitors?.exited(job);
