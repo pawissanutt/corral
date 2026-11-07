@@ -233,7 +233,7 @@ mod imp {
 
     /// Opens immutable content through no-follow directory handles. Nonblocking open plus
     /// the retained descriptor's type check rejects FIFOs/devices before any content is read.
-    pub(crate) fn open_regular_nofollow(path: &Path) -> Result<File> {
+    pub fn open_regular_nofollow(path: &Path) -> Result<File> {
         let path = std::path::absolute(path).context("resolve immutable content path")?;
         let parent = path.parent().context("immutable content has no parent")?;
         let dir = open_absolute(parent, false)
@@ -405,7 +405,15 @@ mod imp {
 #[cfg(unix)]
 pub use imp::create_dir_all_nofollow;
 #[cfg(unix)]
-pub(crate) use imp::open_regular_nofollow;
+pub use imp::open_regular_nofollow;
+
+#[cfg(not(unix))]
+pub fn open_regular_nofollow(path: &Path) -> Result<std::fs::File> {
+    bail!(
+        "no-follow regular-file reads unsupported on this platform: {}",
+        path.display()
+    )
+}
 
 #[cfg(not(unix))]
 pub fn create_dir_all_nofollow(path: &Path) -> Result<()> {

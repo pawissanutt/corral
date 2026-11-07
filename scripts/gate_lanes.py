@@ -26,6 +26,7 @@ PI_CONTRACTS = (
 # Each catalog entry names a behavior, not merely a duration. Changes to these owners
 # restore the whole relevant torture suite; budget fixtures alone do not opt them in.
 SLOW_OWNERS = {
+    "handoff_publication_crash_matrix": ("crates/corral-ops/src/assistant/workflow/handoff/",),
     "scratch_gc_resume_startup_interleaving": (
         "crates/corral-core/src/assistant", "crates/corral-ops/src/assistant/scratch",
         "crates/corral-ops/src/agent/ops/assistant", "crates/corral-ops/src/agent/launch.rs",

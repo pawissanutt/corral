@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use crate::agent::{RejectCode, Rejection};
 
 pub mod boundary;
+pub mod handoff;
 mod publication;
 mod read;
 pub use publication::{Publish, publish, stage};

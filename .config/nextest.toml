@@ -48,7 +48,8 @@ threads-required = 2
 [profile.quick]
 default-filter = '''
 not (
-  (binary_id(=corral-ops) & test(scratch_gc_resume_startup_interleaving))
+  (binary_id(=corral-ops) & test(handoff_publication_crash_matrix))
+| (binary_id(=corral-ops) & test(scratch_gc_resume_startup_interleaving))
 | (binary_id(=corral-ops) & test(operating::records_tests::one_winner_per_thousand_claims_raced_by_eight_independent_processes))
 | (binary_id(=corral-ops) & test(submission_paths_tests::crashes::) & not test(submission_paths_child_entry))
 | (binary_id(=corral-ops) & test(cleanup::ledger_tests::ledger_cleanup_closes_what_the_history_walk_closed))
@@ -73,10 +74,12 @@ path = "junit.xml"
 
 # Explicit slow lane; full landings restore catalog entries on owning-module changes
 # (scripts/gate_lanes.py). Plan verify and legacy/missing context run all tests.
+# Handoff: durable package/reservation crash boundaries, beyond ordinary readback coverage.
 [profile.slow]
 slow-timeout = "30s"
 default-filter = '''
-(binary_id(=corral-ops) & test(scratch_gc_resume_startup_interleaving))
+(binary_id(=corral-ops) & test(handoff_publication_crash_matrix))
+| (binary_id(=corral-ops) & test(scratch_gc_resume_startup_interleaving))
 | (binary_id(=corral-ops) & test(operating::records_tests::one_winner_per_thousand_claims_raced_by_eight_independent_processes))
 | (binary_id(=corral-ops) & test(submission_paths_tests::crashes::) & not test(submission_paths_child_entry))
 | (binary_id(=corral-ops) & test(cleanup::ledger_tests::ledger_cleanup_closes_what_the_history_walk_closed))
@@ -97,7 +100,8 @@ default-filter = '''
 # Off-landing torture cases retain their original report-only hang guards.
 [[profile.default.overrides]]
 filter = '''
-(binary_id(=corral-ops) & test(scratch_gc_resume_startup_interleaving))
+(binary_id(=corral-ops) & test(handoff_publication_crash_matrix))
+| (binary_id(=corral-ops) & test(scratch_gc_resume_startup_interleaving))
 | (binary_id(=corral-ops) & test(operating::records_tests::one_winner_per_thousand_claims_raced_by_eight_independent_processes))
 | (binary_id(=corral-ops) & test(submission_paths_tests::crashes::) & not test(submission_paths_child_entry))
 | (binary_id(=corral-ops) & test(cleanup::ledger_tests::ledger_cleanup_closes_what_the_history_walk_closed))
