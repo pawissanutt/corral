@@ -149,14 +149,22 @@ test("live private-pane co-work: shell finish refused, unclear ship asks, promot
     // The owner's clear instruction confirms shipping, but cannot bypass independent review.
     const words = "finish this as a fix for the cache, no review";
     await turn(words, [{ toolCalls: [{ callId: "finish", name: "corral_owner_action", arguments: { kind: "finish",
-      target: "cache-fix", args: ["--title", "Fix the cache"], input: input(4) } }] }, { text: "Finished as T-002; gate pass." }]);
+      target: "cache-fix", args: ["--title", "Fix the cache"], input: input(4) } }] }, { text: "Submitted as T-002; checks queued." }]);
     const finished = result("finish");
     process.stdout.write(`COWORK_LIVE_FINISH ${JSON.stringify(finished).slice(0, 1500)}\n`);
     expect([finished.state, finished.result.outcome]).toEqual(["committed", "executed"]);
     expect(asked).toEqual([]);
+    expect(show("T-002").runs[0].gate).toBeUndefined();
+    const ownerEnv = { ...originalEnv }; delete ownerEnv.CORRAL_ASSISTANT; delete ownerEnv.CORRAL_ASSISTANT_GENERATION;
+    ok([corral, "sync"], { cwd: workspace, env: ownerEnv });
     const task = show("T-002");
     expect([task.status, task.origin, task.labels]).toEqual(["review", "assistant", ["cowork"]]);
-    expect(task.cowork).toEqual({ session: fixture.session, scratch: "cache-fix", run: "R1", review: "required", owner_confirmed: true });
+    const { completion, ...provenance } = task.cowork;
+    expect(provenance).toEqual({ session: fixture.session, scratch: "cache-fix", run: "R1", review: "required", owner_confirmed: true });
+    expect([completion.version, completion.intent, completion.driver]).toEqual([1, "ship",
+      { kind: "assistant", session: fixture.session, scratch: "cache-fix" }]);
+    expect(completion.contract_revision).toMatch(/^[a-f0-9]{64}$/);
+    expect(completion.instruction).toContain(words);
     expect(finished.result.confirmed).toBe(true);
     const runR1 = task.runs[0];
     process.stdout.write(`COWORK_LIVE_USAGE ${JSON.stringify({ usage: runR1.usage, usage_note: runR1.usage_note })}\n`);
@@ -176,8 +184,7 @@ test("live private-pane co-work: shell finish refused, unclear ship asks, promot
     const finishedEvent = storeEvents().find((e) => e.kind === "cowork_finished" && e.task === "T-002");
     expect([finishedEvent?.actor, finishedEvent?.via]).toEqual(["owner", `assistant:${fixture.session}`]);
 
-    // The deterministic independent reviewer approves before the owner exercises manual approval.
-    const ownerEnv = { ...originalEnv }; delete ownerEnv.CORRAL_ASSISTANT; delete ownerEnv.CORRAL_ASSISTANT_GENERATION;
+    // The deterministic independent reviewer approves after managed reconciliation starts it.
     ok([corral, "verdict", "T-002", "approve", "--notes", "independent fixture review"], { cwd: workspace, env: ownerEnv });
     // Autopilot lands without another owner answer or approve tool call.
     ok([corral, "sync"], { cwd: workspace, env: ownerEnv });

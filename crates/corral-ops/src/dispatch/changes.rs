@@ -176,6 +176,9 @@ fn send_changes(
             .map(|key| format!("repair:{key}"))
             .unwrap_or_else(|| format!("changes:{}:{}", previous.id, changes_round.n));
         crate::repair_runtime::start(store, &*current, &attempt, &previous.agent, false)?;
+        if let (Some(key), Some(round)) = (expected, round) {
+            crate::repair_cycle::issue(store, &*current, key, round)?;
+        }
         current.status = Status::Running;
         Ok(())
     };

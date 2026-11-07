@@ -6,6 +6,9 @@ use anyhow::Result;
 use corral_core::{Status, Store};
 
 use crate::agent::{RejectCode, Rejection};
+#[cfg(test)]
+#[path = "kinds_tests.rs"]
+mod tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Class {
@@ -70,7 +73,7 @@ const fn spec(
     }
 }
 
-pub const KINDS: [Spec; 20] = [
+pub const KINDS: [Spec; 21] = [
     spec(
         "approve",
         &["approve"],
@@ -93,6 +96,12 @@ pub const KINDS: [Spec; 20] = [
         ],
     ),
     spec("review_run", &["review-run"], &[], &[("--reviewer", true)]),
+    spec(
+        "gate_triage",
+        &["repair", "triage"],
+        &[],
+        &[("--file", true)],
+    ),
     spec(
         "dispatch",
         &["dispatch"],
@@ -200,6 +209,7 @@ pub const KINDS: [Spec; 20] = [
                 ("--into", true),
                 ("--note", true),
                 ("--expected-head", true),
+                ("--intent", true),
             ],
         )
     },

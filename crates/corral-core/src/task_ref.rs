@@ -301,12 +301,12 @@ macro_rules! head_fields {
 
         impl TaskFieldsRef for TaskHeadFields {
             $(fn $name(&self) -> &$ty { &self.$name })*
-            fn cowork_run(&self) -> Option<&crate::Cowork> { self.cowork.as_ref().filter(|cowork| Some(cowork.run.as_str()) == self.current_run_id.as_deref()) }
+            fn cowork_run(&self) -> Option<&crate::Cowork> { self.cowork.as_ref().filter(|cowork| self.current_run_id.as_deref().is_some_and(|run| cowork.applies_to(run))) }
         }
 
         impl TaskFieldsRef for TaskHead {
             $(fn $name(&self) -> &$ty { &self.task.$name })*
-            fn cowork_run(&self) -> Option<&crate::Cowork> { self.cowork.as_ref().filter(|cowork| self.current_run.as_ref().is_some_and(|run| run.id == cowork.run)) }
+            fn cowork_run(&self) -> Option<&crate::Cowork> { self.cowork.as_ref().filter(|cowork| self.current_run.as_ref().is_some_and(|run| cowork.applies_to(&run.id))) }
         }
 
         impl TaskFieldsRef for TaskHeadMut {

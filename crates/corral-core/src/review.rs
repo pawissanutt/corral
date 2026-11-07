@@ -554,7 +554,7 @@ impl Config {
         // A confirmed finish is the owner's shipping instruction, not a request for another
         // acceptance. Legacy/unconfirmed finishes retain their original manual behavior.
         if let Some(cowork) = task.cowork_run() {
-            policy.accept = if cowork.owner_confirmed {
+            policy.accept = if cowork.shipping() {
                 Accept::Auto
             } else {
                 Accept::Owner

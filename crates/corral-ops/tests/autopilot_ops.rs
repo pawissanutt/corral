@@ -10,6 +10,8 @@ mod churn;
 mod cleanup_boundary;
 #[path = "autopilot_ops/config_identity.rs"]
 mod config_identity;
+#[path = "autopilot_ops/cowork.rs"]
+mod cowork;
 #[path = "autopilot_ops/deferred_gate.rs"]
 mod deferred_gate;
 #[path = "autopilot_ops/diagnostics.rs"]
@@ -20,6 +22,8 @@ mod empty_gates;
 mod environment;
 #[path = "autopilot_ops/escalation.rs"]
 mod escalation;
+#[path = "autopilot_ops/fixture_completion.rs"]
+mod fixture_completion;
 #[path = "autopilot_ops/freshness.rs"]
 mod freshness;
 #[path = "autopilot_ops/gate_admission.rs"]
@@ -235,46 +239,6 @@ impl Fx {
         let file = self.run().worktree.join(rel);
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(file, text).unwrap();
-    }
-
-    fn done(&self) {
-        self.done_with("made the change");
-    }
-
-    fn done_with(&self, summary: &str) {
-        let task = self.task();
-        let run = task.current_run().unwrap();
-        corral_git::commit_all(
-            &run.worktree,
-            &format!("{}: {} (corral run {})", task.id, task.title, run.id),
-        )
-        .unwrap();
-        let identity = corral_ops::progress_readback(&self.ctx, &self.id).unwrap();
-        corral_ops::save_checkpoint(
-            &self.ctx,
-            &self.id,
-            &corral_core::CheckpointUpdate {
-                task: identity.task,
-                run: identity.run,
-                spec_revision: identity.spec_revision,
-                expected_revision: identity
-                    .checkpoints
-                    .last()
-                    .map_or(0, |r| r.checkpoint.revision),
-                progress_revision: identity.progress.as_ref().map_or(0, |p| p.revision),
-                head: identity.head,
-                base: identity.base,
-                tree: identity.tree,
-                criterion_ids: vec![],
-                evidence_refs: vec![],
-                next_action: "Review the candidate".into(),
-                decisions: vec![],
-                waits: vec![],
-                resources: vec![],
-            },
-        )
-        .unwrap();
-        corral_ops::done(&self.ctx, &self.id, summary).unwrap();
     }
 
     fn sync(&self) -> Task {

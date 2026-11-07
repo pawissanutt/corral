@@ -60,10 +60,16 @@ fn configured(threshold: u32) -> Fx {
 }
 
 fn reject_gate(fx: &Fx) {
+    // A real repair candidate changes before this deliberately failing synthetic check.
+    fx.change(
+        "attempt.txt",
+        &format!("{}:{}\n", fx.run().id, fx.events("gate")),
+    );
     fx.done();
     corral_ops::gate_start(&fx.ctx, &fx.id).unwrap();
     let result = corral_ops::gate_collect(&fx.ctx, &fx.id).unwrap().unwrap();
     assert_eq!(result.result, GateResult::Fail);
+    fx.attribute_candidate_failure();
 }
 
 #[test]
@@ -483,9 +489,9 @@ fn missing_escalation_target_leaves_existing_run_intact() {
 
 #[test]
 fn autopilot_gate_failure_escalates_instead_of_prompting_live_agent() {
-    // Given a live implementing pane and a failing gate.
+    // Given a live implementing pane and an attributed candidate failure.
     let fx = configured(1);
-    fx.done();
+    reject_gate(&fx);
     // When autopilot processes the result.
     fx.sync();
     // Then it starts a fresh escalated run rather than prompting the old pane.

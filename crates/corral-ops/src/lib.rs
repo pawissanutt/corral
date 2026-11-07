@@ -37,6 +37,7 @@ mod digest;
 mod dispatch;
 mod dispatch_policy;
 mod escalation;
+mod repair_cycle;
 mod repair_runtime;
 pub use repair_runtime::{
     FindingReport, repair_diagnose, repair_diagnose_owner, repair_diagnosed, repair_finding,
@@ -46,6 +47,7 @@ mod gate;
 mod gate_probe;
 mod gate_script;
 mod gate_tier;
+pub mod gate_triage;
 mod harness;
 mod history;
 pub mod hold;

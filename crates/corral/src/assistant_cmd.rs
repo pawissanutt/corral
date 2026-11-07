@@ -165,6 +165,9 @@ pub enum ScratchCmd {
         /// Refuse `stale_candidate` unless the scratch HEAD is this commit (the candidate the owner was shown)
         #[arg(long, value_name = "SHA")]
         expected_head: Option<String>,
+        /// Submit verification/repairs only, or authorize shipping (repairs retain prior intent)
+        #[arg(long, value_parser = ["verify", "ship"])]
+        intent: Option<String>,
         #[arg(long)]
         session: Option<String>,
         #[arg(long)]
@@ -528,6 +531,7 @@ fn scratch(ctx: &Ctx, cmd: ScratchCmd) -> Result<()> {
             into,
             note,
             expected_head,
+            intent,
             session,
             json,
         } => {
@@ -546,6 +550,13 @@ fn scratch(ctx: &Ctx, cmd: ScratchCmd) -> Result<()> {
                 into: into.as_deref(),
                 note: note.as_deref(),
                 expected_head: expected_head.as_deref(),
+                intent: intent.map(|intent| {
+                    if intent == "verify" {
+                        corral_core::CompletionIntent::Verify
+                    } else {
+                        corral_core::CompletionIntent::Ship
+                    }
+                }),
             };
             let done = ops::finish(ctx, &session, &slug, &opts)?;
             if json {

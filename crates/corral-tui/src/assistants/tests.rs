@@ -46,6 +46,7 @@ fn board_driver_sessions_inbox_badge_and_cowork_done() {
         .store
         .update("T-007", |t| {
             t.cowork = Some(corral_core::Cowork {
+                completion: None,
                 session: session.id.clone(),
                 scratch: "cache".into(),
                 run: "R1".into(),

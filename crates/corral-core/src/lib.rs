@@ -30,6 +30,8 @@ mod config_events;
 mod config_layers;
 mod config_validation;
 pub mod container_facts;
+mod cowork;
+pub use cowork::{CompletionDriver, CompletionIntent, CompletionScope};
 pub mod dashboard;
 mod dispatch_config;
 mod edited;

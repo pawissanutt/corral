@@ -21,7 +21,7 @@ pub fn automation_blocker_head(ctx: &Ctx, head: &corral_core::TaskHead) -> Resul
         )
     })?;
     Ok(kind.and_then(|kind| {
-        crate::operating::require(&ctx.store, &task, kind)
+        crate::operating::require(&ctx.store, head, kind)
             .err()
             .map(|error| format!("{error:#}"))
     }))
@@ -182,6 +182,7 @@ pub fn automation_summary(ctx: &Ctx) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use corral_core::TaskRef as _;
 
     #[test]
     fn automation_blocker_head_matches_full_task() {
@@ -191,7 +192,10 @@ mod tests {
         store.config.review.gate = Some(vec!["true".into()]);
         let ctx = Ctx::from_store(store);
         for status in [Status::Running, Status::Review, Status::NeedsMe] {
-            let task = ctx.store.create("Blocker", None, status, "").unwrap();
+            let task = ctx
+                .store
+                .create("Blocker", None, status, "specific scope")
+                .unwrap();
             let run: corral_core::Run = serde_json::from_value(serde_json::json!({
                 "id":"R1", "agent":"generic", "worktree":root.path(),
                 "branch":"main", "base":"main", "base_sha":"fixture",
@@ -202,6 +206,11 @@ mod tests {
                 .store
                 .update(&task.id, |task| {
                     task.runs.push(run);
+                    task.cowork = Some(serde_json::from_value(serde_json::json!({
+                        "session":"A-1", "scratch":"work", "run":"R1", "review":"required", "owner_confirmed":true,
+                        "completion":{"version":1,"contract_revision":task.contract_revision()?,"intent":"ship",
+                            "driver":{"kind":"assistant","session":"A-1","scratch":"work"},"instruction":"ship this scope"}
+                    }))?);
                     Ok(())
                 })
                 .unwrap();

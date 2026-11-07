@@ -218,7 +218,7 @@ pub(crate) fn transition(
     let config = ctx.store.config_layers()?.config()?;
     let run = head.current_run.as_ref().context("missing run")?;
     let blocker = match &next {
-        RepairTransition::Stronger { .. } if head.cowork_run().is_some() => Some("Co-work repair cannot silently replace the owner's assistant; propose an owner-directed handoff".into()),
+        RepairTransition::Stronger { profile } if profile != &run.agent && head.cowork_run().is_some_and(|cowork| cowork.assistant_driver().is_some()) => Some("Co-work repair cannot silently replace the owner's assistant; propose an owner-directed handoff".into()),
         RepairTransition::Stronger { profile } if profile != &run.agent && !explicit && (head.profile.is_some()
             || run.route.as_ref().is_some_and(|r| r.is_manual())) => Some("manual implementation pin blocks automatic stronger profile".into()),
         RepairTransition::Current { profile } | RepairTransition::Stronger { profile } => {
@@ -357,13 +357,60 @@ pub(crate) fn start_launch(store: &Store, task: &impl TaskRef) -> Result<()> {
             "corrective continuation is bound to another run"
         );
     }
-    start(
-        store,
-        task,
-        &format!("launch:{}", run.id),
-        &run.agent,
-        continuation.as_ref().is_some_and(|c| c.availability),
-    )?;
+    let cycle = crate::repair_cycle::load(store, task.id())?;
+    let cycle_attempt = continuation
+        .as_ref()
+        .filter(|pending| !pending.availability)
+        .and_then(|pending| {
+            cycle
+                .as_ref()
+                .filter(|cycle| cycle.issued && cycle.key.run == pending.previous)
+        })
+        .map(|cycle| cycle.key.digest().map(|digest| format!("repair:{digest}")))
+        .transpose()?;
+    let ledger = store.repair_ledger(task.id())?;
+    let charged = match (&cycle_attempt, &ledger) {
+        (Some(attempt), Some(ledger)) => {
+            ledger
+                .active()?
+                .history
+                .events()
+                .iter()
+                .find_map(|event| match event {
+                    RepairEvent::Started { receipt } if receipt.attempt_id.0 == *attempt => {
+                        Some(receipt.profile.clone())
+                    }
+                    _ => None,
+                })
+        }
+        _ => None,
+    };
+    if let Some(previous_profile) = charged {
+        require_coding(store, task)?;
+        let next = ledger
+            .as_ref()
+            .context("repair ledger disappeared")?
+            .transition()?;
+        ensure!(
+            previous_profile == run.agent
+                || matches!(next,
+            RepairTransition::Current { ref profile } | RepairTransition::Stronger { ref profile } if profile == &run.agent),
+            "continued repair profile is outside the existing policy"
+        );
+        store.log_event(Some(task.id()), "repair_cycle_continued", serde_json::json!({
+            "cycle":cycle_attempt,"run":run.id,"previous_profile":previous_profile,"profile":run.agent,
+            "coding_charge":"already_issued"}))?;
+    } else {
+        start(
+            store,
+            task,
+            cycle_attempt
+                .as_deref()
+                .unwrap_or(&format!("launch:{}", run.id)),
+            &run.agent,
+            continuation.as_ref().is_some_and(|c| c.availability),
+        )?;
+    }
     // A recovery marker is single-use. It cannot exempt an unrelated future retry from
     // coding accounting. Removal commits atomically with the launch receipt and run.
     if continuation.is_some() {
@@ -488,6 +535,28 @@ pub(crate) fn start(
 
 pub(crate) fn require_coding<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Result<()> {
     if let Some(ledger) = store.repair_ledger(task.id())? {
+        if let Some(cycle) = crate::repair_cycle::load(store, task.id())? {
+            let run = task
+                .current_run_head()?
+                .context("repair cycle run missing")?;
+            let continuation: Option<Continuation> =
+                store.record("repair-continuation", task.id())?;
+            let same_cycle = cycle.issued
+                && cycle.round == *task.rounds()
+                && (run
+                    .autopilot
+                    .as_ref()
+                    .is_some_and(|s| s.stage == corral_core::AutoStage::Changes)
+                    || continuation.as_ref().is_some_and(|pending| {
+                        pending.next == run.id && pending.previous == cycle.key.run
+                    }));
+            let attempt = format!("repair:{}", cycle.key.digest()?);
+            if same_cycle && ledger.active()?.history.coding_blocker().is_none()
+                && ledger.active()?.history.events().iter().any(|event| matches!(event,
+                    RepairEvent::Started { receipt } if receipt.attempt_id.0 == attempt && receipt.profile == run.agent)) {
+                return Ok(());
+            }
+        }
         ensure!(
             matches!(
                 ledger.transition()?,
