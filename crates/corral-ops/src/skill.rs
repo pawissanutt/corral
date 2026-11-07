@@ -575,8 +575,9 @@ fn pm_skill_body() -> String {
 /// Shared operational guidance for new PM panes and installed agent skills.
 pub(crate) fn pm_runbook(bin: &str) -> String {
     format!(
-        "{}\n\n{}",
+        "{}\n\n{}\n\n{}",
         include_str!("../assets/pm-runbook.md"),
+        include_str!("../assets/pm-config-reference.md"),
         MODEL_SELECTION_PROCEDURE
     )
     .replace("{{bin}}", bin)
