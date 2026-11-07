@@ -6,6 +6,7 @@ mod landing;
 mod planning;
 mod rebinding;
 mod resources;
+mod tui;
 mod waiver;
 
 const PLAN: &str = "---\ngoal: recover fixture\nnon_goals: []\ndecisions: []\naffected_paths: [a.rs]\ncontracts: []\ndependencies: []\nacceptance: [{scenario: check, expected: passes}]\nverification: [check]\nowner_decisions: []\n---\n";
@@ -101,6 +102,11 @@ impl Fixture {
 // These are operation tests, not owner-surface evidence. The token is constructed only inside
 // this private test module. Subprocesses isolate managed environment and cwd, never the owner store.
 fn isolated(name: &str) -> bool {
+    isolated_env(name, &[])
+}
+
+/// As [`isolated`], then sets exactly these variables in the child (e.g. an owner board pane).
+fn isolated_env(name: &str, set: &[(&str, &str)]) -> bool {
     if std::env::var("RECOVERY_TEST_CHILD").as_deref() == Ok(name) {
         return false;
     }
@@ -132,6 +138,9 @@ fn isolated(name: &str) -> bool {
         "CORRAL_INTEGRATION_BASE",
     ] {
         child.env_remove(key);
+    }
+    for (key, value) in set {
+        child.env(key, value);
     }
     if name.starts_with("landing::") {
         child.env("GIT_TRACE2_EVENT", tmp.path().join("git-events.jsonl"));

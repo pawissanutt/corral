@@ -32,7 +32,9 @@ pub fn recover_apply(
     }
     let confirmation =
         confirmation.context("recovery requires trusted local owner confirmation")?;
-    authority::require_owner(ctx)?;
+    let RecoveryAttestation::LocalOwnerAttestation { interaction, .. } =
+        &confirmation.authorization.attestation;
+    authority::require_owner_for(ctx, *interaction)?;
     ensure!(
         confirmation.preview == *preview,
         "owner confirmation does not bind this exact preview"
