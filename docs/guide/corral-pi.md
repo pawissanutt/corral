@@ -1105,6 +1105,27 @@ nothing is downloaded. Each model call is independent: there is no resident Clau
 session reuse or Claude Code compaction. The policy record is
 `docs/records/pi-native-claude-route.md`.
 
+The host sets `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1`: the SDK must not prepend a fresh Git-status
+snapshot before the replay on every query, invalidating cached history after an edit or commit.
+This also removes Claude Code's built-in commit/PR workflow and attribution reminders; corral's
+role contract and Git skill govern that workflow, and host tool results supply current Git state.
+The Claude Code preset, tool-denial hooks, private credentials and five-minute cache TTL remain.
+Automatic cache warming is off: refreshing an expired prefix would not repair a changing one.
+
+The Linux Pi gate's `test/claude-wire-cache.test.ts` captures real SDK/CLI requests against a local
+synthetic endpoint, inside isolated network and PID namespaces. It compares tools, system and
+history across clean, edited, staged and committed repository states, and checks the four-marker
+budget. It requires `unshare`, `ip`, and enabled unprivileged user namespaces; missing isolation
+fails rather than falling back to the network. The receipt prints the tested CLI version. To check
+a separately installed CLI used by a compiled host, run from `packages/corral-pi`:
+
+```sh
+CORRAL_TEST_CLAUDE_EXECUTABLE="$(command -v claude)" bun test test/claude-wire-cache.test.ts
+```
+
+This proves request stability, not a provider cache-hit guarantee. No real credentials or paid
+requests are used; non-Linux runs skip this Linux isolation fixture.
+
 ## Amazon Bedrock (metered opt-in)
 
 Bedrock traffic is metered per token to your AWS account. Opt in explicitly; there is no

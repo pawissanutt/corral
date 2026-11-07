@@ -70,6 +70,9 @@ export function claudeEnvironment(parent: NodeJS.ProcessEnv, token: string, conf
   env.CLAUDE_CODE_OAUTH_TOKEN = token;
   env.CLAUDE_CONFIG_DIR = configDir;
   env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
+  // Each query is fresh: the preset's Git snapshot would precede replay and invalidate it after
+  // edits/commits. Corral's role contract and Git skill own the workflow; tools supply live state.
+  env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS = "1";
   // A one-hour history marker after Claude Code's five-minute marker is rejected by the API.
   env.CLAUDE_CODE_PROMPT_CACHE_TTL = PROMPT_CACHE_TTL;
   env.CLAUDE_AGENT_SDK_CLIENT_APP = "corral-pi";
