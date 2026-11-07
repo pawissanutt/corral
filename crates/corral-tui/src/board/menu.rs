@@ -75,6 +75,12 @@ pub(crate) fn items_for(status: Status, pinned: bool) -> Vec<Item> {
     items
 }
 
+/// Blocked, escalated, awaiting-review and plan-decision cards offer the owner recovery sheet.
+pub(crate) fn recoverable(task: &Task) -> bool {
+    matches!(task.status, Status::NeedsMe | Status::Review)
+        || (crate::plan::owns(task) && !matches!(task.status, Status::Done | Status::Dropped))
+}
+
 /// A shelf chip's actions, in menu order (keys of the focused shelf strip).
 pub(crate) const CHIP_ITEMS: [Item; 5] = [
     (KeyCode::Enter, "⏎", "open"),
@@ -97,6 +103,10 @@ impl CardMenu {
             // No implementation pane yet: the plan is what there is to open, reply to or decide.
             items.retain(|(key, _, _)| !matches!(key, KeyCode::Char('r' | 'a')));
             items.push((KeyCode::Char('r'), "r", "plan…"));
+        }
+        if recoverable(task) {
+            // Opens a read-only preview; applying needs the sheet's separate confirmation.
+            items.push((KeyCode::Char('F'), "F", "recover…"));
         }
         CardMenu {
             task_id: task.id.clone(),

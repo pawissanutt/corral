@@ -151,6 +151,16 @@ impl BoardView {
                 self.overlay = Some(Overlay::Help(HelpView::new(self.nav.clone())))
             }
             KeyCode::Char('t') => return Action::OpenTour,
+            KeyCode::Char('F') => {
+                return match self.selected_task() {
+                    Some(t) if menu::recoverable(t) => Action::OpenRecover(t.id.clone()),
+                    _ => Action::Toast(Toast::new(
+                        Tone::Info,
+                        "Nothing to recover",
+                        "recovery is offered on Blocked, Review and plan-decision cards",
+                    )),
+                };
+            }
             KeyCode::Char('*')
             | KeyCode::Char('g')
             | KeyCode::Char('G')

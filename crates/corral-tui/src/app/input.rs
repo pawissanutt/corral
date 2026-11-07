@@ -202,6 +202,12 @@ impl App {
                     .push(Box::new(SettingsView::operating(&self.ctx)));
             }
             Action::OpenTour => self.stack.push(Box::new(TourView::new(self.nav.clone()))),
+            Action::OpenRecover(id) => {
+                let v = self.ctx.store.get(&id).map(|t| {
+                    Box::new(crate::recovery::RecoverySheet::new(&self.ctx, &t)) as Box<dyn View>
+                });
+                self.push(v, &format!("recovery for {id}"));
+            }
             Action::OpenPin(i) => match crate::shelf::open(&self.ctx, i) {
                 Ok(crate::shelf::Opening::Action(a)) => self.apply(a),
                 Ok(crate::shelf::Opening::Preview(v)) => self.stack.push(v),
