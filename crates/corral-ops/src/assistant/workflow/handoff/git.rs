@@ -141,6 +141,36 @@ pub(super) fn scan(source: &Path, base: &str, branch: &str) -> Result<Scan> {
         "snapshot_identity: Git worktree differs from selected source {}",
         source.display()
     );
+    for name in [
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "rebase-merge",
+        "rebase-apply",
+        "sequencer",
+        "BISECT_LOG",
+        "index.lock",
+    ] {
+        let path = PathBuf::from(text(
+            source,
+            &["rev-parse", "--path-format=absolute", "--git-path", name],
+        )?);
+        match path.symlink_metadata() {
+            Ok(_) => anyhow::bail!(
+                "snapshot_unsupported: active Git state {} must settle before handoff",
+                path.display()
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("snapshot_special_or_missing: {}", path.display()));
+            }
+        }
+    }
+    ensure!(
+        git(source, &["ls-files", "--resolve-undo", "-z"], None)?.is_empty(),
+        "snapshot_unsupported: index resolve-undo state must settle before handoff"
+    );
     let sparse = git(source, &["config", "--get", "core.sparseCheckout"], None);
     ensure!(
         sparse.is_err() || sparse.as_ref().is_ok_and(|v| v == b"false\n"),
