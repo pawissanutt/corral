@@ -9,6 +9,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 mod envelope;
+mod execution;
+pub use execution::{ExecutionRecord, ExecutionScope, ExecutionState, PendingExecution};
+mod queue_operations;
+pub use queue_operations::{
+    QueueOperationIntent, QueueOperationKind, QueueOperationOutcome, QueueOperationRequest,
+    QueueReplacement, QueueReplacementOutcome, QueueWithdrawalOutcome,
+};
 mod header;
 pub use header::{
     AttemptRef, DeliveryHeader, DeliveryState, IndexPhase, LegacyDebt, OwnerEntry, OwnerHeader,
@@ -22,6 +29,8 @@ mod records;
 mod storage;
 pub use storage::Inbox;
 
+#[cfg(test)]
+mod queue_test_support;
 #[cfg(test)]
 mod review_run_key_tests;
 #[cfg(test)]
@@ -261,6 +270,8 @@ pub struct Message {
     pub created: Timestamp,
     pub binding: MessageBinding,
     pub subject: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supersedes: Option<String>,
     #[serde(skip)]
     pub body: String,
 }
@@ -403,6 +414,8 @@ pub struct Effect {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InboxEntry {
     pub message: Message,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<ExecutionRecord>,
     pub admitted: Option<Receipt>,
     pub observed: Option<Receipt>,
     pub terminal: Option<TerminalState>,

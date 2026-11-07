@@ -161,7 +161,7 @@ impl<'a> Inbox<'a> {
         Ok(())
     }
 
-    fn build(&self, state: &mut InboxState, post: Post<'_>) -> Result<Message> {
+    pub(super) fn build(&self, state: &mut InboxState, post: Post<'_>) -> Result<Message> {
         self.admit_owner(state, post.kind)?;
         let seq = state.next_seq;
         state.next_seq = seq.checked_add(1).context("inbox sequence exhausted")?;
@@ -175,6 +175,7 @@ impl<'a> Inbox<'a> {
             created: self.store.now(),
             binding: post.binding,
             subject: post.subject,
+            supersedes: None,
             body: format!("[corral {}#{seq} {}]\n{}", self.key, post.kind, post.body),
         };
         Self::retain_owner(state, &message);
@@ -209,6 +210,15 @@ impl<'a> Inbox<'a> {
         head: &mut crate::TaskHeadMut,
         post: Post<'_>,
     ) -> Result<Message> {
+        self.reserve_linked_in_head(head, post, None)
+    }
+
+    pub(super) fn reserve_linked_in_head(
+        &self,
+        head: &mut crate::TaskHeadMut,
+        post: Post<'_>,
+        supersedes: Option<String>,
+    ) -> Result<Message> {
         use crate::TaskMut;
         self.check(&post)?;
         ensure!(
@@ -217,7 +227,8 @@ impl<'a> Inbox<'a> {
         );
         let message = head.inbox_state_mut(&self.recipient, |inbox| {
             let mut state = inbox.scalars();
-            let message = self.build(&mut state, post)?;
+            let mut message = self.build(&mut state, post)?;
+            message.supersedes = supersedes;
             self.write_message(&message)?;
             inbox.next_seq = state.next_seq;
             inbox.owner_header = state.owner_header;
@@ -370,6 +381,7 @@ impl<'a> Inbox<'a> {
         let _lock = self.lock()?;
         Ok(InboxEntry {
             message: self.message(seq)?,
+            execution: self.execution_view(seq)?,
             admitted: self.receipt(seq, ReceiptLevel::Admitted)?,
             observed: self.receipt(seq, ReceiptLevel::Observed)?,
             terminal: self.terminal(seq)?,
