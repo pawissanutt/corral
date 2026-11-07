@@ -867,7 +867,8 @@ impl Store {
         }
         self.check_runtime()?;
         let before = shell_task(&head.base.task)?;
-        let base_doc = head_doc_of(&head.base.task)?;
+        let mut base_doc = head_doc_of(&head.base.task)?;
+        base_doc["annotations"] = serde_json::to_value(&head.base.annotation_summary)?;
         let base_summary = serde_json::to_value(&head.base.summary)?;
         let (num, rev) = (head.base.num, head.base.rev);
         let preserve_updated = head.preserve_updated;
@@ -879,7 +880,8 @@ impl Store {
         let mut after = shell_task(&new.task)?;
         before.check_scope_unchanged(&after)?;
         let decision = self.protect_owner_change(&before, &after)?;
-        let doc = head_doc_of(&new.task)?;
+        let mut doc = head_doc_of(&new.task)?;
+        doc["annotations"] = serde_json::to_value(&new.annotation_summary)?;
         let summary = serde_json::to_value(&new.summary)?;
         let mut fields = task_fields(&after)?;
         if !preserve_updated && (!rows.is_empty() || doc != base_doc || summary != base_summary) {

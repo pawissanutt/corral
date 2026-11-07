@@ -150,6 +150,35 @@ pub fn assemble(head: &TaskHeadDoc, rows: &TaskRows<'_>) -> Result<TaskRecord> {
     let mut decoded: crate::Task =
         serde_json::from_value(Value::Object(task)).context("assembling the stored task")?;
     decoded.body = head_body(head);
+    for row in rows.all(TaskPart::AnnotationThread) {
+        crate::annotations::document_version(&row.doc)?;
+        let mut thread: crate::annotations::AnnotationThread =
+            serde_json::from_value(row.doc.clone())?;
+        thread.entries = rows
+            .under(TaskPart::AnnotationEntry, &format!("{}/", row.key))
+            .into_iter()
+            .map(|r| {
+                crate::annotations::document_version(&r.doc)?;
+                Ok(serde_json::from_value(r.doc.clone())?)
+            })
+            .collect::<Result<_>>()?;
+        thread.validate()?;
+        decoded.annotations.push(thread);
+    }
+    let summary = crate::annotations::AnnotationSummary::of(&decoded.annotations)?;
+    let expected = head
+        .doc
+        .get("annotations")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    anyhow::ensure!(
+        summary == serde_json::from_value(expected)?,
+        "annotation summary differs from rows"
+    );
+    anyhow::ensure!(
+        summary.entries as usize == rows.all(TaskPart::AnnotationEntry).len(),
+        "orphan annotation entries"
+    );
     let mut recoveries = Vec::new();
     for recovery in rows.all(TaskPart::Recovery) {
         let mut doc = object(&recovery.doc, "recovery")?;

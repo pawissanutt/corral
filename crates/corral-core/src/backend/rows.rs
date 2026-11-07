@@ -116,6 +116,8 @@ pub enum TaskPart {
     AggregateReview,
     PaneRef,
     Comment,
+    AnnotationThread,
+    AnnotationEntry,
     ScopeRevision,
     Recovery,
     RecoveryOutcome,

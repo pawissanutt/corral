@@ -63,6 +63,7 @@ const HISTORY_VECTORS: &[&str] = &[
     "plan_runs",
     "plans",
     "comments",
+    "annotations",
     "artifacts",
     "aggregate_attempts",
     "approved_scope_history",
@@ -236,7 +237,8 @@ pub fn head_doc(task: &Task) -> Result<Value> {
             spec.insert((*key).to_owned(), value);
         }
     }
-    Ok(json!({"spec": spec, "state": map, "body": task.body}))
+    Ok(json!({"spec": spec, "state": map, "body": task.body,
+        "annotations": crate::annotations::AnnotationSummary::of(&task.annotations)?}))
 }
 
 /// Splits a whole record into its stored parts.
@@ -246,6 +248,13 @@ pub fn head_doc(task: &Task) -> Result<Value> {
 pub fn split(record: &TaskRecord) -> Result<Split> {
     let task = &record.task;
     let mut rows = Rows::new();
+    for thread in &task.annotations {
+        thread.validate()?;
+        rows.put(super::annotations::thread_row(thread)?);
+        for entry in &thread.entries {
+            rows.put(super::annotations::entry_row(thread.number()?, entry)?);
+        }
+    }
     let value = object(serde_json::to_value(task)?, "task")?;
     let vector = |key: &str| match value.get(key) {
         Some(Value::Array(items)) => items.clone(),

@@ -14,6 +14,7 @@ use crate::config::Config;
 use crate::model::{Event, Status, Task};
 use crate::runtime::Executable;
 
+mod annotations;
 mod assemble;
 mod batch;
 mod cleanup_panes;

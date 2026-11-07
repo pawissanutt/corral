@@ -4,6 +4,7 @@
 mod acceptance;
 pub mod agent;
 pub mod analytics;
+pub mod annotations;
 pub mod approvals;
 mod artifact_gc;
 mod artifact_search;

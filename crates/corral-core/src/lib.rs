@@ -106,6 +106,12 @@ pub use attribution::{Actor, AttributionGuard};
 pub use availability::*;
 pub use card::*;
 pub use comments::*;
+pub mod annotations;
+pub use annotations::{
+    AnnotationAnchor, AnnotationAuthor, AnnotationCode, AnnotationEntry, AnnotationError,
+    AnnotationKind, AnnotationRequest, AnnotationResult, AnnotationSide, AnnotationState,
+    AnnotationSummary, AnnotationSurface, AnnotationThread, AnnotationsQuery, AnnotationsView,
+};
 pub use completion::*;
 pub use config::*;
 pub use config_doc::ConfigDoc;
