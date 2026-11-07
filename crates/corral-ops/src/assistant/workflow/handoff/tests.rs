@@ -213,6 +213,20 @@ fn handoff_snapshot_refuses_named_oversized_missing_special_and_changing_content
     let result = Snapshot::capture(&f.ctx.store, &source, &base, "work");
     crate::agent::FAILPOINT.with_borrow_mut(|hook| *hook = None);
     assert!(result.unwrap_err().to_string().contains("snapshot_changed"));
+    // A resolved-but-uncommitted merge has no unmerged index rows. Its administrative
+    // state must not vanish into an apparently complete code-only checkpoint.
+    std::fs::write(source.join(".git/MERGE_HEAD"), format!("{base}\n")).unwrap();
+    let active_merge = Snapshot::capture(&f.ctx.store, &source, &base, "work");
+    assert!(
+        active_merge.is_err(),
+        "merge administration was silently omitted"
+    );
+    let error = active_merge.unwrap_err().to_string();
+    assert!(
+        error.contains("snapshot_unsupported") && error.contains("MERGE_HEAD"),
+        "{error}"
+    );
+    assert!(source.join(".git/MERGE_HEAD").is_file());
     assert!(f.ctx.store.list().unwrap().is_empty());
 }
 
