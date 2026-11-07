@@ -4,7 +4,7 @@
 
 Assistant finish durably publishes a clean candidate and returns `gate: queued`; normal sync owns gate, independent review, bounded repair and landing. There is no detached parent-owned completion runner. Versioned task-contract-bound intent and current driver are separate from source provenance. Verify cannot authorize acceptance, including through broad grants or manual approval. New records carry an old-reader fence; an unfenced scope cannot be serialized.
 
-Failed gates remain failed receipts. Shared triage retains their identities, command/log evidence and classifications. Unknown/mixed/flaky observations block; one diagnostic retry survives head/run/driver changes. Comparable isolated-baseline receipts are required for red-base attribution. Attribution never substitutes for a fresh successful candidate gate. Owner investigations require evidence and cannot renew twice by replaying the same report. The landed T-802 environment scrub is reused unchanged.
+Failed gates remain failed receipts. Shared triage retains their identities, command/log evidence and classifications. Unknown/mixed/flaky observations block; one diagnostic retry survives head/run/driver changes. Comparable isolated-baseline receipts are required for red-base attribution. Attribution never substitutes for a fresh successful candidate gate. A collected, acceptable PASS records which receipt resolved each active episode, preserving the original failure and consumed diagnostic allowance. Only active failures constrain subsequent repair admission; changing attribution reopens the affected episode. Owner investigations require evidence and cannot renew twice by replaying the same report. The landed T-802 environment scrub is reused unchanged.
 
 Repair preparation is not a charge. Durable issued-cycle identity survives driver/run/profile changes; only author candidate submission closes a cycle. A repeated finding after an unchanged submission is a new bounded cycle, not free indefinite repair. Board source recovery seeds the exact committed candidate and refuses missing context instead of silently starting from the base. Real board workers retain ordinary dispatch capacity; tracking-only source runs do not reserve imaginary worker slots.
 
@@ -89,4 +89,35 @@ operating-operation tests passed (17.31s); no test cases or policy allowances we
 
 Rust LSP repeatedly failed to provide fresh indexed diagnostics; targeted Cargo compilation/tests are the fallback, not a claimed clean LSP result. The required receipted quick gate and its log are attached separately after the final rebase. No other gate tier is run manually. No intentional host load or owner/live herdr interaction was used.
 
-Public context-package creation, handoff/takeback protocol, native writer fencing and participant-facing TUI/PM workflow remain C2–C4. Driver-transfer fixtures prove the C1 committed-driver seam, not those later public end-to-end flows. Native HostSession/PTY integration is left to the run's required isolated gate lane; paid live-provider behavior is not claimed.
+Public context-package creation, handoff/takeback protocol, native writer fencing and participant-facing TUI/PM workflow remain C2–C4. Driver-transfer fixtures prove the C1 committed-driver seam, not those later public end-to-end flows. Native HostSession/PTY integration is checked by the run's required isolated gate lane; paid live-provider behavior is not claimed.
+
+## Review changes round 1 — F1 (A19/A21/A27)
+
+Reproduced the reviewer's resolved-infrastructure admission defect with one store-backed
+unit regression. Before the fix, Environment recovery followed by a fresh-run review repair
+failed with `gate diagnosis retry exhausted`. Both Environment and RedBase are now covered
+at this lowest layer, without adding another end-to-end journey.
+
+`FailureEpisode.resolved_by` retains the exact successful receipt that closed an episode.
+The gate collector already observes receipts inside its publication transaction. It now
+closes active episodes only when PASS meets the same attribution and changed-candidate
+rules as acceptance. No FAIL, diagnosis, diagnostic-attempt marker or history is removed;
+resolution never replenishes the retry allowance. Unknown/mixed/flaky green reruns cannot
+resolve an episode. A changed owner attribution invalidates the earlier resolution.
+
+Admission now considers active episodes rather than demanding that every historical
+failure was Candidate. The regression covers fresh-run admission without a previous gate
+(the shared assistant/board repair seam), current Candidate failure after historical
+infrastructure recovery, unchanged-candidate refusal, changed-candidate admission in the
+same or replacement run, retained failure bytes/closing receipts, preserved retry history,
+and refusal of a later unexplained red even after a green rerun. Existing uncertainty and
+owner-investigation replay assertions remain intact.
+
+The non-blocking CLI note is also corrected: a queued result without a reviewer no longer
+claims review is disabled or suggests immediate approval. It describes pending review and
+intent/live-policy-controlled completion. No wording test was added.
+
+Targeted validation: all four triage contracts passed (0.14s execution); the existing
+isolated red-base service passed (6.07s). Failing-first and post-fix logs are attached to
+this round; the required post-rebase quick gate is recorded separately. One unit registration added;
+no E2E journey, load/performance fixture or policy allowance added.

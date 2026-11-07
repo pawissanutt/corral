@@ -44,6 +44,10 @@ pub struct GateDiagnosis {
 pub struct FailureEpisode {
     pub gate: GateRecord,
     pub diagnoses: Vec<GateDiagnosis>,
+    /// A collected, acceptable PASS closes this episode, not its retained failure facts or
+    /// the task's consumed diagnostic allowance. Old records remain active until observed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_by: Option<GateRecord>,
 }
 
 impl FailureEpisode {
@@ -67,6 +71,14 @@ pub struct GateTriage {
     pub retry_requested: bool,
 }
 
+impl GateTriage {
+    fn active_failures(&self) -> impl Iterator<Item = &FailureEpisode> {
+        self.failures
+            .iter()
+            .filter(|entry| entry.resolved_by.is_none())
+    }
+}
+
 pub fn status(ctx: &Ctx, id: &str) -> Result<GateTriage> {
     Ok(ctx
         .store
@@ -76,18 +88,32 @@ pub fn status(ctx: &Ctx, id: &str) -> Result<GateTriage> {
 
 pub(crate) fn observe(store: &Store, id: &str, gate: &GateRecord) -> Result<GateTriage> {
     let mut state: GateTriage = store.record(AREA, id)?.unwrap_or_default();
+    let mut changed = false;
     if gate.result == GateResult::Fail && !state.failures.iter().any(|e| e.gate == *gate) {
         state.failures.push(FailureEpisode {
             gate: gate.clone(),
             diagnoses: Vec::new(),
+            resolved_by: None,
         });
+        changed = true;
+    } else if gate.result == GateResult::Pass && require_state_pass(&state, Some(gate)).is_ok() {
+        for entry in state
+            .failures
+            .iter_mut()
+            .filter(|entry| entry.resolved_by.is_none())
+        {
+            entry.resolved_by = Some(gate.clone());
+            changed = true;
+        }
+    }
+    if changed {
         store.save_record(AREA, id, &state)?;
     }
     Ok(state)
 }
 
 fn unresolved(state: &GateTriage) -> bool {
-    state.failures.iter().any(|entry| {
+    state.active_failures().any(|entry| {
         matches!(
             entry.class(),
             FailureClass::Unknown | FailureClass::Mixed | FailureClass::Flaky
@@ -99,8 +125,12 @@ fn unresolved(state: &GateTriage) -> bool {
 /// candidate as well as a fresh successful receipt. Base/environment metadata never grants PASS.
 pub(crate) fn require_pass(store: &Store, id: &str, gate: Option<&GateRecord>) -> Result<()> {
     let state: GateTriage = store.record(AREA, id)?.unwrap_or_default();
+    require_state_pass(&state, gate)
+}
+
+fn require_state_pass(state: &GateTriage, gate: Option<&GateRecord>) -> Result<()> {
     ensure!(
-        !unresolved(&state),
+        !unresolved(state),
         "gate diagnosis unresolved (unknown/mixed/flaky); a green rerun is not acceptance evidence"
     );
     if !state.failures.is_empty() {
@@ -117,7 +147,7 @@ pub(crate) fn require_pass(store: &Store, id: &str, gate: Option<&GateRecord>) -
                     != gate.identity.as_ref().map(|i| &i.attempt)),
             "diagnosis cannot turn a failed receipt into PASS"
         );
-        ensure!(state.failures.iter().all(|entry| entry.class() != FailureClass::Candidate || entry.gate.sha != gate.sha),
+        ensure!(state.active_failures().all(|entry| entry.class() != FailureClass::Candidate || entry.gate.sha != gate.sha),
             "candidate findings require a repaired candidate, not rerun-until-green");
     }
     Ok(())
@@ -131,14 +161,14 @@ pub(crate) fn check_retry(
     attempt: Option<&str>,
 ) -> Result<bool> {
     let state: GateTriage = store.record(AREA, id)?.unwrap_or_default();
-    let repaired = !state.failures.is_empty()
+    let active = state.active_failures().next().is_some();
+    let repaired = active
         && state
-            .failures
-            .iter()
+            .active_failures()
             .all(|entry| entry.class() == FailureClass::Candidate && entry.gate.sha != head);
     let passed = previous.is_some_and(|gate| gate.result == GateResult::Pass)
-        && require_pass(store, id, previous).is_ok();
-    let diagnostic = !state.failures.is_empty() && !repaired && !passed;
+        && require_state_pass(&state, previous).is_ok();
+    let diagnostic = active && !repaired && !passed;
     if diagnostic {
         ensure!(
             state
@@ -326,6 +356,9 @@ pub fn diagnose(ctx: &Ctx, id: &str, report: GateDiagnosis, owner: bool) -> Resu
         state.retry_requested = true;
     }
     entry.diagnoses.push(report.clone());
+    // A changed owner attribution must be validated again; an old PASS cannot explain a
+    // newly unknown/mixed/flaky episode or an unchanged candidate defect.
+    entry.resolved_by = None;
     state.retry_requested = report.retry;
     if owner {
         state

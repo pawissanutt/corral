@@ -573,7 +573,9 @@ fn scratch(ctx: &Ctx, cmd: ScratchCmd) -> Result<()> {
             );
             match &done.reviewer {
                 Some(reviewer) => println!("review required: {reviewer}"),
-                None => println!("review none; land it with `corral approve {}`", done.task),
+                None => {
+                    println!("review pending; queued completion follows its intent and live policy")
+                }
             }
         }
         ScratchCmd::Gc {
