@@ -8,7 +8,9 @@ import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { EventLog } from "../src/bridge/events.ts";
 import {
   AssistantResume, type Chooser, type ResumeRow, SWITCH_NOTICE_FILE, SWITCH_REQUEST_FILE, choose, filterRows, resumeRows, rowLabel,
+  rowLines,
 } from "../src/host/assistant-resume.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 const LIST = [
   { session: "A-1", ended: null, live: true, focus: "workspace", summary: "current work", last_activity: "2026-11-04T10:00:00Z" },
@@ -123,6 +125,16 @@ test("the picker renders, searches and cancels from keyboard input", async () =>
     }),
   } as unknown as ExtensionUIContext;
   expect((await choose(ui, rows))?.id).toBe("A-2");
+  // Long and wide summaries are cut in terminal cells; activity and availability always remain.
+  for (const summary of ["x".repeat(120), "会".repeat(40)]) {
+    const row = resumeRows([{ ...LIST[1], summary }], "A-1")[0]!;
+    for (const width of [80, 30]) {
+      const lines = rowLines(row, width, "› ");
+      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      expect(lines.join(" ")).toContain("2026-11-04 09:00");
+      expect(lines.join(" ")).toContain("stopped · resumable");
+    }
+  }
   expect(frames[0]!.join("\n")).toContain("A-3 · focus T-12");
   expect(frames[1]!.filter(line => line.includes("A-"))).toEqual(["› A-2 · storage spike · 2026-11-04 09:00 · stopped · resumable"]);
   writeFileSync(join(tmpdir(), "corral-resume-frames.txt"), frames.map(frame => frame.join("\n")).join("\n---\n"));
