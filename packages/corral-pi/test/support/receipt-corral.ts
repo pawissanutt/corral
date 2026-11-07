@@ -75,6 +75,9 @@ if (envelope.op === "event" && envelope.payload.kind === "owner_input") {
   if (envelope.payload.answers && envelope.payload.text === "y") appendFileSync(join(dir, "answers"), envelope.payload.answers + "\\n");
   emit({ ...base, state: "committed", result: { kind: "owner_input", input: "A-1/g1/i" + n } });
 }
+if (envelope.op === "assistant_plan" && envelope.payload.action === "read") {
+  emit({ ...base, state: "committed", result: planningFixtureRead().workflow });
+}
 if (envelope.op === "event" && envelope.payload.kind === "assistant_boundary") {
   emit({ ...base, state: "committed", result: planningFixtureEvent(envelope) });
 }

@@ -22,7 +22,9 @@ import { dirname, join } from "node:path";
 const dir = dirname(process.argv[1]);
 if (process.argv[2] === "assistant") { process.stdout.write(JSON.stringify({ container: { version: 1 }, workflow: { workflow: null, phase: "ordinary" } })); process.exit(0); }
 const envelope = JSON.parse(readFileSync(0, "utf8"));
-let result = envelope.payload.kind === "budget" ? { admitted: true, exhausted: false } : { op: envelope.op };
+let result = envelope.op === "assistant_plan" && envelope.payload.action === "read"
+  ? { workflow: null, phase: "ordinary" }
+  : envelope.payload.kind === "budget" ? { admitted: true, exhausted: false } : { op: envelope.op };
 if (envelope.payload.kind === "owner_input") {
   const path = join(dir, "journal.jsonl");
   const n = existsSync(path) ? readFileSync(path, "utf8").trim().split("\\n").length + 1 : 1;

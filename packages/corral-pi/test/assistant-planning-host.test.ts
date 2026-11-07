@@ -128,7 +128,9 @@ test("planning fences pending grants, retained children, MCP, direct shell and r
   } finally {
     releaseDialog.resolve("Deny"); releaseChild.resolve();
     await host?.close(); await peer.close();
-    globalThis.fetch = originalFetch; process.env.TMPDIR = originalTemp;
+    globalThis.fetch = originalFetch;
+    if (originalTemp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = originalTemp;
+    expect(process.env.TMPDIR).toBe(originalTemp);
     assets.cleanup(); rmSync(work, { recursive: true, force: true });
   }
 }, 30_000);
