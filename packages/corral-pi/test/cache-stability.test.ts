@@ -49,6 +49,21 @@ test("checkpoints repair effective visibility, never replace ordinary canonical 
   expect(requestCheckpoint([...initial, checkpoint], null, undefined, false, false)).toBeDefined();
 });
 
+test("parallel text results reach the newest cache boundary in one request", () => {
+  const cache = new ReplayCache();
+  const history = [user("Inspect"), result([{ type: "text", text: "first" }])];
+  const first = cache.prepare(buildPromptBlocks([...history, user("continue")], new Map()), "text-batch");
+  first.commit();
+  const batch = Array.from({ length: 25 }, (_, index) => result([{ type: "text", text: `result ${index}` }]));
+  const messages = [...history, user("continue"), ...batch, user("next")];
+  const rendered = buildPromptBlocks(messages, new Map());
+  const next = cache.prepare(rendered, "text-batch");
+  expect(marker(next.blocks)).toBe(marker(rendered));
+  expect(plain(next.blocks.slice(0, marker(first.blocks) + 1))).toEqual(plain(first.blocks.slice(0, marker(first.blocks) + 1)));
+  const text = next.blocks.flatMap(block => block.type === "text" ? [block.text] : []).join("");
+  expect(text.match(/TOOL RESULT/g)).toHaveLength(26);
+});
+
 test("a successful Claude frontier remains reachable across large parallel and image batches with one marker", () => {
   const cache = new ReplayCache();
   const render = (messages: Message[]) => buildPromptBlocks(messages, new Map());

@@ -14,6 +14,8 @@ import { Type } from "typebox";
 
 import { overrideSdk, resolveClaudeCode } from "../../src/claude/sdk.ts";
 import { CLAUDE_SDK_API, streamClaudeSdk } from "../../src/claude/stream.ts";
+import { ReplayCache } from "../../src/claude/cache.ts";
+import { measureResident } from "./claude-resident-probe.ts";
 
 // Refuse accidental direct execution before starting a provider process. The wrapper supplies
 // its original network namespace identity; only loopback is brought up in the new namespace.
@@ -41,6 +43,27 @@ function markers(value: unknown): number {
   if (Array.isArray(value)) return value.reduce((sum: number, item: unknown) => sum + markers(item), 0);
   if (!record(value)) return 0;
   return Number("cache_control" in value) + Object.values(value).reduce<number>((sum, item) => sum + markers(item), 0);
+}
+function lifetimes(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(lifetimes);
+  if (!record(value)) return [];
+  const marker = value.cache_control;
+  return [...(record(marker) ? [String(marker.ttl ?? "5m")] : []), ...Object.values(value).flatMap(lifetimes)];
+}
+function replayContent(payload: Record<string, unknown>): unknown[] {
+  assert(Array.isArray(payload.messages));
+  for (const message of payload.messages) {
+    if (record(message) && Array.isArray(message.content) && message.content.some(block =>
+      record(block) && typeof block.text === "string" && block.text.includes("<conversation_history>"))) return message.content;
+  }
+  throw new Error("missing replay user content");
+}
+function plainBlocks(blocks: unknown[]): unknown[] {
+  return blocks.map(block => {
+    if (!record(block)) return block;
+    const { cache_control: _cache, ...content } = block;
+    return content;
+  });
 }
 const hash = (value: unknown): string => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const captures: Record<string, unknown>[] = [];
@@ -81,14 +104,16 @@ try {
   assert(address && typeof address !== "string");
   // Keep production request construction, credential scrub and deny hooks. Override only the
   // destination at the test SDK seam, after the production scrub (which must reject real overrides).
-  overrideSdk({ ...sdk, query: ({ prompt, options }) => sdk.query({ prompt, options: {
-    ...options, env: { ...options.env, ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}` },
-  } }) });
+  let probeOptions: sdk.Options | undefined;
+  overrideSdk({ ...sdk, query: ({ prompt, options }) => {
+    probeOptions = { ...options, env: { ...options.env, ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}` } };
+    return sdk.query({ prompt, options: probeOptions });
+  } });
   const catalogModel = getModel("anthropic", "claude-opus-5-5");
   assert(catalogModel);
   const { compat: _compat, ...metadata } = catalogModel;
   const model = { ...metadata, api: CLAUDE_SDK_API };
-  const executable = process.argv[3] ?? resolveClaudeCode();
+  const executable = process.argv[3] && process.argv[3] !== "--measure-resident" ? process.argv[3] : resolveClaudeCode();
   const version = spawnSync(executable, ["--version"], { env, encoding: "utf8", timeout: 5000 });
   assert.equal(version.status, 0, version.stderr || String(version.error));
   git("init", "-q");
@@ -123,8 +148,49 @@ try {
     assert.deepEqual(fingerprints, baseline, `${state}: effective Claude prefix changed with repository state`);
     assert(markers(payload) > 0 && markers(payload) <= 4, "SDK and replay must share the four-breakpoint budget");
   }
+  // Extend this same real-SDK journey: lifetime policy must survive CLI serialization, and a
+  // large text batch must reach the newest boundary without spending a fifth cache marker.
+  const cache = new ReplayCache();
+  let growing = context;
+  let previousPayload: Record<string, unknown> | undefined;
+  for (const [index, retention] of (["1h", "1h", "none"] as const).entries()) {
+    const stream = streamClaudeSdk({ configDir: join(home, "claude"), cwd, env, executable: () => executable,
+      cacheRetention: retention }, model, growing,
+      { apiKey: "sk-ant-oat01-SYNTHETIC-FIXTURE", sessionId: "growing", signal: AbortSignal.timeout(10_000) }, cache);
+    const response = await stream.result();
+    if (transportError) throw transportError;
+    assert.equal(response.stopReason, "stop", response.errorMessage);
+    const payload = captures.at(-1);
+    assert(payload);
+    const ttl = lifetimes(payload);
+    assert(ttl.length <= 4, "the SDK and replay share four markers");
+    if (retention === "none") assert.equal(ttl.length, 0, "one-off summaries must not populate cache");
+    else assert(ttl.length > 0 && ttl.every(value => value === retention), "SDK/history TTLs must agree");
+    if (index === 1) {
+      assert(previousPayload);
+      assert.equal(hash(payload.tools), hash(previousPayload.tools));
+      assert.equal(hash(payload.system), hash(previousPayload.system));
+      const old = replayContent(previousPayload);
+      const at = old.findIndex(block => record(block) && typeof block.text === "string" &&
+        block.text.includes("TOOL RESULT") && record(block.cache_control));
+      assert(at >= 0, "the previous request wrote a historical-result boundary");
+      assert.deepEqual(plainBlocks(replayContent(payload).slice(0, at + 1)), plainBlocks(old.slice(0, at + 1)),
+        "growing replay must preserve the prefix actually written by the CLI");
+      const detail = response.diagnostics?.find(diagnostic => diagnostic.type === "claude_cache")?.details;
+      assert(record(detail));
+      assert.equal(detail.uncachedTailBlocks, 0, "parallel text replay must reach the newest boundary");
+    }
+    previousPayload = payload;
+    growing = normalizeContext({ messages: [...growing.messages, response,
+      ...Array.from({ length: 25 }, (_, item) => ({ role: "toolResult" as const, toolName: "read",
+        toolCallId: `parallel-${index}-${item}`, isError: false, timestamp: 0,
+        content: [{ type: "text" as const, text: `bounded synthetic result ${item}` }] }))] });
+  }
+  const residentProbe = process.argv.includes("--measure-resident") && probeOptions
+    ? await measureResident(probeOptions) : undefined;
   console.log(JSON.stringify({ cli: version.stdout.toString().trim(), states: 4, inferenceRequests: captures.length,
-    network: "isolated-loopback", prefixStable: true }));
+    ...(residentProbe ? { residentProbe } : {}),
+    network: "isolated-loopback", prefixStable: true, alignedTtls: ["5m", "1h", "none"], growingHistory: true }));
 } finally {
   overrideSdk(undefined);
   server.closeAllConnections();

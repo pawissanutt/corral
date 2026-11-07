@@ -1119,20 +1119,47 @@ Edit, Bash, Grep and Glob; the role's other tools (`corral_*`, the LSP tools) ap
 in-process MCP server whose handler refuses. Cancelling a turn interrupts and closes the query. A
 missing platform package is refused `claude_code_unavailable`, naming the package to install;
 nothing is downloaded. Each model call is independent: there is no resident Claude Code session,
-session reuse or Claude Code compaction. The policy record is
+session reuse or Claude Code compaction. Pi is the sole compaction owner: SDK auto-compaction is
+explicitly disabled, and an unexpected SDK compact boundary stops the attempt with
+`claude_compaction_conflict`. A query without a terminal success also fails, rather than accepting
+an uncertain replay. Pi compaction rebuilds from its canonical summary and retained messages;
+its first request may legitimately miss the old cache. The policy record is
 `docs/records/pi-native-claude-route.md`.
 
 The host sets `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1`: the SDK must not prepend a fresh Git-status
 snapshot before the replay on every query, invalidating cached history after an edit or commit.
 This also removes Claude Code's built-in commit/PR workflow and attribution reminders; corral's
 role contract and Git skill govern that workflow, and host tool results supply current Git state.
-The Claude Code preset, tool-denial hooks, private credentials and five-minute cache TTL remain.
-Automatic cache warming is off: refreshing an expired prefix would not repair a changing one.
+The Claude Code preset, tool-denial hooks and private credentials remain. Five-minute caching is
+still the default. At host launch, `CORRAL_CLAUDE_CACHE_TTL=1h` selects one-hour retention;
+`5m` and `none` are the other accepted values. Invalid values are refused. Explicit per-request
+Pi `cacheRetention` (`short`, `long`, `none`) takes precedence; one-off compaction summaries use
+`none`. The SDK and history markers always share a lifetime, with ambient Claude cache flags
+removed. One-hour cache writes have a higher API-equivalent price; changing retention is not a
+billing or subscription-coverage guarantee. The reported one-hour write tier is preserved when
+provided by Claude. Automatic cache warming stays off.
+
+Replay seals user/assistant messages and parallel text-result batches into stable text blocks,
+without losing tool IDs, results or images. This avoids a long uncached tail from many tiny text
+blocks. Large image batches can still require a conservative rolling boundary to stay within the
+20-block lookback and SDK's four-marker budget. Changed prefixes are revalidated; uncertain writes
+never advance the frontier, and expired local frontiers do not pin stale boundaries. Current owner
+question state is appended after reusable history, not folded into the root system prompt;
+permanent authority and tool-execution rules are unchanged.
+
+In managed sessions, use `/cache-stats` to compare the latest model request with the whole-session input cache rate.
+Both divide cache reads by reads + writes + uncached input; output tokens are excluded. Session
+figures include all models, nested tools, summaries and cold starts, not an average of percentages.
+Claude assistant messages also persist a `claude_cache` diagnostic containing retention, local
+frontier state, prefix hash, block/tail counts, elapsed time and reported usage. No prompt bodies
+or credentials are logged. Local prefix reachability is not proof of a provider cache hit. See the
+[offline comparison and resident timing probe](../records/claude-cache-efficiency.md) for reproduction
+commands and the limits of those measurements.
 
 The Linux Pi gate's `test/claude-wire-cache.test.ts` captures real SDK/CLI requests against a local
 synthetic endpoint, inside isolated network and PID namespaces. It compares tools, system and
-history across clean, edited, staged and committed repository states, and checks the four-marker
-budget. It requires `unshare`, `ip`, and enabled unprivileged user namespaces; missing isolation
+history across clean, edited, staged and committed repository states, then checks growing text
+batches and aligned `5m`/`1h`/disabled policies at the real wire boundary within four markers. It requires `unshare`, `ip`, and enabled unprivileged user namespaces; missing isolation
 fails rather than falling back to the network. The receipt prints the tested CLI version. To check
 a separately installed CLI used by a compiled host, run from `packages/corral-pi`:
 
