@@ -92,6 +92,35 @@ fn finite_dependency_chain_uses_bounded_repair_independent_review_and_verified_l
     corral_ops::sync_at(&fx.ctx, now()).unwrap();
     assert!(fx.ctx.store.get(&second.id).unwrap().runs.is_empty());
     fx.done(&first.id, "first.txt");
+    corral_ops::gate_start(&fx.fresh(), &first.id).unwrap();
+    let failed = corral_ops::gate_wait(&fx.fresh(), &first.id).unwrap();
+    assert_eq!(failed.result, corral_core::GateResult::Fail);
+    assert_eq!(fx.ctx.store.get(&first.id).unwrap().rounds, 0);
+    let proof = fx.temp.path().join("candidate-diagnosis.md");
+    std::fs::write(&proof, "The submitted candidate lacks required repaired.txt; the managed failed check is the candidate-defect evidence for this finite repair chain.").unwrap();
+    let artifact = corral_ops::add_artifact(
+        &fx.fresh(),
+        &first.id,
+        &proof,
+        Some(corral_core::ArtifactKind::Report),
+        Some("Candidate diagnosis"),
+    )
+    .unwrap();
+    corral_ops::gate_triage::diagnose(
+        &fx.fresh(),
+        &first.id,
+        corral_ops::gate_triage::GateDiagnosis {
+            attempt: failed.identity.unwrap().attempt,
+            class: corral_ops::gate_triage::FailureClass::Candidate,
+            explanation: "Required candidate file missing; attribute before bounded code repair"
+                .into(),
+            evidence: vec![artifact.path],
+            baseline: None,
+            retry: false,
+        },
+        true,
+    )
+    .unwrap();
     corral_ops::sync_at(&fx.fresh(), now()).unwrap();
     let repairing = fx.ctx.store.get(&first.id).unwrap();
     assert_eq!(
