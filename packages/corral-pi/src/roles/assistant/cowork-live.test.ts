@@ -106,7 +106,11 @@ test("live private-pane co-work: shell finish refused, unclear ship asks, promot
       if (message?.role !== "toolResult") throw new Error(`no result for ${callId}`);
       return message.content.map((part) => (part.type === "text" ? part.text : "")).join("");
     };
-    const result = (callId: string): { state: string; result: Record<string, unknown> } => JSON.parse(toolText(callId));
+    const result = (callId: string): { state: string; result: Record<string, unknown> } => {
+      const message = live.session.messages.find((m) => m.role === "toolResult" && m.toolCallId.split("|")[0] === callId);
+      if (message?.role !== "toolResult") throw new Error(`no result for ${callId}`);
+      return message.details as { state: string; result: Record<string, unknown> };
+    };
     const bash = (callId: string, command: string): Step => ({ toolCalls: [{ callId, name: "bash", arguments: { command } }] });
     const show = (id: string) => JSON.parse(ok([corral, "show", id, "--json"], { cwd: workspace }));
     const tasks = () => JSON.parse(ok([corral, "list", "--json"], { cwd: workspace })) as { id: string }[];
@@ -173,9 +177,10 @@ test("live private-pane co-work: shell finish refused, unclear ship asks, promot
     expect([finishedEvent?.actor, finishedEvent?.via]).toEqual(["owner", `assistant:${fixture.session}`]);
 
     // The deterministic independent reviewer approves before the owner exercises manual approval.
-    ok([corral, "verdict", "T-002", "approve", "--notes", "independent fixture review"], { cwd: workspace, env: originalEnv });
+    const ownerEnv = { ...originalEnv }; delete ownerEnv.CORRAL_ASSISTANT; delete ownerEnv.CORRAL_ASSISTANT_GENERATION;
+    ok([corral, "verdict", "T-002", "approve", "--notes", "independent fixture review"], { cwd: workspace, env: ownerEnv });
     // Autopilot lands without another owner answer or approve tool call.
-    ok([corral, "sync"], { cwd: workspace, env: originalEnv });
+    ok([corral, "sync"], { cwd: workspace, env: ownerEnv });
     expect(show("T-002").status).toBe("done");
     const head = ok(["git", "-C", app, "rev-parse", "main"]).trim();
     expect(ok(["git", "-C", app, "log", "-1", "--format=%s", "main"]).trim()).toBe("Fix the cache");

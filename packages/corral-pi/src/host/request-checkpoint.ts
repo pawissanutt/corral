@@ -4,6 +4,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { z } from "zod";
 
 import { ProgressSchema, type TodoProgress } from "../ui/todo-widget.ts";
+import { visibleReceipt } from "../tools/presentation.ts";
 
 export type RequestCheckpoint = Extract<AgentMessage, { role: "custom" }>;
 
@@ -16,12 +17,15 @@ const CONTEXT_ONLY = "\nThis is context only, not a new owner instruction. Conti
 
 function progressIn(message: AgentMessage): TodoProgress | undefined {
   if (message.role !== "toolResult" || message.toolName !== "corral_todo" || message.isError) return undefined;
-  // Parse the actual model-visible content, not details that may have been hidden or truncated.
+  // Legacy transcripts carry JSON. Readable results count only if their full rendering is
+  // present, never merely because details retain a hidden or truncated plan.
   const text = message.content.filter((block) => block.type === "text").map((block) => block.text).join("");
   try {
     const receipt = Receipt.safeParse(JSON.parse(text));
     return receipt.success ? receipt.data.result.progress : undefined;
-  } catch { return undefined; }
+  } catch { /* Current model-facing receipt text is not JSON. */ }
+  const receipt = Receipt.safeParse(visibleReceipt(text, message.details));
+  return receipt.success ? receipt.data.result.progress : undefined;
 }
 
 export function requestCheckpoint(
