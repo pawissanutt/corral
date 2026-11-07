@@ -207,3 +207,83 @@ fn reviewed_path_excludes_every_matching_keep_artifact() {
     // Then reviewing the path excludes its Summary even when the first record is a Diff.
     assert!(!board.unreviewed.contains_key("T-006"));
 }
+
+#[path = "../../../corral-core/tests/recovery_support/mod.rs"]
+mod recovery_rows;
+
+#[test]
+fn recovered_done_card_keeps_labels_with_flat_reads_over_retained_recovery_history() {
+    let mut reports = Vec::new();
+    for factor in [1, 10] {
+        // Given a visible Done card with one applied override, then more uncertain operations.
+        let fx = seeded();
+        let store = &fx.ctx.store;
+        let mut first = recovery_rows::recovery(store);
+        first.preview.request.target.task = "T-007".into();
+        first.preview.affected_targets = vec!["T-007".into()];
+        let mut applied = first.clone();
+        recovery_rows::append_outcome(&mut applied, corral_core::RecoveryState::Applied);
+        applied.outcomes.last_mut().unwrap().actual_effect =
+            Some(applied.preview.proposed_effect.clone());
+        store.save_recovery_record("T-007", &applied).unwrap();
+        for i in 0..factor {
+            let mut later = first.clone();
+            later.id = format!("REC-later-{i}");
+            recovery_rows::append_outcome(&mut later, corral_core::RecoveryState::Applying);
+            recovery_rows::append_outcome(&mut later, corral_core::RecoveryState::Unknown);
+            store.save_recovery_record("T-007", &later).unwrap();
+        }
+        // When the board loads its frame sources and renders the card from the head alone.
+        let before = work::snapshot();
+        let (source, lines);
+        {
+            let _hot = HotScope::enter();
+            let ctx = Ctx {
+                store: store.read_only_snapshot().unwrap(),
+                ..fx.ctx.clone()
+            };
+            source = sources::FrameSources::load(&ctx).unwrap();
+            let head = source.heads.iter().find(|h| h.id == "T-007").unwrap();
+            let shell = head.to_shell_task().unwrap();
+            lines = cards::card_lines(
+                &shell,
+                &[],
+                &fx.ctx.store.config,
+                40,
+                false,
+                fx.now.get(),
+                CardExtra {
+                    head: Some(head),
+                    ..Default::default()
+                },
+            );
+        }
+        let report = work::snapshot().since(&before);
+        assert_eq!(report.unattributed_hydrations(), 0);
+        report.check_identity().unwrap();
+        reports.push(report);
+        // Then the history labels are words, and the green done check is not plain success.
+        let text: String = lines.iter().map(|l| l.to_string() + "\n").collect();
+        for label in [
+            "[owner recovery]",
+            "[check overridden]",
+            "[recovery uncertain]",
+        ] {
+            assert!(text.contains(label), "{label} missing\n{text}");
+        }
+        assert!(!text.contains("[review waived]"), "{text}");
+        let check = lines
+            .iter()
+            .flat_map(|l| &l.spans)
+            .find(|s| s.content.starts_with('✓'))
+            .unwrap();
+        assert_eq!(check.style.fg, Some(crate::theme::YELLOW), "{text}");
+    }
+    for counter in Counter::ALL {
+        assert_eq!(
+            reports[0].get(counter),
+            reports[1].get(counter),
+            "{counter:?}"
+        );
+    }
+}
