@@ -350,6 +350,25 @@ fn pending_question_is_presented_once_while_a_repaired_chain_lands_across_restar
 
     // When B's first candidate fails its gate and repeated wakes and restarts follow.
     fx.done(&b.id, "independent.txt");
+    corral_ops::gate_start(&fx.fresh(), &b.id).unwrap();
+    let failed = corral_ops::gate_wait(&fx.fresh(), &b.id).unwrap();
+    assert_eq!(failed.result, corral_core::GateResult::Fail);
+    assert_eq!(fx.ctx.store.get(&b.id).unwrap().rounds, 0);
+    let proof = fx.temp.path().join("candidate-diagnosis.md");
+    std::fs::write(&proof, "The independent candidate lacks required repaired.txt; the managed failed command provides the synthetic defect evidence for this repair-chain journey.").unwrap();
+    let artifact = corral_ops::add_artifact(
+        &fx.fresh(),
+        &b.id,
+        &proof,
+        Some(corral_core::ArtifactKind::Report),
+        Some("Candidate diagnosis"),
+    )
+    .unwrap();
+    corral_ops::gate_triage::diagnose(&fx.fresh(), &b.id, corral_ops::gate_triage::GateDiagnosis {
+        attempt:failed.identity.unwrap().attempt, class:corral_ops::gate_triage::FailureClass::Candidate,
+        explanation:"Required candidate file is absent; attribute before the existing code-repair authorization".into(),
+        evidence:vec![artifact.path], baseline:None, retry:false,
+    }, true).unwrap();
     for _ in 0..3 {
         pm_pass(&fx, &mut presented);
     }

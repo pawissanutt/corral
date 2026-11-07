@@ -77,6 +77,11 @@ a failure immediately produced code-repair instructions. It now asserts the init
 block and records attached synthetic candidate attribution before retaining all reduced-tier
 instruction assertions. All six instruction-surface tests passed (1.25s); no cases added.
 
+The sixth gate passed 1,837 checks before the repaired-chain operating journey assumed
+candidate attribution. Its managed failure is now explicitly diagnosed before repeated PM
+passes, preserving the exact one-question/one-repair delivery and restart/landing assertions.
+All six operating journeys passed (26.73s); no test cases or allowances were added.
+
 Rust LSP repeatedly failed to provide fresh indexed diagnostics; targeted Cargo compilation/tests are the fallback, not a claimed clean LSP result. The required receipted quick gate and its log are attached separately after the final rebase. No other gate tier is run manually. No intentional host load or owner/live herdr interaction was used.
 
 Public context-package creation, handoff/takeback protocol, native writer fencing and participant-facing TUI/PM workflow remain C2–C4. Driver-transfer fixtures prove the C1 committed-driver seam, not those later public end-to-end flows. Native HostSession/PTY integration is left to the run's required isolated gate lane; paid live-provider behavior is not claimed.
