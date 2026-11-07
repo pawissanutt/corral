@@ -394,6 +394,7 @@ fn remove(
     scratch: &AssistantScratch,
     callers: Callers,
 ) -> Result<Removed> {
+    super::workflow::handoff::require_source_releasable(&ctx.store, session, &scratch.path)?;
     let repo = repo_of(scratch)?;
     let busy = crate::cleanup_worktree::scratch_residents(&scratch.path, callers)?;
     if !busy.is_empty() {
@@ -437,6 +438,11 @@ pub(crate) fn preserve_discarded(ctx: &Ctx, task: &Task) -> Result<Option<std::f
         &format!("scratch-{}-{}", cowork.session, cowork.scratch),
     )?;
     let scratch = find(ctx, &cowork.session, &cowork.scratch)?;
+    super::workflow::handoff::require_source_releasable(
+        &ctx.store,
+        &cowork.session,
+        &scratch.path,
+    )?;
     let run = task
         .current_run()
         .context("co-work task has no current run")?;
