@@ -12,7 +12,7 @@ const QUERIES: Readonly<Record<string, readonly string[]>> = {
 };
 export function investigationTool(cwd: string): ToolDefinition {
   return {
-    name: "assistant_inspect", label: "Inspect Git facts",
+    name: "corral_assistant_inspect", label: "Inspect Git facts",
     description: "Read bounded Git HEAD, status or unstaged/staged diff in this assistant's linked directory. "
       + "No shell, caller options, hooks, fsmonitor, external diff or textconv. Truncated output is labelled.",
     parameters: Type.Object({ fact: Type.Union(Object.keys(QUERIES).map(k => Type.Literal(k))) }, { additionalProperties: false }),

@@ -33,6 +33,7 @@ import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../
 import type { QuestionUpdate, SubmitInput, SubmitResult } from "../bridge/protocol.ts";
 import type { DeliveryHost } from "../delivery/types.ts";
 import { scratchRoots, writeSettings } from "../roles/assistant/paths.ts";
+import { investigationTool } from "../roles/assistant/investigate.ts";
 import type { HostIdentity, RoleContext } from "../roles/types.ts";
 import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from "../tools/corral.ts";
 import { corralToolNames, defineCorralTool } from "../tools/define.ts";
@@ -552,6 +553,7 @@ export class HostSession {
       },
     }) : undefined;
     this.localTools = [...(lspEnabled ? roleLocal : roleLocal.filter((tool) => !tool.name.startsWith("lsp_"))),
+      ...(options.identity.role === "assistant" ? [investigationTool(options.cwd)] : []),
       ...(dialogEnabled ? [askUserTool(async (answer) => {
         if (!this.dialogPi) throw new Error("dialog session is unavailable");
         const id = options.identity.role === "assistant" ? await this.journalOwnerInput("dialog", answer) : undefined;
