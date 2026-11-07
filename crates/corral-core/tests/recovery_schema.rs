@@ -300,3 +300,81 @@ fn genuine_schema2_binary_refuses_a_database_store() {
         before
     );
 }
+
+fn applied(record: &mut corral_core::RecoveryRecord) {
+    append_outcome(record, RecoveryState::Applied);
+    let effect = record.preview.proposed_effect.clone();
+    record.outcomes.last_mut().unwrap().actual_effect = Some(effect);
+}
+
+#[test]
+fn recovery_summary_counts_only_actually_applied_exceptions_and_keeps_unknown_distinct() {
+    use corral_core::{HistorySummary, RecoverySummary};
+    // A head written before the field existed is unknown, never "no recovery".
+    let mut legacy = serde_json::to_value(HistorySummary::default()).unwrap();
+    legacy.as_object_mut().unwrap().remove("recovery");
+    let legacy: HistorySummary = serde_json::from_value(legacy).unwrap();
+    assert_eq!(legacy.recovery, None);
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let task = store.create("R", None, Status::NeedsMe, "Spec").unwrap();
+    let summary = |store: &Store| store.head(&task.id).unwrap().summary.recovery;
+    // A stored record with no recovery is known-empty.
+    assert_eq!(summary(&store), Some(RecoverySummary::default()));
+    // Intent and an Applied outcome without an actual effect are not applied exceptions.
+    let mut early = recovery(&store);
+    store.save_recovery_record(&task.id, &early).unwrap();
+    let pending = summary(&store).unwrap();
+    assert_eq!(
+        (pending.records, pending.unsettled, pending.applied),
+        (1, 1, 0)
+    );
+    assert_eq!(pending.check_overridden, 0);
+    store.save_recovery_record(&task.id, &early).unwrap();
+    assert_eq!(
+        summary(&store).unwrap(),
+        pending,
+        "an identical retry changes nothing"
+    );
+    applied(&mut early);
+    store.save_recovery_record(&task.id, &early).unwrap();
+    let done = summary(&store).unwrap();
+    assert_eq!(
+        (done.applied, done.unsettled, done.check_overridden),
+        (1, 0, 1)
+    );
+    assert_eq!(done.review_waived, 0);
+    // A later failed and an uncertain operation keep the early applied override.
+    for (id, state) in [
+        ("REC2", RecoveryState::Failed),
+        ("REC3", RecoveryState::Unknown),
+    ] {
+        let mut later = recovery(&store);
+        later.id = id.into();
+        append_outcome(&mut later, RecoveryState::Applying);
+        append_outcome(&mut later, state);
+        store.save_recovery_record(&task.id, &later).unwrap();
+    }
+    let mixed = summary(&store).unwrap();
+    assert_eq!(
+        (
+            mixed.records,
+            mixed.applied,
+            mixed.failed,
+            mixed.unknown,
+            mixed.check_overridden
+        ),
+        (3, 1, 1, 1, 1)
+    );
+    // Ordinary head-native and full updates retain the known projection exactly.
+    store
+        .update(&task.id, |t| {
+            t.title = "Ordinary edit".into();
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(summary(&store), Some(mixed.clone()));
+    let record = store.task_record(&task.id).unwrap();
+    assert_eq!(RecoverySummary::of(&record.recoveries), mixed);
+    assert_eq!(HistorySummary::of(&record.task).unwrap().recovery, None);
+}
