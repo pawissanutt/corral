@@ -411,6 +411,35 @@ fn surfaces_rendered_for_a_reduced_tier_task_carry_the_tier_commands_and_no_full
     std::fs::write(fx.out.join("quick-fails"), "").unwrap();
     fx.submit("round-1.txt");
     fx.sync();
+    let blocked = fx.task();
+    assert_eq!((blocked.status, blocked.rounds), (Status::NeedsMe, 0));
+    let failed = blocked.current_run().unwrap().gate.as_ref().unwrap();
+    let proof = fx.out.join("candidate-diagnosis.md");
+    std::fs::write(&proof, "The quick-fails control represents this fixture's synthetic candidate defect; the failed quick command is retained and its instruction surface is under test.").unwrap();
+    let artifact = corral_ops::add_artifact(
+        &fx.ctx,
+        &fx.id,
+        &proof,
+        Some(corral_core::ArtifactKind::Report),
+        Some("Synthetic candidate diagnosis"),
+    )
+    .unwrap();
+    corral_ops::gate_triage::diagnose(
+        &fx.ctx,
+        &fx.id,
+        corral_ops::gate_triage::GateDiagnosis {
+            attempt: failed.identity.as_ref().unwrap().attempt.clone(),
+            class: corral_ops::gate_triage::FailureClass::Candidate,
+            explanation:
+                "Explicit fixture candidate attribution before testing code-repair instructions"
+                    .into(),
+            evidence: vec![artifact.path],
+            baseline: None,
+            retry: false,
+        },
+        true,
+    )
+    .unwrap();
     fx.sync();
     let task = fx.task();
     assert_eq!(
