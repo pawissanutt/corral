@@ -671,10 +671,22 @@ impl Config {
             candidate.effort.as_deref(),
         )?;
         model_args.extend(candidate.args.iter().cloned());
+        let connection = if crate::is_corral_pi(&candidate.harness) {
+            let configured = self.profiles.get(profile);
+            if crate::connection::ConnectionId::parse(&candidate.connection).is_err() {
+                ensure!(
+                    configured
+                        .is_some_and(|p| p.connection.is_none() && p.harness == candidate.harness),
+                    "connection_invalid: legacy candidate has no native profile provenance"
+                );
+            }
+            Some(candidate.native_connection(configured.and_then(|p| p.connection))?)
+        } else {
+            None
+        };
         Ok(ResolvedProfile {
-            connection: crate::is_corral_pi(&candidate.harness)
-                .then(|| crate::connection::ConnectionId::parse(&candidate.connection))
-                .transpose()?,
+            connection,
+            connection_identity: Some(candidate.connection.clone()),
             candidate: Some(candidate.id.clone()),
             profile: profile.to_owned(),
             harness: candidate.harness.clone(),

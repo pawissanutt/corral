@@ -459,7 +459,20 @@ fn next_generation(
     pane: &str,
     capabilities: &CapabilitySnapshot,
     connection: Option<&corral_core::connection::ConnectionBinding>,
+    fresh_session: bool,
 ) -> Result<u32> {
+    if let Some(previous) = state
+        .generations
+        .iter()
+        .filter(|g| g.bound.is_some())
+        .max_by_key(|g| g.n)
+    {
+        corral_core::connection::ConnectionBinding::continue_from(
+            previous.connection.as_ref(),
+            connection,
+            fresh_session,
+        )?;
+    }
     ensure!(
         state.generations.len() < GENERATIONS_MAX,
         "{} already opened {GENERATIONS_MAX} generations",
@@ -542,7 +555,7 @@ pub fn open_generation_with(
     adopt: bool,
     supported: Option<&BTreeSet<String>>,
 ) -> Result<GenerationGrant> {
-    open_generation_bound(store, target, pane, adopt, supported, None)
+    open_generation_bound(store, target, pane, adopt, supported, None, false)
 }
 
 pub(crate) fn open_generation_bound(
@@ -552,6 +565,7 @@ pub(crate) fn open_generation_bound(
     adopt: bool,
     supported: Option<&BTreeSet<String>>,
     connection: Option<&corral_core::connection::ConnectionBinding>,
+    fresh_session: bool,
 ) -> Result<GenerationGrant> {
     if let Some(binding) = connection {
         binding.validate()?;
@@ -634,7 +648,14 @@ pub(crate) fn open_generation_bound(
                 }
                 pm.state.binding.project = project.clone();
                 Ok((
-                    next_generation(&mut pm.state, &digest, pane, &capabilities, connection)?,
+                    next_generation(
+                        &mut pm.state,
+                        &digest,
+                        pane,
+                        &capabilities,
+                        connection,
+                        fresh_session,
+                    )?,
                     true,
                 ))
             },
@@ -650,6 +671,7 @@ pub(crate) fn open_generation_bound(
                     pane,
                     &capabilities,
                     connection,
+                    fresh_session,
                 )
             })?
         }
@@ -700,7 +722,14 @@ pub(crate) fn open_generation_bound(
                     "{} is bound to another role or review attempt",
                     container.key()
                 );
-                generation = next_generation(state, &digest, pane, &capabilities, connection)?;
+                generation = next_generation(
+                    state,
+                    &digest,
+                    pane,
+                    &capabilities,
+                    connection,
+                    fresh_session,
+                )?;
                 Ok(())
             })?;
             drop(known);

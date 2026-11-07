@@ -428,6 +428,7 @@ pub fn prepare_bootstrap(
         spec.adopt,
         Some(&supported),
         spec.binding.as_ref(),
+        fresh_session,
     )?;
     let (task, run, review) = match &container {
         ContainerRef::Worker { task, run } => (Some(task.clone()), Some(run.clone()), None),

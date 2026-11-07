@@ -195,7 +195,7 @@ export function parseLaunchMessage(text: string): HostConfig {
   if (message.todo !== undefined && typeof message.todo !== "boolean") {
     throw new LaunchMessageInvalid("todo must be a boolean");
   }
-  const model = field(message, "model", provider === "llama.cpp" ? /^[^\s\0]+$/ : TOKEN, provider === "llama.cpp" ? 512 : 128);
+  const model = field(message, "model", provider === "llama.cpp" ? /^[^\s\0]+$/ : /^[A-Za-z0-9._:/+-]+$/, provider === "llama.cpp" ? 512 : 128);
   const effort = optional(message, "effort", TOKEN);
   const binding = parseBinding(message.binding, provider ?? "openai-codex", model, effort);
   const aws = awsBinding(message.aws);

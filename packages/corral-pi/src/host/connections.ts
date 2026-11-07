@@ -6,6 +6,8 @@ import type { ProviderId } from "../auth/providers.ts";
 export interface ConnectionBinding {
   readonly version: 1;
   readonly connection: ConnectionId;
+  readonly identity: string;
+  readonly origin: "registered" | "legacy_subscription" | "legacy_bedrock" | "legacy_local";
   readonly candidate: string | null;
   readonly model: string;
   readonly effort: string | null;
@@ -13,7 +15,16 @@ export interface ConnectionBinding {
 }
 
 export function bindingDigest(binding: Omit<ConnectionBinding, "digest">): string {
-  return createHash("sha256").update(JSON.stringify([1, binding.connection, binding.candidate, binding.model, binding.effort])).digest("hex");
+  return createHash("sha256").update(JSON.stringify([1, binding.connection, binding.identity, binding.candidate, binding.model, binding.effort, binding.origin])).digest("hex");
+}
+
+function origin(connection: ConnectionId, identity: string, candidate: string | null): ConnectionBinding["origin"] | undefined {
+  if (identity === connection) return "registered";
+  if (candidate === null || isConnectionId(identity)) return undefined;
+  if (connection === "anthropic-subscription" || connection === "openai-subscription") return "legacy_subscription";
+  if (connection === "amazon-bedrock") return "legacy_bedrock";
+  if (connection === "llama.cpp") return "legacy_local";
+  return undefined;
 }
 
 export function parseBinding(value: unknown, provider: ProviderId, model: string, effort?: string): ConnectionBinding | undefined {
@@ -23,7 +34,12 @@ export function parseBinding(value: unknown, provider: ProviderId, model: string
   }
   const binding = value as ConnectionBinding;
   if (typeof binding !== "object" || Array.isArray(binding) || binding.version !== 1 || !isConnectionId(binding.connection)
-      || !(binding.candidate === null || typeof binding.candidate === "string" && /^[A-Za-z0-9._:+-]{1,128}$/.test(binding.candidate))
+      || typeof binding.identity !== "string" || binding.identity.trim() === "" || Buffer.byteLength(binding.identity) > 256
+      || /[\u0000-\u001f\u007f-\u009f]/.test(binding.identity)
+      || !["registered", "legacy_subscription", "legacy_bedrock", "legacy_local"].includes(binding.origin)
+      || binding.origin !== origin(binding.connection, binding.identity, binding.candidate)
+      || !(binding.candidate === null || typeof binding.candidate === "string" && binding.candidate.trim() !== ""
+        && Buffer.byteLength(binding.candidate) <= 512 && !/[\u0000-\u001f\u007f-\u009f]/.test(binding.candidate))
       || binding.model !== model || binding.effort !== (effort ?? null) || binding.digest !== bindingDigest(binding)) {
     throw new Error("connection_invalid: stale or malformed binding");
   }

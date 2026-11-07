@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { HOST_CAPABILITIES, LaunchMessageInvalid, parseLaunchMessage } from "./config.ts";
+import { bindingDigest } from "./connections.ts";
 
 const message = {
   version: 1, store: "st-demo", project: "demo", role: "reviewer",
@@ -177,6 +178,12 @@ test("the launch provider is optional, defaults to Codex in the host, and must b
   expect(parseLaunchMessage(JSON.stringify({ ...message, provider: "anthropic", model: "claude-opus-5-5" })).provider)
     .toBe("anthropic");
   expect(() => parseLaunchMessage(JSON.stringify({ ...message, provider: "mistral" }))).toThrow(LaunchMessageInvalid);
+  const base = { version: 1 as const, connection: "openai-api" as const, identity: "openai-api", origin: "registered" as const,
+    candidate: "approved", model: "openai/gpt-5.4", effort: null };
+  const binding = { ...base, digest: bindingDigest(base) };
+  const paid = { ...message, provider: "openai", model: binding.model, binding };
+  expect(parseLaunchMessage(JSON.stringify(paid)).binding).toEqual(binding);
+  expect(() => parseLaunchMessage(JSON.stringify({ ...paid, binding: undefined }))).toThrow("connection_invalid");
 });
 
 test("the pane ui is optional (rich in the host), plain is accepted and anything else is refused", () => {

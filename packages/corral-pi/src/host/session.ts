@@ -785,7 +785,7 @@ export class HostSession {
   static async create(options: HostSessionOptions): Promise<HostSession> {
     parseBinding(options.binding, options.provider ?? "openai-codex", options.model, options.effort);
     admitConnection(options.provider ?? "openai-codex", options.binding);
-    if (options.binding && !options.modules.auth.connections?.includes(options.binding.connection)) {
+    if (options.binding?.origin === "registered" && !options.modules.auth.connections?.includes(options.binding.connection)) {
       throw new Error("connection_unsupported_by_auth: installed auth module does not implement the explicit binding");
     }
     const host = new HostSession(options);

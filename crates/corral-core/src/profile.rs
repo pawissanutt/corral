@@ -332,6 +332,9 @@ pub struct ResolvedProfile {
     pub vendor: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection: Option<crate::connection::ConnectionId>,
+    /// Original candidate account-group label, separate from the proven native transport.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_identity: Option<String>,
     /// Exact approved candidate, not inferred by matching a model name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidate: Option<String>,
@@ -811,6 +814,7 @@ impl Config {
         let connection = self.profiles.get(&name).and_then(|p| p.connection);
         let resolved = ResolvedProfile {
             connection,
+            connection_identity: connection.map(|id| id.id().to_owned()),
             candidate: None,
             profile: name,
             harness,

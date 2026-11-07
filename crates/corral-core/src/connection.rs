@@ -100,11 +100,23 @@ impl ConnectionId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionOrigin {
+    Registered,
+    LegacySubscription,
+    LegacyBedrock,
+    LegacyLocal,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConnectionBinding {
     pub version: u32,
     pub connection: ConnectionId,
+    /// Original selector/account-group identity, never used as a credential path or provider.
+    pub identity: String,
+    pub origin: ConnectionOrigin,
     pub candidate: Option<String>,
     pub model: String,
     pub effort: Option<String>,
@@ -118,10 +130,58 @@ impl ConnectionBinding {
         model: String,
         effort: Option<String>,
     ) -> Result<Self> {
-        let bytes = serde_json::to_vec(&(1, connection, &candidate, &model, &effort))?;
+        Self::for_identity(
+            connection,
+            connection.id().to_owned(),
+            candidate,
+            model,
+            effort,
+        )
+    }
+
+    fn for_identity(
+        connection: ConnectionId,
+        identity: String,
+        candidate: Option<String>,
+        model: String,
+        effort: Option<String>,
+    ) -> Result<Self> {
+        ensure!(
+            candidate.as_ref().is_none_or(|c| !c.trim().is_empty()
+                && c.len() <= 512
+                && !c.chars().any(char::is_control)),
+            "connection_invalid: malformed candidate identity"
+        );
+        ensure!(
+            !identity.trim().is_empty()
+                && identity.len() <= 256
+                && !identity.chars().any(char::is_control),
+            "connection_invalid: malformed connection identity"
+        );
+        let origin = if identity == connection.id() {
+            ConnectionOrigin::Registered
+        } else {
+            ensure!(
+                candidate.is_some() && ConnectionId::parse(&identity).is_err(),
+                "connection_invalid: unproven legacy identity"
+            );
+            match connection {
+                ConnectionId::AnthropicSubscription | ConnectionId::OpenaiSubscription => {
+                    ConnectionOrigin::LegacySubscription
+                }
+                ConnectionId::AmazonBedrock => ConnectionOrigin::LegacyBedrock,
+                ConnectionId::LlamaCpp => ConnectionOrigin::LegacyLocal,
+                _ => anyhow::bail!("connection_invalid: API connections cannot use legacy aliases"),
+            }
+        };
+        let bytes = serde_json::to_vec(&(
+            1, connection, &identity, &candidate, &model, &effort, origin,
+        ))?;
         Ok(Self {
             version: 1,
             connection,
+            identity,
+            origin,
             candidate,
             model,
             effort,
@@ -129,12 +189,34 @@ impl ConnectionBinding {
         })
     }
 
+    pub fn continue_from(previous: Option<&Self>, next: Option<&Self>, fresh: bool) -> Result<()> {
+        if let Some(previous) = previous {
+            previous.validate()?;
+        }
+        if let Some(next) = next {
+            next.validate()?;
+        }
+        ensure!(
+            fresh || previous == next,
+            "connection_binding_changed: retained session requires its frozen binding; use an authorized fresh role attempt/session"
+        );
+        Ok(())
+    }
+
+    pub fn requires_ack(&self) -> bool {
+        matches!(
+            self.origin,
+            ConnectionOrigin::Registered | ConnectionOrigin::LegacySubscription
+        )
+    }
+
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.version == 1
                 && *self
-                    == Self::new(
+                    == Self::for_identity(
                         self.connection,
+                        self.identity.clone(),
                         self.candidate.clone(),
                         self.model.clone(),
                         self.effort.clone()
@@ -142,6 +224,58 @@ impl ConnectionBinding {
             "connection_invalid: stale or malformed binding digest"
         );
         Ok(())
+    }
+}
+
+impl crate::ExecutionCandidate {
+    /// The old native Anthropic/OpenAI routes were OAuth-only independently of the decorative
+    /// account label. Unknown cost remains unknown; this supplies no fallback/cost permission.
+    pub(crate) fn native_connection(
+        &self,
+        explicit_profile: Option<ConnectionId>,
+    ) -> Result<ConnectionId> {
+        if let Ok(connection) = ConnectionId::parse(&self.connection) {
+            ConnectionId::resolve(Some(connection), Some(&self.provider))?;
+            ensure!(
+                connection.billing() != BillingMode::Subscription
+                    || matches!(
+                        self.cost,
+                        crate::CandidateCost::Unknown | crate::CandidateCost::Subscription
+                    ),
+                "subscription connection cannot claim metered API spending"
+            );
+            ensure!(
+                !connection.api_key()
+                    || matches!(
+                        self.cost,
+                        crate::CandidateCost::Metered {
+                            maximum_micros: 1..,
+                            ..
+                        }
+                    ),
+                "API candidate requires a finite positive metered cost"
+            );
+            return Ok(connection);
+        }
+        ensure!(
+            explicit_profile.is_none(),
+            "connection_invalid: unknown explicit candidate connection"
+        );
+        match (self.provider.as_str(), &self.cost) {
+            (
+                "anthropic" | "openai",
+                crate::CandidateCost::Unknown | crate::CandidateCost::Subscription,
+            ) => ConnectionId::legacy(&self.provider)
+                .ok_or_else(|| anyhow::anyhow!("connection_invalid: unproven subscription route")),
+            // Retain the existing independently bound AWS/local routes, not subscription aliases.
+            ("amazon-bedrock", crate::CandidateCost::Metered { .. }) => {
+                Ok(ConnectionId::AmazonBedrock)
+            }
+            ("llama.cpp", crate::CandidateCost::Unknown) => Ok(ConnectionId::LlamaCpp),
+            _ => anyhow::bail!(
+                "connection_invalid: unknown candidate connection cannot select a metered/API route"
+            ),
+        }
     }
 }
 
@@ -154,7 +288,11 @@ impl crate::ResolvedProfile {
             );
             return Ok(None);
         }
-        let connection = ConnectionId::resolve(self.connection, self.vendor.as_deref())?;
+        let inferred = self.model.as_deref().and_then(crate::infer_vendor);
+        let connection = ConnectionId::resolve(
+            self.connection,
+            self.vendor.as_deref().or(inferred.as_deref()),
+        )?;
         if self.connection.is_some() {
             ensure!(
                 self.model
@@ -164,8 +302,11 @@ impl crate::ResolvedProfile {
                 "connection_invalid: model family disagrees with connection"
             );
         }
-        Ok(Some(ConnectionBinding::new(
+        Ok(Some(ConnectionBinding::for_identity(
             connection,
+            self.connection_identity
+                .clone()
+                .unwrap_or_else(|| connection.id().to_owned()),
             self.candidate.clone(),
             self.model.clone().unwrap_or_default(),
             self.effort.clone(),
@@ -245,7 +386,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             vector.digest,
-            "6ebb36809372a20d5b4df4fc07afbad27c5feb912052e17fe69f61e88a8becfb"
+            "c89f600694189d007ba94f7e886d994487cb2e4e6f2822ba1ca60cd2bb9f3e40"
         );
         let legacy = ConnectionId::resolve(None, Some("openai")).unwrap();
         assert_eq!(legacy.provider(), "openai-codex");
@@ -260,6 +401,17 @@ mod tests {
             )
             .unwrap();
             bound.validate().unwrap();
+            ConnectionBinding::continue_from(Some(&bound), Some(&bound), false).unwrap();
+            assert!(ConnectionBinding::continue_from(Some(&bound), None, false).is_err());
+            let changed = ConnectionBinding::new(
+                id,
+                Some("another".into()),
+                "same-model".into(),
+                Some("high".into()),
+            )
+            .unwrap();
+            assert!(ConnectionBinding::continue_from(Some(&bound), Some(&changed), false).is_err());
+            ConnectionBinding::continue_from(Some(&bound), Some(&changed), true).unwrap();
             let mut stale = bound.clone();
             stale.candidate = Some("another".into());
             assert!(stale.validate().is_err());
