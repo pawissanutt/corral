@@ -38,7 +38,7 @@ fn clean_exit_suspends_and_resumes_until_explicitly_ended() {
     supervise_with(
         &ctx,
         PANE,
-        "A-1".into(),
+        assistant::claim(&ctx.store, "A-1").unwrap(),
         prepared,
         &Overrides::default(),
         false,

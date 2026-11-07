@@ -174,17 +174,9 @@ pub fn assistant_focused(
 ) -> Result<()> {
     platform()?;
     let pane = current_pane(std::env::var(PANE_ENV).ok().as_deref())?;
-    let (session, prepared, warning) = match focus {
-        Some(task) => {
-            super::ops::assistant::open_focused(ctx, start, &pane, overrides, over_cap, Some(task))?
-        }
-        None => super::ops::assistant::open(ctx, start, &pane, overrides, over_cap)?,
-    };
-    // Claimed before the host starts; a claim that cannot be taken leaves no half-open record.
-    let claim = super::ops::assistant::claim(&ctx.store, &session.id).or_else(|error| {
-        ctx.store.end_assistant(&session.id)?;
-        Err(error)
-    })?;
+    // Claimed before the record is published, so no concurrent resume can take it.
+    let (session, prepared, warning, claim) =
+        super::ops::assistant::open_claimed(ctx, start, &pane, overrides, over_cap, focus)?;
     if let Some(warning) = warning {
         eprintln!("corral pi: {warning}");
     }
@@ -371,18 +363,13 @@ fn supervise_with(
                 // Admission runs again after the old child stopped, so /new also works at the live cap.
                 let directory =
                     crate::assistant::directory(&ctx.store, &ctx.store.get_assistant(&id)?)?;
-                let (next, next_prepared, warning) =
-                    ops::open(ctx, &directory.path, pane, overrides, over_cap).with_context(
-                        || {
+                let (next, next_prepared, warning, next_claim) =
+                    ops::open_claimed(ctx, &directory.path, pane, overrides, over_cap, None)
+                        .with_context(|| {
                             format!(
                                 "/new could not open an assistant; resume {id} with `corral pi --resume {id}`"
                             )
-                        },
-                    )?;
-                let next_claim = ops::claim(&ctx.store, &next.id).or_else(|error| {
-                    ctx.store.end_assistant(&next.id)?;
-                    Err(error)
-                })?;
+                        })?;
                 if let Some(warning) = warning {
                     eprintln!("corral pi: {warning}");
                 }

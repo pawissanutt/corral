@@ -12,12 +12,17 @@ use crate::agent::ops::assistant::{self, SWITCH_NOTICE_FILE, SWITCH_REQUEST_FILE
 const PANE: &str = "w1:p9";
 
 /// A-1 (prepared, generation 1) and a stopped A-2 whose generation 1 recorded a conversation.
-fn setup() -> (Fx, Prepared, PathBuf, PathBuf) {
+fn fixture_with_role() -> Fx {
     let fx = fixture();
     std::fs::write(fx.root().join(PANE), "").unwrap();
     let role = fx.root().join("assets/src/roles/assistant");
     std::fs::create_dir_all(&role).unwrap();
     std::fs::write(role.join("index.ts"), "export {}").unwrap();
+    fx
+}
+
+fn setup() -> (Fx, Prepared, PathBuf, PathBuf) {
+    let fx = fixture_with_role();
     let ctx = f::ctx_at(fx.root());
     let open = |ctx: &Ctx| {
         assistant::open(ctx, ctx.store.root(), PANE, &Overrides::default(), false).unwrap()
@@ -321,4 +326,58 @@ fn clean_quit_suspends_a_returnable_conversation_and_explicit_end_stays_ended() 
     assistant::end(&ctx, "A-1").unwrap();
     let error = assistant::resume(&ctx, "A-1", PANE, &Overrides::default()).unwrap_err();
     assert!(format!("{error:#}").contains("assistant_ended"));
+}
+
+#[test]
+fn a_fresh_session_is_claimed_before_any_resumer_can_see_it() {
+    // The launch and /new share open_claimed; pause it between claim and publication.
+    let fx = fixture_with_role();
+    let ctx = f::ctx_at(fx.root());
+    let mut paused = None;
+    let (session, _, _, claim) = assistant::open_observed(
+        &ctx,
+        ctx.store.root(),
+        PANE,
+        &Overrides::default(),
+        false,
+        None,
+        |id| {
+            // A concurrent `corral pi --resume` or `/resume` claims first: refused, and the
+            // record it would resume is not visible yet.
+            let rival = assistant::claim(&ctx.store, id).unwrap_err();
+            assert!(format!("{rival:#}").contains("assistant_claimed"));
+            assert!(!ctx.store.assistant_exists(id).unwrap());
+            paused = Some(id.to_owned());
+        },
+    )
+    .unwrap();
+    assert_eq!(paused.as_deref(), Some(session.id.as_str()));
+    // After publication the rival is still refused; the winner keeps one open generation.
+    assert!(assistant::claim(&ctx.store, &session.id).is_err());
+    let container = ctx.store.get_assistant_container(&session.id).unwrap();
+    assert_eq!(container.state.generations.len(), 1);
+    assert!(
+        ctx.store
+            .get_assistant(&session.id)
+            .unwrap()
+            .ended
+            .is_none()
+    );
+    drop(claim);
+
+    // A launcher that loses the claim publishes nothing and ends nobody else's session.
+    let held = assistant::claim(&ctx.store, "A-2").unwrap();
+    let error = assistant::open_claimed(
+        &ctx,
+        ctx.store.root(),
+        PANE,
+        &Overrides::default(),
+        false,
+        None,
+    )
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("assistant_claimed"));
+    assert!(!ctx.store.assistant_exists("A-2").unwrap());
+    assert!(ctx.store.get_assistant("A-1").unwrap().ended.is_none());
+    drop(held);
 }
