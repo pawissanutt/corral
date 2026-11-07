@@ -320,6 +320,7 @@ fn reserve(
                 return Ok((stored.clone(), true));
             }
             admission::recheck_assistant(assistant, ended, origin.binding.generation)?;
+            crate::assistant::workflow::boundary::require_ordinary(&ctx.store, session, assistant)?;
             let cited = cite(assistant, payload, action, &origin.request_id)?;
             if assistant.state.receipts.len() >= RECEIPTS_MAX {
                 return Err(reject(
@@ -460,6 +461,7 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     let Resolved::Assistant(assistant, _) = &admitted.resolved else {
         anyhow::bail!("owner_action resolved no assistant container");
     };
+    crate::assistant::workflow::boundary::require_ordinary(&ctx.store, &session, assistant)?;
     let request = envelope.request_id.as_str();
     let cited = cite(assistant, &payload, &action, request)?;
     if cited

@@ -20,6 +20,7 @@ const FAKE = `#!/usr/bin/env bun
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 const dir = dirname(process.argv[1]);
+if (process.argv[2] === "assistant") { process.stdout.write(JSON.stringify({ container: { version: 1 }, workflow: { workflow: null, phase: "ordinary" } })); process.exit(0); }
 const envelope = JSON.parse(readFileSync(0, "utf8"));
 let result = envelope.payload.kind === "budget" ? { admitted: true, exhausted: false } : { op: envelope.op };
 if (envelope.payload.kind === "owner_input") {

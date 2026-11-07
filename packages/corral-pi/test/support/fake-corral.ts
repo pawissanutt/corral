@@ -2,6 +2,7 @@
 // environment keys, and answers `agent call` with one committed receipt line.
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { PLANNING_FIXTURE } from "./planning-state.ts";
 
 export interface FakeCall {
   readonly argv: string[];
@@ -26,6 +27,7 @@ const SCRIPT = `#!/usr/bin/env bun
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 const dir = dirname(process.argv[1]);
+${PLANNING_FIXTURE}
 const stdin = readFileSync(0, "utf8");
 if (process.argv[2] === "run" && process.argv[3] === "inspect") {
   const inspection = join(dir, "inspection.json");
@@ -49,7 +51,9 @@ const fail = join(dir, "fail");
 if (existsSync(fail)) { process.stderr.write("fake corral refused\\n"); process.exit(Number(readFileSync(fail, "utf8"))); }
 const snapshot = join(dir, "snapshot.json");
 if (reading) {
-  process.stdout.write(readFileSync(snapshot, "utf8"));
+  const state = process.argv[2] === "assistant" ? planningFixtureRead()
+    : existsSync(snapshot) ? JSON.parse(readFileSync(snapshot, "utf8")) : {};
+  process.stdout.write(JSON.stringify(state));
   process.exit(0);
 }
 const envelope = JSON.parse(stdin);
@@ -66,6 +70,8 @@ if (envelope.op === "event" && envelope.payload.kind === "turn_ended" && existsS
   ended = queue.shift() ?? {};
   writeFileSync(endings, JSON.stringify(queue));
 }
+const boundary = envelope.op === "event" && envelope.payload.kind === "assistant_boundary"
+  ? planningFixtureEvent(envelope) : undefined;
 let progress;
 if (envelope.op === "todo" && existsSync(snapshot)) {
   const state = JSON.parse(readFileSync(snapshot, "utf8"));
@@ -92,7 +98,7 @@ if (envelope.op === "todo" && existsSync(snapshot)) {
 }
 process.stdout.write(JSON.stringify({ version: 1, request_id: envelope.request_id, op: envelope.op,
   payload_sha256: envelope.payload_sha256, identity: envelope.identity, state: "committed",
-  result: { op: envelope.op, ...ended, ...(progress ? { revision: progress.revision, progress } : {}),
+  result: { op: envelope.op, ...ended, ...boundary, ...(progress ? { revision: progress.revision, progress } : {}),
     ...(envelope.payload.kind === "budget" ? { admitted: true, exhausted: false } : {}),
     ...(envelope.payload.kind === "owner_input" ? { input: envelope.identity.assistant + "/g" + envelope.identity.generation
       + "/i" + envelope.request_id.split("-").at(-1) } : {}),

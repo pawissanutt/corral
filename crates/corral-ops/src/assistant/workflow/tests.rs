@@ -1,3 +1,6 @@
+#[path = "boundary_tests.rs"]
+mod boundary_tests;
+
 use corral_core::assistant::{AssistantContainer, NewOwnerInput, OwnerInputSource};
 use corral_core::assistant_workflow::*;
 use corral_core::blob_ref::BlobHash;
@@ -110,6 +113,38 @@ impl Fixture {
     }
     fn no_tasks(&self) {
         assert!(self.fx.ctx.store.list().unwrap().is_empty());
+    }
+    fn boundary(&self, seq: u64, transition: Value) -> CallResponse {
+        ts::send(
+            &self.fx,
+            &ts::envelope(
+                &self.host,
+                "event",
+                &crate::agent::event_request_id(self.host.identity.generation, seq),
+                json!({"kind": "assistant_boundary", "transition": transition}),
+                false,
+            ),
+            "event",
+        )
+    }
+    fn owner_input(&self) -> String {
+        let text = "Plan this, without implementing.";
+        let answer = ts::send(
+            &self.fx,
+            &ts::envelope(
+                &self.host,
+                "event",
+                "ev-1-50",
+                json!({"kind": "owner_input", "source": "pane", "text": text,
+                "sha256": BlobHash::of(text.as_bytes())}),
+                false,
+            ),
+            "event",
+        );
+        ts::committed(&answer).result["input"]
+            .as_str()
+            .unwrap()
+            .to_owned()
     }
 }
 

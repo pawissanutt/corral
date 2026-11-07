@@ -33,6 +33,7 @@ pub struct Entry {
     via: &'static str,
     assistant: Option<String>,
     owner_action: Option<ViaAssistant>,
+    planning_safe: bool,
 }
 
 impl Entry {
@@ -45,6 +46,7 @@ impl Entry {
                 via: "owner_action",
                 assistant: None,
                 owner_action: Some(via),
+                planning_safe: false,
             });
         }
         if let Some(session) = std::env::var_os("CORRAL_ASSISTANT") {
@@ -85,6 +87,7 @@ impl Entry {
             via,
             assistant: None,
             owner_action: None,
+            planning_safe: false,
         })
     }
 
@@ -103,6 +106,7 @@ impl Entry {
             via: "assistant",
             assistant: Some(session),
             owner_action: None,
+            planning_safe: class::planning_safe(cmd),
         })
     }
 
@@ -124,6 +128,15 @@ impl Entry {
     }
 
     pub fn apply(&self, store: &Store) -> Result<()> {
+        if let Some(session) = &self.assistant
+            && !self.planning_safe
+        {
+            store.inspect_assistant_container(session, |container, _| {
+                corral_ops::assistant::workflow::boundary::require_ordinary(
+                    store, session, container,
+                )
+            })?;
+        }
         let (actor, via) = self.resolve(store)?;
         store.set_attribution(actor, &via)?;
         if let Some(authority) = &self.owner_action {
