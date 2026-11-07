@@ -17,7 +17,7 @@ export interface PlanningState {
 }
 const PHASES = new Set(["ordinary", "entering", "recovering", "planning", "executing", "candidate", "paused",
   "handoff_preparing", "handoff_reconciling", "board_owned", "closed"]);
-const READS = new Set(["read", "grep", "find", "ls", "assistant_inspect", "web_fetch", "web_read", "web_search", "tool_search", "explore",
+const READS = new Set(["read", "grep", "find", "ls", "corral_assistant_inspect", "web_fetch", "web_read", "web_search", "tool_search", "explore",
   "corral_receipt_lookup", "corral_content_read", "corral_memory_list", "corral_memory_read", "codemode",
   "ask_user", "job_output", "job_wait", "job_kill", "corral_job_monitor"]);
 const BOOKKEEPING: Readonly<Record<string, ReadonlySet<string>>> = {
