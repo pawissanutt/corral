@@ -106,11 +106,34 @@ Global and workspace mbx configuration aren't supported yet, and neither are you
 | `MBX_SCHEDULER`, `MBX_SCHEDULER_TESTS` | `0` | Cargo and nextest keep their own job and test policy |
 | `MBX_SHARE_WORKSPACE_ROOT` | `0` | No workspace-root path remapping |
 | `MBX_DISPLAY` | `plain` | Log-friendly output |
+| `MBX_SUMMARY` | `full` | Report bypass reasons and per-build compiler timing |
 
 The budgets are logical collection targets, not physical disk quotas. Active builds and
 state between collections can exceed them. They do not cap or collect worktree targets.
 Use a dedicated cache: the adapter refuses its reserved managed-target root if it already
 contains records, rather than running collection against them.
+
+### Rust flags and the linker
+
+In mbx mode, when neither `RUSTFLAGS` nor `CARGO_ENCODED_RUSTFLAGS` is explicitly
+supplied, the adapter sets `CARGO_ENCODED_RUSTFLAGS` to an empty string. This takes
+precedence over Cargo's target/build rustflags arrays, including flags inherited from
+`CARGO_HOME/config.toml`; an empty project-level array alone would not override them.
+No Cargo configuration file is modified. Plain-Cargo mode is unchanged.
+
+This avoids the observed mbx 1.29.2 `unknown-codegen-option` bypass caused by inherited
+`-C linker-features=-lld`. An inherited `-C link-arg=-B...` also prevents native-link
+caching. Without these overrides the default x86-64 Linux Rust toolchain uses its
+bundled LLD through the system compiler driver, rather than the owner's custom mold
+flags. The adapter does not install a linker or require clang.
+
+Explicit `RUSTFLAGS` and `CARGO_ENCODED_RUSTFLAGS` are preserved, including empty
+values and Cargo's encoded-flags precedence. Put required flags in the review policy
+`env` so they are captured in gate identity; incompatible explicit flags can still
+cause bypasses. This default also masks repository and command-line Cargo rustflags
+arrays: pass required sanitizer, CPU, cfg or linker flags explicitly via the environment.
+A flag change produces new cache keys, so the first gate can rebuild; improved cache
+eligibility is not a measured wall-time speedup.
 
 ## Private targets
 
@@ -152,8 +175,10 @@ For a one-off manual build, export the same three variables in your shell and ru
 
 ## Diagnostics
 
-The gate logs the selected profile and mbx reports cache hits, misses and bypasses on
-stderr. To inspect the dedicated store without changing it:
+The gate logs the selected profile and mbx reports cache hits, misses, bypass reasons
+and compiler timing on stderr with the full summary. Compiler time avoided is summed
+across actions, not wall time saved. Routine probes and rustdoc bypasses are expected.
+To inspect the dedicated store without changing it:
 
 ```sh
 MBX_CACHE_DIR="$CORRAL_MBX_CACHE_DIR" \
