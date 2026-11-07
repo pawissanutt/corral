@@ -389,6 +389,7 @@ fn construct(ctx: &Ctx, task: &Task, landings: &[Landing]) -> Result<Option<Noti
     let target = Target::new(task, run);
     let id = crate::verification::digest(&serde_json::to_vec(&(&target, &relevant))?);
     let key = RepairKey {
+        cycle: None,
         driver: RepairKey::driver(task),
         task: task.id.clone(),
         run: run.id.clone(),

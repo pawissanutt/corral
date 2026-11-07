@@ -15,14 +15,12 @@ impl Pilot<'_> {
     ) -> Result<Step> {
         let _action = corral_core::work::action(self.id(), OperatingActionKind::Repair);
         key.check(&self.ctx.store.head(self.id())?)?;
+        let (bound, issued) = crate::repair_cycle::bind(&self.ctx.store, key, self.head.rounds)?;
+        let key = &bound;
         let digest = key.digest()?;
         if packet.is_some() && output::requested(self.ctx, key, &digest)? {
             return Ok(Step::Wait);
         }
-        let issued = match crate::repair_cycle::load(&self.ctx.store, self.id())? {
-            Some(cycle) if cycle.issued && cycle.key.digest()? == digest => Some(cycle),
-            _ => None,
-        };
         if issued
             .as_ref()
             .is_some_and(|cycle| cycle.driver == key.driver)

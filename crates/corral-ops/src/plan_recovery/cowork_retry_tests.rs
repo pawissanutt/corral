@@ -53,7 +53,7 @@ fn board_repair_adopts_exact_committed_seed_without_assistant_or_worker_session(
         "branch":"source","base":"main","base_sha":base,"started":task.created,"outcome":"superseded"})).unwrap();
     task.runs.push(old.clone());
     task.cowork = Some(serde_json::from_value(json!({"session":"A-999","scratch":"work","run":"R1",
-        "review":"required","owner_confirmed":true,"completion":{"version":1,"contract_revision":task.contract_revision().unwrap(),
+        "review":"completion_v1","owner_confirmed":true,"completion":{"version":1,"contract_revision":task.contract_revision().unwrap(),
         "intent":"ship","driver":{"kind":"board"},"instruction":"take over"}})).unwrap());
     let next = Run {
         id: "R2".into(),

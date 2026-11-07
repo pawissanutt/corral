@@ -155,6 +155,7 @@ fn prepared_snapshot_keeps_first_packet_approval_attribution_after_newer_prepara
     }))
     .unwrap();
     let key = RepairKey {
+        cycle: None,
         driver: RepairKey::driver(&task),
         task: task.id.clone(),
         run: run.id.clone(),

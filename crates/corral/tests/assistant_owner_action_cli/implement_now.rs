@@ -82,8 +82,13 @@ fn one_land_now_answer_finishes_the_reported_candidate_and_approves_it() {
     assert!(task.cowork.as_ref().unwrap().owner_confirmed);
     assert_eq!(
         task.cowork.as_ref().unwrap().review,
-        corral_core::CoworkReview::Required
+        corral_core::CoworkReview::CompletionV1
     );
+    assert!(task.runs[0].gate.is_none() && task.runs[0].review.is_none());
+    // Submission returned before any check. The shared controller, not the parent host,
+    // advances it; a PM caller's role must still be scrubbed from the gate subprocess.
+    fx.ok(&["sync"], &[("CORRAL_PM", "1")]);
+    let task = fx.store().get("T-002").unwrap();
     assert_eq!(
         task.runs[0].gate.as_ref().unwrap().result,
         corral_core::GateResult::Pass

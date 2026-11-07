@@ -274,6 +274,7 @@ struct Draft<'a> {
 
 impl Draft<'_> {
     fn apply(&self, ctx: &Ctx, task: &mut Task) -> Result<String> {
+        crate::repair_cycle::submitted(&ctx.store, task)?;
         if self.owner_confirmed {
             task.kind
                 .get_or_insert_with(|| TaskKind::Backend.to_string());
@@ -464,7 +465,7 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
         OwnerAuthority::ViaAssistant(via) => via.confirmed,
     };
     let review = if owner_confirmed {
-        CoworkReview::Required
+        CoworkReview::CompletionV1
     } else {
         opts.review.unwrap_or(CoworkReview::None)
     };
@@ -473,7 +474,7 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
         scratch.branch,
         match review {
             CoworkReview::None => "none",
-            CoworkReview::Required => "required",
+            CoworkReview::Required | CoworkReview::CompletionV1 => "required",
         }
     );
     if let Some(note) = opts.note.filter(|note| !note.trim().is_empty()) {

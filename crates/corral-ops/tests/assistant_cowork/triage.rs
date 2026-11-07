@@ -1,5 +1,6 @@
 //! Real managed receipt attribution on isolated disposable Git worktrees, no live server.
 use super::*;
+use corral_core::GateResult;
 use corral_ops::gate_triage::{self, Baseline, FailureClass, GateDiagnosis};
 
 #[test]

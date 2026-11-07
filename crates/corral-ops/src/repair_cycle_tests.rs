@@ -26,6 +26,7 @@ fn issued_cycle_keeps_findings_and_one_round_across_transfers_and_run_replacemen
         scratch: "fix".into(),
     };
     let key = RepairKey {
+        cycle: Some(1),
         driver: Some(assistant.clone()),
         task: task.id.clone(),
         run: "R1".into(),
@@ -35,6 +36,7 @@ fn issued_cycle_keeps_findings_and_one_round_across_transfers_and_run_replacemen
     };
     let mut ordinary = key.clone();
     ordinary.driver = None;
+    ordinary.cycle = None;
     let legacy = format!(
         r#"{{"task":"{}","run":"R1","head":"head","base":"base","reason":"required findings"}}"#,
         task.id
@@ -57,9 +59,13 @@ fn issued_cycle_keeps_findings_and_one_round_across_transfers_and_run_replacemen
         let task = store.update(&task.id, |task| {
             task.status = if active_worker { Status::Running } else { Status::NeedsMe };
             task.current_run_mut().unwrap().outcome = if active_worker { None } else { Some(corral_core::RunOutcome::Done) };
-            task.current_run_mut().unwrap().id = run.into();
+            if task.current_run().unwrap().id != run {
+                let mut replacement = task.current_run().unwrap().clone();
+                replacement.id = run.into();
+                task.runs.push(replacement);
+            }
             task.cowork = Some(serde_json::from_value(json!({"session":"A-1","scratch":"fix","run":"R1",
-                "review":"required","owner_confirmed":true,"completion":{"version":1,
+                "review":"completion_v1","owner_confirmed":true,"completion":{"version":1,
                 "contract_revision":task.contract_revision()?,"intent":"ship","driver":driver,"instruction":"ship"}}))?);
             Ok(())
         }).unwrap();
@@ -89,4 +95,31 @@ fn issued_cycle_keeps_findings_and_one_round_across_transfers_and_run_replacemen
                 .is_none()
         );
     }
+    // A real author submission ends the cycle even with no code change. Repeating its
+    // finding after that must consume another bounded cycle, unlike transfer alone.
+    let task = store
+        .update(&task.id, |task| {
+            task.status = Status::Review;
+            task.current_run_mut().unwrap().outcome = Some(corral_core::RunOutcome::Done);
+            submitted(&store, task)
+        })
+        .unwrap();
+    let facts = RepairKey {
+        cycle: None,
+        driver: Some(CompletionDriver::Board),
+        run: "R2".into(),
+        ..key.clone()
+    };
+    let (next, reused) = bind(&store, &facts, task.rounds).unwrap();
+    assert!(reused.is_none());
+    assert_eq!(next.cycle, Some(2));
+    assert_ne!(key.digest().unwrap(), next.digest().unwrap());
+    prepare(&ctx, &next, 2, "findings", "still unresolved").unwrap();
+    store
+        .update(&task.id, |task| {
+            task.rounds = 2;
+            issue(&store, task, &next, 2)
+        })
+        .unwrap();
+    assert_eq!(store.get(&task.id).unwrap().rounds, 2);
 }

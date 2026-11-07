@@ -1,4 +1,5 @@
 //! Completion responsibility is separate from immutable co-work provenance.
+use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +25,33 @@ pub struct CompletionScope {
     pub intent: CompletionIntent,
     pub driver: CompletionDriver,
     pub instruction: String,
+}
+
+// Fail before persistence if a producer forgets the old-reader fence. Merely adding an
+// optional intent field would let an old controller deserialize Verify as legacy Ship.
+impl Serialize for crate::Cowork {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if self.completion.is_some() != (self.review == crate::CoworkReview::CompletionV1) {
+            return Err(serde::ser::Error::custom(
+                "completion scope requires the completion_v1 review fence",
+            ));
+        }
+        let mut value = serializer.serialize_struct(
+            "Cowork",
+            4 + usize::from(self.owner_confirmed) + usize::from(self.completion.is_some()),
+        )?;
+        if let Some(scope) = &self.completion {
+            value.serialize_field("completion", scope)?;
+        }
+        value.serialize_field("session", &self.session)?;
+        value.serialize_field("scratch", &self.scratch)?;
+        value.serialize_field("run", &self.run)?;
+        value.serialize_field("review", &self.review)?;
+        if self.owner_confirmed {
+            value.serialize_field("owner_confirmed", &true)?;
+        }
+        value.end()
+    }
 }
 
 impl crate::Cowork {

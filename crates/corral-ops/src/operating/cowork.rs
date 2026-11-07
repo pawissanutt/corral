@@ -20,10 +20,14 @@ pub(super) fn confirmed<T: TaskRef + ?Sized>(task: &T, kind: OperatingActionKind
 
 /// Completion intent fences every automatic path, including broad workspace grants.
 pub(super) fn validate<T: TaskRef + ?Sized>(task: &T, kind: OperatingActionKind) -> Result<()> {
-    if let Some(scope) = task
-        .cowork_run()
-        .and_then(|cowork| cowork.completion.as_ref())
-    {
+    let cowork = task.cowork_run();
+    ensure!(
+        cowork.is_none_or(
+            |c| c.completion.is_some() == (c.review == corral_core::CoworkReview::CompletionV1)
+        ),
+        "completion scope has no compatible reader fence; upgrade/reconcile Corral"
+    );
+    if let Some(scope) = cowork.and_then(|cowork| cowork.completion.as_ref()) {
         ensure!(
             scope.version == 1,
             "completion version unsupported; upgrade Corral"

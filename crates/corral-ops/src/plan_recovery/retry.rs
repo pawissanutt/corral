@@ -81,9 +81,9 @@ pub(crate) fn start_head(store: &Store, task: &TaskHead, run: &RunHead) -> Resul
     let Some(source) = source else {
         ensure!(
             (run.plan_target.is_none()
-                && !task
+                && task
                     .cowork_run()
-                    .is_some_and(|cowork| cowork.assistant_driver().is_none()))
+                    .is_none_or(|cowork| cowork.assistant_driver().is_some()))
                 || !task
                     .previous_run_head()?
                     .is_some_and(|previous| previous.outcome == Some(RunOutcome::Superseded)

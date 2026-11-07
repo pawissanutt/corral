@@ -729,18 +729,18 @@ pub struct LandingReceipt {
     pub sha: String,
 }
 
-/// An owner-instructed co-work finish: the assistant scratch run `run` came from and the owner's
-/// review choice and confirmed shipping instruction, effective only while `run` is current.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Co-work source provenance, with either a run-bound legacy instruction or a versioned
+/// completion scope. New scopes carry a minimum-reader fence in their review tag.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Cowork {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub completion: Option<crate::CompletionScope>,
     pub session: String,
     pub scratch: String,
     pub run: String,
     pub review: CoworkReview,
-    /// The owner explicitly instructed this finish to ship. Old records remain manual.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    /// The owner confirmed this instruction. Legacy true means Ship; new intent is explicit.
+    #[serde(default)]
     pub owner_confirmed: bool,
 }
 
@@ -749,6 +749,8 @@ pub struct Cowork {
 pub enum CoworkReview {
     None,
     Required,
+    /// Minimum-reader fence: old controllers must not mistake Verify for legacy Ship.
+    CompletionV1,
 }
 
 /// A task file: `.corral/tasks/<id>-<slug>.md` = YAML frontmatter (this struct minus `body`/`path`) + markdown body.

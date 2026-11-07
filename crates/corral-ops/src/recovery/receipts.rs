@@ -8,7 +8,7 @@ use corral_core::{CoworkReview, GateResult, ReviewPolicy, Reviewer, RunHead, Tas
 /// current co-work run with review required, which binds whatever the reviewer resolves to.
 pub(crate) fn review_needed<T: TaskRef + ?Sized>(policy: &ReviewPolicy, task: &T) -> bool {
     policy.reviewer != Reviewer::None
-        || (task.cowork_run()).is_some_and(|cowork| cowork.review == CoworkReview::Required)
+        || (task.cowork_run()).is_some_and(|cowork| cowork.review != CoworkReview::None)
 }
 
 /// The reduced tier an approval is bound to while the current receipt is a failed full one.

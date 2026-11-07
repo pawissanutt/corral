@@ -1,7 +1,7 @@
 //! Shared disposable co-work service fixture.
-use super::{git, support};
+use super::git;
+use corral_core::AgentCmd;
 use corral_core::assistant::AssistantScratch;
-use corral_core::{AgentCmd, Status};
 use corral_herdr::Herdr;
 use corral_ops::{Ctx, assistant::scratch};
 use serde_json::json;

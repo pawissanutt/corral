@@ -55,6 +55,8 @@ impl std::error::Error for StalePacket {}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RepairKey {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cycle: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub driver: Option<corral_core::CompletionDriver>,
     pub task: String,
     pub run: String,
@@ -66,6 +68,7 @@ pub(crate) struct RepairKey {
 impl RepairKey {
     pub fn new<T: TaskRef + ?Sized>(task: &T, run: &RunHead, reason: &str) -> Result<Self> {
         Ok(Self {
+            cycle: None,
             driver: Self::driver(task),
             task: task.id().clone(),
             run: run.id.clone(),
@@ -76,6 +79,15 @@ impl RepairKey {
     }
 
     pub fn digest(&self) -> Result<String> {
+        if let Some(cycle) = self.cycle {
+            return Ok(verification::digest(&serde_json::to_vec(&(
+                "repair-cycle-v1",
+                &self.task,
+                &self.head,
+                &self.reason,
+                cycle,
+            ))?));
+        }
         // Ordinary legacy board preparations keep their exact receipt identity. A scoped
         // completion's driver/run replacement is not another code repair; live run/base/driver
         // still fence submission in check(), without changing its issued cycle identity.
@@ -477,6 +489,7 @@ mod derived_rows_tests {
         }))
         .unwrap();
         let key = RepairKey {
+            cycle: None,
             driver: RepairKey::driver(&task),
             task: task.id.clone(),
             run: run.id.clone(),

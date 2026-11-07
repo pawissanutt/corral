@@ -311,6 +311,7 @@ fn done_inner(
             ctx.store.log_event(Some(&t.id), "done", detail.clone())?;
         }
         save_finish(head, &value)?;
+        crate::repair_cycle::submitted(&ctx.store, head.head())?;
         finished = Some(value);
         Ok(())
     })?;

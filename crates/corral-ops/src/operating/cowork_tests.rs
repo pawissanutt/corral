@@ -63,6 +63,24 @@ fn finish_instruction_is_one_run_not_a_workspace_grant_and_live_stops_still_appl
         },
         instruction: "Check only".into(),
     });
+    task.cowork.as_mut().unwrap().review = corral_core::CoworkReview::CompletionV1;
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum LegacyReview {
+        None,
+        Required,
+    }
+    let wire = serde_json::to_value(task.cowork.as_ref().unwrap()).unwrap();
+    assert!(
+        serde_json::from_value::<LegacyReview>(wire["review"].clone()).is_err(),
+        "an old controller must refuse, not interpret Verify as legacy Ship"
+    );
+    let mut unfenced = task.cowork.clone().unwrap();
+    unfenced.review = corral_core::CoworkReview::Required;
+    assert!(
+        serde_json::to_vec(&unfenced).is_err(),
+        "unfenced scopes must fail before persistence"
+    );
     super::super::require(&store, &task, OperatingActionKind::Gate).unwrap();
     let error = super::super::require(&store, &task, OperatingActionKind::Accept).unwrap_err();
     assert!(error.to_string().contains("check_only"));

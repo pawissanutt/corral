@@ -160,7 +160,7 @@ test("live private-pane co-work: shell finish refused, unclear ship asks, promot
     const task = show("T-002");
     expect([task.status, task.origin, task.labels]).toEqual(["review", "assistant", ["cowork"]]);
     const { completion, ...provenance } = task.cowork;
-    expect(provenance).toEqual({ session: fixture.session, scratch: "cache-fix", run: "R1", review: "required", owner_confirmed: true });
+    expect(provenance).toEqual({ session: fixture.session, scratch: "cache-fix", run: "R1", review: "completion_v1", owner_confirmed: true });
     expect([completion.version, completion.intent, completion.driver]).toEqual([1, "ship",
       { kind: "assistant", session: fixture.session, scratch: "cache-fix" }]);
     expect(completion.contract_revision).toMatch(/^[a-f0-9]{64}$/);
