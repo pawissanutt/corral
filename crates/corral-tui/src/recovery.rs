@@ -33,12 +33,15 @@ const Z_REVIEWER: u8 = 3;
 pub(crate) type Authorize =
     fn(&Ctx, &RecoveryPreview, &RecoveryInput, &str) -> Result<RecoveryRecord>;
 
-/// Refuses until the shared service offers its trusted TUI owner confirmation.
-fn unavailable(_: &Ctx, _: &RecoveryPreview, _: &RecoveryInput, _: &str) -> Result<RecoveryRecord> {
-    anyhow::bail!(
-        "TUI owner confirmation is not available in this build; nothing was applied. \
-         Use `corral recover <task> --apply <digest>` from an unmanaged terminal."
-    )
+/// The board's explicit confirmation, bound to the exact current preview, then one apply.
+fn confirm_and_apply(
+    ctx: &Ctx,
+    preview: &RecoveryPreview,
+    input: &RecoveryInput,
+    reason: &str,
+) -> Result<RecoveryRecord> {
+    let confirmation = recovery::recover_confirm_tui(ctx, preview, input, reason)?;
+    recovery::recover_apply(ctx, preview, input, Some(confirmation))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,7 +146,7 @@ impl RecoverySheet {
         } else {
             Kind::UseReviewer
         };
-        Self::with(ctx, &task.id, kind, unavailable)
+        Self::with(ctx, &task.id, kind, confirm_and_apply)
     }
 
     pub(crate) fn with(ctx: &Ctx, task: &str, kind: Kind, authorize: Authorize) -> RecoverySheet {
@@ -430,7 +433,7 @@ impl RecoverySheet {
                 "Hard blockers remain or the proposal is incomplete; nothing was applied".into(),
             );
         }
-        match (self.authorize)(ctx, &shown, &input, self.reason.trim()) {
+        match (self.authorize)(ctx, &fresh, &input, self.reason.trim()) {
             Ok(record) => {
                 let state = record.outcomes.last().map_or("authorized".into(), |o| {
                     format!("{:?}", o.state).to_lowercase()

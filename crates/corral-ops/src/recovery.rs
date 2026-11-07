@@ -29,7 +29,7 @@ mod reconcile;
 pub(crate) use reconcile::reconcile_pending;
 
 pub use apply::{recover_apply, recover_reconcile};
-pub use authority::{OwnerConfirmation, recover_confirm};
+pub use authority::{OwnerConfirmation, recover_confirm, recover_confirm_tui};
 pub(crate) use continuity::*;
 
 /// Surface input, including the actual resolution notes whose hash the request binds.
