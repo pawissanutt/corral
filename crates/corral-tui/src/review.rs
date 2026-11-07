@@ -482,6 +482,7 @@ impl ReviewView {
             }
             KeyCode::Char('A') => Action::OpenArtifacts,
             KeyCode::Char('i') => Action::OpenAcceptance(self.id()),
+            KeyCode::Char('F') => Action::OpenRecover(self.id()),
             KeyCode::Char('*') => shelf::toggle(ctx, &self.pin_target()),
             KeyCode::Char('[') | KeyCode::Char(']') => {
                 let len = self.info.stat.files.len();
@@ -671,6 +672,7 @@ impl View for ReviewView {
                 ("Retry", hit::press(KeyCode::Char('R'))),
                 ("Discard", hit::press(KeyCode::Char('x'))),
                 ("All artifacts", hit::press(KeyCode::Char('A'))),
+                ("Recover…", hit::press(KeyCode::Char('F'))),
             ];
             hit::buttons(f, hits, actions.x, actions.y, actions.right(), &buttons);
         }
