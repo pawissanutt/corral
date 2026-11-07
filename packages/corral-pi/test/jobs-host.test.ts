@@ -18,6 +18,7 @@ import { workerRole } from "../src/roles/worker/index.ts";
 import type { CapabilitySet, RoleContext } from "../src/roles/types.ts";
 import { CorralClient, sha256Hex, toolRequestId } from "../src/tools/corral.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
+import { requestBody } from "./fixtures/auth/fake-transport.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
 import { writeFakeCorral } from "./support/fake-corral.ts";
 import { nextEvent } from "./support/wait.ts";
@@ -39,7 +40,13 @@ test("background_shell gives only the worker job tools, and another tool cannot 
     const modules = await loadModules(assets.dir, "worker");
     const transport = modules.auth.transport?.(authContext());
     if (!transport) throw new Error("fixture transport missing");
-    const network = guardedFetch(transport, undefined, "openai-codex");
+    const declared: { name: string; description: string }[][] = [];
+    const network = guardedFetch(async (input, init) => {
+      type DeclaredTool = { name: string; description: string };
+      const body = requestBody(init) as { tools?: DeclaredTool[]; input?: { tools?: DeclaredTool[] }[] };
+      declared.push([...(body.tools ?? []), ...(body.input ?? []).flatMap(item => item.tools ?? [])]);
+      return transport(input, init);
+    }, undefined, "openai-codex");
     const role = workerRole(PACKAGE_ROOT);
     const nested: ToolDefinition = {
       name: "fixture_nested", label: "Nested monitor", description: "Exercises nested execution",
@@ -58,7 +65,8 @@ test("background_shell gives only the worker job tools, and another tool cannot 
       corral: corral.path, root: cwd, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "",
     });
     const options = {
-      sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol", capabilities, guidance, client, events,
+      sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol",
+      capabilities: { ...capabilities, enabled: [...capabilities.enabled, "codemode"] }, guidance, client, events,
       network, runtimeDir: join(cwd, "runtime"),
       sessionManager: sdk.SessionManager.create(cwd, join(cwd, "sessions")),
     };
@@ -88,6 +96,15 @@ test("background_shell gives only the worker job tools, and another tool cannot 
         .disposition).toBe("started");
       await ended;
       await host.drained();
+      // The legacy scripted caller still runs, but neither provider schemas nor Code Mode advertise it.
+      expect(declared.length).toBeGreaterThan(0);
+      for (const tools of declared) {
+        expect(tools.map(tool => tool.name)).not.toContain("job_start");
+        expect(tools.map(tool => tool.name)).toContain("bash");
+        const description = tools.find(tool => tool.name === "codemode")?.description ?? "";
+        expect(description).toContain("bash");
+        expect(description).not.toContain("job_start");
+      }
       const exited = nextEvent(events, (event) => event.kind === "job_exited");
       await writeFile(gate, "go\n");
       await exited;

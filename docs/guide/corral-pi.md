@@ -839,8 +839,9 @@ explicit job tools remain structured.
   SIGTERM then SIGKILL after two seconds. Terminal calls are idempotent. `termination`
   distinguishes normal exit, cancellation, hard deadline and owning-host shutdown;
   `group_clear` is a local cleanup observation, not gate PASS or canonical task settlement.
-- `job_start({command})` remains a compatibility alias for immediate-background Bash.
-  New workflows should use Bash plus wait/peek rather than a separate launch engine.
+- `job_start({command})` remains an executable compatibility alias for immediate-background
+  Bash, but is omitted from model tool declarations and Code Mode's advertised callable list
+  when managed Bash is available. New workflows use `bash({command, wait_ms: 0})` plus wait/peek.
 
 Default nested `await tools.bash(...)` waits for actual completion before the next JavaScript
 statement. Code Mode owns yielding the enclosing cell and its filtered final notification;

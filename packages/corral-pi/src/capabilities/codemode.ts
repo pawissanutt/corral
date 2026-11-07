@@ -55,7 +55,9 @@ export function codemodeTool(runtime: CodeRuntime, callable: (names: readonly st
     promptSnippet: "Run JavaScript cells that call other tools on a persistent kernel",
     prepareLoadout: (loadout) => {
       const names = callable(loadout.callable.map((tool) => tool.name).filter((name) => name !== CODEMODE_TOOL));
-      return { descriptions: { [CODEMODE_TOOL]: `${DESCRIPTION}\nCallable as tools.<name>: ${names.join(", ") || "none"}.` } };
+      // The legacy launch alias stays callable, but new scripts should use bash({ wait_ms: 0 }).
+      const advertised = names.includes("bash") ? names.filter(name => name !== "job_start") : names;
+      return { descriptions: { [CODEMODE_TOOL]: `${DESCRIPTION}\nCallable as tools.<name>: ${advertised.join(", ") || "none"}.` } };
     },
     async execute(toolCallId, params: Params, signal, _update, ctx) {
       if (params.cancel !== undefined) {
