@@ -31,6 +31,7 @@ import { subscriptionRoutes } from "./subscriptions.ts";
 import { guardTerminalStop } from "./terminal-stop.ts";
 import { NEW_ASSISTANT_EXIT, RELINK_ASSISTANT_EXIT } from "./assistant-relink.ts";
 import { RESUME_ASSISTANT_EXIT } from "./assistant-resume.ts";
+import { admitConnection } from "./connections.ts";
 
 function launchFd(argv: readonly string[]): number {
   const index = argv.indexOf("--launch-fd");
@@ -44,6 +45,7 @@ function launchFd(argv: readonly string[]): number {
 async function main(): Promise<void> {
   const config = readLaunchMessage(launchFd(process.argv));
   const provider = config.provider ?? "openai-codex";
+  admitConnection(provider, config.binding);
   restrictEnvironment(process.env, provider);
   exportAssistantSession(process.env, config.identity);
   const compat = readCompat(config.assets);
@@ -107,6 +109,7 @@ async function main(): Promise<void> {
   });
   host = await HostSession.create({
     sdk, identity: config.identity, cwd: config.cwd, agentDir, model: config.model, provider, ...(aws ? { aws } : {}),
+    ...(config.binding ? { binding: config.binding } : {}),
     ...(config.effort ? { effort: config.effort } : {}),
     ...(config.promptFile ? { promptFile: config.promptFile } : {}),
     ...(config.memoryFile ? { memoryFile: config.memoryFile } : {}),

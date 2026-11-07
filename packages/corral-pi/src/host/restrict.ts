@@ -24,7 +24,7 @@ export function restrictEnvironment(env: NodeJS.ProcessEnv, provider?: ProviderI
   }
   // Ambient Anthropic auth (API key, auth/OAuth tokens, workload federation, base URL) would be
   // paid or foreign-store access; corral-pi uses only the corral-owned subscription login.
-  for (const key of Object.keys(env)) if (key.startsWith("ANTHROPIC_")) delete env[key];
+  for (const key of Object.keys(env)) if (key.startsWith("ANTHROPIC_") || key.startsWith("OPENAI_")) delete env[key];
   // A Bedrock host signs only with its named profile's credentials: ambient AWS keys, profiles,
   // config-file paths and Bedrock API keys never reach it or any subprocess it starts.
   if (provider === "amazon-bedrock") for (const key of Object.keys(env)) if (key.startsWith("AWS_")) delete env[key];

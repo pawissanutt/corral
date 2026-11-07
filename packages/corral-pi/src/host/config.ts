@@ -14,6 +14,7 @@ import { McpSettingsSchema } from "./mcp-settings.ts";
 import { parseControls } from "./tool-controls.ts";
 import { JobSettingsSchema } from "../extensions/jobs/settings.ts";
 import { LlamaCppSettingsSchema, type LlamaCppSettings } from "../auth/local.ts";
+import { type ConnectionBinding, parseBinding } from "./connections.ts";
 
 export const LAUNCH_VERSION = 1;
 /** Catalog keys this host implements; compat.json's `capabilities` lists the same keys. */
@@ -57,6 +58,7 @@ export interface HostConfig {
   readonly guidance?: CapabilityGuidance;
   readonly model: string;
   readonly provider?: ProviderId;
+  readonly binding?: ConnectionBinding;
   /** The non-secret Amazon Bedrock binding corral read at dispatch; absent means none. */
   readonly aws?: AwsBinding;
   readonly effort?: string;
@@ -193,6 +195,9 @@ export function parseLaunchMessage(text: string): HostConfig {
   if (message.todo !== undefined && typeof message.todo !== "boolean") {
     throw new LaunchMessageInvalid("todo must be a boolean");
   }
+  const model = field(message, "model", provider === "llama.cpp" ? /^[^\s\0]+$/ : TOKEN, provider === "llama.cpp" ? 512 : 128);
+  const effort = optional(message, "effort", TOKEN);
+  const binding = parseBinding(message.binding, provider ?? "openai-codex", model, effort);
   const aws = awsBinding(message.aws);
   const capabilities = capabilitySet(message.capabilities);
   if (provider === "llama.cpp" && capabilities?.enabled.includes("llama_cpp.enabled") !== true) {
@@ -263,10 +268,11 @@ export function parseLaunchMessage(text: string): HostConfig {
     todo: capabilities ? capabilities.enabled.includes("todo") : message.todo === true,
     ...(capabilities ? { capabilities } : {}),
     ...(guidance ? { guidance } : {}),
-    model: field(message, "model", provider === "llama.cpp" ? /^[^\s\0]+$/ : TOKEN, provider === "llama.cpp" ? 512 : 128),
+    model,
     ...(provider ? { provider } : {}),
+    ...(binding ? { binding } : {}),
     ...(aws ? { aws } : {}),
-    effort: optional(message, "effort", TOKEN),
+    effort,
     ...(message.memory_file != null ? { memoryFile: path(message, "memory_file") } : {}),
     promptFile: message.prompt_file === undefined || message.prompt_file === null ? undefined : path(message, "prompt_file"),
     ...(ui ? { ui } : {}),

@@ -9,6 +9,7 @@ import type { AuthModule } from "./types.ts";
 import { CredentialsUnavailable, authDir } from "./paths.ts";
 import { HOST_PROVIDER_IDS, PROVIDERS } from "./providers.ts";
 import { FileCredentialStore } from "./store.ts";
+import { CONNECTIONS, type ConnectionId, isApiConnection, resolveConnection } from "./connections.ts";
 
 let store: FileCredentialStore | undefined;
 
@@ -26,13 +27,16 @@ const NO_STORED_CREDENTIAL: CredentialStore = {
 const auth: AuthModule = {
   provider: "openai-codex",
   providers: HOST_PROVIDER_IDS,
+  connections: Object.keys(CONNECTIONS) as ConnectionId[],
   credentials(context) {
-    if (PROVIDERS[context.provider].auth !== "oauth") return NO_STORED_CREDENTIAL;
-    store = new FileCredentialStore(authDir(), context.provider);
+    const connection = resolveConnection(context.provider, context.connection);
+    if (!isApiConnection(connection) && PROVIDERS[context.provider].auth !== "oauth") return NO_STORED_CREDENTIAL;
+    store = new FileCredentialStore(authDir(), context.provider, {}, connection);
     if (!store.present()) {
       const name = PROVIDERS[context.provider].label.split(" (")[0];
-      throw new CredentialsUnavailable(`no ${name} login (provider ${context.provider}) in ${store.dir}; ` +
-        `run \`corral agent login --provider ${context.provider}\``);
+      throw new CredentialsUnavailable(isApiConnection(connection)
+        ? `no platform API key for connection ${connection} in the corral-owned store`
+        : `no ${name} login (provider ${context.provider}) in ${store.dir}; run \`corral agent login --provider ${context.provider}\``);
     }
     return store;
   },

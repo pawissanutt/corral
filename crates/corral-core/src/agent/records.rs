@@ -193,6 +193,9 @@ pub struct AgentGeneration {
     /// generation runs with. Recorded for assistant generations (T-653); absent before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assets_sha256: Option<String>,
+    /// Frozen auth/billing/model/candidate identity, absent only on legacy generations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<crate::connection::ConnectionBinding>,
 }
 
 impl AgentGeneration {

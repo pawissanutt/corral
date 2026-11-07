@@ -20,6 +20,8 @@ use crate::agent::receipts::{self, Commit};
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HelloPayload {
+    #[serde(default)]
+    binding_digest: Option<String>,
     ctl_cap_sha256: String,
     session_file: PathBuf,
     pid: u32,
@@ -93,7 +95,11 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         return Err(bad("hello did not resume the exact recorded role session"));
     }
     let n = envelope.identity.generation;
-    let launched = admitted.resolved.generation(&container, n)?.map(|g| g.pane);
+    let generation = admitted.resolved.generation(&container, n)?;
+    if generation.as_ref().and_then(|g| g.connection.as_ref()).map(|b| b.digest.as_str()) != payload.binding_digest.as_deref() {
+        return Err(bad("hello connection binding does not match the launched generation"));
+    }
+    let launched = generation.map(|g| g.pane);
     if launched.as_deref() != Some(payload.pane.as_str()) {
         return Err(Rejection::new(
             RejectCode::PaneMismatch,

@@ -18,7 +18,7 @@ use corral_core::{SessionAction, SessionPolicy, Store};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::admission::{BindTarget, open_generation_with};
+use super::admission::BindTarget;
 use super::bridge::assets::{
     asset_digest, bun_version, compiled_host, find_bun, missing_modules, read_compat,
     version_satisfies,
@@ -81,6 +81,8 @@ pub struct Bootstrap {
     /// The Pi provider whose credential the host loads; absent means `openai-codex`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<corral_core::connection::ConnectionBinding>,
     /// Non-secret named-profile binding captured at launch, not re-read by the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aws: Option<super::aws_profile::AwsBinding>,
@@ -237,6 +239,7 @@ pub struct HostSpec {
     pub cwd: PathBuf,
     pub model: String,
     pub provider: Option<String>,
+    pub binding: Option<corral_core::connection::ConnectionBinding>,
     pub effort: Option<String>,
     pub prompt_file: Option<PathBuf>,
     /// The PM launch adopts the owner's own pane (`corral pi`); recorded with the generation move.
@@ -297,6 +300,7 @@ pub fn prepare_bootstrap(
     pane: &str,
     spec: &HostSpec,
 ) -> Result<Prepared> {
+    super::connections::validate(spec.binding.as_ref(), spec.provider.as_deref(), &spec.model, spec.effort.as_deref())?;
     let explicit = ctx.store.config.agent.assets_dir.clone();
     let assets = match explicit.clone() {
         Some(dir) => dir,
@@ -313,6 +317,7 @@ pub fn prepare_bootstrap(
     let assets =
         std::path::absolute(&assets).with_context(|| format!("resolving {}", assets.display()))?;
     let asset_sha256 = asset_digest(&assets)?;
+    if let Some(binding) = &spec.binding { super::connections::compatible(&assets, binding)?; }
     let container = target.container();
     let mut session_dir = paths::container_sessions_dir(&ctx.store, &container);
     let mut resume_session = None;
@@ -407,7 +412,7 @@ pub fn prepare_bootstrap(
         .map(|pins| pins.capabilities)
         .unwrap_or_default();
     let memory = super::hooks::memory::projection(&ctx.store, target.role(), &project)?;
-    let grant = open_generation_with(&ctx.store, target, pane, spec.adopt, Some(&supported))?;
+    let grant = super::admission::open_generation_bound(&ctx.store, target, pane, spec.adopt, Some(&supported), spec.binding.as_ref())?;
     let (task, run, review) = match &container {
         ContainerRef::Worker { task, run } => (Some(task.clone()), Some(run.clone()), None),
         ContainerRef::Reviewer { task, run, review } => {
@@ -451,6 +456,7 @@ pub fn prepare_bootstrap(
         resume_leaf,
         model: spec.model.clone(),
         provider: spec.provider.clone(),
+        binding: spec.binding.clone(),
         aws,
         effort: spec.effort.clone(),
         prompt_file: spec.prompt_file.clone(),
@@ -697,7 +703,12 @@ pub fn check_with(
     assets_flag: Option<&Path>,
     bun: Option<PathBuf>,
 ) -> Result<Ready, LaunchRefusal> {
+    super::connections::validate(bootstrap.binding.as_ref(), bootstrap.provider.as_deref(), &bootstrap.model, bootstrap.effort.as_deref())
+        .map_err(|error| refuse("connection_invalid", format!("{error:#}")))?;
     let assets = assets_flag.unwrap_or(&bootstrap.assets).to_path_buf();
+    if let Some(binding) = &bootstrap.binding {
+        super::connections::compatible(&assets, binding).map_err(|error| refuse("connection_unsupported_by_host", format!("{error:#}")))?;
+    }
     if !assets.is_absolute() || !assets.is_dir() {
         return Err(refuse(
             "assets_unavailable",
@@ -828,7 +839,7 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
         "resume_session": bootstrap.resume_session,
         "fresh_session": bootstrap.fresh_session, "resume_leaf": bootstrap.resume_leaf,
         "model": bootstrap.model, "provider": bootstrap.provider, "effort": bootstrap.effort,
-        "aws": bootstrap.aws,
+        "aws": bootstrap.aws, "binding": bootstrap.binding,
         "prompt_file": bootstrap.prompt_file, "ui": bootstrap.ui.as_str(),
         "memory_file": super::hooks::memory::role(bootstrap.role)
             .map(|_| ready.generation_dir.join(super::hooks::memory::FILE)),

@@ -458,6 +458,7 @@ fn next_generation(
     nonce_digest: &str,
     pane: &str,
     capabilities: &CapabilitySnapshot,
+    connection: Option<&corral_core::connection::ConnectionBinding>,
 ) -> Result<u32> {
     ensure!(
         state.generations.len() < GENERATIONS_MAX,
@@ -493,6 +494,7 @@ fn next_generation(
         capabilities: Some(capabilities.clone()),
         capability_transition: transition,
         assets_sha256: None,
+        connection: connection.cloned(),
     });
     state.binding.generation = n;
     state.binding.health = HostHealth::Unbound;
@@ -540,6 +542,21 @@ pub fn open_generation_with(
     adopt: bool,
     supported: Option<&BTreeSet<String>>,
 ) -> Result<GenerationGrant> {
+    open_generation_bound(store, target, pane, adopt, supported, None)
+}
+
+pub(crate) fn open_generation_bound(
+    store: &Store,
+    target: &BindTarget,
+    pane: &str,
+    adopt: bool,
+    supported: Option<&BTreeSet<String>>,
+    connection: Option<&corral_core::connection::ConnectionBinding>,
+) -> Result<GenerationGrant> {
+    if let Some(binding) = connection {
+        binding.validate()?;
+        binding.connection.require_admission()?;
+    }
     // Settings resolve once per generation; an explicit request the host lacks refuses
     // before any record changes, while an unavailable default is only reported. The
     // project's text trust is recorded with them.
@@ -617,7 +634,7 @@ pub fn open_generation_with(
                 }
                 pm.state.binding.project = project.clone();
                 Ok((
-                    next_generation(&mut pm.state, &digest, pane, &capabilities)?,
+                    next_generation(&mut pm.state, &digest, pane, &capabilities, connection)?,
                     true,
                 ))
             },
@@ -627,7 +644,7 @@ pub fn open_generation_with(
             store.update_assistant_container(session, |assistant| {
                 assistant.pane = Some(pane.into());
                 assistant.state.binding.project = project.clone().unwrap_or_default();
-                next_generation(&mut assistant.state, &digest, pane, &capabilities)
+                next_generation(&mut assistant.state, &digest, pane, &capabilities, connection)
             })?
         }
         (_, Some(task_id)) => {
@@ -677,7 +694,7 @@ pub fn open_generation_with(
                     "{} is bound to another role or review attempt",
                     container.key()
                 );
-                generation = next_generation(state, &digest, pane, &capabilities)?;
+                generation = next_generation(state, &digest, pane, &capabilities, connection)?;
                 Ok(())
             })?;
             drop(known);

@@ -87,6 +87,8 @@ import { transcriptPreview } from "./transcript-preview.ts";
 import { AssistantRelink } from "./assistant-relink.ts";
 import { AssistantResume } from "./assistant-resume.ts";
 import { PlanningPolicy, type PlanningState } from "./planning-policy.ts";
+import { type ConnectionBinding, admitConnection, parseBinding } from "./connections.ts";
+import { type ConnectionId, resolveConnection } from "../auth/connections.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -96,6 +98,7 @@ export interface HostSessionOptions {
   readonly model: string;
   /** The bound profile's provider; absent means OpenAI Codex, the only pre-T-479 route. */
   readonly provider?: ProviderId;
+  readonly binding?: ConnectionBinding;
   /** The Bedrock binding and its credential resolver; required for an AWS-profile provider. */
   readonly aws?: AwsRoute;
   readonly effort?: string;
@@ -251,8 +254,9 @@ export function restrictProvider(
   });
 }
 
-export function authContext(provider: ProviderId = "openai-codex"): AuthContext {
-  return { provider, apiEndpoint: PROVIDERS[provider].api, refreshEndpoint: PROVIDERS[provider].refresh };
+export function authContext(provider: ProviderId = "openai-codex", connection?: ConnectionId): AuthContext {
+  const selected = resolveConnection(provider, connection);
+  return { provider, connection: selected, apiEndpoint: PROVIDERS[provider].api, refreshEndpoint: PROVIDERS[provider].refresh };
 }
 
 export function providerErrorClass(message: string): string {
@@ -777,6 +781,8 @@ export class HostSession {
   }
 
   static async create(options: HostSessionOptions): Promise<HostSession> {
+    parseBinding(options.binding, options.provider ?? "openai-codex", options.model, options.effort);
+    admitConnection(options.provider ?? "openai-codex", options.binding);
     const host = new HostSession(options);
     // Before optional MCP/LSP startup and before any model request, not a cached widget flag.
     await host.planning?.refresh();
@@ -1386,6 +1392,7 @@ export class HostSession {
       payload: {
         ctl_cap_sha256: ctlCapSha256, session_file: sessionFile, pid: process.pid,
         start_time: processStartTime(), pane,
+        ...(this.options.binding ? { binding_digest: this.options.binding.digest } : {}),
       },
     });
     if (receipt.state !== "committed") {
@@ -1398,6 +1405,7 @@ export class HostSession {
     this.session.sessionManager.appendCustomEntry("corral_host_bound", {
       generation: this.options.identity.generation, session_id: sessionId,
       bind_nonce_sha256: sha256Hex(bindNonce),
+      ...(this.options.binding ? { binding: this.options.binding } : {}),
     });
     this.boundSessionId = sessionId;
     const commandFacts: CommandFact[] = [], monitorFacts: MonitorFact[] = [];

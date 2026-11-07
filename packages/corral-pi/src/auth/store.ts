@@ -3,9 +3,9 @@
 // under the directory's one cross-process lock (auth.json.lock), so Pi's own refresh
 // (Models.getAuth runs it inside modify) rewrites the credential in place. A Codex credential
 // still in the pre-T-479 shared auth.json is read from there and moved into openai-codex.json
-// by its first write, so an existing login keeps working. Only OAuth credentials are kept: an
-// API key would be a paid fallback, which corral-pi never uses.
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
+// by its first write, so an existing login keeps working. Explicit API connections use separate
+// <connection>.json files and accept only literal API keys; key presence never admits spending.
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
@@ -14,8 +14,33 @@ import type { Credential, CredentialInfo, CredentialStore, OAuthCredential } fro
 import { type LockHooks, withFileLock } from "./lock.ts";
 import { AUTH_FILE, CredentialsUnavailable } from "./paths.ts";
 import type { ProviderId } from "./providers.ts";
+import { type ConnectionId, isApiConnection, resolveConnection, validApiKey } from "./connections.ts";
 
 const FILE_MAX_BYTES = 64 * 1024;
+/** Bounded retained-handle read, also used for protected API-key input files. */
+export function readPrivateFile(file: string, maximum = FILE_MAX_BYTES): string {
+  let fd: number | undefined;
+  try {
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const meta = fstatSync(fd);
+    if (!meta.isFile() || meta.uid !== process.getuid?.() || (meta.mode & 0o777) !== 0o600 || meta.size > maximum) {
+      throw new Error("unsafe credential input");
+    }
+    const bytes = Buffer.alloc(maximum + 1);
+    let size = 0;
+    for (;;) {
+      const count = readSync(fd, bytes, size, bytes.length - size, null);
+      size += count;
+      if (size > maximum) throw new Error("oversized credential input");
+      if (count === 0) return bytes.subarray(0, size).toString("utf8");
+    }
+  } catch {
+    throw new CredentialsUnavailable("credential input must be an owner-only regular 0600 file within its size bound");
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 /** The only provider the pre-T-479 shared auth.json ever held. */
 const LEGACY_PROVIDER: ProviderId = "openai-codex";
 
@@ -30,7 +55,7 @@ function missing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
 }
 
-export function credentialFile(dir: string, provider: ProviderId): string {
+export function credentialFile(dir: string, provider: ProviderId | ConnectionId): string {
   return join(dir, `${provider}.json`);
 }
 
@@ -40,8 +65,11 @@ export class FileCredentialStore implements CredentialStore {
   private readonly lockFile: string;
   private chain: Promise<unknown> = Promise.resolve();
 
-  constructor(readonly dir: string, readonly provider: ProviderId = "openai-codex", private readonly hooks: LockHooks = {}) {
-    this.file = credentialFile(dir, provider);
+  readonly connection: ConnectionId;
+
+  constructor(readonly dir: string, readonly provider: ProviderId = "openai-codex", private readonly hooks: LockHooks = {}, connection?: ConnectionId) {
+    this.connection = resolveConnection(provider, connection);
+    this.file = credentialFile(dir, isApiConnection(this.connection) ? this.connection : provider);
     this.legacyFile = join(dir, AUTH_FILE);
     this.lockFile = `${this.legacyFile}.lock`;
   }
@@ -56,6 +84,10 @@ export class FileCredentialStore implements CredentialStore {
 
   ensureDir(): void {
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+    this.checkDir();
+  }
+
+  private checkDir(): void {
     const meta = lstatSync(this.dir);
     const uid = process.getuid?.();
     if (!meta.isDirectory() || (uid !== undefined && meta.uid !== uid)) {
@@ -74,10 +106,10 @@ export class FileCredentialStore implements CredentialStore {
       if (missing(error)) return undefined;
       throw error;
     }
-    if (!meta.isFile() || (meta.mode & 0o077) !== 0 || meta.size > FILE_MAX_BYTES) {
-      throw new CredentialsUnavailable(`${file} must be a regular 0600 file of at most ${FILE_MAX_BYTES} bytes`);
-    }
-    const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+    if (!meta.isFile()) throw new CredentialsUnavailable("credential must be a private regular file");
+    let parsed: unknown;
+    try { parsed = JSON.parse(readPrivateFile(file, FILE_MAX_BYTES)); }
+    catch { throw new CredentialsUnavailable("credential file is unsafe or malformed"); }
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       throw new CredentialsUnavailable(`${file} is not a JSON object`);
     }
@@ -85,13 +117,21 @@ export class FileCredentialStore implements CredentialStore {
   }
 
   private legacy(): Record<string, unknown> | undefined {
-    if (this.provider !== LEGACY_PROVIDER) return undefined;
+    if (this.provider !== LEGACY_PROVIDER || isApiConnection(this.connection)) return undefined;
     return this.readJson(this.legacyFile) as Record<string, unknown> | undefined;
   }
 
-  private load(): OAuthCredential | undefined {
+  private valid(value: unknown): value is Credential {
+    if (!isApiConnection(this.connection)) return isOAuth(value);
+    const key = value as { type?: unknown; key?: unknown } | null;
+    return key?.type === "api_key" && typeof key.key === "string" && validApiKey(key.key);
+  }
+
+  private load(): Credential | undefined {
+    // Validate the directory on reads too; never follow an auth-directory symlink.
+    try { this.checkDir(); } catch (error) { if (missing(error)) return undefined; throw error; }
     const own = this.readJson(this.file);
-    if (own !== undefined) return isOAuth(own) ? own : undefined;
+    if (own !== undefined) return this.valid(own) ? own : undefined;
     const entry = this.legacy()?.[this.provider];
     return isOAuth(entry) ? entry : undefined;
   }
@@ -135,7 +175,7 @@ export class FileCredentialStore implements CredentialStore {
   }
 
   async list(): Promise<readonly CredentialInfo[]> {
-    return this.load() ? [{ providerId: this.provider, type: "oauth" as const }] : [];
+    return this.load() ? [{ providerId: this.provider, type: isApiConnection(this.connection) ? "api_key" as const : "oauth" as const }] : [];
   }
 
   modify(
@@ -148,7 +188,8 @@ export class FileCredentialStore implements CredentialStore {
       const current = this.load();
       const next = await fn(current ? structuredClone(current) : undefined);
       if (next === undefined) return current;
-      if (!isOAuth(next)) throw new CredentialsUnavailable("corral-pi stores only OAuth credentials (no API key fallback)");
+      if (!this.valid(next)) throw new CredentialsUnavailable(isApiConnection(this.connection)
+        ? "API connection stores only literal platform API keys" : "corral-pi stores only OAuth credentials (no API key fallback)");
       this.writeAtomically(this.file, next);
       this.retireLegacy();
       return structuredClone(next);

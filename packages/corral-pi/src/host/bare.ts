@@ -22,7 +22,7 @@ import { providerCapabilities, providerTransport, type ProviderAvailability } fr
 import { createModelCatalog } from "./catalog.ts";
 
 /** Pi 1.3.0's own default model of each provider (`defaultModelPerProvider`, not exported). */
-export const BARE_DEFAULT_MODEL: Readonly<Record<Exclude<ProviderId, "llama.cpp">, string>> = {
+export const BARE_DEFAULT_MODEL: Readonly<Record<Exclude<ProviderId, "llama.cpp" | "openai">, string>> = {
   "openai-codex": "gpt-6.1-sol",
   anthropic: "claude-opus-4-8",
   "amazon-bedrock": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
@@ -68,6 +68,7 @@ export function parseBareArgs(argv: readonly string[], assets: string, env: Node
   if (cwd === undefined || !isAbsolute(cwd)) throw new BareArgsInvalid("--cwd must be an absolute directory");
   const provider = flags.get("--provider") ?? "openai-codex";
   if (!isProviderId(provider)) throw new BareArgsInvalid(`unknown provider ${provider}`);
+  if (provider === "openai") throw new BareArgsInvalid("API connections require bound canonical metered admission");
   if (provider === "llama.cpp") {
     throw new BareArgsInvalid("llama.cpp requires a bound role's configured llama_cpp capability");
   }
@@ -91,6 +92,7 @@ export interface BareSession {
  * tools only. `loadSdk` runs after the guard, as the bound host imports the SDK after it.
  */
 export async function openBare(options: BareOptions, loadSdk: () => Promise<typeof Sdk>): Promise<BareSession> {
+  if (options.provider === "openai") throw new BareArgsInvalid("API connections require bound canonical metered admission");
   const auth = await loadAuth(options.assets, options.provider);
   // Bare Pi runs only subscription OAuth providers: it carries no Amazon Bedrock binding.
   const policy = (auth.providers ?? [auth.provider]).filter((provider) => PROVIDERS[provider].auth === "oauth");
