@@ -26,6 +26,8 @@ pub(crate) enum Target {
     Remove(usize),
     /// Selects the row and activates it like `⏎` (the model row's `▾ choose`).
     Activate(usize),
+    /// Steps a stepper row's number down (`false`) or up (`true`), like `←`/`→`.
+    Step(usize, bool),
     /// Model picker popup: one choice (index into its items), and the list area (wheel).
     PickerRow(usize),
     PickerList,
@@ -270,6 +272,21 @@ pub(crate) fn row_lines(
                     Style::new().fg(theme::CYAN),
                     Target::Activate(i),
                 );
+            }
+            if row.step && editing.is_none() {
+                let unset =
+                    row.field == super::model::Field::RunningTarget && !row.value.is_empty();
+                if usize::from(b.x) + if unset { 18 } else { 8 } > width {
+                    out.push(b.finish(i));
+                    b = Builder::default();
+                    b.text("  ", Style::new());
+                }
+                b.text("  ", Style::new());
+                b.button(" − ", Style::new().fg(theme::CYAN), Target::Step(i, false));
+                b.button(" + ", Style::new().fg(theme::CYAN), Target::Step(i, true));
+                if unset {
+                    b.button("  × unset", Style::new().fg(theme::RED), Target::Remove(i));
+                }
             }
             if *kind == Kind::ListItem && editing.is_none() {
                 if usize::from(b.x) + 12 > width {

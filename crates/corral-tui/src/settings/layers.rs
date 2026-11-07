@@ -92,6 +92,8 @@ pub(super) fn key(row: &Row, cfg: &Config) -> Option<String> {
         Field::CardColumnCost => "board.card.column_cost".into(),
         Field::CardColumn(s) => format!("board.card.columns.{}", quoted(status_key(*s))),
         Field::SlotLimit
+        | Field::RunningTarget
+        | Field::WipLimit
         | Field::DefaultProfile
         | Field::PmAgent
         | Field::PmPushEvents

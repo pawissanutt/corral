@@ -61,7 +61,7 @@ pub(super) fn settings_app() -> (super::tests::Fixture, App) {
 fn mouse_edits_slot_limit_and_saves() {
     let (fx, mut app) = settings_app();
     let s = screen(&mut app);
-    let row = find(&s, "Global slot limit", "Global slot limit");
+    let row = find(&s, "Hard slot ceiling", "Hard slot ceiling");
     click(&mut app, row);
     click(&mut app, row);
     let s = screen(&mut app);
@@ -190,7 +190,7 @@ fn board_opens_settings_with_comma_and_footer_click() {
     let mut by_key = App::new(fx.ctx.clone(), Mode::Board).unwrap();
     by_key.handle_key(c(','));
     let expected = screen(&mut by_key);
-    assert!(expected.contains("Global slot limit"), "{expected}");
+    assert!(expected.contains("Hard slot ceiling"), "{expected}");
     let mut by_mouse = App::new(fx.ctx.clone(), Mode::Board).unwrap();
     let s = screen(&mut by_mouse);
     click(&mut by_mouse, footer(&s, ", settings"));

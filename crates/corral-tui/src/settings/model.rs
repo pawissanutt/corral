@@ -53,6 +53,10 @@ impl Section {
 pub(crate) enum Field {
     Operating(super::operating::Key),
     SlotLimit,
+    /// `limits.running_target`: the optional soft automatic coding target.
+    RunningTarget,
+    /// `limits.wip`: unfinished coding work; zero disables it.
+    WipLimit,
     DefaultProfile,
     PmAgent,
     PmPushEvents,
@@ -139,6 +143,8 @@ pub(crate) struct Row {
     pub key: String,
     /// Pill labels drawn dimmed and struck out (harnesses that are not installed).
     pub muted: Vec<String>,
+    /// Draws `−`/`+` buttons that step the number (`←`/`→` on the keyboard).
+    pub step: bool,
 }
 
 impl Row {
@@ -152,7 +158,13 @@ impl Row {
             inherited: None,
             key: String::new(),
             muted: Vec::new(),
+            step: false,
         }
+    }
+
+    pub(super) fn stepper(mut self) -> Row {
+        self.step = true;
+        self
     }
 
     pub(super) fn help(mut self, help: &'static str) -> Row {
@@ -252,15 +264,8 @@ fn general_rows(cfg: &Config, herdr_env: Option<&str>) -> Vec<Row> {
         Some(env) => format!("{env} (from $CORRAL_HERDR_SESSION, which overrides this)"),
         None => "the herdr session corral runs in".into(),
     };
-    vec![
-        Row::new(
-            Field::SlotLimit,
-            "Global slot limit",
-            Kind::Number { optional: false },
-            cfg.limits.running.to_string(),
-        )
-        .help("Runs that may hold a slot at once, including Blocked runs, across all projects.")
-        .key("limits.running"),
+    let mut rows = super::concurrency::rows(cfg);
+    rows.extend([
         Row::new(
             Field::DefaultProfile,
             "Default profile",
@@ -311,7 +316,8 @@ fn general_rows(cfg: &Config, herdr_env: Option<&str>) -> Vec<Row> {
         )
         .help("Comma-separated: done, needs_me, stuck, blocked, escalated. Empty = none.")
         .key("pm.push_kinds"),
-    ]
+    ]);
+    rows
 }
 
 fn project_rows(cfg: &Config) -> Vec<Row> {
@@ -440,6 +446,10 @@ pub(crate) fn set_value(cfg: &mut Config, field: &Field, text: &str) -> Result<(
             return Err("operating selection is not an ordinary config edit".into());
         }
         Field::SlotLimit => cfg.limits.running = number(text)?,
+        Field::RunningTarget => {
+            cfg.limits.running_target = opt(text).map(|t| number(&t)).transpose()?
+        }
+        Field::WipLimit => cfg.limits.wip = number(text)?,
         Field::DefaultProfile => cfg.defaults.profile = opt(text),
         Field::PmAgent => cfg.pm.agent = text.trim().to_string(),
         Field::PmPushEvents => cfg.pm.push_events = text == "on",

@@ -101,6 +101,13 @@ all of them. Parked runs that released their slot count against neither. A task 
 this reason shows `waiting: at soft target (...)`; `corral queue list` prints
 `running N / soft S / hard H` and the board shows `(soft target S)` beside the slot fraction.
 
+Settings (`,` on the board, or `corral settings`) groups these under General › Coding
+concurrency: Hard slot ceiling (`running`), Soft coding target (`running_target`; empty or `x`
+unsets it so it follows the ceiling) and Unfinished work (`wip`; `0` = off). The heading shows
+the effective values. `−`/`+` (or `←`/`→`) step a value without clamping, so an out-of-range
+target shows its validation error and is not saved. A saved change reaches the running board
+and scheduler on the next config reload; no restart is needed.
+
 `corral dispatch --queue` moves work to Ready without launching it. Sync admits Ready work
 when capacity permits, reserving `limits.review` headroom for gates and reviews.
 

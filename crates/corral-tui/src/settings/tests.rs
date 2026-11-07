@@ -184,8 +184,11 @@ fn general_section_shows_fields_help_and_effective_values() {
         "▸ General",
         "Projects",
         "Artifacts",
-        "▸ Global slot limit",
-        "Runs that may hold a slot at once",
+        "▸ Hard slot ceiling",
+        "Most runs holding a slot at once",
+        "Soft coding target",
+        "Unfinished work",
+        "Coding concurrency   auto 3 · hard 3 · WIP 6",
         "PM agent profile",
         "[omo]",
         "Mouse",
@@ -272,7 +275,7 @@ fn dirty_state_confirm_and_save_keep_comments() {
     assert!(s.contains("● unsaved changes"), "{s}");
     assert!(
         s.lines()
-            .nth(line_of(&s, "Global slot limit"))
+            .nth(line_of(&s, "Hard slot ceiling"))
             .unwrap()
             .contains('5')
     );
@@ -336,7 +339,7 @@ fn validation_errors_show_inline_and_block_saving() {
     let mut v = SettingsView::new(&fx.ctx);
     type_value(&mut v, &fx.ctx, "0");
     let s = render(&mut v, &fx.ctx);
-    let field = line_of(&s, "Global slot limit");
+    let field = line_of(&s, "Hard slot ceiling");
     let err = line_of(&s, "✗ limits.running must be > 0");
     assert_eq!(
         err,
@@ -424,7 +427,8 @@ fn glob_list_add_remove_reorder_and_pick() {
         ],
     );
     v.on_key(c('1'), &fx.ctx);
-    press(&mut v, &fx.ctx, &[c('j'), c('j'), c('h')]);
+    v.select_field(&super::model::Field::PmAgent);
+    press(&mut v, &fx.ctx, &[c('h')]);
     assert!(matches!(v.on_key(c('s'), &fx.ctx), Action::Toast(t) if t.tone == Tone::Good));
     let cfg = Store::open(&fx.root).unwrap().config;
     let mut want = globs.clone();
