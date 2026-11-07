@@ -182,6 +182,48 @@ and record an event in the database; use `corral edit` for a task's editable Mar
 **Mouse:** click a tab, a run, artifact or record row; click the selected artifact or record to preview it; the wheel
 scrolls the box under the pointer; `‹ back` is Esc.
 
+### Recover
+
+On the **Plan** and **Acceptance** tabs of a task that is not Done or Dropped, `F` or the
+visible **Recover…** button opens the owner recovery sheet. The key and the button take the
+same path, and neither applies anything. `r`, `R` and `u` keep their existing meanings.
+
+The sheet opens with a read-only preview, the same one `corral recover <id> --action …`
+prints. In order, it shows the target identity and current blockers, the action chooser
+(`use-reviewer`, `accept-plan`, `accept-code`, `force-admission`) with its stage, merge or
+reviewer, each check's original observation next to its proposed disposition, the policy
+sources, the proposed effect, the remaining hard blockers, and then the owner fields.
+`accept-plan` also asks for the owner-decision resolution notes. Every action needs an
+owner-written reason. Nothing is persisted while you edit.
+
+Each proposed exception has to be acknowledged on its own line (`[ ]` → `[x]`). **Continue…**
+moves to a separate confirmation step only when no hard blocker remains, every exception is
+acknowledged and the reason is filled in. That step restates the exact exceptions, the
+effect, the reason and the preview digest, and focus starts on **Cancel**. When you press
+**Confirm recovery**, the sheet first re-derives the preview. If the task, policy, checks or
+effect have changed, it shows the refreshed proposal and returns to editing with your reason
+and notes kept, so you have to confirm again. A changed proposal is never applied.
+
+| Key | Action |
+|---|---|
+| `⇥` / `shift+⇥`, `↑` / `↓` | move focus through every control and button |
+| `←` / `→` | change the focused action, stage/merge or reviewer |
+| `space` | select the focused choice, toggle an acknowledgement or press a button |
+| `⏎` | press the focused button; in a text field it moves to the next field and never applies |
+| `pgup` / `pgdn`, wheel | scroll the body; the button row stays visible at 80x24 |
+| `esc` | from confirmation, return to editing; from editing, close the sheet with no effect |
+
+**Mouse:** click an action, stage or reviewer pill to choose it, click a check to toggle its
+acknowledgement, click a field to focus it, and click **Cancel**, **Continue…**, **Edit** or
+**Confirm recovery**. The wheel scrolls the body.
+
+Recovery is labeled with text, not color alone. The detail header shows `[owner recovery]`,
+`[review waived]` and `[check overridden]` (or `[recovery uncertain]` / `[recovery failed]`).
+The Acceptance tab's **Owner recovery** section lists each operation with its action, target,
+state, the note "owner recovery, not ordinary policy success", the reason, the local-owner
+attestation, the effect, every check as `original … → disposition`, and its linked receipts.
+The original gate and review results stay in the run list above it.
+
 ## Review
 
 Opened with `r` from a task overview needing review. Three boxes: **Summary** (the agent's `corral done` text, outcome, diff size,
