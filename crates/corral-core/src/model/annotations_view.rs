@@ -47,7 +47,7 @@ pub enum AnnotationsPage {
         items: Vec<AnnotationItem>,
     },
     Thread {
-        thread: AnnotationItem,
+        thread: Box<AnnotationItem>,
         entries: Vec<AnnotationEntry>,
         upper_revision: u32,
     },
