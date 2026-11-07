@@ -3,6 +3,8 @@ import { renderBashResult, renderJobResult } from "../src/extensions/jobs/presen
 import { renderReceipt } from "../src/tools/presentation.ts";
 import type { CorralReceipt } from "../src/tools/corral.ts";
 import { buildPromptBlocks } from "../src/claude/prompt.ts";
+import { requestCheckpoint } from "../src/host/request-checkpoint.ts";
+import { ProgressSchema } from "../src/ui/todo-widget.ts";
 
 test("readable results retain recovery metadata, unfamiliar data and canonical state without escaping bodies", () => {
   const body = 'const path = "C:\\tmp";\n// € and \\"quotes\\"\n';
@@ -31,8 +33,15 @@ test("readable results retain recovery metadata, unfamiliar data and canonical s
     "retain me", "retain this too", 'effect: {"kind":"progress","ref":"4"}']) expect(visible).toContain(field);
   expect(visible.includes("payload_sha256")).toBeFalse();
   expect(JSON.stringify(receipt)).toBe(original);
-  const prompt = buildPromptBlocks([{ role: "toolResult", toolName: "corral_todo", toolCallId: "call",
-    content: [{ type: "text", text: visible }], details: receipt, isError: false, timestamp: 0 }], new Map());
+  const message = { role: "toolResult" as const, toolName: "corral_todo", toolCallId: "call",
+    content: [{ type: "text" as const, text: visible }], details: receipt, isError: false, timestamp: 0 };
+  const progress = ProgressSchema.parse(receipt.result.progress);
+  expect(requestCheckpoint([message], progress, "summary", false, false)).toBeUndefined();
+  for (const text of [visible.slice(0, -1), "hidden", visible.replace("in_progress", "done")]) {
+    expect(requestCheckpoint([{ ...message, content: [{ type: "text", text }] }], progress, "summary", false, false))
+      .toMatchObject({ customType: "corral-request-checkpoint" });
+  }
+  const prompt = buildPromptBlocks([message], new Map());
   const modelText = prompt.flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
   expect(modelText).toContain(visible);
   expect(modelText.includes("payload_sha256")).toBeFalse();

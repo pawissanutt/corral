@@ -1,6 +1,7 @@
 import type { Message } from "@earendil-works/pi-ai";
 import { z } from "zod";
 import { ProgressSchema } from "../../src/ui/todo-widget.ts";
+import { visibleReceipt } from "../../src/tools/presentation.ts";
 
 const Receipt = z.object({ state: z.literal("committed"), result: z.object({ progress: ProgressSchema }) });
 
@@ -11,11 +12,12 @@ export function modelPlan(messages: readonly Message[]) {
     const text = typeof message.content === "string" ? message.content
       : message.content.filter((block) => block.type === "text").map((block) => block.text).join("");
     if (message.role === "toolResult" && message.toolName === "corral_todo") {
-      try {
-        const receipt = Receipt.safeParse(JSON.parse(text));
-        if (receipt.success) return { plan: receipt.data.result.progress.plan,
-          revision: receipt.data.result.progress.revision, text, progress: receipt.data.result.progress };
-      } catch { /* This test observer ignores failed/non-JSON results. */ }
+      let value: unknown;
+      try { value = JSON.parse(text); }
+      catch { value = visibleReceipt(text, message.details); }
+      const receipt = Receipt.safeParse(value);
+      if (receipt.success) return { plan: receipt.data.result.progress.plan,
+        revision: receipt.data.result.progress.revision, text, progress: receipt.data.result.progress };
     }
     const checkpoint = /\[corral request (P\d+) revision (\d+):/.exec(text);
     if (message.role === "user" && checkpoint) {

@@ -1,4 +1,5 @@
 // Model-facing text only. Canonical receipts and script return values are never rewritten.
+import { z } from "zod";
 import { CORRAL_OPS } from "../roles/types.ts";
 import type { CorralReceipt } from "./corral.ts";
 
@@ -51,6 +52,16 @@ export function renderReceipt(receipt: CorralReceipt): string {
     : renderFields(receipt.result);
   return [`${receipt.op}: ${receipt.state}${receipt.replayed ? " (replayed)" : ""}`,
     `request_id: ${receipt.request_id}`, envelope, result].filter(Boolean).join("\n");
+}
+
+const CanonicalReceipt = z.object({ version: z.literal(1), request_id: z.string().nullable(), op: z.string(),
+  state: z.enum(["committed", "rejected", "reserved", "queued", "uncertain", "abandoned"]),
+  result: z.unknown(), replayed: z.boolean().optional() }).passthrough();
+
+/** Details establish visibility only when their entire deterministic rendering is still present. */
+export function visibleReceipt(text: string, details: unknown): CorralReceipt | undefined {
+  const canonical = CanonicalReceipt.safeParse(details);
+  return canonical.success && text === renderReceipt(canonical.data) ? canonical.data : undefined;
 }
 
 export function renderFailure(op: string, requestId: string, error: Record<string, unknown>): string {

@@ -179,11 +179,14 @@ test("live implement-now: one ambiguous question, scratch work, a candidate-boun
       { toolCalls: [{ callId: "finish", name: "corral_owner_action", arguments: { kind: "finish", target: slug,
         args: ["--title", "Add a usage section", "--expected-head", candidate.slice(0, 12)], input: input(3) } }] },
       { text: "T-001 is gated and waiting for independent review." }]);
-    const finished = JSON.parse(toolText("finish"));
-    expect([finished.result.outcome, finished.result.confirmed, asked]).toEqual(["executed", true, []]);
+    const finished = live.session.messages.find((m) => m.role === "toolResult" && m.toolCallId.split("|")[0] === "finish");
+    if (finished?.role !== "toolResult") throw new Error("finish result missing");
+    expect(finished.details).toMatchObject({ result: { outcome: "executed", confirmed: true } });
+    expect(asked).toEqual([]);
     expect(show("T-001").status).toBe("review");
-    ok([corral, "verdict", "T-001", "approve", "--notes", "independent fixture review"], { cwd: workspace, env: originalEnv });
-    ok([corral, "sync"], { cwd: workspace, env: originalEnv });
+    const ownerEnv = { ...originalEnv }; delete ownerEnv.CORRAL_ASSISTANT; delete ownerEnv.CORRAL_ASSISTANT_GENERATION;
+    ok([corral, "verdict", "T-001", "approve", "--notes", "independent fixture review"], { cwd: workspace, env: ownerEnv });
+    ok([corral, "sync"], { cwd: workspace, env: ownerEnv });
     const task = show("T-001");
     expect([task.status, task.runs.length, task.runs[0].branch]).toEqual(["done", 1, `corral/${fixture.session}/${slug}`]);
     expect(ok(["git", "-C", app, "rev-parse", "main"]).trim()).toBe(candidate);
