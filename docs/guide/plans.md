@@ -68,6 +68,16 @@ attempt only, so it can never accept a plan for the owner. With `role_enabled` o
 role (preset `strict`), its native launch is refused; it never falls back to another
 harness. See [corral-pi agents](corral-pi.md#the-planner-and-plan-reviewer-roles).
 
+## Owner recovery
+
+For a genuinely blocked current plan, [owner-controlled recovery](recovery.md) provides
+read-only previews, a one-attempt reviewer exception or an explicit independent-review
+waiver. Prefer ordinary task reviewer selection when sufficient. Application requires
+an unmanaged local owner terminal, exact preview confirmation and a reason; PM and
+planner sessions cannot authorize it. Original verdicts remain history and recovered
+acceptance retains implementation dispatch holds. `corral plan show T-001 --json`
+includes recovery provenance; `corral recover T-001 --history --json` reads full outcomes.
+
 ## Reply and cancellation
 
 ```bash

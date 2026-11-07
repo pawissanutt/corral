@@ -20,6 +20,15 @@ PASS. A new candidate, integration base, specification, manifest or attempt
 requires fresh proof. Reviews also bind the evidence ledger they judged.
 Reviewer callbacks carry the attempt in their generated verdict command.
 
+## Owner recovery is not a passing check
+
+[Owner-controlled recovery](recovery.md) can accept completed, current failed check
+outcomes only after an exact preview, nonblank reason and local owner confirmation.
+Missing, pending, unverifiable or stale configured gate/review receipts remain hard
+blockers. Original results are never changed to PASS: history records each disposition,
+`acceptance_mode=owner_recovery`, `policy_satisfied=false` and journal/receipt links.
+A rebase or changed integration base needs fresh proof and fresh authorization.
+
 ## Repository gate recipe
 
 For contributions to corral itself, run the gate your run contract names before

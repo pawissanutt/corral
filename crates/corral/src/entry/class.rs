@@ -162,6 +162,7 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
             | SetupCmd::Apply
             | SetupCmd::Cancel { .. } => Refused,
         },
+        Cmd::Recover(_) => Refused,
         Cmd::Memory(_) => Refused,
         Cmd::Lessons(args) => match &args.cmd {
             None | Some(LessonsCmd::Due) => Read,

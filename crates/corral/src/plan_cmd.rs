@@ -488,6 +488,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
         }
         PlanCmd::Show { id, json } => {
             let task = ctx.store.get(&id)?;
+            let recoveries = corral_ops::recovery::recover_history(ctx, &id)?;
             if json {
                 println!(
                     "{}",
@@ -499,9 +500,18 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
                         "plan_runs": task.plan_runs,
                         "plan": task.plan,
                         "children": task.children,
+                        "recoveries": recoveries,
                     }))?
                 );
             } else {
+                for recovery in &recoveries {
+                    println!(
+                        "owner recovery {}: {:?}; not ordinary policy success; inspect corral recover {} --history for original checks, dispositions and reason",
+                        recovery.id,
+                        recovery.outcomes.last().map(|o| o.state),
+                        task.id,
+                    );
+                }
                 for run in &task.plan_runs {
                     println!(
                         "{} [{}] {:?}, model {}, round {}",

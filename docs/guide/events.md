@@ -44,6 +44,15 @@ starting a fresh default wait at the tail could skip events between subscription
 Sequences are durable, increasing database positions. Readers resume from the stored sequence;
 they do not depend on a JSONL file's size, rotation or byte boundaries.
 
+## Recovery provenance
+
+[Workflow recovery](recovery.md) previews emit no authorization or configuration event.
+Applied operations project keyed recovery events from durable intent and immutable
+outcomes; an event is evidence, not reusable owner permission. Read
+`corral recover T-041 --history --json` for original observations, explicit dispositions,
+policy sources, owner attestation/reason and journal/receipt links. Failed or unknown
+outcomes are not ordinary acceptance or a passing gate.
+
 ## Export and readback contracts
 
 The database is the only authority. Legacy `.corral/events.jsonl` and `.corral/tasks/`

@@ -814,6 +814,15 @@ take the last free slot while it waits. While it waits for gate admission, other
 take the last review-process slot. It also skips the finishing-work first refusal. Gate tiers,
 review policy and dependency rules are unchanged.
 
+## Owner-only recovery boundary
+
+PM and autopilot may inspect `corral recover T-042 --history --json` and prepare
+[read-only recovery previews](recovery.md), but cannot authorize an exception.
+Operating grants do not supply recovery permission. Only the unmanaged local owner
+ceremony can bind one exact operation and reason; background reconciliation may
+finish that already-authorized operation, never refresh or replay its permission.
+Resource recovery is stage-specific and does not waive slots, dependencies or policy.
+
 ## Manual review
 
 Without the autopilot, or after it hands a task to you:

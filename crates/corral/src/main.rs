@@ -33,6 +33,7 @@ mod pm_inbox_cmd;
 mod pricing_cmd;
 mod question_cmd;
 mod queue;
+mod recover_cmd;
 mod repair_cmd;
 mod report_cmd;
 mod run_cmd;
@@ -98,6 +99,8 @@ pub enum Cmd {
     Setup(setup_cmd::SetupArgs),
     /// Inspect bounded repairs, report findings and perform non-coding PM diagnosis
     Repair(repair_cmd::RepairArgs),
+    /// Preview exact workflow exceptions; apply requires a local owner terminal and reason
+    Recover(recover_cmd::RecoverArgs),
     #[command(hide = true)]
     RuntimeProbe {
         #[arg(long)]
