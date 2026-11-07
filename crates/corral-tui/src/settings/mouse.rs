@@ -26,6 +26,7 @@ impl SettingsView {
             | Target::Up(i)
             | Target::Down(i)
             | Target::Remove(i)
+            | Target::Step(i, _)
             | Target::Activate(i) => Some(i),
             _ => None,
         };
@@ -68,6 +69,17 @@ impl SettingsView {
             Target::Remove(i) => {
                 self.select(i);
                 return self.on_key(key('x'), ctx);
+            }
+            Target::Step(i, forward) => {
+                self.select(i);
+                return self.on_key(
+                    KeyEvent::from(if forward {
+                        KeyCode::Right
+                    } else {
+                        KeyCode::Left
+                    }),
+                    ctx,
+                );
             }
             Target::Form | Target::SectionList | Target::PickerRow(_) | Target::PickerList => {}
         }

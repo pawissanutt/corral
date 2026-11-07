@@ -199,7 +199,7 @@ fn input_parity_keyboard_only_settings_journey() {
 
     // When General, Profiles, Harnesses, Projects and Artifacts are edited by keys alone.
     value(&mut app, "6");
-    down(&mut app, 1);
+    down(&mut app, 3); // past the soft target and WIP rows
     press(&mut app, KeyCode::Right); // omp -> inherit
     press(&mut app, KeyCode::Right); // inherit -> claude
     down(&mut app, 1);
@@ -232,7 +232,7 @@ fn input_parity_keyboard_only_settings_journey() {
     keys(&mut app, "x"); // referenced default cannot be deleted
     assert_eq!(app.toasts.last().unwrap().0.tone, Tone::Warn);
     keys(&mut app, "1");
-    down(&mut app, 1);
+    down(&mut app, 3);
     press(&mut app, KeyCode::Left); // claude-copy -> claude
     keys(&mut app, "2");
     down(&mut app, 1);
@@ -380,7 +380,7 @@ fn input_parity_mouse_text_entry_exception_fields_and_adds() {
     let mut app = fx.app();
 
     // When edits, adds, filtering and applying remain mouse actions.
-    open_row(&mut app, "Global slot limit");
+    open_row(&mut app, "Hard slot ceiling");
     text(&mut app, "invalid");
     click(&mut app, "⏎ apply", "⏎ apply");
     assert!(app.stack.last().unwrap().captures_text());
@@ -451,7 +451,7 @@ fn input_parity_keyboard_only_settings_discard_and_keep_editing() {
     let fx = Fixture::new();
     let before = fx.config();
     let mut app = fx.app();
-    down(&mut app, 4);
+    down(&mut app, 6);
     press(&mut app, KeyCode::Enter);
 
     // When back is cancelled once, then confirmed as discard, using keys only.
@@ -491,7 +491,7 @@ fn input_parity_keyboard_only_settings_save_and_close() {
     // Given a staged boolean change.
     let fx = Fixture::new();
     let mut app = fx.app();
-    down(&mut app, 4);
+    down(&mut app, 6);
     press(&mut app, KeyCode::Enter);
 
     // When the unsaved-changes prompt saves and closes.

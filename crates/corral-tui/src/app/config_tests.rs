@@ -45,6 +45,8 @@ fn config_lifecycle_settings_save_has_keyboard_mouse_event_parity() {
             } else {
                 for key in [
                     KeyCode::Down,
+                    KeyCode::Down,
+                    KeyCode::Down,
                     KeyCode::Right,
                     KeyCode::Right,
                     KeyCode::Char('s'),
@@ -185,4 +187,28 @@ fn config_lifecycle_invalid_reload_retains_config_and_shared_message_history() {
             assert_eq!(app.messages.len(), 1, "dismissal retains message history");
         }
     }
+}
+
+#[test]
+fn config_lifecycle_settings_wip_save_reaches_the_live_board_header() {
+    // Given the board with the default WIP limit of 6.
+    let fx = Fixture::new();
+    let mut app = App::new(fx.ctx.clone(), Mode::Board).unwrap();
+    assert!(draw_at(&mut app, 160, 45).contains("WIP 0/6"));
+    // When WIP is stepped down and saved from board settings, then the view is closed.
+    for key in [
+        KeyCode::Char(','),
+        KeyCode::Down,
+        KeyCode::Down,
+        KeyCode::Left,
+        KeyCode::Char('s'),
+        KeyCode::Esc,
+    ] {
+        app.handle_key(code(key));
+    }
+    app.reload();
+    // Then the live board and scheduler config reflect it without a restart.
+    assert_eq!(app.ctx.store.config.limits.wip, 5);
+    let screen = draw_at(&mut app, 160, 45);
+    assert!(screen.contains("WIP 0/5"), "{screen}");
 }

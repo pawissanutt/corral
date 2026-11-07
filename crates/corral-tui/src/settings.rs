@@ -14,6 +14,7 @@ mod cards_tests;
 mod catalog;
 #[cfg(test)]
 mod catalog_tests;
+mod concurrency;
 mod confirm;
 mod fields;
 mod gate;
@@ -341,6 +342,9 @@ impl SettingsView {
             return Action::None;
         };
         let n = fields::pill_labels(&row.kind).len();
+        if row.step && concurrency::step(&mut self.draft, &row.field, forward).is_some() {
+            self.revalidate(ctx);
+        }
         if n == 0 {
             return Action::None;
         }
@@ -381,6 +385,7 @@ impl SettingsView {
             Field::Glob(i) => {
                 self.draft.artifacts.globs.remove(*i);
             }
+            Field::RunningTarget => self.draft.limits.running_target = None,
             Field::Project(k)
             | Field::ProjectPath(k)
             | Field::ProjectBase(k)
@@ -522,6 +527,9 @@ impl SettingsView {
         let saved_rows = self.saved_rows();
         for (i, row) in rows.iter().enumerate() {
             lines.extend(self.gate_preview(row, rows.get(self.sel)));
+            if self.in_section(Section::General) && self.open.is_none() {
+                lines.extend(concurrency::heading(&self.draft, row, width));
+            }
             if matches!(row.kind, Kind::Group | Kind::Header) && i > 0 {
                 lines.push(FormLine::plain(Line::from("")));
             }
@@ -759,6 +767,9 @@ impl View for SettingsView {
         let mut h = vec![("↑↓", "field"), ("⇥", "section"), ("pgup/pgdn", "scroll")];
         let row = self.current();
         match row.as_ref().map(|r| &r.kind) {
+            Some(Kind::Number { .. }) if row.as_ref().is_some_and(|r| r.step) => {
+                h.extend(row.as_ref().map(concurrency::hints).unwrap_or_default())
+            }
             Some(Kind::Text { .. } | Kind::Number { .. }) => h.push(("⏎", "edit")),
             Some(Kind::ListItem) => h.extend([("⏎", "edit"), ("x", "remove"), ("K/J", "reorder")]),
             Some(Kind::Pick(_)) => h.push(("←→", "choose")),
