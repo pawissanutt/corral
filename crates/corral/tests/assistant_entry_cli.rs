@@ -165,6 +165,7 @@ const ROWS: &[(&str, &[&str], Class)] = &[
     ("repair diagnose", &["T-001"], Refused),
     ("repair diagnosed", &["T-001", "--file", "d.json"], Refused),
     ("repair renew", &["T-001", "--file", "r.json"], Refused),
+    ("recover", &["T-001", "--history"], Refused),
     ("memory list", &[], Refused),
     ("memory read", &["entry"], Refused),
     (
