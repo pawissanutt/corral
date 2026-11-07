@@ -15,12 +15,16 @@ impl Pilot<'_> {
     ) -> Result<Step> {
         let _action = corral_core::work::action(self.id(), OperatingActionKind::Repair);
         key.check(&self.ctx.store.head(self.id())?)?;
+        // The integration packet describes Git facts, not a coding-cycle issue. Preserve
+        // its existing dedupe identity when an unchanged candidate is submitted again.
+        let fact_key = key;
+        let fact_digest = fact_key.digest()?;
+        if packet.is_some() && output::requested(self.ctx, fact_key, &fact_digest)? {
+            return Ok(Step::Wait);
+        }
         let (bound, issued) = crate::repair_cycle::bind(&self.ctx.store, key, self.head.rounds)?;
         let key = &bound;
         let digest = key.digest()?;
-        if packet.is_some() && output::requested(self.ctx, key, &digest)? {
-            return Ok(Step::Wait);
-        }
         if issued
             .as_ref()
             .is_some_and(|cycle| cycle.driver == key.driver)
@@ -138,7 +142,7 @@ impl Pilot<'_> {
             self.ctx.store.log_event(
                 Some(id),
                 "integration_request",
-                json!({ "run": key.run, "key": key, "digest": digest, "packet": packet }),
+                json!({ "run": fact_key.run, "key": fact_key, "digest": fact_digest, "packet": packet }),
             )?;
         }
         self.log(AutoStage::Changes, round, None, Some(summary), &note)?;

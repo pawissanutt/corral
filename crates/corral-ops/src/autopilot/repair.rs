@@ -173,6 +173,25 @@ impl Pilot<'_> {
                 // A clean integration refresh is verification preparation, never a code
                 // repair charge. Actual conflicts below still route to the current driver.
                 let run = current.current_run_head()?.context("missing current run")?;
+                let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
+                let approved = match run.review.as_ref() {
+                    Some(review) if review.verdict == Some(Verdict::Approve) => {
+                        review.sha == head
+                            || crate::verdict_carry::clean_replay(
+                                self.ctx,
+                                &*current,
+                                &run,
+                                &review.sha,
+                                &head,
+                            )?
+                    }
+                    _ => false,
+                };
+                // Unapproved ff integration still belongs to the worker. A verified clean
+                // replay of an approved candidate may prepare its new gate automatically.
+                if self.policy.merge == corral_core::MergeMode::Ff && !approved {
+                    return Ok(None);
+                }
                 let action = OperatingActionKind::Gate;
                 let _action = corral_core::work::action(self.id(), action);
                 crate::operating::require(store, &*current, action)?;
