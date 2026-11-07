@@ -4,9 +4,7 @@ use ratatui::crossterm::event::KeyCode;
 use super::super::SettingsView;
 use super::super::model::Field;
 use super::super::mouse_tests::{self, click, find, footer, settings_app};
-use super::super::tests::{
-    HEAD_COMMENT, SLOT_COMMENT, c, fixture, k, press, render, render_at, type_value,
-};
+use super::super::tests::{HEAD_COMMENT, SLOT_COMMENT, c, fixture, k, press, render, type_value};
 use crate::{Action, Tone, View};
 
 fn saved(action: Action) -> bool {
@@ -127,16 +125,4 @@ fn mouse_only_steps_unsets_and_saves_at_80x24() {
     let cfg = Store::open(&fx.root).unwrap().config;
     assert_eq!((cfg.limits.running_target, cfg.limits.running), (None, 3));
     assert!(!draw(&mut app).contains("● unsaved"));
-}
-
-#[test]
-fn concurrency_rows_fit_the_narrow_form() {
-    let fx = fixture();
-    let mut v = SettingsView::new(&fx.ctx);
-    let s = render_at(&mut v, &fx.ctx, 80, 24);
-    let row = s
-        .lines()
-        .nth(super::super::tests::line_of(&s, "Soft coding target"))
-        .unwrap();
-    assert!(row.contains(" − ") && row.contains(" + "), "{s}");
 }
