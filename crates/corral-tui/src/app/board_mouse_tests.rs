@@ -365,3 +365,60 @@ fn column_toggles_and_header_counters_are_buttons() {
         "Review is visually empty"
     );
 }
+
+#[test]
+fn blocked_card_menu_opens_recover_by_keyboard_and_mouse_and_cancel_has_no_effect() {
+    let fx = seeded();
+    let before = fx.ctx.store.get("T-005").unwrap();
+    let (mut app, _) = board_app(&fx);
+    // Keyboard only: select the Blocked card, open its menu, move to the last item (Recover…), press Enter.
+    let text = render(&mut app);
+    let needs = find(&text, 0, "▲ 2 blocked");
+    click(&mut app, (needs.0 + 2, needs.1));
+    app.handle_key(crate::board::tests::key('.'));
+    assert!(
+        render(&mut app).contains("recover…"),
+        "Blocked card menu offers Recover…"
+    );
+    for _ in 0..20 {
+        app.handle_key(code(KeyCode::Down));
+    }
+    app.handle_key(code(KeyCode::Enter));
+    let text = render(&mut app);
+    assert!(text.contains("Recover T-005"), "the sheet opens\n{text}");
+    assert!(
+        text.contains("[Continue…]") && text.contains("[Cancel]"),
+        "{text}"
+    );
+    app.handle_key(code(KeyCode::Esc));
+    assert_eq!(app.stack.len(), 1, "Esc closes the sheet");
+    // Mouse only: right-click the card, click Recover…, then click the visible Cancel button.
+    render(&mut app);
+    // The automation header also names T-005; target the card's own hit region.
+    let (x, y) = app
+        .hits
+        .iter()
+        .find_map(|(rect, hit)| {
+            matches!(hit, crate::Hit::Card(id) if id == "T-005").then_some((rect.x + 2, rect.y))
+        })
+        .unwrap();
+    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Right), x, y));
+    let text = render(&mut app);
+    let item = find_any(&text, "recover…");
+    click(&mut app, item);
+    let text = render(&mut app);
+    assert!(
+        text.contains("Recover T-005"),
+        "click opens the same sheet\n{text}"
+    );
+    let cancel = find_any(&text, "[Cancel]");
+    click(&mut app, cancel);
+    assert_eq!(app.stack.len(), 1, "Cancel closes the sheet");
+    assert_eq!(fx.ctx.store.get("T-005").unwrap(), before, "no task change");
+    assert!(
+        corral_ops::recovery::recover_history(&fx.ctx, "T-005")
+            .unwrap()
+            .is_empty(),
+        "no recovery record"
+    );
+}
