@@ -134,3 +134,17 @@ publishes both together; a refused/no-write callback emits neither. No allowlist
 assertion relaxation or new test was added. Both journal contracts now pass (0.10s).
 Rust LSP timed out; the targeted compiler test and required post-rebase quick gate are
 the validation fallback. Corral still owns the subsequent full landing gate.
+
+That round's quick attempt `ag-98497d716bb6c940` passed all 2,180 selected Rust tests but
+failed in an unnamed setup hook of the unchanged Pi delivery target before its three
+bodies ran. The FAIL remains in `c89e2980-T-852-R1-ag-98497d716bb6c940.log`. One diagnostic
+`bun test src/delivery/delivery.test.ts` passed 3/3 in 1.083s; its separate evidence is
+`7128e387-round2-delivery-diagnostic.log`. Attribution remains **Unknown**: green alone
+proves neither cause nor that the failure is environmental or unrelated.
+
+PM answer `T-852/R1/Q1` authorizes exactly one fresh QUICK through ordinary admission and
+existing budgets after integrating current main `9e5989e`. No timeout/assertion changes,
+skips/quarantine, budget renewal or force are permitted. Refusal or recurrence stops the
+retry path for bounded fixture investigation. Fresh matching independent review and the
+actual Corral-owned full gate are still required; the earlier `3c20a756` approval does not
+cover the later atomic-journal fix or rebased candidate.
