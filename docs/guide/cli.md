@@ -21,7 +21,10 @@ Commands:
   automation              Preview, explicitly confirm, or inspect finite operating authority
   selection               Read current selection guidance or save a validated Auto receipt; JSON output
   setup                   Review and apply owner-approved profile setup; JSON output by default
+  repair                  Inspect bounded repairs, report findings and perform non-coding PM diagnosis
+  recover                 Preview exact workflow exceptions; apply requires a local owner terminal and reason
   digest                  Generate and pin a deterministic digest of recent outcomes and cost/time totals
+  report                  Generate and pin a self-contained HTML cost and performance report (est. API-equivalent)
   revert                  Revert a task's exact landed commits on base and reopen it in Backlog; never push
   review-sprint           Build and pin a sprint review from events, artifacts and recorded usage
   idea                    Record a reasoned idea disposition; owner ideas require explicit consent
@@ -213,7 +216,7 @@ Commands:
   discard  Remove a scratch and its branch, saving any work as a session diff artifact first
   promote  File a Backlog task with the scratch diff attached; the scratch stays unchanged
   finish   Finish a scratch into a task on the owner's instruction, gate it and review it only on request (owner)
-  gc       Collect idle scratch of ended sessions, saving work as diff artifacts first (owner)
+  gc       Collect ended or idle hostless sessions' scratch, saving work first (owner or PM)
   help     Print this message or the help of the given subcommand(s)
 
 Options:
@@ -958,6 +961,7 @@ Options:
       --bare                 Plain unbound Pi in the current directory: no store, binding or corral tools
       --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
       --pm                   Open the workspace PM in this pane, or take over a dead one (plain `corral pi` opens an assistant)
+  -c, --continue             Continue the previous PM conversation instead of starting fresh
       --resume <A-N>         Resume stopped assistant session A-<n> in this pane, fencing its previous generation (inside an assistant, /resume picks one)
       --over-cap             Open an assistant even when assistant.max_live assistants are already live
       --task <TASK-ID>       Preload bounded read-only context for this task in a new assistant
@@ -975,13 +979,14 @@ Triage corral-pi agent questions by key and revision: list, show, answer, escala
 Usage: corral question [OPTIONS] <COMMAND>
 
 Commands:
-  list      List corral-pi agent questions; pending ones (open or escalated) by default
-  show      Show one question with its effective state, triage, answer and deadline
-  answer    Answer at the current revision; a PM answer needs --basis refs and --scope-note
-  escalate  Escalate an open question to the owner, optionally reclassifying it upward
-  cancel    Cancel a pending question with a reason
-  deadline  Owner only: expire the question at --at with --instruction unless its revision changes first
-  help      Print this message or the help of the given subcommand(s)
+  list          List corral-pi agent questions; pending ones (open or escalated) by default
+  show          Show one question with its effective state, triage, answer and deadline
+  answer        Answer at the current revision; a PM answer needs --basis refs and --scope-note
+  answer-group  Answer several members of one question group (a batched ask) in one command
+  escalate      Escalate an open question to the owner, optionally reclassifying it upward
+  cancel        Cancel a pending question with a reason
+  deadline      Owner only: expire the question at --at with --instruction unless its revision changes first
+  help          Print this message or the help of the given subcommand(s)
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -1037,6 +1042,27 @@ Options:
       --basis <BASIS>            Canonical basis ref (repeatable): spec:<task>@<revision>, plan:<task>@<plan>, decision:<task>@<plan>#<n>, decision:<task>/<run>/<id> or comment:<task>#<n>
       --scope-note <SCOPE_NOTE>  How the answer stays inside the approved write scope and acceptance
       --owner                    Answer as the owner: any pending question, or supersede an answer
+      --json                     
+  -h, --help                     Print help
+```
+
+### `corral question answer-group`
+
+```text
+Answer several members of one question group (a batched ask) in one command
+
+Usage: corral question answer-group [OPTIONS] <KEY>
+
+Arguments:
+  <KEY>  The group key or any member's key
+
+Options:
+      --answers <ANSWERS>        JSON array of {"key", "rev", "text"?, "option"?}; omit to answer every pending member at its current revision with --text
+      --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --text <TEXT>              Shared answer text for members without their own [default: ""]
+      --basis <BASIS>            Canonical basis ref (repeatable), shared by every member
+      --scope-note <SCOPE_NOTE>  
+      --owner                    
       --json                     
   -h, --help                     Print help
 ```
@@ -1499,6 +1525,132 @@ Options:
           Print help
 ```
 
+## `corral repair`
+
+```text
+Inspect bounded repairs, report findings and perform non-coding PM diagnosis
+
+Usage: corral repair [OPTIONS] <COMMAND>
+
+Commands:
+  status     Read all allowances, exact counters, findings and diagnosis without mutation
+  finding    Append a structured observation; matching is host-derived from exact identity
+  diagnose   Consume the single PM diagnosis allowance and return the full history
+  diagnosed  Finish diagnosis with a concrete bounded proposal and evidence, never a coding retry
+  renew      Explicit owner-approved allowance renewal, bound to the prior ledger digest
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral repair status`
+
+```text
+Read all allowances, exact counters, findings and diagnosis without mutation
+
+Usage: corral repair status [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral repair finding`
+
+```text
+Append a structured observation; matching is host-derived from exact identity
+
+Usage: corral repair finding [OPTIONS] --file <FILE> <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --file <FILE>  
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral repair diagnose`
+
+```text
+Consume the single PM diagnosis allowance and return the full history
+
+Usage: corral repair diagnose [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --owner        Explicit owner request in Assist; unavailable to PM/agent entry points
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral repair diagnosed`
+
+```text
+Finish diagnosis with a concrete bounded proposal and evidence, never a coding retry
+
+Usage: corral repair diagnosed [OPTIONS] --file <FILE> <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --file <FILE>  
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral repair renew`
+
+```text
+Explicit owner-approved allowance renewal, bound to the prior ledger digest
+
+Usage: corral repair renew [OPTIONS] --file <FILE> <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --file <FILE>  
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+## `corral recover`
+
+```text
+Preview exact workflow exceptions; apply requires a local owner terminal and reason
+
+Usage: corral recover [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --action <ACTION>          Exact proposed operation; without --apply this only previews [possible values: use-reviewer, accept-plan, accept-code, force-admission]
+      --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --stage <STAGE>            One named launch stage (use-reviewer or force-admission only) [possible values: dispatch, plan-dispatch, gate, code-review, plan-review]
+      --plan <PLAN>              Refuse unless this is still the current plan revision
+      --run <RUN>                Refuse unless this is still the current code run
+      --reviewer <REVIEWER>      One-attempt reviewer; prefer ordinary route --set-reviewer when sufficient
+      --merge <MERGE>            Code acceptance strategy (accept-code requires an explicit choice) [possible values: keep, rebase, ff]
+      --waive <EXCEPTIONS>       Name every exact overridden/waived check; repeatable, no wildcard
+      --notes-file <NOTES_FILE>  Plan acceptance resolutions; binds the actual file bytes into the preview
+      --history                  Read durable operations, not preview proposals
+      --apply <APPLY>            Exact current preview digest; not permission and never a yes/force flag
+      --reason <REASON>          Nonblank owner-written reason; application still requires local terminal confirmation
+      --json                     
+  -h, --help                     Print help
+```
+
 ## `corral digest`
 
 ```text
@@ -1511,6 +1663,22 @@ Options:
       --since <SINCE>  Cover the last N hours, days or weeks [default: 1d]
       --json           
   -h, --help           Print help
+```
+
+## `corral report`
+
+```text
+Generate and pin a self-contained HTML cost and performance report (est. API-equivalent)
+
+Usage: corral report [OPTIONS]
+
+Options:
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --since <SINCE>      Include dispatches started in the last N hours, days or weeks [default: 30d]
+      --project <PROJECT>  Only this project's tasks
+      --open               Open the pinned page through the loopback artifact server
+      --json               Print the analytics model as JSON
+  -h, --help               Print help
 ```
 
 ## `corral revert`
@@ -1767,13 +1935,14 @@ Usage: corral plan [OPTIONS] <COMMAND>
 
 Commands:
   progress           Read tracker Plan readiness, target-qualified prerequisites and criterion coverage
+  recovery           Read a cancelled Plan's retained resources and outstanding recovery obligations
   verify             Start an aggregate attempt and run the gate on the combined Plan candidate
   checkpoint         Run an advisory full gate on the Plan integration target head; never aggregate PASS
   evidence           Record an aggregate scenario observation (evidence JSON with run "aggregate")
   aggregate-review   Launch the configured independent reviewer on the current aggregate attempt
   aggregate-verdict  Record a launched aggregate reviewer's verdict; callbacks name their exact review
   accept             Accept the current aggregate attempt and land it once (owner by default)
-  cancel             End a planner session while retaining submitted plans and review history
+  cancel             Cancel Plan coordination without deleting member work, or end a design session
   submit             Snapshot a plan (YAML metadata + markdown) against the current task spec
   show               Inspect current and historical plan snapshots and verdicts
   review             Review a plan without starting implementation or taking a coding slot
@@ -1795,6 +1964,22 @@ Options:
 Read tracker Plan readiness, target-qualified prerequisites and criterion coverage
 
 Usage: corral plan progress [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --json         
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral plan recovery`
+
+```text
+Read a cancelled Plan's retained resources and outstanding recovery obligations
+
+Usage: corral plan recovery [OPTIONS] <ID>
 
 Arguments:
   <ID>  
@@ -1913,7 +2098,7 @@ Options:
 ### `corral plan cancel`
 
 ```text
-End a planner session while retaining submitted plans and review history
+Cancel Plan coordination without deleting member work, or end a design session
 
 Usage: corral plan cancel [OPTIONS] <ID>
 
@@ -1921,9 +2106,11 @@ Arguments:
   <ID>  
 
 Options:
-      --json         
-      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
-  -h, --help         Print help
+      --owner-ok         Confirm cancellation of an owner-origin execution Plan
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --reason <REASON>  
+      --json             
+  -h, --help             Print help
 ```
 
 ### `corral plan submit`
@@ -3060,6 +3247,7 @@ Arguments:
   <ID>  
 
 Options:
+      --json         Output is always JSON; accepted for consistency with other read commands
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -4082,9 +4270,6 @@ Options:
 ```
 
 ### `corral config set`
-
-For example, `corral config set limits.wip 6` sets the workspace coding work-in-progress
-limit; `0` disables it. See [limits](configuration.md#limits) for admission semantics.
 
 ```text
 Change a setting in place, keeping comments; refused when the result would be invalid
