@@ -387,8 +387,8 @@ fn supervise_with(
 }
 
 /// Any host exit leaves a conversation returnable: a clean quit (Pi's `/quit`) suspends it, a
-/// crash leaves it resumable. Only a session that never recorded a conversation ends here;
-/// `corral assistant end` remains the explicit, permanent end.
+/// crash leaves it resumable (a never-prompted one resumes on a fresh file). Only
+/// `corral assistant end` is the explicit, permanent end.
 fn finish(ctx: &Ctx, id: &str, generation: u32, status: std::process::ExitStatus) -> Result<()> {
     if !status.success() {
         #[cfg(unix)]
@@ -397,11 +397,6 @@ fn finish(ctx: &Ctx, id: &str, generation: u32, status: std::process::ExitStatus
     }
     if ctx.store.get_assistant(id)?.ended.is_some() {
         eprintln!("corral pi: assistant {id} ended");
-        return Ok(());
-    }
-    if super::ops::assistant::continued_session(ctx, id)?.is_none() {
-        end_assistant(ctx, id)?;
-        eprintln!("corral pi: assistant {id} ended (no conversation to return to)");
         return Ok(());
     }
     if let Err(error) = super::ops::assistant::suspend(ctx, id, generation, "quit") {
