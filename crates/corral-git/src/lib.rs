@@ -9,6 +9,8 @@ use anyhow::{Context, Result, bail};
 mod contract_tests;
 mod history;
 mod memo;
+mod objects;
+pub use objects::{blob_size, committed_blob, committed_paths, stream_blob};
 #[cfg(test)]
 mod memo_tests;
 mod patch;

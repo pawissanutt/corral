@@ -777,6 +777,9 @@ pub struct Task {
     /// Owner context does not participate in spec or verification identities.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<crate::TaskComment>,
+    /// Canonical annotation rows assembled for full exports only; never prompt context.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<crate::annotations::AnnotationThread>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion: Option<crate::CriteriaManifest>,
     /// Cumulative task outcome, not run activity or proof that checks remain current.

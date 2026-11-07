@@ -46,6 +46,7 @@ pub struct TaskHead {
     pub last_plan: Option<Box<PlanHead>>,
     pub last_aggregate_attempt: Option<Box<AttemptHead>>,
     pub summary: HistorySummary,
+    pub annotation_summary: crate::annotations::AnnotationSummary,
     pub(crate) seqs: CurrentSeqs,
     pub(crate) view: Option<PinnedView>,
     pub(crate) overlay: Option<Arc<super::head_overlay::Overlay>>,
@@ -76,6 +77,7 @@ impl PartialEq for TaskHead {
             && self.last_plan == other.last_plan
             && self.last_aggregate_attempt == other.last_aggregate_attempt
             && self.summary == other.summary
+            && self.annotation_summary == other.annotation_summary
     }
 }
 
@@ -264,6 +266,12 @@ impl TaskHead {
             last_plan: last_plan.map(Box::new),
             last_aggregate_attempt: last_aggregate_attempt.map(Box::new),
             summary: serde_json::from_value(doc.summary)?,
+            annotation_summary: serde_json::from_value(
+                doc.doc
+                    .get("annotations")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({})),
+            )?,
             seqs,
             view: None,
             overlay: None,

@@ -144,6 +144,7 @@ pub(super) fn draft_task(
         }),
         idea_decision: None,
         comments: Vec::new(),
+        annotations: Vec::new(),
         completion: None,
         result: None,
         id: format!("T-{number:03}"),

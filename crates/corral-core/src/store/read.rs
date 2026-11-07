@@ -103,6 +103,7 @@ fn count_task_doc(doc: &TaskDoc) {
             | TaskPart::Plan
             | TaskPart::AggregateAttempt
             | TaskPart::Comment
+            | TaskPart::AnnotationThread
             | TaskPart::Artifact
             | TaskPart::ScopeRevision
             | TaskPart::PmReceipt
