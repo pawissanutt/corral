@@ -75,6 +75,67 @@ fn general() -> (tempfile::TempDir, Config, ProfileMetadata) {
     (dir, config, metadata)
 }
 
+#[test]
+fn native_legacy_labels_keep_history_and_frozen_subscription_provenance() {
+    use crate::connection::{ConnectionId, ConnectionOrigin};
+    let (_dir, mut config, mut metadata) = general();
+    metadata.candidates[0].harness = "corral-pi".into();
+    let profile = config.profiles.get_mut("general").unwrap();
+    profile.harness = "corral-pi".into();
+    profile.metadata = Some(metadata.clone());
+    let episode = running(&metadata);
+    let selected = config
+        .resolve_candidate("general", &metadata.candidates[0])
+        .unwrap();
+    let snapshot = crate::ExecutionSnapshot::new(&config, selected);
+    let snapshot: crate::ExecutionSnapshot =
+        serde_json::from_slice(&serde_json::to_vec(&snapshot).unwrap()).unwrap();
+    let binding = snapshot.resolved.connection_binding().unwrap().unwrap();
+    assert_eq!(binding.connection, ConnectionId::OpenaiSubscription);
+    assert_eq!(binding.origin, ConnectionOrigin::LegacySubscription);
+    assert_eq!(binding.identity, "owner-openai");
+    assert_eq!(binding.candidate.as_deref(), Some("sol"));
+    let history: AvailabilityEpisode =
+        serde_json::from_slice(&serde_json::to_vec(&episode).unwrap()).unwrap();
+    assert_eq!(history.attempts[0].connection, "owner-openai");
+    let mut changed = snapshot.resolved.clone();
+    changed.connection_identity = Some("other-label".into());
+    assert_ne!(
+        changed.connection_binding().unwrap().unwrap().digest,
+        binding.digest
+    );
+    let mut claude = metadata.candidates[2].clone();
+    claude.harness = "corral-pi".into();
+    let claude_binding = config
+        .resolve_candidate("general", &claude)
+        .unwrap()
+        .connection_binding()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        claude_binding.connection,
+        ConnectionId::AnthropicSubscription
+    );
+    assert_eq!(claude_binding.identity, "owner-anthropic");
+    let mut unknown = metadata.candidates[0].clone();
+    unknown.cost = CandidateCost::Unknown;
+    assert!(config.resolve_candidate("general", &unknown).is_ok());
+    let mut policy = metadata.fallback.clone().unwrap();
+    policy.allow_unknown_subscription_cost = false;
+    assert!(policy.admits(&unknown).is_err()); // Mapping supplies no spending/fallback approval.
+    unknown.cost = CandidateCost::Metered {
+        currency: "USD".into(),
+        maximum_micros: 1,
+    };
+    assert!(config.resolve_candidate("general", &unknown).is_err());
+    config.profiles.get_mut("general").unwrap().connection = Some(ConnectionId::OpenaiSubscription);
+    assert!(
+        config
+            .resolve_candidate("general", &metadata.candidates[0])
+            .is_err()
+    );
+}
+
 fn running(metadata: &ProfileMetadata) -> AvailabilityEpisode {
     let mut episode = AvailabilityEpisode::new(
         "T-1-R1-implementation",

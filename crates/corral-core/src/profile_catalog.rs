@@ -149,19 +149,7 @@ impl ExecutionCandidate {
             // Built in and argument-free: model and effort travel in the host bootstrap, so the
             // flag map's effort check above and the vendor allowlist are its rules.
             crate::check_corral_pi_vendor(&self.id, Some(&self.provider))?;
-            let connection = crate::connection::ConnectionId::parse(&self.connection)?;
-            crate::connection::ConnectionId::resolve(Some(connection), Some(&self.provider))?;
-            ensure!(
-                !connection.api_key()
-                    || matches!(
-                        self.cost,
-                        CandidateCost::Metered {
-                            maximum_micros: 1..,
-                            ..
-                        }
-                    ),
-                "API candidate requires a finite positive metered cost"
-            );
+            self.native_connection(None)?;
             ensure!(
                 !crate::CORRAL_PI_METERED_VENDORS.contains(&self.provider.as_str())
                     || matches!(self.cost, CandidateCost::Metered { .. }),
@@ -212,6 +200,9 @@ impl ProfileMetadata {
             candidate
                 .validate(config)
                 .with_context(|| format!("candidate '{}'", candidate.id))?;
+            if crate::is_corral_pi(&candidate.harness) {
+                candidate.native_connection(profile.connection)?;
+            }
             ensure!(
                 ids.insert(&candidate.id),
                 "duplicate execution candidate '{}'",
@@ -240,7 +231,7 @@ impl ProfileMetadata {
                     profile.vendor.as_deref().or(inferred.as_deref()),
                 )?;
                 ensure!(
-                    preferred.connection == connection.id(),
+                    preferred.native_connection(profile.connection)? == connection,
                     "preferred candidate connection differs from profile binding"
                 );
             }

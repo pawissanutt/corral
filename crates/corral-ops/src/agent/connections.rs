@@ -5,6 +5,10 @@ use std::path::Path;
 
 pub fn compatible(assets: &Path, binding: &ConnectionBinding) -> Result<()> {
     binding.validate()?;
+    // Existing AWS/local profile bindings keep their pre-connection host contract.
+    if !binding.requires_ack() {
+        return Ok(());
+    }
     let manifest: serde_json::Value = serde_json::from_slice(
         &std::fs::read(assets.join("compat.json"))
             .context("reading host connection compatibility")?,
@@ -45,6 +49,10 @@ pub fn validate(
 }
 
 pub fn provider(resolved: &corral_core::ResolvedProfile) -> Result<Option<String>> {
+    ensure!(
+        corral_core::is_corral_pi(&resolved.harness),
+        "connection_invalid: native launch has another harness binding"
+    );
     Ok(resolved
         .connection_binding()?
         .map(|b| b.connection.provider().to_owned()))

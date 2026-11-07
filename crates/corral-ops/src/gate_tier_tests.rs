@@ -688,6 +688,7 @@ fn automatic_dispatch_refusal_is_reported_once_and_creates_nothing() {
     let mut execution = ExecutionSnapshot::new(
         &fx.ctx.store.config,
         ResolvedProfile {
+            connection_identity: None,
             connection: None,
             candidate: None,
             profile: "fake".into(),

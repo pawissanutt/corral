@@ -96,11 +96,11 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     }
     let n = envelope.identity.generation;
     let generation = admitted.resolved.generation(&container, n)?;
-    if generation
-        .as_ref()
-        .and_then(|g| g.connection.as_ref())
-        .map(|b| b.digest.as_str())
-        != payload.binding_digest.as_deref()
+    let connection = generation.as_ref().and_then(|g| g.connection.as_ref());
+    let retained_legacy =
+        payload.binding_digest.is_none() && connection.is_some_and(|b| !b.requires_ack());
+    if !retained_legacy
+        && connection.map(|b| b.digest.as_str()) != payload.binding_digest.as_deref()
     {
         return Err(bad(
             "hello connection binding does not match the launched generation",

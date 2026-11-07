@@ -35,7 +35,8 @@ export async function createApiCatalog(
   if (!provider || !model || model.api !== route.modelApi) throw new Error("model_unavailable: exact approved API model is not in the catalog");
   const baseUrl = connection === "anthropic-api" ? "https://api.anthropic.com" : "https://api.openai.com/v1";
   if (model.baseUrl !== baseUrl || Object.keys(model.headers ?? {}).length !== 0) throw new Error("connection_invalid: API model endpoint/header override refused");
-  if (binding.effort !== null && !getSupportedThinkingLevels(model).includes(binding.effort as never)) {
+  const effort = getSupportedThinkingLevels(model).find(level => level === (binding.effort ?? "off"));
+  if (effort === undefined) {
     throw new Error("model_unavailable: exact approved effort is unsupported by the API model");
   }
   const key = async () => {
@@ -55,6 +56,7 @@ export async function createApiCatalog(
     if (!Number.isSafeInteger(output) || output <= 0) throw new Error("connection_invalid: unbounded API output");
     // Auth is pinned, not merely prefix checked: remove OAuth, env, headers and base-URL overrides.
     const fetch: Fetch = async (input, init) => {
+      if (await key() !== apiKey) throw new Error("credentials_unavailable: selected API credential changed before dispatch");
       const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
       const actual = connection === "anthropic-api" ? headers.get("x-api-key") : headers.get("authorization");
       if (actual !== (connection === "anthropic-api" ? apiKey : `Bearer ${apiKey}`)) {
@@ -75,9 +77,18 @@ export async function createApiCatalog(
     };
     const pinnedOptions = {
       ...options, apiKey, headers: {}, env: {}, fetch: fetch as typeof globalThis.fetch, maxRetries: 0,
-      reasoning: (binding.effort ?? "off") as never, maxTokens: output,
+      reasoning: effort, maxTokens: output,
     };
-    return stream({ ...model, headers: {} }, context, pinnedOptions);
+    const source = stream({ ...model, headers: {} }, context, pinnedOptions);
+    return (async function* () {
+      for await (const event of source) {
+        // Provider/SDK error bodies may echo request auth; neither UI nor receipts may retain it.
+        if (event.type === "error") {
+          const error: typeof event.error = JSON.parse(JSON.stringify(event.error).replaceAll(apiKey, "<redacted>"));
+          yield { ...event, error };
+        } else yield event;
+      }
+    })();
   });
   // Minimal registration deliberately drops OpenAI's ChatGPT OAuth AND classifier/image clients.
   models.registerNativeProvider({

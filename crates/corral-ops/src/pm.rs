@@ -54,6 +54,7 @@ pub fn setup_connection(config: &Config, connection: &SetupConnection) -> Result
         "bootstrap harness needs a model_args placeholder for model/effort settings"
     );
     Ok(ResolvedProfile {
+        connection_identity: None,
         connection: None,
         candidate: None,
         profile: "setup-connection".into(),

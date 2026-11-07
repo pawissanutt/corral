@@ -66,10 +66,10 @@ pub(super) fn budget(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             .family("budget_requests")
             .family("generations"),
         move |state, _| {
-            let connection = state
+            let binding = state
                 .current_generation()
-                .and_then(|g| g.connection.as_ref())
-                .map(|b| b.connection);
+                .and_then(|g| g.connection.clone());
+            let connection = binding.as_ref().map(|b| b.connection);
             if let Some(connection) = connection {
                 connection.require_admission()?;
             }
@@ -131,6 +131,9 @@ pub(super) fn budget(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             Ok(Commit {
                 result: json!({"admitted":admitted, "exhausted":state.budget.exhausted(limits),
             "connection":connection, "billing":connection.map(|c| c.billing()),
+            "binding_digest":binding.as_ref().map(|b| &b.digest),
+            "connection_identity":binding.as_ref().map(|b| &b.identity),
+            "candidate":binding.as_ref().and_then(|b| b.candidate.as_ref()),
             "tokens":tokens, "usd_nanos":usd_nanos, "limits":limits,
             "uncertain_requests":state.budget.requests.iter().filter(|r| r.response.is_none()).count(),
             "pricing_gaps":state.budget.requests.iter().filter(|r| !r.priced).count(),

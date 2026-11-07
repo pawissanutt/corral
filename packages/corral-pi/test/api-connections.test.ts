@@ -9,6 +9,7 @@ import auth from "../src/auth/index.ts";
 import { authDir } from "../src/auth/paths.ts";
 import { authContext } from "../src/host/session.ts";
 import { createApiCatalog } from "../src/host/api-connections.ts";
+import { NO_CATALOG_CREDENTIALS } from "../src/host/catalog.ts";
 import { bindingDigest, parseBinding, type ConnectionBinding } from "../src/host/connections.ts";
 import { guardedFetch } from "../src/host/restrict.ts";
 import { fakeCodexTransport } from "./fixtures/auth/fake-transport.ts";
@@ -16,7 +17,7 @@ import { fakeCodexTransport } from "./fixtures/auth/fake-transport.ts";
 const KEY = "sk-SYNTHETIC-platform-key-not-real";
 const context = { messages: [{ role: "user" as const, content: "Reply only API_OK.", timestamp: 1 }] };
 function binding(connection: "openai-api" | "anthropic-api"): ConnectionBinding {
-  const base = { version: 1 as const, connection, candidate: "exact-api", model: connection === "openai-api" ? "gpt-5.4" : "claude-sonnet-4-6", effort: null };
+  const base = { version: 1 as const, connection, identity: connection, origin: "registered" as const, candidate: "exact-api", model: connection === "openai-api" ? "gpt-5.4" : "claude-sonnet-4-6", effort: null };
   return { ...base, digest: bindingDigest(base) };
 }
 function anthropicResponse(): Response {
@@ -37,7 +38,7 @@ for (const connection of ["anthropic-api", "openai-api"] as const) test(`${conne
   process.env.XDG_DATA_HOME = dir;
   const owned = authDir();
   const selected = binding(connection);
-  if (connection === "openai-api") expect(selected.digest).toBe("6ebb36809372a20d5b4df4fc07afbad27c5feb912052e17fe69f61e88a8becfb");
+  if (connection === "openai-api") expect(selected.digest).toBe("c89f600694189d007ba94f7e886d994487cb2e4e6f2822ba1ca60cd2bb9f3e40");
   const provider = CONNECTIONS[connection].provider;
   const subscription = provider === "openai" ? "openai-codex" : provider;
   try {
@@ -60,7 +61,7 @@ for (const connection of ["anthropic-api", "openai-api"] as const) test(`${conne
       expect(headers.get(connection === "anthropic-api" ? "x-api-key" : "authorization")).toBe(connection === "anthropic-api" ? KEY : `Bearer ${KEY}`);
       expect(headers.has(connection === "anthropic-api" ? "authorization" : "x-api-key")).toBe(false);
       expect(init?.redirect).toBe("error");
-      if (fail) return Response.json({ error: { type: "server_error", message: "synthetic transient" } }, { status: 503 });
+      if (fail) return Response.json({ error: { type: "server_error", message: KEY } }, { status: 503 });
       return connection === "anthropic-api" ? anthropicResponse() : fake.send(url, init);
     };
     const denied = await createApiCatalog(selectedCredentials, selected, send);
@@ -83,11 +84,15 @@ for (const connection of ["anthropic-api", "openai-api"] as const) test(`${conne
     fail = true;
     const failure = await lane.models.streamSimple(lane.model, context, { maxRetries: 9 }).result();
     expect(failure.stopReason).toBe("error");
+    expect(JSON.stringify(failure)).not.toContain(KEY);
     expect(admitted).toBe(2); expect(sent).toBe(2); // No hidden Pi/SDK transient retries.
     expect(readFileSync(subscriptions.file)).toEqual(before);
     await store.delete(provider);
     expect(subscriptions.present()).toBe(true);
     expect(store.present()).toBe(false);
+    const loggedOut = await lane.models.streamSimple(lane.model, context).result();
+    expect(loggedOut.stopReason).toBe("error");
+    expect(sent).toBe(2); expect(admitted).toBe(2); // No OAuth/ambient fallback after API logout.
   } finally {
     if (previousXdg === undefined) delete process.env.XDG_DATA_HOME;
     else process.env.XDG_DATA_HOME = previousXdg;
@@ -110,9 +115,20 @@ test("API boundary rejects OAuth, command inputs, unsafe files, foreign endpoint
       await expect(installApiKey(dir, "openai-api", file)).rejects.toThrow("literal");
     }
     const selected = binding("openai-api");
+    const legacyBase = { ...selected, connection: "openai-subscription" as const, identity: "opaque-owner-label", origin: "legacy_subscription" as const };
+    const legacy = { ...legacyBase, digest: bindingDigest(legacyBase) };
+    expect(parseBinding(legacy, "openai-codex", legacy.model)).toEqual(legacy);
+    const falseLegacyBase = { ...selected, identity: "opaque-owner-label", origin: "legacy_subscription" as const };
+    const falseLegacy = { ...falseLegacyBase, digest: bindingDigest(falseLegacyBase) };
+    expect(() => parseBinding(falseLegacy, "openai", falseLegacy.model)).toThrow("binding");
     expect(() => parseBinding({ ...selected, candidate: "changed" }, "openai", selected.model)).toThrow("binding");
     expect(() => parseBinding(selected, "openai-codex", selected.model)).toThrow("incompatible");
     expect(() => parseBinding(undefined, "openai", selected.model)).toThrow("incompatible");
+    const neverSend = async () => { throw new Error("must not dispatch"); };
+    const unsupportedEffort = { ...selected, effort: "unsupported" };
+    await expect(createApiCatalog(NO_CATALOG_CREDENTIALS, { ...unsupportedEffort, digest: bindingDigest(unsupportedEffort) }, neverSend)).rejects.toThrow("effort");
+    const subscriptionName = { ...selected, model: "openai-codex/gpt-5.4" };
+    await expect(createApiCatalog(NO_CATALOG_CREDENTIALS, { ...subscriptionName, digest: bindingDigest(subscriptionName) }, neverSend)).rejects.toThrow("exact approved API model");
     for (const connection of ["openai-api", "anthropic-api"] as const) {
       const network = guardedFetch(async () => { throw new Error("must not send"); }, undefined, CONNECTIONS[connection].provider, connectionRules(connection));
       for (const url of ["https://evil.example/v1/messages", "https://api.openai.com/v1/responses?proxy=1", "https://api.anthropic.com/v1/messages#fragment"]) {
