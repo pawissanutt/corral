@@ -13,9 +13,12 @@ import { registerApiProvider } from "@earendil-works/pi-ai/compat";
 
 import { buildCustomToolServers } from "./custom-tools.ts";
 import { ReplayCache, cacheScope } from "./cache.ts";
-import { type StreamEvent, applyStreamEvent, assistantFailure, emptyOutput, mapStopReason, resultFailure, updateUsage }
-  from "./events.ts";
-import { PROMPT_CACHE_TTL, buildPromptBlocks, promptStream } from "./prompt.ts";
+import {
+  type StreamEvent, applyStreamEvent, assertPiCompactionOwner, assistantFailure, emptyOutput,
+  hasPromptUsage, mapStopReason, recordClaudeCache, resultFailure, updateUsage,
+} from "./events.ts";
+import { buildPromptBlocks, promptStream } from "./prompt.ts";
+import { DEFAULT_CACHE_TTL, resolveCacheRetention, type ClaudeCacheRetention } from "./cache-policy.ts";
 import { loadSdk, resolveClaudeCode } from "./sdk.ts";
 import { HOST_TOOL_DENIAL_HOOKS, canUseTool, resolveSdkTools } from "./tools.ts";
 
@@ -28,6 +31,7 @@ export interface ClaudeLaneConfig {
   readonly env?: NodeJS.ProcessEnv;
   readonly cwd?: string;
   readonly executable?: () => string;
+  readonly cacheRetention?: ClaudeCacheRetention;
   /** Host-created search runtime only; never enabled for the coding lane. */
   readonly searchOnly?: boolean;
 }
@@ -49,7 +53,8 @@ export function claudeSystemPrompt(messages: readonly Message[]): Options["syste
   const base = typeof system?.content === "string" ? system.content
     : (system?.content ?? []).map((block) => block.text).join("");
   const sections = Object.entries(system?.sections ?? {})
-    .filter((entry): entry is [string, string] => typeof entry[1] === "string" && !PI_HARNESS_SECTIONS.has(entry[0]))
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string" &&
+      !PI_HARNESS_SECTIONS.has(entry[0]) && entry[0] !== "owner_questions")
     .map(([, text]) => text);
   const append = [base, ...sections].map((text) => text.trim()).filter(Boolean).join("\n\n")
     .replace(/\s*\(corral-pi\)/g, "").replace(/\bcorral-pi\b/g, "corral");
@@ -60,11 +65,14 @@ export function claudeSystemPrompt(messages: readonly Message[]): Options["syste
  * The subprocess environment: the host's, without any ambient Anthropic or Claude Code auth, with
  * the corral-owned OAuth token as the only credential and a private config directory.
  */
-export function claudeEnvironment(parent: NodeJS.ProcessEnv, token: string, configDir: string): Record<string, string> {
+export function claudeEnvironment(
+  parent: NodeJS.ProcessEnv, token: string, configDir: string, retention: ClaudeCacheRetention = DEFAULT_CACHE_TTL,
+): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(parent)) {
     if (value === undefined || key.startsWith("ANTHROPIC_") || key.startsWith("CLAUDE_CODE_") ||
-        key === "CLAUDE_CONFIG_DIR" || key.startsWith("AWS_BEARER_TOKEN_BEDROCK")) continue;
+        key === "CLAUDE_CONFIG_DIR" || key.startsWith("AWS_BEARER_TOKEN_BEDROCK") ||
+        key.startsWith("DISABLE_PROMPT_CACHING") || key === "FORCE_PROMPT_CACHING_5M") continue;
     env[key] = value;
   }
   env.CLAUDE_CODE_OAUTH_TOKEN = token;
@@ -73,8 +81,10 @@ export function claudeEnvironment(parent: NodeJS.ProcessEnv, token: string, conf
   // Each query is fresh: the preset's Git snapshot would precede replay and invalidate it after
   // edits/commits. Corral's role contract and Git skill own the workflow; tools supply live state.
   env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS = "1";
-  // A one-hour history marker after Claude Code's five-minute marker is rejected by the API.
-  env.CLAUDE_CODE_PROMPT_CACHE_TTL = PROMPT_CACHE_TTL;
+  // SDK and explicit history markers must agree; never inherit an ambient lifetime override.
+  env.CLAUDE_CODE_PROMPT_CACHE_TTL = retention === "none" ? DEFAULT_CACHE_TTL : retention;
+  if (retention === "5m") env.FORCE_PROMPT_CACHING_5M = "1";
+  if (retention === "none") env.DISABLE_PROMPT_CACHING = "1";
   env.CLAUDE_AGENT_SDK_CLIENT_APP = "corral-pi";
   return env;
 }
@@ -107,6 +117,8 @@ export function streamClaudeSdk(
     let started = false;
     let sawStreamEvent = false;
     let succeeded = false;
+    let usageReported = false;
+    let recordCache = () => {};
     const close = () => {
       if (closed || !query) return;
       closed = true;
@@ -131,6 +143,8 @@ export function streamClaudeSdk(
       const sdk = await loadSdk();
       mkdirSync(config.configDir, { recursive: true, mode: 0o700 });
       const messages = context.messages;
+      const retention = resolveCacheRetention(config.cacheRetention ?? (config.env ?? process.env).CORRAL_CLAUDE_CACHE_TTL,
+        options?.cacheRetention);
       const toolLess = options?.toolChoice === "none";
       const tools = resolveSdkTools(toolLess ? [] : getCurrentTools(messages));
       const mcpServers = await buildCustomToolServers(tools.customTools);
@@ -144,21 +158,29 @@ export function streamClaudeSdk(
         hooks: HOST_TOOL_DENIAL_HOOKS,
         systemPrompt: claudeSystemPrompt(messages),
         settingSources: [],
+        settings: { autoCompactEnabled: false },
         strictMcpConfig: true,
         persistSession: false,
         pathToClaudeCodeExecutable: executable,
-        env: claudeEnvironment(config.env ?? process.env, token, config.configDir),
+        env: claudeEnvironment(config.env ?? process.env, token, config.configDir, retention),
         ...(mcpServers ? { mcpServers } : {}),
         ...(toolLess ? { maxTurns: 1 } : {}),
         ...thinkingOptions(model, options),
       };
-      const prompt = cache.prepare(buildPromptBlocks(messages, tools.customToolNameToSdk), options?.sessionId
+      const prompt = cache.prepare(buildPromptBlocks(messages, tools.customToolNameToSdk, retention), options?.sessionId
         ? cacheScope([options.sessionId, model.provider, model.id, queryOptions.cwd, queryOptions.systemPrompt,
           tools.sdkTools, tools.customTools, queryOptions.thinking, queryOptions.effort,
-          queryOptions.maxThinkingTokens]) : undefined);
+          queryOptions.maxThinkingTokens, retention]) : undefined);
+      const startedAt = performance.now();
+      recordCache = () => recordClaudeCache(output, retention, prompt.observation, startedAt, usageReported);
       query = sdk.query({ prompt: promptStream(prompt.blocks), options: queryOptions });
       if (aborted) interrupt();
       for await (const message of query) {
+        assertPiCompactionOwner(message);
+        if (message.type === "result") {
+          usageReported = hasPromptUsage(message.usage) || usageReported;
+          updateUsage(model, output, message.usage);
+        }
         const failure = message.type === "assistant" ? assistantFailure(message)
           : message.type === "result" ? resultFailure(message) : undefined;
         if (failure) throw failure;
@@ -168,11 +190,11 @@ export function streamClaudeSdk(
         }
         if (message.type === "stream_event") {
           sawStreamEvent = true;
-          applyStreamEvent({ model, output, blocks, stream, customToolNameToPi: tools.customToolNameToPi },
-            message.event as StreamEvent);
+          const event = message.event as StreamEvent;
+          if (event.type === "message_start") usageReported = hasPromptUsage(event.message.usage) || usageReported;
+          applyStreamEvent({ model, output, blocks, stream, customToolNameToPi: tools.customToolNameToPi }, event);
         } else if (message.type === "result" && message.subtype === "success") {
           succeeded = true;
-          updateUsage(model, output, message.usage);
           // A terminal result never downgrades a tool-use turn, or Pi would not run the calls.
           if (message.stop_reason != null && output.stopReason !== "toolUse") output.stopReason = mapStopReason(message.stop_reason);
           if (!sawStreamEvent) output.content.push({ type: "text", text: message.result });
@@ -181,15 +203,19 @@ export function streamClaudeSdk(
       if (aborted || options?.signal?.aborted) {
         output.stopReason = "aborted";
         output.errorMessage = "Operation aborted";
+        recordCache();
         stream.push({ type: "error", reason: "aborted", error: output });
       } else {
-        if (succeeded) prompt.commit();
+        if (!succeeded) throw new Error("claude_query_incomplete: Claude Code ended without a terminal success result");
+        prompt.commit();
+        recordCache();
         const reason = output.stopReason === "toolUse" ? "toolUse" : output.stopReason === "length" ? "length" : "stop";
         stream.push({ type: "done", reason, message: output });
       }
     } catch (error) {
       output.stopReason = aborted || options?.signal?.aborted ? "aborted" : "error";
       output.errorMessage = error instanceof Error ? error.message : String(error);
+      recordCache();
       stream.push({ type: "error", reason: output.stopReason, error: output });
     } finally {
       options?.signal?.removeEventListener("abort", onAbort);

@@ -2,11 +2,36 @@ import { expect, test } from "bun:test";
 import type { Message, ToolResultMessage } from "@earendil-works/pi-ai";
 
 import { buildPromptBlocks } from "../src/claude/prompt.ts";
-import { claudeEnvironment } from "../src/claude/stream.ts";
+import { claudeEnvironment, claudeSystemPrompt } from "../src/claude/stream.ts";
 
 const user = (content: string) => ({ role: "user" as const, content, timestamp: 0 });
 const result = (content: ToolResultMessage["content"]): ToolResultMessage => ({
   role: "toolResult", toolCallId: "read-1", toolName: "read", content, isError: false, timestamp: 0,
+});
+
+test("the system prompt keeps Claude Code's preset and appends only corral's sections, without Pi's harness identity", () => {
+  const system = {
+    role: "system" as const, content: "", timestamp: 0,
+    sections: {
+      preamble: "You are an expert coding assistant operating inside pi, a coding agent harness.",
+      tools: "<tools>- read</tools>", rules: "<rules>- Use read</rules>", docs: "<docs>Pi documentation</docs>",
+      addendum: "<addendum>\n# corral worker contract (corral-pi)\nRun the gate.\n</addendum>", cwd: "<cwd>\n/w\n</cwd>",
+    },
+  };
+  expect(claudeSystemPrompt([system])).toEqual({
+    type: "preset", preset: "claude_code",
+    append: "<addendum>\n# corral worker contract\nRun the gate.\n</addendum>\n\n<cwd>\n/w\n</cwd>",
+  });
+});
+
+test("question-state changes are live context, not mutations of the cached system prefix", () => {
+  const context = (state: string) => [{ role: "system" as const, content: "", timestamp: 0,
+    sections: { addendum: "Permanent authority rules", owner_questions: state } }, user("continue")];
+  const pending = context("A question is pending; this is not permission");
+  const answered = context("Answer delivery completed; consult the owner input");
+  expect(claudeSystemPrompt(pending)).toEqual(claudeSystemPrompt(answered));
+  expect(JSON.stringify(buildPromptBlocks(pending, new Map()))).toContain("A question is pending");
+  expect(JSON.stringify(buildPromptBlocks(answered, new Map()))).toContain("Answer delivery completed");
 });
 
 test("Claude replay caches an unchanged text prefix before its moving suffix, with the SDK's TTL", () => {

@@ -52,6 +52,7 @@ import { askUserEnabled, askUserTool } from "./ask-user.ts";
 import { PendingQuestions, QUESTION_ENTRY } from "./pending-questions.ts";
 import { recordQuestionOwnerInput } from "./question-owner-input.ts";
 import { OwnerQuestionUi } from "../ui/owner-questions.ts";
+import { registerCacheStats } from "../ui/cache-stats.ts";
 import { type HerdrLifecycle, answeredKeys } from "./herdr.ts";
 import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, guardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
@@ -904,6 +905,7 @@ export class HostSession {
       return Reflect.get(target, property, receiver);
     } }) : api;
     this.dialogPi = pi;
+    registerCacheStats(pi);
     if (policy) pi.on("context_with_system", async event => {
       await policy.refresh();
       const state = policy.snapshot();

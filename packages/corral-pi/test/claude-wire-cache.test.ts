@@ -11,7 +11,8 @@ test.skipIf(process.platform !== "linux")("Claude's effective prefix survives ed
   const child = spawnSync("unshare", ["--user", "--map-root-user", "--net", "--pid", "--fork", "--kill-child",
     "sh", "-c", 'ip link set lo up && exec "$@"', "claude-cache-fixture",
     process.execPath, fixture, readlinkSync("/proc/self/ns/net"),
-    ...(process.env.CORRAL_TEST_CLAUDE_EXECUTABLE ? [process.env.CORRAL_TEST_CLAUDE_EXECUTABLE] : [])], {
+    ...(process.env.CORRAL_TEST_CLAUDE_EXECUTABLE ? [process.env.CORRAL_TEST_CLAUDE_EXECUTABLE] : []),
+    ...(process.env.CORRAL_TEST_CLAUDE_RESIDENT_PROBE === "1" ? ["--measure-resident"] : [])], {
     env: { PATH: process.env.PATH }, encoding: "utf8", input: "", timeout: 45_000, maxBuffer: 1024 * 1024,
   });
   if (child.status !== 0) throw new Error(child.stderr || String(child.error ?? child.signal));

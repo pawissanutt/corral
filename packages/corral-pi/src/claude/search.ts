@@ -3,9 +3,10 @@ import { mkdirSync } from "node:fs";
 import type { Options, Query } from "@anthropic-ai/claude-agent-sdk";
 import { createAssistantMessageEventStream, type AssistantMessageEventStream, type Model,
   type SimpleStreamOptions, type TranscriptContext } from "@earendil-works/pi-ai";
-import { assistantFailure, emptyOutput, resultFailure, updateUsage } from "./events.ts";
+import { assertPiCompactionOwner, assistantFailure, emptyOutput, resultFailure, updateUsage } from "./events.ts";
 import { buildPromptBlocks, promptStream } from "./prompt.ts";
 import { loadSdk, resolveClaudeCode } from "./sdk.ts";
+import { resolveCacheRetention } from "./cache-policy.ts";
 import { claudeEnvironment, claudeSystemPrompt, type ClaudeLaneConfig } from "./stream.ts";
 
 export function streamClaudeSearch(
@@ -25,12 +26,15 @@ export function streamClaudeSearch(
       const token = options?.apiKey;
       if (typeof token !== "string" || !token.includes("sk-ant-oat")) throw new Error("credentials_unavailable: subscription OAuth required");
       const sdk = await loadSdk();
+      const retention = resolveCacheRetention(config.cacheRetention ?? (config.env ?? process.env).CORRAL_CLAUDE_CACHE_TTL,
+        options?.cacheRetention);
       mkdirSync(config.configDir, { recursive: true, mode: 0o700 });
       const queryOptions: Options = {
         cwd: config.cwd ?? process.cwd(), model: model.id, tools: ["WebSearch"], allowedTools: ["WebSearch"],
-        permissionMode: "dontAsk", settingSources: [], strictMcpConfig: true, persistSession: false,
+        permissionMode: "dontAsk", settingSources: [], settings: { autoCompactEnabled: false },
+        strictMcpConfig: true, persistSession: false,
         maxTurns: 3, pathToClaudeCodeExecutable: (config.executable ?? resolveClaudeCode)(),
-        env: claudeEnvironment(config.env ?? process.env, token, config.configDir),
+        env: claudeEnvironment(config.env ?? process.env, token, config.configDir, retention),
         systemPrompt: claudeSystemPrompt(context.messages),
         canUseTool: async (name, input) => name === "WebSearch"
           ? { behavior: "allow", updatedInput: input }
@@ -44,11 +48,12 @@ export function streamClaudeSearch(
         }] }] },
       };
       options?.signal?.throwIfAborted();
-      query = sdk.query({ prompt: promptStream(buildPromptBlocks(context.messages, new Map())), options: queryOptions });
+      query = sdk.query({ prompt: promptStream(buildPromptBlocks(context.messages, new Map(), retention)), options: queryOptions });
       if (options?.signal?.aborted) abort();
       stream.push({ type: "start", partial: output });
       for await (const message of query) {
         await options?.onProviderStreamEvent?.(message, model);
+        assertPiCompactionOwner(message);
         // Error results (including max-turn exhaustion) can still report consumed quota.
         if (message.type === "result") updateUsage(model, output, message.usage);
         const failure = message.type === "assistant" ? assistantFailure(message)

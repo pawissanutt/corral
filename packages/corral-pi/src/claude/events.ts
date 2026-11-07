@@ -6,12 +6,15 @@ import {
 } from "@earendil-works/pi-ai";
 
 import { mapSdkToolNameToPi, mapToolArgs } from "./tools.ts";
+import type { ReplayObservation } from "./cache.ts";
+import type { ClaudeCacheRetention } from "./cache-policy.ts";
 
 export interface SdkUsage {
   input_tokens?: number | null;
   output_tokens?: number | null;
   cache_read_input_tokens?: number | null;
   cache_creation_input_tokens?: number | null;
+  cache_creation?: { ephemeral_1h_input_tokens?: number | null } | null;
 }
 
 /** The subset of Anthropic's raw stream events Claude Code forwards as `stream_event`. */
@@ -34,6 +37,14 @@ export interface EventContext {
   readonly customToolNameToPi: ReadonlyMap<string, string>;
 }
 
+/** Pi owns canonical compaction; an SDK rewrite must never silently replace its history. */
+export function assertPiCompactionOwner(message: { type: string; subtype?: string }): void {
+  if (message.type === "system" && message.subtype === "compact_boundary") {
+    throw new Error("claude_compaction_conflict: Claude Code compacted while Pi owns history; " +
+      "the attempt was stopped without accepting its rewritten context");
+  }
+}
+
 export function mapStopReason(reason: string | null | undefined): StopReason {
   if (reason === "tool_use") return "toolUse";
   if (reason === "max_tokens") return "length";
@@ -46,8 +57,34 @@ export function updateUsage(model: Model<string>, output: AssistantMessage, usag
   if (usage.output_tokens != null) output.usage.output = usage.output_tokens;
   if (usage.cache_read_input_tokens != null) output.usage.cacheRead = usage.cache_read_input_tokens;
   if (usage.cache_creation_input_tokens != null) output.usage.cacheWrite = usage.cache_creation_input_tokens;
+  if (usage.cache_creation?.ephemeral_1h_input_tokens != null) {
+    output.usage.cacheWrite1h = usage.cache_creation.ephemeral_1h_input_tokens;
+  }
   output.usage.totalTokens = output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
   calculateCost(model, output.usage);
+}
+
+export function hasPromptUsage(usage: SdkUsage | undefined): boolean {
+  return usage !== undefined && [usage.input_tokens, usage.cache_read_input_tokens, usage.cache_creation_input_tokens]
+    .some(value => value != null);
+}
+
+/** Sanitized per-query telemetry; local prefix reachability is not a provider cache-hit claim. */
+export function recordClaudeCache(
+  output: AssistantMessage, retention: ClaudeCacheRetention, replay: ReplayObservation, startedAt: number,
+  usageReported: boolean,
+): void {
+  const usage = output.usage;
+  const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+  output.diagnostics = [...(output.diagnostics ?? []), {
+    type: "claude_cache", timestamp: Date.now(), details: {
+      mode: "one-shot", retention, ...replay, elapsedMs: Math.max(0, performance.now() - startedAt),
+      usageReported, inputTokens: usageReported ? usage.input : null,
+      cacheReadTokens: usageReported ? usage.cacheRead : null, cacheWriteTokens: usageReported ? usage.cacheWrite : null,
+      cacheWrite1hTokens: usage.cacheWrite1h ?? null, promptTokens: usageReported ? promptTokens : null,
+      hitRate: usageReported && promptTokens > 0 ? usage.cacheRead / promptTokens : null, stopReason: output.stopReason,
+    },
+  }];
 }
 
 export function emptyOutput(model: Model<string>): AssistantMessage {
