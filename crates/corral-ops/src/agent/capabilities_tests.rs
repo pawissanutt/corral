@@ -532,6 +532,41 @@ fn the_workspace_pm_bootstrap_names_workspace_root_for_guidance() {
 }
 
 #[test]
+fn queue_control_is_negotiated_not_advertised_to_older_installed_hosts() {
+    let current = fixture(Some(&["queue_control"]));
+    let bootstrap = current.open().unwrap();
+    assert!(
+        bootstrap
+            .capabilities
+            .as_ref()
+            .unwrap()
+            .enabled("queue_control")
+    );
+    assert_eq!(
+        current.message(&bootstrap)["capabilities"]["enabled"],
+        json!(["queue_control"])
+    );
+    let mut older = fixture(Some(&["todo"]));
+    let bootstrap = older.open().unwrap();
+    let snapshot = bootstrap.capabilities.unwrap();
+    assert!(!snapshot.enabled("queue_control"));
+    assert!(snapshot.features["queue_control"].unavailable.is_some());
+    older
+        .ctx
+        .store
+        .config
+        .agent
+        .capabilities
+        .set(AgentRole::Worker, "queue_control", true)
+        .unwrap();
+    assert!(
+        format!("{:#}", older.open().unwrap_err())
+            .contains("capability_unavailable: [agent.capabilities.worker] queue_control = true")
+    );
+    assert_eq!(older.host().generations.len(), 1);
+}
+
+#[test]
 fn background_shell_bounds_reach_the_worker_launch_only_when_installed() {
     // Given an installed host with background_shell and one without it.
     let fx = fixture(Some(&["todo", "background_shell"]));

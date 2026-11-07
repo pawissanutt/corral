@@ -24,7 +24,7 @@ pub type CapabilitySettings = BTreeMap<String, Value>;
 pub type SettingsFn = fn(&CapabilitySettings) -> Result<CapabilitySettings, String>;
 
 /// Bumped when a catalog entry's meaning or the snapshot's canonical form changes.
-pub const CAPABILITY_CATALOG_VERSION: u32 = 9;
+pub const CAPABILITY_CATALOG_VERSION: u32 = 10;
 
 /// One catalog entry. `defaults` returns `[strict, standard, full]` for a role, or `None` where
 /// the role's ceiling disallows the capability; a configured override can never cross it.
@@ -40,6 +40,13 @@ pub struct CapabilityDef {
 
 /// Every capability Corral resolves. Each later member registers its own implemented key here.
 pub const CATALOG: &[CapabilityDef] = &[
+    CapabilityDef {
+        key: "queue_control",
+        summary: "inspect and control eligible queued Pi input (never model authority)",
+        defaults: optional_text,
+        host: true,
+        settings: None,
+    },
     CapabilityDef {
         key: "budget",
         summary: "cumulative model token/USD admission limits",
@@ -600,13 +607,14 @@ impl CapabilitySnapshot {
     }
 
     pub fn enabled(&self, key: &str) -> bool {
-        self.features.get(key).is_some_and(|state| state.enabled)
+        (key != "queue_control" || self.catalog >= 10)
+            && self.features.get(key).is_some_and(|state| state.enabled)
     }
 
     pub fn enabled_keys(&self) -> impl Iterator<Item = &str> {
         self.features
             .iter()
-            .filter(|(_, state)| state.enabled)
+            .filter(|(key, _)| self.enabled(key))
             .map(|(key, _)| key.as_str())
     }
 
@@ -770,6 +778,10 @@ impl CapabilityTransition {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "../inbox/queue_capabilities_tests.rs"]
+mod queue_capabilities_tests;
 
 #[cfg(test)]
 mod lsp_config_tests {
