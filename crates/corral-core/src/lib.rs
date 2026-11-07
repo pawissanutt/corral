@@ -116,7 +116,7 @@ pub use event_reader::{
 pub use gate_presets::{GatePreset, detect_gate_presets};
 pub use gate_tier::*;
 pub use hints::*;
-pub use history_summary::{EndedRun, HistorySummary, TokenTotals};
+pub use history_summary::{EndedRun, HistorySummary, RecoverySummary, TokenTotals};
 pub use hooks::*;
 pub use infra_wait::*;
 pub use json_path::{JsonPath, PathProblem, PathProblems, PathSeg, Read};

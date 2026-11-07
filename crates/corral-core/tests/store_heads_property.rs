@@ -111,7 +111,12 @@ fn check(store: &Store, expected: &mut Task, before: &Rows, step: &str) {
     assert_eq!(&task, expected, "{step}");
     let raw = store.view().unwrap().head(TaskNum(1)).unwrap().unwrap();
     let summary: HistorySummary = serde_json::from_value(raw.summary).unwrap();
-    assert_eq!(summary, HistorySummary::of(&task).unwrap(), "{step}");
+    let record = store.task_record("T-001").unwrap();
+    assert_eq!(
+        summary,
+        HistorySummary::of_record(&record).unwrap(),
+        "{step}"
+    );
     assert_eq!(
         raw.header.fields.spec_rev,
         corral_core::spec_revision(&task).unwrap(),

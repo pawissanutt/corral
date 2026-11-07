@@ -41,7 +41,10 @@ fn old_sqlite_boards_initialize_artifact_facts_and_indexes_at_open() {
     let store = Store::open(root.path()).unwrap();
     // Then all derived values and new keyed lookups agree with the full task.
     let head = store.head(&task.id).unwrap();
-    assert_eq!(head.summary, HistorySummary::of(&task).unwrap());
+    assert_eq!(
+        head.summary,
+        HistorySummary::of_record(&store.task_record(&task.id).unwrap()).unwrap()
+    );
     assert_eq!(head.reviewed_keep_artifacts().unwrap(), 1);
     for field in [CardField::Artifacts, CardField::Lines] {
         assert_eq!(

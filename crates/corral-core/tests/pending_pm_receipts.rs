@@ -72,7 +72,10 @@ fn pending_pm_receipt_selection_and_terminal_owner_retirement_have_exact_growth_
         assert_eq!(delta.cells(Counter::FullTaskHydrations).total, 0);
         costs.push(Counter::ALL.map(|counter| delta.cells(counter).unattributed));
         let after = store.get(&task.id).unwrap();
-        assert_eq!(head.summary, HistorySummary::of(&after).unwrap());
+        assert_eq!(
+            head.summary,
+            HistorySummary::of_record(&store.task_record(&task.id).unwrap()).unwrap()
+        );
         assert_eq!(after.agent_pm_receipts.len(), full.agent_pm_receipts.len());
         for (before, after) in full.agent_pm_receipts.iter().zip(&after.agent_pm_receipts) {
             if !wanted

@@ -87,7 +87,8 @@ fn explicit_named_wait_edits_preserve_full_parity_facts_summary_and_current_guar
             assert_eq!(store.get(&task.id).unwrap(), expected);
             assert_eq!(
                 head.summary,
-                corral_core::HistorySummary::of(&expected).unwrap()
+                corral_core::HistorySummary::of_record(&store.task_record(&task.id).unwrap())
+                    .unwrap()
             );
             let before = store.get(&task.id).unwrap();
             assert!(

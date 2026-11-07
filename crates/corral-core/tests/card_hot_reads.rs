@@ -27,6 +27,7 @@ fn card_fields_match_full_tasks_over_random_histories() {
         }
         store.fixture_put_task(&task).unwrap();
         let full = store.get(&task.id).unwrap();
+        let record = store.task_record(&task.id).unwrap();
         // When the card reads only the head and the current run's artifact page.
         let before = work::snapshot();
         let _hot = HotScope::enter();
@@ -68,7 +69,7 @@ fn card_fields_match_full_tasks_over_random_histories() {
         assert!((actual.total() - expected.total()).abs() < 1e-10);
         assert_eq!(actual.text(), expected.text());
         assert_eq!(actual.unpriced_tokens, expected.unpriced_tokens);
-        assert_eq!(head.summary, HistorySummary::of(&full).unwrap());
+        assert_eq!(head.summary, HistorySummary::of_record(&record).unwrap());
         let delta = work::snapshot().since(&before);
         assert_eq!(delta.unattributed_hydrations(), 0);
         delta.check_identity().unwrap();

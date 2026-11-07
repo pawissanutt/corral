@@ -101,6 +101,7 @@ fn old_database_backfills_current_run_proof_before_hot_readiness() {
             .unwrap(),
         Some("00000000000000000001".into())
     );
+    let record = store.task_record(&task.id).unwrap();
     let before = crate::work::snapshot();
     let head = {
         let _hot = crate::work::HotScope::enter();
@@ -108,7 +109,7 @@ fn old_database_backfills_current_run_proof_before_hot_readiness() {
     };
 
     // Then facts match a full recount without decoding any artifact row in the hot path.
-    assert_eq!(head.summary, HistorySummary::of(&task).unwrap());
+    assert_eq!(head.summary, HistorySummary::of_record(&record).unwrap());
     let proof = &head.summary.current_artifacts.accepted_proof;
     assert_eq!(
         proof.first_purged.as_ref().unwrap().path,

@@ -215,7 +215,7 @@ fn demotion_folds_usage_changed_in_the_same_mutation() {
         .unwrap();
     // Then the demotion's summary must derive from the final stored history.
     let head = store.head("T-001").unwrap();
-    let expected = HistorySummary::of(&store.get("T-001").unwrap()).unwrap();
+    let expected = HistorySummary::of_record(&store.task_record("T-001").unwrap()).unwrap();
     println!(
         "demoted run summary: stored_tokens={}, expected_tokens={}, stored_cost={:?}, expected_cost={:?}",
         head.summary.tokens.input, expected.tokens.input, head.summary.cost, expected.cost
@@ -480,7 +480,7 @@ fn every_usage_change_is_settled_before_its_run_is_folded() {
                 .unwrap();
             // Then the folded summary matches the final stored history.
             let stored = store.head("T-001").unwrap().summary;
-            let expected = HistorySummary::of(&store.get("T-001").unwrap()).unwrap();
+            let expected = HistorySummary::of_record(&store.task_record("T-001").unwrap()).unwrap();
             assert_eq!(stored, expected, "{label}");
         }
     }
@@ -517,7 +517,7 @@ fn a_child_pushed_and_demoted_in_one_operation_is_stored() {
         );
         assert_eq!(
             store.head("T-001").unwrap().summary,
-            HistorySummary::of(&task).unwrap()
+            HistorySummary::of_record(&store.task_record("T-001").unwrap()).unwrap()
         );
     }
 }

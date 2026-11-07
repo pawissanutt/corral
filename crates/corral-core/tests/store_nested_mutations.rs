@@ -213,7 +213,7 @@ fn queued_inbox_recipients_resolve_before_and_after_demotion() {
                     }
                     assert_eq!(
                         head.summary,
-                        HistorySummary::of(&store.get("T-001").unwrap()).unwrap()
+                        HistorySummary::of_record(&store.task_record("T-001").unwrap()).unwrap()
                     );
                 }
             }

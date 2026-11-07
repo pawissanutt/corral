@@ -339,7 +339,7 @@ pub fn split(record: &TaskRecord) -> Result<Split> {
     Ok(Split {
         fields: task_fields(task)?,
         doc: head_doc(task)?,
-        summary: serde_json::to_value(HistorySummary::of(task)?)?,
+        summary: serde_json::to_value(HistorySummary::of_record(record)?)?,
         rows: rows.0,
     })
 }

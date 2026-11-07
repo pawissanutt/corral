@@ -141,7 +141,7 @@ fn ten_named_current_and_historical_native_inboxes_settle_once_with_exact_growth
         assert_eq!(store.get(&id).unwrap(), expected);
         assert_eq!(
             head.summary,
-            corral_core::HistorySummary::of(&expected).unwrap()
+            corral_core::HistorySummary::of_record(&store.task_record(&id).unwrap()).unwrap()
         );
         let pending = head.unfinished_native_containers().unwrap();
         assert!(targets.iter().all(|container| !pending.contains(container)));
