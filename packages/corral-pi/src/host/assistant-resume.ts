@@ -4,7 +4,7 @@
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { matchesKey } from "@earendil-works/pi-tui";
+import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { EventLog } from "../bridge/events.ts";
 import type { HistoryRequest } from "../tools/history.ts";
 
@@ -43,8 +43,25 @@ export function resumeRows(value: unknown, current: string): ResumeRow[] {
 const LABEL: Record<Availability, string> = {
   current: "current · this pane", live: "live · host running elsewhere", ended: "ended · not resumable", stopped: "stopped · resumable",
 };
+const activity = (row: ResumeRow): string => row.lastActivity.slice(0, 16).replace("T", " ") || "unknown";
 export function rowLabel(row: ResumeRow): string {
-  return `${row.id} · ${row.title} · ${row.lastActivity.slice(0, 16).replace("T", " ") || "unknown"} · ${LABEL[row.availability]}`;
+  return `${row.id} · ${row.title} · ${activity(row)} · ${LABEL[row.availability]}`;
+}
+
+/** Narrowest summary kept on the row's line; below it activity and availability get their own line. */
+const MIN_TITLE = 8;
+/**
+ * One row in terminal cells: the summary is truncated so activity and availability always fit.
+ * When `width` is too narrow for that, they move to a second, indented line.
+ */
+export function rowLines(row: ResumeRow, width: number, marker: string): string[] {
+  const head = `${marker}${row.id} · `, tail = ` · ${activity(row)} · ${LABEL[row.availability]}`;
+  const room = width - visibleWidth(head) - visibleWidth(tail);
+  if (room >= MIN_TITLE) return [`${head}${truncateToWidth(row.title, room, "…")}${tail}`];
+  const indent = " ".repeat(visibleWidth(marker) + 2);
+  const state = `${indent}${LABEL[row.availability]}`, when = ` · ${activity(row)}`;
+  const details = visibleWidth(state) + visibleWidth(when) <= width ? [`${state}${when}`] : [state, `${indent}${activity(row)}`];
+  return [truncateToWidth(`${head}${row.title}`, width, "…"), ...details.map(line => truncateToWidth(line, width, "…"))];
 }
 export function filterRows(rows: readonly ResumeRow[], filter: string): ResumeRow[] {
   const needle = filter.trim().toLowerCase();
@@ -150,17 +167,26 @@ export const choose: Chooser = (ui, rows) => ui.custom<ResumeRow | undefined>((t
   const visible = () => filterRows(rows, filter);
   return {
     render: (width: number) => {
-      const shown = visible(), height = Math.max(3, Math.min(12, tui.terminal.rows - 6));
+      const shown = visible(), budget = Math.max(3, Math.min(12, tui.terminal.rows - 6));
       index = Math.min(index, Math.max(0, shown.length - 1));
-      const start = Math.max(0, Math.min(index - Math.floor(height / 2), shown.length - height));
-      const cut = (line: string) => line.length > width ? `${line.slice(0, Math.max(0, width - 1))}…` : line;
+      const cut = (line: string) => truncateToWidth(line, Math.max(1, width), "…");
+      const style = (row: ResumeRow, selected: boolean) => (line: string) =>
+        selected ? theme.fg("accent", line) : row.availability === "stopped" ? line : theme.fg("dim", line);
+      const lines = (i: number) => rowLines(shown[i]!, Math.max(1, width), i === index ? "› " : "  ");
+      // A window of whole rows around the selection, filling `budget` terminal lines.
+      let start = index, end = index + 1, used = shown.length ? lines(index).length : 0;
+      while (true) {
+        const below = end < shown.length ? lines(end).length : 0, above = start > 0 ? lines(start - 1).length : 0;
+        if (below && used + below <= budget && (end - index <= index - start || !above)) { used += below; end++; }
+        else if (above && used + above <= budget) { used += above; start--; }
+        else if (below && used + below <= budget) { used += below; end++; }
+        else break;
+      }
       return [
         cut(theme.bold(`Resume an assistant session (${shown.length}/${rows.length}) · current conversation and draft stay until you select`)),
         cut(`Search: ${filter}▏`),
-        ...(shown.length ? shown.slice(start, start + height).map((row, i) => {
-          const line = cut(`${start + i === index ? "› " : "  "}${rowLabel(row)}`);
-          return start + i === index ? theme.fg("accent", line) : row.availability === "stopped" ? line : theme.fg("dim", line);
-        }) : [theme.fg("dim", "  No matching assistant sessions")]),
+        ...(shown.length ? shown.slice(start, end).flatMap((row, i) => lines(start + i).map(style(row, start + i === index)))
+          : [theme.fg("dim", cut("  No matching assistant sessions"))]),
         cut(theme.fg("dim", "type to search · ↑↓ move · Enter resume · Esc cancel")),
       ];
     },
