@@ -12,6 +12,7 @@ import type { CorralOp, RoleModule, UpstreamTool } from "../types.ts";
 import { assistantShellRefusal } from "./guard.ts";
 import { ownerActionTool } from "./owner-action.ts";
 import { installWriteGuard } from "./paths.ts";
+import { investigationTool } from "./investigate.ts";
 
 export const CONTRACT_ASSET = "assets/assistant-contract.md";
 export const UPSTREAM: readonly UpstreamTool[] = ["read", "edit", "write", "grep", "find", "ls", "bash"];
@@ -22,6 +23,8 @@ export function assistantRole(root: string): RoleModule {
   return {
     role: "assistant",
     upstreamTools: UPSTREAM,
+    localToolNames: ["assistant_inspect"],
+    localTools: context => [investigationTool(context.cwd)],
     corralOps: OPS,
     tools: (context) => context.todo === true ? [LOOKUP, ownerActionTool, ...memoryTools, sessionTodoTool] : [LOOKUP, ownerActionTool, ...memoryTools],
     contract: (context) => {

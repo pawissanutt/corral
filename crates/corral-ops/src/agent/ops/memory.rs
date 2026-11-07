@@ -99,7 +99,8 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRe
         Admission::Replay(stored) => return receipts::respond(ctx, &container, *stored, true),
         Admission::New(admitted) => admitted,
     };
-    receipts::commit(ctx, &admitted, |state, _| {
+    let write = matches!(input, Input::Put(_) | Input::Remove(_));
+    let apply = |state: &mut corral_core::agent::AgentRunState| {
         // append() also checks this, but memory file effects cannot be rolled back if
         // the container's receipt capacity is already exhausted.
         if state.receipts.len() >= corral_core::agent::RECEIPTS_MAX {
@@ -121,7 +122,6 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRe
                 .into());
             }
         };
-        let write = matches!(input, Input::Put(_) | Input::Remove(_));
         authorize(&ctx.store, &actor, input.scope(), write).map_err(|_| {
             Rejection::new(
                 RejectCode::OutOfScope,
@@ -170,7 +170,21 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRe
             effect: None,
             post_pending: vec![],
         })
-    })
+    };
+    if envelope.identity.assistant.is_some() {
+        receipts::commit_assistant(ctx, &admitted, |assistant| {
+            if write {
+                crate::assistant::workflow::boundary::require_ordinary(
+                    &ctx.store,
+                    envelope.identity.assistant.as_deref().unwrap_or_default(),
+                    assistant,
+                )?;
+            }
+            apply(&mut assistant.state)
+        })
+    } else {
+        receipts::commit(ctx, &admitted, |state, _| apply(state))
+    }
 }
 
 #[cfg(test)]

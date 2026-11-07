@@ -191,6 +191,51 @@ fn a_new_skill_scope_resolves_without_creation_and_keeps_symlink_and_directory_c
 }
 
 #[test]
+fn planning_invalidates_a_previous_file_grant_and_decide_receipt_without_widening_it() {
+    let s = session();
+    let target = s.proj.join("unchanged.txt");
+    let original = input(&s.host, 1, "session", &target, Some(&s.proj));
+    ts::committed(&ts::send(&s.fx, &original, OP));
+    let text = "Plan only, no writes";
+    let request = event_request_id(1, 91);
+    let owner = ts::committed(&ts::send(
+        &s.fx,
+        &ts::envelope(
+            &s.host,
+            "event",
+            &request,
+            json!({"kind": "owner_input", "source": "pane", "text": text, "sha256": paths::sha256_hex(text.as_bytes())}),
+            false,
+        ),
+        "event",
+    ));
+    s.fx.ctx
+        .store
+        .update_assistant_container(&s.id, |container| {
+            crate::assistant::workflow::prepare_entry(
+                &s.fx.ctx.store,
+                &s.id,
+                container,
+                owner.result["input"].as_str().unwrap(),
+            )
+        })
+        .unwrap();
+    let before = container(&s);
+    assert_eq!(granted(&s.fx, &s.host, &target), Err("op_not_allowed"));
+    assert_eq!(
+        ts::code(&ts::send(&s.fx, &original, OP)),
+        Some("op_not_allowed")
+    );
+    let pending = input(&s.host, 2, "once", &target, None);
+    assert_eq!(
+        ts::code(&ts::send(&s.fx, &pending, OP)),
+        Some("op_not_allowed")
+    );
+    assert_eq!(container(&s), before);
+    assert!(!target.exists());
+}
+
+#[test]
 fn a_once_decision_replays_only_to_its_live_generation_and_is_consumed() {
     // Given A-1 generation 1 decided Allow once.
     let s = session();

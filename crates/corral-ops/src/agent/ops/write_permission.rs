@@ -241,6 +241,13 @@ fn decide(ctx: &Ctx, envelope: &Envelope, d: Decide) -> Result<CallResponse> {
     let session = envelope.identity.assistant.clone().unwrap_or_default();
     let admitted = match admission::admit(ctx, envelope, Mode::Mutation { settles_turn: None })? {
         Admission::Replay(stored) => {
+            ctx.store
+                .inspect_assistant_container(&session, |container, ended| {
+                    admission::recheck_assistant(container, ended, envelope.identity.generation)?;
+                    crate::assistant::workflow::boundary::require_ordinary(
+                        &ctx.store, &session, container,
+                    )
+                })?;
             let answer = receipts::replay_assistant_live(ctx, envelope, *stored);
             drain_or_warn(ctx, &session);
             return answer;
@@ -268,6 +275,9 @@ fn decide(ctx: &Ctx, envelope: &Envelope, d: Decide) -> Result<CallResponse> {
     let now = now();
     let committed =
         receipts::commit_assistant_with(ctx, &admitted, StoredAnswer::LiveOnly, |assistant| {
+            crate::assistant::workflow::boundary::require_ordinary(
+                &ctx.store, &session, assistant,
+            )?;
             let (entry, grant) = assistant
                 .record_permission(&session, new, now)
                 .map_err(|_| {
@@ -314,7 +324,7 @@ fn lookup(ctx: &Ctx, envelope: &Envelope) -> Result<Box<Admitted>> {
 
 /// The session's grant records, read under the store lock after the caller's generation is
 /// shown to be current, unfenced and in an open session.
-fn live_grants(ctx: &Ctx, envelope: &Envelope) -> Result<Vec<WriteGrant>> {
+fn live_grants(ctx: &Ctx, envelope: &Envelope, authorize: bool) -> Result<Vec<WriteGrant>> {
     let id = envelope
         .identity
         .assistant
@@ -323,6 +333,9 @@ fn live_grants(ctx: &Ctx, envelope: &Envelope) -> Result<Vec<WriteGrant>> {
     ctx.store
         .inspect_assistant_container(id, |assistant, ended| {
             admission::recheck_assistant(assistant, ended, envelope.identity.generation)?;
+            if authorize {
+                crate::assistant::workflow::boundary::require_ordinary(&ctx.store, id, assistant)?;
+            }
             Ok(assistant.write_grants.clone())
         })
 }
@@ -359,7 +372,7 @@ fn check(
     let home = home();
     let (_, canonical) = forms(target, "target", &home)?;
     let admitted = lookup(ctx, envelope)?;
-    let grants = live_grants(ctx, envelope)?;
+    let grants = live_grants(ctx, envelope, true)?;
     let result = match wp::check(&grants, &canonical, now(), &home, resolve_dir) {
         Some(grant) => {
             let mut found = json!({"tool": tool, "grant": grant.id, "scope": grant.scope});
@@ -379,7 +392,7 @@ fn list(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         ctx,
         envelope.identity.assistant.as_deref().unwrap_or_default(),
     );
-    let grants = live_grants(ctx, envelope)?;
+    let grants = live_grants(ctx, envelope, false)?;
     let now = now();
     let active: Vec<&WriteGrant> = grants
         .iter()

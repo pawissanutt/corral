@@ -19,6 +19,7 @@ import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
 import { nextEvent } from "./support/wait.ts";
+import { PLANNING_FIXTURE } from "./support/planning-state.ts";
 
 // Answers owner_input with the next journal ID and, like corral, makes a discard wait until an
 // answer is journaled for its request ID.
@@ -26,6 +27,8 @@ const FAKE = `#!/usr/bin/env bun
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 const dir = dirname(process.argv[1]);
+${PLANNING_FIXTURE}
+if (process.argv[2] === "assistant") { process.stdout.write(JSON.stringify(planningFixtureRead())); process.exit(0); }
 const envelope = JSON.parse(readFileSync(0, "utf8"));
 appendFileSync(join(dir, "calls.jsonl"), JSON.stringify({ op: envelope.op, request_id: envelope.request_id,
   payload: envelope.payload }) + "\\n");
@@ -33,7 +36,9 @@ const counter = join(dir, "inputs");
 const answered = join(dir, "answers");
 let state = "committed";
 let result = { op: envelope.op };
-if (envelope.payload.kind === "owner_input") {
+if (envelope.payload.kind === "assistant_boundary") {
+  result = planningFixtureEvent(envelope);
+} else if (envelope.payload.kind === "owner_input") {
   const n = (existsSync(counter) ? Number(readFileSync(counter, "utf8")) : 0) + 1;
   writeFileSync(counter, String(n));
   if (envelope.payload.answers) appendFileSync(answered, envelope.payload.answers + "\\n");

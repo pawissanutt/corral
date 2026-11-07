@@ -10,6 +10,7 @@ import {
 } from "../capabilities/bash-rules.ts";
 import { type HookSettings, HookSettingsSchema, type Hooks } from "../capabilities/hooks.ts";
 import type { Role } from "../roles/types.ts";
+import type { PlanningPolicy } from "./planning-policy.ts";
 
 export interface HostControls {
   readonly hooks?: HookSettings;
@@ -44,6 +45,7 @@ export interface ToolControls {
   readonly hooks?: Hooks;
   readonly rules?: BashRuleSettings;
   readonly permissions?: BashPermissions;
+  readonly planning?: PlanningPolicy;
   readonly events: EventLog;
   readonly corral: ReadonlySet<string>;
   currentTurn(): number | undefined;
@@ -60,6 +62,8 @@ function commandOf(input: unknown): string {
 export function installToolControls(pi: ExtensionAPI, controls: ToolControls): void {
   const hooked = new Set<string>();
   pi.on("tool_call", async (event) => {
+    const planning = controls.planning?.refusal(event.toolName, event.input as Record<string, unknown>);
+    if (planning) return { block: true, reason: planning };
     const nested = event.parentToolCallId !== undefined;
     const secondsField = event.toolName === "bash" ? "timeout"
       : event.toolName === "corral_job_monitor" ? "timeout_secs" : undefined;
@@ -94,7 +98,7 @@ export function installToolControls(pi: ExtensionAPI, controls: ToolControls): v
       }
     }
     const hooks = controls.hooks;
-    if (!hooks || nested || controls.corral.has(event.toolName) || !hooks.wraps(event.toolName)) return undefined;
+    if (controls.planning?.restricted || !hooks || nested || controls.corral.has(event.toolName) || !hooks.wraps(event.toolName)) return undefined;
     const refusal = await hooks.before({
       tool: event.toolName, toolCallId: event.toolCallId, input: event.input,
       ...(controls.currentTurn() !== undefined ? { turn: controls.currentTurn() } : {}),
@@ -109,7 +113,7 @@ export function installToolControls(pi: ExtensionAPI, controls: ToolControls): v
         controls.events.emit("bash_permission_asked", { tool_call_id: event.toolCallId });
       }
     }
-    if (!controls.hooks || !hooked.delete(event.toolCallId)) return undefined;
+    if (!controls.hooks || !hooked.delete(event.toolCallId) || controls.planning?.restricted) return undefined;
     const notes = await controls.hooks.after({
       tool: event.toolName, toolCallId: event.toolCallId, input: event.input,
       ...(controls.currentTurn() !== undefined ? { turn: controls.currentTurn() } : {}),
@@ -119,6 +123,7 @@ export function installToolControls(pi: ExtensionAPI, controls: ToolControls): v
   if (controls.hooks) {
     const hooks = controls.hooks;
     pi.on("agent_settled", async () => {
+      if (controls.planning?.restricted) return;
       await hooks.turnEnd(controls.currentTurn());
     });
   }

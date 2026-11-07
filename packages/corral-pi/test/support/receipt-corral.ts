@@ -5,6 +5,7 @@
 // after commit. Every envelope and every applied effect is logged.
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { PLANNING_FIXTURE } from "./planning-state.ts";
 
 export interface Envelope {
   readonly op: string;
@@ -45,10 +46,11 @@ const SCRIPT = `#!/usr/bin/env bun
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 const dir = dirname(process.argv[1]);
+${PLANNING_FIXTURE}
 const json = (name, fallback) => existsSync(join(dir, name)) ? JSON.parse(readFileSync(join(dir, name), "utf8")) : fallback;
 const stdin = readFileSync(0, "utf8");
 if (process.argv[2] !== "agent" || process.argv[3] !== "call") {
-  process.stdout.write(JSON.stringify(json("snapshot.json", {})));
+  process.stdout.write(JSON.stringify(process.argv[2] === "assistant" ? planningFixtureRead() : json("snapshot.json", {})));
   process.exit(0);
 }
 const envelope = JSON.parse(stdin);
@@ -72,6 +74,9 @@ if (envelope.op === "event" && envelope.payload.kind === "owner_input") {
   writeFileSync(counter, String(n));
   if (envelope.payload.answers && envelope.payload.text === "y") appendFileSync(join(dir, "answers"), envelope.payload.answers + "\\n");
   emit({ ...base, state: "committed", result: { kind: "owner_input", input: "A-1/g1/i" + n } });
+}
+if (envelope.op === "event" && envelope.payload.kind === "assistant_boundary") {
+  emit({ ...base, state: "committed", result: planningFixtureEvent(envelope) });
 }
 if (envelope.op === "hello" || envelope.op === "event") {
   emit({ ...base, state: "committed", result: { op: envelope.op, kind: envelope.payload.kind,

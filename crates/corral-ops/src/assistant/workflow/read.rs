@@ -20,6 +20,7 @@ pub fn read_state(
         return Err(bad("history limit must be 1-8"));
     }
     let mut result = summary(container)?;
+    result["boundary"] = super::boundary::projection(store, session)?;
     let Some(index) = &container.workflow else {
         return Ok(result);
     };

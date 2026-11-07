@@ -178,7 +178,7 @@ pub fn claim(
         .with_context(|| format!("{OWNER_ACTION_ENV} must be <A-n>:<request>"))?;
     corral_core::assistant::validate_id(session)?;
     let me = effects::executor()?;
-    store.settle_assistant_container(session, |assistant, _| {
+    store.settle_assistant_container(session, |assistant, ended| {
         let Some(index) = assistant
             .state
             .receipts
@@ -194,6 +194,12 @@ pub fn claim(
         if executor.pid != parent || effects::executor_gone(&executor)? {
             return Ok(None);
         }
+        corral_core::agent::check_assistant_live(
+            &assistant.state,
+            ended,
+            receipt.identity.generation,
+        )?;
+        super::workflow::boundary::require_ordinary(store, session, assistant)?;
         ensure!(
             receipt.state == ReceiptState::Reserved && started(receipt).is_none(),
             "owner_action_unclaimed: {request} already started its command"

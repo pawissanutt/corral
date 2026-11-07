@@ -188,6 +188,40 @@ fn rejected_detail(response: &CallResponse) -> Value {
 }
 
 #[test]
+fn planning_blocks_a_previously_reserved_owner_command_before_child_claim_and_never_replays_it() {
+    let mut s = session();
+    let task = s.task(Status::Backlog);
+    let input = s.journal("Plan the next change; do not execute it", None);
+    let payload = json!({"kind": "approve", "target": task, "input": input});
+    let me = effects::executor().unwrap();
+    let request = s.reserve("before-entry", &payload, &me);
+    let action = kinds::resolve("approve", Some(&task), &[], None).unwrap();
+    s.fx.ctx
+        .store
+        .update_assistant_container(&s.id, |container| {
+            crate::assistant::workflow::prepare_entry(&s.fx.ctx.store, &s.id, container, &input)
+        })
+        .unwrap();
+    let before = s.stored("before-entry").unwrap();
+    let refused = claim(
+        &s.fx.ctx.store,
+        &format!("{}:{request}", s.id),
+        &action.argv,
+        me.pid,
+    )
+    .unwrap_err();
+    assert!(format!("{refused:#}").contains("assistant_planning"));
+    assert_eq!(s.stored("before-entry").unwrap(), before);
+    let replay = s.act("before-entry", &payload);
+    assert_eq!(replay.receipt().unwrap().state, ReceiptState::Reserved);
+    assert_eq!(
+        ts::code(&s.act("new-bypass", &payload)),
+        Some("op_not_allowed")
+    );
+    assert!(s.runs().is_empty());
+}
+
+#[test]
 fn a_permission_answer_never_authorizes_an_owner_action() {
     // Given A-1's write_permission decide journaled the owner's Deny as a permission input.
     let s = session();

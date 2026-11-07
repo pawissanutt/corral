@@ -237,6 +237,52 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRe
     }
 }
 
+/// Host-only lifecycle channel. ev IDs are authenticated just like owner-input provenance;
+/// the model-callable assistant_plan schema cannot name these actions.
+pub(crate) fn boundary(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Payload {
+        kind: String,
+        transition: workflow::boundary::BoundaryAction,
+    }
+    let payload: Payload = super::payload(envelope, "kind, transition")?;
+    if payload.kind != "assistant_boundary"
+        || crate::agent::envelope::event_id_parts(&envelope.request_id).is_none()
+        || envelope.identity.assistant.is_none()
+    {
+        return Err(Rejection::new(
+            RejectCode::BadRequest,
+            "assistant boundary requires a host event",
+        )
+        .into());
+    }
+    let reference = admission::container_of(&envelope.identity);
+    let admitted = match admission::admit(ctx, envelope, Mode::Mutation { settles_turn: None })? {
+        Admission::Replay(stored) => return receipts::respond(ctx, &reference, *stored, true),
+        Admission::New(admitted) => admitted,
+    };
+    let session = envelope
+        .identity
+        .assistant
+        .as_deref()
+        .context("assistant identity missing")?;
+    receipts::commit_assistant(ctx, &admitted, |container| {
+        let result = workflow::boundary::apply(
+            &ctx.store,
+            session,
+            container,
+            envelope.identity.generation,
+            payload.transition,
+        )?;
+        Ok(Commit {
+            result,
+            effect: None,
+            post_pending: Vec::new(),
+        })
+    })
+}
+
 fn plan(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     let action: PlanAction = super::payload(
         envelope,

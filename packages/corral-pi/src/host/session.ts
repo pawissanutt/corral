@@ -84,6 +84,7 @@ import { memoryContext } from "./memory.ts";
 import { transcriptPreview } from "./transcript-preview.ts";
 import { AssistantRelink } from "./assistant-relink.ts";
 import { AssistantResume } from "./assistant-resume.ts";
+import { PlanningPolicy, type PlanningState } from "./planning-policy.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -328,11 +329,27 @@ export class HostSession {
   private closing = false;
   private readonly relink: AssistantRelink | undefined;
   private readonly resume: AssistantResume | undefined;
+  private readonly planning: PlanningPolicy | undefined;
+  private readonly planningResources = new Map<string, Promise<() => Promise<void>>>();
 
   readonly provider: ProviderId;
 
   private constructor(private readonly options: HostSessionOptions) {
     this.provider = options.provider ?? "openai-codex";
+    this.planning = options.identity.role === "assistant" ? new PlanningPolicy({
+      read: () => options.client.todoSnapshot(),
+      record: async transition => {
+        if (!this.bound) throw new Error("host_not_bound");
+        const event = options.events.emit("assistant_boundary", { transition });
+        const receipt = await options.client.call("event", {
+          requestId: eventRequestId(options.identity.generation, event.seq),
+          payload: { kind: "assistant_boundary", transition }, turn: this.currentTurn(),
+        });
+        if (receipt.state !== "committed") throw new Error(`planning boundary refused: ${JSON.stringify(receipt.result)}`);
+        return receipt.result;
+      },
+      fence: () => { this.writeAbort.abort(); },
+    }) : undefined;
     this.relink = options.identity.role === "assistant" && options.identity.assistant && options.relinkAssistant
       ? new AssistantRelink({
         assistant: options.identity.assistant, generation: options.identity.generation, cwd: options.cwd,
@@ -496,7 +513,9 @@ export class HostSession {
           }
           if (!this.auxiliaryModels) throw new Error("auxiliary model runtime is not ready");
           return runAuxiliarySession({ sdk: options.sdk, models: this.auxiliaryModels, provider: this.provider,
-            cwd: options.cwd, agentDir: options.agentDir, parentLoadout: this.loadout, localTools: this.localTools }, invocation, signal);
+            cwd: options.cwd, agentDir: options.agentDir,
+            parentLoadout: this.loadout.filter(name => this.planning?.visible(name) !== false),
+            localTools: this.localTools.map(tool => this.planningTool(tool)) }, invocation, signal);
         },
       });
     }
@@ -566,7 +585,8 @@ export class HostSession {
     this.controlJob = this.jobs && this.commands ? jobControl({
       jobs: this.jobs, commands: this.commands, generation: options.identity.generation,
       session: () => !this.closing && this.bound && this.session.sessionId === this.boundSessionId ? this.boundSessionId : undefined,
-      allowed: tool => this.loadout.includes(tool) && this.session.getActiveToolNames().includes(tool),
+      allowed: tool => this.loadout.includes(tool) && this.session.getActiveToolNames().includes(tool)
+        && this.planning?.refusal(tool) === undefined,
       record: entry => { options.sessionManager.appendCustomEntry("corral_job_control", entry); options.events.emit("job_control", entry); },
       before: (toolCallId, job) => this.hooks?.wraps("job_kill")
         ? this.hooks.before({ tool: "job_kill", toolCallId, input: { job }, ...(this.currentTurn() === undefined ? {} : { turn: this.currentTurn() }) })
@@ -611,8 +631,78 @@ export class HostSession {
       onEvent: (kind, data) => options.events.emit(kind, data),
       call: (op, key, payload) => worker ? options.client.call(op, {
         requestId: toolRequestId(this.sessionId(), key), payload, turn: this.currentTurn(),
-      }) : Promise.resolve({ state: "committed", result: {} }),
+      }) : this.planningJob(payload),
     });
+  }
+
+  private async planningJob(payload: Record<string, unknown>): Promise<{ state: string; result: unknown }> {
+    const id = `job:${String(payload.job)}`;
+    if (payload.action === "prepare") await this.planningResource(id, "job_start");
+    if (payload.action === "exited" && payload.group_clear === true) await this.releasePlanningResource(id);
+    return { state: "committed", result: {} };
+  }
+
+  private async planningResource(id: string, tool: string): Promise<void> {
+    if (!this.planning) return;
+    let pending = this.planningResources.get(id);
+    if (!pending) {
+      pending = this.planning.begin(`${this.options.identity.generation}:${id}`, tool);
+      this.planningResources.set(id, pending);
+    }
+    await pending;
+  }
+
+  private async releasePlanningResource(id: string): Promise<void> {
+    const pending = this.planningResources.get(id);
+    if (!pending) return;
+    await (await pending)();
+    this.planningResources.delete(id);
+  }
+
+  private planningTool(tool: ToolDefinition): ToolDefinition {
+    const policy = this.planning;
+    if (!policy) return tool;
+    const original = tool;
+    if (tool.name.startsWith("lsp_")) tool = { ...tool, execute: async (...args) => {
+      await this.planningResource("lsp", "lsp_startup");
+      return original.execute(...args);
+    } };
+    else if (tool.name === "bash" || tool.name === "job_start") tool = { ...tool, execute: async (...args) => {
+      const result = await original.execute(...args);
+      const details = result.details as { job?: unknown; state?: unknown } | undefined;
+      // shutdownEpoch can fence a prepared launcher before it exists. This is positive
+      // runtime proof of not-started, unlike a timeout, missing PID or aborted Promise.
+      if (details?.state === "not_started" && typeof details.job === "string") await this.releasePlanningResource(`job:${details.job}`);
+      return result;
+    } };
+    return policy.wrap(policy.visible(tool.name) ? tool : { ...tool, defaultActive: false });
+  }
+
+  private async planningMcp(): Promise<void> {
+    if (!this.mcp) return;
+    await this.planningResource("mcp", "mcp_connect");
+    await this.mcp.refresh();
+  }
+
+  /** Internal integration seam. Public entry/choice UI is deliberately not exposed here. */
+  async enterPlanning(input: string): Promise<PlanningState> {
+    if (!this.planning || !this.bound) throw new Error("planning requires a bound assistant");
+    const result = await this.planning.enter(input, async () => {
+      await this.mcp?.close();
+      await this.releasePlanningResource("mcp");
+      await this.additionalLsp?.shutdown();
+      await this.releasePlanningResource("lsp");
+      await this.jobs?.shutdown();
+    });
+    this.session.setActiveToolsByName([...this.initialTools]);
+    return result;
+  }
+
+  async drainPlanning(): Promise<PlanningState> {
+    if (!this.planning) throw new Error("planning requires an assistant");
+    const result = await this.planning.drained();
+    this.session.setActiveToolsByName([...this.initialTools]);
+    return result;
   }
 
   private exportable(): boolean {
@@ -623,6 +713,11 @@ export class HostSession {
 
   /** `/corral-export`: the current snapshot as one attached offline HTML artifact. */
   async exportSession(): Promise<SessionExport> {
+    if (this.planning) return this.planning.execute("session_export", {}, "export", () => this.exportUnchecked());
+    return this.exportUnchecked();
+  }
+
+  private async exportUnchecked(): Promise<SessionExport> {
     if (!this.exportable() || this.options.exportDir === undefined) throw new Error("session_export is not enabled for this role");
     if (!this.bound) throw new Error("host_not_bound");
     return exportSnapshot(this.session, this.sessionId(), this.options.exportDir, this.options.client);
@@ -644,11 +739,14 @@ export class HostSession {
   get loadout(): readonly string[] { return [...this.baseLoadout, ...this.mcp?.names() ?? []]; }
 
   private get initialTools(): readonly string[] {
-    return this.options.capabilities?.enabled.includes("tool_search") ? this.baseLoadout : this.loadout;
+    const tools = this.options.capabilities?.enabled.includes("tool_search") ? this.baseLoadout : this.loadout;
+    return tools.filter(name => this.planning?.visible(name) !== false);
   }
 
   static async create(options: HostSessionOptions): Promise<HostSession> {
     const host = new HostSession(options);
+    // Before optional MCP/LSP startup and before any model request, not a cached widget flag.
+    await host.planning?.refresh();
     const { sdk } = options;
     const route = PROVIDERS[host.provider];
     const local = host.provider === "llama.cpp" && options.capabilities?.enabled.includes("llama_cpp.enabled") === true
@@ -754,8 +852,23 @@ export class HostSession {
     return this.open ? this.turn : undefined;
   }
 
-  private async extension(pi: ExtensionAPI): Promise<void> {
+  private async extension(api: ExtensionAPI): Promise<void> {
+    await this.planning?.refresh(); // reload never resets authority to ordinary
+    const policy = this.planning;
+    const pi = policy ? new Proxy(api, { get: (target, property, receiver) => {
+      if (property === "registerTool") return (tool: ToolDefinition) => target.registerTool(this.planningTool(tool));
+      return Reflect.get(target, property, receiver);
+    } }) : api;
     this.dialogPi = pi;
+    if (policy) pi.on("context_with_system", async event => {
+      await policy.refresh();
+      const state = policy.snapshot();
+      if (state.phase === "ordinary" && !state.expected) return undefined;
+      return { messages: [...event.messages, { role: "user" as const, timestamp: Date.now(),
+        content: `[corral canonical assistant workflow] ${JSON.stringify(state)}\n`
+          + "Managed effects remain fenced until their exact typed transition is available. Entering/recovering is not settled read-only. "
+          + "This state report is not owner input, execution consent, review approval or a filesystem grant." }] };
+    });
     if (this.ownerQuestions) {
       this.questionUi = new OwnerQuestionUi(this.ownerQuestions, () => this.bound && !this.closing);
       this.questionUi.install(pi);
@@ -772,18 +885,25 @@ export class HostSession {
       });
     }
     if (this.additionalLsp) {
-      pi.on("session_start", () => { void this.additionalLsp?.warm(); });
-      pi.on("session_shutdown", async () => { await this.additionalLsp?.shutdown(); });
+      pi.on("session_start", () => { if (!policy) void this.additionalLsp?.warm(); });
+      pi.on("session_shutdown", async () => {
+        await this.additionalLsp?.shutdown();
+        await this.releasePlanningResource("lsp");
+      });
     }
     const settings = this.options.capabilities?.mcp;
     const search = this.options.capabilities?.enabled.includes("tool_search") === true;
     if (settings) {
       this.mcp = new McpAccess(settings, this.options.identity.role, this.options.identity.project,
         this.options.cwd, this.options.network.mcp);
-      await this.mcp.refresh();
+      if (!policy) await this.mcp.refresh();
+      else if (this.bound && !policy.restricted) await this.planningMcp();
       this.mcp.attach(pi, search);
       const access = this.mcp;
-      pi.on("session_shutdown", async () => { await access.close(); });
+      pi.on("session_shutdown", async () => {
+        await access.close();
+        await this.releasePlanningResource("mcp");
+      });
     }
     if (search) pi.registerTool(toolSearch(pi, (name) => this.loadout.includes(name)));
     const specs = this.options.modules.role.tools(this.roleContext);
@@ -827,12 +947,14 @@ export class HostSession {
     for (const tool of this.localTools) pi.registerTool(tool);
     // One execution check for model-issued and nested calls; a Code Mode child it refuses is
     // reported as denied with no effect.
-    pi.on("tool_call", (event) => {
+    pi.on("tool_call", async (event) => {
+      await policy?.refresh();
       const allowed = new Set(this.loadout);
       const nested = event.parentToolCallId !== undefined;
       const child = nested ? nestedChild(event.toolName, event.toolCallId) : undefined;
       const unjournaled = corral.has(event.toolName) && !reads.has(event.toolName) && child === undefined;
-      const reason = executionRefusal(event.toolName, nested, allowed, unjournaled);
+      const reason = policy?.refusal(event.toolName, event.input as Record<string, unknown>)
+        ?? executionRefusal(event.toolName, nested, allowed, unjournaled);
       if (!reason) return undefined;
       if (child) child.denied = reason;
       this.deniedTools++;
@@ -849,7 +971,20 @@ export class HostSession {
       ...(this.controls.bashRules ? { rules: this.controls.bashRules } : {}),
       ...(this.permissions ? { permissions: this.permissions } : {}),
       events: this.options.events, corral, currentTurn: () => this.currentTurn(),
+      ...(policy ? { planning: policy } : {}),
     });
+    if (policy) {
+      // ! and !! bypass tool_call in upstream Pi. Use its backend, but at the same actual
+      // admission boundary as model shell calls; no command-string read-only fiction.
+      pi.on("user_bash", async () => {
+        await policy.refresh();
+        const reason = policy.refusal("user_bash");
+        if (reason) return { result: { output: reason, exitCode: 1, cancelled: false, truncated: false } };
+        const local = this.options.sdk.createLocalBashOperations();
+        return { operations: { exec: (command, cwd, options) =>
+          policy.execute("user_bash", {}, "user-bash", () => local.exec(command, cwd, options)) } };
+      });
+    }
     if (!this.loadout.includes("bash")) {
       pi.on("user_bash", () => ({
         result: { output: "bash is not in this role's loadout", exitCode: 1, cancelled: false, truncated: false },
@@ -915,6 +1050,13 @@ export class HostSession {
         : { action: "transform" as const, text: ownerInputText(event.text, id) };
     });
     this.options.modules.role.extend?.(pi, this.roleContext);
+    if (policy) {
+      // Event preflight alone is insufficient: permission dialogs and sibling preflights
+      // can yield before execution. Override only the actual built-in mutation dispatches.
+      if (!this.localTools.some(tool => tool.name === "bash")) pi.registerTool(this.options.sdk.createBashToolDefinition(this.options.cwd));
+      pi.registerTool(this.options.sdk.createEditToolDefinition(this.options.cwd));
+      pi.registerTool(this.options.sdk.createWriteToolDefinition(this.options.cwd));
+    }
     this.relink?.extend(pi);
     this.resume?.extend(pi);
     // Registered after the role's own handler: upstream keeps the first skill of each name, so
@@ -962,8 +1104,10 @@ export class HostSession {
 
   /** Shows the owner a confirm-class command in the pane and journals the answer for the request. */
   private async confirmOwnerAction(command: string, context: ConfirmUi, requestId: string): Promise<boolean> {
-    if (!context.hasUI) return false;
-    const yes = await context.ui.confirm("corral: confirm owner action", command);
+    if (!context.hasUI || this.planning?.refusal("corral_owner_action")) return false;
+    const signal = this.writeAbort.signal;
+    const yes = await context.ui.confirm("corral: confirm owner action", command, { signal });
+    if (signal.aborted || this.planning?.refusal("corral_owner_action")) return false;
     return await this.journalOwnerInput("confirmation", yes ? "y" : "n", command, requestId) !== undefined;
   }
 
@@ -1226,6 +1370,8 @@ export class HostSession {
     }
     const bound = (receipt.result ?? {}) as { herdr_seq_epoch_ms?: unknown; questions?: unknown };
     this.options.herdr?.bind({ sessionId, sessionFile, epochMs: bound.herdr_seq_epoch_ms, questions: bound.questions });
+    await this.planning?.refresh();
+    if (this.planning && !this.planning.restricted) await this.planningMcp();
     if ((this.options.capabilities?.catalog ?? 0) >= 7) await this.budget.refresh();
     await this.writePermissionNotice?.();
     this.options.events.emit("bound", { generation: this.options.identity.generation, session_id: sessionId });
@@ -1411,6 +1557,7 @@ export class HostSession {
       jobs: this.jobs?.state() ?? null,
       commands: this.commands?.state() ?? null,
       codemode: this.code?.state() ?? null,
+      planning: this.planning?.snapshot() ?? null,
       owner_questions: this.ownerQuestions?.list().map(q => ({ id: q.id, status: this.ownerQuestions?.status(q.id),
         session: q.session, generation: q.generation, expires: q.expires })) ?? null,
       checkpoints: this.checkpoints !== undefined,
