@@ -11,11 +11,13 @@ use std::path::PathBuf;
 #[path = "annotations_tests.rs"]
 mod tests;
 
+type AnnotationAdmission<'a> = dyn Fn(&Store, &TaskHead) -> Result<AnnotationAuthor> + 'a;
+
 /// Trusted entry-point capability. The callback must reauthenticate scope and live generation
 /// on *every* invocation, including inside the committing task lease and before retry lookup.
 /// Never construct this from client author/role fields. Host adapters own origin authentication.
 pub struct AnnotationActor<'a> {
-    admission: Box<dyn Fn(&Store, &TaskHead) -> Result<AnnotationAuthor> + 'a>,
+    admission: Box<AnnotationAdmission<'a>>,
 }
 impl<'a> AnnotationActor<'a> {
     pub fn owner_cli(cwd: PathBuf) -> Self {
@@ -687,7 +689,7 @@ fn read_page(
         let mut summary = item(&t, head, &view.candidate);
         summary.anchor = None;
         view.page = AnnotationsPage::Thread {
-            thread: summary,
+            thread: Box::new(summary),
             entries: vec![],
             upper_revision: upper,
         };
@@ -708,10 +710,10 @@ fn read_page(
                 view = old;
                 break;
             }
-            if let AnnotationsPage::Thread { entries, .. } = &view.page {
-                if entries.len() >= max {
-                    break;
-                }
+            if let AnnotationsPage::Thread { entries, .. } = &view.page
+                && entries.len() >= max
+            {
+                break;
             }
         }
     } else {
@@ -752,10 +754,10 @@ fn read_page(
                 view = old;
                 break;
             }
-            if let AnnotationsPage::List { items } = &view.page {
-                if items.len() >= max {
-                    break;
-                }
+            if let AnnotationsPage::List { items } = &view.page
+                && items.len() >= max
+            {
+                break;
             }
         }
     }
