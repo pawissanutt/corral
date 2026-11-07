@@ -63,6 +63,7 @@ fn harness(command: &str) -> Harness {
 
 fn profile(harness: &str, model: Option<&str>, effort: Option<&str>) -> Profile {
     Profile {
+        connection: None,
         metadata: None,
         harness: harness.into(),
         model: model.map(str::to_string),

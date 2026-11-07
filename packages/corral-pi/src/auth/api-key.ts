@@ -13,6 +13,10 @@ export async function installApiKey(dir: string, connection: ApiConnectionId, in
 /** Reuses the installed login entry, but makes no OAuth, refresh or model requests. */
 export async function apiKeyCommand(dir: string, selected: string, argv: readonly string[]): Promise<void> {
   if (!isConnectionId(selected) || !isApiConnection(selected)) throw new CredentialsUnavailable("unknown API connection");
+  const actions = ["--logout", "--status", "--key-file"].filter(flag => argv.includes(flag));
+  if (actions.length !== 1 || actions.some(flag => argv.filter(arg => arg === flag).length !== 1)) {
+    throw new CredentialsUnavailable("select exactly one of --key-file, --status or --logout");
+  }
   const store = new FileCredentialStore(dir, CONNECTIONS[selected].provider, {}, selected);
   if (argv.includes("--logout")) {
     await store.delete(CONNECTIONS[selected].provider);

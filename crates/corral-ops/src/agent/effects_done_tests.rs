@@ -43,6 +43,7 @@ fn budget(
     response: Option<&str>,
 ) -> core_agent::BudgetRequest {
     core_agent::BudgetRequest {
+        connection: None,
         request: request.into(),
         generation,
         tokens,

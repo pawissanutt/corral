@@ -32,6 +32,7 @@ fn git(dir: &Path, args: &[&str]) {
 
 fn reviewer(model: &str, vendor: &str, roles: &[ProfileRole]) -> Profile {
     Profile {
+        connection: None,
         metadata: Some(ProfileMetadata {
             display_name: model.into(),
             purpose: "Review".into(),

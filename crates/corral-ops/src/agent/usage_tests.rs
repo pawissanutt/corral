@@ -15,6 +15,40 @@ const EXPECTED: &str =
     include_str!("../../../../tools/pi-probe/fixtures/session-usage.expected.json");
 
 #[test]
+fn usage_connection_identity_comes_from_generation_and_scopes_response_deduplication() {
+    use corral_core::connection::{BillingMode, ConnectionBinding, ConnectionId};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("usage.jsonl");
+    let mut lines = Vec::new();
+    let mut bindings = BTreeMap::new();
+    for (generation, connection) in [
+        (1, ConnectionId::AnthropicSubscription),
+        (2, ConnectionId::AnthropicApi),
+    ] {
+        bindings.insert(
+            generation,
+            ConnectionBinding::new(connection, None, "same-model".into(), None).unwrap(),
+        );
+        lines.push(serde_json::json!({"type":"custom", "customType":"corral_host_bound", "data":{"generation":generation, "binding":{"connection":"untrusted"}}}).to_string());
+        lines.push(serde_json::json!({"type":"message", "message":{"role":"assistant", "model":"same-model", "provider":"anthropic", "responseId":"same-response",
+            "usage":{"input":2,"output":1,"cost":{"total":0.1}}}}).to_string());
+    }
+    std::fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+    let mut entries = BTreeMap::new();
+    read_session(&path, "same-session", None, &mut entries, true, &bindings).unwrap();
+    assert_eq!(entries.len(), 2);
+    let connections: Vec<_> = entries
+        .values()
+        .map(|e| (e.connection, e.billing))
+        .collect();
+    assert!(connections.contains(&(Some(ConnectionId::AnthropicApi), Some(BillingMode::Metered))));
+    assert!(connections.contains(&(
+        Some(ConnectionId::AnthropicSubscription),
+        Some(BillingMode::Subscription)
+    )));
+}
+
+#[test]
 fn complete_snapshot_reports_partial_tail_instead_of_partial_usage() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("session.jsonl");
@@ -23,11 +57,11 @@ fn complete_snapshot_reports_partial_tail_instead_of_partial_usage() {
         "{\"type\":\"message\""
     )).unwrap();
     let mut entries = BTreeMap::new();
-    let error = read_session(&path, "s", None, &mut entries, true).unwrap_err();
+    let error = read_session(&path, "s", None, &mut entries, true, &BTreeMap::new()).unwrap_err();
     assert_eq!(entries.len(), 1);
     assert!(error.to_string().contains("incomplete trailing line"));
     let mut ordinary = BTreeMap::new();
-    read_session(&path, "s", None, &mut ordinary, false).unwrap();
+    read_session(&path, "s", None, &mut ordinary, false, &BTreeMap::new()).unwrap();
     assert_eq!(ordinary.len(), 1);
 }
 

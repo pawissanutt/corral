@@ -9,6 +9,7 @@ pub(crate) fn fixture() -> crate::board::tests::Fixture {
         fx.ctx.store.config.profiles.insert(
             name.into(),
             Profile {
+                connection: None,
                 harness: "generic".into(),
                 vendor: Some(vendor.into()),
                 model: None,

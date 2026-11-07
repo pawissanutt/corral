@@ -223,7 +223,12 @@ export function runLogin(argv: readonly string[]): void {
   const dir = arg("--auth-dir") ?? authDir();
   const connection = arg("--connection");
   if (connection !== undefined) {
-    void import("./api-key.ts").then(({ apiKeyCommand }) => apiKeyCommand(dir, connection, argv)).then(() => process.exit(0), () => {
+    void import("./api-key.ts").then(({ apiKeyCommand }) => {
+      if (arg("--provider") !== undefined || argv.filter(arg => arg === "--connection").length !== 1) {
+        throw new CredentialsUnavailable("API setup requires only its selected connection, not a provider override");
+      }
+      return apiKeyCommand(dir, connection, argv);
+    }).then(() => process.exit(0), () => {
       process.stderr.write("corral API key setup refused: check connection and protected input file; no credential content is shown\n");
       process.exit(1);
     });

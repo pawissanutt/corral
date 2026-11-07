@@ -37,6 +37,7 @@ Spin it with care.
 pub(crate) fn planning(fx: &mut Fixture) -> String {
     let config = &mut fx.ctx.store.config;
     let reviewer = Profile {
+        connection: None,
         harness: "claude".into(),
         model: Some("fixture-reviewer".into()),
         effort: None,

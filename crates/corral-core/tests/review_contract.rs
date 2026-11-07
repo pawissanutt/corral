@@ -217,6 +217,7 @@ fn stronger_request_raises_capability_and_round_three_scopes_review() {
 
 fn reviewer_profile(roles: &[ProfileRole]) -> Profile {
     Profile {
+        connection: None,
         metadata: Some(ProfileMetadata {
             display_name: "Reviewer".into(),
             purpose: "Review".into(),

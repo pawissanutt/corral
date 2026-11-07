@@ -27,7 +27,9 @@ use super::cli::LaunchArgs;
 use crate::Ctx;
 
 mod fixture_assets;
+mod secrets;
 use fixture_assets::explicit_assets;
+pub use secrets::{Secrets, write_ctl_cap};
 
 /// The T-252 child that lands the launcher and the launch command.
 pub const OWNER: &str = "host-bridge";
@@ -300,7 +302,12 @@ pub fn prepare_bootstrap(
     pane: &str,
     spec: &HostSpec,
 ) -> Result<Prepared> {
-    super::connections::validate(spec.binding.as_ref(), spec.provider.as_deref(), &spec.model, spec.effort.as_deref())?;
+    super::connections::validate(
+        spec.binding.as_ref(),
+        spec.provider.as_deref(),
+        &spec.model,
+        spec.effort.as_deref(),
+    )?;
     let explicit = ctx.store.config.agent.assets_dir.clone();
     let assets = match explicit.clone() {
         Some(dir) => dir,
@@ -317,7 +324,9 @@ pub fn prepare_bootstrap(
     let assets =
         std::path::absolute(&assets).with_context(|| format!("resolving {}", assets.display()))?;
     let asset_sha256 = asset_digest(&assets)?;
-    if let Some(binding) = &spec.binding { super::connections::compatible(&assets, binding)?; }
+    if let Some(binding) = &spec.binding {
+        super::connections::compatible(&assets, binding)?;
+    }
     let container = target.container();
     let mut session_dir = paths::container_sessions_dir(&ctx.store, &container);
     let mut resume_session = None;
@@ -412,7 +421,14 @@ pub fn prepare_bootstrap(
         .map(|pins| pins.capabilities)
         .unwrap_or_default();
     let memory = super::hooks::memory::projection(&ctx.store, target.role(), &project)?;
-    let grant = super::admission::open_generation_bound(&ctx.store, target, pane, spec.adopt, Some(&supported), spec.binding.as_ref())?;
+    let grant = super::admission::open_generation_bound(
+        &ctx.store,
+        target,
+        pane,
+        spec.adopt,
+        Some(&supported),
+        spec.binding.as_ref(),
+    )?;
     let (task, run, review) = match &container {
         ContainerRef::Worker { task, run } => (Some(task.clone()), Some(run.clone()), None),
         ContainerRef::Reviewer { task, run, review } => {
@@ -703,11 +719,17 @@ pub fn check_with(
     assets_flag: Option<&Path>,
     bun: Option<PathBuf>,
 ) -> Result<Ready, LaunchRefusal> {
-    super::connections::validate(bootstrap.binding.as_ref(), bootstrap.provider.as_deref(), &bootstrap.model, bootstrap.effort.as_deref())
-        .map_err(|error| refuse("connection_invalid", format!("{error:#}")))?;
+    super::connections::validate(
+        bootstrap.binding.as_ref(),
+        bootstrap.provider.as_deref(),
+        &bootstrap.model,
+        bootstrap.effort.as_deref(),
+    )
+    .map_err(|error| refuse("connection_invalid", format!("{error:#}")))?;
     let assets = assets_flag.unwrap_or(&bootstrap.assets).to_path_buf();
     if let Some(binding) = &bootstrap.binding {
-        super::connections::compatible(&assets, binding).map_err(|error| refuse("connection_unsupported_by_host", format!("{error:#}")))?;
+        super::connections::compatible(&assets, binding)
+            .map_err(|error| refuse("connection_unsupported_by_host", format!("{error:#}")))?;
     }
     if !assets.is_absolute() || !assets.is_dir() {
         return Err(refuse(
@@ -781,46 +803,6 @@ pub fn check_with(
         bun_version,
         generation_dir: generation_dir.to_path_buf(),
     })
-}
-
-/// The two directional secrets of one generation. Never logged; only digests persist.
-pub struct Secrets {
-    pub host_cap: String,
-    pub ctl_cap: String,
-}
-
-impl std::fmt::Debug for Secrets {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Secrets(<redacted>)")
-    }
-}
-
-impl Secrets {
-    pub fn generate() -> Result<Secrets> {
-        let secret = || -> Result<String> {
-            let mut bytes = [0u8; 32];
-            getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("generating a secret: {e}"))?;
-            Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
-        };
-        Ok(Secrets {
-            host_cap: secret()?,
-            ctl_cap: secret()?,
-        })
-    }
-}
-
-/// Writes `ctl.cap` 0600 by atomic rename, so any later corral process can reach the host.
-#[cfg(unix)]
-pub fn write_ctl_cap(dir: &Path, ctl_cap: &str) -> Result<()> {
-    let parent = dir
-        .parent()
-        .context("the generation directory has no parent")?;
-    ensure_private_dir(parent, dir)?;
-    let staged = dir.join(format!("{CTL_CAP_FILE}.{}", std::process::id()));
-    let _ = std::fs::remove_file(&staged);
-    write_private(&staged, ctl_cap.as_bytes())?;
-    std::fs::rename(&staged, dir.join(CTL_CAP_FILE))
-        .with_context(|| format!("installing {}", dir.join(CTL_CAP_FILE).display()))
 }
 
 /// The JSON the host reads from its inherited descriptor (`src/host/config.ts`).

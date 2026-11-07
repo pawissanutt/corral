@@ -19,6 +19,7 @@ pub(crate) fn fixture() -> Fixture {
     fx.ctx.store.config.profiles.insert(
         "fast".into(),
         Profile {
+            connection: None,
             harness: "claude".into(),
             model: Some("sonnet".into()),
             effort: Some("low".into()),
@@ -515,6 +516,7 @@ fn p_saves_the_override_as_a_profile_keeping_corral_toml_comments() {
     assert_eq!(
         Config::load(&path).unwrap().profiles.get("omo-high"),
         Some(&Profile {
+            connection: None,
             harness: "omo".into(),
             model: None,
             effort: Some("high".into()),

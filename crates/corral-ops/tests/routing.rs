@@ -26,6 +26,7 @@ fn routing_uses_enabled_authenticated_models_without_probing_harnesses() {
         store.config.profiles.insert(
             name.into(),
             Profile {
+                connection: None,
                 harness: "omo".into(),
                 model: Some(model.into()),
                 effort: Some("high".into()),

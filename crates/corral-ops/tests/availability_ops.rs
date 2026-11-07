@@ -69,6 +69,7 @@ fn profile(candidates: Vec<ExecutionCandidate>, role: ProfileRole) -> Profile {
     let providers: BTreeSet<String> = candidates.iter().map(|c| c.provider.clone()).collect();
     let switches = u32::try_from(candidates.len() - 1).unwrap();
     Profile {
+        connection: None,
         harness: preferred.harness.clone(),
         model: Some(preferred.model.clone()),
         vendor: Some(preferred.provider.clone()),
@@ -780,6 +781,7 @@ fn legacy_profiles_keep_transient_only_stall_handling() {
             store.config.profiles.insert(
                 "legacy".into(),
                 Profile {
+                    connection: None,
                     harness: "omo".into(),
                     model: Some("openai/sol-fixture".into()),
                     vendor: None,

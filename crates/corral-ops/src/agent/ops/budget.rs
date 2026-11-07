@@ -66,6 +66,13 @@ pub(super) fn budget(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             .family("budget_requests")
             .family("generations"),
         move |state, _| {
+            let connection = state
+                .current_generation()
+                .and_then(|g| g.connection.as_ref())
+                .map(|b| b.connection);
+            if let Some(connection) = connection {
+                connection.require_admission()?;
+            }
             let feature = state
                 .current_generation()
                 .and_then(|g| g.capabilities.as_ref())
@@ -95,6 +102,7 @@ pub(super) fn budget(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                     }
                     state.budget.reserve(
                         BudgetRequest {
+                            connection,
                             request: p.request,
                             generation,
                             tokens: p.tokens,
@@ -122,6 +130,7 @@ pub(super) fn budget(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             let (tokens, usd_nanos) = state.budget.totals();
             Ok(Commit {
                 result: json!({"admitted":admitted, "exhausted":state.budget.exhausted(limits),
+            "connection":connection, "billing":connection.map(|c| c.billing()),
             "tokens":tokens, "usd_nanos":usd_nanos, "limits":limits,
             "uncertain_requests":state.budget.requests.iter().filter(|r| r.response.is_none()).count(),
             "pricing_gaps":state.budget.requests.iter().filter(|r| !r.priced).count(),

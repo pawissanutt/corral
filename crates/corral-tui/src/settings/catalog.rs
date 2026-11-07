@@ -50,6 +50,7 @@ pub(crate) fn new_profile(cfg: &Config, report: Option<&HarnessReport>) -> Profi
         .next()
         .unwrap_or_else(|| "generic".into());
     Profile {
+        connection: None,
         harness,
         model: None,
         effort: None,

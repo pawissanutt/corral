@@ -55,6 +55,7 @@ impl Fixture {
             store.config.profiles.insert(
                 name.into(),
                 Profile {
+                    connection: None,
                     harness: "fake".into(),
                     model: Some(model.into()),
                     vendor: None,

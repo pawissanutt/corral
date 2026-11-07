@@ -46,6 +46,7 @@ fn submit(fx: &Fx, id: &str) {
 
 fn strict_reviewer() -> Profile {
     Profile {
+        connection: None,
         harness: "h".into(),
         model: Some("strict-model".into()),
         vendor: Some("other-vendor".into()),

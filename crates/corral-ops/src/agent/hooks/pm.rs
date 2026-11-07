@@ -192,14 +192,13 @@ pub fn prepared(
         project: project(ctx)?,
     };
     let spec = super::super::launch::HostSpec {
+        binding: crate::agent::connections::explicit(resolved)?,
         cwd: ctx.store.root().to_path_buf(),
         model: resolved
             .model
             .clone()
             .context("a corral-pi PM needs a model")?,
-        provider: resolved.model.as_deref().and_then(|model| {
-            super::super::launch::host_provider(resolved.vendor.as_deref(), model)
-        }),
+        provider: crate::agent::connections::provider(resolved)?,
         effort: resolved.effort.clone(),
         // Rebuild on resume too: never append the legacy harness's command runbook.
         prompt_file: Some(crate::pm::save_native_context(ctx)?),

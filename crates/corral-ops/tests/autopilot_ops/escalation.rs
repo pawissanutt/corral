@@ -29,6 +29,7 @@ fn configured(threshold: u32) -> Fx {
         fx.ctx.store.config.profiles.insert(
             name.into(),
             Profile {
+                connection: None,
                 harness: "fake".into(),
                 vendor: Some(vendor.into()),
                 escalate_to: target.map(str::to_string),

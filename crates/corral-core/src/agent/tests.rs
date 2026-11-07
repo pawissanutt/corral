@@ -24,6 +24,7 @@ fn state(role: AgentRole, callback: Option<&str>) -> Box<AgentRunState> {
         closing: false,
     });
     state.generations.push(AgentGeneration {
+        connection: None,
         n: 1,
         bind_nonce_sha256: "00".into(),
         pane: "p1".into(),

@@ -45,6 +45,7 @@ fn fixture() -> Fixture {
         config.profiles.insert(
             name.into(),
             Profile {
+                connection: None,
                 metadata: None,
                 harness: "generic".into(),
                 model: Some(model.into()),

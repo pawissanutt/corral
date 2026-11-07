@@ -644,7 +644,13 @@ pub(crate) fn open_generation_bound(
             store.update_assistant_container(session, |assistant| {
                 assistant.pane = Some(pane.into());
                 assistant.state.binding.project = project.clone().unwrap_or_default();
-                next_generation(&mut assistant.state, &digest, pane, &capabilities, connection)
+                next_generation(
+                    &mut assistant.state,
+                    &digest,
+                    pane,
+                    &capabilities,
+                    connection,
+                )
             })?
         }
         (_, Some(task_id)) => {

@@ -209,9 +209,14 @@ fn relaunch(ctx: &Ctx, container: &ContainerRef, state: &AgentRunState) -> Resul
             unreachable!("the PM and assistants have no task")
         }
     };
+    let resolved = run.execution.as_ref().map(|execution| &execution.resolved);
     let spec = HostSpec {
+        binding: crate::agent::connections::snapshot(run.execution.as_ref())?,
         cwd: run.worktree.clone(),
-        provider: super::launch::host_provider(run.vendor.as_deref(), &model),
+        provider: match resolved {
+            Some(resolved) => crate::agent::connections::provider(resolved)?,
+            None => super::launch::host_provider(run.vendor.as_deref(), &model),
+        },
         model,
         effort: run.effort.clone(),
         prompt_file: Some(prompt),

@@ -313,6 +313,7 @@ fn accepted_replacement_plan_updates_self_link_and_admits_implementation() {
     harness.model_flag = Some("--model".into());
     ctx.store.config.harnesses.insert("fixture".into(), harness);
     let mut profile = corral_core::Profile {
+        connection: None,
         harness: "fixture".into(),
         model: Some("fixture-planner".into()),
         vendor: Some("openai".into()),

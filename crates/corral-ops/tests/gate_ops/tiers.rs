@@ -93,6 +93,7 @@ impl Fx {
         store.config.profiles.insert(
             "fake".into(),
             Profile {
+                connection: None,
                 harness: "fake".into(),
                 model: None,
                 vendor: None,

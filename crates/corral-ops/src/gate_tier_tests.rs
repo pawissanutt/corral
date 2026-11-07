@@ -688,6 +688,8 @@ fn automatic_dispatch_refusal_is_reported_once_and_creates_nothing() {
     let mut execution = ExecutionSnapshot::new(
         &fx.ctx.store.config,
         ResolvedProfile {
+            connection: None,
+            candidate: None,
             profile: "fake".into(),
             harness: "fake".into(),
             command: "true".into(),
@@ -767,6 +769,7 @@ fn autopilot_dispatch_reports_a_template_conflict_once_and_creates_no_run() {
     store.config.profiles.insert(
         "fake".into(),
         corral_core::Profile {
+            connection: None,
             harness: "fake".into(),
             model: None,
             vendor: None,

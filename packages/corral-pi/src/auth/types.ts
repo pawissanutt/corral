@@ -10,7 +10,7 @@ import type { ConnectionId } from "./connections.ts";
 export type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 export interface AuthContext {
-  /** The bound profile's subscription OAuth provider (OD5; Anthropic per T-357/T-479). */
+  /** Native provider and separately selected Corral credential/billing connection. */
   readonly provider: ProviderId;
   readonly connection?: ConnectionId;
   readonly apiEndpoint: string;

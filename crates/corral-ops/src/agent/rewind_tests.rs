@@ -189,6 +189,7 @@ fn an_interrupted_rewind_continues_to_the_checkpoint_and_keeps_receipts_usage_an
             .push(receipt.clone());
         t.runs[0].agent_host.as_mut().unwrap().budget.requests.push(
             corral_core::agent::BudgetRequest {
+                connection: None,
                 request: "interrupted-billable-request".into(),
                 generation: 1,
                 tokens: 1000,

@@ -191,6 +191,7 @@ fn render_command_fills_model_args_from_profile_and_run() {
     ctx.store.config.profiles.insert(
         "deep".into(),
         Profile {
+            connection: None,
             harness: "claude".into(),
             model: Some("opus".into()),
             effort: Some("high".into()),
@@ -364,6 +365,7 @@ fn herdr_dispatch_sync_reply_jump_retry() {
     ctx.store.config.profiles.insert(
         "fake-profile".into(),
         Profile {
+            connection: None,
             harness: "fake".into(),
             model: None,
             effort: None,

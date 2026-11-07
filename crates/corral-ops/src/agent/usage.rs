@@ -103,9 +103,17 @@ fn collect_state_inner(
     if files.is_empty() {
         bail!("no bound Pi session");
     }
+    let bindings: BTreeMap<_, _> = state
+        .generations
+        .iter()
+        .filter_map(|g| g.connection.clone().map(|b| (g.n, b)))
+        .collect();
+    for binding in bindings.values() {
+        binding.validate()?;
+    }
     let mut entries = BTreeMap::new();
     for (path, (session_id, model)) in files {
-        read_session(path, session_id, model, &mut entries, complete)?;
+        read_session(path, session_id, model, &mut entries, complete, &bindings)?;
     }
     if entries.is_empty() {
         bail!("no assistant usage found in the bound Pi sessions");
@@ -126,6 +134,10 @@ struct Line {
     timestamp: Option<Timestamp>,
     #[serde(rename = "modelId")]
     model_id: Option<String>,
+    provider: Option<String>,
+    #[serde(rename = "customType")]
+    custom_type: Option<String>,
+    data: Option<serde_json::Value>,
     message: Option<Message>,
     /// A compaction or branch summary's own request usage, recorded on its entry.
     usage: Option<WireUsage>,
@@ -134,6 +146,7 @@ struct Line {
 #[derive(Deserialize)]
 struct Message {
     role: String,
+    provider: Option<String>,
     model: Option<String>,
     #[serde(rename = "responseId")]
     response_id: Option<String>,
@@ -164,6 +177,7 @@ fn read_session(
     run_model: Option<&str>,
     entries: &mut BTreeMap<(String, String), UsageEntry>,
     complete: bool,
+    bindings: &BTreeMap<u32, corral_core::connection::ConnectionBinding>,
 ) -> Result<()> {
     let display = path.display();
     let meta = match fs::symlink_metadata(path) {
@@ -184,6 +198,8 @@ fn read_session(
     let mut reader = BufReader::new(file.take(SESSION_MAX_BYTES + 1));
     let mut session_id = bound_session.to_owned();
     let mut model = run_model.map(str::to_owned);
+    let mut provider = None;
+    let mut binding = None;
     let mut previous_at = None;
     let mut read = 0u64;
     let mut line = Vec::new();
@@ -215,6 +231,15 @@ fn read_session(
             .with_context(|| format!("unrecognized Pi session line {number} in {display}"))?;
         let preceding_at = std::mem::replace(&mut previous_at, entry.timestamp);
         match entry.kind.as_str() {
+            "custom" if entry.custom_type.as_deref() == Some("corral_host_bound") => {
+                binding = entry
+                    .data
+                    .as_ref()
+                    .and_then(|d| d["generation"].as_u64())
+                    .and_then(|n| u32::try_from(n).ok())
+                    .and_then(|n| bindings.get(&n));
+                continue;
+            }
             "session" => {
                 if let Some(id) = entry.id {
                     session_id = id;
@@ -222,6 +247,7 @@ fn read_session(
                 continue;
             }
             "model_change" => {
+                provider = entry.provider;
                 if entry.model_id.is_some() {
                     model = entry.model_id;
                 }
@@ -232,11 +258,14 @@ fn read_session(
             "message" => {}
             _ => continue,
         }
-        let (usage, response_id, message_model) = match entry.message {
-            Some(message) if entry.kind == "message" && message.role == "assistant" => {
-                (message.usage, message.response_id, message.model)
-            }
-            _ if entry.kind != "message" => (entry.usage, None, None),
+        let (usage, response_id, message_model, message_provider) = match entry.message {
+            Some(message) if entry.kind == "message" && message.role == "assistant" => (
+                message.usage,
+                message.response_id,
+                message.model,
+                message.provider,
+            ),
+            _ if entry.kind != "message" => (entry.usage, None, None, None),
             _ => continue,
         };
         let Some(usage) = usage else {
@@ -259,7 +288,20 @@ fn read_session(
             ),
             _ => None,
         };
+        let connection = binding.map(|b| b.connection).or_else(|| {
+            match message_provider.as_deref().or(provider.as_deref()) {
+                Some("openai-codex") => {
+                    Some(corral_core::connection::ConnectionId::OpenaiSubscription)
+                }
+                Some(vendor @ ("anthropic" | "amazon-bedrock" | "llama.cpp")) => {
+                    corral_core::connection::ConnectionId::legacy(vendor)
+                }
+                _ => None,
+            }
+        });
         let evidence = UsageEntry {
+            connection,
+            billing: connection.map(|c| c.billing()),
             at,
             latency_ms,
             model: message_model
@@ -273,7 +315,10 @@ fn read_session(
             ..UsageEntry::default()
         };
         entries
-            .entry((session_id.clone(), response))
+            .entry((
+                session_id.clone(),
+                format!("{}:{response}", connection.map_or("legacy", |c| c.id())),
+            ))
             .or_insert(evidence);
     }
     Ok(())

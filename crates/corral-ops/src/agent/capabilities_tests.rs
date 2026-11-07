@@ -100,6 +100,7 @@ impl Fixture {
 
     fn spec(&self) -> HostSpec {
         HostSpec {
+            binding: None,
             cwd: self.tmp.path().join("worktree"),
             model: "gpt-6.1-sol".into(),
             provider: None,

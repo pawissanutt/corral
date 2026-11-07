@@ -345,6 +345,7 @@ fn many_reviewers_wrap_so_every_profile_is_visible_and_clickable_at_80x24() {
         fx.ctx.store.config.profiles.insert(
             format!("reviewer{i:02}"),
             corral_core::Profile {
+                connection: None,
                 harness: "claude".into(),
                 model: Some(format!("fixture-{i}")),
                 effort: None,

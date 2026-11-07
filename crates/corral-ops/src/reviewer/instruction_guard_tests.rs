@@ -58,6 +58,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
 
 fn reviewer(vendor: &str) -> Profile {
     Profile {
+        connection: None,
         metadata: Some(ProfileMetadata {
             display_name: "Reviewer".into(),
             purpose: "Review".into(),

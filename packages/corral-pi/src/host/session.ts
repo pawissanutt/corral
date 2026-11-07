@@ -88,7 +88,7 @@ import { AssistantRelink } from "./assistant-relink.ts";
 import { AssistantResume } from "./assistant-resume.ts";
 import { PlanningPolicy, type PlanningState } from "./planning-policy.ts";
 import { type ConnectionBinding, admitConnection, parseBinding } from "./connections.ts";
-import { type ConnectionId, resolveConnection } from "../auth/connections.ts";
+import { CONNECTIONS, type ConnectionId, resolveConnection } from "../auth/connections.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -209,6 +209,7 @@ export function restrictProvider(
   models: Models, providerId: ProviderId, fetch: typeof globalThis.fetch, lane?: ClaudeLaneConfig, aws?: AwsRoute,
 ): void {
   const route = PROVIDERS[providerId];
+  if (route.auth === "api_key") throw new Error("connection_invalid: API provider requires an explicit metered connection binding");
   const provider = models.getProvider(route.id);
   if (route.auth === "aws-profile") {
     if (!provider) throw new Error(`model_unavailable: ${route.id} is not in Pi's catalog`);
@@ -256,7 +257,8 @@ export function restrictProvider(
 
 export function authContext(provider: ProviderId = "openai-codex", connection?: ConnectionId): AuthContext {
   const selected = resolveConnection(provider, connection);
-  return { provider, connection: selected, apiEndpoint: PROVIDERS[provider].api, refreshEndpoint: PROVIDERS[provider].refresh };
+  return { provider, connection: selected, apiEndpoint: PROVIDERS[provider].api,
+    refreshEndpoint: CONNECTIONS[selected].auth === "api_key" ? "" : PROVIDERS[provider].refresh };
 }
 
 export function providerErrorClass(message: string): string {
@@ -783,6 +785,9 @@ export class HostSession {
   static async create(options: HostSessionOptions): Promise<HostSession> {
     parseBinding(options.binding, options.provider ?? "openai-codex", options.model, options.effort);
     admitConnection(options.provider ?? "openai-codex", options.binding);
+    if (options.binding && !options.modules.auth.connections?.includes(options.binding.connection)) {
+      throw new Error("connection_unsupported_by_auth: installed auth module does not implement the explicit binding");
+    }
     const host = new HostSession(options);
     // Before optional MCP/LSP startup and before any model request, not a cached widget flag.
     await host.planning?.refresh();
@@ -794,7 +799,7 @@ export class HostSession {
       throw new Error("module_invalid: llama.cpp requires its explicit generation-bound capability");
     }
     const localModels = local ? await createLocalModels(local, options.model, options.network.fetch) : undefined;
-    const subscriptions = await subscriptionRoutes(options.modules.auth, route.id, options.identity.role);
+    const subscriptions = await subscriptionRoutes(options.modules.auth, route.id, options.binding ? "worker" : options.identity.role);
     const models = localModels?.models ?? await createModelCatalog(subscriptions.credentials, {
       providers: subscriptions.providers,
     });
@@ -1574,6 +1579,8 @@ export class HostSession {
     return {
       role: this.options.identity.role,
       identity: this.options.identity,
+      binding: this.options.binding ?? null,
+      connection: resolveConnection((session.model?.provider ?? this.provider) as ProviderId, this.options.binding?.connection),
       native_children: this.auxiliary?.inspection().map(({ sessionFile: _file, ...child }) => child) ?? null,
       todo: this.loadout.includes("corral_todo"),
       // The plan the widget renders and the model summary names: one host ledger.

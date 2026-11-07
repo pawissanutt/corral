@@ -175,8 +175,9 @@ fn prepare(ctx: &Ctx, id: &str, pane: &str, resolved: &ResolvedProfile) -> Resul
         .clone()
         .context("an assistant needs a model")?;
     let spec = HostSpec {
+        binding: crate::agent::connections::explicit(resolved)?,
         cwd: crate::assistant::directory(&ctx.store, &session)?.path,
-        provider: launch::host_provider(resolved.vendor.as_deref(), &model),
+        provider: crate::agent::connections::provider(resolved)?,
         model,
         effort: resolved.effort.clone(),
         prompt_file: {

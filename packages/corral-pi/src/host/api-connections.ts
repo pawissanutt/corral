@@ -51,20 +51,31 @@ export async function createApiCatalog(
     }
     if (!admit) requirePaidAdmission(connection);
     const apiKey = await key();
+    const output = Math.min(options?.maxTokens ?? model.maxTokens, model.maxTokens);
+    if (!Number.isSafeInteger(output) || output <= 0) throw new Error("connection_invalid: unbounded API output");
     // Auth is pinned, not merely prefix checked: remove OAuth, env, headers and base-URL overrides.
     const fetch: Fetch = async (input, init) => {
-      if (!admit) requirePaidAdmission(connection);
-      else await admit({ binding, model, context, options });
       const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
       const actual = connection === "anthropic-api" ? headers.get("x-api-key") : headers.get("authorization");
       if (actual !== (connection === "anthropic-api" ? apiKey : `Bearer ${apiKey}`)) {
         throw new Error("credentials_unavailable: request auth does not match selected connection");
       }
+      let payload: Record<string, unknown>;
+      try {
+        if (typeof init?.body !== "string") throw new Error("unrecognized body");
+        payload = JSON.parse(init.body) as Record<string, unknown>;
+      } catch { throw new Error("connection_invalid: unrecognized API request body"); }
+      const limit = connection === "anthropic-api" ? payload.max_tokens : payload.max_output_tokens;
+      if (payload.model !== model.id || typeof limit !== "number" || !Number.isSafeInteger(limit) || limit <= 0 || limit > output) {
+        throw new Error("connection_invalid: request changed the approved model/output bound");
+      }
+      if (!admit) requirePaidAdmission(connection);
+      else await admit({ binding, model, context, options: { ...options, maxTokens: output } });
       return guarded.fetch(input, init);
     };
     const pinnedOptions = {
       ...options, apiKey, headers: {}, env: {}, fetch: fetch as typeof globalThis.fetch, maxRetries: 0,
-      reasoning: (binding.effort ?? "off") as never,
+      reasoning: (binding.effort ?? "off") as never, maxTokens: output,
     };
     return stream({ ...model, headers: {} }, context, pinnedOptions);
   });
