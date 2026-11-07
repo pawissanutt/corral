@@ -121,3 +121,16 @@ Targeted validation: all four triage contracts passed (0.14s execution); the exi
 isolated red-base service passed (6.07s). Failing-first and post-fix logs are attached to
 this round; the required post-rebase quick gate is recorded separately. One unit registration added;
 no E2E journey, load/performance fixture or policy allowance added.
+
+## Review changes round 2 — atomic configuration wait
+
+Review approved F1. Corral's subsequent full landing gate passed 4,854 tests before the
+existing `submission_paths_do_not_split_task_writes_from_events` guard found
+`cowork_wait` logging `cowork_configuration_wait` outside its task update callback.
+
+Reproduced that exact failure with the existing `submission_journal` target, then moved
+the event into `try_update_head` beside the state mutation. The store's event unit now
+publishes both together; a refused/no-write callback emits neither. No allowlist entry,
+assertion relaxation or new test was added. Both journal contracts now pass (0.10s).
+Rust LSP timed out; the targeted compiler test and required post-rebase quick gate are
+the validation fallback. Corral still owns the subsequent full landing gate.
