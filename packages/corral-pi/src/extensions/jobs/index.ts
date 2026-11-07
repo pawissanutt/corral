@@ -52,6 +52,10 @@ export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands):
     } satisfies ToolDefinition] : []),
     {
       name: "job_start", label: "Start a background command",
+      // Keep old calls executable without spending model tokens on a second launch tool.
+      prepareLoadout: loadout => ({
+        hiddenDeclarations: commands && loadout.declared.some(tool => tool.name === "bash") ? ["job_start"] : [],
+      }),
       description: "Compatibility adapter for bash with wait_ms:0: launch one managed command and return its job ID immediately. "
         + "Turn endings do not stop it. The hard runtime cap, job_kill, or owning host teardown stops its process group. Completion is announced automatically.",
       parameters: Type.Object({ command: Type.String({ minLength: 1, maxLength: 4096 }) }),
