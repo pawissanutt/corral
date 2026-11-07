@@ -125,6 +125,7 @@ pub(super) fn annotate(
     layers: Result<&ConfigSources, &anyhow::Error>,
     staged: bool,
     target: ConfigLayer,
+    width: usize,
 ) {
     let Some(key) = key(row, cfg) else {
         return;
@@ -139,10 +140,33 @@ pub(super) fn annotate(
     if staged {
         label.push_str(&format!(" · staged → {target}"));
     }
+    let help_at = lines.iter().position(|line| {
+        line.line
+            .spans
+            .iter()
+            .any(|span| span.content.contains(row.help))
+    });
     if row.help.is_empty() {
         let mut line = FormLine::plain(Line::styled(label, theme::dim()));
         line.row = lines.first().and_then(|line| line.row);
         lines.push(line);
+    } else if let (true, Some(at)) = (row.step, help_at) {
+        // Stepper help carries distinctions that must stay readable when narrow: wrap source and help together.
+        let text = format!("{} · {}", label.trim_start(), row.help);
+        let wrapped = crate::render::wrap::wrap(
+            &crate::render::wrap::chunks(&[(text, theme::dim())]),
+            width.saturating_sub(4),
+        );
+        let owner = lines[at].row;
+        lines.splice(
+            at..=at,
+            wrapped.into_iter().map(|mut spans| {
+                spans.insert(0, Span::raw("    "));
+                let mut line = FormLine::plain(Line::from(spans));
+                line.row = owner;
+                line
+            }),
+        );
     } else if let Some(help) = lines.iter_mut().find(|line| {
         line.line
             .spans

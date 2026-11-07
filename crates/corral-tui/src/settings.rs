@@ -561,6 +561,7 @@ impl SettingsView {
                 self.layers.sources.as_ref(),
                 self.row_staged(row, &saved_rows),
                 self.save_target,
+                width,
             );
             lines.extend(rendered);
         }
