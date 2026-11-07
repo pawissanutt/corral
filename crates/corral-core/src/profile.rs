@@ -168,6 +168,9 @@ pub struct Profile {
     /// Explicit vendor; otherwise inferred from the effective model's provider prefix.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vendor: Option<String>,
+    /// Explicit native billing/auth route. Absent preserves the legacy subscription route.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<crate::connection::ConnectionId>,
     /// Next profile in the finite escalation chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub escalate_to: Option<String>,
@@ -327,6 +330,11 @@ pub struct ResolvedProfile {
     pub command: String,
     pub model: Option<String>,
     pub vendor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<crate::connection::ConnectionId>,
+    /// Exact approved candidate, not inferred by matching a model name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate: Option<String>,
     /// Normalized (lowercase) effort level.
     pub effort: Option<String>,
     /// Argv rendered into `{model_args}`: model/effort flags, then the profile's extra args.
@@ -800,7 +808,10 @@ impl Config {
                  model/effort/args cannot be passed (command: {command})"
             );
         }
+        let connection = self.profiles.get(&name).and_then(|p| p.connection);
         let resolved = ResolvedProfile {
+            connection,
+            candidate: None,
             profile: name,
             harness,
             command,
@@ -810,6 +821,9 @@ impl Config {
             model_args,
         };
         resolved.delivery_args()?;
+        if resolved.connection.is_some() {
+            resolved.connection_binding()?;
+        }
         Ok(resolved)
     }
 }

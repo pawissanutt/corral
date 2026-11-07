@@ -21,6 +21,7 @@ mod call;
 #[cfg(all(test, unix))]
 mod capabilities_tests;
 pub mod cli;
+pub mod connections;
 pub mod credentials;
 pub mod delivery;
 pub mod effects;

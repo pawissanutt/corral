@@ -609,6 +609,7 @@ impl Config {
                 k.to_string(),
                 Profile {
                     metadata: None,
+                    connection: None,
                     harness: k.to_string(),
                     model: None,
                     vendor: None,

@@ -672,6 +672,9 @@ impl Config {
         )?;
         model_args.extend(candidate.args.iter().cloned());
         Ok(ResolvedProfile {
+            connection: crate::is_corral_pi(&candidate.harness)
+                .then(|| crate::connection::ConnectionId::parse(&candidate.connection)).transpose()?,
+            candidate: Some(candidate.id.clone()),
             profile: profile.to_owned(),
             harness: candidate.harness.clone(),
             command,

@@ -25,6 +25,7 @@ pub use hold::TaskHold;
 pub mod comments;
 pub mod completion;
 pub mod config;
+pub mod connection;
 pub mod config_doc;
 mod config_events;
 mod config_layers;

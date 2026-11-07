@@ -6,10 +6,13 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { corralPiRoot } from "../auth/paths.ts";
 import { PROVIDERS, type ProviderId, isProviderId } from "../auth/providers.ts";
 import { SUPPLEMENTAL_MODELS } from "./supplemental-models.ts";
+import { CONNECTIONS, type ApiConnectionId, validApiKey } from "../auth/connections.ts";
 
 export interface CatalogPolicy {
   /** Only these subscription providers can expose models or resolve credentials. */
   readonly providers: readonly ProviderId[];
+  /** Single explicit API route; never inferred from installed credentials or provider alone. */
+  readonly apiConnection?: ApiConnectionId;
   /** Omit for corral's corral-pi/models.json; null disables that file. */
   readonly modelsPath?: string | null;
 }
@@ -44,14 +47,18 @@ export async function createModelCatalog(
   const { InMemoryModelsStore } = await import("@earendil-works/pi-ai");
   const modelsPath = policy.modelsPath === undefined ? join(corralPiRoot(), "models.json") : policy.modelsPath;
   const approved = new Set(policy.providers);
+  const paidProvider = policy.apiConnection ? CONNECTIONS[policy.apiConnection].provider : undefined;
+  if (paidProvider && (approved.size !== 1 || !approved.has(paidProvider))) throw new ModelCatalogInvalid("API connection/provider mismatch");
+  const matchesCredential = (id: string, entry: { type: string; key?: string }) => id === paidProvider
+    ? entry.type === "api_key" && typeof entry.key === "string" && validApiKey(entry.key) : entry.type === "oauth";
   const scopedCredentials: CredentialStore = {
     read: async (id, options) => {
       if (!isProviderId(id) || !approved.has(id)) return undefined;
       const credential = await credentials.read(id, options);
-      return credential?.type === "oauth" ? credential : undefined;
+      return credential && matchesCredential(id, credential) ? credential : undefined;
     },
     list: async (options) => (await credentials.list(options))
-      .filter((entry) => isProviderId(entry.providerId) && approved.has(entry.providerId) && entry.type === "oauth"),
+      .filter((entry) => isProviderId(entry.providerId) && approved.has(entry.providerId) && entry.type === (entry.providerId === paidProvider ? "api_key" : "oauth")),
     modify: async (id, fn, options) => {
       if (!isProviderId(id) || !approved.has(id)) throw new Error(`provider_not_allowed: ${id}`);
       return credentials.modify(id, fn, options);
@@ -101,7 +108,7 @@ export async function createModelCatalog(
       };
       runtime.registerNativeProvider({
         ...provider,
-        auth: provider.auth.oauth ? { oauth: provider.auth.oauth } : {},
+        auth: id === paidProvider ? {} : provider.auth.oauth ? { oauth: provider.auth.oauth } : {},
         getModels,
         getAllModels: getModels,
         // The metadata runtime, not the native provider's remote catalog, owns this list.

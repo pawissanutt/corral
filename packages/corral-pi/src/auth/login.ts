@@ -221,6 +221,14 @@ export function runLogin(argv: readonly string[]): void {
     return index === -1 ? undefined : argv[index + 1];
   };
   const dir = arg("--auth-dir") ?? authDir();
+  const connection = arg("--connection");
+  if (connection !== undefined) {
+    void import("./api-key.ts").then(({ apiKeyCommand }) => apiKeyCommand(dir, connection, argv)).then(() => process.exit(0), () => {
+      process.stderr.write("corral API key setup refused: check connection and protected input file; no credential content is shown\n");
+      process.exit(1);
+    });
+    return;
+  }
   const provider = arg("--provider") ?? "openai-codex";
   if (!isProviderId(provider)) {
     process.stderr.write(`corral agent login failed: unknown provider ${provider}; use openai-codex or anthropic\n`);
