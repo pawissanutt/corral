@@ -199,7 +199,6 @@ impl RecoverySheet {
             page: 10,
             authorize,
         };
-        sheet.reload_questions(ctx);
         sheet.refresh_preview(ctx);
         sheet.focus = sheet.position(Control::Cancel);
         sheet
@@ -323,6 +322,14 @@ impl RecoverySheet {
 
     /// Re-derives the read-only preview. Nothing is persisted.
     pub(crate) fn refresh_preview(&mut self, ctx: &Ctx) {
+        // Owner decisions can change while editing: reload them first, keeping focus on the
+        // same control (and a decision field on the same question).
+        let focused = self.focused();
+        let question = match focused {
+            Control::Decision(i) => self.questions.get(i).cloned(),
+            _ => None,
+        };
+        self.reload_questions(ctx);
         let result = self
             .evaluate(ctx)
             .map(|(_, p)| p)
@@ -343,6 +350,18 @@ impl RecoverySheet {
             self.acknowledged.retain(|c| offered.contains(c));
         }
         self.preview = Some(result);
+        let keep = match question {
+            Some(q) => self
+                .questions
+                .iter()
+                .position(|o| *o == q)
+                .map(Control::Decision),
+            None => Some(focused),
+        };
+        let controls = self.controls();
+        self.focus = keep
+            .and_then(|c| controls.iter().position(|o| *o == c))
+            .unwrap_or_else(|| self.focus.min(controls.len().saturating_sub(1)));
     }
 
     pub(crate) fn controls(&self) -> Vec<Control> {
@@ -527,7 +546,6 @@ impl RecoverySheet {
     }
 
     fn stale(&mut self, ctx: &Ctx, text: String) -> Action {
-        self.reload_questions(ctx);
         self.refresh_preview(ctx);
         self.back_to_edit(text)
     }
