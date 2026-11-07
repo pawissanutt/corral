@@ -353,6 +353,9 @@ fn gate_failure_sends_the_run_back_and_the_second_done_lands() {
     fx.change("widget.txt", "v1\n");
     fx.done();
 
+    let blocked = fx.sync();
+    assert_eq!((blocked.status, blocked.rounds), (Status::NeedsMe, 0));
+    fx.attribute_candidate_failure();
     let t = fx.sync();
     assert_eq!(t.status, Status::Running);
     assert_eq!(t.rounds, 1);
@@ -401,6 +404,7 @@ fn gate_failure_sends_the_run_back_and_the_second_done_lands() {
         fx.transitions(),
         [
             "gating",
+            "escalated",
             "changes",
             "gating",
             "reviewing",
@@ -419,11 +423,19 @@ fn exhausted_rounds_escalate_to_needs_me_and_the_owner_can_still_approve() {
     });
     fx.change("a.txt", "a\n");
     fx.done();
+    let blocked = fx.sync();
+    assert_eq!((blocked.status, blocked.rounds), (Status::NeedsMe, 0));
+    fx.attribute_candidate_failure();
     assert_eq!(fx.sync().status, Status::Running);
     fx.change("b.txt", "b\n");
     fx.done();
-
-    let t = fx.sync();
+    // Distinct escalation episodes need distinct logical times, not a reused notice source.
+    corral_ops::sync_at(&fx.ctx, now() + jiff::SignedDuration::from_secs(1)).unwrap();
+    let blocked = fx.task();
+    assert_eq!((blocked.status, blocked.rounds), (Status::NeedsMe, 1));
+    fx.attribute_candidate_failure();
+    corral_ops::sync_at(&fx.ctx, now() + jiff::SignedDuration::from_secs(2)).unwrap();
+    let t = fx.task();
     assert_eq!(t.status, Status::NeedsMe);
     assert!(t.escalated());
     assert_eq!(fx.stage(), Some(AutoStage::Escalated));
@@ -432,9 +444,9 @@ fn exhausted_rounds_escalate_to_needs_me_and_the_owner_can_still_approve() {
         "{}",
         fx.reason()
     );
-    assert_eq!(fx.herdr_log("notify.log"), "▲ T-001 blocked\n");
+    assert_eq!(fx.herdr_log("notify.log"), "▲ T-001 blocked\n".repeat(3));
     assert_eq!(fx.sync().status, Status::NeedsMe, "waits for the owner");
-    assert_eq!(fx.events("autopilot"), 4);
+    assert_eq!(fx.events("autopilot"), 6);
 
     corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::Rebase, true, false).unwrap();
     assert_eq!(fx.task().status, Status::Done);
@@ -753,6 +765,9 @@ fn fresh_mode_gives_a_gone_agent_a_retry_run_carrying_the_request() {
     fx.done();
     std::fs::write(fx.bin_dir.join("gone"), "w1:p1\n").unwrap();
 
+    let blocked = fx.sync();
+    assert_eq!((blocked.status, blocked.rounds), (Status::NeedsMe, 0));
+    fx.attribute_candidate_failure();
     let t = fx.sync();
     assert_eq!(t.status, Status::Running);
     assert_eq!(t.rounds, 1);
