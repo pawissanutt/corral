@@ -9,7 +9,6 @@ use std::io::Write;
 
 use corral_core::Store;
 use corral_core::agent::{RequestReceipt, paths};
-use corral_core::assistant::{NewOwnerInput, OwnerInputSource};
 use corral_ops::agent::{BindTarget, open_generation, payload_sha256, tool_request_id};
 use corral_ops::assistant::owner_action::kinds::{self, Class, KINDS, Target};
 use serde_json::{Value, json};
@@ -112,37 +111,20 @@ impl Fixture {
         shown["status"].as_str().unwrap().to_owned()
     }
 
-    /// The owner typed `text` into A-1's pane; returns its journal ID.
-    fn journal(&self, text: &str) -> String {
-        let input = NewOwnerInput {
-            generation: 1,
-            turn: None,
-            source: OwnerInputSource::Pane,
-            sha256: paths::sha256_hex(text.as_bytes()),
-            text: text.into(),
-            truncated: false,
-            command: None,
-            answers: None,
-            request: "ev-1-1".into(),
-        };
-        let store = self.store();
-        store
-            .update_assistant_container("A-1", |container| {
-                Ok(container.journal_owner_input("A-1", input).id)
-            })
-            .unwrap()
-    }
-
     /// A reservation of `argv` citing `input`, held by this test process as its executor.
     fn reserve(&self, request: &str, argv: &[&str], input: &str) {
         let store = self.store();
         let executor = corral_ops::agent::effects::executor().unwrap();
+        let assistant = store.get_assistant_container("A-1").unwrap();
+        let cited = assistant.owner_input(input).unwrap();
+        let payload =
+            json!({"kind": argv[0], "target": argv[1], "args": &argv[2..], "input": input});
         let receipt: RequestReceipt = serde_json::from_value(json!({
-            "version": 1, "request_id": request, "op": "owner_action", "payload_sha256": "00",
+            "version": 1, "request_id": request, "op": "owner_action", "payload_sha256": payload_sha256(&payload),
             "identity": {"store": paths::store_id(&store), "project": "", "role": "assistant",
-                "assistant": "A-1", "session_id": "s", "generation": 1},
+                "assistant": "A-1", "session_id": "s", "generation": assistant.state.binding.generation},
             "state": "reserved", "executor": executor, "at": "2026-10-30T00:00:00Z",
-            "result": {"kind": argv[0], "argv": argv, "input": input, "sha256": "ab",
+            "result": {"kind": argv[0], "argv": argv, "input": input, "sha256": cited.sha256,
                 "confirmed": false, "outcome": "reserved"},
         }))
         .unwrap();
@@ -310,8 +292,9 @@ fn every_owner_action_kind_is_a_real_command_with_its_flags_and_a_fixed_class() 
 fn an_owner_action_child_acts_for_the_owner_via_its_assistant_exactly_once() {
     // Given A-1 journaled the owner's instruction, and its shell may not move tasks itself.
     let fx = Fixture::new();
+    let mut host = Host::bind(&fx);
     let message = "move T-001 to ready please";
-    let input = fx.journal(message);
+    let input = host.journal(message, None);
     let shell = fx.run(&["move", "T-001", "ready"], &[("CORRAL_ASSISTANT", "A-1")]);
     assert_eq!(shell.status.code(), Some(2), "{}", text(&shell));
     assert!(text(&shell).contains("assistant_refused"));
