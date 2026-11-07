@@ -28,14 +28,41 @@ wip = 2
 running = 3
 running_target = 2
 
+[dispatch]
+ready_projects = ["app"]
+
+[defaults]
+profile = "example"
+
+[projects.app]
+path = "app"
+default_profile = "example"
+
+[profiles.example]
+harness = "claude"
+model = "example"
+
+[[routing.rules]]
+profile = "example"
+
+[[routing.reviewer_rules]]
+profile = "example"
+
 [review]
 reviewer = "none"
 accept = "owner"
+gate = []
+
+[review.gate_tiers]
+quick = ["true"]
 
 [review.tier_policy]
 review_rounds = "full"
 plan_member = "full"
 ```
+
+For example, preview landing authority with `corral mode autopilot --task T-042 --dispatch --accept`;
+for future work, preview with `corral automation preview --project app --include-new --dispatch`.
 
 Use `corral config get <key> --source` before and after `corral config set <key> <value>`;
 use `corral config validate` and `corral config history` / `corral config diff` to verify

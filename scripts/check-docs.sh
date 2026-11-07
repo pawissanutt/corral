@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 
 corral, files = sys.argv[1], sys.argv[2:]
 errors = []
@@ -72,9 +73,16 @@ def check_code(path, code):
                 continue
             if nested[first] and rest and re.fullmatch(r"[a-z][a-z-]*", rest[0]) and rest[0] not in nested[first]:
                 errors.append(f"{path}: unknown subcommand `corral {first} {rest[0]}`")
+            allowed = flags_of[first]
+            command = first
+            # The PM reference is operational guidance: a sibling subcommand's
+            # flags do not validate a command the PM is instructed to execute.
+            if os.path.basename(path) == "pm-config-reference.md" and rest and rest[0] in nested[first]:
+                command += " " + rest[0]
+                allowed = set(re.findall(r"--[a-z][a-z0-9-]*", help_text(first, rest[0]) or "")) | {"--root", "--help"}
             for flag in re.findall(r"--[a-z][a-z0-9-]*", " ".join(rest)):
-                if flag not in flags_of[first]:
-                    errors.append(f"{path}: `corral {first}` has no flag {flag}")
+                if flag not in allowed:
+                    errors.append(f"{path}: `corral {command}` has no flag {flag}")
 
 
 def toml_blocks(text):
@@ -116,6 +124,20 @@ def validate_toml(path, index, fragment):
         r = subprocess.run([corral, "--root", root, "config", "validate"], env=environment, capture_output=True, text=True, stdin=subprocess.DEVNULL)
         if r.returncode != 0:
             errors.append(f"{path}: toml block {index} is invalid:\n{(r.stdout + r.stderr).strip()}")
+        if os.path.basename(path) == "pm-config-reference.md":
+            # Validation may accept unknown fields. Read each documented key back
+            # through the effective typed config, including entire rule arrays.
+            def keys(value, prefix=""):
+                for key, item in value.items():
+                    name = f"{prefix}.{key}" if prefix else key
+                    if isinstance(item, dict):
+                        yield from keys(item, name)
+                    else:
+                        yield name
+            for key in keys(tomllib.loads(fragment)):
+                result = subprocess.run([corral, "--root", root, "config", "get", key], env=environment, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+                if result.returncode != 0:
+                    errors.append(f"{path}: config key {key} not readable: {(result.stdout + result.stderr).strip()}")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
