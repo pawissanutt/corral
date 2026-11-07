@@ -330,6 +330,7 @@ export class HostSession {
   private readonly relink: AssistantRelink | undefined;
   private readonly resume: AssistantResume | undefined;
   private readonly planning: PlanningPolicy | undefined;
+  private planningRead = 0;
   private readonly planningResources = new Map<string, Promise<() => Promise<void>>>();
 
   readonly provider: ProviderId;
@@ -337,7 +338,17 @@ export class HostSession {
   private constructor(private readonly options: HostSessionOptions) {
     this.provider = options.provider ?? "openai-codex";
     this.planning = options.identity.role === "assistant" ? new PlanningPolicy({
-      read: () => options.client.todoSnapshot(),
+      read: async () => {
+        // Bootstrap has no authenticated session yet. Once bound, use the dedicated,
+        // receipt-free workflow projection, independently of Todo continuation reads.
+        if (!this.bound) return options.client.todoSnapshot();
+        const receipt = await options.client.call("assistant_plan", {
+          requestId: toolRequestId(this.sessionId(), `workflow-read:${options.identity.generation}:${++this.planningRead}`),
+          payload: { action: "read", limit: 1 }, turn: this.currentTurn(),
+        });
+        if (receipt.state !== "committed") throw new Error(`planning read refused: ${JSON.stringify(receipt.result)}`);
+        return receipt.result;
+      },
       record: async transition => {
         if (!this.bound) throw new Error("host_not_bound");
         const event = options.events.emit("assistant_boundary", { transition });

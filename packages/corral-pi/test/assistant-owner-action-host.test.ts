@@ -36,7 +36,9 @@ const counter = join(dir, "inputs");
 const answered = join(dir, "answers");
 let state = "committed";
 let result = { op: envelope.op };
-if (envelope.payload.kind === "assistant_boundary") {
+if (envelope.op === "assistant_plan" && envelope.payload.action === "read") {
+  result = planningFixtureRead().workflow;
+} else if (envelope.payload.kind === "assistant_boundary") {
   result = planningFixtureEvent(envelope);
 } else if (envelope.payload.kind === "owner_input") {
   const n = (existsSync(counter) ? Number(readFileSync(counter, "utf8")) : 0) + 1;

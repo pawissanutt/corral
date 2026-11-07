@@ -71,7 +71,8 @@ if (envelope.op === "event" && envelope.payload.kind === "turn_ended" && existsS
   writeFileSync(endings, JSON.stringify(queue));
 }
 const boundary = envelope.op === "event" && envelope.payload.kind === "assistant_boundary"
-  ? planningFixtureEvent(envelope) : undefined;
+  ? planningFixtureEvent(envelope) : envelope.op === "assistant_plan" && envelope.payload.action === "read"
+    ? planningFixtureRead().workflow : undefined;
 let progress;
 if (envelope.op === "todo" && existsSync(snapshot)) {
   const state = JSON.parse(readFileSync(snapshot, "utf8"));
