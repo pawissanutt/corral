@@ -195,8 +195,10 @@ prints. In order, it shows the target identity and current blockers, the action 
 (`use-reviewer`, `accept-plan`, `accept-code`, `force-admission`) with its stage, merge or
 reviewer, each check's original observation next to its proposed disposition, the policy
 sources, the proposed effect, the remaining hard blockers, and then the owner fields.
-`accept-plan` also asks for the owner-decision resolution notes. Every action needs an
-owner-written reason. Nothing is persisted while you edit.
+`accept-plan` lists each pending owner decision with its own **resolved** field (all are
+required) and an optional notes field; with no decisions, the notes are required. Long pill
+rows such as the reviewer list wrap, so every option stays visible and clickable at 80x24.
+Every action needs an owner-written reason. Nothing is persisted while you edit.
 
 Each proposed exception has to be acknowledged on its own line (`[ ]` → `[x]`). **Continue…**
 moves to a separate confirmation step only when no hard blocker remains, every exception is
