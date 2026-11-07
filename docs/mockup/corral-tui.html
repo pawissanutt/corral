@@ -92,6 +92,7 @@ table.t td{padding:0 12px 0 0;white-space:nowrap}
   <button type="button" data-s="artifacts">Artifacts</button>
   <button type="button" data-s="pm">PM agent</button>
   <button type="button" data-s="help">Keys</button>
+  <button type="button" data-s="recover">Recover</button>
   <b>Simulate</b>
   <button type="button" class="sim" data-s="sim-block">T-042 gets blocked</button>
   <button type="button" class="sim" data-s="sim-done">T-040 finishes</button>
@@ -176,6 +177,7 @@ function footer(){
   else if(S.overlay==='merge')f=[k('j/k','strategy'),k('w','toggle worktree removal'),k('⏎','confirm'),k('esc','cancel')];
   else if(S.overlay==='artifacts')f=[k('type','filter'),k('↑↓','select'),k('⏎','open'),k('esc','close')];
   else if(S.overlay==='help')f=[k('any key','close')];
+  else if(S.overlay==='recover')f=[k('⇥','next'),k('space','select'),k('⏎','activate'),k('pgdn','scroll'),k('c','toggle confirm step'),k('esc',S.rec.confirm?'edit':'cancel')];
   else if(S.line)f=[k('⏎','send'),k('esc','cancel')];
   else if(S.screen==='board'){const t=sel(),st=t&&t.status;f=[k('⏎',st==='review'?'review':'open')];
     if(st==='needs')f.push(k('r','reply'));if(st==='running'||st==='needs')f.push(k('a','jump'));if(st==='ready')f.push(k('d','dispatch'));
@@ -394,6 +396,30 @@ Register outputs: corral artifact add ${t.id} &lt;path&gt; --kind …</pre>`,'',
       <div style="display:flex;gap:6px"><span class="cy">/</span><input id="aq" value="${h(S.art.q)}" placeholder="filter: kind, task, project, title"></div>
       <div class="split" style="grid-template-columns:1fr 1.3fr">${box('results',`<div class="scroll">${rows}</div>`,'f')}${box('preview',`<div class="scroll">${a?preview(a):''}</div>`,'f',a?`${a.file} · ${a.size}`:'')}</div></div>`;
   }
+  if(S.overlay==='recover'){
+    const t=sel();const c=S.rec.confirm;
+    const body=c?`<div class="ye"><b>Confirm owner recovery — not ordinary policy success</b></div>
+      <div>Target ${t.id} · run R1 @3f2a91c · task rev 9c1d2e0</div><div>Action accept-code</div>
+      <div><b>Exceptions authorized for this operation only</b></div>
+      <div class="ye">  gate-outcome: original gate fail → check overridden</div>
+      <div><b>Effect</b></div><div>  accept run R1 @3f2a91c with merge rebase</div>
+      <div>Reason: ${h(S.rec.reason)}</div><div class="dim">Preview 5b0e91a7c3d4f2e1</div>
+      <div class="dim">Cancel is focused. Confirm recovery applies this exact operation once; a changed proposal is refreshed instead.</div>`
+     :`<div><b>Target ${t.id} · run R1 @3f2a91c · task rev 9c1d2e0</b></div>
+      <div><b>Current blockers</b></div><div class="ye">  [recoverable] gate-outcome: gate fail</div>
+      <div>${['use-reviewer','accept-plan','accept-code','force-admission'].map((a,i)=>`<span class="pill ${i===2?'on':''}">${a}</span>`).join('')} <span class="dim">action ←→</span></div>
+      <div>${['keep','rebase','ff'].map((a,i)=>`<span class="pill ${i===1?'on':''}">${a}</span>`).join('')} <span class="dim">merge</span></div>
+      <div><b>Checks  original → proposed</b></div>
+      <div class="ye"><span class="cy">${S.rec.ack?'[x]':'[ ]'}</span> gate-outcome: original gate fail → check overridden</div>
+      <div class="dim">    review-outcome: original review approve → satisfied</div>
+      <div><b>Proposed effect</b></div><div>  accept run R1 @3f2a91c with merge rebase</div>
+      <div><b>Remaining hard blockers</b></div><div class="dim">  none</div>
+      <div><span class="cy">reason   </span>${h(S.rec.reason)||'<span class="dim">owner-written reason (required)</span>'}</div>`;
+    const btn=c?['Edit','Cancel','Confirm recovery']:['Cancel','Continue…'];
+    inner=`<div class="pop" style="width:760px"><div class="bt">Recover ${t.id}</div>${body}
+      <div style="margin-top:8px">${btn.map(b=>`<span class="pill ${b==='Cancel'?'on':''}">[${b}]</span>`).join(' ')}</div>
+      <div class="dim" style="margin-top:6px">recovery is labeled [owner recovery] / [review waived] / [check overridden], never a pass badge</div></div>`;
+  }
   if(S.overlay==='help'){
     const rows=[['h j k l / arrows','move selection'],['⏎','open card / review'],['a','jump to agent pane'],['r','reply to blocked agent inline'],['d','dispatch (agent, mode, base, prompt)'],['H / L','move card left / right (backlog ⇄ ready)'],['n / c','capture an idea'],['A','artifact finder'],['P','PM agent pane'],['i / D','ideas only / show done'],['/','filter project:x status:y'],['esc','back'],['','herdr: ctrl+b k board · ctrl+b n capture · ctrl+b a artifacts · ctrl+b m PM']];
     inner=`<div class="pop" style="width:640px"><div class="bt">keys</div><table class="t">${rows.map(r=>`<tr><td class="cy">${r[0]}</td><td>${r[1]}</td></tr>`).join('')}</table></div>`;
@@ -437,6 +463,12 @@ function moveCard(dir){
 function key(e){
   const k=e.key;
   if(S.overlay==='help'){S.overlay=null;render();e.preventDefault();return;}
+  if(S.overlay==='recover'){
+    if(k==='Escape'){if(S.rec.confirm)S.rec.confirm=false;else S.overlay=null;}
+    else if(k===' ')S.rec.ack=!S.rec.ack;
+    else if(k==='c')S.rec.confirm=!S.rec.confirm&&S.rec.ack&&!!S.rec.reason;
+    render();e.preventDefault();return;
+  }
   if(S.overlay==='dispatch'){
     if(k==='Escape')S.overlay=null;
     else if(k==='h'||k==='ArrowLeft')S.disp.agent=(S.disp.agent+3)%4;
@@ -526,6 +558,7 @@ function scene(s){
   if(s==='artifacts'){S.screen='board';S.overlay='artifacts';S.art={q:'',i:0};}
   if(s==='pm'){S.screen='pm';applyPM();}
   if(s==='help'){S.screen='board';S.overlay='help';}
+  if(s==='recover'){const t=tasks.find(x=>x.id==='T-039');t.status='review';selectId('T-039');S.screen='review';S.overlay='recover';S.rec={ack:true,reason:'Flaky unrelated gate step; owner reviewed the failing log.',confirm:false};}
   if(s==='sim-block'){const t=tasks.find(x=>x.id==='T-042');if(t.status==='running'){t.status='needs';t.el='0m';t.q='Cache key: include beat_seq only, or also the rollback epoch?';S.screen='board';selectId('T-042');toast('▲ T-042 needs you','"Cache key: include beat_seq only, or also the rollback epoch?"','var(--ye)');}}
   if(s==='sim-done'){const t=tasks.find(x=>x.id==='T-040');if(t.status==='running'){t.status='review';t.diff='+233 −51';t.arts=3;S.screen='board';selectId('T-040');toast('◆ T-040 ready for review','corral done · 3 artifacts snapshotted · diff +233 −51','var(--gr)');setTimeout(()=>{freeSlot();render();},1600);}}
   render();document.getElementById('wrap').focus({preventScroll:true});
