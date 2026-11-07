@@ -169,9 +169,10 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
     if let Some(step) = pilot.resume_repair_cycle()? {
         return Ok(step);
     }
-    // Waiting for permission/Verify completion is not a reason to rebase and re-gate on
-    // every base movement, regardless of which driver currently owns the scope.
-    if pilot.stage() == Some(AutoStage::Reviewed)
+    // A co-work scope waiting for permission/Verify completion does not re-gate on every
+    // base movement. Ordinary board tasks still refresh changed verification policy below.
+    if pilot.head.cowork_run().is_some()
+        && pilot.stage() == Some(AutoStage::Reviewed)
         && pilot.require(OperatingActionKind::Accept).is_err()
     {
         return Ok(Step::Wait);

@@ -448,8 +448,10 @@ fn a_failed_quick_gate_and_a_stale_review_send_back_the_tier_and_untiered_keeps_
         corral_git::commit_all(&fx.run().worktree, "round 1").unwrap();
         fx.done_with(SUMMARY);
 
-        // When autopilot gates it.
-        fx.sync();
+        // When autopilot gates it, failure alone cannot spend a coding round.
+        let blocked = fx.sync();
+        assert_eq!((blocked.status, blocked.rounds), (Status::NeedsMe, 0));
+        fx.attribute_candidate_failure();
         fx.sync();
 
         // Then the change request names the tier and the one receipted gate on a quick run only.

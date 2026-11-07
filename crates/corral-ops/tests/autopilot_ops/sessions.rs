@@ -37,7 +37,13 @@ fn automatic_missing_worker_context_escalates_once_instead_of_retrying_empty() {
     fx.done();
     std::fs::write(fx.bin_dir.join("gone"), "w1:p1\n").unwrap();
 
-    // When the automatic loop needs a repair.
+    corral_ops::gate_start(&fx.ctx, &fx.id).unwrap();
+    assert_eq!(
+        corral_ops::gate_wait(&fx.ctx, &fx.id).unwrap().result,
+        GateResult::Fail
+    );
+    fx.attribute_candidate_failure();
+    // When the automatic loop needs an evidence-attributed candidate repair.
     let task = fx.sync();
 
     // Then it holds for the owner with one diagnostic and no new run or repeated launch.
@@ -105,7 +111,13 @@ fn automatic_gone_worker_resumes_its_exact_session_in_the_same_run() {
     fx.done();
     std::fs::write(fx.bin_dir.join("gone"), "w1:p1\n").unwrap();
 
-    // When the automatic review loop requests the repair after the pane disappears.
+    corral_ops::gate_start(&fx.ctx, &fx.id).unwrap();
+    assert_eq!(
+        corral_ops::gate_wait(&fx.ctx, &fx.id).unwrap().result,
+        GateResult::Fail
+    );
+    fx.attribute_candidate_failure();
+    // When the automatic review loop requests the attributed repair after the pane disappears.
     let task = fx.sync();
 
     // Then the same task run resumes the exact conversation under the existing repair authorization.

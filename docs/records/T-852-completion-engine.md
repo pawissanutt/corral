@@ -55,6 +55,16 @@ no sleep, timeout, retry or notification-accounting rule changed. All three targ
 passed (5.81s); all 15 root ordinary-board journeys also passed (8.81s), followed by clean
 `corral-ops` production Clippy. No new test cases were added.
 
+The third gate caught an overbroad Reviewed wait guard: it now applies only to co-work,
+so ordinary owner-reviewed work still refreshes changed verification policy. An expanded
+209-case autopilot run passed 201 and exposed eight remaining compatibility cases. Fixes
+preserve the original integration-fact packet/event/deduplication identity separately from
+repair-cycle issue identity, preserve worker integration for unapproved fast-forward policy,
+and explicitly attribute genuine failures in session-reuse/tier fixtures. Existing complete
+packet-key, no-repeat-request, exact-session, round and tier assertions remain intact.
+All 26 affected integration/session/tier/freshness checks passed (46.01s); the 12 co-work
+service checks also passed in the expanded run (10.14s). No new test cases were added.
+
 Rust LSP repeatedly failed to provide fresh indexed diagnostics; targeted Cargo compilation/tests are the fallback, not a claimed clean LSP result. The required receipted quick gate and its log are attached separately after the final rebase. No other gate tier is run manually. No intentional host load or owner/live herdr interaction was used.
 
 Public context-package creation, handoff/takeback protocol, native writer fencing and participant-facing TUI/PM workflow remain C2–C4. Driver-transfer fixtures prove the C1 committed-driver seam, not those later public end-to-end flows. Native HostSession/PTY integration is left to the run's required isolated gate lane; paid live-provider behavior is not claimed.
