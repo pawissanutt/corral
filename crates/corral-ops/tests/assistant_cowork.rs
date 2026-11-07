@@ -148,7 +148,7 @@ fn owner_finish_materializes_gated_reviewed_work_and_autopilot_lands_it() {
         session: "A-1".into(),
         scratch: "cache-fix".into(),
         run: "R1".into(),
-        review: CoworkReview::Required,
+        review: CoworkReview::CompletionV1,
         owner_confirmed: true,
     };
     assert_eq!(

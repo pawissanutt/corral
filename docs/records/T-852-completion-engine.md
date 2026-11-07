@@ -1,0 +1,40 @@
+# T-852 C1: shared completion and failure triage
+
+## Delivered scope
+
+Assistant finish durably publishes a clean candidate and returns `gate: queued`; normal sync owns gate, independent review, bounded repair and landing. There is no detached parent-owned completion runner. Versioned task-contract-bound intent and current driver are separate from source provenance. Verify cannot authorize acceptance, including through broad grants or manual approval. New records carry an old-reader fence; an unfenced scope cannot be serialized.
+
+Failed gates remain failed receipts. Shared triage retains their identities, command/log evidence and classifications. Unknown/mixed/flaky observations block; one diagnostic retry survives head/run/driver changes. Comparable isolated-baseline receipts are required for red-base attribution. Attribution never substitutes for a fresh successful candidate gate. Owner investigations require evidence and cannot renew twice by replaying the same report. The landed T-802 environment scrub is reused unchanged.
+
+Repair preparation is not a charge. Durable issued-cycle identity survives driver/run/profile changes; only author candidate submission closes a cycle. A repeated finding after an unchanged submission is a new bounded cycle, not free indefinite repair. Board source recovery seeds the exact committed candidate and refuses missing context instead of silently starting from the base. Real board workers retain ordinary dispatch capacity; tracking-only source runs do not reserve imaginary worker slots.
+
+## Observable proof
+
+All test names below are executable contracts, not prose assertions. Raw logs are attached separately to R1.
+
+| Design criterion | Proof |
+|---|---|
+| A02 queued submit / common pipeline | `assistant_cowork::owner_finish_materializes_gated_reviewed_work_and_autopilot_lands_it` asserts no gate/reviewer on return, unchanged Assist policy, then independent review and landing through sync. CLI `implement_now::one_land_now_answer_finishes_the_reported_candidate_and_approves_it` independently returns before checks and advances from a PM sync caller. |
+| A03 Check only | `check_only_runs_normal_verification_and_never_lands` covers broad grants, manual approval refusal, transfer to board and main movement without acceptance/regating. Operating contract also checks old-reader refusal and rejection before persisting an unfenced scope. |
+| A04 live stops | Owner-finish service checks pause before the next effect. `operating::cowork::tests::finish_instruction_is_one_run_not_a_workspace_grant_and_live_stops_still_apply` covers holds, pause/kill switch, contract drift, no dispatch grant and diagnosis without expanding zero coding allowance. |
+| A13 existing check / current driver | Owner-finish test transfers the committed driver during review and retains one gate/review attempt. `finish_into_an_existing_task_adds_a_run_and_refuses_task_busy_while_one_is_live` refuses replacement of an unsettled gate with unchanged task state. Current-driver cycle and runtime contracts cover rerouting without another charge. |
+| A19 proven red base / environment | `triage::red_base_is_proven_without_repair_charge_and_candidate_is_gated_again_after_base_repair` runs real managed failing receipts in isolated Git checkouts, attaches evidence, spends zero repair rounds, repairs the base and requires a new successful candidate gate. Triage routing contract also covers environment attribution without rewriting FAIL. |
+| A20 mixed / unknown / flaky | `gate_triage::tests::unexplained_red_survives_green_run_and_driver_changes_with_one_diagnostic_attempt` and attribution contract cover all three classes, original failure retention and no green laundering. Owner investigation replay contract preserves the retry cap. |
+| A21 issued-cycle accounting | `repair_cycle::tests::issued_cycle_keeps_findings_and_one_round_across_transfers_and_run_replacement` retains exact findings/round across transfers, preserves ordinary legacy receipt identity and charges a new cycle after no-op submission. Runtime counterpart retains the exact ledger through two driver/profile/run changes (2 coding repairs), then charges a genuinely new cycle (3). |
+| A22 origin exits after takeover | Owner-finish test ends the origin before board continuation under a normal grant. `plan_recovery::retry::tests::board_repair_adopts_exact_committed_seed_without_assistant_or_worker_session` proves exact seed restoration and named missing-seed refusal. |
+| A23 unavailable before takeover | Existing `authority::cowork::cowork_failures_return_to_assistant_or_actionable_owner_without_worker_recovery` preserves the assistant repair/request and exposes NeedsMe without inventing a board worker. |
+| A27 ordinary board behavior | Targeted send-back, escalation, guardrail and tier-refusal checks pass, including failed delivery, eligibility/profile pins, unchanged failed-check owner override semantics and landing failure attribution before repair. Full-task/head slot predicates are checked for tracking-only source and actual board worker runs. |
+
+## Validation and cost
+
+- Focused `corral-ops` contracts: **9 passed**, 0.18s suite execution.
+- `assistant_cowork`: **12 passed**, 5.64s suite execution, including deterministic ordered-clock and isolated red-base regressions.
+- Targeted ordinary-board checks: **57 passed**, 90.45s execution (existing tier-refusal matrix dominates). Two accidentally duplicated test registrations were then removed; the canonical `authority::cowork` cases were rerun: **2 passed**, 2.57s.
+- Owner-action CLI journey: **1 passed**, 1.73s execution, including T-802 scrubbing from a PM sync caller.
+- Affected core/ops/TUI/CLI production Clippy: **passed** with `-D warnings`. Pi `bun run typecheck`: **passed**.
+- First-failure evidence is retained for synchronous completion and the mixed raw/ordered clock usage window. Finish now uses the same ordered clock as scratch creation. The matching `assistant_cowork` usage-window quarantine entry (T-832) was removed; this is not a claim that every separate T-832 criterion was checked.
+- New coverage uses small fixtures and exact counters, not large histories or timing/load assertions. No new race/crash/torture matrix or prose wording pins. The required gate reports authoritative added-test count/cost separately; compilation is not suite execution time.
+
+Rust LSP repeatedly failed to provide fresh indexed diagnostics; targeted Cargo compilation/tests are the fallback, not a claimed clean LSP result. The required receipted quick gate and its log are attached separately after the final rebase. No other gate tier is run manually. No intentional host load or owner/live herdr interaction was used.
+
+Public context-package creation, handoff/takeback protocol, native writer fencing and participant-facing TUI/PM workflow remain C2–C4. Driver-transfer fixtures prove the C1 committed-driver seam, not those later public end-to-end flows. Native HostSession/PTY integration is left to the run's required isolated gate lane; paid live-provider behavior is not claimed.

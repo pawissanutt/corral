@@ -719,7 +719,13 @@ with the `finish` owner action, the same slug, `--into <task>` and
 run on the same scratch for fresh gate and review. While waiting for repair, owner acceptance,
 a running review or a blocked landing checkout, unrelated main movement does not rewrite
 or repeatedly gate the candidate. Once it can proceed, verification refreshes before landing.
-An omitted `--intent` on a repair retains the original Verify/Ship intent.
+An omitted `--intent` on a repair retains the original Verify/Ship intent. New records use
+an internal `completion_v1` review tag as a minimum-reader fence: upgrade/restart old
+controllers rather than letting them interpret Verify as a legacy Ship instruction.
+Producers must persist the scope and its fence together; legacy records remain unchanged.
+
+Only an author's candidate submission closes an issued repair cycle. Repeating a finding
+after a no-op submission consumes a new bounded cycle; changing driver/run alone does not.
 
 **Gate diagnosis (board and co-work).** Unknown, mixed and suspected-flaky failures block
 without a code-repair charge. Read `corral repair triage-status T-042`, attach the diagnostic

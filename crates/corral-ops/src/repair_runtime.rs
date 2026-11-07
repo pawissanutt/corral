@@ -362,9 +362,9 @@ pub(crate) fn start_launch(store: &Store, task: &impl TaskRef) -> Result<()> {
         .as_ref()
         .filter(|pending| !pending.availability)
         .and_then(|pending| {
-            cycle
-                .as_ref()
-                .filter(|cycle| cycle.issued && cycle.key.run == pending.previous)
+            cycle.as_ref().filter(|cycle| {
+                cycle.issued && !cycle.completed && cycle.key.run == pending.previous
+            })
         })
         .map(|cycle| cycle.key.digest().map(|digest| format!("repair:{digest}")))
         .transpose()?;
@@ -542,6 +542,7 @@ pub(crate) fn require_coding<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Re
             let continuation: Option<Continuation> =
                 store.record("repair-continuation", task.id())?;
             let same_cycle = cycle.issued
+                && !cycle.completed
                 && cycle.round == *task.rounds()
                 && (run
                     .autopilot

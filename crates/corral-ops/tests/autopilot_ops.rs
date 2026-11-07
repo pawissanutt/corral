@@ -10,8 +10,6 @@ mod churn;
 mod cleanup_boundary;
 #[path = "autopilot_ops/config_identity.rs"]
 mod config_identity;
-#[path = "autopilot_ops/cowork.rs"]
-mod cowork;
 #[path = "autopilot_ops/deferred_gate.rs"]
 mod deferred_gate;
 #[path = "autopilot_ops/diagnostics.rs"]

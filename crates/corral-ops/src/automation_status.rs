@@ -207,7 +207,7 @@ mod tests {
                 .update(&task.id, |task| {
                     task.runs.push(run);
                     task.cowork = Some(serde_json::from_value(serde_json::json!({
-                        "session":"A-1", "scratch":"work", "run":"R1", "review":"required", "owner_confirmed":true,
+                        "session":"A-1", "scratch":"work", "run":"R1", "review":"completion_v1", "owner_confirmed":true,
                         "completion":{"version":1,"contract_revision":task.contract_revision()?,"intent":"ship",
                             "driver":{"kind":"assistant","session":"A-1","scratch":"work"},"instruction":"ship this scope"}
                     }))?);
