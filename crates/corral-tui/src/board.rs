@@ -48,7 +48,7 @@ pub(crate) use overlay::Overlay;
 #[cfg(test)]
 mod artifact_hot_tests;
 #[cfg(test)]
-mod hot_read_tests;
+pub(crate) mod hot_read_tests;
 mod pins;
 #[cfg(test)]
 mod pins_tests;

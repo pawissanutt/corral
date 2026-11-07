@@ -209,7 +209,7 @@ fn reviewed_path_excludes_every_matching_keep_artifact() {
 }
 
 #[path = "../../../corral-core/tests/recovery_support/mod.rs"]
-mod recovery_rows;
+pub(crate) mod recovery_rows;
 
 #[test]
 fn recovered_done_card_keeps_labels_with_flat_reads_over_retained_recovery_history() {

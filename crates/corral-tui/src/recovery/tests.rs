@@ -264,3 +264,221 @@ fn recovery_history_names_exceptions_in_text_with_original_checks() {
     assert!(text.contains("reason: owner reason"), "{text}");
     assert!(!text.contains("passed"), "{text}");
 }
+
+/// A plan-first task whose P1 (two owner decisions) is submitted with no independent review.
+fn decisions_fixture() -> (crate::board::tests::Fixture, String) {
+    let mut fx = fixture();
+    let id = crate::plan::tests::planning(&mut fx);
+    let text = crate::plan::tests::PLAN.replace(
+        "owner_decisions: []",
+        "owner_decisions: [Choose boundary, Pick storage]",
+    );
+    let path = fx.ctx.store.root().join("plan.md");
+    std::fs::write(&path, text).unwrap();
+    corral_ops::plan_submit(&fx.ctx, &id, &path).unwrap();
+    (fx, id)
+}
+
+fn focus(s: &mut RecoverySheet, control: Control) {
+    s.focus = s.controls().iter().position(|c| *c == control).unwrap();
+}
+
+#[test]
+fn two_owner_decisions_each_need_a_resolution_before_separate_confirmation() {
+    let (fx, id) = decisions_fixture();
+    CALLS.with(|c| c.set(0));
+    let mut s = RecoverySheet::with(&fx.ctx, &id, Kind::AcceptPlan, counting);
+    // Both questions are shown, each with its own resolution field.
+    assert_eq!(s.questions, ["Choose boundary", "Pick storage"]);
+    let (text, _) = render(&mut s, &fx.ctx, 80, 40);
+    assert!(
+        text.contains("1. Choose boundary") && text.contains("2. Pick storage"),
+        "{text}"
+    );
+    // Keyboard: acknowledge the waiver, resolve only the first decision, write a reason.
+    focus(&mut s, Control::Check(0));
+    s.on_key(key(' '), &fx.ctx);
+    focus(&mut s, Control::Decision(0));
+    type_text(&mut s, &fx.ctx, "Keep the closed action set");
+    s.on_key(code(KeyCode::Enter), &fx.ctx);
+    assert_eq!(
+        s.focused(),
+        Control::Decision(1),
+        "Enter moves on, never applies"
+    );
+    focus(&mut s, Control::Reason);
+    type_text(&mut s, &fx.ctx, "Reviewer unavailable");
+    focus(&mut s, Control::Continue);
+    s.on_key(code(KeyCode::Enter), &fx.ctx);
+    assert_eq!(s.step, Step::Edit, "one open decision blocks confirmation");
+    assert_eq!(calls(), 0);
+    // Resolve the second decision: Continue reaches the separate confirmation.
+    focus(&mut s, Control::Decision(1));
+    type_text(&mut s, &fx.ctx, "Rows in the task database");
+    focus(&mut s, Control::Continue);
+    s.on_key(code(KeyCode::Enter), &fx.ctx);
+    assert_eq!(s.step, Step::Confirm, "{:?}", s.notice);
+    assert_eq!(
+        s.focused(),
+        Control::Cancel,
+        "confirmation defaults to Cancel"
+    );
+    assert_eq!(
+        s.resolution_notes(),
+        "Resolved: Choose boundary => Keep the closed action set\n\
+         Resolved: Pick storage => Rows in the task database"
+    );
+    let (text, hits) = render(&mut s, &fx.ctx, 80, 24);
+    assert!(text.contains("Confirm owner recovery"), "{text}");
+    assert!(text.contains("[Confirm recovery]"), "{text}");
+    assert_eq!(calls(), 0, "reaching confirmation applies nothing");
+    // Mouse: the explicit Confirm button reaches the authorizer exactly once.
+    let at = locate(&text, "[Confirm recovery]", "[Confirm recovery]");
+    click(&mut s, &fx.ctx, &hits, at, false);
+    assert_eq!(calls(), 1);
+}
+
+#[test]
+fn many_reviewers_wrap_so_every_profile_is_visible_and_clickable_at_80x24() {
+    let mut fx = fixture();
+    for i in 1..=8 {
+        fx.ctx.store.config.profiles.insert(
+            format!("reviewer{i:02}"),
+            corral_core::Profile {
+                harness: "claude".into(),
+                model: Some(format!("fixture-{i}")),
+                effort: None,
+                args: Vec::new(),
+                vendor: Some("fixture".into()),
+                escalate_to: None,
+                metadata: None,
+            },
+        );
+    }
+    fx.ctx.store.save_config().unwrap();
+    CALLS.with(|c| c.set(0));
+    let mut s = RecoverySheet::with(&fx.ctx, "T-002", Kind::UseReviewer, counting);
+    let n = s.reviewers.len();
+    assert!(n >= 12);
+    focus(&mut s, Control::Reviewer);
+    for _ in 1..n {
+        s.on_key(code(KeyCode::Right), &fx.ctx);
+    }
+    let last = s.reviewers[n - 1].clone();
+    let (text, hits) = render(&mut s, &fx.ctx, 80, 24);
+    assert!(
+        text.contains(&format!("[{last}]")),
+        "selected reviewer visible\n{text}"
+    );
+    for name in &s.reviewers {
+        assert!(text.contains(name.as_str()), "{name} reachable\n{text}");
+    }
+    let at = locate(&text, "reviewer03", "reviewer03");
+    click(&mut s, &fx.ctx, &hits, at, false);
+    assert_eq!(s.reviewers[s.reviewer], "reviewer03");
+    assert_eq!(calls(), 0);
+}
+
+#[test]
+fn detail_plan_tab_and_review_screen_open_recover_by_key_and_by_click() {
+    let (fx, id) = decisions_fixture();
+    // Detail Plan tab: key F, then the visible button.
+    for by_mouse in [false, true] {
+        let mut v = crate::detail::DetailView::plan(&fx.ctx, &id).unwrap();
+        let (text, hits) = crate::choice::tests::draw(&mut v, &fx.ctx);
+        if by_mouse {
+            let at = locate(&text, "[Recover…]", "[Recover…]");
+            click(&mut v, &fx.ctx, &hits, at, false);
+        } else {
+            v.on_key(key('F'), &fx.ctx);
+        }
+        let (text, _) = crate::choice::tests::draw(&mut v, &fx.ctx);
+        assert!(text.contains(&format!("Recover {id}")), "{text}");
+        assert!(text.contains("Choose boundary"), "{text}");
+        assert_eq!(v.on_key(code(KeyCode::Esc), &fx.ctx), Action::None);
+    }
+    // Review screen: key F and the Recover… button both ask the app for the same sheet.
+    // Review reads the canonical snapshot; give the seeded card a real diff artifact.
+    let diff = fx.ctx.store.root().join("review.diff");
+    std::fs::write(
+        &diff,
+        "diff --git a/x.rs b/x.rs\n--- a/x.rs\n+++ b/x.rs\n@@ -1 +1 @@\n-old\n+new\n",
+    )
+    .unwrap();
+    fx.ctx
+        .store
+        .update("T-006", |task| {
+            task.artifacts.clear();
+            Ok(())
+        })
+        .unwrap();
+    corral_ops::add_artifact(
+        &fx.ctx,
+        "T-006",
+        &diff,
+        Some(corral_core::ArtifactKind::Diff),
+        Some("Final diff"),
+    )
+    .unwrap();
+    let mut r = crate::review::ReviewView::new(&fx.ctx, "T-006").unwrap();
+    assert_eq!(
+        r.on_key(key('F'), &fx.ctx),
+        Action::OpenRecover("T-006".into())
+    );
+    let (text, hits) = crate::choice::tests::draw(&mut r, &fx.ctx);
+    let at = locate(&text, "[Recover…]", "[Recover…]");
+    assert_eq!(
+        click(&mut r, &fx.ctx, &hits, at, false),
+        Action::OpenRecover("T-006".into())
+    );
+    assert!(recovery::recover_history(&fx.ctx, &id).unwrap().is_empty());
+}
+
+use crate::board::hot_read_tests::recovery_rows;
+
+#[test]
+fn acceptance_detail_shows_populated_recovery_history_beside_original_results() {
+    let fx = fixture();
+    let mut record = recovery_rows::recovery(&fx.ctx.store);
+    record.preview.request.target.task = "T-006".into();
+    record.preview.affected_targets = vec!["T-006".into()];
+    record
+        .preview
+        .checks
+        .push(corral_core::RecoveryCheckRecord {
+            check: RecoveryCheck::ReviewOutcome,
+            observed: corral_core::RecoveryObservation::Review {
+                verdict: Some(corral_core::Verdict::Changes),
+            },
+            disposition: CheckDisposition::Waived,
+            evidence: vec![],
+        });
+    record
+        .preview
+        .request
+        .exceptions
+        .insert(RecoveryCheck::ReviewOutcome);
+    recovery_rows::append_outcome(&mut record, corral_core::RecoveryState::Applied);
+    record.outcomes.last_mut().unwrap().actual_effect =
+        Some(record.preview.proposed_effect.clone());
+    fx.ctx.store.save_recovery_record("T-006", &record).unwrap();
+    let mut v = crate::detail::DetailView::acceptance(&fx.ctx, "T-006").unwrap();
+    let mut term = Terminal::new(TestBackend::new(160, 120)).unwrap();
+    let mut hits = HitMap::default();
+    term.draw(|f| v.draw(f, f.area(), &fx.ctx, &mut hits))
+        .unwrap();
+    let text = buffer_text(term.backend().buffer());
+    for needle in [
+        "[owner recovery]",
+        "[review waived]",
+        "[check overridden]",
+        "owner recovery, not ordinary policy success",
+        "reviewer-family-policy: original not satisfied → check overridden",
+        "review-outcome: original review changes → waived",
+        "reason: Use this separate Astra review attempt only",
+        "attested: local owner via cli",
+        "Gate and review per run",
+    ] {
+        assert!(text.contains(needle), "{needle} missing\n{text}");
+    }
+}
