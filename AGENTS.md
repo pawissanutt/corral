@@ -78,6 +78,7 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
   `python3 scripts/test_gate_select.py`, `python3 scripts/test_gate_policy.py` and
   `python3 scripts/test_slow_lane.py`.
 - The Linux concurrent-dequeue regression requires `python3` and `strace`. It traces only disposable fixture processes and synchronizes on lock syscalls, never timing sleeps.
+- The Pi Claude wire-cache regression requires Linux `unshare`, `ip`, and unprivileged user/network/PID namespaces. It runs the real SDK/CLI against a synthetic loopback endpoint with no external network or owner credentials; unavailable isolation fails the Linux gate. Non-Linux runs skip it. `CORRAL_TEST_CLAUDE_EXECUTABLE=/path/to/claude` tests an installed CLI instead of the pinned SDK binary; see the Pi guide.
 - Compilation in the gate goes through `scripts/cargo.sh`, which is plain Cargo unless
   `CORRAL_BUILD_CACHE=mbx` opts into the shared mbx 1.29.2 cache pilot. Bare `cargo` is not
   intercepted; use `bash scripts/cargo.sh <args>` to share artifacts. See
