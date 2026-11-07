@@ -34,6 +34,7 @@ import type { QuestionUpdate, SubmitInput, SubmitResult } from "../bridge/protoc
 import type { DeliveryHost } from "../delivery/types.ts";
 import { scratchRoots, writeSettings } from "../roles/assistant/paths.ts";
 import { investigationTool } from "../roles/assistant/investigate.ts";
+import { AssistantShell, assistantShellBackend, requireVerifiedPlanningDrain } from "../roles/assistant/shell.ts";
 import type { HostIdentity, RoleContext } from "../roles/types.ts";
 import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from "../tools/corral.ts";
 import { corralToolNames, defineCorralTool } from "../tools/define.ts";
@@ -287,6 +288,7 @@ export class HostSession {
   private readonly ownerQuestions: PendingQuestions | undefined;
   private questionUi: OwnerQuestionUi | undefined;
   private readonly jobs: JobRuntime | undefined;
+  private readonly assistantShell: AssistantShell | undefined;
   private readonly commands: Commands | undefined;
   private readonly controlJob: JobControl | undefined;
   /** The generation's Code Mode kernel and its nested-call bridge (T-683); absent when disabled. */
@@ -472,6 +474,11 @@ export class HostSession {
       this.additionalLsp = lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp), registerCapability });
     }
     this.jobs = this.jobRuntime(registerCapability);
+    this.assistantShell = this.planning ? new AssistantShell({
+      generation: options.identity.generation, runtimeDir: options.runtimeDir, registerCapability,
+      admit: id => this.planningResource(`foreground:${id}`, "bash"),
+      settle: id => this.releasePlanningResource(`foreground:${id}`),
+    }) : undefined;
     this.commands = this.jobs ? new Commands({
       jobs: this.jobs, generation: options.identity.generation, worker: options.identity.role === "worker",
       waitMs: JobSettingsSchema.parse(options.guidance?.settings.background_shell).wait_ms,
@@ -681,6 +688,7 @@ export class HostSession {
       return original.execute(...args);
     } };
     else if (tool.name === "bash" || tool.name === "job_start") tool = { ...tool, execute: async (...args) => {
+      assistantShellBackend(this.assistantShell?.verifiedDrain === true, policy.snapshot());
       const result = await original.execute(...args);
       const details = result.details as { job?: unknown; state?: unknown } | undefined;
       // shutdownEpoch can fence a prepared launcher before it exists. This is positive
@@ -697,15 +705,26 @@ export class HostSession {
     await this.mcp.refresh();
   }
 
+  private foregroundShellOperations(): Sdk.BashOperations {
+    const policy = this.planning, managed = this.assistantShell;
+    if (!policy || !managed) throw new Error("assistant shell controller unavailable; no effect started");
+    const local = this.options.sdk.createLocalBashOperations();
+    // Both callers run this selector after actual-dispatch policy admission/readback.
+    return { exec: (...args) => (assistantShellBackend(managed.verifiedDrain, policy.snapshot()) === "managed"
+      ? managed.operations : local).exec(...args) };
+  }
+
   /** Internal integration seam. Public entry/choice UI is deliberately not exposed here. */
   async enterPlanning(input: string): Promise<PlanningState> {
     if (!this.planning || !this.bound) throw new Error("planning requires a bound assistant");
+    requireVerifiedPlanningDrain(this.assistantShell?.verifiedDrain === true); // before the mode/fence changes
     const result = await this.planning.enter(input, async () => {
       await this.mcp?.close();
       await this.releasePlanningResource("mcp");
       await this.additionalLsp?.shutdown();
       await this.releasePlanningResource("lsp");
       await this.jobs?.shutdown();
+      await this.assistantShell?.shutdown();
     });
     this.session.setActiveToolsByName([...this.initialTools]);
     return result;
@@ -713,6 +732,7 @@ export class HostSession {
 
   async drainPlanning(): Promise<PlanningState> {
     if (!this.planning) throw new Error("planning requires an assistant");
+    requireVerifiedPlanningDrain(this.assistantShell?.verifiedDrain === true);
     const result = await this.planning.drained();
     this.session.setActiveToolsByName([...this.initialTools]);
     return result;
@@ -987,15 +1007,15 @@ export class HostSession {
       ...(policy ? { planning: policy } : {}),
     });
     if (policy) {
-      // ! and !! bypass tool_call in upstream Pi. Use its backend, but at the same actual
-      // admission boundary as model shell calls; no command-string read-only fiction.
+      // ! and !! bypass tool_call in upstream Pi. Keep the same actual admission boundary
+      // AND verified process-group ownership as model shell calls; shell exit is not drain.
       pi.on("user_bash", async () => {
         await policy.refresh();
         const reason = policy.refusal("user_bash");
         if (reason) return { result: { output: reason, exitCode: 1, cancelled: false, truncated: false } };
-        const local = this.options.sdk.createLocalBashOperations();
+        const operations = this.foregroundShellOperations();
         return { operations: { exec: (command, cwd, options) =>
-          policy.execute("user_bash", {}, "user-bash", () => local.exec(command, cwd, options)) } };
+          policy.execute("user_bash", {}, "user-bash", () => operations.exec(command, cwd, options)) } };
       });
     }
     if (!this.loadout.includes("bash")) {
@@ -1066,7 +1086,9 @@ export class HostSession {
     if (policy) {
       // Event preflight alone is insufficient: permission dialogs and sibling preflights
       // can yield before execution. Override only the actual built-in mutation dispatches.
-      if (!this.localTools.some(tool => tool.name === "bash")) pi.registerTool(this.options.sdk.createBashToolDefinition(this.options.cwd));
+      if (!this.localTools.some(tool => tool.name === "bash")) {
+        pi.registerTool(this.options.sdk.createBashToolDefinition(this.options.cwd, { operations: this.foregroundShellOperations() }));
+      }
       pi.registerTool(this.options.sdk.createEditToolDefinition(this.options.cwd));
       pi.registerTool(this.options.sdk.createWriteToolDefinition(this.options.cwd));
     }
@@ -1082,6 +1104,7 @@ export class HostSession {
       if (event.reason === "reload") await this.auxiliary?.cancelAll(); else await this.auxiliary?.close();
       this.commands?.pause();
       await this.jobs?.shutdown();
+      if (event.reason === "reload") await this.assistantShell?.shutdown(); else await this.assistantShell?.close();
     });
   }
 
@@ -1346,6 +1369,7 @@ export class HostSession {
     const aborted = this.session.abort();
     await this.auxiliary?.close();
     await this.jobs?.shutdown();
+    await this.assistantShell?.close();
     await aborted;
     await this.mcp?.close();
     this.session.dispose();
