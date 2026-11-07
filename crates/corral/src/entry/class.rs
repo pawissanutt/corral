@@ -39,31 +39,6 @@ pub enum CommandClass {
 
 use CommandClass::{File, Read, Refused};
 
-#[cfg(test)]
-mod planning_tests {
-    use super::*;
-    use clap::Parser;
-
-    #[test]
-    fn planning_projects_only_closed_reads_and_the_authenticated_operation_channel() {
-        for (argv, allowed) in [
-            (vec!["corral", "show", "T-1", "--json"], true),
-            (vec!["corral", "assistant", "show", "A-1", "--json"], true),
-            (vec!["corral", "agent", "call", "--op", "event"], true),
-            (vec!["corral", "new", "not permitted"], false),
-            (
-                vec!["corral", "artifact", "serve", "T-1:R1:report.html"],
-                false,
-            ),
-            (vec!["corral", "agent", "doctor"], false),
-            (vec!["corral", "setup", "discover"], false),
-        ] {
-            let cli = crate::Cli::try_parse_from(argv).unwrap();
-            assert_eq!(planning_safe(&cli.cmd.unwrap()), allowed);
-        }
-    }
-}
-
 fn read_unless(mutates: bool) -> CommandClass {
     if mutates { Refused } else { Read }
 }
@@ -367,5 +342,30 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
         | Cmd::Capture { .. }
         | Cmd::Artifacts { .. }
         | Cmd::Settings { .. } => Refused,
+    }
+}
+
+#[cfg(test)]
+mod planning_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn planning_projects_only_closed_reads_and_the_authenticated_operation_channel() {
+        for (argv, allowed) in [
+            (vec!["corral", "show", "T-1", "--json"], true),
+            (vec!["corral", "assistant", "show", "A-1", "--json"], true),
+            (vec!["corral", "agent", "call", "--op", "event"], true),
+            (vec!["corral", "new", "not permitted"], false),
+            (
+                vec!["corral", "artifact", "serve", "T-1:R1:report.html"],
+                false,
+            ),
+            (vec!["corral", "agent", "doctor"], false),
+            (vec!["corral", "setup", "discover"], false),
+        ] {
+            let cli = crate::Cli::try_parse_from(argv).unwrap();
+            assert_eq!(planning_safe(&cli.cmd.unwrap()), allowed);
+        }
     }
 }
