@@ -78,7 +78,10 @@ export async function createModelCatalog(
     loaded.registerNativeProvider({ ...codex, getModels, getAllModels: getModels });
     const error = loaded.getError();
     if (error !== undefined) throw new ModelCatalogInvalid(error);
-    return loaded;
+    // Native registration starts an unawaited SDK refresh. It may reload this file after
+    // invalidation, so retain validated model values, not that mutable runtime's catalog.
+    const models = new Map(policy.providers.map(id => [id, Object.freeze([...loaded.getModels(id)])] as const));
+    return { runtime: loaded, models };
   };
   let metadata = await loadMetadata();
   const runtime = await ModelRuntime.create({
@@ -91,7 +94,7 @@ export async function createModelCatalog(
     if (isProviderId(provider.id) && approved.has(provider.id)) {
       const id = provider.id;
       const getModels = () => {
-        const listed = metadata.getModels(id).filter((model) => model.api === PROVIDERS[id].modelApi);
+        const listed = (metadata.models.get(id) ?? []).filter((model) => model.api === PROVIDERS[id].modelApi);
         const extra = (SUPPLEMENTAL_MODELS[id] ?? [])
           .filter((model) => model.api === PROVIDERS[id].modelApi && !listed.some((entry) => entry.id === model.id));
         return [...listed, ...extra];
@@ -122,7 +125,7 @@ export async function createModelCatalog(
     });
   };
   const getError = runtime.getError.bind(runtime);
-  runtime.getError = () => metadata.getError() ?? getError();
+  runtime.getError = () => metadata.runtime.getError() ?? getError();
   await runtime.refresh();
   return runtime;
 }
