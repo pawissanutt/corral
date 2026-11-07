@@ -133,8 +133,8 @@ crash never strands a session.
 `corral pi` runs the host as a child of itself in the pane. When the host exits cleanly
 (Pi's `/quit`), the session is suspended, not ended: its generation is fenced (reason `quit`)
 and it stays returnable with `corral pi --resume A-1` or `/resume` from another assistant. A
-session that never recorded a conversation (Pi had not written its file yet) has nothing to
-return to and ends instead. When the host dies (killed, crashed, the provider stopped it),
+session that never recorded a conversation (Pi had not written its file yet) stays open too
+and resumes on a fresh file. When the host dies (killed, crashed, the provider stopped it),
 `corral pi` prints `A-1's host stopped (...); corral pi --resume A-1 resumes it` and the
 session stays open.
 

@@ -32,8 +32,9 @@
   visible width so last activity and availability always remain; at narrow widths they move to
   indented lines (R1 review F2). The packaged Pi patch no longer reports the routed `/resume`
   extension command as a built-in conflict.
-- **Quit.** A clean `/quit` now suspends a session that has a recorded conversation (fence `quit`).
-  A session that was never prompted still ends. `corral assistant end` remains the permanent end.
+- **Quit.** A clean `/quit` suspends the session (fence `quit`), matching main's resumable clean
+  exit; a never-prompted session resumes on a fresh file. `corral assistant end` remains the
+  permanent end.
   Previously ended records stay ended and are refused `assistant_ended`; nothing revives them.
 - **Guidance.** The bound-session refusal now gives role-correct guidance: assistant
   (`/new` / `/resume`, or `corral pi --resume`), PM (`corral agent resume --pm`), worker/reviewer
