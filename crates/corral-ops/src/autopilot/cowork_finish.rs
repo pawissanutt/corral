@@ -5,24 +5,26 @@ use super::*;
 
 impl Pilot<'_> {
     pub(super) fn cowork_initial_step(&self) -> Result<Option<Step>> {
+        if self
+            .head
+            .cowork_run()
+            .and_then(|cowork| cowork.completion.as_ref())
+            .is_some()
+            && self.stage() == Some(AutoStage::Gating)
+            && self
+                .state()
+                .and_then(|state| state.sha.as_deref())
+                .is_some_and(|submitted| run_head_sha(self.run).as_deref() != Some(submitted))
+        {
+            return self
+                .escalate("submitted candidate changed before gate admission; resubmit explicitly")
+                .map(Some);
+        }
         if self.head.cowork_run().is_some()
             && !matches!(self.stage(), Some(AutoStage::Escalated | AutoStage::Done))
+            && let Some(step) = self.cowork_wait()?
         {
-            if let Some(step) = self.cowork_wait()? {
-                return Ok(Some(step));
-            }
-            // A failed co-work gate already ran at finish. Do not silently retry it, even if
-            // main moved: this candidate's defect belongs to its originating assistant.
-            if let Some(gate) = self.run.gate.as_ref().filter(|gate| {
-                gate.result == GateResult::Fail
-                    && run_head_sha(self.run).as_deref() == Some(&gate.sha)
-            }) {
-                if self.require(OperatingActionKind::Repair).is_err() {
-                    return Ok(Some(Step::Wait));
-                }
-                let (summary, details) = self.gate_failure(gate, "")?;
-                return self.request_changes(&summary, &details).map(Some);
-            }
+            return Ok(Some(step));
         }
         Ok(None)
     }
@@ -42,10 +44,13 @@ impl Pilot<'_> {
 
     pub(super) fn repair_finish_instruction(&self, corral: &str) -> String {
         let id = self.id();
-        if let Some(cowork) = self.head.cowork_run() {
+        if let Some((session, scratch)) = self
+            .head
+            .cowork_run()
+            .and_then(|cowork| cowork.assistant_driver())
+        {
             format!(
-                "Fix and commit in assistant {}; resubmit scratch {} with the original owner finish instruction and `--into {id} --expected-head <new HEAD>`.",
-                cowork.session, cowork.scratch
+                "Fix and commit in assistant {session}; resubmit scratch {scratch} with the original owner finish instruction and `--into {id} --expected-head <new HEAD>`."
             )
         } else {
             format!(

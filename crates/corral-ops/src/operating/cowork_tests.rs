@@ -52,6 +52,59 @@ fn finish_instruction_is_one_run_not_a_workspace_grant_and_live_stops_still_appl
     other = task.clone();
     other.cowork.as_mut().unwrap().owner_confirmed = false;
     assert!(super::super::require(&store, &other, OperatingActionKind::Accept).is_err());
+    let legacy = task.clone();
+    task.cowork.as_mut().unwrap().completion = Some(corral_core::CompletionScope {
+        version: 1,
+        contract_revision: task.contract_revision().unwrap(),
+        intent: corral_core::CompletionIntent::Verify,
+        driver: corral_core::CompletionDriver::Assistant {
+            session: "A-1".into(),
+            scratch: "fix".into(),
+        },
+        instruction: "Check only".into(),
+    });
+    super::super::require(&store, &task, OperatingActionKind::Gate).unwrap();
+    let error = super::super::require(&store, &task, OperatingActionKind::Accept).unwrap_err();
+    assert!(error.to_string().contains("check_only"));
+    task.title.push_str(" widened");
+    assert!(
+        super::super::require(&store, &task, OperatingActionKind::Gate)
+            .unwrap_err()
+            .to_string()
+            .contains("scope changed")
+    );
+    task.title = legacy.title.clone();
+    task.cowork
+        .as_mut()
+        .unwrap()
+        .completion
+        .as_mut()
+        .unwrap()
+        .driver = corral_core::CompletionDriver::Board;
+    // Transfer changes responsibility, not candidate/run, and does not forge a workspace grant.
+    assert!(task.cowork_run().unwrap().assistant_driver().is_none());
+    assert_eq!(task.current_run(), legacy.current_run());
+    assert!(super::super::require(&store, &task, OperatingActionKind::Gate).is_err());
+    let mut replacement = task.current_run().unwrap().clone();
+    replacement.id = "R2".into();
+    task.runs.push(replacement);
+    assert!(task.cowork_run().is_some());
+    assert!(
+        super::super::require_completion(&task)
+            .unwrap_err()
+            .to_string()
+            .contains("check_only")
+    );
+    task = legacy;
+    store.config.review.max_rounds = Some(0);
+    store.save_config().unwrap();
+    super::super::require_diagnosis(&store, &task, false).unwrap();
+    assert!(
+        super::super::require(&store, &task, OperatingActionKind::Repair).is_err(),
+        "diagnosis cannot enlarge coding allowance"
+    );
+    store.config.review.max_rounds = None;
+    store.save_config().unwrap();
     store.config.automation.paused = true;
     store.save_config().unwrap();
     assert!(super::super::require(&store, &task, OperatingActionKind::Gate).is_err());

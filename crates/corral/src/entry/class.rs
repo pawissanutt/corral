@@ -68,8 +68,10 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
             ExportCmd::Tasks { .. } => Refused,
         },
         Cmd::Repair(args) => match &args.cmd {
-            crate::repair_cmd::RepairCmd::Status { .. } => Read,
-            crate::repair_cmd::RepairCmd::Finding { .. }
+            crate::repair_cmd::RepairCmd::Status { .. }
+            | crate::repair_cmd::RepairCmd::TriageStatus { .. } => Read,
+            crate::repair_cmd::RepairCmd::Triage { .. }
+            | crate::repair_cmd::RepairCmd::Finding { .. }
             | crate::repair_cmd::RepairCmd::Diagnose { .. }
             | crate::repair_cmd::RepairCmd::Diagnosed { .. }
             | crate::repair_cmd::RepairCmd::Renew { .. } => Refused,

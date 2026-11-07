@@ -5,8 +5,8 @@
 
 use anyhow::Result;
 use corral_core::{
-    AutoStage, AutopilotState, Config, GateRecord, GateResult, MergeMode, OperatingActionKind,
-    ReviewPolicy, ReviewRecord, Reviewer, RunHead, RunOutcome, Status, Verdict,
+    AutoStage, AutopilotState, Config, GateRecord, GateResult, OperatingActionKind, ReviewPolicy,
+    ReviewRecord, Reviewer, RunHead, RunOutcome, Status, Verdict,
 };
 use corral_git::RebaseOutcome;
 use jiff::Timestamp;
@@ -14,7 +14,6 @@ use serde_json::json;
 
 use crate::acceptance::{Landing, record_acceptance};
 use crate::artifacts::glob_match;
-use crate::dispatch::{auto_request_changes, auto_retry};
 use crate::gate::{gate_collect, gate_paths, run_head_sha};
 use crate::integration::{IntegrationPacket, RepairKey};
 use crate::prompt::corral_bin;
@@ -34,10 +33,12 @@ mod infra;
 mod output;
 mod recover;
 mod repair;
+mod requests;
 pub use recover::recover_infrastructure;
 #[cfg(test)]
 mod tests;
 mod tiers;
+mod triage;
 use output::{first_line, gate_log_details, short};
 
 enum Step {
@@ -165,7 +166,20 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
         policy,
         now,
     };
+    if let Some(step) = pilot.resume_repair_cycle()? {
+        return Ok(step);
+    }
+    // Waiting for permission/Verify completion is not a reason to rebase and re-gate on
+    // every base movement, regardless of which driver currently owns the scope.
+    if pilot.stage() == Some(AutoStage::Reviewed)
+        && pilot.require(OperatingActionKind::Accept).is_err()
+    {
+        return Ok(Step::Wait);
+    }
     if let Some(step) = pilot.cowork_initial_step()? {
+        return Ok(step);
+    }
+    if let Some(step) = pilot.gate_triage_step()? {
         return Ok(step);
     }
     // Main movement can stale an approval, but cannot erase a known defect on this candidate.
@@ -326,10 +340,7 @@ impl Pilot<'_> {
             GateNow::Pending => Ok(Step::Wait),
             GateNow::Started => Ok(Step::Acted),
             GateNow::Pass => self.after_gate(head),
-            GateNow::Fail(g) => {
-                let (summary, details) = self.gate_failure(&g, "")?;
-                self.request_changes(&summary, &details)
-            }
+            GateNow::Fail(g) => self.triage_failure(&g),
             GateNow::Lost => self.escalate("the gate pane closed before the gate finished"),
             GateNow::Replayed(step) => Ok(step),
         }
@@ -584,11 +595,7 @@ impl Pilot<'_> {
                 GateNow::Pass => {}
                 GateNow::Pending => return Ok(Step::Wait),
                 GateNow::Started => return Ok(Step::Acted),
-                GateNow::Fail(g) => {
-                    let (summary, details) =
-                        self.gate_failure(&g, &format!(" after rebasing onto {base}"))?;
-                    return self.request_changes(&summary, &details);
-                }
+                GateNow::Fail(g) => return self.triage_failure(&g),
                 GateNow::Lost => {
                     return self.escalate("the gate pane closed before the gate finished");
                 }
@@ -664,124 +671,6 @@ impl Pilot<'_> {
             to: Status::Done,
             note: format!("autopilot landed: {line}"),
             stage: Some(AutoStage::Done),
-        }))
-    }
-
-    /// Sends the run back to its agent with `summary` (one line) and `details`, or escalates when the rounds are
-    /// used up. Reuse resumes a missing worker's recorded session; explicit fresh mode or an incompatible
-    /// profile escalation starts a retry whose prompt carries the request.
-    fn send_request(
-        &self,
-        summary: &str,
-        details: &str,
-        key: &RepairKey,
-        packet: Option<&str>,
-    ) -> Result<Step> {
-        let _action = corral_core::work::action(self.id(), OperatingActionKind::Repair);
-        key.check(&self.ctx.store.head(self.id())?)?;
-        let digest = key.digest()?;
-        if packet.is_some() && output::requested(self.ctx, key, &digest)? {
-            return Ok(Step::Wait);
-        }
-        let (bounded, policy_switch, max) = match self.repair_budget(&digest, summary)? {
-            repair::RepairBudget::Legacy => (false, None, self.policy.max_rounds),
-            repair::RepairBudget::Coding { switch, max } => (true, switch, max),
-            repair::RepairBudget::Stop(step) => return Ok(step),
-        };
-        let round = self.head.rounds + 1;
-        if !bounded && round > max && !self.ctx.store.config.automation.turbo {
-            return self.escalate(&format!("{summary} (all {max} change rounds used)"));
-        }
-        self.require(OperatingActionKind::Repair)?;
-        let id = self.id();
-        let corral = corral_bin()?.display().to_string();
-        let mut request = format!("{summary}\n");
-        if !details.trim().is_empty() {
-            request.push_str(&format!("\n{}\n", details.trim_end()));
-        }
-        let finish = self.repair_finish_instruction(&corral);
-        let document =
-            format!("# Changes requested: {id} round {round} of {max}\n\n{request}\n{finish}\n");
-        let artifact = self.snapshot(
-            &format!("changes-round-{round}.md"),
-            &document,
-            &format!("Autopilot changes (round {round})"),
-        )?;
-        let file = crate::artifact_path(self.ctx, &artifact)?;
-        let message = format!(
-            "corral autopilot: changes requested on {id} (round {round} of {max}): {}. Details: {}. {finish}",
-            summary.trim_end_matches('.'),
-            file.display()
-        );
-        let state = AutopilotState {
-            stage: AutoStage::Changes,
-            reason: Some(request),
-            sha: run_head_sha(self.run),
-            at: self.now,
-        };
-        if let Some(cowork) = self.head.cowork_run() {
-            return self.cowork_changes(cowork, &message, summary, state, key, round);
-        }
-        let pane = self.run.herdr.as_ref().map(|h| h.pane_id.as_str());
-        let task = self.ctx.store.head(id)?;
-        let switch = if bounded {
-            policy_switch
-        } else {
-            crate::escalation::escalation_head(self.config, &task, false)?
-        };
-        let reuse = self.config.task_review_policy(&task).worker_session
-            == corral_core::SessionPolicy::Reuse;
-        let alive = if switch.is_none() {
-            self.pane_alive(pane)?
-        } else {
-            false
-        };
-        let sent: Result<(Status, String)> = if switch.is_none() && (reuse || alive) {
-            auto_request_changes(self.ctx, id, &message, round, state, key).map(|_| {
-                (
-                    Status::Running,
-                    format!("changes requested (round {round}/{max}): {summary}"),
-                )
-            })
-        } else {
-            auto_retry(self.ctx, id, round, state, key).map(|outcome| match outcome {
-                DispatchOutcome::Started { run_id, .. } => (
-                    Status::Running,
-                    format!(
-                        "fresh retry run {run_id} carries the change request (round {round}/{max}): {summary}"
-                    ),
-                ),
-                DispatchOutcome::Queued { reason, .. } => (
-                    Status::Ready,
-                    format!(
-                        "fresh retry queued ({reason}) with the change request (round {round}/{max}): {summary}"
-                    ),
-                ),
-            })
-        };
-        // Capacity or a moved snapshot only delays the send-back: the prepared authorization
-        // stays claimed, so a later sync retries the same request instead of handing it to the owner.
-        let (to, note) = match sent {
-            Err(error) if crate::operating::transient_refusal(&error) => return Ok(Step::Wait),
-            Err(error) if error.is::<crate::role_session::SessionUnavailable>() => {
-                return self.escalate(&error.to_string());
-            }
-            sent => sent?,
-        };
-        if let Some(packet) = packet {
-            self.ctx.store.log_event(
-                Some(id),
-                "integration_request",
-                json!({ "run": key.run, "key": key, "digest": digest, "packet": packet }),
-            )?;
-        }
-        self.log(AutoStage::Changes, round, None, Some(summary), &note)?;
-        Ok(Step::Moved(Change {
-            task: id.to_string(),
-            from: Status::Review,
-            to,
-            note: format!("autopilot {note}"),
-            stage: Some(AutoStage::Changes),
         }))
     }
 

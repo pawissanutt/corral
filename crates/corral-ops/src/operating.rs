@@ -40,6 +40,7 @@ pub(crate) fn require<T: TaskRef + ?Sized>(
     kind: OperatingActionKind,
 ) -> Result<()> {
     crate::hold::require_clear(store, task)?;
+    cowork::validate(task, kind)?;
     if !cowork::require(store, task, kind)? {
         require_grant(store, task, kind)?;
     }
@@ -48,6 +49,10 @@ pub(crate) fn require<T: TaskRef + ?Sized>(
         crate::repair_runtime::require_coding(store, task)?;
     }
     Ok(())
+}
+
+pub(crate) fn require_completion<T: TaskRef + ?Sized>(task: &T) -> Result<()> {
+    cowork::validate(task, OperatingActionKind::Accept)
 }
 
 pub(crate) fn require_grant<T: TaskRef + ?Sized>(
@@ -84,7 +89,8 @@ pub(crate) fn require_diagnosis<T: TaskRef + ?Sized>(
     owner: bool,
 ) -> Result<()> {
     crate::hold::require_clear(store, task)?;
-    if !owner && !cowork::require(store, task, OperatingActionKind::Repair)? {
+    cowork::validate(task, OperatingActionKind::Repair)?;
+    if !owner && !cowork::diagnosis(store, task)? {
         require_grant(store, task, OperatingActionKind::Repair)?;
     }
     require_recovery(store, task)

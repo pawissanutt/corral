@@ -12,6 +12,21 @@ pub(super) enum RepairBudget {
 }
 
 impl Pilot<'_> {
+    pub(super) fn resume_repair_cycle(&self) -> Result<Option<Step>> {
+        let Some(cycle) = crate::repair_cycle::pending(&self.ctx.store, self.head)? else {
+            return Ok(None);
+        };
+        let key = RepairKey::new(self.head, self.run, &cycle.key.reason)?;
+        if key.head != cycle.key.head {
+            return self.escalate("transferred repair candidate changed; reconcile preserved work before continuation").map(Some);
+        }
+        if self.require(OperatingActionKind::Repair).is_err() {
+            return Ok(Some(Step::Wait));
+        }
+        self.send_request(&cycle.summary, &cycle.details, &key, None)
+            .map(Some)
+    }
+
     pub(super) fn repair_budget(&self, digest: &str, summary: &str) -> Result<RepairBudget> {
         let Some(ledger) =
             crate::repair_runtime::observations(self.ctx, self.head, Some((digest, summary)))?
@@ -155,34 +170,10 @@ impl Pilot<'_> {
             .store
             .dispatch_update_head(self.id(), |store, current| {
                 key.check(&*current)?;
-                // Replaying an approved candidate is verification preparation, not a
-                // worker repair. Keep all Gate authority and recovery checks in force;
-                // only an approval bound to this head (or our own clean replay) qualifies.
+                // A clean integration refresh is verification preparation, never a code
+                // repair charge. Actual conflicts below still route to the current driver.
                 let run = current.current_run_head()?.context("missing current run")?;
-                let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
-                let approved = match run.review.as_ref() {
-                    Some(review) if review.verdict == Some(Verdict::Approve) => {
-                        review.sha == head
-                            || crate::verdict_carry::clean_replay(
-                                self.ctx,
-                                &*current,
-                                &run,
-                                &review.sha,
-                                &head,
-                            )?
-                    }
-                    _ => false,
-                };
-                // Preserve worker integration for unapproved fast-forward candidates.
-                // An approved clean replay is re-gated before the eventual ff landing.
-                if self.policy.merge == MergeMode::Ff && !approved {
-                    return Ok(None);
-                }
-                let action = if approved {
-                    OperatingActionKind::Gate
-                } else {
-                    OperatingActionKind::Repair
-                };
+                let action = OperatingActionKind::Gate;
                 let _action = corral_core::work::action(self.id(), action);
                 crate::operating::require(store, &*current, action)?;
                 crate::verdict_carry::rebase(self.ctx, &*current, &run, &key.base).map(Some)

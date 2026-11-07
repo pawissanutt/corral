@@ -2,16 +2,18 @@
 //! through the ops API, against a fake terminal server whose panes run gates synchronously.
 #![cfg(unix)] // Fixtures execute the symlinked POSIX fake terminal server.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+#[path = "assistant_cowork/fixture.rs"]
+mod fixture;
 mod support;
+use fixture::Fx;
+#[path = "assistant_cowork/triage.rs"]
+mod triage;
 
-use corral_core::assistant::AssistantScratch;
 use corral_core::{
-    Accept, AgentCmd, Cowork, CoworkReview, GateResult, Origin, Reviewer, Run, RunOutcome, Status,
-    Verdict,
+    Accept, Cowork, CoworkReview, Origin, Reviewer, Run, RunOutcome, Status, Verdict,
 };
-use corral_herdr::Herdr;
 use corral_ops::assistant::scratch::{self, Finish};
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 use serde_json::json;
@@ -29,108 +31,6 @@ fn git(dir: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8_lossy(&out.stdout).trim().to_owned()
-}
-
-struct Fx {
-    _tmp: tempfile::TempDir,
-    app: PathBuf,
-    ctx: Ctx,
-}
-
-impl Fx {
-    /// Project `app` with a passing gate, reviewer `reviewer` when given, fake agent and
-    /// reviewer profiles, and assistant session A-1.
-    fn new(reviewer: Option<&str>) -> Self {
-        let tmp = tempfile::tempdir().unwrap();
-        let bin = tmp.path().join("herdr");
-        std::os::unix::fs::symlink(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/reviewer_ops/herdr.sh"),
-            &bin,
-        )
-        .unwrap();
-        let app = tmp.path().join("app");
-        std::fs::create_dir_all(&app).unwrap();
-        git(&app, &["init", "-q", "-b", "main"]);
-        git(&app, &["config", "user.name", "corral test"]);
-        git(&app, &["config", "user.email", "corral@test.invalid"]);
-        std::fs::write(app.join("README.md"), "hello\n").unwrap();
-        std::fs::write(app.join(".gitignore"), ".worktrees/\n").unwrap();
-        git(&app, &["add", "-A"]);
-        git(&app, &["commit", "-q", "-m", "init"]);
-        let mut store = corral_core::Store::init(tmp.path()).unwrap();
-        for name in ["fake", "rev"] {
-            let command = "true".into();
-            store
-                .config
-                .agents
-                .insert(name.into(), AgentCmd { command });
-        }
-        store.config.review.gate = Some(vec!["echo gate-ok".into()]);
-        store.config.review.reviewer = reviewer.map(str::to_owned);
-        let project = serde_json::from_value(json!({"path": "app"})).unwrap();
-        store.config.projects.insert("app".into(), project);
-        store.save_config().unwrap();
-        store.create_assistant("pi", None, None, None).unwrap();
-        let ctx = Ctx {
-            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
-            store,
-            herdr: Herdr::with_bin(bin, None),
-        };
-        let app = app.canonicalize().unwrap();
-        Self {
-            _tmp: tmp,
-            app,
-            ctx,
-        }
-    }
-
-    fn scratch(&self, slug: &str) -> AssistantScratch {
-        scratch::create(&self.ctx, "A-1", "app", Some(slug), None).unwrap()
-    }
-
-    fn commit(&self, dir: &Path, file: &str) -> String {
-        std::fs::write(dir.join(file), format!("{file}\n")).unwrap();
-        git(dir, &["add", file]);
-        git(dir, &["commit", "-q", "-m", &format!("add {file}")]);
-        git(dir, &["rev-parse", "HEAD"])
-    }
-
-    fn kind(&self, slug: &str) -> Option<String> {
-        let session = self.ctx.store.get_assistant("A-1").unwrap();
-        let entry = session.scratch.into_iter().find(|s| s.slug == slug);
-        entry.map(|s| s.kind)
-    }
-
-    /// Binds A-1's generation 1 to a Pi transcript with responses before, at and after `at`.
-    fn usage_around(&self, at: jiff::Timestamp) {
-        let transcript = self.ctx.store.dir().join("A-1-session.jsonl");
-        let line = |id: &str, ts: String, input: u64| {
-            format!(
-                "{{\"type\":\"message\",\"id\":\"{id}\",\"timestamp\":\"{ts}\",\"message\":{{\"role\":\"assistant\",\"usage\":{{\"input\":{input},\"output\":1}}}}}}\n"
-            )
-        };
-        let text = [
-            "{\"type\":\"session\",\"id\":\"sid\"}\n".to_owned(),
-            line("before", "2020-01-01T00:00:00Z".into(), 100),
-            line("during", at.to_string(), 10),
-            line("after", "2100-01-01T00:00:00Z".into(), 1000),
-        ]
-        .concat();
-        std::fs::write(&transcript, text).unwrap();
-        let store = &self.ctx.store;
-        store
-            .update_assistant_container("A-1", |container| {
-                container.state.generations.push(serde_json::from_value(json!({
-                    "n": 1, "bind_nonce_sha256": "nonce", "pane": "pane", "created": at,
-                    "bound": {"host_cap_sha256": "host", "ctl_cap_sha256": "ctl", "session_id": "sid",
-                        "session_file": transcript, "pid": 1, "start_time": "start",
-                        "request_id": "hello", "at": at}
-                }))?);
-                container.state.binding.generation = 1;
-                Ok(())
-            })
-            .unwrap();
-    }
 }
 
 fn kinds(ctx: &Ctx, task: &str) -> Vec<String> {
@@ -235,7 +135,7 @@ fn owner_finish_materializes_gated_reviewed_work_and_autopilot_lands_it() {
     // Then a Review task exists with origin assistant, label cowork and run R1 on the scratch.
     assert_eq!(
         (finished.gate.as_str(), finished.status, &finished.reviewer),
-        ("pass", Status::Review, &Some("rev".into()))
+        ("queued", Status::Review, &None)
     );
     let task = fx.ctx.store.get(&finished.task).unwrap();
     assert_eq!(task.title, "Fix the cache");
@@ -244,6 +144,7 @@ fn owner_finish_materializes_gated_reviewed_work_and_autopilot_lands_it() {
     assert_eq!(task.kind.as_deref(), Some("backend"));
     assert_eq!(task.size, Some(corral_core::TaskSize::M));
     let cowork = Cowork {
+        completion: None,
         session: "A-1".into(),
         scratch: "cache-fix".into(),
         run: "R1".into(),
@@ -263,8 +164,11 @@ fn owner_finish_materializes_gated_reviewed_work_and_autopilot_lands_it() {
     );
     assert_eq!(run.outcome, Some(RunOutcome::Done));
     assert!(run.herdr.is_none());
-    assert_eq!(run.gate.as_ref().map(|g| g.result), Some(GateResult::Pass));
-    assert_eq!(run.gate.as_ref().unwrap().sha, finished.head);
+    assert!(
+        run.gate.is_none(),
+        "submission must not wait for or launch a gate"
+    );
+    assert!(run.review.is_none());
     // The scratch was rebased onto the moved main before the gate.
     assert_eq!(git(&made.path, &["rev-parse", "HEAD^"]), moved);
     // Only the usage between scratch creation and finish is on the run.
@@ -291,10 +195,75 @@ fn owner_finish_materializes_gated_reviewed_work_and_autopilot_lands_it() {
         fx.ctx.store.config.automation.mode,
         corral_core::OperatingMode::Assist
     );
+    fx.ctx.store.config.automation.paused = true;
+    fx.ctx.store.save_config().unwrap();
+    corral_ops::sync(&fx.ctx).unwrap();
+    assert!(
+        fx.ctx
+            .store
+            .get(&task.id)
+            .unwrap()
+            .current_run()
+            .unwrap()
+            .gate
+            .is_none()
+    );
+    fx.ctx.store.config.automation.paused = false;
+    fx.ctx.store.save_config().unwrap();
+    corral_ops::sync(&fx.ctx).unwrap();
     corral_ops::sync(&fx.ctx).unwrap();
     let waiting = fx.ctx.store.get(&task.id).unwrap();
     assert_eq!(waiting.status, Status::Review);
     assert_eq!(waiting.current_run().unwrap().review_runs.len(), 1);
+    assert_eq!(
+        kinds(&fx.ctx, &task.id)
+            .iter()
+            .filter(|kind| *kind == "gate_started")
+            .count(),
+        1
+    );
+    // A committed driver transfer while review runs retains that exact attempt. Board
+    // continuation needs normal policy, not the original assistant's Ship flag or host.
+    fx.ctx
+        .store
+        .update(&task.id, |task| {
+            task.cowork
+                .as_mut()
+                .unwrap()
+                .completion
+                .as_mut()
+                .unwrap()
+                .driver = corral_core::CompletionDriver::Board;
+            Ok(())
+        })
+        .unwrap();
+    fx.ctx
+        .store
+        .update_assistant("A-1", |session| {
+            session.ended = Some(jiff::Timestamp::now());
+            Ok(())
+        })
+        .unwrap();
+    corral_ops::sync(&fx.ctx).unwrap();
+    assert_eq!(
+        fx.ctx
+            .store
+            .get(&task.id)
+            .unwrap()
+            .current_run()
+            .unwrap()
+            .review_runs
+            .len(),
+        1
+    );
+    assert_eq!(
+        kinds(&fx.ctx, &task.id)
+            .iter()
+            .filter(|kind| *kind == "gate_started")
+            .count(),
+        1
+    );
+    fx.delegate_board(&task.id);
     corral_ops::verdict(
         &fx.ctx,
         &task.id,
@@ -356,6 +325,43 @@ fn owner_finish_materializes_gated_reviewed_work_and_autopilot_lands_it() {
 }
 
 #[test]
+fn finish_usage_window_uses_the_same_ordered_clock_as_scratch_creation() {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            corral_core::clock::pin_thread(None);
+        }
+    }
+    let fx = Fx::new(None);
+    // Model a process clock ahead of the raw wall clock after a backward wall step.
+    let ordered = jiff::Timestamp::now()
+        .checked_add(jiff::SignedDuration::from_hours(1))
+        .unwrap();
+    corral_core::clock::pin_thread(Some(ordered));
+    let _reset = Reset;
+    let made = fx.scratch("ordered-clock");
+    fx.commit(&made.path, "work.txt");
+    fx.usage_around(made.created);
+    let submitted = scratch::finish(
+        &fx.ctx,
+        "A-1",
+        "ordered-clock",
+        &Finish {
+            title: Some("Ordered completion window"),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let task = fx.ctx.store.get(&submitted.task).unwrap();
+    let run = task.current_run().unwrap();
+    assert!(
+        run.ended.unwrap() >= run.started,
+        "completion must not end before scratch creation"
+    );
+    assert_eq!(run.usage.as_ref().map(|usage| usage.input), Some(10));
+}
+
+#[test]
 fn finish_records_note_when_zero_usage_is_followed_by_partial_response() {
     let fx = Fx::new(None);
     let made = fx.scratch("partial");
@@ -396,21 +402,23 @@ fn finish_records_note_when_zero_usage_is_followed_by_partial_response() {
 }
 
 #[test]
-fn review_required_runs_the_normal_reviewer_after_the_gate() {
+fn check_only_runs_normal_verification_and_never_lands() {
     // Given A-1's scratch with a commit in a project reviewed by rev.
-    let fx = Fx::new(Some("rev"));
+    let mut fx = Fx::new(Some("rev"));
     let made = fx.scratch("spinner");
     fx.commit(&made.path, "spin.txt");
     // When the owner finishes it and asks for review.
     let opts = Finish {
         title: Some("Spin the widget"),
         review: Some(CoworkReview::Required),
+        intent: Some(corral_core::CompletionIntent::Verify),
         ..Finish::default()
     };
     let finished = scratch::finish(&fx.ctx, "A-1", "spinner", &opts).unwrap();
-    // Then the gate passed and the project's reviewer started on the run.
-    assert_eq!(finished.gate, "pass");
-    assert_eq!(finished.reviewer.as_deref(), Some("rev"));
+    // Submission returns before checks; ordinary sync starts the gate and independent review.
+    assert_eq!(finished.gate, "queued");
+    assert!(finished.reviewer.is_none());
+    corral_ops::sync(&fx.ctx).unwrap();
     let task = fx.ctx.store.get(&finished.task).unwrap();
     let run = task.current_run().unwrap();
     assert_eq!(
@@ -420,21 +428,47 @@ fn review_required_runs_the_normal_reviewer_after_the_gate() {
     assert_eq!(run.review_runs.len(), 1);
     let policy = fx.ctx.store.config.task_review_policy(&task);
     assert_eq!(policy.reviewer, Reviewer::parse("rev"));
-    assert_eq!(policy.accept, Accept::Auto);
-    // When the reviewer configuration later changes to none, the required review still binds.
-    let mut fx = fx;
-    fx.ctx.store.config.review.reviewer = None;
-    fx.ctx.store.save_config().unwrap();
-    let refused = approve(&fx, &task.id).unwrap_err();
-    assert!(
-        format!("{refused:#}").contains("review_required"),
-        "{refused:#}"
-    );
+    assert_eq!(policy.accept, Accept::Owner);
+    corral_ops::verdict(&fx.ctx, &task.id, Verdict::Approve, "checked independently").unwrap();
+    corral_ops::sync(&fx.ctx).unwrap();
     assert_eq!(fx.ctx.store.get(&task.id).unwrap().status, Status::Review);
+    let refused = approve(&fx, &task.id).unwrap_err();
+    assert!(refused.to_string().contains("check_only"), "{refused:#}");
+    assert!(made.path.exists());
+    fx.ctx
+        .store
+        .update(&task.id, |task| {
+            task.cowork
+                .as_mut()
+                .unwrap()
+                .completion
+                .as_mut()
+                .unwrap()
+                .driver = corral_core::CompletionDriver::Board;
+            Ok(())
+        })
+        .unwrap();
+    fx.delegate_board(&task.id);
+    let checks = kinds(&fx.ctx, &task.id)
+        .iter()
+        .filter(|kind| *kind == "gate_started")
+        .count();
+    fx.commit(&fx.app, "moved-base.txt");
+    corral_ops::sync(&fx.ctx).unwrap();
+    assert_eq!(fx.ctx.store.get(&task.id).unwrap().status, Status::Review);
+    assert_eq!(
+        kinds(&fx.ctx, &task.id)
+            .iter()
+            .filter(|kind| *kind == "gate_started")
+            .count(),
+        checks,
+        "base movement/board authority cannot turn Verify into more automatic checks or landing"
+    );
+    assert!(!fx.app.join("spin.txt").exists());
 }
 
 #[test]
-fn a_stale_candidate_refuses_and_the_shown_one_goes_to_independent_review() {
+fn stale_choice_and_unsubmitted_changes_cannot_replace_the_queued_candidate() {
     // Given A-1's scratch whose candidate the owner was shown, then one more commit on it.
     let fx = Fx::new(Some("rev"));
     let made = fx.scratch("cache-fix");
@@ -465,23 +499,52 @@ fn a_stale_candidate_refuses_and_the_shown_one_goes_to_independent_review() {
     assert!(!events.iter().any(|e| e.kind == "cowork_finished"));
     // When the owner was shown the current candidate and asks for independent review.
     let finished = scratch::finish(&fx.ctx, "A-1", "cache-fix", &review(&later[..12])).unwrap();
-    // Then the gate and the normal reviewer run on that same commit, in the one co-work run.
+    // Submission pins that commit; a later ordinary commit must not silently replace it.
     assert_eq!(
         (finished.head.as_str(), finished.gate.as_str()),
-        (later.as_str(), "pass")
+        (later.as_str(), "queued")
     );
-    assert_eq!(finished.reviewer.as_deref(), Some("rev"));
+    assert!(finished.reviewer.is_none());
+    let unsubmitted = fx.commit(&made.path, "unsubmitted.txt");
+    corral_ops::sync(&fx.ctx).unwrap();
     let task = fx.ctx.store.get(&finished.task).unwrap();
     assert_eq!(task.runs.len(), 1);
+    assert_eq!(task.status, Status::NeedsMe);
     let run = task.current_run().unwrap();
-    assert_eq!(
-        run.gate.as_ref().map(|g| g.sha.as_str()),
-        Some(later.as_str())
+    assert!(run.gate.is_none());
+    assert!(run.review_runs.is_empty());
+    assert!(
+        run.autopilot
+            .as_ref()
+            .unwrap()
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("submitted candidate changed")
     );
-    assert_eq!(run.review_runs.len(), 1);
     let events = fx.ctx.store.events_shared().unwrap();
     let event = events.iter().find(|e| e.kind == "cowork_finished").unwrap();
     assert_eq!(event.detail["candidate"], later.as_str());
+    let refreshed = scratch::finish(
+        &fx.ctx,
+        "A-1",
+        "cache-fix",
+        &Finish {
+            into: Some(&task.id),
+            expected_head: Some(&unsubmitted),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            refreshed.task.as_str(),
+            refreshed.run.as_str(),
+            refreshed.gate.as_str()
+        ),
+        (task.id.as_str(), "R2", "queued")
+    );
+    assert_eq!(fx.ctx.store.get(&task.id).unwrap().rounds, 0);
 }
 
 fn approve(fx: &Fx, id: &str) -> anyhow::Result<String> {
@@ -503,11 +566,21 @@ fn review_required_binds_approval_when_no_reviewer_resolves() {
     let finished = scratch::finish(&fx.ctx, "A-1", "cache-fix", &opts).unwrap();
     let id = finished.task.clone();
     // Then the finish names how to start a review, and approval refuses until one approves.
-    let note = finished.reviewer.unwrap_or_default();
-    assert!(
-        note.contains(&format!("corral review-run {id} --reviewer")),
-        "{note}"
-    );
+    assert!(finished.reviewer.is_none());
+    corral_ops::sync(&fx.ctx).unwrap();
+    let blocked = fx.ctx.store.get(&id).unwrap();
+    let note = blocked
+        .current_run()
+        .unwrap()
+        .autopilot
+        .as_ref()
+        .unwrap()
+        .reason
+        .as_deref()
+        .unwrap();
+    assert!(note.contains("independent reviewer"), "{note}");
+    corral_ops::gate_start(&fx.ctx, &id).unwrap();
+    corral_ops::gate_wait(&fx.ctx, &id).unwrap();
     let main = git(&fx.app, &["rev-parse", "main"]);
     let refused = approve(&fx, &id).unwrap_err();
     assert!(
@@ -545,8 +618,10 @@ fn review_required_into_a_task_whose_reviewer_is_none_cannot_land_unreviewed() {
     };
     let finished = scratch::finish(&fx.ctx, "A-1", "cache-fix", &opts).unwrap();
     // Then no review starts on its own, and approval refuses without one.
-    let note = finished.reviewer.unwrap_or_default();
-    assert!(note.contains("--reviewer"), "{note}");
+    assert!(finished.reviewer.is_none());
+    corral_ops::sync(&fx.ctx).unwrap();
+    corral_ops::gate_start(&fx.ctx, &task.id).unwrap();
+    corral_ops::gate_wait(&fx.ctx, &task.id).unwrap();
     let refused = approve(&fx, &task.id).unwrap_err();
     assert!(
         format!("{refused:#}").contains("review_required"),
@@ -583,6 +658,7 @@ fn reviewer_none_applies_only_to_the_cowork_run() {
     let mut cowork = plain.clone();
     cowork.runs.push(run("R2"));
     cowork.cowork = Some(Cowork {
+        completion: None,
         session: "A-1".into(),
         scratch: "s".into(),
         run: "R2".into(),
@@ -663,6 +739,14 @@ fn finish_into_an_existing_task_adds_a_run_and_refuses_task_busy_while_one_is_li
         })
         .unwrap();
     fx.commit(&made.path, "repaired.txt");
+    corral_ops::gate_start(&fx.ctx, &created.id).unwrap();
+    let checking = fx.ctx.store.get(&created.id).unwrap();
+    let busy = scratch::finish(&fx.ctx, "A-1", "cache-fix", &into).unwrap_err();
+    assert!(busy.to_string().contains("task_busy"), "{busy:#}");
+    assert_eq!(fx.ctx.store.get(&created.id).unwrap(), checking);
+    corral_ops::gate_collect(&fx.ctx, &created.id)
+        .unwrap()
+        .unwrap();
     let repaired = scratch::finish(&fx.ctx, "A-1", "cache-fix", &into).unwrap();
     assert_eq!(repaired.run, "R3");
     assert_eq!(

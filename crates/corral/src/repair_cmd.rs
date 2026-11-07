@@ -15,6 +15,17 @@ pub struct RepairArgs {
 pub enum RepairCmd {
     /// Read all allowances, exact counters, findings and diagnosis without mutation
     Status { id: String },
+    /// Read retained failed receipts, attributions and the diagnostic retry state
+    TriageStatus { id: String },
+    /// Attribute a failed gate with retained evidence; never grants PASS or coding allowance
+    Triage {
+        id: String,
+        #[arg(long)]
+        file: PathBuf,
+        /// Explicit owner investigation, required to revise an earlier attribution
+        #[arg(long)]
+        owner: bool,
+    },
     /// Append a structured observation; matching is host-derived from exact identity
     Finding {
         id: String,
@@ -46,6 +57,8 @@ impl RepairCmd {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Status { .. } => "status",
+            Self::TriageStatus { .. } => "triage-status",
+            Self::Triage { .. } => "triage",
             Self::Finding { .. } => "finding",
             Self::Diagnose { .. } => "diagnose",
             Self::Diagnosed { .. } => "diagnosed",
@@ -85,6 +98,12 @@ pub fn run(root: &Path, args: RepairArgs) -> Result<()> {
             }
             None => serde_json::Value::Null,
         },
+        RepairCmd::TriageStatus { id } => {
+            serde_json::to_value(corral_ops::gate_triage::status(&ctx, &id)?)?
+        }
+        RepairCmd::Triage { id, file, owner } => serde_json::to_value(
+            corral_ops::gate_triage::diagnose(&ctx, &id, read(&file)?, owner)?,
+        )?,
         RepairCmd::Finding { id, file } => {
             serde_json::to_value(corral_ops::repair_finding(&ctx, &id, read(&file)?)?)?
         }

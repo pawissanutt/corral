@@ -582,7 +582,7 @@ owner (never `--root`, `--author` or output flags):
 
 | Class | Kinds (command) |
 |---|---|
-| Ordinary: runs on the instruction | `approve`, `verdict`, `review_run` (review-run), `dispatch` (incl. `--plan`), `queue` (queue add), `unqueue` (queue remove), `move` to any status but dropped, `park` and `unpark` (attention park/unpark), `revert`, `plan_accept`, `plan_verdict`, `plan_review`, `plan_member_gate`, `plan_add_member`, `plan_move_member`, `finish` (assistant scratch finish; target: the scratch slug) |
+| Ordinary: runs on the instruction | `approve`, `verdict`, `review_run` (review-run), `gate_triage` (repair triage, bounded current-driver diagnosis), `dispatch` (incl. `--plan`), `queue` (queue add), `unqueue` (queue remove), `move` to any status but dropped, `park` and `unpark` (attention park/unpark), `revert`, `plan_accept`, `plan_verdict`, `plan_review`, `plan_member_gate`, `plan_add_member`, `plan_move_member`, `finish` (assistant scratch finish; target: the scratch slug) |
 | Confirm: waits for the owner | `move` to dropped or with `--force`, `discard` (with or without `--keep-branch`), `config_set` (config set), `mode` (autopilot, assist, turbo, pause, resume) |
 
 Anything else refuses `unsupported_action`, and the refusal lists the kinds this corral
@@ -636,7 +636,7 @@ corral pm inbox show PMI-1
 
 ```sh
 corral assistant scratch finish cache-fix --title "Fix the cache" --session A-1
-corral assistant scratch finish cache-fix --title "Fix the cache" --review required --session A-1
+corral assistant scratch finish cache-fix --title "Check the cache" --intent verify --session A-1
 corral assistant scratch finish cache-fix --into T-042 --session A-1
 corral assistant scratch finish cache-fix --title "Fix the cache" --expected-head 3f2a9c1 --session A-1
 corral approve T-060
@@ -646,8 +646,11 @@ The owner and an assistant can work together in one of the assistant's scratch w
 without a task. No task exists before or during that work. When the owner says to finish
 it ("finish this as a fix for the cache", or "1" selecting a concrete ship option), the
 assistant runs the `finish` owner action with the scratch slug and title from the instruction.
-That explicit finish is confirmed owner authority to ship: gate → independent review → land,
-without a second owner acceptance or confirmation dialog. The assistant asks only when the
+The default (`--intent ship`) authorizes gate → independent review → land without another
+routine acceptance. `--intent verify` authorizes checks and in-scope repairs only: a passing
+candidate stays in Review and cannot be approved/landed through a broad automation grant.
+Submission returns durable task/run IDs and `gate: queued`; it does not wait for the gate or
+reviewer. Normal sync/service reconciliation owns the pipeline, independently of the assistant host. The assistant asks only when the
 scratch or title is unclear ("ship something like this"), or hands the request to the PM; nothing finishes on a guess. From the owner's own
 shell the same command takes `--session A-<n>`. An assistant shell is refused with
 `assistant_refused`: finishing is an owner action and reaches an assistant only through
@@ -677,33 +680,37 @@ changes nothing. Then:
    body stay as they are. It refuses `task_busy` while T-x has a live run, a review or a
    queued, launching or slot-holding dispatch, `task_status` for Idea, Done and Dropped
    tasks, and `project_mismatch` when T-x belongs to another project.
-3. **Gate.** The project's gate runs on the run to its end, as `corral gate <id> --wait`
-   would, with the run's tier rules fixed as a dispatch fixes them. A failed gate leaves
-   the task in Review with the failed receipt, as for a worker. The finish reports the
-   result (`pass`, `fail`, `none` without a configured gate) instead of undoing itself.
+3. **Gate.** Reconciliation starts/collects the existing managed gate with the run's fixed
+   tier rules and ordinary admission. Closing the assistant does not cancel the queued work.
+   A failed receipt stays failed; shared triage determines diagnosis versus code repair.
+   A pause or hold prevents the next effect, while already-running checks may settle.
 4. **Independent review.** A confirmed finish always requires review, including when an
    older assistant sends `--review none`. The normal configured/routed reviewer starts
    after a passing gate. If none resolves (including an explicit task `reviewer: none`),
-   the finish names the missing configuration and landing refuses `review_required` until
+   reconciliation names the missing configuration and landing refuses `review_required` until
    `corral review-run <id> --reviewer <profile>` returns an approving verdict. No gate pass
    substitutes for review. Old/unconfirmed records retain their saved review choice.
-5. **Land.** Confirmed finish resolves acceptance to `auto`, not `owner`. Its explicit
+5. **Land.** Only Ship permits landing; Verify stops after checks. A Ship instruction's explicit
    owner instruction authorizes this task's gate, review, repair and landing even in Assist
    mode, without a workspace grant, an `owner_accept` attention or another owner decision.
    It authorizes neither dispatch nor another task. Workspace pauses, kill switches, recovery holds,
    owner paths and all normal landing checks still apply. Landing takes the landing lock,
    integration, size and freshness checks, and the full gate where the project is tiered.
-   Old/unconfirmed finishes remain owner-accepted. These overrides apply only while the
-   co-work run is current; a later ordinary run follows the project's policy. After landing the
+   Old/unconfirmed finishes retain their manual, run-bound behavior. New completion records
+   retain the exact contract revision, intent, instruction and current driver across ordinary
+   repair runs. Changed scope or an unsupported record version refuses continuation. Board
+   responsibility uses normal board policy, never the assistant's run-only dispatch exclusion
+   as a takeover grant. This backend state is not a public transfer operation. After landing the
    session record's `landed` list gains `{task, run, base, sha, commits}` (the commits the
    landing added to the base, oldest first), the session's scratch record is removed (the
    task run owns the worktree, and `approve` removes it with the run's branch), and corral
    logs `cowork_landed`. Discarding the task instead removes the worktree as for any task,
    and the session forgets the scratch record too.
 
-**Failures return to the assistant.** A gate failure or review changes on the current co-work
-run never resumes or dispatches a worker. Corral posts the request, details and resubmission
-instructions to the originating assistant's native inbox. A live assistant receives it; an
+**Repairs follow the current driver.** Attributed candidate defects and independent review
+changes issue one repair cycle; transfer/run changes do not reset its findings or counters.
+For assistant responsibility, Corral posts the request, details and resubmission instructions
+to that assistant's native inbox, never an invented worker session. A live assistant receives it; an
 offline session keeps it queued and the owner gets Needs me with `corral pi --resume A-<n>`.
 An ended/missing session produces an actionable owner notice naming the scratch and finish
 command instead. Fix and commit in that scratch, then use the original finish instruction
@@ -712,6 +719,27 @@ with the `finish` owner action, the same slug, `--into <task>` and
 run on the same scratch for fresh gate and review. While waiting for repair, owner acceptance,
 a running review or a blocked landing checkout, unrelated main movement does not rewrite
 or repeatedly gate the candidate. Once it can proceed, verification refreshes before landing.
+An omitted `--intent` on a repair retains the original Verify/Ship intent.
+
+**Gate diagnosis (board and co-work).** Unknown, mixed and suspected-flaky failures block
+without a code-repair charge. Read `corral repair triage-status T-042`, attach the diagnostic
+evidence, then record a JSON `GateDiagnosis` with `corral repair triage T-042 --file diagnosis.json`.
+The current assistant driver can use owner-action kind `gate_triage` with target `T-042`
+and `args: ["--file", "diagnosis.json"]`, citing the original verification/shipping instruction;
+this kind cannot pass `--owner` or renew investigation allowance. It names `attempt`, `class` (`candidate`, `red_base`, `environment`, `unknown`, `mixed`, `flaky`),
+`explanation`, attached artifact paths in `evidence`, and optional `retry: true`. Red-base reports
+also name `baseline: {task, run, attempt}`: the service checks a separate clean baseline gate's
+exact base, environment and all failed-command output signatures. Partial matches cannot
+excuse candidate-specific failures. Known launcher/environment diagnosis must cite its evidence;
+it is routing metadata, never PASS. A single diagnostic retry is admitted durably; a new driver,
+run or candidate cannot reset it or erase an unexplained red. A diagnostic green does not clear
+unknown/mixed/flaky attribution. Revising a recorded diagnosis requires an explicit owner
+investigation (`--owner`), not an automatic retry loop or coding allowance renewal. A new,
+evidence-backed owner investigation can request one further diagnostic attempt; replaying the
+identical report cannot renew it, and all prior launches/observations remain recorded. Proven base or
+environment failures spend no coding round, and landing still needs a fresh successful candidate
+gate plus the normal independent review. Clean integration refresh spends no coding round;
+actual conflicts still use the bounded repair path.
 
 Events: `cowork_finished` (session, scratch, run, branch, head, owner_confirmed, candidate: the scratch HEAD
 before any rebase, base, review) and

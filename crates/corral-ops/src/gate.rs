@@ -398,6 +398,20 @@ fn gate_start_origin(
         );
     }
     let sha = corral_git::rev_sha(&run.worktree, "HEAD")?;
+    if origin == crate::operating::Origin::Automatic
+        && run.autopilot.as_ref().is_some_and(|state| {
+            state.stage == corral_core::AutoStage::Gating
+                && state
+                    .sha
+                    .as_deref()
+                    .is_some_and(|submitted| submitted != sha)
+        })
+    {
+        bail!("submitted candidate changed before gate admission");
+    }
+    if let Some(previous) = run.gate.as_ref() {
+        crate::gate_triage::observe(&ctx.store, id, previous)?;
+    }
     let attempt = launch
         .bound_attempt()
         .or(recovery_attempt)
@@ -411,6 +425,7 @@ fn gate_start_origin(
                 jiff::Timestamp::now().as_nanosecond()
             )
         });
+    crate::gate_triage::check_retry(&ctx.store, id, run.gate.as_ref(), &sha, Some(&attempt))?;
     let origin = crate::gate_tier::origin_step(&run, &contract);
     let identity = match (launch.bound_candidate(), origin.promoted_from()) {
         (Some(candidate), _) => candidate,
@@ -567,6 +582,7 @@ fn gate_start_origin(
         if crate::gate_tier::origin_step(&current, &contract) != origin {
             bail!("candidate changed while starting gate");
         }
+        crate::gate_triage::admit(&ctx.store, id, current.gate.as_ref(), &sha, &attempt)?;
         origin.apply(&mut current);
         t.edit_run(&run_id, |r| {
             r.promotion_origin = current.promotion_origin;
@@ -819,6 +835,7 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
                 r.promotion_origin = None;
             }
             let record = finished.as_ref().context("finished gate missing")?;
+            crate::gate_triage::observe(&ctx.store, &run_task_id, record)?;
             let attempt = record.identity.as_ref().map(|identity| &identity.attempt);
             let mut detail = json!({ "run": run_id, "attempt": attempt, "result": record.result.as_str(), "failed_cmd": record.failed_cmd, "sha": record.sha, "log_sha256": record.log_sha256 });
             evidence::tier_detail(&mut detail, record.tier.as_deref());

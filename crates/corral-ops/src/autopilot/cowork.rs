@@ -31,19 +31,22 @@ pub(super) fn deliver_pending(ctx: &Ctx) {
             .store
             .heads(&corral_core::backend::HeadQuery::Open { project: None })?
         {
-            let Some(cowork) = head.cowork_run() else {
+            let Some((session, _)) = head
+                .cowork_run()
+                .and_then(|cowork| cowork.assistant_driver())
+            else {
                 continue;
             };
-            if !head
+            let stage = head
                 .current_run
                 .as_ref()
                 .and_then(|r| r.autopilot.as_ref())
-                .is_some_and(|state| state.stage == AutoStage::Changes)
-            {
+                .map(|state| state.stage);
+            if !matches!(stage, Some(AutoStage::Changes | AutoStage::Escalated)) {
                 continue;
             }
-            let (open, live) = destination(ctx, &cowork.session);
-            if head.status == Status::Review && !live {
+            let (open, live) = destination(ctx, session);
+            if stage == Some(AutoStage::Changes) && head.status == Status::Review && !live {
                 let previous = head
                     .current_run
                     .as_ref()
@@ -55,13 +58,13 @@ pub(super) fn deliver_pending(ctx: &Ctx) {
                     &head,
                     &format!(
                         "{previous}\nAssistant {} stopped before repair completed. Owner: run `corral pi --resume {}` if open, or finish the named scratch from your shell if ended.",
-                        cowork.session, cowork.session
+                        session, session
                     ),
                 )?;
             }
             if open {
                 let recipient = Recipient::Assistant {
-                    session: cowork.session.clone(),
+                    session: session.to_owned(),
                 };
                 crate::delivery::deliver(
                     ctx,
@@ -123,6 +126,52 @@ fn owner_wait(ctx: &Ctx, head: &corral_core::TaskHead, reason: &str) -> Result<(
 }
 
 impl Pilot<'_> {
+    /// A failed check asks the current assistant for bounded attribution, not product edits.
+    /// Escalation is committed first: sync cannot repeatedly create diagnosis turns. An
+    /// unavailable host keeps the failed receipts/owner notice; an open inbox keeps delivery.
+    pub(super) fn queue_gate_diagnosis(&self, gate: &GateRecord) -> Result<()> {
+        let current = self.ctx.store.head(self.id())?;
+        let Some((session, _)) = current
+            .cowork_run()
+            .and_then(|cowork| cowork.assistant_driver())
+        else {
+            return Ok(());
+        };
+        if !destination(self.ctx, session).0 {
+            return Ok(());
+        }
+        let recipient = Recipient::Assistant {
+            session: session.to_owned(),
+        };
+        let attempt = gate
+            .identity
+            .as_ref()
+            .map_or("legacy", |identity| identity.attempt.as_str());
+        let message = format!(
+            "Gate diagnosis needed for {} (attempt {attempt}). No code-repair cycle was issued or charged. Refresh the task/current driver before acting; inspect the retained failed receipt and attach precise diagnosis evidence. Do not edit unrelated product code. Use owner-action kind gate_triage targeting {} with --file <GateDiagnosis JSON>, citing the existing Check/Ship instruction. Unknown/mixed/flaky remains blocked; at most one diagnostic retry, never rerun-until-green. No worker dispatch or owner-investigation renewal is authorized.",
+            self.id(),
+            self.id()
+        );
+        Inbox::new(&self.ctx.store, recipient.clone())?.post(Post {
+            kind:"gate_diagnosis_needed", urgency:Urgency::Wake, author:"autopilot", body:&message,
+            binding:MessageBinding::default(), subject:Some(json!({"key":format!("gate-diagnosis/{attempt}"),"task":self.id(),"run":self.run.id})),
+            max_payload:corral_core::inbox::MAX_PAYLOAD,
+        })?;
+        if let Err(error) = crate::delivery::deliver(
+            self.ctx,
+            &recipient,
+            &crate::agent::delivery::CorralPiAdapter,
+            None,
+        ) {
+            crate::messages::report(
+                Some(self.id()),
+                "cowork",
+                format!("diagnosis queued; delivery deferred: {error:#}"),
+            );
+        }
+        Ok(())
+    }
+
     /// Do not rewrite/re-gate a candidate while something other than verification blocks it.
     pub(super) fn cowork_wait(&self) -> Result<Option<Step>> {
         if self.head.review_wait == Some(corral_core::ReviewWork::Reviewer)
@@ -132,7 +181,14 @@ impl Pilot<'_> {
             return Ok(Some(Step::Wait));
         }
         match self.stage() {
-            Some(AutoStage::Changes) => return Ok(Some(Step::Wait)),
+            Some(AutoStage::Changes)
+                if self
+                    .head
+                    .cowork_run()
+                    .is_some_and(|cowork| cowork.assistant_driver().is_some()) =>
+            {
+                return Ok(Some(Step::Wait));
+            }
             Some(AutoStage::Reviewed) if self.require(OperatingActionKind::Accept).is_err() => {
                 return Ok(Some(Step::Wait));
             }
@@ -158,10 +214,38 @@ impl Pilot<'_> {
         if self.policy.reviewer == Reviewer::None
             && self.head.cowork_run().is_some_and(|c| c.owner_confirmed)
         {
-            return self.escalate(&format!(
-                "co-work finish needs an independent reviewer; configure the project reviewer, then run `corral review-run {}`",
+            let reason = format!(
+                "reviewer unavailable: co-work finish needs an independent reviewer; configure the project reviewer, or run `corral review-run {} --reviewer <profile>`",
                 self.id()
-            )).map(Some);
+            );
+            if self.state().and_then(|state| state.reason.as_deref()) != Some(&reason) {
+                self.ctx.store.try_update_head(self.id(), |current| {
+                    if current.status != Status::Review
+                        || current
+                            .current_run_head()?
+                            .is_none_or(|run| run.id != self.run.id)
+                    {
+                        return Ok(false);
+                    }
+                    let run = current
+                        .current_run_mut()
+                        .context("completion run disappeared")?;
+                    let state = run.autopilot.get_or_insert(AutopilotState {
+                        stage: AutoStage::Gating,
+                        reason: None,
+                        sha: run_head_sha(self.run),
+                        at: self.now,
+                    });
+                    state.reason = Some(reason.clone());
+                    Ok(true)
+                })?;
+                self.ctx.store.log_event(
+                    Some(self.id()),
+                    "cowork_configuration_wait",
+                    json!({"run":self.run.id,"reason":reason}),
+                )?;
+            }
+            return Ok(Some(Step::Wait));
         }
         Ok(None)
     }
@@ -175,7 +259,9 @@ impl Pilot<'_> {
         key: &RepairKey,
         round: u32,
     ) -> Result<Step> {
-        let session = &cowork.session;
+        let (session, scratch) = cowork
+            .assistant_driver()
+            .context("repair driver changed to board")?;
         let resume = format!("corral pi --resume {session}");
         let finish = format!(
             "Fix and commit in {}, then use the original owner finish instruction with \
@@ -183,15 +269,15 @@ impl Pilot<'_> {
              From the owner's shell: `corral assistant scratch finish {} --session {session} --into {} --expected-head <new HEAD>`. \
              This resubmits the same work for gate and independent review; do not dispatch a worker.",
             self.run.worktree.display(),
-            cowork.scratch,
+            scratch,
             self.id(),
-            cowork.scratch,
+            scratch,
             self.id()
         );
         let message = format!("{message}\n\nCo-work repair for assistant {session}: {finish}");
         let (open, live) = destination(self.ctx, session);
         let recipient = Recipient::Assistant {
-            session: session.clone(),
+            session: session.to_owned(),
         };
         let reason = if live {
             format!("{summary}; changes returned to assistant {session}. {finish}")
@@ -228,7 +314,14 @@ impl Pilot<'_> {
             |store, current| {
                 key.check(&*current)?;
                 crate::operating::require(store, &*current, OperatingActionKind::Repair)?;
-                crate::repair_runtime::start(store, &*current, &attempt, &self.run.agent, false)?;
+                crate::repair_runtime::start(
+                    store,
+                    &*current,
+                    &format!("repair:{}", key.digest()?),
+                    &self.run.agent,
+                    false,
+                )?;
+                crate::repair_cycle::issue(store, &*current, key, round)?;
                 crate::reviewer::supersede_review_head(current, self.now)?;
                 current
                     .current_run_mut()

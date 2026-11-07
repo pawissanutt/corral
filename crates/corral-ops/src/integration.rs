@@ -54,6 +54,8 @@ impl std::error::Error for StalePacket {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RepairKey {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub driver: Option<corral_core::CompletionDriver>,
     pub task: String,
     pub run: String,
     pub head: String,
@@ -64,6 +66,7 @@ pub(crate) struct RepairKey {
 impl RepairKey {
     pub fn new<T: TaskRef + ?Sized>(task: &T, run: &RunHead, reason: &str) -> Result<Self> {
         Ok(Self {
+            driver: Self::driver(task),
             task: task.id().clone(),
             run: run.id.clone(),
             head: corral_git::rev_sha(&run.worktree, "HEAD")?,
@@ -73,7 +76,29 @@ impl RepairKey {
     }
 
     pub fn digest(&self) -> Result<String> {
-        Ok(verification::digest(&serde_json::to_vec(self)?))
+        // Ordinary legacy board preparations keep their exact receipt identity. A scoped
+        // completion's driver/run replacement is not another code repair; live run/base/driver
+        // still fence submission in check(), without changing its issued cycle identity.
+        if self.driver.is_none() {
+            return Ok(verification::digest(&serde_json::to_vec(self)?));
+        }
+        Ok(verification::digest(&serde_json::to_vec(&(
+            &self.task,
+            &self.head,
+            &self.reason,
+        ))?))
+    }
+
+    pub(crate) fn driver<T: TaskRef + ?Sized>(task: &T) -> Option<corral_core::CompletionDriver> {
+        task.cowork_run().map(|cowork| {
+            cowork.completion.as_ref().map_or_else(
+                || corral_core::CompletionDriver::Assistant {
+                    session: cowork.session.clone(),
+                    scratch: cowork.scratch.clone(),
+                },
+                |scope| scope.driver.clone(),
+            )
+        })
     }
 
     /// Called inside the task write lock as well as before any external delivery.
@@ -84,7 +109,8 @@ impl RepairKey {
         else {
             return Err(StalePacket.into());
         };
-        if *task.status() != Status::Review
+        if Self::driver(task) != self.driver
+            || *task.status() != Status::Review
             || run.outcome != Some(RunOutcome::Done)
             || corral_git::rev_sha(&run.worktree, "HEAD")? != self.head
             || corral_git::rev_sha(&run.worktree, &run.base)? != self.base
@@ -451,6 +477,7 @@ mod derived_rows_tests {
         }))
         .unwrap();
         let key = RepairKey {
+            driver: RepairKey::driver(&task),
             task: task.id.clone(),
             run: run.id.clone(),
             head,

@@ -1,8 +1,8 @@
 //! Retries: supersede the current run and dispatch a fresh one, read and written as heads.
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
-    AutoStage, AutopilotState, ProfileChoice, RetryPlan, RunOutcome, Status, TaskHead, TaskHeadMut,
-    TaskRef as _,
+    AutoStage, AutopilotState, ProfileChoice, RetryPlan, RunOutcome, Status, TaskFieldsRef as _,
+    TaskHead, TaskHeadMut, TaskRef as _,
 };
 use serde_json::json;
 
@@ -87,21 +87,31 @@ pub(crate) fn auto_retry(
     expected: &RepairKey,
 ) -> Result<DispatchOutcome<Box<TaskHead>>> {
     let _action = corral_core::work::action(id, corral_core::OperatingActionKind::Repair);
-    retry_with(
-        ctx,
-        id,
-        &ProfileChoice::default(),
-        None,
-        false,
-        Some(expected),
-        None,
-        |t| {
-            t.rounds = round;
-            if let Some(run) = t.current_run_mut() {
-                run.autopilot = Some(state);
-            }
-        },
-    )
+    let head = ctx.store.head(id)?;
+    let board_source = head.cowork_run().is_some_and(|cowork| {
+        cowork.assistant_driver().is_none()
+            && head
+                .current_run
+                .as_ref()
+                .is_some_and(|run| !cowork.has_worker(&run.id, run.herdr.is_some()))
+    });
+    let choice = if board_source && !crate::repair_runtime::enabled(&ctx.store, &head)? {
+        let route =
+            crate::routing::route_task(ctx, &head.shell_task()?, &ProfileChoice::default())?;
+        ProfileChoice {
+            profile: Some(route.profile),
+            model: route.model,
+            effort: route.effort,
+        }
+    } else {
+        ProfileChoice::default()
+    };
+    retry_with(ctx, id, &choice, None, false, Some(expected), None, |t| {
+        t.rounds = round;
+        if let Some(run) = t.current_run_mut() {
+            run.autopilot = Some(state);
+        }
+    })
 }
 
 // Only a recognizable pre-exec Pi refusal with no bound host and an unchanged tree can
@@ -231,6 +241,13 @@ pub(super) fn retry_with(
             crate::plan_recovery::retry::require_source(&prev, &target.head)?;
         }
     }
+    if task
+        .cowork_run()
+        .is_some_and(|cowork| cowork.assistant_driver().is_none())
+    {
+        let base = corral_git::rev_sha(&prev.worktree, &prev.base)?;
+        crate::plan_recovery::retry::require_source(&prev, &base)?;
+    }
     let can_checkpoint = reachable && prev.worktree.is_dir();
     let refused_before_start =
         launch_refused_before_start(&head, head.current_run.as_deref().context("missing_run")?)?;
@@ -289,6 +306,9 @@ pub(super) fn retry_with(
         }
         crate::repair_runtime::prepare_continuation(store, &*t, &prev.id, availability.is_some())?;
         mark(t);
+        if let Some(key) = expected {
+            crate::repair_cycle::issue(store, &*t, key, t.rounds)?;
+        }
         if let Some(run) = t.current_run_mut() {
             run.outcome = Some(RunOutcome::Superseded);
             run.ended = Some(corral_core::clock::now());

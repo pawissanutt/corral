@@ -733,6 +733,8 @@ pub struct LandingReceipt {
 /// review choice and confirmed shipping instruction, effective only while `run` is current.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cowork {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<crate::CompletionScope>,
     pub session: String,
     pub scratch: String,
     pub run: String,
@@ -916,8 +918,10 @@ impl Task {
         });
         let worker = planning.map_or_else(
             || {
-                self.cowork_run().is_none()
-                    && self.status.holds_slot()
+                self.cowork_run().is_none_or(|cowork| {
+                    self.current_run()
+                        .is_some_and(|run| cowork.has_worker(&run.id, run.herdr.is_some()))
+                }) && self.status.holds_slot()
                     && self.current_run().is_none_or(|r| {
                         r.outcome != Some(RunOutcome::Failed) && !r.releases_slot(&self.id)
                     })
@@ -939,12 +943,13 @@ impl Task {
         self.runs.last()
     }
 
-    /// The co-work finish whose run is the current run.
+    /// The current legacy finish or versioned completion scope. This is responsibility
+    /// metadata, not proof that the current run is workerless.
     pub fn cowork_run(&self) -> Option<&Cowork> {
         let current = self.current_run()?;
         self.cowork
             .as_ref()
-            .filter(|cowork| cowork.run == current.id)
+            .filter(|cowork| cowork.applies_to(&current.id))
     }
 
     pub fn current_run_mut(&mut self) -> Option<&mut Run> {

@@ -120,7 +120,7 @@ fn send_back_with_a_queued_fresh_retry_leaves_review_for_ready() {
 }
 
 #[test]
-fn landing_gate_failure_after_rebase_returns_the_task_to_running() {
+fn landing_gate_failure_after_rebase_waits_for_attribution_without_charging_repair() {
     // Given a passing candidate blocked from landing by a dirty main checkout.
     let fx = Fx::new(|r| {
         r.gate = gate(&["grep -qx hello README.md"]);
@@ -144,13 +144,16 @@ fn landing_gate_failure_after_rebase_returns_the_task_to_running() {
     // When landing resumes, rebases, and the gate fails on the integrated candidate.
     let task = fx.sync();
 
-    // Then the same worker resumes with exactly one change round, not a Review card.
-    assert_eq!(task.status, Status::Running, "{}", fx.reason());
-    assert_eq!(task.rounds, 1);
-    assert_eq!(fx.stage(), Some(AutoStage::Changes));
+    // The new base broke this check: retain its red receipt and diagnose before asking
+    // any worker to change product code or charging a candidate repair cycle.
+    assert_eq!(task.status, Status::NeedsMe, "{}", fx.reason());
+    assert_eq!(task.rounds, 0);
+    assert_eq!(fx.stage(), Some(AutoStage::Escalated));
+    assert!(fx.reason().contains("diagnosis"));
+    assert!(fx.herdr_log("prompts.log").is_empty());
     let run = fx.run();
     assert_eq!(run.id, original.id);
-    assert_eq!(run.outcome, None);
+    assert_eq!(run.outcome, Some(RunOutcome::Done));
     let gate = run.gate.unwrap();
     assert_eq!(gate.result, GateResult::Fail);
     assert_ne!(gate.sha, original.gate.unwrap().sha);
@@ -167,7 +170,7 @@ fn landing_gate_failure_after_rebase_returns_the_task_to_running() {
             "blocked",
             "landing",
             "gating",
-            "changes"
+            "escalated"
         ]
     );
     assert_eq!(git(&fx.app, &["rev-parse", "main"]), base);

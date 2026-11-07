@@ -4,7 +4,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use corral_core::{
     Artifact, ArtifactKind, CandidateIdentity, GateRecord, GateResult, Run, RunHead, RunOutcome,
-    Status, Task, TaskRef, Verdict,
+    Status, Task, TaskFieldsRef as _, TaskRef, Verdict,
 };
 use corral_git::{DiffStat, MergeStrategy};
 use serde_json::json;
@@ -550,6 +550,12 @@ fn approve_landed_inner(
         let t = &*head;
         if !awaiting_owner(t)? || t.current_run_head()?.is_none_or(|r| r.id != run.id) {
             bail!("stale_retry: task or run changed before landing");
+        }
+        crate::operating::require_completion(t)?;
+        // Ordinary explicit owner overrides retain their non-policy-PASS semantics.
+        // Automatic landing and versioned completion instructions never waive triage.
+        if expected.is_some() || t.cowork_run().and_then(|cowork| cowork.completion.as_ref()).is_some() {
+            crate::gate_triage::require_pass(store, id, run.gate.as_ref())?;
         }
         crate::plan_target::validate_run(store, t, &run)?;
         if let Some(recovery) = recovery {

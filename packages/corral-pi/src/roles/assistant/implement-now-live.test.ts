@@ -178,13 +178,16 @@ test("live implement-now: one ambiguous question, scratch work, a candidate-boun
     await turn(`/questions ${shipping}`, [
       { toolCalls: [{ callId: "finish", name: "corral_owner_action", arguments: { kind: "finish", target: slug,
         args: ["--title", "Add a usage section", "--expected-head", candidate.slice(0, 12)], input: input(3) } }] },
-      { text: "T-001 is gated and waiting for independent review." }]);
+      { text: "T-001 is queued for checks and independent review." }]);
     const finished = live.session.messages.find((m) => m.role === "toolResult" && m.toolCallId.split("|")[0] === "finish");
     if (finished?.role !== "toolResult") throw new Error("finish result missing");
     expect(finished.details).toMatchObject({ result: { outcome: "executed", confirmed: true } });
     expect(asked).toEqual([]);
     expect(show("T-001").status).toBe("review");
     const ownerEnv = { ...originalEnv }; delete ownerEnv.CORRAL_ASSISTANT; delete ownerEnv.CORRAL_ASSISTANT_GENERATION;
+    // Durable submission returned to the parent turn before the shared controller ran.
+    expect(show("T-001").runs[0].gate).toBeUndefined();
+    ok([corral, "sync"], { cwd: workspace, env: ownerEnv });
     ok([corral, "verdict", "T-001", "approve", "--notes", "independent fixture review"], { cwd: workspace, env: ownerEnv });
     ok([corral, "sync"], { cwd: workspace, env: ownerEnv });
     const task = show("T-001");

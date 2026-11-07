@@ -15,7 +15,30 @@ pub(super) fn confirmed<T: TaskRef + ?Sized>(task: &T, kind: OperatingActionKind
             | OperatingActionKind::Accept
     ) && task
         .cowork_run()
-        .is_some_and(|cowork| cowork.owner_confirmed)
+        .is_some_and(|cowork| cowork.owner_confirmed && cowork.assistant_driver().is_some())
+}
+
+/// Completion intent fences every automatic path, including broad workspace grants.
+pub(super) fn validate<T: TaskRef + ?Sized>(task: &T, kind: OperatingActionKind) -> Result<()> {
+    if let Some(scope) = task
+        .cowork_run()
+        .and_then(|cowork| cowork.completion.as_ref())
+    {
+        ensure!(
+            scope.version == 1,
+            "completion version unsupported; upgrade Corral"
+        );
+        ensure!(
+            scope.contract_revision == task.contract_revision()?,
+            "completion scope changed; renew the current-revision instruction"
+        );
+        ensure!(
+            kind != OperatingActionKind::Accept
+                || scope.intent == corral_core::CompletionIntent::Ship,
+            "check_only: verification intent never authorizes landing; submit Ship explicitly"
+        );
+    }
+    Ok(())
 }
 
 /// Apply the live stops to the one-task instruction, independently of workspace grants/mode.
@@ -23,6 +46,19 @@ pub(super) fn require<T: TaskRef + ?Sized>(
     store: &Store,
     task: &T,
     kind: OperatingActionKind,
+) -> Result<bool> {
+    require_with(store, task, kind, false)
+}
+
+pub(super) fn diagnosis<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Result<bool> {
+    require_with(store, task, OperatingActionKind::Repair, true)
+}
+
+fn require_with<T: TaskRef + ?Sized>(
+    store: &Store,
+    task: &T,
+    kind: OperatingActionKind,
+    diagnosis: bool,
 ) -> Result<bool> {
     if !confirmed(task, kind) {
         return Ok(false);
@@ -36,7 +72,9 @@ pub(super) fn require<T: TaskRef + ?Sized>(
     corral_core::Park::require_unparked_ref(task)?;
     ensure!(!*task.dispatch_hold(), "task dispatch hold");
     ensure!(
-        *task.status() == corral_core::Status::Review,
+        *task.status() == corral_core::Status::Review
+            || (kind == OperatingActionKind::Repair
+                && *task.status() == corral_core::Status::NeedsMe),
         "co-work shipping needs Review status"
     );
     let run = task.current_run_head()?.context("co-work run missing")?;
@@ -50,8 +88,13 @@ pub(super) fn require<T: TaskRef + ?Sized>(
     );
     let policy = config.task_review_policy(task);
     if kind == OperatingActionKind::Repair
+        && !diagnosis
         && config.routing.repair.is_none()
         && store.repair_ledger(task.id())?.is_none()
+        && !run
+            .autopilot
+            .as_ref()
+            .is_some_and(|state| state.stage == corral_core::AutoStage::Changes)
     {
         ensure!(
             *task.rounds() < policy.max_rounds || config.automation.turbo,

@@ -36,7 +36,16 @@ fn cowork_failures_return_to_assistant_or_actionable_owner_without_worker_recove
         fx.done();
         cowork(&fx, true);
         fx.sync();
+        assert_eq!(
+            fx.task().rounds,
+            0,
+            "unattributed failure cannot spend a repair"
+        );
+        fx.sync(); // blocked diagnosis must not create another turn/check
+        fx.attribute_candidate_failure();
+        fx.sync();
         let task = fx.task();
+        assert_eq!(task.rounds, 1);
         assert_eq!(task.status, Status::NeedsMe);
         assert!(!task.holds_dispatch_slot());
         assert!(!fx.ctx.store.head(&fx.id).unwrap().holds_dispatch_slot());
@@ -51,9 +60,20 @@ fn cowork_failures_return_to_assistant_or_actionable_owner_without_worker_recove
         )
         .unwrap();
         let messages = inbox.messages().unwrap();
-        assert_eq!(messages.len(), 1);
-        assert!(messages[0].body.contains("--into"));
-        assert!(messages[0].body.contains(&fx.id));
+        assert_eq!(messages.len(), 2);
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message.kind == "gate_diagnosis_needed")
+                .count(),
+            1
+        );
+        let repair = messages
+            .iter()
+            .find(|message| message.kind == "changes_requested")
+            .unwrap();
+        assert!(repair.body.contains("--into"));
+        assert!(repair.body.contains(&fx.id));
         let gates = fx.events("gate_started");
         fx.commit_on_main("unrelated.txt", "moved\n", "main moves");
         fx.sync();

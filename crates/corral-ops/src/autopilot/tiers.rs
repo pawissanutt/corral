@@ -23,6 +23,14 @@ impl Pilot<'_> {
     /// destination head so that the gate runs on the replayed head. A Plan member's receipt
     /// carried onto corral's clean replay of it stands instead of a new gate.
     pub(super) fn start_gate(&self, head: &str) -> Result<GateNow> {
+        if self.stage() == Some(AutoStage::Gating)
+            && self
+                .state()
+                .and_then(|state| state.sha.as_deref())
+                .is_some_and(|submitted| submitted != head)
+        {
+            return self.escalate("submitted candidate changed before gate admission; an ordinary commit is not a new submission").map(GateNow::Replayed);
+        }
         let base = corral_git::rev_sha(&self.run.worktree, &self.run.base)?;
         if !corral_git::is_ancestor(&self.run.worktree, &base, head)? {
             return self.rebase().map(GateNow::Replayed);
