@@ -26,6 +26,11 @@ PI_CONTRACTS = (
 # Each catalog entry names a behavior, not merely a duration. Changes to these owners
 # restore the whole relevant torture suite; budget fixtures alone do not opt them in.
 SLOW_OWNERS = {
+    # Bounded annotation CAS contention uses the service and its exact Store lease/append owners.
+    "=annotations::tests::annotations_reply_resolve_race_uses_revision_cas": (
+        "crates/corral-ops/src/annotations.rs", "crates/corral-ops/src/annotations_tests.rs",
+        "crates/corral-core/src/store/annotations.rs", "crates/corral-core/src/store/head_api.rs",
+    ),
     "handoff_publication_crash_matrix": ("crates/corral-ops/src/assistant/workflow/handoff/",),
     "scratch_gc_resume_startup_interleaving": (
         "crates/corral-core/src/assistant", "crates/corral-ops/src/assistant/scratch",

@@ -163,6 +163,37 @@ fn annotations_durable_retry_status_and_identity_isolation() {
         serde_json::to_value(new_audit).unwrap()
     );
     let initial = f.snapshot();
+    let admissions = std::cell::Cell::new(0);
+    let fenced_during_commit = AnnotationActor::authenticated(|_, _| {
+        admissions.set(admissions.get() + 1);
+        if admissions.get() == 1 {
+            Ok(AnnotationAuthor::Owner {
+                version: 1,
+                surface: AnnotationSurface::Cli,
+            })
+        } else {
+            Err(annotation_error(
+                AnnotationCode::NotOwner,
+                "authority revoked",
+                Value::Null,
+            ))
+        }
+    });
+    assert_eq!(
+        code(
+            reply(
+                &f.store,
+                &fenced_during_commit,
+                &f.task,
+                "revoked",
+                f.change(2)
+            )
+            .unwrap_err()
+        ),
+        AnnotationCode::NotOwner
+    );
+    assert_eq!(admissions.get(), 2);
+    assert_eq!(f.snapshot(), initial);
     let view = list(&f.store, &f.task, &AnnotationsQuery::default()).unwrap();
     let AnnotationsPage::List { items } = view.page else {
         panic!()
@@ -327,6 +358,11 @@ fn annotations_invalid_anchors_are_noops() {
 fn annotations_reply_resolve_race_uses_revision_cas() {
     let f = Fixture::new();
     f.open();
+    let before = (
+        f.store.head(&f.task).unwrap().rev,
+        f.store.view().unwrap().seq().0,
+        f.store.event_tail().unwrap(),
+    );
     let barrier = std::sync::Barrier::new(2);
     let results = std::thread::scope(|s| {
         let a = s.spawn(|| {
@@ -341,9 +377,21 @@ fn annotations_reply_resolve_race_uses_revision_cas() {
     });
     assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
     assert_eq!(
-        code(results.into_iter().find_map(Result::err).unwrap()),
-        AnnotationCode::ThreadRevisionConflict
+        (
+            f.store.head(&f.task).unwrap().rev,
+            f.store.view().unwrap().seq().0,
+            f.store.event_tail().unwrap()
+        ),
+        (before.0 + 1, before.1 + 1, before.2 + 1)
     );
+    let loser = results
+        .into_iter()
+        .find_map(Result::err)
+        .unwrap()
+        .downcast::<AnnotationError>()
+        .unwrap();
+    assert_eq!(loser.code, AnnotationCode::ThreadRevisionConflict);
+    assert_eq!(loser.detail["revision"], 2);
     let t = f
         .store
         .head(&f.task)
@@ -352,6 +400,10 @@ fn annotations_reply_resolve_race_uses_revision_cas() {
         .unwrap()
         .unwrap();
     assert_eq!(t.revision, 2);
+    assert_eq!(
+        loser.detail["state"],
+        serde_json::to_value(t.state).unwrap()
+    );
     let next = if t.state == AnnotationState::Open {
         resolve(&f.store, &owner(), &f.task, "close", f.change(2))
     } else {
@@ -360,11 +412,28 @@ fn annotations_reply_resolve_race_uses_revision_cas() {
     .unwrap();
     assert_eq!(next.state, AnnotationState::Resolved);
     assert_eq!(
-        reopen(&f.store, &owner(), &f.task, "reopen", f.change(3))
+        reply(&f.store, &owner(), &f.task, "still-resolved", f.change(3))
+            .unwrap()
+            .state,
+        AnnotationState::Resolved
+    );
+    assert_eq!(
+        reopen(&f.store, &owner(), &f.task, "reopen", f.change(4))
             .unwrap()
             .state,
         AnnotationState::Open
     );
+    let before = f.snapshot();
+    let replayed = if t.state == AnnotationState::Open {
+        reply(&f.store, &owner(), &f.task, "race-reply", f.change(1))
+    } else {
+        resolve(&f.store, &owner(), &f.task, "race-resolve", f.change(1))
+    }
+    .unwrap();
+    assert!(replayed.replayed);
+    assert_eq!(replayed.revision, 2);
+    assert_eq!(replayed.state, t.state);
+    assert_eq!(before, f.snapshot());
 }
 
 #[test]

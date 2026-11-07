@@ -43,12 +43,14 @@ threads-required = 2
 # Scratch: deterministic resume/startup-vs-GC interleaving requires admission and Git fixtures.
 # Plans: repeated multi-member full-gate/failure-repair journeys; ordinary member tests remain.
 # Cleanup: retained-branch approval corruption matrix across process restart.
+# Annotations: bounded std-thread reply/resolve contention proves revision CAS under real Store leases.
 # Quick skips this catalog; declared tests can opt in. The extra memo test exercises
 # a wide Git-settings matrix and remains excluded from quick as before.
 [profile.quick]
 default-filter = '''
 not (
-  (binary_id(=corral-ops) & test(handoff_publication_crash_matrix))
+  (binary_id(=corral-ops) & test(=annotations::tests::annotations_reply_resolve_race_uses_revision_cas))
+| (binary_id(=corral-ops) & test(handoff_publication_crash_matrix))
 | (binary_id(=corral-ops) & test(scratch_gc_resume_startup_interleaving))
 | (binary_id(=corral-ops) & test(operating::records_tests::one_winner_per_thousand_claims_raced_by_eight_independent_processes))
 | (binary_id(=corral-ops) & test(submission_paths_tests::crashes::) & not test(submission_paths_child_entry))
@@ -78,7 +80,8 @@ path = "junit.xml"
 [profile.slow]
 slow-timeout = "30s"
 default-filter = '''
-(binary_id(=corral-ops) & test(handoff_publication_crash_matrix))
+(binary_id(=corral-ops) & test(=annotations::tests::annotations_reply_resolve_race_uses_revision_cas))
+| (binary_id(=corral-ops) & test(handoff_publication_crash_matrix))
 | (binary_id(=corral-ops) & test(scratch_gc_resume_startup_interleaving))
 | (binary_id(=corral-ops) & test(operating::records_tests::one_winner_per_thousand_claims_raced_by_eight_independent_processes))
 | (binary_id(=corral-ops) & test(submission_paths_tests::crashes::) & not test(submission_paths_child_entry))
