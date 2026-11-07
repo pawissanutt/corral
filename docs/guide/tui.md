@@ -187,6 +187,8 @@ scrolls the box under the pointer; `‹ back` is Esc.
 On the **Plan** and **Acceptance** tabs of a task that is not Done or Dropped, `F` or the
 visible **Recover…** button opens the owner recovery sheet. The key and the button take the
 same path, and neither applies anything. `r`, `R` and `u` keep their existing meanings.
+On the board, Blocked, Review and plan-decision cards offer **recover…** in the card menu
+(`.` or right-click). The Review screen has a **Recover…** button and `F`.
 
 The sheet opens with a read-only preview, the same one `corral recover <id> --action …`
 prints. In order, it shows the target identity and current blockers, the action chooser
@@ -217,8 +219,16 @@ and notes kept, so you have to confirm again. A changed proposal is never applie
 acknowledgement, click a field to focus it, and click **Cancel**, **Continue…**, **Edit** or
 **Confirm recovery**. The wheel scrolls the body.
 
-Recovery is labeled with text, not color alone. The detail header shows `[owner recovery]`,
-`[review waived]` and `[check overridden]` (or `[recovery uncertain]` / `[recovery failed]`).
+**Confirm recovery** is the owner board's explicit confirmation, bound to the exact preview
+shown. It works inside herdr, but is refused in a managed agent context (PM, worker,
+reviewer or assistant). The CLI keeps its own typed confirmation outside herdr.
+
+Recovery is labeled with text, not color alone. Cards and the detail header show a history
+line such as `history: [owner recovery] [review waived] [check overridden]`, plus
+`[recovery uncertain]`, `[recovery failed]` or `[recovery pending]`. Exception labels count
+only operations that actually applied. A card with recovery history shows `✓ reviewed · see
+recovery` or a yellow done check instead of a plain green one; a Review or Done card whose
+history is unavailable says `recovery history unavailable · see details`.
 The Acceptance tab's **Owner recovery** section lists each operation with its action, target,
 state, the note "owner recovery, not ordinary policy success", the reason, the local-owner
 attestation, the effect, every check as `original … → disposition`, and its linked receipts.
