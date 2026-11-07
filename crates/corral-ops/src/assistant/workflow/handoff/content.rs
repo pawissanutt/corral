@@ -41,6 +41,7 @@ impl Content {
         } else {
             store.put_evidence(AREA, &key, bytes, |_| json!(reference))?;
         }
+        crate::agent::failpoint("handoff_content_published");
         Ok(reference)
     }
     pub fn load(&self, store: &Store) -> Result<Vec<u8>> {

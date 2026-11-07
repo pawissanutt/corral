@@ -6,8 +6,11 @@ Implements T-807 design §§4–5 C2 service foundations in
 `crates/corral-ops/src/assistant/workflow/handoff/`. Public `assistant_handoff`
 remains unavailable: C2 does **not** create a task/outbox, transfer `ScopeOwner`,
 start a worker, grant execution, adopt a plan, or claim a native session fork.
-C3 owns those lifecycle effects and their shared acceptance proof. Interface
-confirmation was requested as `T-853/R1/Q1`.
+C3 owns those lifecycle effects and their shared acceptance proof. PM confirmed
+this staged split in `T-853/R1/Q1` revision 2, explicitly retaining all joint acceptance.
+Immutable preview descriptors and their source/intent lookup are not journals or
+ownership state. `assistant-handoff-journals` is the **one authoritative transfer
+journal**, referenced through the existing workflow handoff package.
 
 The package and journal extend T-751's container/artifact model and retain T-752's
 fail-closed phase/epoch fence. There is no second author or completion runner.
@@ -23,7 +26,11 @@ fail-closed phase/epoch fence. There is no second author or completion runner.
    new repository. Research/plan-only without a scratch remains explicitly code-free.
 3. Inspect `Prepared::id`, `package`, and `preview`; or use `read_package` /
    `preview_package`. Preview publishes immutable bytes but changes no workflow
-   ownership, phase or authority. Different previews have different digest-bound IDs.
+   ownership, phase or authority. Its lookup is bound to source CAS and exact
+   project/scope/goal/context/source intent, atomically with the immutable preview.
+   A repeated intent recovers the same checkpoint; changed source bytes refuse
+   rather than silently recapture work after a lost reply. Different choices have
+   different digest-bound identities, but only one can reserve a source revision.
 4. Call `reserve` **inside the existing authenticated assistant-container transaction**,
    alongside its receipt. CAS, journal insertion, phase `HandoffPreparing`, handoff
    reference, revision and epoch publish together. The owner remains Local. A lost
@@ -49,6 +56,10 @@ no filesystem-wide atomic snapshot is claimed.
   decisions, progress, findings, failed approaches, assumptions, evidence, questions
   and next action. Minimal still includes current work, mandatory blockers/findings,
   questions and next action. No discussion history is accepted outside Conversation.
+- Plan preview exposes the exact revision/digest/stage and pinned review artifacts.
+  Local-review freshness is explicitly unknown for opaque historical artifacts:
+  T-753's lifecycle is still unlanded, so no trusted target-revision binding or
+  freshness/approval is invented. C3/T-753 must supply actual lifecycle metadata.
 - Conversation accepts only a closed visible user/assistant-message schema, one
   contiguous range, explicit branch/checkpoint and exclusions. Preview reports the
   selected range, archived bytes/messages and actually loaded messages/bytes.
@@ -82,9 +93,12 @@ no filesystem-wide atomic snapshot is claimed.
 ## Acceptance evidence
 
 Primary log: `.evidence/c2-workflow-final.log` (14 workflow tests, including 7 new
-C2 cases; all passed in 1.21 s). `.evidence/c2-merge-red.log` records the failing-first
+C2 cases; all passed in 8.14 s, including the expanded slow publication matrix). `.evidence/c2-merge-red.log` records the failing-first
 regression: a resolved-but-uncommitted merge was silently accepted. The same refusal
 case passes after checking in-progress Git administration and resolve-undo state.
+`.evidence/c2-lost-preview-red.log` records a second failing-first variant: retry
+silently captured changed source bytes after preview publication. Stable intent
+lookup now reconciles the pinned preview and names the changed source instead.
 The receipted gate result is attached separately when complete.
 
 | Criterion | Observable C2 proof | Explicit shared boundary |
@@ -93,7 +107,7 @@ The receipted gate result is attached separately when complete.
 | A06 | Selected contiguous history only, honest archive/load counts, closed credential/tool fields, minimal mandatory F1 and code-presence tests. Fresh Git config lacks source credential helper. | No live/native fork is exposed. Provider/launch policy stays with lifecycle owner. |
 | A07 | One disposable Git restoration journey compares original raw index/work manifests before/after; restores binary staged/unstaged bytes, CRLF, index-only addition/deletion, untracked executable bytes and exact base/HEAD/stranded-branch commits. Ignored source bytes remain intact. | C3 adopts the verified seed into the normal task worktree and retains a single driver. |
 | A08 | Sparse oversize fixture, special symlink, missing required bundle, deterministic concurrent edit and stale selection refusals; failed restore leaves no destination. Code presence cannot be omitted, and reserved source disposal refuses. | C3 repeats source validation after fencing and before ownership publication. |
-| A14 | Explicit slow crash matrix injects failure after package preparation, preview publication and reservation staging. Reopen plus committed-lost-ack retry yields one preview and one journal; zero tasks/dispatch, Local owner retained. | Task-created-before-death, held task/outbox publication, actual ownership commit and notification recovery belong to C3; no claim those effects were tested here. |
+| A14 | Explicit slow crash matrix covers interrupted capture, early/late content attachment, verified restore, package preparation, atomic preview/intent publication and reservation staging. Reopen plus committed-lost-ack recovery yields one preview/intent and one journal; zero tasks/dispatch, Local owner retained. | Task-created-before-death, held task/outbox publication, actual ownership commit and notification recovery belong to C3; no claim those effects were tested here. |
 
 Inherited T-754 A8: research, draft and advisory-reviewed plan metadata are
 parameterized through package/readback without importing approval; dirty partial
@@ -107,7 +121,7 @@ of predecessor acceptance based on this report alone.
 ## Checks and cost
 
 - `cargo test -p corral-ops assistant::workflow --lib -- --nocapture`: 14/14 passed,
-  1.21 s suite time (compilation separate). Seven new C2 tests; one publication
+  8.14 s suite time (compilation separate). Seven new C2 tests; one publication
   crash matrix is explicitly slow, with handoff-module owner trigger.
 - `cargo test -p corral-ops --test assistant_scratch c13_discard_saves_commits_staged_unstaged_and_untracked_work_restorably -- --nocapture`: existing discard/restore regression passed (0.30 s), exercising ordinary cleanup with the new retention check.
 - `python3 scripts/test_gate_policy.py`: passed; validates slow membership/owners.

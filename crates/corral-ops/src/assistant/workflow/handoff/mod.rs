@@ -26,6 +26,8 @@ pub use retention::require_source_releasable;
 
 const PACKAGES: &str = "assistant-handoff-packages";
 const JOURNALS: &str = "assistant-handoff-journals";
+/// Immutable source/intent-to-preview lookup, not ownership or another journal.
+const INTENTS: &str = "assistant-handoff-intents";
 pub const VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +44,7 @@ pub enum Goal {
 #[serde(deny_unknown_fields)]
 pub struct Package {
     pub version: u32,
+    pub intent: corral_core::blob_ref::BlobHash,
     pub assistant: String,
     pub expected: Expected,
     pub project: String,
@@ -58,6 +61,19 @@ pub struct Package {
     pub source_path: Option<std::path::PathBuf>,
 }
 
+/// Immutable preview descriptor, NOT a transfer journal or ownership state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Publication {
+    pub version: u32,
+    pub id: String,
+    pub package: Content,
+    pub assistant: String,
+    pub expected: Expected,
+    pub previous_phase: WorkflowPhase,
+}
+
+/// The single authoritative transfer journal; absent until reservation commits.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Journal {
@@ -76,14 +92,14 @@ pub struct Journal {
 /// Only successful preparation/restore verification can construct this value. C3 must
 /// revalidate the source AFTER reservation closes admission and before ownership commits.
 pub struct Prepared {
-    journal: Journal,
+    publication: Publication,
     preview: Preview,
     package: Package,
 }
 
 impl Prepared {
     pub fn id(&self) -> &str {
-        &self.journal.id
+        &self.publication.id
     }
     pub fn preview(&self) -> &Preview {
         &self.preview
@@ -93,6 +109,7 @@ impl Prepared {
     }
 }
 
+#[derive(Serialize)]
 pub struct Request {
     pub project: String,
     pub scope: Vec<String>,
@@ -178,6 +195,17 @@ pub fn prepare(
             "handoff_missing: existing project scratch cannot be omitted"
         ),
     }
+    let intent =
+        corral_core::blob_ref::BlobHash::of(&serde_json::to_vec(&(expected, &request, source))?);
+    let intent_key = format!("{}/{}", marker(session, expected), intent);
+    if let Some(id) = store.record::<String>(INTENTS, &intent_key)? {
+        let prepared = recover(store, &id)?;
+        ensure!(
+            prepared.package.intent == intent,
+            "handoff_reconciling: intent lookup differs from published package"
+        );
+        return Ok(prepared);
+    }
     let snapshot = source
         .map(|(path, base, branch)| Snapshot::capture(store, path, base, branch))
         .transpose()?;
@@ -188,6 +216,7 @@ pub fn prepare(
     }
     let package = Package {
         version: VERSION,
+        intent,
         assistant: session.into(),
         expected: expected.clone(),
         project: request.project,
@@ -210,30 +239,30 @@ pub fn prepare(
     );
     let reference = Content::put(store, &bytes)?;
     crate::agent::failpoint("handoff_package_prepared");
-    let journal = Journal {
+    let publication = Publication {
         version: VERSION,
         id: format!("{}/{}", marker(session, expected), reference.blob.hash()),
         package: reference,
         assistant: session.into(),
         expected: expected.clone(),
         previous_phase: w.phase,
-        reserved: false,
-        source_retained: true,
     };
     // A prepared preview is immutable and inspectable, but does not fence or transfer work.
     // CAS insert prevents a lost acknowledgement from selecting different bytes at this identity.
-    if !store.insert_record(PACKAGES, &journal.id, &journal)? {
-        let old: Journal = store
-            .record(PACKAGES, &journal.id)?
-            .context("handoff package missing")?;
-        ensure!(
-            old == journal,
-            "handoff_changed: immutable preview identity differs"
-        );
-    }
+    store.records_transaction(|| {
+        if !store.insert_record(PACKAGES, &publication.id, &publication)? {
+            let old: Publication = store.record(PACKAGES, &publication.id)?.context("handoff package missing")?;
+            ensure!(old == publication, "handoff_changed: immutable preview identity differs");
+        }
+        if !store.insert_record(INTENTS, &intent_key, &publication.id)? {
+            ensure!(store.record::<String>(INTENTS, &intent_key)?.as_deref() == Some(publication.id.as_str()),
+                "handoff_changed: this source/intent already published another checkpoint; reconcile readback");
+        }
+        Ok(())
+    })?;
     crate::agent::failpoint("handoff_preview_published");
     Ok(Prepared {
-        journal,
+        publication,
         preview,
         package,
     })
@@ -247,7 +276,7 @@ pub fn reserve(
     container: &mut AssistantContainer,
     prepared: &Prepared,
 ) -> Result<Journal> {
-    let j = &prepared.journal;
+    let j = &prepared.publication;
     ensure!(
         j.assistant == session,
         "handoff_identity: wrong source session"
@@ -301,8 +330,16 @@ pub fn reserve(
         blob: j.package.blob.clone(),
         bytes: j.package.bytes as u32,
     });
-    let mut reserved = j.clone();
-    reserved.reserved = true;
+    let reserved = Journal {
+        version: VERSION,
+        id: j.id.clone(),
+        package: j.package.clone(),
+        assistant: j.assistant.clone(),
+        expected: j.expected.clone(),
+        previous_phase: j.previous_phase,
+        reserved: true,
+        source_retained: true,
+    };
     ensure!(
         store.insert_record(JOURNALS, &j.id, &reserved)?,
         "handoff_reconciling: journal already exists"
@@ -323,13 +360,21 @@ pub fn read_journal(store: &Store, id: &str) -> Result<Option<Journal>> {
 }
 
 /// Preview and current reservation readback reconstruct from pinned blobs, not transcripts.
-pub fn read_package(store: &Store, id: &str) -> Result<(Journal, Package, Preview)> {
-    let j: Journal = read_journal(store, id)?
-        .or(store.record(PACKAGES, id)?)
-        .context("handoff_missing: unknown transfer marker")?;
+pub fn read_package(store: &Store, id: &str) -> Result<(Publication, Package, Preview)> {
+    let j: Publication = store
+        .record(PACKAGES, id)?
+        .context("handoff_missing: incomplete/unknown package publication")?;
+    if let Some(journal) = read_journal(store, id)? {
+        ensure!(
+            journal.package == j.package
+                && journal.expected == j.expected
+                && journal.assistant == j.assistant,
+            "handoff_reconciling: journal/package publication differs"
+        );
+    }
     ensure!(
-        j.version == VERSION,
-        "handoff_incompatible: unsupported journal version"
+        j.version == VERSION && j.id == id,
+        "handoff_incompatible: unsupported/mismatched package publication"
     );
     let package: Package = serde_json::from_slice(&j.package.load(store)?)
         .context("decode immutable handoff package")?;
@@ -366,7 +411,7 @@ pub fn read_package(store: &Store, id: &str) -> Result<(Journal, Package, Previe
 /// Recover exact preparation after host death/lost acknowledgement. Never recapture different
 /// bytes, fabricate a new task identity, or fall back to an empty checkout on missing data.
 pub fn recover(store: &Store, id: &str) -> Result<Prepared> {
-    let (journal, package, preview) = read_package(store, id)?;
+    let (publication, package, preview) = read_package(store, id)?;
     match (&package.snapshot, &package.source_path) {
         (Some(snapshot), Some(source)) => {
             let temp = tempfile::tempdir().context("create recovery verification")?;
@@ -377,7 +422,7 @@ pub fn recover(store: &Store, id: &str) -> Result<Prepared> {
         _ => anyhow::bail!("handoff_missing: code snapshot/source identity mismatch"),
     }
     Ok(Prepared {
-        journal,
+        publication,
         package,
         preview,
     })

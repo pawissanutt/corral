@@ -83,7 +83,7 @@ fn handoff_context_modes_select_only_visible_history_and_disclose_paging() {
     assert!(task.history.is_none());
 }
 
-fn repo(path: &Path) -> String {
+pub(super) fn repo(path: &Path) -> String {
     std::fs::create_dir_all(path).unwrap();
     git(path, &["init", "--template=", "-b", "work"], None).unwrap();
     std::fs::write(path.join("file"), b"base\r\n").unwrap();
@@ -302,8 +302,28 @@ fn handoff_preview_reservation_readback_is_idempotent_and_keeps_local_source_own
         container,
         "preview has no ownership effect"
     );
-    let id = prepared.journal.id.clone();
+    let id = prepared.id().to_owned();
     let loaded = read_package(&f.ctx.store, &id).unwrap();
+    assert!(
+        read_journal(&f.ctx.store, &id).unwrap().is_none(),
+        "preview is not a transfer journal"
+    );
+    let mut other_intent = request();
+    other_intent.goal = Goal::ImplementationShip;
+    let other = prepare(
+        &f.ctx.store,
+        &session,
+        &container,
+        &expected,
+        other_intent,
+        None,
+    )
+    .unwrap();
+    assert_ne!(
+        prepared.id(),
+        other.id(),
+        "intent participates in immutable identity"
+    );
     assert_eq!(loaded.1, prepared.package);
     assert_eq!(loaded.2, prepared.preview);
     let reserve_once = || {
@@ -314,6 +334,13 @@ fn handoff_preview_reservation_readback_is_idempotent_and_keeps_local_source_own
     let first = reserve_once().unwrap();
     let after = f.ctx.store.get_assistant_container(&session).unwrap();
     assert_eq!(reserve_once().unwrap(), first);
+    assert!(
+        f.ctx
+            .store
+            .update_assistant_container(&session, |c| reserve(&f.ctx.store, &session, c, &other))
+            .is_err(),
+        "a competing intent cannot reserve the same source"
+    );
     assert_eq!(
         after,
         f.ctx.store.get_assistant_container(&session).unwrap()
@@ -323,7 +350,14 @@ fn handoff_preview_reservation_readback_is_idempotent_and_keeps_local_source_own
     assert_eq!(w.phase, WorkflowPhase::HandoffPreparing);
     assert!(first.reserved && first.source_retained);
     assert!(super::super::boundary::require_ordinary(&f.ctx.store, &session, &after).is_err());
-    assert_eq!(read_package(&f.ctx.store, &id).unwrap().0, first);
+    assert_eq!(
+        read_package(&f.ctx.store, &id).unwrap().0.package,
+        first.package
+    );
+    assert_eq!(
+        read_journal(&f.ctx.store, &id).unwrap(),
+        Some(first.clone())
+    );
     let recovered = recover(&f.ctx.store, &id).unwrap();
     assert_eq!(recovered.id(), id);
     assert_eq!(recovered.package(), prepared.package());
@@ -380,6 +414,13 @@ fn handoff_plan_stage_artifacts_and_late_findings_remain_exact_without_importing
         let (_, loaded, _) = read_package(&f.ctx.store, p.id()).unwrap();
         assert_eq!(loaded.plan, w.current_plan);
         assert_eq!(loaded.reviews, w.reviews);
+        let projected = preview_package(&f.ctx.store, p.id()).unwrap();
+        assert_eq!(projected.plan, w.current_plan);
+        assert_eq!(projected.local_reviews, w.reviews);
+        assert_eq!(
+            projected.local_review_freshness, None,
+            "opaque review metadata cannot imply freshness or approval"
+        );
         f.ctx
             .store
             .update_assistant_container(&session, |c| {
@@ -398,21 +439,16 @@ fn handoff_plan_stage_artifacts_and_late_findings_remain_exact_without_importing
     }
 }
 
-#[test]
-fn handoff_code_presence_and_retention_cannot_be_silently_bypassed() {
-    let mut f = ts::fx();
-    let (session, c, expected) = planning(&mut f);
-    let source = f._tmp.path().join("source");
-    let base = repo(&source);
+pub(super) fn record_source(f: &ts::Fx, session: &str, source: &Path, base: &str) {
     f.ctx
         .store
-        .update_assistant(&session, |s| {
+        .update_assistant(session, |s| {
             s.scratch.push(corral_core::assistant::AssistantScratch {
                 slug: "work".into(),
                 project: "app".into(),
-                path: source.clone(),
+                path: source.to_path_buf(),
                 branch: "work".into(),
-                base: base.clone(),
+                base: base.into(),
                 created: corral_core::clock::now(),
                 kind: "spike".into(),
                 bytes: None,
@@ -421,6 +457,15 @@ fn handoff_code_presence_and_retention_cannot_be_silently_bypassed() {
             Ok(())
         })
         .unwrap();
+}
+
+#[test]
+fn handoff_code_presence_and_retention_cannot_be_silently_bypassed() {
+    let mut f = ts::fx();
+    let (session, c, expected) = planning(&mut f);
+    let source = f._tmp.path().join("source");
+    let base = repo(&source);
+    record_source(&f, &session, &source, &base);
     assert!(
         prepare(&f.ctx.store, &session, &c, &expected, request(), None)
             .err()
@@ -443,6 +488,34 @@ fn handoff_code_presence_and_retention_cannot_be_silently_bypassed() {
         p.package().snapshot.is_some(),
         "minimal cannot discard code"
     );
+    let original = std::fs::read(source.join("file")).unwrap();
+    std::fs::write(
+        source.join("file"),
+        b"edited after a lost preview acknowledgement",
+    )
+    .unwrap();
+    let mut retry = request();
+    retry.context.mode = ContextMode::Minimal;
+    let changed = prepare(
+        &f.ctx.store,
+        &session,
+        &c,
+        &expected,
+        retry,
+        Some((&source, &base, "work")),
+    );
+    assert!(
+        changed.is_err(),
+        "retry silently captured new bytes instead of reconciling the published preview"
+    );
+    assert!(
+        changed
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("snapshot_changed")
+    );
+    std::fs::write(source.join("file"), original).unwrap();
     f.ctx
         .store
         .update_assistant_container(&session, |c| reserve(&f.ctx.store, &session, c, &p))
