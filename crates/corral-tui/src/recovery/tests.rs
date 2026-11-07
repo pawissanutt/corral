@@ -482,3 +482,85 @@ fn acceptance_detail_shows_populated_recovery_history_beside_original_results() 
         assert!(text.contains(needle), "{needle} missing\n{text}");
     }
 }
+
+#[test]
+fn owner_question_added_while_editing_gets_its_own_field_on_continue() {
+    let (fx, id) = decisions_fixture();
+    CALLS.with(|c| c.set(0));
+    let mut s = RecoverySheet::with(&fx.ctx, &id, Kind::AcceptPlan, counting);
+    focus(&mut s, Control::Check(0));
+    s.on_key(key(' '), &fx.ctx);
+    focus(&mut s, Control::Decision(0));
+    type_text(&mut s, &fx.ctx, "Keep the closed action set");
+    focus(&mut s, Control::Decision(1));
+    type_text(&mut s, &fx.ctx, "Rows in the task database");
+    focus(&mut s, Control::Reason);
+    type_text(&mut s, &fx.ctx, "Reviewer unavailable");
+    // A run question becomes pending while the sheet is open.
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            task.runs.push(
+                serde_json::from_value(serde_json::json!({
+                    "id": "R1", "agent": "fixture", "profile": "fast",
+                    "model": "vendor/model", "harness": "claude",
+                    "worktree": "/not-read", "branch": "corral/T-008", "base": "main",
+                    "base_sha": "abc123", "started": "2026-10-28T03:00:00Z"
+                }))
+                .unwrap(),
+            );
+            let run = task.runs.last_mut().unwrap();
+            let at = "2026-10-28T03:00:00Z".parse().unwrap();
+            run.obligations.decisions.push(corral_core::DecisionRecord {
+                request: corral_core::DecisionRequest {
+                    version: 1,
+                    id: "q-transport".into(),
+                    run: run.id.clone(),
+                    question: "Pick transport".into(),
+                    requested_action: "answer".into(),
+                    owner: "owner".into(),
+                    source: corral_core::ObligationSource::Worker,
+                    deadline: None,
+                },
+                registered_at: at,
+                observation: corral_core::WaitObservation {
+                    at,
+                    state: corral_core::WaitState::Pending,
+                    detail: String::new(),
+                },
+                receipt: None,
+            });
+            Ok(())
+        })
+        .unwrap();
+    focus(&mut s, Control::Continue);
+    s.on_key(code(KeyCode::Enter), &fx.ctx);
+    assert_eq!(s.step, Step::Edit, "the new question is still open");
+    assert_eq!(
+        s.focused(),
+        Control::Continue,
+        "focus stays on the same control"
+    );
+    assert_eq!(
+        s.questions,
+        ["Choose boundary", "Pick storage", "Pick transport"]
+    );
+    assert_eq!(s.answers[0], "Keep the closed action set");
+    assert_eq!(s.answers[1], "Rows in the task database");
+    let (text, _) = render(&mut s, &fx.ctx, 80, 40);
+    assert!(text.contains("3. Pick transport"), "{text}");
+    focus(&mut s, Control::Decision(2));
+    type_text(&mut s, &fx.ctx, "Local sockets");
+    if !s.offered.is_empty() && s.acknowledged.len() != s.offered.len() {
+        focus(&mut s, Control::Check(0));
+        s.on_key(key(' '), &fx.ctx);
+    }
+    focus(&mut s, Control::Continue);
+    s.on_key(code(KeyCode::Enter), &fx.ctx);
+    assert_eq!(s.step, Step::Confirm, "{:?}", s.notice);
+    assert!(
+        s.resolution_notes()
+            .contains("Resolved: Pick transport => Local sockets")
+    );
+    assert_eq!(calls(), 0);
+}
