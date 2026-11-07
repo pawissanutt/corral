@@ -183,7 +183,7 @@ export const choose: Chooser = (ui, rows) => ui.custom<ResumeRow | undefined>((t
         else break;
       }
       return [
-        cut(theme.bold(`Resume an assistant session (${shown.length}/${rows.length}) · current conversation and draft stay until you select`)),
+        cut(theme.bold(`Resume an assistant session (${shown.length}/${rows.length}) · the current conversation stays until you select`)),
         cut(`Search: ${filter}▏`),
         ...(shown.length ? shown.slice(start, end).flatMap((row, i) => lines(start + i).map(style(row, start + i === index)))
           : [theme.fg("dim", cut("  No matching assistant sessions"))]),
