@@ -17,6 +17,22 @@ skills directory `~/.corral/skills/corral-pi`. When the new directory is absent,
 legacy installations are read in place, without moving or merging directories, so old
 and new binaries can coexist. No reinstall is required.
 
+## Tool result presentation
+
+Corral receipts have separate model-facing text and canonical machine data. The model sees
+operation/state, request ID and result fields, with multiline prose/code left literal. Todo
+ledgers use phase/step outlines; unfamiliar operations or protocol versions retain full JSON.
+Identity, timestamps and payload digests remain in canonical receipts, not the compact text.
+Errors, effects, revisions and continuation fields remain visible. Receipt storage, validation,
+lookup and authority checks are unchanged; receipt text is not a machine-parsing API.
+
+Job peeks, waits and completion notices likewise show metadata followed by unescaped, untrusted
+logs. Ordinary successful Bash retains stdout-only output; failures and partial output include
+status/paging metadata. Code Mode keeps its existing return contracts: Corral tools return
+structured receipts, completed Bash returns an object, and legacy job tools return JSON strings.
+Print `(await tools.bash({ command: "git status --short" })).output` to show just stdout rather
+than printing the entire result object. This changes presentation, not JSON tool argument schemas.
+
 ## Configuring a profile
 
 `corral-pi` is a built-in harness: you do not declare a `[harnesses.corral-pi]` table. A

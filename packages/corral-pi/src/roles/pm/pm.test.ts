@@ -168,7 +168,7 @@ test("default-resolved PM and assistant hosts have the same capability tools and
   expect(result.isError).toBeFalse();
   const output = result.content.find((part) => part.type === "text");
   if (!output || output.type !== "text") throw new Error("missing job result");
-  const startedJob = JSON.parse(output.text);
+  const startedJob = result.details as Record<string, unknown>;
   expect(startedJob.state).toBe("running");
   const job = startedJob.job;
   fixtureTransport().script([{ toolCalls: [
@@ -185,7 +185,7 @@ test("default-resolved PM and assistant hosts have the same capability tools and
     expect(result.isError).toBeFalse();
     const text = result.content.find((part) => part.type === "text");
     if (!text || text.type !== "text") throw new Error(`missing ${name} output`);
-    expect(JSON.parse(text.text).error).toBeUndefined();
+    expect((result.details as Record<string, unknown>).error).toBeUndefined();
   }
   const resources = pmHost.runtime.services.resourceLoader;
   expect(resources.getSkills().skills.map((skill) => skill.name)).toContain("pm-fixture");
@@ -200,7 +200,7 @@ test("default-resolved PM and assistant hosts have the same capability tools and
   if (!live || live.role !== "toolResult") throw new Error("missing live job result");
   const liveText = live.content.find((part) => part.type === "text");
   if (!liveText || liveText.type !== "text") throw new Error("missing live job output");
-  const pid = JSON.parse(liveText.text).pid;
+  const pid = Number((live.details as Record<string, unknown>).pid);
   expect(startTimeOf(pid)).toBeDefined();
   await pmHost.close();
   await assistantHost.close();

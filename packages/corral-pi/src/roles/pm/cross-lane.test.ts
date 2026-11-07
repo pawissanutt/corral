@@ -9,6 +9,7 @@ import { loadModules } from "../../host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../../host/restrict.ts";
 import { HostSession } from "../../host/session.ts";
 import { CorralClient, sha256Hex } from "../../tools/corral.ts";
+import { record } from "../../tools/presentation.ts";
 import { type FakeTransport, fakeCodexTransport } from "../../../test/fixtures/auth/fake-transport.ts";
 import { type FixtureInstall, buildFixtureInstall, PACKAGE_ROOT } from "../../../test/support/fixture-install.ts";
 import { nextEvent } from "../../../test/support/wait.ts";
@@ -31,11 +32,6 @@ interface TaskReadback {
     readonly state: string;
     readonly identity: { readonly role: string; readonly task: string | null; readonly run: string | null };
   }[];
-}
-
-interface ToolOutcome {
-  readonly state: string;
-  readonly result?: { readonly code?: string };
 }
 
 const isolated = privateHerdr();
@@ -156,9 +152,9 @@ test("a model-issued PM comment commits once in scope and cannot mutate another 
   expect(receipts[0]?.identity.role).toBe("pm");
   expect(receipts[0]?.identity.task ?? null).toBeNull();
   expect(receipts[0]?.identity.run ?? null).toBeNull();
-  const results: ToolOutcome[] = host.session.messages.flatMap((message) => message.role === "toolResult"
-    ? message.content.flatMap((part) => part.type === "text" ? [JSON.parse(part.text)] : []) : []);
-  expect(results.some((result) => result.state === "rejected" && result.result?.code === "out_of_scope")).toBeTrue();
+  const results = host.session.messages.flatMap((message) => message.role === "toolResult" ? [message.details] : []);
+  expect(results.some((result) => record(result) && result.state === "rejected"
+    && record(result.result) && result.result.code === "out_of_scope")).toBeTrue();
 }, 600_000);
 
 test("a model-issued PM todo survives fresh state reads without changing a task", async () => {
