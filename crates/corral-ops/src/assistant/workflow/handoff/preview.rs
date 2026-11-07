@@ -15,6 +15,11 @@ pub struct PackagePreview {
     pub source_workflow: String,
     pub source_revision: u64,
     pub goal: Goal,
+    pub plan: Option<corral_core::assistant_workflow::PlanRevision>,
+    pub local_reviews: Vec<corral_core::assistant_workflow::DesignArtifact>,
+    /// None = unknown, never fresh/approved by implication. T-753's local-review lifecycle
+    /// has not landed; opaque historical review artifacts have no trusted revision binding.
+    pub local_review_freshness: Option<bool>,
     pub context: Preview,
     pub code_preserved: bool,
     pub excluded_work: Vec<String>,
@@ -74,13 +79,16 @@ impl Package {
 }
 
 pub fn preview_package(store: &Store, id: &str) -> Result<PackagePreview> {
-    let (journal, package, context) = super::read_package(store, id)?;
+    let (publication, package, context) = super::read_package(store, id)?;
     Ok(PackagePreview {
-        package: journal.package,
+        package: publication.package,
         source_assistant: package.assistant,
         source_workflow: package.expected.workflow,
         source_revision: package.expected.state_revision,
         goal: package.goal,
+        plan: package.plan,
+        local_reviews: package.reviews,
+        local_review_freshness: None,
         context,
         code_preserved: package.snapshot.is_some(),
         excluded_work: package.snapshot.map_or_else(Vec::new, |s| s.excluded),
