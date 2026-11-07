@@ -223,6 +223,7 @@ fn selectable(store: &Store, task: &Task, role: ProfileRole, key: &str) -> Resul
     }
     // Legacy agents remain usable and explicitly lack semantic guidance/evidence.
     Ok(Profile {
+        connection: resolved.connection,
         harness: resolved.harness,
         model: resolved.model,
         vendor: resolved.vendor,

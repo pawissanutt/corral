@@ -54,6 +54,7 @@ fn fixture() -> (tempfile::TempDir, Ctx, String, PathBuf) {
         },
     );
     store.config.profiles.insert("worker".into(), Profile {
+        connection: None,
         harness: "frozen".into(),
         model: Some("openai/exact-v1".into()), vendor: Some("openai".into()),
         effort: Some("high".into()), args: vec!["--old-argument".into()],

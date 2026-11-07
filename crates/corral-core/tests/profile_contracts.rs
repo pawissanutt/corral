@@ -63,6 +63,7 @@ fn metadata() -> ProfileMetadata {
 
 fn custom_profile() -> Profile {
     Profile {
+        connection: None,
         metadata: Some(metadata()),
         harness: "omo".into(),
         model: Some("openai/exact-fixture-v1".into()),

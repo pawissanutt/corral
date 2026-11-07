@@ -119,6 +119,7 @@ fn memory_dispatch_writes_private_generation_file_and_launch_reference() {
         &target,
         "p1",
         &launch::HostSpec {
+            binding: None,
             cwd: tmp.path().into(),
             model: "fixture".into(),
             provider: None,

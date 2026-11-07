@@ -9,6 +9,9 @@ pub struct BudgetLedger {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BudgetRequest {
+    /// Server-resolved billing route; absent for legacy container-only estimates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<crate::connection::ConnectionId>,
     pub request: String,
     pub generation: u32,
     pub tokens: u64,
@@ -163,6 +166,7 @@ mod tests {
     #[test]
     fn unlimited_accounting_does_not_stop_at_the_ledger_cap() {
         let request = BudgetRequest {
+            connection: None,
             request: "prior".into(),
             generation: 1,
             tokens: 1,
@@ -191,6 +195,7 @@ mod tests {
             max_usd_nanos: None,
         };
         let request = BudgetRequest {
+            connection: None,
             request: "sdk-lane".into(),
             generation: 1,
             tokens: 10,
@@ -224,6 +229,7 @@ mod tests {
             assert!(
                 ledger.reserve(
                     BudgetRequest {
+                        connection: None,
                         request: kind.to_string(),
                         generation: 1,
                         tokens: 25,
@@ -239,6 +245,7 @@ mod tests {
         }
         assert!(ledger.exhausted(limits));
         let next = BudgetRequest {
+            connection: None,
             request: "resume".into(),
             generation: 2,
             tokens: 25,
@@ -261,6 +268,7 @@ mod tests {
         assert_eq!(copy.totals(), (85, 85)); // the other three calls remain reserved
         assert!(copy.settle("resume", 2, "again".into(), 10, 10).is_err());
         let unpriced = BudgetRequest {
+            connection: None,
             request: "unpriced".into(),
             generation: 3,
             tokens: 1,
@@ -273,6 +281,7 @@ mod tests {
         assert!(copy.reserve(unpriced, BudgetLimits::default()));
         assert!(!copy.reserve(
             BudgetRequest {
+                connection: None,
                 request: "priced-after-gap".into(),
                 generation: 4,
                 tokens: 1,

@@ -24,13 +24,18 @@ pub fn host_provider(vendor: Option<&str>, model: &str) -> Option<String> {
 pub fn worker_command(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     consulted("launch");
     let pane = &run.herdr.as_ref().context("launch pane missing")?.pane_id;
+    let resolved = run.execution.as_ref().map(|execution| &execution.resolved);
     let spec = HostSpec {
+        binding: crate::agent::connections::snapshot(run.execution.as_ref())?,
         cwd: run.worktree.clone(),
         model: run.model.clone().context("a corral-pi run needs a model")?,
-        provider: run
-            .model
-            .as_deref()
-            .and_then(|model| host_provider(run.vendor.as_deref(), model)),
+        provider: match resolved {
+            Some(resolved) => crate::agent::connections::provider(resolved)?,
+            None => run
+                .model
+                .as_deref()
+                .and_then(|model| host_provider(run.vendor.as_deref(), model)),
+        },
         effort: run.effort.clone(),
         prompt_file: Some(crate::prompt::run_prompt_file(ctx, &task.id, &run.id)?),
         adopt: false,
@@ -58,8 +63,9 @@ pub fn plan_command(
         .clone()
         .context("a corral-pi planner needs a model")?;
     let spec = HostSpec {
+        binding: crate::agent::connections::explicit(resolved)?,
         cwd: cwd.to_path_buf(),
-        provider: host_provider(resolved.vendor.as_deref(), &model),
+        provider: crate::agent::connections::provider(resolved)?,
         model,
         effort: resolved.effort.clone(),
         prompt_file: Some(prompt_file.to_path_buf()),

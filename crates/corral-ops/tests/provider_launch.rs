@@ -108,6 +108,7 @@ fn a_session_created_during_launch_is_owned_by_the_dispatched_run() {
     store.config.profiles.insert(
         "agent".into(),
         Profile {
+            connection: None,
             harness: "omo".into(),
             model: None,
             effort: None,

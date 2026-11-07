@@ -70,6 +70,7 @@ fn sessions_and_containers_round_trip_and_end_retains_transcripts() {
             container.state.binding.generation = 1;
             container.state.binding.health = HostHealth::Healthy;
             container.state.generations.push(AgentGeneration {
+                connection: None,
                 n: 1,
                 bind_nonce_sha256: "digest".into(),
                 pane: "pane-1".into(),

@@ -3,8 +3,11 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CONNECTIONS, connectionRules, resolveConnection } from "../src/auth/connections.ts";
-import { installApiKey } from "../src/auth/api-key.ts";
+import { apiKeyCommand, installApiKey } from "../src/auth/api-key.ts";
 import { FileCredentialStore } from "../src/auth/store.ts";
+import auth from "../src/auth/index.ts";
+import { authDir } from "../src/auth/paths.ts";
+import { authContext } from "../src/host/session.ts";
 import { createApiCatalog } from "../src/host/api-connections.ts";
 import { bindingDigest, parseBinding, type ConnectionBinding } from "../src/host/connections.ts";
 import { guardedFetch } from "../src/host/restrict.ts";
@@ -30,20 +33,26 @@ function anthropicResponse(): Response {
 
 for (const connection of ["anthropic-api", "openai-api"] as const) test(`${connection}: isolated credentials and guarded direct client require physical admission`, async () => {
   const dir = mkdtempSync(join(tmpdir(), "corral-api-connections-"));
+  const previousXdg = process.env.XDG_DATA_HOME;
+  process.env.XDG_DATA_HOME = dir;
+  const owned = authDir();
   const selected = binding(connection);
+  if (connection === "openai-api") expect(selected.digest).toBe("6ebb36809372a20d5b4df4fc07afbad27c5feb912052e17fe69f61e88a8becfb");
   const provider = CONNECTIONS[connection].provider;
   const subscription = provider === "openai" ? "openai-codex" : provider;
   try {
     const input = join(dir, "input"); writeFileSync(input, KEY, { mode: 0o600 });
-    const subscriptions = new FileCredentialStore(dir, subscription);
+    const subscriptions = new FileCredentialStore(owned, subscription);
     await subscriptions.modify(subscription, async () => ({ type: "oauth", access: "sk-ant-oat-SYNTHETIC", refresh: "r", expires: 9999999999999 }));
     const before = readFileSync(subscriptions.file);
-    await installApiKey(dir, connection, input);
-    const store = new FileCredentialStore(dir, provider, {}, connection);
+    await installApiKey(owned, connection, input);
+    const store = new FileCredentialStore(owned, provider, {}, connection);
+    const selectedCredentials = auth.credentials(authContext(provider, connection));
+    expect((await auth.credentials(authContext(subscription)).read(subscription))?.type).toBe("oauth");
     expect(store.file).not.toBe(subscriptions.file);
     expect((await store.read(provider))?.type).toBe("api_key");
     expect(resolveConnection(subscription)).toBe(provider === "openai" ? "openai-subscription" : "anthropic-subscription");
-    let sent = 0, admitted = 0;
+    let sent = 0, admitted = 0, fail = false;
     const fake = fakeCodexTransport();
     const send = async (url: string | URL | Request, init?: RequestInit) => {
       sent++;
@@ -51,16 +60,17 @@ for (const connection of ["anthropic-api", "openai-api"] as const) test(`${conne
       expect(headers.get(connection === "anthropic-api" ? "x-api-key" : "authorization")).toBe(connection === "anthropic-api" ? KEY : `Bearer ${KEY}`);
       expect(headers.has(connection === "anthropic-api" ? "authorization" : "x-api-key")).toBe(false);
       expect(init?.redirect).toBe("error");
+      if (fail) return Response.json({ error: { type: "server_error", message: "synthetic transient" } }, { status: 503 });
       return connection === "anthropic-api" ? anthropicResponse() : fake.send(url, init);
     };
-    const denied = await createApiCatalog(store, selected, send);
+    const denied = await createApiCatalog(selectedCredentials, selected, send);
     const refusal = await denied.models.streamSimple(denied.model, context).result();
     expect(refusal.stopReason).toBe("error");
     expect(refusal.errorMessage).toContain("paid_admission_required");
     expect(refusal.errorMessage).not.toContain(KEY);
     expect(sent).toBe(0);
     // Trusted synthetic admission adapter, not a launch/configurable spending switch.
-    const lane = await createApiCatalog(store, selected, send, async ({ binding: request }) => {
+    const lane = await createApiCatalog(selectedCredentials, selected, send, async ({ binding: request }) => {
       expect(request).toEqual(selected); admitted++;
     });
     expect(lane.models.getProvider(provider)?.auth.oauth).toBeUndefined();
@@ -70,16 +80,25 @@ for (const connection of ["anthropic-api", "openai-api"] as const) test(`${conne
     // OpenAI attaches a provider-private text signature; this contract checks public text only.
     expect(response.content).toMatchObject([{ type: "text", text: "API_OK" }]);
     expect(admitted).toBe(1); expect(sent).toBe(1);
+    fail = true;
+    const failure = await lane.models.streamSimple(lane.model, context, { maxRetries: 9 }).result();
+    expect(failure.stopReason).toBe("error");
+    expect(admitted).toBe(2); expect(sent).toBe(2); // No hidden Pi/SDK transient retries.
     expect(readFileSync(subscriptions.file)).toEqual(before);
     await store.delete(provider);
     expect(subscriptions.present()).toBe(true);
     expect(store.present()).toBe(false);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally {
+    if (previousXdg === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = previousXdg;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("API boundary rejects OAuth, command inputs, unsafe files, foreign endpoints and stale bindings", async () => {
   const dir = mkdtempSync(join(tmpdir(), "corral-api-input-"));
   try {
+    await expect(apiKeyCommand(dir, "openai-api", ["--status", "--logout"])).rejects.toThrow("exactly one");
     const file = join(dir, "key"); writeFileSync(file, KEY, { mode: 0o600 });
     const link = join(dir, "link"); symlinkSync(file, link);
     await expect(installApiKey(dir, "openai-api", link)).rejects.toThrow("0600");
@@ -98,6 +117,10 @@ test("API boundary rejects OAuth, command inputs, unsafe files, foreign endpoint
       const network = guardedFetch(async () => { throw new Error("must not send"); }, undefined, CONNECTIONS[connection].provider, connectionRules(connection));
       for (const url of ["https://evil.example/v1/messages", "https://api.openai.com/v1/responses?proxy=1", "https://api.anthropic.com/v1/messages#fragment"]) {
         await expect(network.fetch(url, { method: "POST", headers: { authorization: "Bearer eyJ-OAuth" } })).rejects.toThrow("network_refused");
+      }
+      const endpoint = connection === "openai-api" ? "https://api.openai.com/v1/responses" : "https://api.anthropic.com/v1/messages";
+      for (const headers of [{ authorization: KEY }, { authorization: "Bearer sk-ant-oat-SYNTHETIC" }, { "x-api-key": "sk-ant-oat-SYNTHETIC" }]) {
+        await expect(network.fetch(endpoint, { method: "POST", headers })).rejects.toThrow("network_refused");
       }
       expect(network.ledger().allowed).toBe(0);
     }

@@ -69,6 +69,7 @@ fn fixture_with(plan: &str) -> (tempfile::TempDir, Ctx, String, std::path::PathB
         store.config.profiles.insert(
             name.into(),
             Profile {
+                connection: None,
                 harness: "omo".into(),
                 model: Some(model.into()),
                 vendor: Some("openai".into()),

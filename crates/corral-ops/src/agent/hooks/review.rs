@@ -79,15 +79,13 @@ fn pi_command<T: corral_core::TaskRef + ?Sized>(
         .and_then(crate::reviewer::review_callback_token)
         .context("the review has no callback token")?;
     let spec = HostSpec {
+        binding: crate::agent::connections::explicit(resolved)?,
         cwd: child.worktree.clone(),
         model: child
             .model
             .clone()
             .context("a corral-pi reviewer needs a model")?,
-        provider: child
-            .model
-            .as_deref()
-            .and_then(|model| crate::agent::launch::host_provider(child.vendor.as_deref(), model)),
+        provider: crate::agent::connections::provider(resolved)?,
         effort: child.effort.clone(),
         prompt_file: Some(review_prompt_file(ctx, task.id(), &run.id)?),
         adopt: false,

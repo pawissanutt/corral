@@ -69,6 +69,7 @@ fn fixture() -> (tempfile::TempDir, Store, SetupProposalInput) {
         evidence: vec![evidence.clone()],
     };
     let profile = Profile {
+        connection: None,
         harness: candidate.harness.clone(),
         model: Some(candidate.model.clone()),
         vendor: Some(candidate.provider.clone()),

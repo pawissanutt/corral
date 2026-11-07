@@ -35,6 +35,11 @@ pub enum CostBasis {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UsageEntry {
+    /// Billing route evidence, independent of model-family identity and API-equivalent prices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<crate::connection::ConnectionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub billing: Option<crate::connection::BillingMode>,
     /// Response timestamp from the transcript, absent for legacy evidence.
     #[serde(default)]
     pub at: Option<Timestamp>,

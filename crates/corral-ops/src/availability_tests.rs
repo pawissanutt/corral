@@ -53,6 +53,7 @@ fn pm_sessions_open_on_the_next_approved_candidate_when_the_preferred_is_unavail
     store.config.profiles.insert(
         "coordinator".into(),
         Profile {
+            connection: None,
             harness: preferred.harness.clone(),
             model: Some(preferred.model.clone()),
             vendor: Some(preferred.provider.clone()),

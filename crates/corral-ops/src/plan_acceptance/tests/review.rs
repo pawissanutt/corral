@@ -411,6 +411,7 @@ fn mixed_transport(reviewer: &str, cross_family: bool) -> Fixture {
         store.config.profiles.insert(
             name.into(),
             corral_core::Profile {
+                connection: None,
                 metadata: None,
                 harness: "h".into(),
                 model: Some(model.into()),

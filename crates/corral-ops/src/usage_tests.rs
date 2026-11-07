@@ -35,6 +35,7 @@ fn profile_names_resolve_to_their_harnesses() {
         config.profiles.insert(
             name.into(),
             corral_core::Profile {
+                connection: None,
                 harness: harness.into(),
                 model: None,
                 effort: None,
@@ -373,6 +374,7 @@ fn stats_backfills_profile_runs_with_unsupported_harness_notes() {
     store.config.profiles.insert(
         "opus".into(),
         corral_core::Profile {
+            connection: None,
             harness: "omo".into(),
             model: None,
             effort: None,

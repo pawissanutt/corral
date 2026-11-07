@@ -19,6 +19,7 @@ fn fixture() -> (tempfile::TempDir, Store, Task) {
     store.config.projects.clear();
     store.config.profiles.clear();
     let profile = Profile {
+        connection: None,
         harness: "omo".into(),
         model: Some("openai/fixture-v1".into()),
         vendor: Some("openai".into()),

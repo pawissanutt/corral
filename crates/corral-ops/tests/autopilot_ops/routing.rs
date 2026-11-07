@@ -31,6 +31,7 @@ fn configured(reviewer: &str) -> Fx {
         fx.ctx.store.config.profiles.insert(
             name.into(),
             Profile {
+                connection: None,
                 harness: "routing-test".into(),
                 vendor: Some(vendor.into()),
                 model: None,

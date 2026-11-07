@@ -96,8 +96,15 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     }
     let n = envelope.identity.generation;
     let generation = admitted.resolved.generation(&container, n)?;
-    if generation.as_ref().and_then(|g| g.connection.as_ref()).map(|b| b.digest.as_str()) != payload.binding_digest.as_deref() {
-        return Err(bad("hello connection binding does not match the launched generation"));
+    if generation
+        .as_ref()
+        .and_then(|g| g.connection.as_ref())
+        .map(|b| b.digest.as_str())
+        != payload.binding_digest.as_deref()
+    {
+        return Err(bad(
+            "hello connection binding does not match the launched generation",
+        ));
     }
     let launched = generation.map(|g| g.pane);
     if launched.as_deref() != Some(payload.pane.as_str()) {

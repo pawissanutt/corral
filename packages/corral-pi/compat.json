@@ -51,6 +51,12 @@
     "amazon-bedrock",
     "llama.cpp"
   ],
+  "connections": [
+    "anthropic-subscription",
+    "anthropic-api",
+    "openai-subscription",
+    "openai-api"
+  ],
   "capabilities": [
     "budget",
     "todo",

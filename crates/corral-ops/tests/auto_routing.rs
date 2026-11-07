@@ -88,6 +88,7 @@ impl Fixture {
 
 fn profile(key: &str) -> Profile {
     Profile {
+        connection: None,
         harness: "fixture".into(),
         model: None,
         vendor: None,

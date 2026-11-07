@@ -37,7 +37,9 @@ export function connectionRules(id: ConnectionId): readonly DestinationRule[] {
   return [{
     method: "POST", display: route.api,
     matches(url, headers) {
-      const key = id === "anthropic-api" ? headers.get("x-api-key") : headers.get("authorization")?.replace(/^Bearer /, "");
+      const authorization = headers.get("authorization");
+      const key = id === "anthropic-api" ? headers.get("x-api-key")
+        : authorization?.startsWith("Bearer ") ? authorization.slice(7) : undefined;
       const otherAuth = id === "anthropic-api" ? headers.has("authorization") : headers.has("x-api-key");
       return [route.api, ...(id === "anthropic-api" ? [`${route.api}?beta=true`] : [])].includes(url)
         && typeof key === "string" && validApiKey(key) && !otherAuth

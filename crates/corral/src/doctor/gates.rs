@@ -236,6 +236,7 @@ mod tests {
 
     fn profile(roles: &[ProfileRole], instructions: &str) -> corral_core::Profile {
         corral_core::Profile {
+            connection: None,
             metadata: Some(corral_core::ProfileMetadata {
                 display_name: "p".into(),
                 purpose: "p".into(),

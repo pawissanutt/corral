@@ -1,12 +1,12 @@
 // The providers corral-pi can run (OD5, T-479, T-504): each one's corral vendor, picker label, Pi
 // model API, auth kind, and the only destinations its host and its login may reach. The Rust side
 // (crates/corral-ops/src/agent/credentials.rs, PROVIDERS) lists the same ids and labels.
-// OpenAI Codex and Anthropic run on a subscription OAuth login; Amazon Bedrock is the one metered
-// vendor (OD-1), signed with a named AWS profile's credentials (OD-2).
+// These are upstream provider defaults, not spending permissions. connections.ts binds separate
+// subscription/API billing routes; Anthropic API uses the same native provider without its SDK lane.
 
 export type ProviderId = "openai-codex" | "openai" | "anthropic" | "amazon-bedrock" | "llama.cpp";
 
-/** How a provider authenticates: a corral-owned subscription OAuth login, or a named AWS profile. */
+/** Default provider auth; an explicit connection may further restrict it (Anthropic API). */
 export type AuthKind = "oauth" | "api_key" | "aws-profile" | "local";
 
 export interface ProviderRoute {
@@ -106,7 +106,7 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderRoute>> = {
 /** The subscription OAuth providers (OD5), the policy a session's provider capabilities draw from. */
 export const PROVIDER_IDS: readonly ProviderId[] = ["openai-codex", "anthropic"];
 
-/** Every provider a host can be bound to: the subscription providers and metered Amazon Bedrock. */
+/** Known native providers. Knowing an API provider never admits an unbound or unpaid request. */
 export const HOST_PROVIDER_IDS: readonly ProviderId[] = [...PROVIDER_IDS, "openai", "amazon-bedrock", "llama.cpp"];
 
 export function isProviderId(value: unknown): value is ProviderId {

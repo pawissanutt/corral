@@ -85,6 +85,7 @@ fn fixture(command: &str, plan_required: bool) -> Fx {
     store.config.profiles.insert(
         "agent".into(),
         Profile {
+            connection: None,
             harness: "fixture".into(),
             model: None,
             effort: None,

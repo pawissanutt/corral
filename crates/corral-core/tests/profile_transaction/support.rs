@@ -8,6 +8,7 @@ pub fn now() -> jiff::Timestamp {
 
 pub fn profile(provider: &str) -> Profile {
     Profile {
+        connection: None,
         harness: "omo".into(),
         model: Some(format!("{provider}/fixture-v1")),
         vendor: Some(provider.into()),

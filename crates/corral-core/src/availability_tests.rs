@@ -61,6 +61,7 @@ fn general() -> (tempfile::TempDir, Config, ProfileMetadata) {
     };
     let preferred = &metadata.candidates[0];
     let profile = Profile {
+        connection: None,
         metadata: Some(metadata.clone()),
         harness: preferred.harness.clone(),
         model: Some(preferred.model.clone()),

@@ -48,6 +48,7 @@ impl Fixture {
 
     fn spec(&self) -> HostSpec {
         HostSpec {
+            binding: None,
             cwd: self._tmp.path().join("worktree"),
             model: "gpt-6.1-sol".into(),
             provider: None,
@@ -139,6 +140,83 @@ fn fake_bun(dir: &Path, version: &str) -> PathBuf {
 
 fn refusal(result: Result<Ready, LaunchRefusal>) -> LaunchRefusal {
     result.expect_err("the launch must be refused")
+}
+
+#[test]
+fn explicit_connections_bind_bootstrap_generation_and_refuse_unmetered_api_launch() {
+    use corral_core::connection::{ConnectionBinding, ConnectionId};
+    let fx = fixture(&ALL_MODULES, true);
+    let target = BindTarget::Worker {
+        task: fx.task.clone(),
+        run: "R1".into(),
+    };
+    for connection in [ConnectionId::OpenaiApi, ConnectionId::AnthropicApi] {
+        let mut spec = fx.spec();
+        spec.provider = Some(connection.provider().into());
+        spec.binding = Some(
+            ConnectionBinding::new(
+                connection,
+                Some("approved".into()),
+                spec.model.clone(),
+                spec.effort.clone(),
+            )
+            .unwrap(),
+        );
+        let error = prepare_bootstrap(&fx.ctx, &target, "p1", &spec).unwrap_err();
+        assert!(error.to_string().contains("paid_admission_required"));
+        assert!(
+            fx.ctx.store.get(&fx.task).unwrap().runs[0]
+                .agent_host
+                .is_none()
+        );
+    }
+    let mut spec = fx.spec();
+    spec.provider = Some("openai-codex".into());
+    spec.binding = Some(
+        ConnectionBinding::new(
+            ConnectionId::OpenaiSubscription,
+            None,
+            spec.model.clone(),
+            spec.effort.clone(),
+        )
+        .unwrap(),
+    );
+    assert!(
+        prepare_bootstrap(&fx.ctx, &target, "p1", &spec)
+            .unwrap_err()
+            .to_string()
+            .contains("connection_unsupported_by_host")
+    );
+    let manifest = fx.assets.join("compat.json");
+    let mut compat: Value = serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
+    compat["connections"] = json!(["openai-subscription"]);
+    write(&manifest, &compat.to_string());
+    let prepared = prepare_bootstrap(&fx.ctx, &target, "p1", &spec).unwrap();
+    let bootstrap = consume_bootstrap(&prepared.bootstrap).unwrap();
+    assert_eq!(bootstrap.binding, spec.binding);
+    let task = fx.ctx.store.get(&fx.task).unwrap();
+    assert_eq!(
+        task.runs[0]
+            .agent_host
+            .as_ref()
+            .unwrap()
+            .current_generation()
+            .unwrap()
+            .connection,
+        spec.binding
+    );
+    let ready = Ready {
+        assets: fx.assets.clone(),
+        bun: "unused".into(),
+        bun_version: "1.4.2".into(),
+        generation_dir: fx.generation_dir(),
+    };
+    let message = launch_message(&bootstrap, &ready, &Secrets::generate().unwrap()).unwrap();
+    let message: Value = serde_json::from_slice(&message).unwrap();
+    assert_eq!(
+        message["binding"],
+        serde_json::to_value(spec.binding).unwrap()
+    );
 }
 
 #[test]

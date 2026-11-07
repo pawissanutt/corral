@@ -293,6 +293,7 @@ mod tests {
             config.profiles.insert(
                 name.into(),
                 Profile {
+                    connection: None,
                     harness: "omo".into(),
                     model: Some(model.into()),
                     vendor: Some(vendor.into()),

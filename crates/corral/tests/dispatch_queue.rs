@@ -316,6 +316,7 @@ fn explicit_route_and_base_survive_reload_without_silent_model_replacement() {
     f.ctx.store.config.profiles.insert(
         "pinned".into(),
         Profile {
+            connection: None,
             metadata: None,
             harness: "generic".into(),
             model: Some("default-model".into()),

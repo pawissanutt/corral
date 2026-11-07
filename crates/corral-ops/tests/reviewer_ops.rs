@@ -481,6 +481,7 @@ fn reviewer_profile(ctx: &mut Ctx, command: String) {
     ctx.store.config.profiles.insert(
         "rev".into(),
         Profile {
+            connection: None,
             harness: "omo".into(),
             model: Some("review-model".into()),
             effort: Some("high".into()),

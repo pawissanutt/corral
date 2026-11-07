@@ -59,6 +59,10 @@ pub fn check(ctx: &Ctx, role: AgentRole, resolved: &ResolvedProfile) -> Result<(
         return Ok(());
     }
     consulted("preflight");
+    let connection = crate::agent::connections::explicit(resolved)?;
+    if let Some(binding) = &connection {
+        binding.connection.require_admission()?;
+    }
     corral_core::check_corral_pi_vendor(&resolved.profile, resolved.vendor.as_deref())?;
     corral_core::check_corral_pi_metered_opt_in(
         &resolved.profile,
@@ -84,6 +88,9 @@ pub fn check(ctx: &Ctx, role: AgentRole, resolved: &ResolvedProfile) -> Result<(
         })?,
     };
     assets(&dir, role, explicit.is_some())?;
+    if let Some(binding) = &connection {
+        crate::agent::connections::compatible(&dir, binding)?;
+    }
     super::memory::compatible(&dir, role).map_err(|error| {
         refuse(
             "memory_contract_unavailable",

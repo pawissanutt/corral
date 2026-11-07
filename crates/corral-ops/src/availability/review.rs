@@ -194,6 +194,8 @@ pub(crate) fn pm_plan_reviewer(ctx: &Ctx, config: &corral_core::Config, task: &T
         );
     };
     let actual = ResolvedProfile {
+        connection: None,
+        candidate: None,
         profile: config.pm.agent.clone(),
         harness: execution.harness,
         command: String::new(),
