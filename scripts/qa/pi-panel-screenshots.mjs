@@ -1,5 +1,5 @@
 // Rasterize the owned production-host PTY proof, preserving its actual resize/input output.
-// Usage: bun scripts/qa/pi-panel-screenshots.mjs <owned PTY QA output directory> [--lifecycle|--usage|--appearance]
+// Usage: bun scripts/qa/pi-panel-screenshots.mjs <owned PTY QA output directory> [--lifecycle|--usage|--appearance|--resume]
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -10,7 +10,11 @@ const directory = resolve(process.argv[2]);
 const result = JSON.parse(await readFile(join(directory, "result.json"), "utf8"));
 assert.equal(result.status, "PASS");
 assert.equal(result.candidate, execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(), "Capture must match the current candidate");
-const requested = process.argv.includes("--usage") ? new Map([
+const requested = process.argv.includes("--resume") ? new Map([
+  ["conversation", "FAKE_TRANSPORT_OK"], ["picker-wide", "stopped · resumable"], ["picker-search", "storage spike"],
+  ["picker-cancelled", "RESUME_DRAFT_AFTER_CANCEL"], ["picker-compact-80x24", "stopped · resumable"],
+  ["refused-live", "running in another pane"], ["picker-select-a2", "A-2"],
+]) : process.argv.includes("--usage") ? new Map([
   ["wide-source-table", "Scope │ Input"], ["wide-chart-toggle", "Token bars"],
   ["wide-source-restored", "Scope │ Input"], ["wide-budget", "Budget accounting unavailable"],
   ["compact-chart-top", "Token bars"], ["compact-budget", "Budget accounting unavailable"],
