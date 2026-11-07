@@ -35,6 +35,14 @@ All test names below are executable contracts, not prose assertions. Raw logs ar
 - First-failure evidence is retained for synchronous completion and the mixed raw/ordered clock usage window. Finish now uses the same ordered clock as scratch creation. The matching `assistant_cowork` usage-window quarantine entry (T-832) was removed; this is not a claim that every separate T-832 criterion was checked.
 - New coverage uses small fixtures and exact counters, not large histories or timing/load assertions. No new race/crash/torture matrix or prose wording pins. The required gate reports authoritative added-test count/cost separately; compilation is not suite execution time.
 
+The first receipted quick gate found two C1 CLI fixture gaps: the original owner-action
+journey still expected synchronous legacy metadata, and the exhaustive assistant command
+classification table lacked the two new triage paths. Both are corrected without weakening
+review/authority checks: queued state is asserted before sync, the versioned contract/driver
+and reader fence are checked, and independent review is still required. Both full CLI test
+targets then passed (**10 tests**, 4.61s + 2.36s). No new test cases were added for this repair.
+The separate quarantined T-845 plan-inspection failure was observed but not changed.
+
 Rust LSP repeatedly failed to provide fresh indexed diagnostics; targeted Cargo compilation/tests are the fallback, not a claimed clean LSP result. The required receipted quick gate and its log are attached separately after the final rebase. No other gate tier is run manually. No intentional host load or owner/live herdr interaction was used.
 
 Public context-package creation, handoff/takeback protocol, native writer fencing and participant-facing TUI/PM workflow remain C2–C4. Driver-transfer fixtures prove the C1 committed-driver seam, not those later public end-to-end flows. Native HostSession/PTY integration is left to the run's required isolated gate lane; paid live-provider behavior is not claimed.

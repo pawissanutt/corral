@@ -7,8 +7,8 @@ use std::process::{Command, Output, Stdio};
 
 use std::io::Write;
 
-use corral_core::Store;
 use corral_core::agent::{RequestReceipt, paths};
+use corral_core::{Store, TaskRef};
 use corral_ops::agent::{BindTarget, open_generation, payload_sha256, tool_request_id};
 use corral_ops::assistant::owner_action::kinds::{self, Class, KINDS, Target};
 use serde_json::{Value, json};
@@ -633,14 +633,38 @@ fn c9_c10_finish_and_approve_run_on_the_owner_s_words_and_never_from_the_shell()
     assert_eq!(shown["status"], "review");
     assert_eq!(shown["origin"], "assistant");
     assert_eq!(shown["labels"], json!(["cowork"]));
+    let mut provenance = shown["cowork"].clone();
+    let completion = provenance
+        .as_object_mut()
+        .unwrap()
+        .remove("completion")
+        .unwrap();
     assert_eq!(
-        shown["cowork"],
-        json!({"session": "A-1", "scratch": "cache-fix", "run": "R1", "review": "required", "owner_confirmed": true})
+        provenance,
+        json!({"session": "A-1", "scratch": "cache-fix", "run": "R1", "review": "completion_v1", "owner_confirmed": true})
+    );
+    assert_eq!(completion["version"], 1);
+    assert_eq!(completion["intent"], "ship");
+    assert_eq!(
+        completion["driver"],
+        json!({"kind":"assistant","session":"A-1","scratch":"cache-fix"})
+    );
+    assert_eq!(
+        completion["contract_revision"],
+        fx.store()
+            .get("T-002")
+            .unwrap()
+            .contract_revision()
+            .unwrap()
     );
     assert_eq!(shown["runs"][0]["branch"], "corral/A-1/cache-fix");
     assert_eq!(finished["result"]["confirmed"], true);
-    assert_eq!(shown["runs"][0]["gate"]["result"], "pass");
-    assert_eq!(shown["runs"][0]["review"]["reviewer"], "cowork-reviewer");
+    assert!(shown["runs"][0]["gate"].is_null());
+    assert!(shown["runs"][0]["review"].is_null());
+    fx.ok(&["sync"], &[]);
+    let checked: Value = serde_json::from_str(&fx.ok(&["show", "T-002", "--json"], &[])).unwrap();
+    assert_eq!(checked["runs"][0]["gate"]["result"], "pass");
+    assert_eq!(checked["runs"][0]["review"]["reviewer"], "cowork-reviewer");
     let task = fx.store().get("T-002").unwrap();
     assert!(task.body.contains(words), "{}", task.body);
     let finished_event = fx
