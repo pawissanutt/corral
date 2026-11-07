@@ -237,13 +237,13 @@ impl Pilot<'_> {
                         at: self.now,
                     });
                     state.reason = Some(reason.clone());
+                    self.ctx.store.log_event(
+                        Some(self.id()),
+                        "cowork_configuration_wait",
+                        json!({"run":self.run.id,"reason":reason}),
+                    )?;
                     Ok(true)
                 })?;
-                self.ctx.store.log_event(
-                    Some(self.id()),
-                    "cowork_configuration_wait",
-                    json!({"run":self.run.id,"reason":reason}),
-                )?;
             }
             return Ok(Some(Step::Wait));
         }
