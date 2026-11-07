@@ -232,6 +232,7 @@ fn record_assets(ctx: &Ctx, id: &str, prepared: &Prepared) -> Result<()> {
 
 /// A new assistant session in the owner's pane `pane`: every check, then record and generation 1.
 /// A failure after the record exists ends it again, so no half-open session is left behind.
+#[cfg(test)]
 pub fn open(
     ctx: &Ctx,
     start: &std::path::Path,
@@ -243,6 +244,7 @@ pub fn open(
 }
 
 /// Open an assistant with optional read-only task context.
+#[cfg(test)]
 pub fn open_focused(
     ctx: &Ctx,
     start: &std::path::Path,
@@ -251,6 +253,33 @@ pub fn open_focused(
     over_cap: bool,
     focus: Option<&str>,
 ) -> Result<(AssistantSession, Prepared, Option<String>)> {
+    open_claimed(ctx, start, pane, overrides, over_cap, focus)
+        .map(|(session, prepared, warning, _)| (session, prepared, warning))
+}
+
+/// `open_focused` that also returns this supervisor's claim on the new session. The claim is
+/// taken before the record is published, so no concurrent resume can ever see it unclaimed.
+pub fn open_claimed(
+    ctx: &Ctx,
+    start: &std::path::Path,
+    pane: &str,
+    overrides: &Overrides,
+    over_cap: bool,
+    focus: Option<&str>,
+) -> Result<(AssistantSession, Prepared, Option<String>, Claim)> {
+    open_observed(ctx, start, pane, overrides, over_cap, focus, |_| {})
+}
+
+/// `observe` runs with the reserved ID after the claim and before publication (test seam).
+pub(crate) fn open_observed(
+    ctx: &Ctx,
+    start: &std::path::Path,
+    pane: &str,
+    overrides: &Overrides,
+    over_cap: bool,
+    focus: Option<&str>,
+    observe: impl FnOnce(&str),
+) -> Result<(AssistantSession, Prepared, Option<String>, Claim)> {
     if let Some(task) = focus {
         ctx.store.get(task)?;
     }
@@ -259,9 +288,13 @@ pub fn open_focused(
     let resolved = profile(ctx, None, overrides)?;
     let warning = admit(ctx, over_cap)?;
     let socket = ctx.herdr.socket_path().ok();
-    let created = ctx
-        .store
-        .create_assistant(&resolved.profile, focus, Some(pane), socket)?;
+    let (created, claim) =
+        ctx.store
+            .create_assistant_with(&resolved.profile, focus, Some(pane), socket, |id| {
+                let claim = claim(&ctx.store, id)?;
+                observe(id);
+                Ok(claim)
+            })?;
     let prepared: Result<_> = (|| {
         let session = ctx.store.update_assistant(&created.id, |session| {
             session.project = project;
@@ -277,9 +310,10 @@ pub fn open_focused(
                 json!({"session": session.id, "generation": 1, "pane": pane,
                     "profile": resolved.profile, "over_cap": warning.is_some()}),
             )?;
-            Ok((session, prepared, warning))
+            Ok((session, prepared, warning, claim))
         }
         Err(error) => {
+            // Still claimed by this supervisor: nobody else can own what is ended here.
             ctx.store.end_assistant(&created.id)?;
             Err(error)
         }

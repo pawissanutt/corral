@@ -370,6 +370,21 @@ impl Store {
         pane: Option<&str>,
         herdr_socket: Option<PathBuf>,
     ) -> Result<AssistantSession> {
+        self.create_assistant_with(profile, focus, pane, herdr_socket, |_| Ok(()))
+            .map(|(session, ())| session)
+    }
+
+    /// `create_assistant` that runs `before_publish` with the reserved ID under the board lock,
+    /// before either file is visible: a caller's exclusive claim then precedes every reader. A
+    /// failing hook publishes nothing (the reserved ID is skipped, never reused).
+    pub fn create_assistant_with<T>(
+        &self,
+        profile: &str,
+        focus: Option<&str>,
+        pane: Option<&str>,
+        herdr_socket: Option<PathBuf>,
+        before_publish: impl FnOnce(&str) -> Result<T>,
+    ) -> Result<(AssistantSession, T)> {
         let _board = self.lock("dispatch")?;
         let next = records::reserve(self)?;
         let session = AssistantSession {
@@ -409,6 +424,7 @@ impl Store {
             permission_audit: Vec::new(),
             workflow: None,
         };
+        let hooked = before_publish(&session.id)?;
         self.records_transaction(|| {
             self.write_assistant_container(&session.id, &container)?;
             self.write_assistant(&session)?;
@@ -418,7 +434,7 @@ impl Store {
                 serde_json::json!({"session": session.id}),
             )
         })?;
-        Ok(session)
+        Ok((session, hooked))
     }
 
     pub(crate) fn read_assistant(&self, id: &str) -> Result<AssistantSession> {
