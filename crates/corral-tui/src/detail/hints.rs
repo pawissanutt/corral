@@ -3,6 +3,9 @@ use super::{ACCEPTANCE, COMMENTS, PLAN, TIMELINE};
 
 impl DetailView {
     pub(super) fn detail_hints(&self) -> Vec<(&'static str, &'static str)> {
+        if let Some(sheet) = &self.recover {
+            return sheet.hints();
+        }
         if self.overview {
             return self.overview_hints();
         }
@@ -51,6 +54,9 @@ impl DetailView {
             TIMELINE => h.extend([("j/k", "event"), ("⏎", "raw event"), ("a", "all events")]),
             PLAN => h.extend(self.plan.hints(true).unwrap_or_default()),
             _ => h.push(("j/k", "scroll")),
+        }
+        if self.recover_available() {
+            h.push(("F", "recover…"));
         }
         if self.stuck().is_some() {
             h.push(("u", "unstick"));

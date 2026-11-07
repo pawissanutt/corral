@@ -15,6 +15,9 @@ impl DetailView {
     /// Wheel scrolls the box under the pointer; a click selects a run, artifact or acceptance record row, and a
     /// click on the selected artifact or record (or a double-click) previews it like ⏎. Tabs and `‹ back` are key hits.
     pub(super) fn mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
+        if let Some(action) = self.recover_mouse(ev, m) {
+            return action;
+        }
         if self.overview {
             if let Some(dir) = hit::wheel(&ev) {
                 self.scroll.wheel(dir);

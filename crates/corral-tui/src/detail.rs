@@ -34,6 +34,7 @@ mod panels_tests;
 mod progress;
 #[cfg(test)]
 mod progress_tests;
+mod recover;
 mod routing;
 #[cfg(test)]
 mod routing_tests;
@@ -113,6 +114,10 @@ pub struct DetailView {
     /// Pin refs, for the ★ markers.
     pins: HashSet<String>,
     plan: crate::plan::tab::PlanTab,
+    /// Open owner recovery sheet (`F` on Plan/Acceptance); drawn over everything else.
+    recover: Option<Box<crate::recovery::RecoverySheet>>,
+    /// Durable owner-recovery history; loaded with the Acceptance tab, reset on refresh.
+    recoveries: Option<Result<Vec<corral_core::RecoveryRecord>, String>>,
 }
 
 impl DetailView {
@@ -152,7 +157,10 @@ impl DetailView {
             timeline: timeline::TimelineTab::default(),
             comment: None,
             pins: shelf::pinned_refs(ctx),
-        })
+            recover: None,
+            recoveries: None,
+        }
+        .with_recoveries(ctx))
     }
 
     /// The detail view opened on its Acceptance tab (from the review screen).
@@ -241,6 +249,7 @@ impl DetailView {
                 .filter(|r| r.outcome.is_none())
                 .and_then(run_state::badge),
         );
+        spans.extend(self.recovery_badges());
         if let Some(s) = self.stuck() {
             spans.push(Span::styled(
                 format!("  ⚠ stuck: {}", s.argv.join(" ")),
@@ -472,6 +481,8 @@ impl View for DetailView {
                     .collect();
                 acc_first = first + effective.len();
                 effective.extend(lines);
+                effective.push(Line::default());
+                effective.extend(self.recovery_lines());
                 (effective, false)
             }
             _ => (self.diff_lines(), false),
@@ -541,6 +552,8 @@ impl View for DetailView {
         }
         self.plan.draw_sheet(f, area, hits);
         self.routing.draw(f, area, &self.task, hits);
+        self.recover_button(f, content, hits);
+        self.draw_recover(f, area, ctx, hits);
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> Action {
@@ -549,6 +562,9 @@ impl View for DetailView {
         }
         if !ui::is_press(&key) {
             return Action::None;
+        }
+        if let Some(action) = self.recover_key(key, ctx) {
+            return action;
         }
         if (self.timeline.overlay_open()
             || (self.tab == TIMELINE
@@ -632,6 +648,7 @@ impl View for DetailView {
                 self.set_tab(self.tab + self.tab_names().len() - 1, ctx);
                 Action::None
             }
+            KeyCode::Char('F') if self.recover_available() => self.open_recover(ctx),
             KeyCode::Char('a') => Action::Jump(self.task.id.clone()),
             KeyCode::Char('c') if self.tab == COMMENTS => {
                 self.comment = Some(comments::Composer::new(&self.task));
@@ -734,7 +751,9 @@ impl View for DetailView {
     }
 
     fn captures_text(&self) -> bool {
-        self.comment.is_some() || self.plan.sheet_open()
+        self.recover.as_ref().is_some_and(|r| r.captures_text())
+            || self.comment.is_some()
+            || self.plan.sheet_open()
     }
 
     fn has_unsaved_text(&self) -> bool {
@@ -742,12 +761,16 @@ impl View for DetailView {
             .as_ref()
             .is_some_and(|c| !c.input.text.is_empty())
             || self.plan.has_unsaved_text()
+            || self.recover.as_ref().is_some_and(|r| r.has_unsaved_text())
     }
 }
 
 impl DetailView {
     fn refresh_with_attention(&mut self, ctx: &Ctx, attention: crate::attention::Snapshot) {
         self.attention = attention;
+        if let Some(sheet) = &mut self.recover {
+            sheet.refresh(ctx);
+        }
         if let Err(error) = corral_ops::refresh_usage(&ctx.store, &self.task.id) {
             corral_ops::report_message(
                 Some(&self.task.id),
@@ -775,6 +798,7 @@ impl DetailView {
         self.pins = shelf::pinned_refs(ctx);
         self.diff = None;
         self.history = None;
+        self.recoveries = Some(recover::load(ctx, &self.task.id));
         self.timeline.reset();
         if !self.overview && self.tab == TIMELINE {
             self.set_tab(TIMELINE, ctx);
