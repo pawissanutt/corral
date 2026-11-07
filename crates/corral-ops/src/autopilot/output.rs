@@ -115,6 +115,25 @@ pub(super) fn first_line(text: &str) -> &str {
 
 /// A failed gate's send-back details: its log's tail, plus the repair commands the gate printed
 /// when they fall outside that tail, and the repair-first guidance whenever there are any.
+pub(super) fn failed_gate_details(
+    ctx: &Ctx,
+    task: &str,
+    run: &str,
+    gate: &corral_core::GateRecord,
+) -> Result<String> {
+    if let Some(identity) = &gate.identity
+        && let Some(bytes) = crate::gate::evidence::attempt_log(ctx, task, run, &identity.attempt)?
+    {
+        return Ok(log_details(
+            &format!("retained attempt {}", identity.attempt),
+            &String::from_utf8_lossy(&bytes),
+        ));
+    }
+    Ok(gate_log_details(
+        &crate::gate::gate_paths(ctx, task, run).log,
+    ))
+}
+
 pub(super) fn gate_log_details(path: &std::path::Path) -> String {
     let text = match std::fs::read(path) {
         Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),

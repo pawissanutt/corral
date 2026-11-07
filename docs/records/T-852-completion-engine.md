@@ -43,6 +43,18 @@ and reader fence are checked, and independent review is still required. Both ful
 targets then passed (**10 tests**, 4.61s + 2.36s). No new test cases were added for this repair.
 The separate quarantined T-845 plan-inspection failure was observed but not changed.
 
+The second quick gate passed 1,457 checks before finding two ordinary-board fixtures that
+still assumed a nonzero gate automatically implied a candidate defect. Three related gate
+repair journeys now assert a zero-charge unknown block, provide explicit attached candidate
+evidence, then retain their worker retry, round-limit and landing assertions. This exposed a
+real retention defect: after triage cleanup, repair details read a deleted scratch log instead
+of the canonical recorded attempt. Details now read the retained exact-byte log first. The
+existing log-content assertion failed before this fix and passes afterward. The fixed-time
+exhaustion fixture also advances explicit logical event times for distinct notice episodes;
+no sleep, timeout, retry or notification-accounting rule changed. All three targeted journeys
+passed (5.81s); all 15 root ordinary-board journeys also passed (8.81s), followed by clean
+`corral-ops` production Clippy. No new test cases were added.
+
 Rust LSP repeatedly failed to provide fresh indexed diagnostics; targeted Cargo compilation/tests are the fallback, not a claimed clean LSP result. The required receipted quick gate and its log are attached separately after the final rebase. No other gate tier is run manually. No intentional host load or owner/live herdr interaction was used.
 
 Public context-package creation, handoff/takeback protocol, native writer fencing and participant-facing TUI/PM workflow remain C2–C4. Driver-transfer fixtures prove the C1 committed-driver seam, not those later public end-to-end flows. Native HostSession/PTY integration is left to the run's required isolated gate lane; paid live-provider behavior is not claimed.

@@ -14,7 +14,7 @@ use serde_json::json;
 
 use crate::acceptance::{Landing, record_acceptance};
 use crate::artifacts::glob_match;
-use crate::gate::{gate_collect, gate_paths, run_head_sha};
+use crate::gate::{gate_collect, run_head_sha};
 use crate::integration::{IntegrationPacket, RepairKey};
 use crate::prompt::corral_bin;
 use crate::review::{approve_landed, has_tracked_changes, main_repo};
@@ -39,7 +39,7 @@ pub use recover::recover_infrastructure;
 mod tests;
 mod tiers;
 mod triage;
-use output::{first_line, gate_log_details, short};
+use output::{first_line, short};
 
 enum Step {
     /// Waiting on something outside (a gate, the reviewer, the owner, a dirty main checkout): stop for this sync.
@@ -437,7 +437,7 @@ impl Pilot<'_> {
             label.unwrap_or_default(),
             short(&g.sha)
         );
-        let mut details = gate_log_details(&gate_paths(self.ctx, self.id(), &self.run.id).log);
+        let mut details = output::failed_gate_details(self.ctx, self.id(), &self.run.id, g)?;
         if let Some((_, text)) = tier {
             details.push_str(&format!("\n\n{text}"));
         }
