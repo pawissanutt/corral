@@ -116,8 +116,10 @@ apply only to sessions this `corral pi` opened or named, not to one selected wit
 
 When the target is refused, the supervisor resumes the source session in the same pane and its
 host shows `corral: /resume did not switch: <reason>. Continuing A-<n>.` When the selected host
-cannot start, the target stays resumable and the owner returns to the source with a notice
-naming both resume commands. `/resume` again in the target returns to the source the same way.
+cannot be launched at all, the target stays resumable and the owner returns to the source with a
+notice naming both resume commands. A target host that starts and then exits abnormally is not
+returned automatically: `corral pi` prints its `corral pi --resume` command, and the source stays
+resumable the same way. `/resume` again in the target returns to the source.
 
 **Claims.** A `corral pi` supervisor holds an exclusive lock on the session it runs (under
 `$XDG_RUNTIME_DIR/corral/<store>/assistant-claims/`) from before its generation opens until its
