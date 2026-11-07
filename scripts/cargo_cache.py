@@ -186,6 +186,10 @@ def main() -> None:
         fail("the Corral cache contains managed target records")
 
     environment = os.environ.copy()
+    # Cargo config arrays merge with the owner's global linker flags. An empty
+    # encoded override masks those arrays without changing config or explicit flags.
+    if "RUSTFLAGS" not in environment:
+        environment.setdefault("CARGO_ENCODED_RUSTFLAGS", "")
     environment.update({
         "CARGO": cargo,
         "MBX_CACHE_DIR": str(cache),
@@ -196,6 +200,7 @@ def main() -> None:
         "MBX_LINKER": "system",
         "MBX_SCHEDULER": "0", "MBX_SCHEDULER_TESTS": "0",
         "MBX_SHARE_WORKSPACE_ROOT": "0", "MBX_DISPLAY": "plain",
+        "MBX_SUMMARY": "full",
     })
     os.execve(binary, [str(binary), *args], environment)
 

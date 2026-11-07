@@ -114,6 +114,44 @@ else:
             "MBX_TARGET_ROOT": str(self.root / "cache" / "corral-disabled-targets"),
         })
 
+    def test_mbx_masks_config_rustflags_without_overwriting_explicit_flags(self) -> None:
+        self.environment.pop("RUSTFLAGS", None)
+        self.environment.pop("CARGO_ENCODED_RUSTFLAGS", None)
+        cargo_home = self.root / "cargo-home"
+        cargo_home.mkdir()
+        config = cargo_home / "config.toml"
+        original = (
+            '[target.x86_64-unknown-linux-gnu]\n'
+            'rustflags = ["-C", "linker-features=-lld", "-C", "link-arg=-B/owner/mold"]\n'
+        )
+        _ = config.write_text(original)
+        self.write_executable(
+            self.mbx,
+            """#!/usr/bin/env python3
+import json, os, sys
+if sys.argv[1:] == ["--version"]:
+    print("mbx 1.29.2")
+else:
+    print(json.dumps({key: os.environ.get(key) for key in
+                      ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "MBX_SUMMARY")}))
+    sys.exit(19)
+""",
+        )
+        cases = (
+            ({}, {"RUSTFLAGS": None, "CARGO_ENCODED_RUSTFLAGS": ""}),
+            ({"RUSTFLAGS": "-C debuginfo=1"},
+             {"RUSTFLAGS": "-C debuginfo=1", "CARGO_ENCODED_RUSTFLAGS": None}),
+            ({"RUSTFLAGS": ""}, {"RUSTFLAGS": "", "CARGO_ENCODED_RUSTFLAGS": None}),
+            ({"CARGO_ENCODED_RUSTFLAGS": "--cfg\x1fexplicit"},
+             {"RUSTFLAGS": None, "CARGO_ENCODED_RUSTFLAGS": "--cfg\x1fexplicit"}),
+        )
+        for overrides, expected in cases:
+            with self.subTest(overrides=overrides):
+                result = self.run_adapter("check", CORRAL_BUILD_CACHE="mbx", **overrides)
+                self.assertEqual(result.returncode, 19, result.stderr)
+                self.assertEqual(json.loads(result.stdout), {**expected, "MBX_SUMMARY": "full"})
+        self.assertEqual(config.read_text(), original)
+
     def test_ambient_mbx_configuration_is_rejected(self) -> None:
         result = self.run_adapter(
             "check", CORRAL_BUILD_CACHE="mbx", MBX_REMOTE_URL="https://example.invalid"
