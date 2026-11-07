@@ -58,67 +58,6 @@ impl<'a> AnnotationActor<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OpenAnnotation {
-    pub expected_run: String,
-    pub base: String,
-    pub head: String,
-    pub path: String,
-    pub side: AnnotationSide,
-    pub range: Option<LineRange>,
-    pub text: String,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ChangeAnnotation {
-    pub thread: String,
-    pub expected_revision: u32,
-    #[serde(default)]
-    pub text: String,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-pub enum AnnotationAction {
-    Open(OpenAnnotation),
-    Reply(ChangeAnnotation),
-    Resolve(ChangeAnnotation),
-    Reopen(ChangeAnnotation),
-}
-impl AnnotationAction {
-    fn kind(&self) -> AnnotationKind {
-        match self {
-            Self::Open(_) => AnnotationKind::Opened,
-            Self::Reply(_) => AnnotationKind::Reply,
-            Self::Resolve(_) => AnnotationKind::Resolved,
-            Self::Reopen(_) => AnnotationKind::Reopened,
-        }
-    }
-    fn validate(&self) -> Result<()> {
-        match self {
-            Self::Open(a) => require(
-                !a.expected_run.is_empty()
-                    && a.expected_run.len() <= 128
-                    && a.base.len() <= 64
-                    && a.head.len() <= 64
-                    && a.path.len() <= 1024,
-                AnnotationCode::InvalidPath,
-                "candidate fields/path exceed input bounds",
-            ),
-            Self::Reply(a) | Self::Resolve(a) | Self::Reopen(a) => require(
-                a.thread.len() <= 16,
-                AnnotationCode::ThreadNotFound,
-                "invalid thread identity",
-            ),
-        }
-    }
-    fn text(&self) -> &str {
-        match self {
-            Self::Open(a) => &a.text,
-            Self::Reply(a) | Self::Resolve(a) | Self::Reopen(a) => &a.text,
-        }
-    }
-}
 pub fn payload_sha256(task: &str, action: &AnnotationAction) -> Result<String> {
     Ok(hash(&serde_json::to_vec(&(1, task, action))?))
 }
@@ -570,9 +509,18 @@ fn decode(value: &str) -> Result<Cursor> {
         anyhow::ensure!(hash(&bytes) == sum, "cursor checksum");
         let c: Cursor = serde_json::from_slice(&bytes)?;
         anyhow::ensure!(
-            c.version == 1 && c.snapshot.len() <= TASK_THREADS as usize,
+            c.version == 1 && !c.snapshot.is_empty() && c.snapshot.len() <= TASK_THREADS as usize,
             "cursor version/bound"
         );
+        let mut previous = 0;
+        for (id, upper) in &c.snapshot {
+            let n: u32 = id.strip_prefix('N').context("cursor thread id")?.parse()?;
+            anyhow::ensure!(
+                n > previous && n <= TASK_THREADS && (1..=THREAD_ENTRIES).contains(upper),
+                "cursor membership/revision"
+            );
+            previous = n;
+        }
         Ok(c)
     };
     parse().map_err(|e| {
@@ -610,7 +558,35 @@ fn read(
     q: &AnnotationsQuery,
 ) -> Result<AnnotationsView> {
     let head = store.head(task)?;
-    let candidate = candidate(&head);
+    let mut candidate = candidate(&head);
+    let paths = match &candidate {
+        CandidateAvailability::Available { candidate: c } => corral_git::committed_paths(
+            &head
+                .current_run
+                .as_ref()
+                .context("annotation run")?
+                .worktree,
+            &c.base,
+            &c.head,
+        ),
+        CandidateAvailability::Unavailable { .. } => Ok(vec![]),
+    };
+    let paths = paths.unwrap_or_else(|_| {
+        candidate = CandidateAvailability::Unavailable {
+            reason: "git_failed".into(),
+        };
+        vec![]
+    });
+    read_page(&head, candidate, paths, thread, q)
+}
+// Row/serialization layer: independent of Git IO, so byte/cursor variants use cheap contract tests.
+fn read_page(
+    head: &TaskHead,
+    candidate: CandidateAvailability,
+    paths: Vec<String>,
+    thread: Option<&str>,
+    q: &AnnotationsQuery,
+) -> Result<AnnotationsView> {
     require(
         q.limit.is_none_or(|n| (1..=64).contains(&n)),
         AnnotationCode::InvalidCursor,
@@ -651,7 +627,7 @@ fn read(
             .filter(|t| {
                 q.state.is_none_or(|s| s == t.state)
                     && q.anchor.as_deref().is_none_or(|s| {
-                        serde_json::to_value(status(t, &head, &candidate))
+                        serde_json::to_value(status(t, head, &candidate))
                             .ok()
                             .and_then(|v| v["status"].as_str().map(str::to_owned))
                             .as_deref()
@@ -689,7 +665,13 @@ fn read(
             "thread cursor membership",
         )?;
         let upper = cursor.snapshot[0].1;
-        let mut t = head.annotation_thread(id)?.context("thread disappeared")?;
+        let mut t = head.annotation_thread(id)?.ok_or_else(|| {
+            annotation_error(
+                AnnotationCode::InvalidCursor,
+                "cursor thread missing",
+                Value::Null,
+            )
+        })?;
         require(
             upper > 0 && upper <= t.revision && cursor.pos < upper as usize,
             AnnotationCode::InvalidCursor,
@@ -702,7 +684,7 @@ fn read(
             .state;
         // Entry pages do not repeat the anchor (available in list); reserve room for any
         // legal 4-KiB note even with worst-case JSON escaping.
-        let mut summary = item(&t, &head, &view.candidate);
+        let mut summary = item(&t, head, &view.candidate);
         summary.anchor = None;
         view.page = AnnotationsPage::Thread {
             thread: summary,
@@ -740,7 +722,13 @@ fn read(
         )?;
         while cursor.pos < cursor.snapshot.len() {
             let (id, upper) = &cursor.snapshot[cursor.pos];
-            let mut t = head.annotation_thread(id)?.context("thread disappeared")?;
+            let mut t = head.annotation_thread(id)?.ok_or_else(|| {
+                annotation_error(
+                    AnnotationCode::InvalidCursor,
+                    "cursor thread missing",
+                    Value::Null,
+                )
+            })?;
             require(
                 *upper > 0 && *upper <= t.revision,
                 AnnotationCode::InvalidCursor,
@@ -753,7 +741,7 @@ fn read(
                 .state;
             let old = view.clone();
             if let AnnotationsPage::List { items } = &mut view.page {
-                items.push(item(&t, &head, &view.candidate));
+                items.push(item(&t, head, &view.candidate));
             }
             cursor.pos += 1;
             view.next_cursor = (cursor.pos < cursor.snapshot.len())
@@ -787,24 +775,16 @@ fn read(
         AnnotationCode::AnnotationLimit,
         "response envelope exceeds 32 KiB",
     )?;
-    if let CandidateAvailability::Available { candidate: c } = &view.candidate {
-        let repo = &head
-            .current_run
-            .as_ref()
-            .context("annotation run")?
-            .worktree;
-        let paths = corral_git::committed_paths(repo, &c.base, &c.head)?;
-        for path in paths {
-            if path.len() > 1024 {
-                view.paths_truncated = true;
-                continue;
-            }
-            view.paths.push(path);
-            if view.paths.len() > 64 || serde_json::to_vec(&view)?.len() > RESPONSE_BYTES - 32 {
-                view.paths.pop();
-                view.paths_truncated = true;
-                break;
-            }
+    for path in paths {
+        if path.len() > 1024 {
+            view.paths_truncated = true;
+            continue;
+        }
+        view.paths.push(path);
+        if view.paths.len() > 64 || serde_json::to_vec(&view)?.len() > RESPONSE_BYTES - 32 {
+            view.paths.pop();
+            view.paths_truncated = true;
+            break;
         }
     }
     Ok(view)

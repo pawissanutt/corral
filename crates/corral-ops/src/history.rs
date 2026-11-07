@@ -228,6 +228,7 @@ mod tests {
             origin: None,
             idea_decision: None,
             comments: Vec::new(),
+            annotations: Vec::new(),
             completion: None,
             result: None,
             plan_required: None,
