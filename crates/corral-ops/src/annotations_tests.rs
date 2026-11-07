@@ -122,6 +122,15 @@ fn annotations_durable_retry_status_and_identity_isolation() {
         "gate",
     )
     .unwrap();
+    let signals = corral_core::ReviewSignals::for_task(
+        &f.store.get(&f.task).unwrap(),
+        corral_core::ReviewSubjectKind::Implementation,
+    );
+    let requirement = corral_core::review_requirement(&signals);
+    let route: corral_core::ReviewRoute = serde_json::from_value(json!({"version":1,
+        "contract_digest":crate::review_contracts::contract_digest(&requirement), "requirement":requirement,
+        "signals":signals,"profile":"test","profile_revision":"fixture","profile_source":"explicit_override",
+        "independence":"unknown","capability_mismatch":false,"round":1,"scope":"full","packet_digest":"approved-packet"})).unwrap();
     f.store
         .update(&f.task, |t| {
             t.runs[0].gate = Some(
@@ -131,20 +140,56 @@ fn annotations_durable_retry_status_and_identity_isolation() {
             );
             t.runs[0].review = Some(
                 serde_json::from_value(json!({"verdict":"approve","sha":f.action.head,
-            "reviewer":"owner","evidence_digest":"packet-digest","at":"2026-01-01T00:00:00Z"}))
+            "reviewer":"owner","route":route,"evidence_digest":"packet-digest","at":"2026-01-01T00:00:00Z"}))
                 .unwrap(),
             );
             Ok(())
         })
         .unwrap();
     let before = f.store.head(&f.task).unwrap();
+    let run = before.current_run.as_ref().unwrap();
+    let packet = crate::review_packet::build(
+        &ctx,
+        &before,
+        run,
+        ("RR1", &route),
+        run.review.as_ref().unwrap(),
+        vec![],
+        None,
+    )
+    .unwrap()
+    .0
+    .digest;
+    let fresh =
+        crate::verification::gate_fresh(&ctx, &before, run, run.gate.as_ref().unwrap()).unwrap();
     let mut audit =
         crate::completion_check(&ctx, &f.task, "Verified: fixture\nNot verified: none").unwrap();
+    assert!(audit.passed);
     let spec = corral_core::store::spec_revision(&f.store.get(&f.task).unwrap()).unwrap();
     assert_eq!(f.open().thread, "N1");
     resolve(&f.store, &owner(), &f.task, "resolve", f.change(1)).unwrap();
     let after = f.store.head(&f.task).unwrap();
     assert_eq!(before.current_run, after.current_run);
+    let run = after.current_run.as_ref().unwrap();
+    assert_eq!(
+        crate::review_packet::build(
+            &ctx,
+            &after,
+            run,
+            ("RR1", &route),
+            run.review.as_ref().unwrap(),
+            vec![],
+            None
+        )
+        .unwrap()
+        .0
+        .digest,
+        packet
+    );
+    assert_eq!(
+        crate::verification::gate_fresh(&ctx, &after, run, run.gate.as_ref().unwrap()).unwrap(),
+        fresh
+    );
     assert_eq!(
         crate::verification::capture_identity(
             &ctx,
@@ -195,6 +240,11 @@ fn annotations_durable_retry_status_and_identity_isolation() {
     assert_eq!(admissions.get(), 2);
     assert_eq!(f.snapshot(), initial);
     let view = list(&f.store, &f.task, &AnnotationsQuery::default()).unwrap();
+    let mut contract_views = vec![
+        serde_json::to_value(&view).unwrap(),
+        serde_json::to_value(show(&f.store, &f.task, "N1", &AnnotationsQuery::default()).unwrap())
+            .unwrap(),
+    ];
     let AnnotationsPage::List { items } = view.page else {
         panic!()
     };
@@ -229,6 +279,7 @@ fn annotations_durable_retry_status_and_identity_isolation() {
     git(f.dir.path(), &["add", "code.txt"]);
     git(f.dir.path(), &["commit", "-m", "move"]);
     let stale = list(&f.store, &f.task, &AnnotationsQuery::default()).unwrap();
+    contract_views.push(serde_json::to_value(&stale).unwrap());
     let AnnotationsPage::List { items } = stale.page else {
         panic!()
     };
@@ -272,6 +323,7 @@ fn annotations_durable_retry_status_and_identity_isolation() {
         .unwrap();
     let before = f.snapshot();
     let unavailable = list(&f.store, &f.task, &AnnotationsQuery::default()).unwrap();
+    contract_views.push(serde_json::to_value(&unavailable).unwrap());
     assert!(matches!(
         unavailable.candidate,
         CandidateAvailability::Unavailable { .. }
@@ -304,6 +356,9 @@ fn annotations_durable_retry_status_and_identity_isolation() {
         AnnotationCode::NotOwner
     );
     assert_eq!(before, f.snapshot());
+    if let Some(path) = std::env::var_os("CORRAL_ANNOTATION_VIEWS") {
+        std::fs::write(path, serde_json::to_vec_pretty(&contract_views).unwrap()).unwrap();
+    }
 }
 
 #[test]
@@ -469,16 +524,81 @@ fn annotations_file_level_hash_streams_beyond_the_line_blob_cap() {
 fn annotations_pages_freeze_upper_revision_and_bound_encoded_bytes() {
     let f = Fixture::new();
     f.open();
-    // One legal thread, not a large history: escaping is the named frame-size defect.
-    for revision in 1..63 {
-        let mut a = f.change(revision);
-        a.text = "\u{1}".repeat(4096);
-        reply(&f.store, &owner(), &f.task, &format!("r{revision}"), a).unwrap();
-    }
+    // Seed one legal thread in one transaction; paging, not repeated mutation IO, is under test.
+    f.store
+        .update(&f.task, |task| {
+            let thread = &mut task.annotations[0];
+            for seq in 2..=63 {
+                let mut entry = thread.entries[0].clone();
+                entry.seq = seq;
+                entry.kind = AnnotationKind::Reply;
+                entry.text = "\u{1}".repeat(4096);
+                let action = AnnotationAction::Reply(ChangeAnnotation {
+                    thread: "N1".into(),
+                    expected_revision: seq - 1,
+                    text: entry.text.clone(),
+                });
+                entry.request = AnnotationRequest {
+                    key: format!("r{}", seq - 1),
+                    payload_sha256: payload_sha256(&f.task, &action)?,
+                };
+                thread.entries.push(entry);
+            }
+            thread.revision = 63;
+            Ok(())
+        })
+        .unwrap();
+    let c = candidate(&f.store.head(&f.task).unwrap());
+    let entry_page = |q: &AnnotationsQuery| {
+        read_page(
+            &f.store.head(&f.task).unwrap(),
+            c.clone(),
+            vec![],
+            Some("N1"),
+            q,
+        )
+        .unwrap()
+    };
     let first = show(&f.store, &f.task, "N1", &AnnotationsQuery::default()).unwrap();
     let mut a = f.change(63);
     a.text = "64".into();
     reply(&f.store, &owner(), &f.task, "r63", a).unwrap();
+    let read_before = f.snapshot();
+    let bounded = read_page(
+        &f.store.head(&f.task).unwrap(),
+        c.clone(),
+        vec!["p".repeat(1024); 64],
+        Some("N1"),
+        &AnnotationsQuery::default(),
+    )
+    .unwrap();
+    assert!(
+        bounded.paths_truncated && serde_json::to_vec(&bounded).unwrap().len() <= RESPONSE_BYTES
+    );
+    let cursor = first.next_cursor.as_ref().unwrap();
+    let mut tampered = cursor.clone();
+    tampered.replace_range(..1, if cursor.starts_with('a') { "b" } else { "a" });
+    assert_eq!(
+        code(decode(&tampered).unwrap_err()),
+        AnnotationCode::InvalidCursor
+    );
+    assert_eq!(
+        code(
+            read_page(
+                &f.store.head(&f.task).unwrap(),
+                c.clone(),
+                vec![],
+                Some("N1"),
+                &AnnotationsQuery {
+                    cursor: Some(cursor.clone()),
+                    state: Some(AnnotationState::Resolved),
+                    ..Default::default()
+                }
+            )
+            .unwrap_err()
+        ),
+        AnnotationCode::InvalidCursor
+    );
     let mut page = first;
     let mut seqs = vec![];
     loop {
@@ -490,22 +610,16 @@ fn annotations_pages_freeze_upper_revision_and_bound_encoded_bytes() {
         let Some(cursor) = page.next_cursor else {
             break;
         };
-        page = show(
-            &f.store,
-            &f.task,
-            "N1",
-            &AnnotationsQuery {
-                cursor: Some(cursor),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        page = entry_page(&AnnotationsQuery {
+            cursor: Some(cursor),
+            ..Default::default()
+        });
     }
     assert_eq!(seqs, (1..=63).collect::<Vec<_>>());
     let mut q = AnnotationsQuery::default();
     let mut all = vec![];
     loop {
-        let page = show(&f.store, &f.task, "N1", &q).unwrap();
+        let page = entry_page(&q);
         assert!(serde_json::to_vec(&page).unwrap().len() <= RESPONSE_BYTES);
         let AnnotationsPage::Thread { entries, .. } = page.page else {
             panic!()
@@ -517,6 +631,7 @@ fn annotations_pages_freeze_upper_revision_and_bound_encoded_bytes() {
         }
     }
     assert_eq!(all, (1..=64).collect::<Vec<_>>());
+    assert_eq!(f.snapshot(), read_before);
     let before = f.snapshot();
     assert_eq!(
         code(reply(&f.store, &owner(), &f.task, "65", f.change(64)).unwrap_err()),

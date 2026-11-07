@@ -8,6 +8,9 @@ use serde_json::{Value, json};
 #[path = "model/annotations_tests.rs"]
 mod tests;
 
+#[path = "model/annotations_action.rs"]
+mod action;
+pub use action::*;
 #[path = "model/annotations_view.rs"]
 mod view;
 pub use view::*;

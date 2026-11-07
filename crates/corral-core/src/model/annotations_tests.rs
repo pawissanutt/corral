@@ -82,17 +82,40 @@ fn annotations_codec_and_backends_preserve_rows_and_projection() {
             t.entries[0]
         );
         if fake {
-            faults.arm(1);
+            let seq = store.view().unwrap().seq();
+            let tail = store.event_tail().unwrap();
+            // Fail after head/row work has begun, without a process-crash matrix.
+            faults.arm(3);
             assert!(
                 store
                     .update_head(&task.id, |head| {
-                        head.title = "fail".into();
+                        let mut entry = t.entries[0].clone();
+                        entry.seq = 2;
+                        entry.kind = AnnotationKind::Reply;
+                        entry.request.key = "failed-reply".into();
+                        head.append_annotation(t.clone(), entry, false)?;
+                        store.log_event(
+                            Some(&task.id),
+                            "annotation_replied",
+                            serde_json::json!({"thread":"N1","entry":2}),
+                        )?;
                         Ok(())
                     })
                     .is_err()
             );
             faults.disarm();
             assert_eq!(store.get(&task.id).unwrap(), before);
+            assert_eq!(store.head(&task.id).unwrap().annotation_summary.entries, 1);
+            assert_eq!(store.view().unwrap().seq(), seq);
+            assert_eq!(store.event_tail().unwrap(), tail);
+            assert!(
+                store
+                    .head(&task.id)
+                    .unwrap()
+                    .annotation_request("failed-reply")
+                    .unwrap()
+                    .is_none()
+            );
         }
         store
             .update(&task.id, |task| {
