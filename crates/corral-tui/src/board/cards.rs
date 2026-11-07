@@ -142,6 +142,48 @@ fn automation_short(reason: &str) -> String {
     }
 }
 
+/// Recovery history from the head summary, in words. A head without the projection says so on
+/// cards whose normal badges could otherwise hide an exception; cards without a head add nothing.
+fn recovery_lines(t: &Task, extra: CardExtra, width: usize) -> Vec<Line<'static>> {
+    let Some(head) = extra.head else {
+        return Vec::new();
+    };
+    let style = Style::new().fg(theme::YELLOW);
+    let Some(summary) = &head.summary.recovery else {
+        if matches!(t.status, Status::Review | Status::Done) {
+            return wrap2("recovery history unavailable · see details", width)
+                .into_iter()
+                .map(|l| Line::styled(l, style))
+                .collect();
+        }
+        return Vec::new();
+    };
+    let badges = crate::recovery::labels::summary_badges(summary);
+    if badges.is_empty() {
+        return Vec::new();
+    }
+    // Pack whole `[label]` tokens so no label is cut at narrow widths.
+    let mut lines = vec![String::from("history:")];
+    for badge in badges {
+        let token = format!("[{badge}]");
+        match lines.last_mut() {
+            Some(last) if last.width() + 1 + token.width() <= width => {
+                last.push(' ');
+                last.push_str(&token);
+            }
+            _ => lines.push(token),
+        }
+    }
+    lines.into_iter().map(|l| Line::styled(l, style)).collect()
+}
+
+/// Whether a normal reviewed/done badge must not read as plain policy success.
+pub(super) fn recovery_qualified(extra: CardExtra) -> bool {
+    extra
+        .head
+        .is_some_and(|h| h.summary.recovery.as_ref().is_none_or(|r| r.records > 0))
+}
+
 fn automation_lines(reason: Option<&str>, width: usize) -> Vec<Line<'static>> {
     reason
         .map(|reason| {
@@ -406,7 +448,12 @@ fn meta_lines(
             if let Some(stage) = extra.stage {
                 out.extend(autopilot::active_lines(stage, width));
             } else {
-                out.extend(autopilot::review_lines(t, config, width));
+                out.extend(autopilot::review_lines(
+                    t,
+                    config,
+                    width,
+                    recovery_qualified(extra),
+                ));
             }
             if extra.unreviewed > 0 {
                 out.push(Line::styled(
@@ -462,7 +509,12 @@ fn compact_progress(progress: &RunProgress, width: usize) -> String {
 /// Done card meta: `✓ <landed sha> <strategy>` (plus the autopilot note), then the finish date and the artifact
 /// count badge.
 fn done_lines(t: &Task, extra: CardExtra) -> [Line<'static>; 2] {
-    let green = Style::new().fg(theme::GREEN);
+    // A recovered or unverifiable history never shows a plain green success check.
+    let green = Style::new().fg(if recovery_qualified(extra) {
+        theme::YELLOW
+    } else {
+        theme::GREEN
+    });
     let mut first = match extra.finish.and_then(|f| f.landed.as_ref()) {
         Some(landed) => vec![
             Span::styled(format!("✓ {}", landed.short_sha()), green),
@@ -612,6 +664,10 @@ pub(crate) fn card_lines(
             line.spans.insert(0, bar.clone());
             lines.push(line);
         }
+        for mut line in recovery_lines(t, extra, width) {
+            line.spans.insert(0, bar.clone());
+            lines.push(line);
+        }
         lines.extend(attention);
         return lines;
     }
@@ -636,6 +692,10 @@ pub(crate) fn card_lines(
             spans.push(Span::styled(text, s.style.patch(meta.style)));
         }
         lines.push(Line::from(spans));
+    }
+    for mut line in recovery_lines(t, extra, width) {
+        line.spans.insert(0, bar.clone());
+        lines.push(line);
     }
     if !t.tracker
         && let Some(fields) = card_fields::field_spans_head(

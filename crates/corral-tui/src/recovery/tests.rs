@@ -203,6 +203,18 @@ fn recovery_history_names_exceptions_in_text_with_original_checks() {
             evidence: vec![],
         },
     ];
+    preview.request.exceptions = std::collections::BTreeSet::from([
+        RecoveryCheck::GateOutcome,
+        RecoveryCheck::ReviewOutcome,
+    ]);
+    let applied = corral_core::RecoveryOutcome {
+        state: corral_core::RecoveryState::Applied,
+        at: jiff::Timestamp::UNIX_EPOCH,
+        detail: "applied".into(),
+        actual_effect: Some(preview.proposed_effect.clone()),
+        after: None,
+        evidence: vec![],
+    };
     let record = RecoveryRecord {
         version: corral_core::RECOVERY_VERSION,
         id: "REC-abc".into(),
@@ -221,6 +233,13 @@ fn recovery_history_names_exceptions_in_text_with_original_checks() {
         outcomes: vec![],
         links: vec![],
     };
+    // Requested but never applied: no exception labels, only the pending operation.
+    assert_eq!(
+        labels::badges(std::slice::from_ref(&record)),
+        ["recovery pending"]
+    );
+    let mut record = record;
+    record.outcomes.push(applied);
     assert_eq!(
         labels::badges(std::slice::from_ref(&record)),
         [

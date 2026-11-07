@@ -110,8 +110,14 @@ pub(super) fn escalation(t: &Task) -> Option<String> {
 }
 
 /// Lines under a Review card's meta line: the sub-state badge on its own line (the meta line is full at normal
-/// widths); a blocked run's badge carries its reason, wrapped to two lines.
-pub(super) fn review_lines(t: &Task, config: &Config, width: usize) -> Vec<Line<'static>> {
+/// widths); a blocked run's badge carries its reason, wrapped to two lines. `qualified` (owner
+/// recovery in history, or history unavailable) keeps `reviewed` from reading as plain success.
+pub(super) fn review_lines(
+    t: &Task,
+    config: &Config,
+    width: usize,
+    qualified: bool,
+) -> Vec<Line<'static>> {
     let Some(state) = t.current_run().and_then(|r| r.autopilot.as_ref()) else {
         return Vec::new();
     };
@@ -119,6 +125,9 @@ pub(super) fn review_lines(t: &Task, config: &Config, width: usize) -> Vec<Line<
         AutoStage::Gating => ("⧗ gating".to_string(), theme::BLUE),
         AutoStage::Reviewing => ("👁 reviewing".to_string(), theme::BLUE),
         AutoStage::Landing => ("⟳ landing".to_string(), theme::BLUE),
+        AutoStage::Reviewed if qualified => {
+            ("✓ reviewed · see recovery".to_string(), theme::YELLOW)
+        }
         AutoStage::Reviewed => ("✓ reviewed".to_string(), theme::GREEN),
         AutoStage::Changes => (changes_text(t, config), theme::YELLOW),
         AutoStage::Blocked => {

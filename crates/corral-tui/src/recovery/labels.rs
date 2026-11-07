@@ -2,8 +2,8 @@
 //! original observation stays beside its owner disposition.
 
 use corral_core::{
-    CheckDisposition, RecoveryCheck, RecoveryCheckRecord, RecoveryEffect, RecoveryIdentity,
-    RecoveryObservation, RecoveryRecord, RecoveryState,
+    CheckDisposition, RecoveryCheckRecord, RecoveryEffect, RecoveryIdentity, RecoveryObservation,
+    RecoveryRecord,
 };
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -36,13 +36,6 @@ macro_rules! wire {
 }
 pub(crate) use wire;
 
-fn is_review(check: RecoveryCheck) -> bool {
-    matches!(
-        check,
-        RecoveryCheck::IndependentPlanReview | RecoveryCheck::ReviewOutcome
-    )
-}
-
 fn excepted(c: &RecoveryCheckRecord) -> bool {
     matches!(
         c.disposition,
@@ -50,40 +43,26 @@ fn excepted(c: &RecoveryCheckRecord) -> bool {
     )
 }
 
-/// Badges for a task's durable recovery history, most general first. Empty when there is none.
+/// Badges for a task's durable recovery history, the same derivation cards read from heads.
 pub(crate) fn badges(records: &[RecoveryRecord]) -> Vec<&'static str> {
-    if records.is_empty() {
-        return Vec::new();
-    }
-    let checks = || {
-        records
-            .iter()
-            .flat_map(|r| &r.preview.checks)
-            .filter(|c| excepted(c))
-    };
-    let mut out = vec![OWNER_RECOVERY];
-    if checks().any(|c| is_review(c.check)) {
-        out.push(REVIEW_WAIVED);
-    }
-    if checks().any(|c| !is_review(c.check)) {
-        out.push(CHECK_OVERRIDDEN);
-    }
-    if let Some(state) = records
-        .iter()
-        .filter_map(|r| r.outcomes.last())
-        .map(|o| o.state)
-        .find(|s| {
-            matches!(
-                s,
-                RecoveryState::Unknown | RecoveryState::Failed | RecoveryState::Applying
-            )
-        })
-    {
-        out.push(match state {
-            RecoveryState::Unknown => "recovery uncertain",
-            RecoveryState::Failed => "recovery failed",
-            _ => "recovery applying",
-        });
+    summary_badges(&corral_core::RecoverySummary::of(records))
+}
+
+/// History badges from the bounded summary. Exception labels mean an operation actually applied
+/// them; uncertain, failed and pending operations are named separately. Empty without records.
+pub(crate) fn summary_badges(s: &corral_core::RecoverySummary) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    for (n, label) in [
+        (s.applied, OWNER_RECOVERY),
+        (s.review_waived, REVIEW_WAIVED),
+        (s.check_overridden, CHECK_OVERRIDDEN),
+        (s.unknown, "recovery uncertain"),
+        (s.failed, "recovery failed"),
+        (s.unsettled, "recovery pending"),
+    ] {
+        if n > 0 {
+            out.push(label);
+        }
     }
     out
 }
