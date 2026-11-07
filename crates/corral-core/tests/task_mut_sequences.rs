@@ -536,7 +536,7 @@ fn check(store: &Store, expected: &mut Task, step: &str) -> Rows {
     let summary: HistorySummary = serde_json::from_value(raw.summary).unwrap();
     assert_eq!(
         summary,
-        HistorySummary::of(&task).unwrap(),
+        HistorySummary::of_record(&store.task_record("T-001").unwrap()).unwrap(),
         "{step} summary"
     );
     let rows = task_rows(store);

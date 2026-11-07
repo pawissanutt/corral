@@ -9,7 +9,7 @@ mod task_ref_support;
 use corral_core::agent::{ContainerRef, RequestBinding, check_live, check_live_ref};
 use corral_core::inbox::Recipient;
 use corral_core::work::{self, Counter, HotScope, WorkSnapshot};
-use corral_core::{FindingSource, Task, TaskFieldsRef, TaskHead, TaskRef};
+use corral_core::{FindingSource, HistorySummary, Task, TaskFieldsRef, TaskHead, TaskRef};
 use store_support::Rng;
 use task_ref_support::*;
 
@@ -117,10 +117,9 @@ fn same_projections(full: &Task, head: &TaskHead) {
             .unwrap()
             .map(|c| norm_attempt(c.into_owned()))
     );
-    assert_eq!(
-        full.history_summary().unwrap(),
-        head.history_summary().unwrap()
-    );
+    let task_only = full.history_summary().unwrap().into_owned();
+    assert_eq!(task_only.recovery, None, "a Task has no recovery evidence");
+    assert_eq!(task_only, HistorySummary::of(full).unwrap());
     assert_eq!(full.head_fields().unwrap(), head.head_fields().unwrap());
     assert_eq!(
         full.contract_revision().unwrap(),
@@ -619,6 +618,10 @@ fn every_task_ref_read_on_a_head_equals_the_full_task_on_both_backends() {
                 let full = random_task(&store, &mut rng);
                 let head = store.head(&full.id).unwrap();
                 same_projections(&full, &head);
+                let record = store.task_record(&full.id).unwrap();
+                let stored = head.history_summary().unwrap().into_owned();
+                assert_eq!(stored, HistorySummary::of_record(&record).unwrap());
+                assert!(stored.recovery.is_some(), "stored heads know recovery");
                 same_keyed_reads(&full, &head);
                 same_inbox_and_agent_reads(&full, &head);
                 same_emitted_pages(&full, &head);

@@ -92,6 +92,82 @@ pub struct HistorySummary {
     /// revisions are appended, so the contract revision is recomputed without reading it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub scope_history_chain: String,
+    /// Facts over the canonical recovery records, derived only where the whole record is split.
+    /// Absent means unknown (an older head, or a Task-only derivation), never "no recovery".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<RecoverySummary>,
+}
+
+/// Bounded recovery history. Exception counts cover only operations that actually applied
+/// (an Applied outcome with an actual effect), never requested or proposed waivers. Lifecycle
+/// counts are kept separately, so a mixed history keeps every state it holds.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RecoverySummary {
+    #[serde(with = "crate::container_facts::fixed")]
+    pub records: u64,
+    /// Records with an Applied outcome that carries an actual effect.
+    #[serde(with = "crate::container_facts::fixed")]
+    pub applied: u64,
+    /// Records whose latest outcome is Authorized or Applying (not yet settled).
+    #[serde(with = "crate::container_facts::fixed")]
+    pub unsettled: u64,
+    /// Records whose latest outcome is Unknown (uncertain delivery).
+    #[serde(with = "crate::container_facts::fixed")]
+    pub unknown: u64,
+    #[serde(with = "crate::container_facts::fixed")]
+    pub failed: u64,
+    /// Applied operations that waived or overrode an independent plan review or review outcome.
+    #[serde(with = "crate::container_facts::fixed")]
+    pub review_waived: u64,
+    /// Applied operations that overrode any other check (gate, reviewer policy/binding, pressure).
+    #[serde(with = "crate::container_facts::fixed")]
+    pub check_overridden: u64,
+}
+
+impl RecoverySummary {
+    pub fn of(records: &[crate::RecoveryRecord]) -> RecoverySummary {
+        use crate::{CheckDisposition, RecoveryCheck, RecoveryState};
+        let mut s = RecoverySummary {
+            records: n(records.len()),
+            ..RecoverySummary::default()
+        };
+        for record in records {
+            match record.outcomes.last().map(|o| o.state) {
+                Some(RecoveryState::Authorized | RecoveryState::Applying) | None => {
+                    s.unsettled += 1;
+                }
+                Some(RecoveryState::Unknown) => s.unknown += 1,
+                Some(RecoveryState::Failed) => s.failed += 1,
+                Some(RecoveryState::Applied) => {}
+            }
+            let applied = record
+                .outcomes
+                .iter()
+                .any(|o| o.state == RecoveryState::Applied && o.actual_effect.is_some());
+            if !applied {
+                continue;
+            }
+            s.applied += 1;
+            let (mut review, mut other) = (false, false);
+            for c in record.preview.checks.iter().filter(|c| {
+                matches!(
+                    c.disposition,
+                    CheckDisposition::Overridden | CheckDisposition::Waived
+                ) && record.preview.request.exceptions.contains(&c.check)
+            }) {
+                match c.check {
+                    RecoveryCheck::IndependentPlanReview | RecoveryCheck::ReviewOutcome => {
+                        review = true;
+                    }
+                    _ => other = true,
+                }
+            }
+            s.review_waived += u64::from(review);
+            s.check_overridden += u64::from(other);
+        }
+        s
+    }
 }
 
 fn n(len: usize) -> u64 {
@@ -155,6 +231,17 @@ impl HistorySummary {
             }
         }
         Ok(summary)
+    }
+
+    /// The summary of a whole canonical record: [`Self::of`] plus its known recovery facts.
+    ///
+    /// # Errors
+    /// As [`Self::of`].
+    pub fn of_record(record: &crate::TaskRecord) -> anyhow::Result<HistorySummary> {
+        Ok(HistorySummary {
+            recovery: Some(RecoverySummary::of(&record.recoveries)),
+            ..Self::of(&record.task)?
+        })
     }
 
     fn add_panes(&mut self, panes: Vec<crate::PaneRef>) {

@@ -87,7 +87,7 @@ fn rich_tasks_round_trip_through_rows_and_fresh_processes() {
     assert_eq!(reopened.list().unwrap(), vec![task.clone()]);
     assert_eq!(
         summary(&store, &task.id),
-        HistorySummary::of(&task).unwrap()
+        HistorySummary::of_record(&store.task_record(&task.id).unwrap()).unwrap()
     );
 }
 
@@ -124,7 +124,7 @@ fn a_full_update_writes_only_the_changed_run_row_and_a_no_op_writes_nothing() {
     );
     assert_eq!(
         summary(&store, &task.id),
-        HistorySummary::of(&saved).unwrap()
+        HistorySummary::of_record(&store.task_record(&task.id).unwrap()).unwrap()
     );
     assert_eq!(store.get(&task.id).unwrap(), saved);
     // When a callback changes nothing, no row and no change entry are written.

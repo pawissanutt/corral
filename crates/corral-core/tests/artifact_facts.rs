@@ -33,7 +33,10 @@ fn artifact(run: &str, kind: ArtifactKind, path: &str) -> Artifact {
 fn assert_facts(store: &Store, id: &str) {
     let task = store.get(id).unwrap();
     let head = store.head(id).unwrap();
-    assert_eq!(head.summary, HistorySummary::of(&task).unwrap());
+    assert_eq!(
+        head.summary,
+        HistorySummary::of_record(&store.task_record(id).unwrap()).unwrap()
+    );
     let reviewed: BTreeSet<String> = corral_core::records::RecordArea::new("reviewed-artifacts")
         .load(store, "set")
         .unwrap()
