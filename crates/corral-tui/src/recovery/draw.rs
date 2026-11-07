@@ -13,7 +13,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::labels::{self, wire};
 use super::{Control, KINDS, Kind, RecoverySheet, Step, Z_KIND, Z_PARAM, Z_REVIEWER, Z_ROW};
-use crate::hit::{self, Hit};
+use crate::hit::Hit;
 use crate::overlays;
 use crate::theme::{self, CYAN, FG, RED, YELLOW};
 use crate::{Action, HitMap, MouseCtx, Tone, View};
@@ -41,8 +41,10 @@ pub(crate) fn wrap(text: &str, width: usize, indent: &str) -> Vec<String> {
 struct Body {
     lines: Vec<Line<'static>>,
     controls: Vec<Option<Control>>,
-    /// Pill rows: (line, zone, options, x offset).
-    pills: Vec<(usize, u8, Vec<String>, u16)>,
+    /// One entry per pill: (line, zone, option index, x offset, width).
+    pills: Vec<(usize, u8, usize, u16, u16)>,
+    /// The line holding a wrapped row's selected option, followed instead of its first line.
+    selected: Vec<(Control, usize)>,
 }
 
 impl Body {
@@ -67,6 +69,8 @@ fn marker(focused: bool) -> Span<'static> {
 }
 
 impl RecoverySheet {
+    /// Pills wrap onto indented continuation lines, so no option is ever clipped off-screen.
+    #[allow(clippy::too_many_arguments)]
     fn pill_row(
         &self,
         body: &mut Body,
@@ -75,14 +79,53 @@ impl RecoverySheet {
         name: &str,
         options: Vec<String>,
         sel: usize,
+        width: usize,
     ) {
         let focused = self.focused() == control;
         let prefix = format!("{name:<LABEL_W$}");
-        let refs: Vec<&str> = options.iter().map(String::as_str).collect();
-        let mut spans = vec![marker(focused), Span::styled(prefix.clone(), theme::dim())];
-        spans.extend(overlays::pills(&refs, sel, if focused { "←→" } else { "" }).spans);
-        body.pills
-            .push((body.lines.len(), zone, options, (2 + prefix.width()) as u16));
+        let indent = 2 + prefix.width();
+        let mut spans = vec![marker(focused), Span::styled(prefix, theme::dim())];
+        let mut x = indent;
+        let mut pills_on_line = 0;
+        for (i, option) in options.iter().enumerate() {
+            let text = if i == sel {
+                format!("[{option}]")
+            } else {
+                format!(" {option} ")
+            };
+            let w = text.width();
+            if pills_on_line > 0 && x + w > width {
+                body.push(Line::from(std::mem::take(&mut spans)), Some(control));
+                spans.push(Span::raw(" ".repeat(indent)));
+                x = indent;
+                pills_on_line = 0;
+            }
+            let style = if i == sel {
+                Style::new()
+                    .fg(CYAN)
+                    .bg(theme::SELECTED_BG)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                theme::dim()
+            };
+            if i == sel {
+                body.selected.push((control, body.lines.len()));
+            }
+            body.pills.push((
+                body.lines.len(),
+                zone,
+                i,
+                u16::try_from(x).unwrap_or(u16::MAX),
+                u16::try_from(w).unwrap_or(u16::MAX),
+            ));
+            spans.push(Span::styled(text, style));
+            spans.push(Span::raw(" "));
+            x += w + 1;
+            pills_on_line += 1;
+        }
+        if focused && x + 3 <= width {
+            spans.push(Span::styled("←→", theme::dim()));
+        }
         body.push(Line::from(spans), Some(control));
     }
 
@@ -146,6 +189,7 @@ impl RecoverySheet {
             lines: vec![],
             controls: vec![],
             pills: vec![],
+            selected: vec![],
         };
         let preview = match &self.preview {
             Some(Ok(p)) => Some(p),
@@ -193,7 +237,15 @@ impl RecoverySheet {
         }
         b.push(Line::default(), None);
         let kinds: Vec<String> = KINDS.iter().map(|k| k.label().to_string()).collect();
-        self.pill_row(&mut b, Control::Kind, Z_KIND, "Action", kinds, self.kind);
+        self.pill_row(
+            &mut b,
+            Control::Kind,
+            Z_KIND,
+            "Action",
+            kinds,
+            self.kind,
+            width,
+        );
         let kind = self.kind();
         if !kind.params().is_empty() {
             let params = kind.params().iter().map(|s| s.to_string()).collect();
@@ -204,6 +256,7 @@ impl RecoverySheet {
                 kind.param_name(),
                 params,
                 self.param,
+                width,
             );
         }
         if kind == Kind::UseReviewer {
@@ -214,6 +267,7 @@ impl RecoverySheet {
                 "reviewer",
                 self.reviewers.clone(),
                 self.reviewer,
+                width,
             );
         }
         if let Some(p) = preview {
@@ -292,12 +346,34 @@ impl RecoverySheet {
         }
         b.push(Line::default(), None);
         if kind == Kind::AcceptPlan {
+            if !self.questions.is_empty() {
+                b.push(
+                    Line::styled("Owner decisions (resolve each)", theme::bold()),
+                    None,
+                );
+            }
+            for (i, q) in self.questions.iter().enumerate() {
+                b.text(&format!("  {}. {q}", i + 1), width, Style::new().fg(FG));
+                self.field(
+                    &mut b,
+                    Control::Decision(i),
+                    "resolved",
+                    self.answers.get(i).map_or("", String::as_str),
+                    "resolution for this decision (required)",
+                    width,
+                );
+            }
+            let placeholder = if self.questions.is_empty() {
+                "owner acceptance notes (required)"
+            } else {
+                "additional notes (optional)"
+            };
             self.field(
                 &mut b,
                 Control::Notes,
-                "decisions",
+                "notes",
                 &self.notes,
-                "resolve every owner decision",
+                placeholder,
                 width,
             );
         }
@@ -317,6 +393,7 @@ impl RecoverySheet {
             lines: vec![],
             controls: vec![],
             pills: vec![],
+            selected: vec![],
         };
         b.push(
             Line::styled(
@@ -363,7 +440,10 @@ impl RecoverySheet {
             );
             if self.kind() == Kind::AcceptPlan {
                 b.text(
-                    &format!("Decisions: {}", self.notes.trim()),
+                    &format!(
+                        "Decisions: {}",
+                        self.resolution_notes().replace('\n', " · ")
+                    ),
                     width,
                     Style::new().fg(FG),
                 );
@@ -409,7 +489,12 @@ impl RecoverySheet {
         self.page = height.max(1);
         let focused = self.focused();
         if self.follow
-            && let Some(line) = body.controls.iter().position(|c| *c == Some(focused))
+            && let Some(line) = body
+                .selected
+                .iter()
+                .find(|(c, _)| *c == focused)
+                .map(|(_, l)| *l)
+                .or_else(|| body.controls.iter().position(|c| *c == Some(focused)))
         {
             if line < self.scroll.offset {
                 self.scroll.offset = line;
@@ -438,17 +523,16 @@ impl RecoverySheet {
                 );
             }
         }
-        for (line, zone, options, x) in &body.pills {
+        for (line, zone, index, x, w) in &body.pills {
             if let Some(dy) = line.checked_sub(offset).filter(|dy| *dy < height) {
-                let refs: Vec<&str> = options.iter().map(String::as_str).collect();
-                hit::pill_hits(
-                    hits,
-                    &refs,
-                    *zone,
-                    body_area.x + x,
-                    body_area.y + dy as u16,
-                    body_area.right(),
-                );
+                let left = body_area.x.saturating_add(*x);
+                if left < body_area.right() {
+                    let w = (*w).min(body_area.right() - left);
+                    hits.push(
+                        Rect::new(left, body_area.y + dy as u16, w, 1),
+                        Hit::Item(*zone, *index),
+                    );
+                }
             }
         }
         let notice_row = Rect::new(inner.x, inner.bottom() - 2, inner.width, 1);

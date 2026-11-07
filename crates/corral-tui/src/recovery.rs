@@ -23,6 +23,29 @@ pub(crate) mod labels;
 #[cfg(test)]
 mod tests;
 
+/// Every distinct owner decision the plan acceptance contract requires a resolution for.
+pub(crate) fn pending_questions(task: &Task) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let plan = task
+        .plans
+        .last()
+        .into_iter()
+        .flat_map(|p| &p.document.owner_decisions);
+    let completion = task.completion.iter().flat_map(|m| &m.owner_decisions);
+    let run = task
+        .current_run()
+        .into_iter()
+        .flat_map(|r| r.obligations.decisions.iter().filter(|d| d.pending()))
+        .map(|d| &d.request.question);
+    for q in plan.chain(completion).chain(run) {
+        let q = q.trim();
+        if !q.is_empty() && !out.iter().any(|o| o == q) {
+            out.push(q.to_string());
+        }
+    }
+    out
+}
+
 /// Mouse zones ([`Hit::Item`]) of the sheet.
 const Z_ROW: u8 = 0;
 const Z_KIND: u8 = 1;
@@ -99,6 +122,8 @@ pub(crate) enum Control {
     Param,
     Reviewer,
     Check(usize),
+    /// The resolution of pending owner decision `i`.
+    Decision(usize),
     Notes,
     Reason,
     Cancel,
@@ -122,6 +147,9 @@ pub(crate) struct RecoverySheet {
     /// Checks the current preview proposes to override or waive; each needs its own acknowledgement.
     pub(crate) offered: Vec<RecoveryCheck>,
     pub(crate) acknowledged: BTreeSet<RecoveryCheck>,
+    /// Pending owner decisions (plan, completion, run), each resolved in its own field.
+    pub(crate) questions: Vec<String>,
+    pub(crate) answers: Vec<String>,
     pub(crate) notes: String,
     pub(crate) reason: String,
     pub(crate) preview: Option<std::result::Result<RecoveryPreview, String>>,
@@ -158,6 +186,8 @@ impl RecoverySheet {
             reviewer: 0,
             offered: Vec::new(),
             acknowledged: BTreeSet::new(),
+            questions: Vec::new(),
+            answers: Vec::new(),
             notes: String::new(),
             reason: String::new(),
             preview: None,
@@ -169,9 +199,44 @@ impl RecoverySheet {
             page: 10,
             authorize,
         };
+        sheet.reload_questions(ctx);
         sheet.refresh_preview(ctx);
         sheet.focus = sheet.position(Control::Cancel);
         sheet
+    }
+
+    /// Re-reads the pending owner decisions, keeping answers already written for the same question.
+    pub(crate) fn reload_questions(&mut self, ctx: &Ctx) {
+        let Ok(task) = ctx.store.get(&self.task) else {
+            return;
+        };
+        let questions = pending_questions(&task);
+        self.answers = questions
+            .iter()
+            .map(|q| {
+                self.questions
+                    .iter()
+                    .position(|old| old == q)
+                    .and_then(|i| self.answers.get(i).cloned())
+                    .unwrap_or_default()
+            })
+            .collect();
+        self.questions = questions;
+    }
+
+    /// The exact `Resolved: <question> => <resolution>` lines the plan contract checks, then notes.
+    pub(crate) fn resolution_notes(&self) -> String {
+        let mut out: Vec<String> = self
+            .questions
+            .iter()
+            .zip(&self.answers)
+            .filter(|(_, a)| !a.trim().is_empty())
+            .map(|(q, a)| format!("Resolved: {} => {}", q.trim(), a.trim()))
+            .collect();
+        if !self.notes.trim().is_empty() {
+            out.push(self.notes.trim().to_string());
+        }
+        out.join("\n")
     }
 
     pub(crate) fn kind(&self) -> Kind {
@@ -215,7 +280,7 @@ impl RecoverySheet {
                 waive_independent_review: exceptions
                     .contains(&RecoveryCheck::IndependentPlanReview),
                 resolution_notes_sha256: corral_core::agent::paths::sha256_hex(
-                    self.notes.as_bytes(),
+                    self.resolution_notes().as_bytes(),
                 ),
             },
             Kind::AcceptCode => RecoveryAction::AcceptCode {
@@ -243,7 +308,7 @@ impl RecoverySheet {
             action,
             exceptions,
             notes: if kind == Kind::AcceptPlan {
-                self.notes.clone()
+                self.resolution_notes()
             } else {
                 String::new()
             },
@@ -294,6 +359,7 @@ impl RecoverySheet {
         }
         out.extend((0..self.offered.len()).map(Control::Check));
         if kind == Kind::AcceptPlan {
+            out.extend((0..self.questions.len()).map(Control::Decision));
             out.push(Control::Notes);
         }
         out.extend([Control::Reason, Control::Cancel, Control::Continue]);
@@ -387,8 +453,17 @@ impl RecoverySheet {
             Some(Ok(_)) if self.reason.trim().is_empty() => {
                 Some("Write the owner reason first".into())
             }
-            Some(Ok(_)) if self.kind() == Kind::AcceptPlan && self.notes.trim().is_empty() => {
-                Some("Write the owner-decision resolution notes first".into())
+            Some(Ok(_))
+                if self.kind() == Kind::AcceptPlan
+                    && self.answers.iter().any(|a| a.trim().is_empty()) =>
+            {
+                let open = self.answers.iter().filter(|a| a.trim().is_empty()).count();
+                Some(format!("Resolve every owner decision first ({open} open)"))
+            }
+            Some(Ok(_))
+                if self.kind() == Kind::AcceptPlan && self.resolution_notes().is_empty() =>
+            {
+                Some("Write the owner acceptance notes first".into())
             }
             Some(Ok(_)) => None,
         };
@@ -452,6 +527,7 @@ impl RecoverySheet {
     }
 
     fn stale(&mut self, ctx: &Ctx, text: String) -> Action {
+        self.reload_questions(ctx);
         self.refresh_preview(ctx);
         self.back_to_edit(text)
     }
@@ -474,7 +550,7 @@ impl RecoverySheet {
                 self.toggle(i, ctx);
                 Action::None
             }
-            Control::Notes | Control::Reason => {
+            Control::Decision(_) | Control::Notes | Control::Reason => {
                 self.move_focus(1);
                 Action::None
             }
@@ -492,6 +568,7 @@ impl RecoverySheet {
 
     fn text_mut(&mut self, control: Control) -> Option<&mut String> {
         match control {
+            Control::Decision(i) => self.answers.get_mut(i),
             Control::Notes => Some(&mut self.notes),
             Control::Reason => Some(&mut self.reason),
             _ => None,
@@ -607,11 +684,16 @@ impl RecoverySheet {
     }
 
     pub(crate) fn captures_text(&self) -> bool {
-        matches!(self.focused(), Control::Notes | Control::Reason)
+        matches!(
+            self.focused(),
+            Control::Decision(_) | Control::Notes | Control::Reason
+        )
     }
 
     pub(crate) fn has_unsaved_text(&self) -> bool {
-        !self.reason.is_empty() || !self.notes.is_empty()
+        !self.reason.is_empty()
+            || !self.notes.is_empty()
+            || self.answers.iter().any(|a| !a.is_empty())
     }
 
     /// Periodic refresh: a changed task while confirming returns to editing with the draft kept.
