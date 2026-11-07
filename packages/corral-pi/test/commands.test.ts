@@ -6,6 +6,7 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readOutput } from "../src/extensions/jobs/output.ts";
+import { runChild } from "../src/extensions/codemode/child.ts";
 import { jobTools } from "../src/extensions/jobs/index.ts";
 import { Commands, type CommandFact } from "../src/extensions/jobs/commands.ts";
 import { type MonitorFact } from "../src/extensions/jobs/monitors.ts";
@@ -66,6 +67,7 @@ test("background promotion releases one Bash observer without relaunching or res
   fx.commands.flush();
   await fx.commands.notified();
   expect(fx.notices).toHaveLength(1);
+  expect(fx.notices[0]).toContain("before\nafter\n");
   expect(fx.jobs.peek(job).text).toBe("before\nafter\n");
   expect(await fx.commands.wait(undefined, 0)).toMatchObject({ state: "none" });
   expect(await fx.commands.wait(job, 0)).toMatchObject({ state: "exited", exit_code: 0 });
@@ -89,8 +91,22 @@ test("foreground and nested Bash return real completion; Code Mode sequencing is
   if (!bash) throw new Error("managed Bash missing");
   const failure = await bash.execute("fail", { command: "exit 7", wait_ms: 10000 }, undefined, undefined, {} as never);
   expect(failure.isError).toBeTrue();
+  expect(failure.content.flatMap(part => part.type === "text" ? [part.text] : []).join("\n")).toContain("exit_code: 7");
   const raw = await bash.execute("raw", { command: "seq 1 60", wait_ms: 10000 }, undefined, undefined, {} as never);
   expect(raw.content).toEqual([{ type: "text", text: Array.from({ length: 60 }, (_, i) => `${i + 1}\n`).join("") }]);
+  const output = jobTools(fx.jobs, true, fx.commands).find(tool => tool.name === "job_output");
+  if (!output) throw new Error("job_output missing");
+  const peek = await output.execute("peek", { job: "j3-3" }, undefined, undefined, {} as never);
+  const visible = peek.content.flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
+  expect(visible).toContain("59\n60\n");
+  expect(peek.details).toMatchObject({ state: "exited", exit_code: 0 });
+  const nested = await runChild({ tool: "job_output", key: "parent/cell-1.1",
+    parent: { tool_call_id: "parent", cell: "cell-1", call: "cell-1.1" } },
+  () => output.execute("parent/1", { job: "j3-3" }, undefined, undefined, {} as never));
+  const nestedText = nested.content[0];
+  if (nestedText?.type !== "text") throw new Error("nested output missing");
+  expect(JSON.parse(nestedText.text)).toEqual(peek.details);
+  expect(nested.structuredContent).toBeUndefined();
 });
 
 test("wait-next claims exactly one completion, while cancellation releases waiting without killing the command", async () => {

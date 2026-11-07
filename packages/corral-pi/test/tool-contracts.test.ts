@@ -87,11 +87,18 @@ function fixture(s: CorralToolSpec) {
 
 test("structured responses preserve canonical identity, codes and continuation without parsing text", async () => {
   const { client, tool, run } = fixture(spec("read_show"));
+  const body = 'const text = "hello";\nconst path = "C:\\tmp"; // €\n';
+  client.response = { ...client.response, result: { content_json: body, next_offset: 30, total_chars: 100 } };
   for (const state of ["committed", "rejected", "uncertain", "reserved", "queued", "abandoned"] as const) {
     client.response = { ...client.response, state };
     const result = await run({ task: "T-1" });
     expect(result.structuredContent).toEqual(client.response);
     expect(result.details).toEqual(client.response);
+    const visible = result.content.flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
+    expect(visible).toContain(body);
+    expect(visible).toContain(state);
+    expect(visible).toContain(String(client.response.request_id));
+    expect(visible).toContain("next_offset: 30");
     expect(Check(tool.outputSchema!, result.structuredContent)).toBeTrue();
     expect(result.isError).toBe(["rejected", "uncertain", "abandoned"].includes(state));
   }

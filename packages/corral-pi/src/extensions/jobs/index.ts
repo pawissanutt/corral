@@ -5,29 +5,32 @@ import { callKey, nestedChild } from "../codemode/child.ts";
 import { type Commands } from "./commands.ts";
 import { JobError, type JobRuntime, OUTPUT_READ_MAX } from "./runtime.ts";
 import type { OutputOptions } from "./output.ts";
+import { renderBashResult, renderJobResult } from "./presentation.ts";
 
 export const JOB_TOOL_NAMES = ["job_start", "job_output", "job_wait", "job_kill", "corral_job_monitor"] as const;
 export const JOB_MONITOR_TOOL = "corral_job_monitor";
 
-function text(value: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: undefined };
+function text(value: unknown, nested: boolean) {
+  // Legacy job tools resolve to JSON strings in Code Mode. Change presentation, not that API.
+  return { content: [{ type: "text" as const, text: nested ? JSON.stringify(value) : renderJobResult(value) }], details: value };
 }
-async function guarded(run: () => Promise<unknown> | unknown, commandResult = false, bashStdout = false) {
+async function guarded(name: string, id: string, run: () => Promise<unknown> | unknown, commandResult = false, bashStdout = false) {
+  const nested = nestedChild(name, id) !== undefined;
   try {
     const value = await run();
-    // Terminal Bash keeps the built-in stdout contract; metadata is not a stdout envelope.
+    // Ordinary successful Bash keeps stdout; failures and partial output also expose status.
     const result = bashStdout && value !== null && typeof value === "object" && "state" in value && value.state === "exited" && "text" in value && typeof value.text === "string"
-      ? { content: [{ type: "text" as const, text: value.text || "(no output)" }], details: value, structuredContent: {
+      ? { content: [{ type: "text" as const, text: renderBashResult({ ...value, text: value.text }) }], details: value, structuredContent: {
         output: value.text, state: "exited", exit_code: "exit_code" in value && typeof value.exit_code === "number" ? value.exit_code : null,
         signal: "signal" in value && typeof value.signal === "string" ? value.signal : null,
         truncated: "truncated" in value && value.truncated === true,
       } }
-      : text(value);
+      : text(value, nested);
     if (commandResult && value !== null && typeof value === "object" && "state" in value && value.state === "exited" &&
       ("exit_code" in value && value.exit_code !== 0 || "signal" in value && value.signal !== null)) return { ...result, isError: true };
     return result;
   } catch (error) {
-    if (error instanceof JobError) return { ...text({ error: error.message }), isError: true };
+    if (error instanceof JobError) return { ...text({ error: error.message }, nested), isError: true };
     throw error;
   }
 }
@@ -43,7 +46,7 @@ export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands):
       parameters: Type.Object({ command: Type.String({ minLength: 1, maxLength: 4096 }),
         timeout: Type.Optional(Type.Number({ minimum: 1 })), wait_ms: waitBudget }),
       async execute(id: string, params: { command: string; timeout?: number; wait_ms?: number }, signal?: AbortSignal) {
-        return guarded(() => commands.run(params.command, callKey("bash", id), {
+        return guarded("bash", id, () => commands.run(params.command, callKey("bash", id), {
           ...params, ...(signal ? { signal } : {}), nested: nestedChild("bash", id) !== undefined }), true, true);
       },
     } satisfies ToolDefinition] : []),
@@ -53,7 +56,7 @@ export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands):
         + "Turn endings do not stop it. The hard runtime cap, job_kill, or owning host teardown stops its process group. Completion is announced automatically.",
       parameters: Type.Object({ command: Type.String({ minLength: 1, maxLength: 4096 }) }),
       async execute(id, params: { command: string }, signal) {
-        return guarded(() => commands ? commands.run(params.command, callKey("job_start", id), { wait_ms: 0, ...(signal ? { signal } : {}) })
+        return guarded("job_start", id, () => commands ? commands.run(params.command, callKey("job_start", id), { wait_ms: 0, ...(signal ? { signal } : {}) })
           : jobs.start(params.command, callKey("job_start", id)));
       },
     },
@@ -65,8 +68,8 @@ export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands):
       parameters: Type.Object({ job: Type.String(), offset: Type.Optional(Type.Integer({ minimum: 0 })),
         cursor: Type.Optional(Type.String()), tail_lines: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
         max_bytes: Type.Optional(Type.Integer({ minimum: 1, maximum: OUTPUT_READ_MAX })) }),
-      async execute(_id, params: { job: string } & OutputOptions) {
-        return guarded(() => commands ? commands.output(params.job, params) : jobs.peek(params.job, params));
+      async execute(id, params: { job: string } & OutputOptions) {
+        return guarded("job_output", id, () => commands ? commands.output(params.job, params) : jobs.peek(params.job, params));
       },
     },
     ...(commands ? [{
@@ -74,15 +77,15 @@ export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands):
       description: "Await one owned job, or omit job for the next unconsumed completion. Return immediately if none exist. "
         + "wait_ms (default 60000) limits observation only: expiry or cancellation never kills work. Completed output remains readable; no polling is needed.",
       parameters: Type.Object({ job: Type.Optional(Type.String()), wait_ms: waitBudget }),
-      async execute(_id: string, params: { job?: string; wait_ms?: number }, signal?: AbortSignal) {
-        return guarded(() => commands.wait(params.job, params.wait_ms, signal), true);
+      async execute(id: string, params: { job?: string; wait_ms?: number }, signal?: AbortSignal) {
+        return guarded("job_wait", id, () => commands.wait(params.job, params.wait_ms, signal), true);
       },
     } satisfies ToolDefinition] : []),
     {
       name: "job_kill", label: "Stop a command",
       description: "Stop this host's owned process group (SIGTERM then SIGKILL after a short grace), retaining output. Never signals a stale or reused PID.",
       parameters: Type.Object({ job: Type.String() }),
-      async execute(_id, params: { job: string }) { return guarded(() => commands ? commands.kill(params.job) : jobs.kill(params.job)); },
+      async execute(id, params: { job: string }) { return guarded("job_kill", id, () => commands ? commands.kill(params.job) : jobs.kill(params.job)); },
     },
     {
       name: JOB_MONITOR_TOOL, label: "Wake on command exit or matching line",
@@ -92,7 +95,7 @@ export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands):
         pattern: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
         timeout_secs: Type.Optional(Type.Integer({ minimum: 1, maximum: 86400 })) }),
       async execute(id, params: { job: string; on: "exit" | "line"; pattern?: string; timeout_secs?: number }) {
-        return guarded(async () => {
+        return guarded(JOB_MONITOR_TOOL, id, async () => {
           const runtime = commands ?? jobs;
           const receipt = await runtime.monitor(params.job, params.on, params.pattern, params.timeout_secs ?? 3600, callKey(JOB_MONITOR_TOOL, id));
           return { state: receipt.state, result: receipt.result };

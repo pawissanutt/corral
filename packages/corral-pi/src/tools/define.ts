@@ -5,6 +5,7 @@ import type { ExtensionUIContext, ToolDefinition } from "@earendil-works/pi-codi
 import { Errors } from "typebox/value";
 import type { JsonValue } from "@earendil-works/pi-ai";
 import { corralOutput } from "./results.ts";
+import { renderFailure, renderReceipt } from "./presentation.ts";
 
 import type { CorralOp, CorralToolSpec } from "../roles/types.ts";
 import { nestedChild } from "../extensions/codemode/child.ts";
@@ -56,7 +57,7 @@ export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefi
       const requestId = toolRequestId(host.sessionId(), child?.key ?? toolCallId);
       const failure = (error: Record<string, unknown>) => {
         const value = { request_id: requestId, op: spec.op, error };
-        return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: value,
+        return { content: [{ type: "text" as const, text: renderFailure(spec.op, requestId, error) }], details: value,
           structuredContent: value as JsonValue, isError: true };
       };
       // Pi validates normal calls as well. Keep raw execute()/host callers safe and return
@@ -102,7 +103,7 @@ export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefi
         });
       }
       return {
-        content: [{ type: "text", text: JSON.stringify(receipt) }],
+        content: [{ type: "text", text: renderReceipt(receipt) }],
         details: receipt,
         structuredContent: receipt as JsonValue,
         isError: receipt.state === "rejected" || receipt.state === "uncertain" || receipt.state === "abandoned",

@@ -125,7 +125,7 @@ test("live private-pane owner authority: landing, synthetic inputs, do it, confi
     const result = (callId: string): { state: string; result: Record<string, unknown> } => {
       const message = live.session.messages.find((m) => m.role === "toolResult" && m.toolCallId.split("|")[0] === callId);
       if (message?.role !== "toolResult") throw new Error(`no result for ${callId}`);
-      return JSON.parse(message.content.map((part) => (part.type === "text" ? part.text : "")).join(""));
+      return message.details as { state: string; result: Record<string, unknown> };
     };
     const toolCallId = (callId: string): string => {
       const message = live.session.messages.find((m) => m.role === "toolResult" && m.toolCallId.split("|")[0] === callId);
