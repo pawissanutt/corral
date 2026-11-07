@@ -121,6 +121,15 @@ diff --git a/dist/modes/interactive/interactive-mode.js b/dist/modes/interactive
 index 615a6ba..18b9522 100644
 --- a/dist/modes/interactive/interactive-mode.js
 +++ b/dist/modes/interactive/interactive-mode.js
+@@ -453,7 +453,7 @@ export class InteractiveMode {
+         return description ? `[${sourceTag}] ${description}` : `[${sourceTag}]`;
+     }
+     getBuiltInCommandConflictDiagnostics(extensionRunner) {
+-        const builtinNames = new Set(BUILTIN_SLASH_COMMANDS.map((command) => command.name));
++        const builtinNames = new Set(BUILTIN_SLASH_COMMANDS.map((command) => command.name).filter((name) => name !== "resume"));
+         return extensionRunner
+             .getRegisteredCommands()
+             .filter((command) => builtinNames.has(command.name))
 @@ -694,6 +694,15 @@ export class InteractiveMode {
          this.renderWidgets(); // Initialize with default spacer
          const viewport = createChatViewport({
