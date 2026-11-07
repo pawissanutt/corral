@@ -140,6 +140,8 @@ pub enum Action {
     OpenOperating,
     /// Show the welcome tour (`t` on the board or in help).
     OpenTour,
+    /// Open the owner recovery sheet for this task (read-only preview; applying needs a separate confirmation).
+    OpenRecover(String),
 }
 
 /// Every full-screen view and overlay implements this. `draw` must not do I/O beyond cheap store reads;
