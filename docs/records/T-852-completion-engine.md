@@ -65,6 +65,13 @@ packet-key, no-repeat-request, exact-session, round and tier assertions remain i
 All 26 affected integration/session/tier/freshness checks passed (46.01s); the 12 co-work
 service checks also passed in the expanded run (10.14s). No new test cases were added.
 
+The fourth gate passed 1,783 checks before a promotion-origin fixture attempted repeated
+failed checks without diagnostic authorization. Its original invalid-receipt, command-failure,
+fresh-PASS and no-promotion assertions remain. The fixture now marks its candidate submitted
+and attaches an explicit owner environment investigation before each bounded recheck. The
+case was extracted to a sibling module to preserve the 800-SLOC ceiling, not duplicated.
+It passed in 1.12s; the other 52 gate-operation cases had passed in the preceding target run.
+
 Rust LSP repeatedly failed to provide fresh indexed diagnostics; targeted Cargo compilation/tests are the fallback, not a claimed clean LSP result. The required receipted quick gate and its log are attached separately after the final rebase. No other gate tier is run manually. No intentional host load or owner/live herdr interaction was used.
 
 Public context-package creation, handoff/takeback protocol, native writer fencing and participant-facing TUI/PM workflow remain C2–C4. Driver-transfer fixtures prove the C1 committed-driver seam, not those later public end-to-end flows. Native HostSession/PTY integration is left to the run's required isolated gate lane; paid live-provider behavior is not claimed.

@@ -20,6 +20,8 @@ mod changes_round;
 mod member_gate;
 #[path = "re_review.rs"]
 mod re_review;
+#[path = "triage.rs"]
+mod triage;
 
 const CLEAN_TEMPLATE: &str =
     "{{id}} {{title}}\n{{body}}\nRun the gate below once after the final rebase.\n{{gate}}\n";
@@ -847,37 +849,4 @@ fn changes_verdict_leaves_the_origin_inert_until_a_new_promotable_approval_recor
         gate_at: q.at,
     };
     assert_promotable(&fx, &id, &c, &renewed);
-}
-
-#[test]
-fn full_command_failure_clears_the_origin_but_invalid_receipts_keep_it() {
-    let fx = Fx::new(true, |_| {});
-    let (id, origin) = approved_on_quick(&fx);
-    // An invalid receipt is not a test result: the origin stays.
-    let b = fx.start(&id);
-    assert_promotable(&fx, &id, &b, &origin);
-    let log = corral_ops::gate_paths(&fx.ctx, &id, &fx.run(&id).id).log;
-    let mut bytes = std::fs::read(&log).unwrap();
-    bytes.extend_from_slice(b"tampered\n");
-    std::fs::write(&log, bytes).unwrap();
-    let invalid = corral_ops::gate_collect(&fx.ctx, &id).unwrap().unwrap();
-    assert_eq!(
-        invalid.failed_cmd.as_deref(),
-        Some("invalid_command_receipts")
-    );
-    assert_eq!(fx.run(&id).promotion_origin.as_deref(), Some(&origin));
-    // A full landing gate whose command fails clears it in its collection update.
-    std::fs::write(fx.out.join("full-fails"), "").unwrap();
-    let failed = fx.gate(&id);
-    assert_eq!(
-        failed.failed_cmd.as_deref(),
-        Some(full_command(&fx.out).as_str())
-    );
-    assert_eq!(fx.run(&id).promotion_origin, None);
-    // A later full PASS is never promoted from the quick approval.
-    std::fs::remove_file(fx.out.join("full-fails")).unwrap();
-    let pass = fx.gate(&id);
-    assert_eq!(pass.result, GateResult::Pass);
-    assert_eq!(pass.tier.as_ref().unwrap().promoted_from, None);
-    assert_eq!(fx.run(&id).promotion_origin, None);
 }
