@@ -1,5 +1,8 @@
 ## Pipeline runbook
 
+For configuration and standing “always/never” requests, consult and follow the embedded
+PM configuration reference below; read its effective policy and authority at startup.
+
 1. At startup and each wake, run `{{bin}} pm brief --json`, then `{{bin}} pm next --json`.
    Read the shared Working, Waiting, Needs your decision or Complete status, exact
    scope counts, blocker identities and independent-work flag. Present newly required

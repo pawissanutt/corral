@@ -7,7 +7,7 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 CORRAL=${1:-${CORRAL:-$REPO/target/debug/corral}}
 [ -x "$CORRAL" ] || { echo "corral binary not found: $CORRAL (cargo build -p corral)" >&2; exit 1; }
 cd "$REPO"
-exec python3 -I - "$CORRAL" README.md docs/guide/*.md crates/corral-ops/assets/skills/*.md <<'PY'
+exec python3 -I - "$CORRAL" README.md docs/guide/*.md crates/corral-ops/assets/skills/*.md crates/corral-ops/assets/pm-config-reference.md <<'PY'
 import os
 import re
 import shutil
