@@ -90,6 +90,7 @@ import { AssistantResume } from "./assistant-resume.ts";
 import { PlanningPolicy, type PlanningState } from "./planning-policy.ts";
 import { type ConnectionBinding, admitConnection, parseBinding } from "./connections.ts";
 import { CONNECTIONS, type ConnectionId, resolveConnection } from "../auth/connections.ts";
+import { failureClass, messageFailure, withProviderFailures } from "./provider-failure.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -248,6 +249,11 @@ export function restrictProvider(
     }
     return { ...(streamOptions as object), fetch };
   };
+  if (providerId === "anthropic" || providerId === "openai-codex") {
+    const connection = resolveConnection(providerId);
+    stream = withProviderFailures(connection, stream);
+    streamSimple = withProviderFailures(connection, streamSimple);
+  }
   models.registerNativeProvider({
     ...provider,
     auth: { oauth: provider.auth.oauth },
@@ -270,9 +276,9 @@ export function providerErrorClass(message: string): string {
   if (/\bThrottlingException\b|throttl/i.test(message)) return "rate_limit";
   if (/\b(ServiceUnavailableException|ModelNotReadyException)\b/.test(message)) return "overload";
   if (/\b(401|403)\b|unauthori[sz]ed|forbidden|expired/i.test(message)) return "auth";
-  if (/\b429\b|rate.?limit|quota|usage limit/i.test(message)) return "rate_limit";
+  if (/\b429\b|rate.?limit/i.test(message)) return "rate_limit";
   if (/\b5\d\d\b|overload|unavailable/i.test(message)) return "overload";
-  return "provider";
+  return "unknown";
 }
 
 /** Changes "since session" compares against the HEAD each root had when this session first read it. */
@@ -1181,7 +1187,14 @@ export class HostSession {
         this.options.events.emit("queue", { steering: event.steering.length, follow_up: event.followUp.length });
       } else if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") {
         const message = event.message.errorMessage ?? "";
-        if (!message.includes("budget_exhausted") || !this.budget.state().stopped) this.providerError(providerErrorClass(message));
+        if ((!message.includes("budget_exhausted") && !message.includes(": local_budget")) || !this.budget.state().stopped) {
+          const provider = session.model?.provider as ProviderId | undefined;
+          const connection = resolveConnection(provider ?? this.options.provider ?? "openai-codex", this.options.binding?.connection);
+          const failure = messageFailure(event.message, connection);
+          this.report("provider_error", { class: provider === "amazon-bedrock" || provider === "llama.cpp"
+            ? providerErrorClass(message) : failureClass(failure),
+            ...(provider === "amazon-bedrock" || provider === "llama.cpp" ? {} : { failure }) });
+        }
       }
     });
     this.options.events.emit("session_bound", { session_id: session.sessionId });
@@ -1249,10 +1262,6 @@ export class HostSession {
     });
   }
 
-  private providerError(errorClass: string): void {
-    this.report("provider_error", { class: errorClass });
-  }
-
   private report(kind: "turn_started" | "turn_ended" | "provider_error" | "budget_exhausted", data: Record<string, unknown>): void {
     const turn = this.turn;
     const event = this.options.events.emit(kind, { turn, ...data });
@@ -1263,7 +1272,7 @@ export class HostSession {
       payload.provider = data.provider;
       payload.model = data.model;
     }
-    if (kind === "provider_error") payload.class = data.class;
+    if (kind === "provider_error") { payload.class = data.class; payload.failure = data.failure; }
     if (kind === "budget_exhausted") payload.budget = data.budget;
     if (kind === "turn_ended" && data.owner_input === true) payload.owner_input = true;
     if (kind === "turn_ended" && data.cancelled === true) payload.cancelled = true;

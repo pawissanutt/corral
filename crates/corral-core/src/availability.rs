@@ -16,6 +16,88 @@ use crate::{
 
 pub const AVAILABILITY_EPISODE_VERSION: u32 = 1;
 
+/// Allowlisted native evidence. No provider message, raw body or header is durable here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderFailure {
+    pub version: u32,
+    pub connection: crate::connection::ConnectionId,
+    pub category: FailureCategory,
+    pub scope: FailureScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_at: Option<Timestamp>,
+    /// SHA-256 of the upstream request identifier, never the identifier itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureCategory {
+    SubscriptionQuota,
+    Transient,
+    Auth,
+    Billing,
+    InvalidRequest,
+    Unavailable,
+    Unknown,
+    LocalBudget,
+    NetworkPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureScope { Account, Model, Request, Unknown }
+
+impl ProviderFailure {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(self.version == 1, "unsupported provider failure version");
+        ensure!(self.request_ref.as_ref().is_none_or(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))), "invalid provider request reference");
+        ensure!(self.retry_after_secs.is_none_or(|s| s <= 31_536_000), "invalid provider retry hint");
+        if self.category == FailureCategory::SubscriptionQuota {
+            ensure!(self.connection.billing() == crate::connection::BillingMode::Subscription
+                && matches!(self.scope, FailureScope::Account | FailureScope::Model), "quota evidence requires a subscription and known scope");
+        }
+        ensure!(self.reset_at.is_none() || self.category == FailureCategory::SubscriptionQuota, "only quota evidence carries a reset");
+        ensure!(self.retry_after_secs.is_none() || matches!(self.category, FailureCategory::SubscriptionQuota | FailureCategory::Transient), "only retryable evidence carries a retry hint");
+        Ok(())
+    }
+
+    /// Wire-compatible class for old readers; typed evidence, never text, owns native recovery.
+    pub fn class(&self) -> &'static str {
+        match self.category {
+            FailureCategory::SubscriptionQuota => "quota",
+            FailureCategory::Transient => "rate_limit",
+            FailureCategory::Auth => "auth",
+            FailureCategory::Billing => "billing",
+            FailureCategory::InvalidRequest => "invalid_request",
+            FailureCategory::Unavailable => "unavailable",
+            FailureCategory::Unknown => "unknown",
+            FailureCategory::LocalBudget => "local_budget",
+            FailureCategory::NetworkPolicy => "network_policy",
+        }
+    }
+
+    /// No paid billing, auth, request, budget or unknown error is an availability workaround.
+    pub fn availability(&self) -> Option<AvailabilityClass> {
+        if self.validate().is_err() { return None; }
+        match self.category {
+            FailureCategory::SubscriptionQuota => Some(AvailabilityClass::QuotaExhausted {
+                account: self.scope == FailureScope::Account, reset_at: self.reset_at,
+            }),
+            FailureCategory::Transient => Some(AvailabilityClass::Transient { retry_after_secs: self.retry_after_secs }),
+            FailureCategory::Unavailable => Some(AvailabilityClass::Unavailable),
+            _ => None,
+        }
+    }
+
+    pub fn summary(&self) -> String {
+        format!("{}: {} ({:?})", self.connection.id(), self.class(), self.scope)
+    }
+}
+
 /// Why a provider turn failed, when the failure is about access rather than the work.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

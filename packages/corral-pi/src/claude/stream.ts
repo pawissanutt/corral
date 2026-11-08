@@ -20,6 +20,7 @@ import {
 import { buildPromptBlocks, promptStream } from "./prompt.ts";
 import { DEFAULT_CACHE_TTL, resolveCacheRetention, type ClaudeCacheRetention } from "./cache-policy.ts";
 import { loadSdk, resolveClaudeCode } from "./sdk.ts";
+import { NativeFailure, normalizeFailure, type ProviderFailure } from "../host/provider-failure.ts";
 import { HOST_TOOL_DENIAL_HOOKS, canUseTool, resolveSdkTools } from "./tools.ts";
 
 /** The Pi API id of this lane; Anthropic models are re-addressed to it by the restricted provider. */
@@ -119,6 +120,7 @@ export function streamClaudeSdk(
     let succeeded = false;
     let usageReported = false;
     let recordCache = () => {};
+    let rateLimit: unknown;
     const close = () => {
       if (closed || !query) return;
       closed = true;
@@ -181,9 +183,16 @@ export function streamClaudeSdk(
           usageReported = hasPromptUsage(message.usage) || usageReported;
           updateUsage(model, output, message.usage);
         }
+        if (message.type === "rate_limit_event") rateLimit = message.rate_limit_info;
         const failure = message.type === "assistant" ? assistantFailure(message)
           : message.type === "result" ? resultFailure(message) : undefined;
-        if (failure) throw failure;
+        if (failure) throw new NativeFailure(normalizeFailure("anthropic-subscription", {
+          ...(message.type === "assistant" ? { sdk_error: message.message.stop_reason === "refusal" ? "invalid_request" : message.error,
+            request_id: message.request_id } : {}),
+          ...(message.type === "result" ? { terminal_reason: message.terminal_reason,
+            status: "api_error_status" in message && typeof message.api_error_status === "number" ? message.api_error_status : undefined } : {}),
+          rate_limit: rateLimit,
+        }));
         if (!started) {
           stream.push({ type: "start", partial: output });
           started = true;
@@ -214,7 +223,11 @@ export function streamClaudeSdk(
       }
     } catch (error) {
       output.stopReason = aborted || options?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = error instanceof Error ? error.message : String(error);
+      const failure = error instanceof NativeFailure ? error.failure : normalizeFailure("anthropic-subscription", {
+        message: error instanceof Error ? error.message : undefined,
+      });
+      (output as typeof output & { providerFailure: ProviderFailure }).providerFailure = failure;
+      output.errorMessage = output.stopReason === "aborted" ? "Operation aborted" : new NativeFailure(failure).message;
       recordCache();
       stream.push({ type: "error", reason: output.stopReason, error: output });
     } finally {
