@@ -15,7 +15,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use corral_core::ArtifactKind;
 use corral_core::agent::ContainerRef;
-use corral_core::inbox::{Inbox, Receipt, ReceiptLevel, Recipient, TerminalState};
+use corral_core::inbox::{Inbox, MessageBinding, Receipt, ReceiptLevel, Recipient, TerminalState};
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
@@ -35,6 +35,21 @@ pub struct Unconfirmed {
     pub kind: String,
     /// The continuing Pi session holds its `corral_delivery` entry: it was delivered.
     pub observed: bool,
+}
+
+/// Bind recovery messages to the exact child, never a parent run for a reviewer.
+pub(crate) fn binding(container: &ContainerRef) -> MessageBinding {
+    let run = match container {
+        ContainerRef::Worker { run, .. } | ContainerRef::Planner { run, .. } => Some(run.clone()),
+        ContainerRef::Reviewer { review, .. } | ContainerRef::PlanReviewer { review, .. } => {
+            Some(review.clone())
+        }
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
+    };
+    MessageBinding {
+        run,
+        ..MessageBinding::default()
+    }
 }
 
 /// Settles the open envelope generation `lost` (bound at `endpoint`) was sent and never

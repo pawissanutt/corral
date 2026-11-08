@@ -16,7 +16,9 @@ use corral_core::agent::{
     self, AgentRunState, ContainerRef, Executor, HookSettings, HostHealth, InterruptedCall,
     ReceiptState, RequestReceipt, ResumeClass, pm_state,
 };
-use corral_core::inbox::{Inbox, Message, MessageBinding, Post, Recipient, Urgency};
+#[cfg(test)]
+use corral_core::inbox::MessageBinding;
+use corral_core::inbox::{Inbox, Message, Post, Recipient, Urgency};
 use serde_json::{Value, json};
 
 use super::admission::{BindTarget, fence_generation};
@@ -24,7 +26,7 @@ use super::bridge::BridgeClient;
 use super::bridge::cancel as cancels;
 use super::bridge::interrupted::{self, ScanLimit};
 use super::bridge::liveness::{bound_host, gone};
-use super::bridge::notice::{self, Unconfirmed};
+use super::bridge::notice::{self, Unconfirmed, binding};
 use super::cli::{AgentTarget, CancelArgs, ResumeArgs};
 use super::effects;
 use super::launch::{
@@ -757,24 +759,6 @@ fn post_notice(
     Ok(message)
 }
 
-fn binding(container: &ContainerRef) -> MessageBinding {
-    let run = match container {
-        ContainerRef::Worker { run, .. } | ContainerRef::Planner { run, .. } => Some(run.clone()),
-        ContainerRef::Reviewer { review, .. } | ContainerRef::PlanReviewer { review, .. } => {
-            Some(review.clone())
-        }
-        ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
-    };
-    MessageBinding {
-        run,
-        ..MessageBinding::default()
-    }
-}
-
-fn update_due(receipt: &RequestReceipt) -> bool {
-    receipt.recovery_update_due()
-}
-
 /// Every corral-pi container of the task with a receipt owed its one `recovery_update`.
 fn due_updates<T: TaskRef + ?Sized>(task: &T) -> Result<Vec<(ContainerRef, String)>> {
     let mut due = Vec::new();
@@ -788,7 +772,7 @@ fn due_updates<T: TaskRef + ?Sized>(task: &T) -> Result<Vec<(ContainerRef, Strin
         for receipt in task
             .pending_agent_receipts(&container)?
             .into_iter()
-            .filter(update_due)
+            .filter(RequestReceipt::recovery_update_due)
         {
             due.push((container.clone(), receipt.request_id));
         }
@@ -807,7 +791,9 @@ pub fn post_updates(ctx: &Ctx, task_id: &str) -> Result<usize> {
         let mut message = None;
         ctx.store.try_update_head(task_id, |task| {
             let closed = agent::container_closure_ref(task, &container)?.is_some();
-            let Some(mut receipt) = task.agent_receipt(&container, &request)?.filter(update_due)
+            let Some(mut receipt) = task
+                .agent_receipt(&container, &request)?
+                .filter(RequestReceipt::recovery_update_due)
             else {
                 return Ok(false);
             };
