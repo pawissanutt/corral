@@ -59,6 +59,27 @@ fn saved_transfer_is_once_held_after_reopen_and_no_manual_or_automatic_effect_ca
     }
     assert!(!crate::queue::authorized_ready(&reopened, &task));
     let container = reopened.get_assistant_container(&session).unwrap();
+    let generation = container.state.binding.generation;
+    assert!(
+        crate::agent::open_generation(
+            &reopened,
+            &crate::agent::BindTarget::Assistant {
+                session: session.clone()
+            },
+            "historical-pane"
+        )
+        .is_err(),
+        "a former source cannot reopen mutation authority while the board owns its scope"
+    );
+    assert_eq!(
+        reopened
+            .get_assistant_container(&session)
+            .unwrap()
+            .state
+            .binding
+            .generation,
+        generation
+    );
     assert_eq!(
         container.workflow.as_ref().unwrap().current.owner,
         ScopeOwner::Board {

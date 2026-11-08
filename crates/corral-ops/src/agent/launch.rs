@@ -328,6 +328,7 @@ pub fn prepare_bootstrap(
         super::connections::compatible(&assets, binding)?;
     }
     let container = target.container();
+    super::bridge::assets::require_source_boundary(&ctx.store, &container, &assets)?;
     let mut session_dir = paths::container_sessions_dir(&ctx.store, &container);
     let mut resume_session = None;
     let mut fresh_session = spec.fresh_session;

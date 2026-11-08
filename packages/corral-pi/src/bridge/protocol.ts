@@ -13,9 +13,9 @@ export const INPUT_REPLY_MS = 30_000;
 /** Room left in a frame for the reply envelope around a page of events. */
 export const EVENT_PAGE_BYTES = FRAME_MAX_BYTES - 4 * 1024;
 
-export type Command = "hello" | "get_state" | "submit_input" | "cancel" | "events_since" | "shutdown" | "questions" | "queue_state" | "queue_withdraw";
+export type Command = "hello" | "get_state" | "submit_input" | "cancel" | "events_since" | "shutdown" | "questions" | "queue_state" | "queue_withdraw" | "handoff_drain";
 export const COMMANDS: readonly Command[] = [
-  "hello", "get_state", "submit_input", "cancel", "events_since", "shutdown", "questions", "queue_state", "queue_withdraw",
+  "hello", "get_state", "submit_input", "cancel", "events_since", "shutdown", "questions", "queue_state", "queue_withdraw", "handoff_drain",
 ];
 /** At most this many questions in one `questions` request (corral sends its newest 128). */
 export const QUESTIONS_MAX = 256;

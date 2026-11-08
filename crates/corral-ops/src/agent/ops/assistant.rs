@@ -341,6 +341,7 @@ pub fn resume(ctx: &Ctx, id: &str, pane: &str, overrides: &Overrides) -> Result<
     }
     pane_known(ctx, pane)?;
     let container = ctx.store.get_assistant_container(id)?;
+    crate::assistant::workflow::boundary::require_resume(&ctx.store, id, &container)?;
     if host_alive(&container.state)? {
         let pid = bound_host(&container.state).map_or(0, |host| host.pid);
         return Err(refuse(

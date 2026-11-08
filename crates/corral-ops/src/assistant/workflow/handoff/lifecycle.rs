@@ -174,10 +174,22 @@ pub(crate) fn board_owner(store: &Store, journal: &Journal) -> Result<bool> {
                 .is_some_and(|a| a.blob == journal.package.blob),
         "handoff_reconciling: workflow no longer binds this transfer"
     );
-    Ok(workflow.owner
+    let owned = workflow.owner
         == ScopeOwner::Board {
             task: transfer.task.clone(),
-        })
+        };
+    if owned {
+        ensure!(
+            transfer.ownership_committed,
+            "handoff_reconciling: owner publication incomplete"
+        );
+        journal
+            .source_boundary
+            .as_ref()
+            .context("handoff_source_unsupported: published transfer has no source drain proof")?
+            .require_published(&container, journal)?;
+    }
+    Ok(owned)
 }
 
 /// Review requires fresh scope; renewed planning may retain an older exact plan as

@@ -155,6 +155,11 @@ export class PlanningPolicy {
   }
   async drained(): Promise<PlanningState> {
     await this.refresh();
+    // Transfer drain permanently retires this controller's edit authority. A later
+    // local return/epoch is not an instruction to old queued callbacks or its old cwd.
+    if (["handoff_preparing", "handoff_reconciling", "board_owned"].includes(this.state.phase)) {
+      this.fenced = true; this.port.fence();
+    }
     if (this.active.size || this.state.boundary?.activities.length) return this.state;
     if (this.state.expected && ["entering", "recovering"].includes(this.state.phase)) {
       await this.record({ action: "drained", expected: this.state.expected });

@@ -26,6 +26,7 @@ pub(crate) mod plan_goal;
 pub(crate) mod recovery;
 mod settlement;
 mod source;
+mod source_boundary;
 pub(crate) mod takeback;
 pub mod transfer;
 pub use takeback::Returned;
@@ -113,6 +114,8 @@ pub struct Journal {
     pub transfer: Option<lifecycle::Transfer>,
     #[serde(default)]
     pub selection: Option<transfer::Selection>,
+    #[serde(default)]
+    pub source_boundary: Option<source_boundary::Proof>,
     #[serde(default)]
     pub previous_handoff: Option<DesignArtifact>,
     #[serde(default)]
@@ -406,6 +409,7 @@ pub fn reserve(
         source_retained: true,
         transfer: None,
         selection: None,
+        source_boundary: None,
         previous_handoff,
         previous_handoff_known: true,
         cancelled: false,

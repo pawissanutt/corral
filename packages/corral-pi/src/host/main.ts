@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { startBridge } from "../bridge/server.ts";
+import { attestSourceDrain } from "../bridge/source-drain.ts";
 import { EventLog } from "../bridge/events.ts";
 import { COMMANDS } from "../bridge/protocol.ts";
 import { CorralClient, sha256Hex } from "../tools/corral.ts";
@@ -27,7 +28,7 @@ import { herdrLifecycle } from "./herdr.ts";
 import { checkCompiledRuntime, checkRuntime, readCompat } from "./runtime.ts";
 import { serverVisible } from "./mcp-settings.ts";
 import { exportAssistantSession } from "../roles/assistant/env.ts";
-import { type AwsRoute, HostSession, authContext } from "./session.ts";
+import { type AwsRoute, HostSession, authContext, processStartTime } from "./session.ts";
 import { subscriptionRoutes } from "./subscriptions.ts";
 import { guardTerminalStop } from "./terminal-stop.ts";
 import { NEW_ASSISTANT_EXIT, RELINK_ASSISTANT_EXIT } from "./assistant-relink.ts";
@@ -142,11 +143,13 @@ async function main(): Promise<void> {
       hello: () => ({
         protocol: 1, generation: config.identity.generation, role: config.identity.role,
         bound: session.bound, session_id: session.sessionId(), last_seq: events.last,
-        commands: COMMANDS,
+        commands: COMMANDS.filter(command => command !== "handoff_drain" || config.identity.role === "assistant"),
       }),
       state: () => session.state(),
       queueState: limit => session.queue.snapshot(limit, false),
       queueWithdraw: (key, op_key) => ({ ...session.queue.bridgeWithdraw(key, op_key) }),
+      handoffDrain: args => attestSourceDrain(session, config.identity,
+        { pid: process.pid, start_time: processStartTime() }, args),
       submit: (input, requestId) => session.submit(input, requestId),
       cancel: (turn) => session.cancel(turn),
       questions: (updates) => session.questionsChanged(updates),

@@ -663,6 +663,7 @@ pub(crate) fn open_generation_bound(
         // The owner's pane moves with the generation, so a refused launch changes nothing.
         (BindTarget::Assistant { session }, _) => {
             store.update_assistant_container(session, |assistant| {
+                crate::assistant::workflow::boundary::require_resume(store, session, assistant)?;
                 assistant.pane = Some(pane.into());
                 assistant.state.binding.project = project.clone().unwrap_or_default();
                 next_generation(
