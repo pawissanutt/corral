@@ -2,8 +2,8 @@
 // codemode tool runs cells on the embedded Corral kernel worker, nested reads pass the host's
 // checks, variables persist across cells and a reload starts an empty kernel.
 import { spawnSync } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import fixtureAuth, { fixtureTransport } from "./auth/index.ts";
@@ -18,6 +18,7 @@ import { nextEvent } from "../support/wait.ts";
 
 const root = mkdtempSync(join(tmpdir(), "corral-compiled-codemode-"));
 let host: HostSession | undefined;
+let outputWatcher: FSWatcher | undefined;
 try {
   process.argv = [process.execPath, process.execPath, "--write-install", root];
   await import("../../src/host/compiled.ts");
@@ -66,17 +67,29 @@ try {
   }
   // One compiled cross-layer journey: managed Bash yields, logs are peeked immediately,
   // then an explicit wait gets final bytes without an automatic duplicate turn.
-  const gate = join(cwd, "command-gate"), ready = join(cwd, "command-ready");
-  for (const fifo of [gate, ready]) if (spawnSync("mkfifo", [fifo]).status !== 0) throw new Error("mkfifo failed");
+  const gate = join(cwd, "command-gate");
+  if (spawnSync("mkfifo", [gate]).status !== 0) throw new Error("mkfifo failed");
+  // Shell readiness is not host capture readiness: its FIFO can be read before the pipe's
+  // data callback runs. Watch the host-written spool before launch instead. capture() writes
+  // this file and updates the peek buffer synchronously, before our watch callback can run.
+  const logs = join(root, "runtime", "jobs"), log = join(logs, "j1-1.log");
+  mkdirSync(logs, { recursive: true });
+  const beforeCaptured = new Promise<void>((resolve, reject) => {
+    outputWatcher = watch(logs, () => {
+      if (existsSync(log) && readFileSync(log, "utf8").includes("BEFORE\n")) resolve();
+    });
+    outputWatcher.on("error", reject);
+  });
   fixtureTransport().script([
     { toolCalls: [{ callId: "managed-start", name: "bash", arguments: {
-      command: `echo BEFORE; echo ready > ${ready}; cat ${gate} >/dev/null; echo AFTER`, wait_ms: 0,
+      command: `echo BEFORE; cat ${gate} >/dev/null; echo AFTER`, wait_ms: 0,
     } }] }, { text: "Backgrounded" },
   ]);
   const ended = nextEvent(events, event => event.kind === "turn_ended");
   await host.submit({ text: "start managed", busyPolicy: "prompt", origin: "fixture", idempotencyKey: "managed-start" }, "managed-start");
   await ended;
-  await readFile(ready, "utf8");
+  await beforeCaptured;
+  outputWatcher?.close();
   if (!text("managed-start").includes("background")) throw new Error("managed Bash did not yield");
   let waiting!: () => void;
   const waitStarted = new Promise<void>(resolve => { waiting = resolve; });
@@ -93,15 +106,17 @@ try {
   await writeFile(gate, "go");
   await final;
   unsubscribe();
-  if (!text("managed-peek").includes("BEFORE") || text("managed-peek").includes("AFTER") || !text("managed-wait").includes("AFTER")) {
-    throw new Error("managed command lost output or peek waited for completion");
-  }
+  const peek = text("managed-peek"), waited = text("managed-wait");
+  if (!peek.includes("BEFORE")) throw new Error(`managed peek missing BEFORE: ${peek}; wait: ${waited}`);
+  if (peek.includes("AFTER")) throw new Error(`managed peek waited for completion: ${peek}`);
+  if (!waited.includes("AFTER")) throw new Error(`managed wait missing AFTER: ${waited}`);
   console.log("COMPILED_COMMAND launch/yield/peek/wait passed");
   if (modules.length < 2 || !modules.every((module) => /\$bunfs|~BUN|%7EBUN/.test(module))) {
     throw new Error(`the kernel worker did not load from the executable: ${JSON.stringify(modules)}`);
   }
   console.log(`COMPILED_CODEMODE kernel ${modules[0]}`);
 } finally {
+  outputWatcher?.close();
   await host?.close();
   rmSync(root, { recursive: true, force: true });
 }
