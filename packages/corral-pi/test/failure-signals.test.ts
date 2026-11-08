@@ -33,8 +33,24 @@ test("native failure evidence distinguishes subscription exhaustion from 429 and
     ["anthropic-subscription", { sdk_error: "unknown", rate_limit: { status: "rejected", rateLimitType: "novel_period" } }, "unknown"],
     ["anthropic-subscription", { sdk_error: "rate_limit", rate_limit: { status: "rejected", rateLimitType: "novel_period" } }, "unknown"],
     ["anthropic-subscription", { sdk_error: "rate_limit", rate_limit: { status: "rejected", rateLimitType: "five_hour", errorCode: "credits_required" } }, "billing"],
+    ["anthropic-subscription", { terminal_reason: "blocking_limit", status: 429, rate_limit: { status: "rejected", rateLimitType: "five_hour" } }, "subscription_quota"],
+    ["anthropic-subscription", { terminal_reason: "blocking_limit", status: 401, rate_limit: { status: "rejected" } }, "auth"],
+    ["anthropic-subscription", { terminal_reason: "blocking_limit", status: 429, rate_limit: { status: "rejected", errorCode: "credits_required" } }, "billing"],
+    ["anthropic-subscription", { terminal_reason: "blocking_limit", status: 429, sdk_subtype: "error_max_turns", rate_limit: { status: "rejected" } }, "invalid_request"],
+    ["anthropic-subscription", { status: 429 }, "transient"],
   ] as const;
   for (const [connection, input, category] of cases) expect(normalizeFailure(connection, input, at).category).toBe(category);
+  // F1: terminal blocking-limit results must not turn unsupported rejected evidence into retries.
+  for (const rate_limit of [
+    { status: "rejected", rateLimitType: "novel_period" },
+    { status: "rejected" },
+    { status: "rejected", rateLimitType: "five_hour", limitScope: "service" },
+    { status: "rejected", rateLimitType: "five_hour", limitScope: "channel" },
+  ]) {
+    const assistant = normalizeFailure("anthropic-subscription", { sdk_error: "rate_limit", rate_limit }, at);
+    const terminal = normalizeFailure("anthropic-subscription", { terminal_reason: "blocking_limit", status: 429, rate_limit }, at);
+    expect({ assistant: assistant.category, terminal: terminal.category }).toEqual({ assistant: "unknown", terminal: "unknown" });
+  }
   expect(JSON.stringify(codex)).not.toContain("secret");
 });
 
