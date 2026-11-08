@@ -178,21 +178,28 @@ pub(crate) fn board_owner(store: &Store, journal: &Journal) -> Result<bool> {
         })
 }
 
+/// Review requires fresh scope; renewed planning may retain an older exact plan as
+/// context. Identity pinning itself must not silently impose the review-only goal.
 pub(super) fn review_target<T: TaskRef + ?Sized>(task: &T) -> Result<ReviewTarget> {
+    let target = plan_identity(task)?;
+    ensure!(
+        target.spec_revision == crate::plan_spec_revision(task)?,
+        "plan_review_only: plan/spec changed; refresh"
+    );
+    Ok(target)
+}
+
+pub(super) fn plan_identity<T: TaskRef + ?Sized>(task: &T) -> Result<ReviewTarget> {
     let plan = task
         .last_plan_head()?
-        .context("plan_review_only: no formal reviewable plan")?;
+        .context("handoff_plan: no formal plan to pin")?;
     let run = plan
         .run
         .as_deref()
-        .context("plan_review_only: exact plan producer is unnamed")?;
+        .context("handoff_plan: exact plan producer is unnamed")?;
     let producer = task.plan_run_head(run)?.context(
-        "plan_review_only: exact plan producer is unavailable; do not replace it with a planner",
+        "handoff_plan: exact plan producer is unavailable; do not relabel it as another producer",
     )?;
-    ensure!(
-        plan.spec_revision == crate::plan_spec_revision(task)?,
-        "plan_review_only: plan/spec changed; refresh"
-    );
     Ok(ReviewTarget {
         plan: plan.id.clone(),
         sha256: plan.artifact.sha256.clone(),
