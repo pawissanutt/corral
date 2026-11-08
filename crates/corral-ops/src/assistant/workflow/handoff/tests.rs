@@ -238,7 +238,7 @@ pub(super) fn planning(f: &mut ts::Fx) -> (String, AssistantContainer, Expected)
     let session = f
         .ctx
         .store
-        .create_assistant("pi", None, Some("fixture"), None)
+        .create_assistant("pi", None, None, None)
         .unwrap()
         .id;
     f.ctx

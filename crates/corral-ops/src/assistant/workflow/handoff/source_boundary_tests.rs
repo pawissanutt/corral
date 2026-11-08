@@ -24,6 +24,44 @@ fn source() -> (ts::Fx, String, handoff::Prepared) {
 }
 
 #[test]
+fn a_legacy_pane_without_native_launch_history_is_not_a_proven_unlaunched_source() {
+    let mut f = ts::fx();
+    let (session, c, expected) = handoff::tests::planning(&mut f);
+    f.ctx
+        .store
+        .update_assistant_container(&session, |s| {
+            s.pane = Some("unverified-legacy-pane".into());
+            Ok(())
+        })
+        .unwrap();
+    f.ctx.store.save_config().unwrap();
+    let prepared = handoff::prepare(
+        &f.ctx.store,
+        &session,
+        &c,
+        &expected,
+        handoff::tests::request(),
+        None,
+    )
+    .unwrap();
+    let choice = transfer::preview(&f.ctx, prepared.id(), "legacy source", None, true).unwrap();
+    assert!(
+        transfer::commit(
+            &f.ctx,
+            &choice,
+            &choice.digest().unwrap(),
+            lifecycle::Instruction::Shell {
+                text: "fixture explicit selection is not proof of writer absence".into(),
+                at: corral_core::clock::now(),
+            }
+        )
+        .is_err(),
+        "generation zero plus a role label cannot prove that a legacy pane has no writer"
+    );
+    assert!(f.ctx.store.list().unwrap().is_empty());
+}
+
+#[test]
 fn missing_actual_source_proof_cannot_publish_a_task_or_reassign_ownership() {
     let (f, session, prepared) = source();
     let choice = transfer::preview(&f.ctx, prepared.id(), "current source", None, true).unwrap();

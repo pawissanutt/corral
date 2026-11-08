@@ -58,13 +58,18 @@ fn select(f: &ts::Fx, prepared: &Prepared) -> transfer::Choice {
     .unwrap()
 }
 
-fn returned() -> (ts::Fx, String, corral_core::Task) {
+fn board() -> (ts::Fx, String, corral_core::Task) {
     let mut f = ts::fx();
     let (session, _, _) = tests::planning(&mut f);
     f.ctx.store.save_config().unwrap();
     let prepared = publish(&f, &session, lifecycle_tests::FORMAL, Goal::PlanReviewOnly);
     let choice = select(&f, &prepared);
     let task = transfer::commit(&f.ctx, &choice, &choice.digest().unwrap(), instruction()).unwrap();
+    (f, session, task)
+}
+
+fn returned() -> (ts::Fx, String, corral_core::Task) {
+    let (f, session, task) = board();
     takeback::apply(
         &f.ctx,
         &task.id,
@@ -74,6 +79,113 @@ fn returned() -> (ts::Fx, String, corral_core::Task) {
     .unwrap();
     let task = f.ctx.store.get(&task.id).unwrap();
     (f, session, task)
+}
+
+#[test]
+fn a_manual_plan_decision_cannot_mutate_a_saved_transfer_before_its_lifecycle_check() {
+    let (f, _, task) = board();
+    let saved = continuation::save(
+        &f.ctx,
+        &task.id,
+        &task.contract_revision().unwrap(),
+        instruction(),
+    )
+    .unwrap();
+    let result = crate::plan_verdict(
+        &f.ctx,
+        &task.id,
+        &crate::PlanVerdict {
+            plan: "P1",
+            attempt: None,
+            verdict: corral_core::Verdict::Changes,
+            notes: "Fixture current owner asks for revisions, without releasing the saved transfer.",
+        },
+    );
+    assert!(
+        result.is_err(),
+        "manual plan mutation must enforce the saved current-driver fence before recording a decision"
+    );
+    let current = f.ctx.store.get(&task.id).unwrap();
+    assert_eq!(current.plans, saved.plans);
+    assert_eq!(current.plan_runs, saved.plan_runs);
+    assert!(current.dispatch_hold && current.runs.is_empty());
+}
+
+#[test]
+fn optional_policy_cannot_turn_an_unapproved_transfer_plan_into_no_plan_requirement() {
+    let (f, _, mut task) = returned();
+    task.plan_required = Some(false);
+    assert!(
+        crate::approved_plan(&f.ctx, &task).is_err(),
+        "a retained C3 formal plan still needs independent acceptance under optional plan policy"
+    );
+}
+
+#[test]
+fn ordinary_plan_submission_cannot_use_the_unpublished_adoption_domain() {
+    let (f, _, task) = board();
+    f.ctx
+        .store
+        .update(&task.id, |task| {
+            // Exact lifecycle-boundary fixture: publication is held, not an admitted planner.
+            task.plans.clear();
+            task.plan_runs.clear();
+            task.dispatch_hold = true;
+            let mut journal = lifecycle::for_task(&f.ctx.store, task)?.unwrap();
+            let transfer = journal.transfer.as_mut().unwrap();
+            transfer.ownership_committed = false;
+            transfer.adoption_proven = false;
+            recovery::save(&f.ctx.store, &journal)
+        })
+        .unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("plan.md");
+    std::fs::write(&path, lifecycle_tests::FORMAL).unwrap();
+    assert!(
+        crate::plan_submit(&f.ctx, &task.id, &path).is_err(),
+        "only the checked internal adopter can submit before ownership publication"
+    );
+    let task = f.ctx.store.get(&task.id).unwrap();
+    assert!(task.plans.is_empty() && task.plan_runs.is_empty() && task.dispatch_hold);
+}
+
+#[test]
+fn existing_target_findings_change_after_preview_requires_a_new_choice() {
+    let (f, session, previous) = returned();
+    let prepared = publish(
+        &f,
+        &session,
+        "Current unfinished source draft.",
+        Goal::PlanContinue,
+    );
+    let choice = select(&f, &prepared);
+    let changed = f
+        .ctx
+        .store
+        .update(&previous.id, |task| {
+            // This is identity-only fixture data, not accepted approval or consent.
+            task.plans[0].approval = Some(corral_core::PlanApproval {
+                by: "fixture-only".into(),
+                at: corral_core::clock::now(),
+                policy_digest: "not-acceptance-evidence".into(),
+                authorization: None,
+            });
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        changed.contract_revision().unwrap(),
+        previous.contract_revision().unwrap()
+    );
+    assert!(
+        transfer::commit(&f.ctx, &choice, &choice.digest().unwrap(), instruction()).is_err(),
+        "target plan/findings changed without changing task contract or run; selected choice must be stale"
+    );
+    assert_eq!(f.ctx.store.get(&previous.id).unwrap().plans, changed.plans);
+    assert_eq!(f.ctx.store.list().unwrap().len(), 1);
+    assert!(read_journal(&f.ctx.store, prepared.id()).unwrap().is_none());
+    let refreshed = select(&f, &prepared);
+    assert_ne!(refreshed.digest().unwrap(), choice.digest().unwrap());
 }
 
 #[test]

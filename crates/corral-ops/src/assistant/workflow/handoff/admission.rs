@@ -157,12 +157,19 @@ pub(crate) fn require<T: TaskRef + ?Sized>(
                 "plan_only: planning/review stops before implementation"
             );
             if kind != Kind::AcceptPlan && !draft_pending {
+                let spec = crate::plan_spec_revision(task)?;
                 ensure!(
-                    !task.last_plan_head()?.is_some_and(|p| p.approval.is_some()
-                        || p.current_review.as_ref().is_some_and(|r| matches!(
-                            r.verdict,
-                            Some(corral_core::Verdict::Approve | corral_core::Verdict::Escalate)
-                        ))),
+                    !task
+                        .last_plan_head()?
+                        .is_some_and(|p| p.spec_revision == spec
+                            && (p.approval.is_some()
+                                || p.current_review.as_ref().is_some_and(|r| matches!(
+                                    r.verdict,
+                                    Some(
+                                        corral_core::Verdict::Approve
+                                            | corral_core::Verdict::Escalate
+                                    )
+                                )))),
                     "plan_only: reviewed plan or blocker reached; no automatic next stage"
                 );
             }

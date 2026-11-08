@@ -74,7 +74,9 @@ impl Proof {
             Self::Unlaunched { transfer, .. } => ensure!(
                 transfer == &journal.id
                     && container.state.binding.generation == 0
-                    && container.state.generations.is_empty(),
+                    && container.state.generations.is_empty()
+                    && container.pane.is_none()
+                    && container.state.binding.callback.is_none(),
                 "handoff_source_unsupported: source is not the attested unlaunched session"
             ),
             Self::Native { proof } => {
