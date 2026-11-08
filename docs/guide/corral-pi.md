@@ -1420,7 +1420,7 @@ subscription and guarded-stream restrictions survive model refresh.
 corral talks to a live host over its generation's Unix socket. Any corral process can connect
 through `ctl.cap`, which it must send with every request; the host also refuses a peer running
 as another user. The commands are `hello`, `get_state`, `submit_input`, `cancel`,
-`events_since` and `shutdown`. Input is answered truthfully: `started` (with the turn it
+`events_since`, `shutdown`, `questions`, `queue_state` and `queue_withdraw`. Input is answered truthfully: `started` (with the turn it
 started), `queued` (busy, delivered as a steer or follow-up), `handled` (a command that needs
 no model run) or `rejected` (for example, busy input whose policy is `prompt`). When Pi has not
 answered within 30 seconds, the reply is `pending`: the input stays admitted, its outcome follows
@@ -1438,6 +1438,33 @@ Each host event carries the generation and a monotonic sequence. `events_since` 
 one frame of events; continue from its `next` cursor while `more` is true. A reader whose cursor
 fell behind the host's buffer gets an explicit gap, which corral records as an
 `agent_events_gap` event, a requirement to reconcile from its own records.
+
+### Identified input queues
+
+The pinned Pi 1.5.0 patches expose synchronous object-identity queue hooks and targeted removal.
+Every bound host journals `corral_queue` v1 custom entries, even when `queue_control` is off.
+These entries are not model context. `queued`, `started`, `withdrawn`, `handled` and `rejected`
+describe execution independently of `corral_delivery` observation; `started` never means turn
+completion. IDs have the form `q-g<generation>-<bind-prefix>-<counter>`; checks use the full
+committed binding, not the display prefix. Ledger appends persist before queue mutations,
+including before the first conversational message. A write failure fences further progress.
+
+`queue_control` requires catalog 10 and host support (strict/standard/full defaults off/on/on).
+Older snapshots remain off. Bridge v1 adds `queue_state {limit?:1..64}` (default 64) with
+bounded metadata and an explicit `more` flag, and `queue_withdraw {key,op_key}`. Readback never
+sends pane text over the bridge. Withdrawal only controls current Corral-inbox input; pane and
+extension items refuse `foreign_origin`. Unavailable capability, binding or interactive mode
+is an explicit refusal, not an empty queue. Mutations retain per-generation canonical operation
+receipts, capped at 1,024 keys with replay still available at capacity. Reuse the same operation
+key after an uncertain acknowledgement; a new key is not reconciliation.
+
+The in-host `HostSession.queue` API offers `snapshot()`, `withdraw(item)`, `edit(item,text)` and
+`operation(op_key)`. Only pane items are editable there; it is not a model tool or extension
+API. Edits withdraw the original, then run native input handlers once for a new tail identity
+linked by `supersedes`; assistant input receives a fresh owner-input journal ID. A failed
+replacement leaves the original withdrawn and reports the replacement's real disposition.
+Rich mode keeps its existing read-only, count-only queue notices and draft protection; these
+APIs add no panel or keyboard controls. Compaction-held input is outside their scope.
 
 ### Fixture installations
 

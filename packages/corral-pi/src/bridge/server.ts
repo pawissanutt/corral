@@ -12,7 +12,7 @@ import { FrameInvalid, FrameTooLarge, LineReader } from "./framing.ts";
 import {
   BRIDGE_VERSION, BridgeRefusal, EVENT_PAGE_BYTES, FRAME_MAX_BYTES, INPUT_REPLY_MS, MAX_IN_FLIGHT, type QuestionUpdate,
   type RequestFrame, SUBMISSIONS_MAX, type SubmitInput, type SubmitResult, frameId, parseFrame, parseQuestions, parseSeq,
-  parseSubmitInput, parseTurn,
+  parseSubmitInput, parseTurn, parseQueueLimit, parseQueueWithdraw,
 } from "./protocol.ts";
 
 export interface BridgeHandlers {
@@ -24,6 +24,8 @@ export interface BridgeHandlers {
   shutdown(): void;
   /** Corral's current states of the container's questions; absent, the host keeps no projection. */
   questions?(updates: readonly QuestionUpdate[]): Record<string, unknown>;
+  queueState?(limit: number): Record<string, unknown>;
+  queueWithdraw?(key: string, op_key: string): Record<string, unknown>;
 }
 
 export interface BridgeServerOptions {
@@ -154,6 +156,16 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
           busy_policy: input.busyPolicy, disposition: result.disposition, ...(result.turn ? { turn: result.turn } : {}),
         });
         return { request_id: frame.id, idempotency_key: input.idempotencyKey, ...result };
+      }
+      case "queue_state": {
+        const limit = parseQueueLimit(frame.args);
+        if (!options.handlers.queueState) throw new BridgeRefusal("capability_unavailable", "queue_control is unavailable");
+        return options.handlers.queueState(limit);
+      }
+      case "queue_withdraw": {
+        const { key, op_key } = parseQueueWithdraw(frame.args);
+        if (!options.handlers.queueWithdraw) throw new BridgeRefusal("capability_unavailable", "queue_control is unavailable");
+        return options.handlers.queueWithdraw(key, op_key);
       }
       case "cancel":
         return { request_id: frame.id, ...(await options.handlers.cancel(parseTurn(frame.args))) };

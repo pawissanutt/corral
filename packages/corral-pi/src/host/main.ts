@@ -11,6 +11,7 @@ import { join } from "node:path";
 
 import { startBridge } from "../bridge/server.ts";
 import { EventLog } from "../bridge/events.ts";
+import { COMMANDS } from "../bridge/protocol.ts";
 import { CorralClient, sha256Hex } from "../tools/corral.ts";
 import { readLaunchMessage } from "./config.ts";
 import { openSession, withRecoveryContext } from "./lifecycle.ts";
@@ -141,9 +142,11 @@ async function main(): Promise<void> {
       hello: () => ({
         protocol: 1, generation: config.identity.generation, role: config.identity.role,
         bound: session.bound, session_id: session.sessionId(), last_seq: events.last,
-        commands: ["hello", "get_state", "submit_input", "cancel", "events_since", "shutdown", "questions"],
+        commands: COMMANDS,
       }),
       state: () => session.state(),
+      queueState: limit => session.queue.snapshot(limit, false),
+      queueWithdraw: (key, op_key) => ({ ...session.queue.bridgeWithdraw(key, op_key) }),
       submit: (input, requestId) => session.submit(input, requestId),
       cancel: (turn) => session.cancel(turn),
       questions: (updates) => session.questionsChanged(updates),

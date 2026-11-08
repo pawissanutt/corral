@@ -28,6 +28,7 @@
   "patchedDependencies": {
     "@earendil-works/pi-ai@1.5.0": "patches/@earendil-works%2Fpi-ai@1.5.0.patch",
     "@earendil-works/pi-coding-agent@1.5.0": "patches/@earendil-works%2Fpi-coding-agent@1.5.0.patch",
-    "@earendil-works/pi-tui@1.5.0": "patches/@earendil-works%2Fpi-tui@1.5.0.patch"
+    "@earendil-works/pi-tui@1.5.0": "patches/@earendil-works%2Fpi-tui@1.5.0.patch",
+    "@earendil-works/pi-agent-core@1.5.0": "patches/@earendil-works%2Fpi-agent-core@1.5.0.patch"
   }
 }

@@ -1,15 +1,379 @@
+diff --git a/dist/core/agent-session.d.ts b/dist/core/agent-session.d.ts
+index 2d847a8852537c78076b3b895c3b1a2a167bbd75..865a246f1b62880122f1d22604595181110c9781 100644
+--- a/dist/core/agent-session.d.ts
++++ b/dist/core/agent-session.d.ts
+@@ -12,7 +12,7 @@
+  *
+  * Modes use this class and add their own I/O layer on top.
+  */
+-import { type Agent, type AgentEvent, type AgentMessage, type AgentState, type AgentTool, type StreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
++import { type Agent, type AgentEvent, type AgentMessage, type AgentQueueChange, type AgentState, type AgentTool, type StreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
+ import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai/compat";
+ import { type BashResult } from "./bash-executor.ts";
+ import type { CacheWarmer, CacheWarmingStatus } from "./cache-warmer.ts";
+@@ -176,7 +176,15 @@ export interface ExtensionBindings {
+ export type QueuedInputDisposition = "handled" | "queued";
+ export type PromptDisposition = QueuedInputDisposition | "started";
+ /** Options for AgentSession.prompt() */
++export interface HostQueueObserver {
++    input(input: { text: string; images?: ImageContent[]; source: InputSource; mode: "prompt" | "steer" | "follow_up" }): unknown;
++    lifecycle(event: { tag: unknown; event: PromptDisposition | "rejected"; reason?: string }): void;
++    queue(change: AgentQueueChange & { entries: { message: AgentMessage; tag: unknown }[] }): void;
++    canRestore?(tag: unknown): boolean;
++}
+ export interface PromptOptions {
++    /** Opaque per-invocation host provenance, not extension input text. */
++    queueTag?: unknown;
+     /** Whether to dispatch extension commands and expand skill commands and prompt templates (default: true) */
+     expandPromptTemplates?: boolean;
+     /** Image attachments */
+@@ -221,6 +229,8 @@ export interface SessionStats {
+ }
+ export declare class AgentSession {
+     readonly agent: Agent;
++    setQueueObserver(observer: HostQueueObserver | undefined): void;
++    removeQueuedMessage(message: AgentMessage, cause?: string): boolean;
+     readonly sessionManager: SessionManager;
+     readonly settingsManager: SettingsManager;
+     private _scopedModels;
+@@ -578,6 +588,7 @@ export declare class AgentSession {
+      */
+     steer(text: string, images?: ImageContent[], options?: {
+         source?: InputSource;
++        queueTag?: unknown;
+     }): Promise<QueuedInputDisposition>;
+     /**
+      * Queue a follow-up message to be processed after the agent finishes.
+@@ -589,6 +600,7 @@ export declare class AgentSession {
+      */
+     followUp(text: string, images?: ImageContent[], options?: {
+         source?: InputSource;
++        queueTag?: unknown;
+     }): Promise<QueuedInputDisposition>;
+     /**
+      * Internal: Queue a steering message (already expanded, no extension command check).
+@@ -642,7 +654,7 @@ export declare class AgentSession {
+      * Useful for restoring to editor when user aborts.
+      * @returns Object with steering and followUp arrays
+      */
+-    clearQueue(): {
++    clearQueue(options?: { restore?: boolean }): {
+         steering: string[];
+         followUp: string[];
+     };
+diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
+index ccbb5a96b093a95499f1caa4a30371c3ebd4102a..26ce73d4e4d6928007155af65e6dc8ac3f97b8d2 100644
+--- a/dist/core/agent-session.js
++++ b/dist/core/agent-session.js
+@@ -102,6 +102,14 @@ export class AgentSession {
+     _idleWaitPromise;
+     _resolveIdleWait;
+     /** Tracks pending steering messages for UI display. Removed when delivered. */
++    _queueObserver;
++    _queueTags = new WeakMap();
++    _queueDisplay = new Map();
++    setQueueObserver(observer) { this._queueObserver = observer; }
++    removeQueuedMessage(message, cause) { return this.agent.removeQueuedMessage(message, cause); }
++    _inputTag(text, images, source, mode, tag) {
++        return tag ?? this._queueObserver?.input({ text, images, source, mode });
++    }
+     _steeringMessages = [];
+     /** Tracks pending follow-up messages for UI display. Removed when delivered. */
+     _followUpMessages = [];
+@@ -184,6 +192,18 @@ export class AgentSession {
+     _runSystemPromptOptions;
+     constructor(config) {
+         this.agent = config.agent;
++        this.agent.setQueueHook(change => {
++            const entries = change.messages.map(message => ({ message, tag: this._queueTags.get(message) }));
++            this._queueObserver?.queue({ ...change, entries });
++            for (const { message } of entries) {
++                if (change.action === "enqueue" && message.role === "user")
++                    this._queueDisplay.set(message, { mode: change.mode, text: contentText(message.content, "") });
++                else if (change.action !== "enqueue") this._queueDisplay.delete(message);
++            }
++            this._steeringMessages = [...this._queueDisplay.values()].filter(v => v.mode === "steer").map(v => v.text);
++            this._followUpMessages = [...this._queueDisplay.values()].filter(v => v.mode === "follow_up").map(v => v.text);
++            queueMicrotask(() => this._emitQueueUpdate());
++        });
+         this.sessionManager = config.sessionManager;
+         this.settingsManager = config.settingsManager;
+         this._scopedModels = config.scopedModels ?? [];
+@@ -743,23 +763,7 @@ export class AgentSession {
+         // This ensures the UI sees the updated queue state
+         if (event.type === "message_start" && event.message.role === "user") {
+             this._overflowRecoveryAttempted = false;
+-            const messageText = contentText(event.message.content, "");
+-            if (messageText) {
+-                // Check steering queue first
+-                const steeringIndex = this._steeringMessages.indexOf(messageText);
+-                if (steeringIndex !== -1) {
+-                    this._steeringMessages.splice(steeringIndex, 1);
+-                    this._emitQueueUpdate();
+-                }
+-                else {
+-                    // Check follow-up queue
+-                    const followUpIndex = this._followUpMessages.indexOf(messageText);
+-                    if (followUpIndex !== -1) {
+-                        this._followUpMessages.splice(followUpIndex, 1);
+-                        this._emitQueueUpdate();
+-                    }
+-                }
+-            }
++            // Display membership is removed by exact object identity at the synchronous drain hook.
+         }
+         // Emit to extensions first, then notify public listeners.
+         await this._emitExtensionEvent(event);
+@@ -1456,7 +1460,6 @@ export class AgentSession {
+         // have while idle. No run exists yet, so they cannot split a tool call from its result.
+         this._flushPendingBashMessages();
+         this._flushPendingCustomMessages();
+-        onStarted?.();
+         // Compaction before the prompt may have scheduled a retry; the new prompt replaces it.
+         this._failedResponse = undefined;
+         this._recordSelection();
+@@ -1464,6 +1467,7 @@ export class AgentSession {
+         // are dropped, so a tool that never registers does not stay pending.
+         this._pendingToolNames.clear();
+         try {
++            onStarted?.();
+             await this.agent.prompt(messages);
+             while (!this._agentRunAbortRequested) {
+                 if (await this._handlePostAgentRun()) {
+@@ -1647,8 +1651,28 @@ export class AgentSession {
+      * @throws Error if no model selected or no API key available (when not streaming)
+      */
+     async prompt(text, options) {
++        const tag = this._inputTag(text, options?.images, options?.source ?? "interactive",
++            options?.streamingBehavior === "steer" ? "steer" : options?.streamingBehavior === "followUp" ? "follow_up" : "prompt", options?.queueTag);
++        const report = disposition => {
++            this._queueObserver?.lifecycle({ tag, event: disposition });
++            options?.preflightResult?.(disposition);
++        };
++        try {
++            return await this._prompt(text, { ...options, queueTag: tag, preflightResult: report });
++        } catch (error) {
++            this._queueObserver?.lifecycle({ tag, event: "rejected", reason: String(error).slice(0, 256) });
++            throw error;
++        }
++    }
++    async _prompt(text, options) {
+         if (this._isEmittingAgentSettled) {
+-            this._deferredSettledActions.push(async () => await this.prompt(text, options));
++            this._deferredSettledActions.push(async () => {
++                try { await this._prompt(text, options); }
++                catch (error) {
++                    this._queueObserver?.lifecycle({ tag: options?.queueTag, event: "rejected", reason: String(error).slice(0, 256) });
++                    throw error;
++                }
++            });
+             return;
+         }
+         const expandPromptTemplates = options?.expandPromptTemplates ?? true;
+@@ -1685,10 +1709,10 @@ export class AgentSession {
+                 throw new Error("Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.");
+             }
+             if (options.streamingBehavior === "followUp") {
+-                await this._queueFollowUp(expandedText, currentImages);
++                await this._queueFollowUp(expandedText, currentImages, options?.queueTag);
+             }
+             else {
+-                await this._queueSteer(expandedText, currentImages);
++                await this._queueSteer(expandedText, currentImages, options?.queueTag);
+             }
+             preflightResult?.("queued");
+             return;
+@@ -1767,7 +1791,18 @@ export class AgentSession {
+             return text; // Return original on error
+         }
+     }
+-    async _queueUserInput(text, images, behavior, source) {
++    async _queueUserInput(text, images, behavior, source, suppliedTag) {
++        const tag = this._inputTag(text, images, source, behavior === "steer" ? "steer" : "follow_up", suppliedTag);
++        try {
++            const result = await this._queueUserInputTagged(text, images, behavior, source, tag);
++            this._queueObserver?.lifecycle({ tag, event: result });
++            return result;
++        } catch (error) {
++            this._queueObserver?.lifecycle({ tag, event: "rejected", reason: String(error).slice(0, 256) });
++            throw error;
++        }
++    }
++    async _queueUserInputTagged(text, images, behavior, source, tag) {
+         if (text.startsWith("/")) {
+             this._throwIfExtensionCommand(text);
+         }
+@@ -1777,10 +1812,10 @@ export class AgentSession {
+         let expandedText = this._expandSkillCommand(processedInput.text);
+         expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+         if (behavior === "steer") {
+-            await this._queueSteer(expandedText, processedInput.images);
++            await this._queueSteer(expandedText, processedInput.images, tag);
+         }
+         else {
+-            await this._queueFollowUp(expandedText, processedInput.images);
++            await this._queueFollowUp(expandedText, processedInput.images, tag);
+         }
+         return "queued";
+     }
+@@ -1794,7 +1829,7 @@ export class AgentSession {
+      * @throws Error if text is an extension command
+      */
+     async steer(text, images, options) {
+-        return this._queueUserInput(text, images, "steer", options?.source ?? "interactive");
++        return this._queueUserInput(text, images, "steer", options?.source ?? "interactive", options?.queueTag);
+     }
+     /**
+      * Queue a follow-up message to be processed after the agent finishes.
+@@ -1805,35 +1840,31 @@ export class AgentSession {
+      * @throws Error if text is an extension command
+      */
+     async followUp(text, images, options) {
+-        return this._queueUserInput(text, images, "followUp", options?.source ?? "interactive");
++        return this._queueUserInput(text, images, "followUp", options?.source ?? "interactive", options?.queueTag);
+     }
+     /**
+      * Internal: Queue a steering message (already expanded, no extension command check).
+      */
+-    async _queueSteer(text, images) {
+-        this._steeringMessages.push(text);
+-        this._emitQueueUpdate();
++    async _queueSteer(text, images, tag) {
+         const content = [{ type: "text", text }];
+         if (images) {
+             content.push(...images);
+         }
+-        this.agent.steer({
+-            role: "user",
+-            content,
+-            timestamp: Date.now(),
+-        });
++        const message = { role: "user", content, timestamp: Date.now() };
++        if (tag !== undefined) this._queueTags.set(message, tag);
++        this.agent.steer(message);
+     }
+     /**
+      * Internal: Queue a follow-up message (already expanded, no extension command check).
+      */
+-    async _queueFollowUp(text, images) {
+-        this._followUpMessages.push(text);
+-        this._emitQueueUpdate();
++    async _queueFollowUp(text, images, tag) {
+         const content = [{ type: "text", text }];
+         if (images) {
+             content.push(...images);
+         }
+-        this.agent.followUp({ role: "user", content, timestamp: Date.now() });
++        const message = { role: "user", content, timestamp: Date.now() };
++        if (tag !== undefined) this._queueTags.set(message, tag);
++        this.agent.followUp(message);
+     }
+     /**
+      * Throw an error if the text is an extension command.
+@@ -1959,13 +1990,15 @@ export class AgentSession {
+      * Useful for restoring to editor when user aborts.
+      * @returns Object with steering and followUp arrays
+      */
+-    clearQueue() {
+-        const steering = [...this._steeringMessages];
+-        const followUp = [...this._followUpMessages];
+-        this._steeringMessages = [];
+-        this._followUpMessages = [];
+-        this.agent.clearAllQueues();
+-        this._emitQueueUpdate();
++    clearQueue(options) {
++        const steering = [], followUp = [];
++        for (const message of this.agent.getQueuedMessages()) {
++            const tag = this._queueTags.get(message);
++            if (options?.restore && this._queueObserver?.canRestore && !this._queueObserver.canRestore(tag)) continue;
++            const display = this._queueDisplay.get(message);
++            this.agent.removeQueuedMessage(message, options?.restore ? "pane_restore" : "host");
++            if (display) (display.mode === "steer" ? steering : followUp).push(display.text);
++        }
+         return { steering, followUp };
+     }
+     /** Number of pending messages (includes both steering and follow-up) */
+diff --git a/dist/core/session-manager.d.ts b/dist/core/session-manager.d.ts
+index c042aaf3f7aff9aa8dca36a83a6d96cdbbfc949e..53cdbd4fbcc1cdeb8337d98b20eda1e7cda8212e 100644
+--- a/dist/core/session-manager.d.ts
++++ b/dist/core/session-manager.d.ts
+@@ -277,7 +277,7 @@ export declare class SessionManager {
+     /** Append a compaction summary as child of current leaf, then advance leaf. Returns entry id. */
+     appendCompaction<T = unknown>(summary: string, firstKeptEntryId: string | null, tokensBefore: number, details?: T, fromHook?: boolean, usage?: Usage): string;
+     /** Append a custom entry (for extensions) as child of current leaf, then advance leaf. Returns entry id. */
+-    appendCustomEntry(customType: string, data?: unknown): string;
++    appendCustomEntry(customType: string, data?: unknown, options?: { immediate?: boolean }): string;
+     /** Append a session info entry (e.g., display name). Returns entry id. */
+     appendSessionInfo(name: string): string;
+     /** Get the current session name from the latest session_info entry, if any. */
+diff --git a/dist/core/session-manager.js b/dist/core/session-manager.js
+index 7ee05014e13c6434040bfdd7b39b455a6731a7d6..70ec5185af15a96c14395a1623a23573bff47bc3 100644
+--- a/dist/core/session-manager.js
++++ b/dist/core/session-manager.js
+@@ -792,11 +792,11 @@ export class SessionManager {
+     _hasConversation() {
+         return this.fileEntries.some((e) => e.type === "message" && (e.message.role === "user" || e.message.role === "assistant"));
+     }
+-    _persist(entry) {
++    _persist(entry, immediate = false) {
+         if (!this.persist || !this.sessionFile)
+             return;
+         if (!this.flushed) {
+-            if (!this._hasConversation())
++            if (!immediate && !this._hasConversation())
+                 return;
+             const fd = openSync(this.sessionFile, "wx");
+             try {
+@@ -813,13 +813,13 @@ export class SessionManager {
+             appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+         }
+     }
+-    _appendEntry(entry) {
++    _appendEntry(entry, immediate = false) {
+         const previousLeafId = this.leafId;
+         this.fileEntries.push(entry);
+         this.byId.set(entry.id, entry);
+         this.leafId = entry.id;
+         try {
+-            this._persist(entry);
++            this._persist(entry, immediate);
+         }
+         catch (error) {
+             // Keep memory in line with the file: an entry that was not written must not become the
+@@ -910,7 +910,7 @@ export class SessionManager {
+         return entry.id;
+     }
+     /** Append a custom entry (for extensions) as child of current leaf, then advance leaf. Returns entry id. */
+-    appendCustomEntry(customType, data) {
++    appendCustomEntry(customType, data, options) {
+         const entry = {
+             type: "custom",
+             customType,
+@@ -919,7 +919,7 @@ export class SessionManager {
+             parentId: this.leafId,
+             timestamp: new Date().toISOString(),
+         };
+-        this._appendEntry(entry);
++        this._appendEntry(entry, options?.immediate);
+         return entry.id;
+     }
+     /** Append a session info entry (e.g., display name). Returns entry id. */
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index 2472338..6b9eabd 100644
+index 247233807ec7ba7b5c897b162eff9f40d0985e30..96f59fe342fb24733a40d6e41cc304d5fd37440a 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
-@@ -1,3 +1,5 @@
+@@ -1,6 +1,8 @@
 +export { withBuiltInRenderers } from "./core/tools/renderers/index.ts";
 +export type { InteractiveChatPresentation } from "./modes/interactive/interactive-mode.ts";
  export { type Args, parseArgs } from "./cli/args.ts";
  export { CONFIG_DIR_NAME, getAgentDir, getDocsPath, getExamplesPath, getPackageDir, getReadmePath, VERSION, } from "./config.ts";
- export { AgentSession, type AgentSessionConfig, type AgentSessionEvent, type AgentSessionEventListener, type ModelCycleResult, type ParsedSkillBlock, type PromptOptions, parseSkillBlock, type SessionStats, } from "./core/agent-session.ts";
+-export { AgentSession, type AgentSessionConfig, type AgentSessionEvent, type AgentSessionEventListener, type ModelCycleResult, type ParsedSkillBlock, type PromptOptions, parseSkillBlock, type SessionStats, } from "./core/agent-session.ts";
++export { AgentSession, type AgentSessionConfig, type AgentSessionEvent, type AgentSessionEventListener, type HostQueueObserver, type ModelCycleResult, type ParsedSkillBlock, type PromptOptions, parseSkillBlock, type SessionStats, } from "./core/agent-session.ts";
+ export { readStoredCredential } from "./core/auth-storage.ts";
+ export type { CacheWarmingDecision, CacheWarmingStatus } from "./core/cache-warmer.ts";
+ export { type BranchPreparation, type BranchSummaryResult, type CollectEntriesResult, type CompactionResult, type CutPointResult, calculateContextTokens, collectEntriesForBranchSummary, compact, DEFAULT_COMPACTION_SETTINGS, estimateTokens, type FileOperations, findCutPoint, findTurnStartIndex, type GenerateBranchSummaryOptions, generateBranchSummary, generateSummary, generateSummaryWithUsage, getLastAssistantUsage, prepareBranchEntries, serializeConversation, shouldCompact, } from "./core/compaction/index.ts";
 diff --git a/dist/index.js b/dist/index.js
-index ab5cfcc..443c03d 100644
+index ab5cfccc3a90939e533b9118122189507a7af326..443c03d20243f33aefd7a4e6f8572d06eef4a861 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -1,3 +1,4 @@
@@ -18,7 +382,7 @@ index ab5cfcc..443c03d 100644
  export { parseArgs } from "./cli/args.js";
  // Config paths
 diff --git a/dist/modes/interactive/chat-viewport.d.ts b/dist/modes/interactive/chat-viewport.d.ts
-index 65638e7..b94d737 100644
+index 65638e7fc46589141ca4b0d37e7032f553d6f573..b94d7375521752f911de63a0cd0dff5827b3e819 100644
 --- a/dist/modes/interactive/chat-viewport.d.ts
 +++ b/dist/modes/interactive/chat-viewport.d.ts
 @@ -1,6 +1,7 @@
@@ -30,7 +394,7 @@ index 65638e7..b94d737 100644
      readonly status: Component;
      readonly editor: Component;
 diff --git a/dist/modes/interactive/chat-viewport.js b/dist/modes/interactive/chat-viewport.js
-index afed5bd..e995c18 100644
+index afed5bdc99bad115f3e5c14b872aa714ef71d023..e995c18b1fc7c748d7630fccd91f623ba0deaf39 100644
 --- a/dist/modes/interactive/chat-viewport.js
 +++ b/dist/modes/interactive/chat-viewport.js
 @@ -20,7 +20,7 @@ export function createChatViewport(options) {
@@ -43,7 +407,7 @@ index afed5bd..e995c18 100644
          ]),
      };
 diff --git a/dist/modes/interactive/components/assistant-message.d.ts b/dist/modes/interactive/components/assistant-message.d.ts
-index c58f050..6f07cb2 100644
+index c58f050624a13c494174ab5f60be20e14a3dbfd5..6f07cb2effd89fa9db9fe76061ec3fcdd57c7855 100644
 --- a/dist/modes/interactive/components/assistant-message.d.ts
 +++ b/dist/modes/interactive/components/assistant-message.d.ts
 @@ -1,6 +1,8 @@
@@ -72,7 +436,7 @@ index c58f050..6f07cb2 100644
  //# sourceMappingURL=assistant-message.d.ts.map
 \ No newline at end of file
 diff --git a/dist/modes/interactive/components/assistant-message.js b/dist/modes/interactive/components/assistant-message.js
-index 1e16f4c..3bfef65 100644
+index 1e16f4cb43136e7c20264f1e3dc8c5c43c0bd8a8..3bfef65c1e3dfe13685e00df4d11ab6fe162d847 100644
 --- a/dist/modes/interactive/components/assistant-message.js
 +++ b/dist/modes/interactive/components/assistant-message.js
 @@ -157,7 +157,7 @@ export class AssistantMessageComponent extends Container {
@@ -85,7 +449,7 @@ index 1e16f4c..3bfef65 100644
          if (message.stopReason === "length") {
              this.contentContainer.addChild(new Spacer(1));
 diff --git a/dist/modes/interactive/interactive-mode.d.ts b/dist/modes/interactive/interactive-mode.d.ts
-index c75d274..342d196 100644
+index c75d274e24b63ee7c8fa0c4c1736bf7fbfb42c90..342d1969ee7ebbccad48263476ca35cb08fe67f3 100644
 --- a/dist/modes/interactive/interactive-mode.d.ts
 +++ b/dist/modes/interactive/interactive-mode.d.ts
 @@ -3,7 +3,8 @@
@@ -118,7 +482,7 @@ index c75d274..342d196 100644
  export declare class InteractiveMode {
      private runtimeHost;
 diff --git a/dist/modes/interactive/interactive-mode.js b/dist/modes/interactive/interactive-mode.js
-index 615a6ba..18b9522 100644
+index 615a6ba211a5d2bf165ab7d4c4dcc41819a452dd..3f01da2b0e7db21f72926fe05e1728fbcca46eaa 100644
 --- a/dist/modes/interactive/interactive-mode.js
 +++ b/dist/modes/interactive/interactive-mode.js
 @@ -453,7 +453,7 @@ export class InteractiveMode {
@@ -213,7 +577,7 @@ index 615a6ba..18b9522 100644
  | \`/\` | Slash commands |
  | \`!\` | Run bash command |
 diff --git a/dist/utils/image-process.js b/dist/utils/image-process.js
-index 65b15af..75c1e84 100644
+index 65b15afe6f7532d030e841d3ac163b462e833849..75c1e84ccc88e7e0c4b2798dfada5ee62b769672 100644
 --- a/dist/utils/image-process.js
 +++ b/dist/utils/image-process.js
 @@ -1,3 +1,4 @@
