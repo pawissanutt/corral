@@ -1,4 +1,5 @@
 mod agent_cmd;
+mod annotation_cmd;
 mod artifact_cmd;
 mod artifact_show;
 mod assistant_cmd;
@@ -120,6 +121,8 @@ pub enum Cmd {
     Lessons(lessons_cmd::LessonsArgs),
     /// Read and explicitly edit scoped workspace memory; JSON output
     Memory(memory_cmd::MemoryArgs),
+    /// Read candidate-bound review threads or author them as the owner
+    Annotation(annotation_cmd::AnnotationArgs),
     /// Submit, review and approve implementation plans independently of code review
     Plan {
         #[command(subcommand)]
@@ -828,16 +831,28 @@ fn main() {
                 Some(arg) if arg == "setup" => break Some("setup"),
                 Some(arg) if arg == "selection" => break Some("selection"),
                 Some(arg) if arg == "repair" => break Some("repair"),
+                Some(arg) if arg == "annotation" && args.any(|arg| arg == "--json") => {
+                    break Some("annotation");
+                }
                 Some(_) | None => break None,
             }
         };
         if let Some(command) = structured
             && err.use_stderr()
         {
-            eprintln!(
-                "{}",
-                serde_json::json!({"command":command,"error":err.to_string()})
-            );
+            if command == "annotation" {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({"error": {
+                        "code":"bad_request", "message":err.to_string(), "detail":null
+                    }})
+                );
+            } else {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({"command":command,"error":err.to_string()})
+                );
+            }
             std::process::exit(err.exit_code());
         }
         err.exit()
@@ -846,6 +861,7 @@ fn main() {
         std::process::exit(ext_cmd::run(ext));
     }
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
+    let annotation_json = matches!(&cli.cmd, Some(Cmd::Annotation(args)) if args.json);
     let setup_json = match &cli.cmd {
         Some(Cmd::Setup(args)) => Some(args.cmd.name()),
         _ => None,
@@ -874,6 +890,10 @@ fn main() {
     if let Err(err) = result {
         if err.is::<wait_cmd::WaitTimeout>() {
             std::process::exit(124);
+        }
+        if annotation_json {
+            eprintln!("{}", annotation_cmd::error_json(&err));
+            std::process::exit(1);
         }
         if err.is::<entry::AssistantRefused>() {
             eprintln!("error: {err}");

@@ -30,6 +30,7 @@ Commands:
   idea                    Record a reasoned idea disposition; owner ideas require explicit consent
   lessons                 Inspect project lessons, distill history, pin rules or delete them
   memory                  Read and explicitly edit scoped workspace memory; JSON output
+  annotation              Read candidate-bound review threads or author them as the owner
   plan                    Submit, review and approve implementation plans independently of code review
   build-identity          Print the immutable landed identity embedded by a post-land install
   hooks                   Inspect, reconcile and retry durable project post-land operations
@@ -1924,6 +1925,158 @@ Options:
       --scope <SCOPE>                  workspace, project, or role [default: workspace] [possible values: workspace, project, role]
       --key <KEY>                      Registered project key (project scope) or pm/assistant/worker (role scope)
   -h, --help                           Print help
+```
+
+## `corral annotation`
+
+See [candidate review annotations](annotations.md) for the owner workflow, immutable anchors,
+retry/concurrency rules, statuses and bounds.
+
+```text
+Read candidate-bound review threads or author them as the owner
+
+Usage: corral annotation [OPTIONS] <COMMAND>
+
+Commands:
+  open     Open a thread on the exact committed candidate you observed
+  reply    Reply without changing the thread's open/resolved state
+  resolve  Explicitly resolve an open thread, with an optional note
+  reopen   Explicitly reopen a resolved thread, with an optional note
+  list     Read one bounded page of thread summaries, without entries
+  show     Read one bounded page of immutable entries in a thread
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --json         Emit the shared v1 view/result; refusals are JSON on stderr
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral annotation open`
+
+```text
+Open a thread on the exact committed candidate you observed
+
+Usage: corral annotation open [OPTIONS] --run <RUN> --base <BASE> --head <HEAD> --path <PATH> <TASK>
+
+Arguments:
+  <TASK>
+
+Options:
+      --json                       Emit the shared v1 view/result; refusals are JSON on stderr
+      --root <ROOT>                Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --run <RUN>
+      --base <BASE>
+      --head <HEAD>
+      --path <PATH>
+      --old                        Anchor to the base (old) side instead of the head (new) side
+      --lines <LINES>              1-based inclusive range A-B (omit for a file-level anchor)
+      --text <TEXT>
+      --text-file <TEXT_FILE>      Read at most 4 KiB of UTF-8 from a regular file (not stdin)
+      --request-key <REQUEST_KEY>  Retry identity; defaults to cli- plus 32 hex digits of the request digest
+  -h, --help                       Print help
+```
+
+### `corral annotation reply`
+
+```text
+Reply without changing the thread's open/resolved state
+
+Usage: corral annotation reply [OPTIONS] --revision <REVISION> <TASK> <THREAD>
+
+Arguments:
+  <TASK>
+  <THREAD>
+
+Options:
+      --json                       Emit the shared v1 view/result; refusals are JSON on stderr
+      --revision <REVISION>        Thread revision from the read view (required even for state transitions)
+      --root <ROOT>                Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --text <TEXT>
+      --text-file <TEXT_FILE>      Read at most 4 KiB of UTF-8 from a regular file (not stdin)
+      --request-key <REQUEST_KEY>  Retry identity; defaults to cli- plus 32 hex digits of the request digest
+  -h, --help                       Print help
+```
+
+### `corral annotation resolve`
+
+```text
+Explicitly resolve an open thread, with an optional note
+
+Usage: corral annotation resolve [OPTIONS] --revision <REVISION> <TASK> <THREAD>
+
+Arguments:
+  <TASK>
+  <THREAD>
+
+Options:
+      --json                       Emit the shared v1 view/result; refusals are JSON on stderr
+      --revision <REVISION>        Thread revision from the read view (required even for state transitions)
+      --root <ROOT>                Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --text <TEXT>
+      --text-file <TEXT_FILE>      Read at most 4 KiB of UTF-8 from a regular file (not stdin)
+      --request-key <REQUEST_KEY>  Retry identity; defaults to cli- plus 32 hex digits of the request digest
+  -h, --help                       Print help
+```
+
+### `corral annotation reopen`
+
+```text
+Explicitly reopen a resolved thread, with an optional note
+
+Usage: corral annotation reopen [OPTIONS] --revision <REVISION> <TASK> <THREAD>
+
+Arguments:
+  <TASK>
+  <THREAD>
+
+Options:
+      --json                       Emit the shared v1 view/result; refusals are JSON on stderr
+      --revision <REVISION>        Thread revision from the read view (required even for state transitions)
+      --root <ROOT>                Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --text <TEXT>
+      --text-file <TEXT_FILE>      Read at most 4 KiB of UTF-8 from a regular file (not stdin)
+      --request-key <REQUEST_KEY>  Retry identity; defaults to cli- plus 32 hex digits of the request digest
+  -h, --help                       Print help
+```
+
+### `corral annotation list`
+
+```text
+Read one bounded page of thread summaries, without entries
+
+Usage: corral annotation list [OPTIONS] <TASK>
+
+Arguments:
+  <TASK>
+
+Options:
+      --json             Emit the shared v1 view/result; refusals are JSON on stderr
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --state <STATE>    [possible values: open, resolved]
+      --anchor <ANCHOR>  [possible values: current, stale, superseded, unavailable]
+      --cursor <CURSOR>
+      --limit <LIMIT>    Items per page, 1..64 (default 16); encoded bytes also limit each page
+  -h, --help             Print help
+```
+
+### `corral annotation show`
+
+```text
+Read one bounded page of immutable entries in a thread
+
+Usage: corral annotation show [OPTIONS] <TASK> <THREAD>
+
+Arguments:
+  <TASK>
+  <THREAD>
+
+Options:
+      --cursor <CURSOR>
+      --json             Emit the shared v1 view/result; refusals are JSON on stderr
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --limit <LIMIT>    Items per page, 1..64 (default 16); encoded bytes also limit each page
+  -h, --help             Print help
 ```
 
 ## `corral plan`
