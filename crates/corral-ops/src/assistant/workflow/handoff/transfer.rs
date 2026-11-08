@@ -198,16 +198,36 @@ fn compatible(ctx: &Ctx, task: &Task, prepared: &Prepared) -> Result<()> {
     Ok(())
 }
 
-fn fence(task: &mut Task, prepared: &Prepared, instruction: &Instruction) -> Result<()> {
+fn fence(ctx: &Ctx, task: &mut Task, prepared: &Prepared, instruction: &Instruction) -> Result<()> {
     let existing = task.cowork.clone();
+    let source_scratch = prepared
+        .package()
+        .source_path
+        .as_ref()
+        .map(|path| -> Result<String> {
+            ctx.store
+                .get_assistant(&prepared.package().assistant)?
+                .scratch
+                .into_iter()
+                .find(|s| &s.path == path)
+                .map(|s| s.slug)
+                .context(
+                    "handoff_source: registered source scratch disappeared before task publication",
+                )
+        })
+        .transpose()?
+        .unwrap_or_default();
     if prepared.package().plan.is_some() {
         task.plan_required = Some(true);
     }
     task.cowork = Some(Cowork {
-        session: prepared.package().assistant.clone(),
+        session: existing.as_ref().map_or_else(
+            || prepared.package().assistant.clone(),
+            |c| c.session.clone(),
+        ),
         scratch: existing
             .as_ref()
-            .map_or_else(String::new, |c| c.scratch.clone()),
+            .map_or(source_scratch, |c| c.scratch.clone()),
         run: existing
             .as_ref()
             .map_or_else(String::new, |c| c.run.clone()),
@@ -347,7 +367,7 @@ pub(crate) fn commit(
                 "handoff_reconciling: task publication already exists; read its journal"
             );
             journal = fresh;
-            fence(task, &prepared, &instruction)?;
+            fence(ctx, task, &prepared, &instruction)?;
             if choice.save {
                 task.cowork
                     .as_mut()

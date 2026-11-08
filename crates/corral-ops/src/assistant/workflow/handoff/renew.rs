@@ -9,6 +9,32 @@ use corral_core::{
     CompletionDriver, CompletionIntent, CoworkReview, Task, TaskRef, assistant_workflow::ScopeOwner,
 };
 
+/// Refuse a new/changed completion intent BEFORE C1 rebases or publishes a candidate.
+pub(crate) fn preflight(
+    ctx: &crate::Ctx,
+    task: &Task,
+    intent: Option<CompletionIntent>,
+) -> Result<()> {
+    let Some(journal) = lifecycle::for_task(&ctx.store, task)? else {
+        return Ok(());
+    };
+    let transfer = journal.transfer.as_ref().context("transfer missing")?;
+    if transfer.disposition == Disposition::Returned {
+        let intent = intent
+            .or_else(|| task.cowork.as_ref()?.completion.as_ref().map(|s| s.intent))
+            .unwrap_or(CompletionIntent::Ship);
+        let goal = if intent == CompletionIntent::Ship {
+            Goal::ImplementationShip
+        } else {
+            Goal::ImplementationVerify
+        };
+        if !transfer.renewed_assistant || transfer.goal != goal {
+            super::owner::require_completion_owner(ctx)?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn submitted(
     ctx: &crate::Ctx,
     task: &mut Task,
@@ -39,7 +65,7 @@ pub(crate) fn submitted(
     );
     let scope = cowork
         .completion
-        .as_ref()
+        .as_mut()
         .context("completion scope missing")?;
     ensure!(
         scope.driver
@@ -55,14 +81,34 @@ pub(crate) fn submitted(
     } else {
         Goal::ImplementationVerify
     };
-    if !transfer.renewed_assistant || transfer.goal != goal {
-        let instruction = super::owner::completion_instruction(session, &scope.instruction)?;
-        transfer.record(instruction)?;
-        transfer.advance()?;
-    }
+    let instruction = if !transfer.renewed_assistant || transfer.goal != goal {
+        Some(super::owner::completion_instruction(
+            ctx,
+            &scope.instruction,
+        )?)
+    } else {
+        // Bounded same-goal repair carries the original directive, even after the
+        // source input/receipt cache expires. Never replace it with a default finish.
+        scope.instruction = transfer
+            .history
+            .iter()
+            .rev()
+            .find_map(|t| match &t.instruction {
+                lifecycle::Instruction::Completion { instruction, .. } => Some(instruction.clone()),
+                _ => None,
+            })
+            .context(
+                "completion_instruction_missing: recover the accepted current-scope directive",
+            )?;
+        None
+    };
     cowork.review = CoworkReview::TransferV1;
     transfer.goal = goal;
     transfer.contract_revision = contract;
+    if let Some(instruction) = instruction {
+        transfer.record(instruction)?;
+        transfer.advance()?;
+    }
     transfer.renewed_assistant = true;
     task.dispatch_hold = false;
     ctx.store.save_record(JOURNALS, &journal.id, &journal)?;

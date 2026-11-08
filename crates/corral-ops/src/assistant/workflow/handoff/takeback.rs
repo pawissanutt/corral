@@ -132,6 +132,18 @@ pub(crate) fn apply(
     }
     let (_, package, _) = super::read_package(&ctx.store, &journal.id)?;
     let plan_only = lifecycle::plan_only(transfer.goal);
+    let destination = ctx.store.get_assistant(&journal.assistant)?;
+    ensure!(
+        destination.ended.is_none(),
+        "take_back: destination ended; board is held, resume an eligible continuation before restoring work"
+    );
+    let recorded_base = package.source_base.clone().or_else(|| {
+        destination
+            .scratch
+            .iter()
+            .find(|s| Some(&s.path) == package.source_path.as_ref())
+            .map(|s| s.base.clone())
+    });
     let source = if plan_only || (transfer.fresh_seed && super::adopt::pending_seed(ctx, &task)?) {
         None
     } else if super::adopt::pending_seed(ctx, &task)? {
@@ -140,25 +152,36 @@ pub(crate) fn apply(
             .as_ref()
             .context("take_back: pending captured seed is missing")?;
         let (path, branch) = super::adopt::seed_path(ctx, &task)?;
-        Some((path, snapshot.state.base.clone(), branch))
+        Some((
+            path,
+            snapshot.state.base.clone(),
+            branch,
+            recorded_base.clone(),
+        ))
     } else if let Some(run) = task.current_run() {
         Some((
             run.worktree.clone(),
             run.base_sha.clone(),
             run.branch.clone(),
+            Some(run.base.clone()),
         ))
     } else if let Some(snapshot) = &package.snapshot {
         let (path, branch) = super::adopt::seed_path(ctx, &task)?;
-        Some((path, snapshot.state.base.clone(), branch))
+        Some((
+            path,
+            snapshot.state.base.clone(),
+            branch,
+            recorded_base.clone(),
+        ))
     } else {
         None
     };
     let snapshot = match (&transfer.return_snapshot, &source) {
-        (Some(snapshot), Some((path, _, _))) => {
+        (Some(snapshot), Some((path, _, _, _))) => {
             snapshot.validate_source(path)?;
             Some(snapshot.clone())
         }
-        (None, Some((path, base, branch))) => {
+        (None, Some((path, base, branch, _))) => {
             Some(Snapshot::capture(&ctx.store, path, base, branch)?)
         }
         (None, None) => None,
@@ -202,7 +225,8 @@ pub(crate) fn apply(
                 project: package.project.clone(),
                 path,
                 branch,
-                base: snapshot.state.base.clone(),
+                base: source.as_ref().and_then(|s| s.3.clone())
+                    .context("handoff_missing: retained integration branch is unavailable; refresh the scope, never use its SHA as a branch")?,
                 created: corral_core::clock::now(),
                 kind: crate::assistant::scratch::SPIKE.into(),
                 bytes: None,
@@ -358,13 +382,9 @@ pub(crate) fn apply(
         transfer.returned_scratch = scratch.as_ref().map(|s| s.slug.clone());
         transfer.renewed_assistant = false;
         let current_contract = task.contract_revision()?;
-        let scope = task
-            .cowork
-            .as_mut()
-            .context("co-work fence missing")?
-            .completion
-            .as_mut()
-            .context("completion missing")?;
+        let cowork = task.cowork.as_mut().context("co-work fence missing")?;
+        cowork.owner_confirmed = false;
+        let scope = cowork.completion.as_mut().context("completion missing")?;
         scope.driver = CompletionDriver::Assistant {
             session: journal.assistant.clone(),
             scratch: scratch
