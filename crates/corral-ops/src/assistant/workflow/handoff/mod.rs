@@ -145,7 +145,8 @@ impl Prepared {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Request {
     pub project: String,
     pub scope: Vec<String>,

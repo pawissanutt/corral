@@ -12,6 +12,91 @@ use anyhow::{Context, Result, ensure};
 use corral_core::{Task, TaskRef};
 use serde_json::{Value, json};
 
+pub fn require_entry(ctx: &Ctx) -> Result<()> {
+    ensure!(
+        matches!(owner_action::authority(), OwnerAuthority::Shell),
+        "handoff_unavailable: assistant-origin entry needs an authenticated named-action/choice consumer"
+    );
+    crate::automation_controls::require_automation_owner(&ctx.store)
+}
+
+/// Bootstrap only a legacy ordinary source, never a planning-to-execution transition.
+/// The input is provenance; the guarded owner command, not its ID, authorizes this entry.
+pub fn initialize(ctx: &Ctx, session: &str, input: &str) -> Result<super::Expected> {
+    require_entry(ctx)?;
+    ensure!(
+        super::super::boundary::activities(&ctx.store, session)?.is_empty(),
+        "handoff_busy: source effects must settle before preparation"
+    );
+    ctx.store.settle_assistant_container(session, |c, _| {
+        ensure!(
+            c.workflow.is_none(),
+            "handoff_source: existing workflow must be used without changing its mode"
+        );
+        super::super::prepare_entry(&ctx.store, session, c, input)?;
+        c.workflow
+            .as_mut()
+            .context("workflow missing")?
+            .current
+            .phase = corral_core::assistant_workflow::WorkflowPhase::Ordinary;
+        Ok(())
+    })?;
+    let c = ctx.store.get_assistant_container(session)?;
+    let w = super::super::current(&c)?;
+    Ok(super::Expected {
+        workflow: w.id.clone(),
+        state_revision: w.state_revision,
+        authority_epoch: w.authority_epoch,
+        plan_revision: None,
+    })
+}
+
+pub fn prepare(
+    ctx: &Ctx,
+    session: &str,
+    request: super::Request,
+    scratch: Option<&str>,
+) -> Result<super::Prepared> {
+    require_entry(ctx)?;
+    let c = ctx.store.get_assistant_container(session)?;
+    let w = super::super::current(&c)?;
+    let expected = super::Expected {
+        workflow: w.id.clone(),
+        state_revision: w.state_revision,
+        authority_epoch: w.authority_epoch,
+        plan_revision: w.current_plan.as_ref().map(|p| p.revision),
+    };
+    let assistant = ctx.store.get_assistant(session)?;
+    let sources: Vec<_> = assistant
+        .scratch
+        .iter()
+        .filter(|s| s.project == request.project)
+        .collect();
+    let source = match scratch {
+        Some(slug) => Some(
+            *sources
+                .iter()
+                .find(|s| s.slug == slug)
+                .context("handoff_source: selected scratch not found in project")?,
+        ),
+        None => {
+            ensure!(
+                sources.len() <= 1,
+                "handoff_source: choose one explicit source scratch"
+            );
+            sources.first().copied()
+        }
+    };
+    super::prepare(
+        &ctx.store,
+        session,
+        &c,
+        &expected,
+        request,
+        source.map(|s| (s.path.as_path(), s.base.as_str(), s.branch.as_str())),
+    )
+}
+
 pub(crate) fn instruction(ctx: &Ctx, _session: &str, text: &str) -> Result<Instruction> {
     // An ordinary finish confirmation is NOT transfer consent. Native assistant entry
     // stays closed until C4 installs its payload-bound stable-option consumer.

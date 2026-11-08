@@ -3,6 +3,7 @@ mod annotation_cmd;
 mod artifact_cmd;
 mod artifact_show;
 mod assistant_cmd;
+mod assistant_handoff_cmd;
 mod attention_cmd;
 mod automation_cmd;
 mod cmds;
