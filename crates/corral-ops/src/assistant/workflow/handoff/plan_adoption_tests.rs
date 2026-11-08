@@ -317,6 +317,119 @@ fn take_back_retains_the_latest_settled_unsubmitted_planner_draft_without_submit
     assert!(task.runs.is_empty());
 }
 
+#[cfg(unix)]
+#[test]
+fn transferred_research_and_draft_dispatch_then_continue_the_stopped_planner_normally() {
+    for raw in [
+        None,
+        Some("Retain this unfinished raw draft and its open question."),
+    ] {
+        let mut f = ts::fx();
+        let (session, container, expected) = tests::planning(&mut f);
+        let engine = f._tmp.path().join("planner-engine");
+        std::fs::create_dir(&engine).unwrap();
+        let bin = engine.join("herdr");
+        std::os::unix::fs::symlink(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/plan_engine.sh"),
+            &bin,
+        )
+        .unwrap();
+        // The fake engine records commands, with no `execute` marker or actual agent.
+        f.ctx.herdr = corral_herdr::Herdr::with_bin(bin, Some("c3-planner-fixture".into()));
+        f.ctx.resource_probe = crate::resources::FixedResourceProbe::arc();
+        f.ctx.store.config.agents.insert(
+            "planner-fixture".into(),
+            corral_core::AgentCmd {
+                command: "true '{prompt_file}'".into(),
+            },
+        );
+        f.ctx
+            .store
+            .config
+            .projects
+            .get_mut("app")
+            .unwrap()
+            .default_profile = Some("planner-fixture".into());
+        f.ctx.store.save_config().unwrap();
+        let prepared = match raw {
+            Some(text) => publish(&f, &session, text, Goal::PlanContinue),
+            None => {
+                let mut request = tests::request();
+                request.goal = Goal::PlanContinue;
+                prepare(&f.ctx.store, &session, &container, &expected, request, None).unwrap()
+            }
+        };
+        let choice = select(&f, &prepared);
+        let task =
+            transfer::commit(&f.ctx, &choice, &choice.digest().unwrap(), instruction()).unwrap();
+        let first = crate::dispatch(&f.ctx, &task.id, &crate::DispatchOpts::default());
+        assert!(
+            matches!(&first, Ok(crate::DispatchOutcome::Started { run_id, .. }) if run_id == "D1"),
+            "initial {raw:?} takeover must reach actual planner dispatch: {first:?}"
+        );
+        let first = f.ctx.store.get(&task.id).unwrap();
+        assert!(!first.dispatch_hold && first.runs.is_empty());
+        let output = first.plan_runs[0].output_dir.clone();
+        if let Some(raw) = raw {
+            assert!(
+                std::fs::read_to_string(output.join("prompt.md"))
+                    .unwrap()
+                    .contains(raw)
+            );
+        }
+        let latest = "Latest settled planner draft; this question remains open.\n";
+        std::fs::write(output.join("plan.md"), latest).unwrap();
+        // Model completion of the inert transport: it never spawned a physical writer.
+        std::fs::remove_file(engine.join("planner-live")).unwrap();
+        f.ctx
+            .store
+            .update(&task.id, |task| {
+                let planner = task.plan_runs.last_mut().unwrap();
+                planner.state = corral_core::PlanRunState::Cancelled;
+                planner.ended = Some(corral_core::clock::now());
+                planner.inbox.settled = Some(corral_core::clock::now());
+                planner.herdr = None;
+                task.status = corral_core::Status::NeedsMe;
+                Ok(())
+            })
+            .unwrap();
+        let saved = continuation::save(
+            &f.ctx,
+            &task.id,
+            &task.contract_revision().unwrap(),
+            instruction(),
+        )
+        .unwrap();
+        assert!(crate::dispatch(&f.ctx, &task.id, &crate::DispatchOpts::default()).is_err());
+        assert!(
+            f.ctx.store.get(&task.id).unwrap().dispatch_hold,
+            "planner preparation must not release Saved"
+        );
+        let choice = continuation::preview(&f.ctx, &task.id, Goal::PlanContinue).unwrap();
+        continuation::start(&f.ctx, &choice, &choice.digest().unwrap(), instruction()).unwrap();
+        let next = crate::dispatch::dispatch_automatic(
+            &f.ctx,
+            &task.id,
+            serde_json::json!({"source":"availability"}),
+            corral_core::clock::now(),
+        );
+        assert!(
+            matches!(&next, Ok(crate::DispatchOutcome::Started { run_id, .. }) if run_id == "D2"),
+            "stopped-planner continuation must use normal automatic dispatch: {next:?}"
+        );
+        let continued = f.ctx.store.get(&task.id).unwrap();
+        assert_eq!(continued.plan_runs[0], saved.plan_runs[0]);
+        assert_eq!(continued.plan_runs.len(), 2);
+        assert_eq!(continued.id, task.id);
+        assert!(!continued.dispatch_hold && continued.runs.is_empty());
+        assert!(
+            std::fs::read_to_string(continued.plan_runs[1].output_dir.join("prompt.md"))
+                .unwrap()
+                .contains(latest)
+        );
+    }
+}
+
 #[test]
 fn a_new_raw_draft_requires_new_formal_planning_without_reusing_predecessor_stopping_semantics() {
     let (f, session, previous) = returned();
