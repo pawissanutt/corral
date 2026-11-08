@@ -9,6 +9,7 @@ import type { Fetch } from "../auth/types.ts";
 import { createModelCatalog } from "./catalog.ts";
 import { type ConnectionBinding, parseBinding } from "./connections.ts";
 import { guardedFetch } from "./restrict.ts";
+import { withProviderFailures } from "./provider-failure.ts";
 
 /** Invoked at EACH physical POST, including a pinned client's internal compatibility retry. */
 export type ApiAdmission = (request: {
@@ -79,7 +80,7 @@ export async function createApiCatalog(
       ...options, apiKey, headers: {}, env: {}, fetch: fetch as typeof globalThis.fetch, maxRetries: 0,
       reasoning: effort, maxTokens: output,
     };
-    const source = stream({ ...model, headers: {} }, context, pinnedOptions);
+    const source = withProviderFailures(connection, stream)({ ...model, headers: {} }, context, pinnedOptions);
     return (async function* () {
       for await (const event of source) {
         // Provider/SDK error bodies may echo request auth; neither UI nor receipts may retain it.
