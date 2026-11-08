@@ -32,6 +32,7 @@ SLOW_OWNERS = {
         "crates/corral-core/src/store/annotations.rs", "crates/corral-core/src/store/head_api.rs",
     ),
     "handoff_publication_crash_matrix": ("crates/corral-ops/src/assistant/workflow/handoff/",),
+    "handoff_materialization_restart": ("crates/corral-ops/src/assistant/workflow/handoff/",),
     "scratch_gc_resume_startup_interleaving": (
         "crates/corral-core/src/assistant", "crates/corral-ops/src/assistant/scratch",
         "crates/corral-ops/src/agent/ops/assistant", "crates/corral-ops/src/agent/launch.rs",

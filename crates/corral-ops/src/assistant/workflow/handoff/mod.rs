@@ -35,6 +35,8 @@ mod settlement;
 mod source;
 mod source_boundary;
 pub(crate) mod takeback;
+#[cfg(test)]
+mod takeback_tests;
 mod target;
 pub mod transfer;
 pub use takeback::Returned;

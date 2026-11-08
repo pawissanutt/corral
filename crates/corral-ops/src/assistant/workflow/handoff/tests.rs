@@ -366,19 +366,60 @@ fn handoff_preview_reservation_readback_is_idempotent_and_keeps_local_source_own
 
 #[test]
 fn handoff_plan_stage_artifacts_and_late_findings_remain_exact_without_importing_approval() {
-    for stage in [None, Some(false), Some(true)] {
+    #[derive(Clone, Copy, Debug)]
+    enum Stage {
+        Research,
+        Draft,
+        Reviewed,
+        Dirty,
+        Completed,
+    }
+    for stage in [
+        Stage::Research,
+        Stage::Draft,
+        Stage::Reviewed,
+        Stage::Dirty,
+        Stage::Completed,
+    ] {
         let mut f = ts::fx();
         let (session, _, _) = planning(&mut f);
+        let source = if matches!(stage, Stage::Dirty | Stage::Completed) {
+            let path = f._tmp.path().join("stage-source");
+            let base = repo(&path);
+            git(&path, &["branch", "main", &base], None).unwrap();
+            f.ctx.store.config.projects.insert(
+                "app".into(),
+                serde_json::from_value(serde_json::json!({"path":"stage-source","base":"main"}))
+                    .unwrap(),
+            );
+            record_source(&f, &session, &path, "main");
+            std::fs::write(path.join("file"), b"staged\0\xff\r\n").unwrap();
+            git(&path, &["add", "file"], None).unwrap();
+            if matches!(stage, Stage::Dirty) {
+                std::fs::write(path.join("file"), b"work\0\xfe\r\n").unwrap();
+                std::fs::write(path.join("untracked"), b"retained note\r\n").unwrap();
+            } else {
+                git(&path, &["commit", "-m", "completed fixture code"], None).unwrap();
+            }
+            Some(path)
+        } else {
+            None
+        };
+        f.ctx.store.save_config().unwrap();
         f.ctx
             .store
             .update_assistant_container(&session, |c| {
                 let w = &mut c.workflow.as_mut().unwrap().current;
-                if let Some(reviewed) = stage {
+                if matches!(stage, Stage::Draft | Stage::Reviewed) {
                     let artifact = super::super::publication::artifact(
                         &f.ctx.store,
                         &session,
                         "W1",
-                        b"exact draft\r\n",
+                        if matches!(stage, Stage::Reviewed) {
+                            lifecycle_tests::FORMAL.as_bytes()
+                        } else {
+                            b"exact draft\r\n"
+                        },
                     )?;
                     w.current_plan = Some(PlanRevision {
                         revision: 1,
@@ -390,7 +431,7 @@ fn handoff_plan_stage_artifacts_and_late_findings_remain_exact_without_importing
                         supersedes: None,
                         scope_changes: String::new(),
                     });
-                    if reviewed {
+                    if matches!(stage, Stage::Reviewed) {
                         w.reviews.push(super::super::publication::artifact(
                             &f.ctx.store,
                             &session,
@@ -410,7 +451,8 @@ fn handoff_plan_stage_artifacts_and_late_findings_remain_exact_without_importing
             authority_epoch: w.authority_epoch,
             plan_revision: w.current_plan.as_ref().map(|p| p.revision),
         };
-        let p = prepare(&f.ctx.store, &session, &c, &e, request(), None).unwrap();
+        let selected_source = source.as_ref().map(|p| (p.as_path(), "main", "work"));
+        let p = prepare(&f.ctx.store, &session, &c, &e, request(), selected_source).unwrap();
         let (_, loaded, _) = read_package(&f.ctx.store, p.id()).unwrap();
         assert_eq!(loaded.plan, w.current_plan);
         assert_eq!(loaded.reviews, w.reviews);
@@ -436,6 +478,84 @@ fn handoff_plan_stage_artifacts_and_late_findings_remain_exact_without_importing
             "late results must refresh selection"
         );
         assert!(f.ctx.store.list().unwrap().is_empty());
+        let c = f.ctx.store.get_assistant_container(&session).unwrap();
+        let current = &c.workflow.as_ref().unwrap().current;
+        let refreshed = Expected {
+            workflow: current.id.clone(),
+            state_revision: current.state_revision,
+            authority_epoch: current.authority_epoch,
+            plan_revision: current.current_plan.as_ref().map(|p| p.revision),
+        };
+        let fresh = prepare(
+            &f.ctx.store,
+            &session,
+            &c,
+            &refreshed,
+            request(),
+            selected_source,
+        )
+        .unwrap();
+        let choice =
+            transfer::preview(&f.ctx, fresh.id(), "Exact retained source", None, true).unwrap();
+        let instruction = plan_adoption_tests::instruction();
+        let saved = transfer::commit(
+            &f.ctx,
+            &choice,
+            &choice.digest().unwrap(),
+            instruction.clone(),
+        )
+        .unwrap();
+        let replay =
+            transfer::commit(&f.ctx, &choice, &choice.digest().unwrap(), instruction).unwrap();
+        assert_eq!(saved.id, replay.id);
+        assert_eq!(f.ctx.store.list().unwrap().len(), 1);
+        assert!(saved.dispatch_hold && saved.runs.is_empty() && saved.launch.is_none());
+        assert!(
+            saved
+                .plan_runs
+                .iter()
+                .all(|p| p.herdr.is_none() && p.agent_host.is_none() && p.ended.is_some())
+        );
+        assert!(
+            saved
+                .plans
+                .iter()
+                .all(|p| p.approval.is_none() && p.reviews.is_empty())
+        );
+        let reopened = Store::open(f.ctx.store.root()).unwrap();
+        let owner = reopened
+            .get_assistant_container(&session)
+            .unwrap()
+            .workflow
+            .unwrap()
+            .current;
+        assert_eq!(
+            owner.owner,
+            ScopeOwner::Board {
+                task: saved.id.clone()
+            }
+        );
+        assert_eq!(owner.phase, WorkflowPhase::BoardOwned);
+        let journal = lifecycle::for_task(&reopened, &reopened.get(&saved.id).unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(journal.transfer.as_ref().unwrap().ownership_committed);
+        assert_eq!(
+            journal.transfer.as_ref().unwrap().disposition,
+            lifecycle::Disposition::Saved
+        );
+        let (_, retained, _) = read_package(&reopened, fresh.id()).unwrap();
+        assert_eq!(retained.plan, loaded.plan);
+        assert_eq!(retained.reviews, loaded.reviews);
+        if let Some(path) = source {
+            let snapshot = retained.snapshot.as_ref().unwrap();
+            let base = corral_git::rev_sha(&path, "main").unwrap();
+            let actual = Snapshot::capture(&reopened, &path, &base, "work").unwrap();
+            assert_eq!(snapshot.state, actual.state);
+        }
+        eprintln!(
+            "FIVE_STAGE {stage:?}: exact retained work, one held owner/task after replay/reopen, zero implementation/planner launches and no imported approval/PASS"
+        );
     }
 }
 

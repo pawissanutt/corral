@@ -216,8 +216,9 @@ fn dirty_saved_seed_returns_exact_layers_and_branch_without_residual_intent() {
         "goal changes cannot duplicate an owned candidate"
     );
     assert_eq!(resumed.runs[0].worktree, current.runs[0].worktree);
-    // Recover a running native writer whose host exited without a turn-end report.
-    // An open historical turn must not make take-back wait forever for a forbidden Done.
+    // Linux also proves the stop against an actual owned stand-in process, not a
+    // dead-PID fixture. This is not a real SDK host. Historical open turns remain
+    // truthful and never force a forbidden Done/turn-end to settle the writer.
     f.ctx.herdr = corral_herdr::Herdr::with_bin(
         f._tmp.path().join("herdr-must-not-run"),
         Some("isolated-fixture".into()),
@@ -237,8 +238,25 @@ fn dirty_saved_seed_returns_exact_layers_and_branch_without_residual_intent() {
             Ok(())
         })
         .unwrap();
+    #[cfg(target_os = "linux")]
+    let mut process = crate::agent::bridge::fixture::HostProc::spawn(true);
     let mut host = ts::bind(&f, &target, "worker-pane", "worker-session");
     host.identity.project = current.project.clone().unwrap();
+    #[cfg(target_os = "linux")]
+    {
+        let hello = ts::envelope(
+            &host,
+            "hello",
+            &crate::agent::event_request_id(host.identity.generation, 0),
+            serde_json::json!({"ctl_cap_sha256":corral_core::agent::paths::sha256_hex(host.ctl_cap.as_bytes()),
+                "session_file":host.sessions.join("session.jsonl"),"pid":process.pid(),
+                "start_time":process.start_time(),"pane":host.pane}),
+            true,
+        );
+        ts::committed(&ts::send(&f, &hello, "hello"));
+        assert!(!process.reaped());
+    }
+    #[cfg(not(target_os = "linux"))]
     ts::committed(&ts::hello(&f, &host));
     ts::committed(&ts::send(
         &f,
@@ -265,6 +283,28 @@ fn dirty_saved_seed_returns_exact_layers_and_branch_without_residual_intent() {
         paused.current_run().unwrap().outcome,
         Some(corral_core::RunOutcome::Cancelled)
     );
+    #[cfg(target_os = "linux")]
+    {
+        assert!(
+            process.reaped(),
+            "Save must physically stop the bound owned host, not only fence it"
+        );
+        assert_eq!(
+            paused
+                .current_run()
+                .unwrap()
+                .agent_host
+                .as_ref()
+                .unwrap()
+                .binding
+                .generation,
+            1,
+            "stop must not bootstrap a replacement generation"
+        );
+        eprintln!(
+            "C3_NATIVE_STOP: verified owned stand-in exited; no replacement generation or fabricated turn end"
+        );
+    }
     let next = continuation::preview(&f.ctx, &running.id, Goal::ImplementationPrepare).unwrap();
     let resumed =
         continuation::start(&f.ctx, &next, &next.digest().unwrap(), instruction()).unwrap();
