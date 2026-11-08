@@ -73,10 +73,13 @@ No provider calls, owner credentials, live herdr fixtures, or load tests were ne
 ## Review round 1 rework
 
 F1: The reviewer correctly distinguishes the demonstrated capture-readiness defect from the
-unknown historical T-890 cause. Owner-only decision `T-901/R1/Q1` asks whether bounded proof
-of that defect is sufficient with the historical subcondition explicitly unresolved, or
-whether the task must remain blocked on exact historical identification. Until answered,
-this report does not claim that obligation met or reinterpret it as runtime-cause proof.
+unknown historical T-890 cause. In owner-only decision `T-901/R1/Q1` revision 3 (PM-pane
+ask_user `rq-e214fc5c88f132cbf8d0c64fe4b097d1`), the owner explicitly allowed T-901 to finish
+on the demonstrated defect proof, leaving T-890's historical cause unresolved. This permits
+completion of the bounded fixture-readiness fix with that limitation; it is not acceptance,
+landing, or proof of T-890 recovery. The current-candidate gate, independent review, full
+landing proof, and later separately authorized T-890 recovery checks remain required.
+Neither the controlled probe nor any green rerun identifies the historical subcondition.
 
 F2: The compiled completed-wait assertion now requires both BEFORE and AFTER. The scratch
 `completed-buffer-assertion-probe.mjs` executes the fixture's actual assertion block with
