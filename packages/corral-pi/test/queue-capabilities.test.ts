@@ -1,25 +1,38 @@
 import { expect, test } from "bun:test";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { HostQueue, QUEUE_OPERATIONS_MAX } from "../src/host/queue.ts";
+import { EventLog } from "../src/bridge/events.ts";
 
 function fixture() {
   const entries: { type: string; data: Record<string, unknown> }[] = [];
+  const events = new EventLog(3);
   let enabled = true, interactive = true, current = true;
   const queue = new HostQueue({ generation: 3, session: () => session,
     enabled: () => enabled, interactive: () => interactive, current: () => current,
-    turn: next => next ? 2 : 1, emit() {}, fence() {},
+    turn: next => next ? 2 : 1, emit: (kind, data) => { events.emit(kind, data); }, fence() {},
   });
   const session = { sessionManager: { appendCustomEntry(type: string, data: Record<string, unknown>) { entries.push({ type, data }); } } } as unknown as AgentSession;
   queue.bind("session-full-identity", "a".repeat(64));
-  return { queue, entries, enabled: (value: boolean) => { enabled = value; },
+  return { queue, entries, events, enabled: (value: boolean) => { enabled = value; },
     interactive: (value: boolean) => { interactive = value; }, current: (value: boolean) => { current = value; } };
 }
 
-test("capability, interaction, binding and transport origin fail closed without touching queue evidence", () => {
+test("capability, interaction, binding and transport origin fail closed without touching queue evidence", async () => {
   const fx = fixture();
+  fx.enabled(false);
   const tag = fx.queue.observer.input({ text: "owner secret", source: "interactive", mode: "follow_up" });
   const message = { role: "user" as const, content: "owner secret", timestamp: 1 };
   fx.queue.observer.queue({ action: "enqueue", mode: "follow_up", messages: [message], nextRun: false, entries: [{ message, tag }] });
+  await Promise.resolve(); // The public event publishes after the synchronous queue mutation.
+  const published = fx.events.since(0, 60_000).events;
+  expect(published).toHaveLength(1);
+  expect(published[0]).toMatchObject({ kind: "queue_item", event: "queued", origin: "pane", mode: "follow_up", text_bytes: 12 });
+  expect(published[0]?.text).toBeUndefined();
+  expect(JSON.stringify(published)).not.toContain("owner secret");
+  expect(fx.entries[0]?.data.text).toBe("owner secret");
+  expect(fx.queue.observer.restoreInput?.(tag)).toBe("owner secret");
+  fx.enabled(true);
+  expect((fx.queue.snapshot().items as { text?: string }[])[0]?.text).toBe("owner secret");
   const id = (fx.queue.snapshot().items as { item: string }[])[0]!.item;
   expect((fx.queue.snapshot(1, false).items as unknown[])[0]).toMatchObject({ item: id, actions: [] });
   expect(JSON.stringify(fx.queue.snapshot(1, false))).not.toContain("owner secret");
