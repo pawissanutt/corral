@@ -17,6 +17,14 @@
 set -euo pipefail
 exec </dev/null
 cd "$(dirname "$0")/.."
+
+# Keep the native mbx lease across compilation, prebuilt execution and gaps.
+if [[ ${1:-} == --corral-mbx-protected ]]; then
+  shift
+  python3 scripts/cargo_cache_targets.py --verify-protection
+elif [[ ${CORRAL_BUILD_CACHE:-off} == mbx && ${CORRAL_MBX_TARGETS:-private} == managed ]]; then
+  exec python3 scripts/cargo_cache.py --protect-script "$PWD/scripts/work-budget.sh" "$@"
+fi
 if [[ -n ${CORRAL_GATE_BINARIES_METADATA:-} ]]; then
   filter='binary_id(=corral-tui) and (test(=app::work_budget::board_work_stays_within_budget_and_independent_of_history) or test(=app::hot_budget::hot_reads_work_stays_independent_of_history) or test(=app::sync_budget::sync_tick_work_stays_independent_of_history))'
   CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_timer.py run \

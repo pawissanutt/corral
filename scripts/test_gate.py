@@ -91,7 +91,7 @@ class GateTests(unittest.TestCase):
         self.repo = Path(temp.name)
         (self.repo / "scripts").mkdir()
         (self.repo / "src").mkdir()
-        for name in ("gate.sh", "cargo.sh", "cargo_cache.py", "cargo_config.py", "gate_select.py", "gate_lanes.py", "gate_pi.py", "gate_timer.py", "gate_case.py", "gate_ratchet.py", "gate_repair.py", "gate_quarantine.py", "test_cost.py", "check-candidate.py", "work-budget.sh"):
+        for name in ("gate.sh", "cargo.sh", "cargo_cache.py", "cargo_cache_targets.py", "cargo_config.py", "gate_select.py", "gate_lanes.py", "gate_pi.py", "gate_timer.py", "gate_case.py", "gate_ratchet.py", "gate_repair.py", "gate_quarantine.py", "test_cost.py", "check-candidate.py", "work-budget.sh"):
             _ = shutil.copy2(SCRIPTS / name, self.repo / "scripts" / name)
         (self.repo / ".config").mkdir()
         for file in ("gate.toml", "nextest.toml"):
@@ -238,16 +238,20 @@ else:
     sys.exit(31)
 """)
         (self.repo / "bin" / "mbx").chmod(0o755)
-        with tempfile.TemporaryDirectory(prefix="corral-mbx-config-") as config:
-            result = self.gate(
-                PATH=path,
-                XDG_CONFIG_HOME=config,
-                CARGO_HOME=config,
-                CORRAL_BUILD_CACHE="mbx",
-                CORRAL_MBX_BIN=str(self.repo / "bin" / "mbx"),
-                CORRAL_MBX_CACHE_DIR=str(Path(config) / "cache"),
-            )
-        self.assertEqual(result.returncode, 31, result.stderr)
+        self.write("bin/b3sum", f'#!{sys.executable}\nprint("a" * 64)\n')
+        (self.repo / "bin" / "b3sum").chmod(0o755)
+        for target_mode in ("private", "managed"):
+            with self.subTest(target_mode=target_mode), tempfile.TemporaryDirectory(prefix="corral-mbx-config-") as config:
+                result = self.gate(
+                    PATH=path,
+                    XDG_CONFIG_HOME=config,
+                    CARGO_HOME=config,
+                    CORRAL_BUILD_CACHE="mbx",
+                    CORRAL_MBX_TARGETS=target_mode,
+                    CORRAL_MBX_BIN=str(self.repo / "bin" / "mbx"),
+                    CORRAL_MBX_CACHE_DIR=str(Path(config) / "cache"),
+                )
+                self.assertEqual(result.returncode, 31, result.stderr)
 
     def gate_as_runner(self, command: str = RUNNER_COMMAND,
                        **extra_env: str) -> tuple[bytes, int, int, int]:

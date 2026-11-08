@@ -10,6 +10,15 @@
 # CORRAL_GATE_CONTEXT (schema v1) and checks only what the candidate touched.
 set -euo pipefail
 exec </dev/null
+cd "$(dirname "$0")/.."
+
+# Keep the native mbx lease across compilation, prebuilt execution and gaps.
+if [[ ${1:-} == --corral-mbx-protected ]]; then
+  shift
+  python3 scripts/cargo_cache_targets.py --verify-protection
+elif [[ ${CORRAL_BUILD_CACHE:-off} == mbx && ${CORRAL_MBX_TARGETS:-private} == managed ]]; then
+  exec python3 scripts/cargo_cache.py --protect-script "$PWD/scripts/gate.sh" "$@"
+fi
 
 tier=full
 if (($#)); then
@@ -65,9 +74,8 @@ step="repository setup"
 step_active=0
 repair_profile=""
 trap on_error ERR
-cd "$(dirname "$0")/.."
 if [[ ${CORRAL_BUILD_CACHE:-off} == mbx ]]; then
-  printf 'Build cache: mbx 1.29.2 local profile (verified on invocation)\n'
+  printf 'Build cache: mbx 1.29.2 local profile, targets=%s (verified on invocation)\n' "${CORRAL_MBX_TARGETS:-private}"
 fi
 # Keep Cargo's worktree-local default: shared top-level CLI executable paths can be
 # overwritten by a concurrent candidate after Cargo releases its build lock.
