@@ -116,7 +116,7 @@ pub(crate) fn validate_slug(slug: &str) -> Result<()> {
     Ok(())
 }
 
-fn disk_check(ctx: &Ctx) -> Result<()> {
+pub(crate) fn disk_check(ctx: &Ctx) -> Result<()> {
     let snapshot = ctx.resource_probe.sample(&ctx.store)?;
     let min = ctx.store.config.resources.min_disk_bytes()?;
     if let Some(disk) = snapshot.disks.iter().find(|disk| disk.free_bytes < min) {
@@ -129,6 +129,36 @@ fn disk_check(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
+/// Shared scratch admission for creation and verified take-back adoption. A recovery of
+/// an already registered identity does not consume another scratch, but still checks disk.
+pub(crate) fn creation_admission(
+    ctx: &Ctx,
+    session: &str,
+    recovering: Option<&str>,
+) -> Result<std::fs::File> {
+    let guard = lock(ctx, "scratch-create")?;
+    let current = ctx.store.get_assistant(session)?;
+    if current.ended.is_some() {
+        bail!("assistant_ended: {session} has ended; scratch worktrees belong to open sessions");
+    }
+    if !recovering.is_some_and(|slug| current.scratch.iter().any(|s| s.slug == slug)) {
+        let total: usize = ctx
+            .store
+            .list_assistants()?
+            .iter()
+            .map(|s| s.scratch.len())
+            .sum();
+        let max = limits(ctx).max;
+        if total >= max {
+            bail!(
+                "scratch_cap: {total} scratch worktrees exist (assistant.scratch_max {max}); discard one, or the owner runs `corral assistant scratch gc`"
+            );
+        }
+    }
+    disk_check(ctx)?;
+    Ok(guard)
+}
+
 /// Creates a spike scratch for an open session, from `base` or the project's base branch.
 pub fn create(
     ctx: &Ctx,
@@ -138,24 +168,8 @@ pub fn create(
     base: Option<&str>,
 ) -> Result<AssistantScratch> {
     // Held from the workspace count through recording, so concurrent creators respect the cap.
-    let _creating = lock(ctx, "scratch-create")?;
+    let _creating = creation_admission(ctx, session, None)?;
     let current = ctx.store.get_assistant(session)?;
-    if current.ended.is_some() {
-        bail!("assistant_ended: {session} has ended; scratch worktrees belong to open sessions");
-    }
-    let total: usize = ctx
-        .store
-        .list_assistants()?
-        .iter()
-        .map(|s| s.scratch.len())
-        .sum();
-    let max = limits(ctx).max;
-    if total >= max {
-        bail!(
-            "scratch_cap: {total} scratch worktrees exist (assistant.scratch_max {max}); discard one, or the owner runs `corral assistant scratch gc`"
-        );
-    }
-    disk_check(ctx)?;
     let repo = ctx
         .store
         .project_path(project)?
@@ -310,6 +324,18 @@ fn repo_of(scratch: &AssistantScratch) -> Result<PathBuf> {
 
 /// A task run or co-work finish that owns the scratch's lifecycle now.
 fn holder(tasks: &[Task], scratch: &AssistantScratch) -> Option<String> {
+    if let Some(task) = tasks.iter().find(|task| {
+        !matches!(task.status, Status::Done | Status::Dropped)
+            && task
+                .cowork
+                .as_ref()
+                .and_then(|c| c.assistant_driver())
+                .is_some_and(|(session, slug)| {
+                    slug == scratch.slug && scratch.branch == format!("corral/{session}/{slug}")
+                })
+    }) {
+        return Some(format!("{} current assistant driver", task.id));
+    }
     if scratch.kind == COWORK {
         let owners: Vec<_> = tasks
             .iter()

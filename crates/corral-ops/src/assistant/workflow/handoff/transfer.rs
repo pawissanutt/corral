@@ -11,7 +11,7 @@ use serde_json::json;
 
 use super::{
     Goal, JOURNALS, Prepared,
-    lifecycle::{Disposition, Instruction, TASKS, Transfer},
+    lifecycle::{self, Disposition, Instruction, TASKS, Transfer},
 };
 use crate::Ctx;
 
@@ -32,6 +32,14 @@ pub struct Choice {
     pub save: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Selection {
+    pub choice: Choice,
+    pub digest: String,
+    pub instruction: Instruction,
+}
+
 impl Choice {
     pub fn digest(&self) -> Result<String> {
         Ok(crate::verification::digest(&serde_json::to_vec(self)?))
@@ -45,16 +53,43 @@ pub fn preview(
     into: Option<&str>,
     save: bool,
 ) -> Result<Choice> {
+    if let Some(journal) = super::read_journal(&ctx.store, package)? {
+        ensure!(
+            !journal.cancelled,
+            "handoff_consumed: this selection was cancelled; refresh the source checkpoint"
+        );
+        if let Some(selection) = journal.selection {
+            ensure!(
+                selection.choice.title == title
+                    && selection.choice.save == save
+                    && into.is_none_or(|id| corral_core::Store::normalize_id(id).ok().as_deref()
+                        == selection.choice.into.as_ref().map(|t| t.task.as_str())),
+                "handoff_consumed: a different choice was selected; inspect its current outcome"
+            );
+            return Ok(selection.choice);
+        }
+    }
     let prepared = super::recover(&ctx.store, package)?;
     ensure!(
         !title.trim().is_empty() && title.len() <= 256,
         "handoff_title: requires a bounded title"
     );
     validate_goal(ctx, &prepared)?;
-    let into = into
+    let source = super::source::task(ctx, &prepared)?;
+    let requested = into.map(corral_core::Store::normalize_id).transpose()?;
+    ensure!(
+        source
+            .as_ref()
+            .zip(requested.as_ref())
+            .is_none_or(|(source, target)| source == target),
+        "handoff_source_attached: keep the existing source task; never file a competing scope"
+    );
+    let into = requested
+        .or(source)
+        .as_deref()
         .map(|id| -> Result<Target> {
             let task = ctx.store.get(id)?;
-            compatible(&task, &prepared)?;
+            compatible(ctx, &task, &prepared)?;
             Ok(Target {
                 task: task.id.clone(),
                 contract_revision: task.contract_revision()?,
@@ -71,6 +106,13 @@ pub fn preview(
 }
 
 fn validate_goal(ctx: &Ctx, prepared: &Prepared) -> Result<()> {
+    ensure!(
+        !matches!(
+            prepared.publication.previous_phase,
+            WorkflowPhase::Executing | WorkflowPhase::Candidate
+        ) || prepared.package().snapshot.is_some(),
+        "handoff_missing: implementation stage requires its captured code; no empty-source fallback"
+    );
     if prepared.package().goal == Goal::PlanReviewOnly {
         let plan = prepared
             .package()
@@ -85,49 +127,82 @@ fn validate_goal(ctx: &Ctx, prepared: &Prepared) -> Result<()> {
     Ok(())
 }
 
-fn compatible(task: &Task, prepared: &Prepared) -> Result<()> {
+fn compatible(ctx: &Ctx, task: &Task, prepared: &Prepared) -> Result<()> {
     ensure!(
         task.project.as_deref() == Some(&prepared.package().project),
         "handoff_project: target belongs to another project"
     );
+    let same_source = super::source::driver(ctx, task, prepared)?;
+    let returning_plan = same_source
+        && task.status == Status::Done
+        && lifecycle::plan_only(prepared.package().goal)
+        && task.landed.is_none();
     ensure!(
-        !matches!(task.status, Status::Done | Status::Dropped) && !task.tracker,
-        "handoff_target: terminal/tracker target cannot receive this scope"
+        !task.tracker
+            && task.status != Status::Dropped
+            && (task.status != Status::Done || returning_plan),
+        "handoff_target: terminal/tracker target needs a separately selected implementation scope"
     );
-    let same_source = task
-        .cowork_run()
-        .is_some_and(|c| c.session == prepared.package().assistant)
-        && task
-            .current_run()
-            .is_some_and(|r| Some(&r.worktree) == prepared.package().source_path.as_ref());
+    ensure!(
+        same_source
+            || !task
+                .runs
+                .iter()
+                .any(|r| Some(&r.worktree) == prepared.package().source_path.as_ref()),
+        "handoff_source_historical: the old scratch is not the current driver; take back the latest work"
+    );
+    ensure!(
+        task.launch.is_none()
+            && task.current_run().is_none_or(|r| r.outcome.is_some())
+            && task.plan_runs.last().is_none_or(|r| !r.holds_slot()),
+        "handoff_busy: an author must settle first"
+    );
     ensure!(
         same_source
             || (task.launch.is_none()
                 && !task.queued
                 && !task.holds_dispatch_slot()
                 && task.current_run().is_none_or(|r| r.outcome.is_some())
-                && task.review_reservation.is_none()),
+                && task.review_reservation.is_none()
+                && task
+                    .plans
+                    .last()
+                    .and_then(|p| p.reviews.last())
+                    .is_none_or(|r| r.cancelled || r.verdict.is_some())),
         "handoff_busy: target has a competing writer/check"
     );
-    if same_source {
-        let snapshot = prepared
-            .package()
-            .snapshot
+    if same_source && let Some(run) = task.current_run() {
+        let active_head = run
+            .gate
             .as_ref()
-            .context("handoff_missing: source candidate missing")?;
-        ensure!(
-            corral_git::rev_sha(
-                &task.current_run().context("source run missing")?.worktree,
-                "HEAD"
-            )? == snapshot.state.head,
-            "handoff_changed: candidate changed since preview"
-        );
+            .filter(|g| g.result == corral_core::GateResult::Running)
+            .map(|g| g.sha.as_str())
+            .or_else(|| {
+                run.review
+                    .as_ref()
+                    .filter(|r| r.verdict.is_none())
+                    .map(|r| r.sha.as_str())
+            });
+        if let Some(head) = active_head {
+            ensure!(
+                prepared.code_clean() == Some(true)
+                    && prepared
+                        .package()
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.state.head == head),
+                "handoff_busy: existing check pins another candidate; settle it, preserve WIP and refresh"
+            );
+        }
     }
     Ok(())
 }
 
 fn fence(task: &mut Task, prepared: &Prepared, instruction: &Instruction) -> Result<()> {
     let existing = task.cowork.clone();
+    if prepared.package().plan.is_some() {
+        task.plan_required = Some(true);
+    }
     task.cowork = Some(Cowork {
         session: prepared.package().assistant.clone(),
         scratch: existing
@@ -166,11 +241,23 @@ pub(crate) fn commit(
     digest: &str,
     instruction: Instruction,
 ) -> Result<Task> {
+    instruction.require_transfer()?;
     ensure!(
         digest == choice.digest()?,
         "handoff_stale_choice: refresh the selected work"
     );
+    let _transfer = ctx
+        .store
+        .try_lock(&format!(
+            "handoff-{}",
+            crate::verification::digest(choice.package.as_bytes())
+        ))?
+        .context("handoff_reconciling: this source is already being published; read its journal")?;
     let existing = super::read_journal(&ctx.store, &choice.package)?;
+    ensure!(
+        existing.as_ref().is_none_or(|j| !j.cancelled),
+        "handoff_consumed: cancelled selection; refresh source checkpoint"
+    );
     let target = existing
         .as_ref()
         .and_then(|j| j.transfer.as_ref().map(|t| t.task.as_str()))
@@ -189,7 +276,11 @@ pub(crate) fn commit(
         && let Some(transfer) = journal.transfer.as_ref().filter(|t| t.ownership_committed)
     {
         ensure!(
-            transfer.choice_digest == digest,
+            journal
+                .selection
+                .as_ref()
+                .map_or(transfer.choice_digest.as_str(), |s| s.digest.as_str())
+                == digest,
             "handoff_stale_choice: another choice already committed"
         );
         notify(ctx, &journal.id)?;
@@ -201,18 +292,37 @@ pub(crate) fn commit(
     // Closing source admission and reservation share the assistant transaction.
     ctx.store
         .settle_assistant_container(&prepared.package().assistant, |container, _| {
-            super::reserve(
+            let mut journal = super::reserve(
                 &ctx.store,
                 &prepared.package().assistant,
                 container,
                 &prepared,
-            )
-            .map(drop)
+            )?;
+            if let Some(selected) = &journal.selection {
+                ensure!(
+                    selected.digest == digest && selected.choice == *choice,
+                    "handoff_reconciling: a different source choice is already selected"
+                );
+            } else {
+                journal.selection = Some(Selection {
+                    choice: choice.clone(),
+                    digest: digest.into(),
+                    instruction: instruction.clone(),
+                });
+                super::recovery::save(&ctx.store, &journal)?;
+            }
+            Ok(())
         })?;
     crate::agent::failpoint("handoff_source_reserved");
     // Revalidate AFTER reservation. External edits cannot silently become the chosen bytes.
     let prepared = super::recover(&ctx.store, &id)?;
     let mut journal = super::read_journal(&ctx.store, &id)?.context("reservation missing")?;
+    let instruction = journal
+        .selection
+        .as_ref()
+        .context("handoff_reconciling: selected instruction missing")?
+        .instruction
+        .clone();
     let task = if let Some(transfer) = &journal.transfer {
         ensure!(
             transfer.choice_digest == digest,
@@ -228,8 +338,15 @@ pub(crate) fn commit(
                         && task.current_run().map(|r| &r.id) == target.run.as_ref(),
                     "handoff_stale_choice: target task/spec/run changed; refresh"
                 );
-                compatible(task, &prepared)?;
+                compatible(ctx, task, &prepared)?;
             }
+            let fresh = super::read_journal(&ctx.store, &id)?.context("reservation missing")?;
+            ensure!(
+                fresh.transfer.is_none()
+                    && fresh.selection.as_ref().is_some_and(|s| s.digest == digest),
+                "handoff_reconciling: task publication already exists; read its journal"
+            );
+            journal = fresh;
             fence(task, &prepared, &instruction)?;
             if choice.save {
                 task.cowork
@@ -242,6 +359,7 @@ pub(crate) fn commit(
             }
             journal.transfer = Some(Transfer {
                 task: task.id.clone(),
+                revision: 1,
                 contract_revision: task.contract_revision()?,
                 goal: prepared.package().goal,
                 disposition: if choice.save {
@@ -258,11 +376,32 @@ pub(crate) fn commit(
                 returned_scratch: None,
                 renewed_assistant: false,
                 choice_digest: digest.into(),
+                history: Vec::new(),
+                candidate_pending: false,
+                review_target: None,
+                consumed_choices: vec![digest.into()],
+                code_pin: None,
+                fresh_seed: false,
+                draft_predecessor: None,
+                imported_plan_run: None,
             });
-            ensure!(
-                ctx.store.insert_record(TASKS, &task.id, &id)?,
-                "handoff_target: task already belongs to a transfer; reconcile its current owner"
-            );
+            if let Some(previous) = ctx.store.record::<String>(TASKS, &task.id)? {
+                let previous = super::read_journal(&ctx.store, &previous)?
+                    .context("previous transfer missing")?;
+                ensure!(
+                    previous.assistant == journal.assistant
+                        && previous.transfer.as_ref().is_some_and(
+                            |t| t.task == task.id && t.disposition == Disposition::Returned
+                        ),
+                    "handoff_target: task belongs to another active transfer; take it back first"
+                );
+                ctx.store.save_record(TASKS, &task.id, &id)?;
+            } else {
+                ensure!(
+                    ctx.store.insert_record(TASKS, &task.id, &id)?,
+                    "handoff_target: concurrent source binding"
+                );
+            }
             ctx.store.save_record(JOURNALS, &id, &journal)?;
             ctx.store
                 .log_event(Some(&task.id), "handoff_task_held", json!({"transfer":id}))?;
@@ -345,6 +484,7 @@ pub(crate) fn commit(
             .driver = CompletionDriver::Board;
         transfer.ownership_committed = true;
         transfer.notification_pending = true;
+        journal.waiting = None;
         task.dispatch_hold = choice.save;
         if task.current_run().is_none() && task.plans.is_empty() {
             task.status = if choice.save {
@@ -393,7 +533,7 @@ pub(crate) fn notify(ctx: &Ctx, id: &str) -> Result<()> {
                 json!({"transfer":id,"goal":transfer.goal,"disposition":transfer.disposition}),
             )?;
             transfer.notification_pending = false;
-            ctx.store.save_record(JOURNALS, id, &journal)?;
+            super::recovery::save(&ctx.store, &journal)?;
         }
         Ok(())
     })?;

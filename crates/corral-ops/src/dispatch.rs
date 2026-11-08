@@ -342,7 +342,12 @@ fn dispatch_with(
         &corral_core::RunHead::of(&run)?,
     )?);
 
-    let retry_source = crate::plan_recovery::retry::source(&task, &run)?;
+    let retry_source =
+        if crate::assistant::workflow::handoff::adopt::has_seed_for(ctx, &task, &run.id)? {
+            None // C3's verified, lossless current seed supersedes the prior run's checkout.
+        } else {
+            crate::plan_recovery::retry::source(&task, &run)?
+        };
     let ownership = ctx
         .store
         .claim_session_ownership()?

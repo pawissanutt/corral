@@ -150,7 +150,7 @@ fn check_into(task: &Task, project: &str) -> Result<()> {
 }
 
 fn check_completion(task: &Task, session: &str, slug: &str) -> Result<()> {
-    if let Some(cowork) = task.cowork_run()
+    if let Some(cowork) = task.cowork.as_ref()
         && let Some(scope) = cowork.completion.as_ref()
     {
         if matches!(owner_action::authority(), OwnerAuthority::ViaAssistant(via) if !via.confirmed)
@@ -397,24 +397,44 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
     let scratch = find(ctx, session, slug)?;
     if let Some(holder) = holder(&ctx.store.list()?, &scratch) {
         let target = opts.into.map(|id| ctx.store.get(id)).transpose()?;
+        let transfer = target
+            .as_ref()
+            .map(|task| crate::assistant::workflow::handoff::lifecycle::for_task(&ctx.store, task))
+            .transpose()?
+            .flatten()
+            .and_then(|j| j.transfer);
+        let returned = transfer.as_ref().is_some_and(|t| {
+            t.disposition == crate::assistant::workflow::handoff::lifecycle::Disposition::Returned
+                && !crate::assistant::workflow::handoff::lifecycle::plan_only(t.goal)
+        });
+        if returned
+            && transfer.as_ref().is_some_and(|t| !t.renewed_assistant)
+            && opts.intent.is_none()
+        {
+            bail!(
+                "prepare_only: take-back requires a new explicit --intent verify|ship instruction for this candidate"
+            );
+        }
         let repairing = target.as_ref().is_some_and(|task| {
-            matches!(task.status, Status::Review | Status::NeedsMe)
+            (returned || matches!(task.status, Status::Review | Status::NeedsMe))
                 && task
-                    .cowork_run()
+                    .cowork
+                    .as_ref()
                     .is_some_and(|cowork| cowork.assistant_driver() == Some((session, slug)))
-                && task.current_run().is_some_and(|run| {
-                    run.worktree == scratch.path
-                        && run.autopilot.as_ref().is_some_and(|state| {
-                            state.stage == corral_core::AutoStage::Changes
-                                || (state.stage == corral_core::AutoStage::Reviewed
-                                    && opts.intent.is_some())
-                                || (state.stage == corral_core::AutoStage::Escalated
-                                    && opts.expected_head.is_some()
-                                    && state.reason.as_deref().is_some_and(|reason| {
-                                        reason.starts_with("submitted candidate changed")
-                                    }))
-                        })
-                })
+                && (returned
+                    || task.current_run().is_some_and(|run| {
+                        run.worktree == scratch.path
+                            && run.autopilot.as_ref().is_some_and(|state| {
+                                state.stage == corral_core::AutoStage::Changes
+                                    || (state.stage == corral_core::AutoStage::Reviewed
+                                        && opts.intent.is_some())
+                                    || (state.stage == corral_core::AutoStage::Escalated
+                                        && opts.expected_head.is_some()
+                                        && state.reason.as_deref().is_some_and(|reason| {
+                                            reason.starts_with("submitted candidate changed")
+                                        }))
+                            })
+                    }))
         });
         if !repairing {
             bail!(

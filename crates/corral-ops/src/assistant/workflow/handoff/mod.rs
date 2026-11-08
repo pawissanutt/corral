@@ -14,9 +14,16 @@ use std::path::Path;
 
 pub(crate) mod admission;
 pub(crate) mod adopt;
+mod attachments;
+mod code_pin;
 mod content;
 pub mod context;
+pub mod continuation;
+pub use code_pin::CodePin;
 pub mod lifecycle;
+pub(crate) mod plan_goal;
+pub(crate) mod recovery;
+mod source;
 pub(crate) mod takeback;
 pub mod transfer;
 pub use takeback::Returned;
@@ -99,6 +106,16 @@ pub struct Journal {
     /// reconciling until actual task/ownership publication completes.
     #[serde(default)]
     pub transfer: Option<lifecycle::Transfer>,
+    #[serde(default)]
+    pub selection: Option<transfer::Selection>,
+    #[serde(default)]
+    pub previous_handoff: Option<DesignArtifact>,
+    #[serde(default)]
+    pub previous_handoff_known: bool,
+    #[serde(default)]
+    pub cancelled: bool,
+    #[serde(default)]
+    pub waiting: Option<String>,
 }
 
 /// Only successful preparation/restore verification can construct this value. C3 must
@@ -107,6 +124,7 @@ pub struct Prepared {
     publication: Publication,
     preview: Preview,
     package: Package,
+    code_clean: Option<bool>,
 }
 
 impl Prepared {
@@ -118,6 +136,9 @@ impl Prepared {
     }
     pub fn package(&self) -> &Package {
         &self.package
+    }
+    pub fn code_clean(&self) -> Option<bool> {
+        self.code_clean
     }
 }
 
@@ -153,7 +174,8 @@ pub fn prepare(
         w.owner == ScopeOwner::Local
             && matches!(
                 w.phase,
-                WorkflowPhase::Planning
+                WorkflowPhase::Ordinary
+                    | WorkflowPhase::Planning
                     | WorkflowPhase::Executing
                     | WorkflowPhase::Candidate
                     | WorkflowPhase::Paused
@@ -221,11 +243,21 @@ pub fn prepare(
     let snapshot = source
         .map(|(path, base, branch)| Snapshot::capture(store, path, base, branch))
         .transpose()?;
-    if let Some(snapshot) = &snapshot {
+    let code_clean = if let Some(snapshot) = &snapshot {
         let restore = tempfile::tempdir().context("prepare restoration verification")?;
-        snapshot.restore_new(store, &restore.path().join("verified"))?;
+        let verified = restore.path().join("verified");
+        snapshot.restore_new(store, &verified)?;
+        let clean = git::git(
+            &verified,
+            &["status", "--porcelain", "--untracked-files=all"],
+            None,
+        )?
+        .is_empty();
         snapshot.validate_source(source.context("source disappeared")?.0)?;
-    }
+        Some(clean)
+    } else {
+        None
+    };
     let package = Package {
         version: VERSION,
         intent,
@@ -277,6 +309,7 @@ pub fn prepare(
         publication,
         preview,
         package,
+        code_clean,
     })
 }
 
@@ -338,6 +371,7 @@ pub fn reserve(
         .checked_add(1)
         .context("workflow revision overflow")?;
     w.phase = WorkflowPhase::HandoffPreparing;
+    let previous_handoff = w.handoff.clone();
     w.handoff = Some(DesignArtifact {
         blob: j.package.blob.clone(),
         bytes: j.package.bytes as u32,
@@ -352,6 +386,11 @@ pub fn reserve(
         reserved: true,
         source_retained: true,
         transfer: None,
+        selection: None,
+        previous_handoff,
+        previous_handoff_known: true,
+        cancelled: false,
+        waiting: None,
     };
     ensure!(
         store.insert_record(JOURNALS, &j.id, &reserved)?,
@@ -362,10 +401,16 @@ pub fn reserve(
 }
 
 pub fn read_journal(store: &Store, id: &str) -> Result<Option<Journal>> {
-    let row: Option<Journal> = store.record(JOURNALS, id)?;
+    let row: Option<Journal> = store
+        .record(JOURNALS, id)
+        .context("handoff_incompatible: upgrade/reconcile transfer journal")?;
     if let Some(j) = &row {
         ensure!(
-            j.version == VERSION && j.id == id && j.reserved && j.source_retained,
+            ((j.version == VERSION && j.transfer.is_none() && j.selection.is_none())
+                || (j.version == 2 && j.selection.is_some()))
+                && j.id == id
+                && j.reserved
+                && (j.source_retained || j.cancelled),
             "handoff_incompatible: invalid journal; upgrade/reconcile required"
         );
     }
@@ -424,20 +469,38 @@ pub fn read_package(store: &Store, id: &str) -> Result<(Publication, Package, Pr
 /// Recover exact preparation after host death/lost acknowledgement. Never recapture different
 /// bytes, fabricate a new task identity, or fall back to an empty checkout on missing data.
 pub fn recover(store: &Store, id: &str) -> Result<Prepared> {
+    checkpoint(store, id, true)
+}
+
+/// After ownership commits, restoration uses the self-contained checkpoint, not the
+/// originating host/checkout. Source revalidation remains mandatory BEFORE ownership.
+pub(super) fn checkpoint(store: &Store, id: &str, validate_source: bool) -> Result<Prepared> {
     let (publication, package, preview) = read_package(store, id)?;
-    match (&package.snapshot, &package.source_path) {
+    let code_clean = match (&package.snapshot, &package.source_path) {
         (Some(snapshot), Some(source)) => {
             let temp = tempfile::tempdir().context("create recovery verification")?;
-            snapshot.restore_new(store, &temp.path().join("verified"))?;
-            snapshot.validate_source(source)?;
+            let verified = temp.path().join("verified");
+            snapshot.restore_new(store, &verified)?;
+            if validate_source {
+                snapshot.validate_source(source)?;
+            }
+            Some(
+                git::git(
+                    &verified,
+                    &["status", "--porcelain", "--untracked-files=all"],
+                    None,
+                )?
+                .is_empty(),
+            )
         }
-        (None, None) => {}
+        (None, None) => None,
         _ => anyhow::bail!("handoff_missing: code snapshot/source identity mismatch"),
-    }
+    };
     Ok(Prepared {
         publication,
         package,
         preview,
+        code_clean,
     })
 }
 

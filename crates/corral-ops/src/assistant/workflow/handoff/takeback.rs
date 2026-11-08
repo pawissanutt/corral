@@ -24,6 +24,11 @@ pub enum Returned {
     },
     AlreadyLanded {
         task: String,
+        sha: String,
+    },
+    Terminal {
+        task: String,
+        status: corral_core::Status,
     },
     Ready {
         task: String,
@@ -32,7 +37,13 @@ pub enum Returned {
     },
 }
 
-pub(crate) fn apply(ctx: &Ctx, id: &str, contract: &str) -> Result<Returned> {
+pub(crate) fn apply(
+    ctx: &Ctx,
+    id: &str,
+    contract: &str,
+    instruction: lifecycle::Instruction,
+) -> Result<Returned> {
+    instruction.require_transfer()?;
     // Approval, manual/queued launch and gate starts use these same leases. If landing
     // won the race, report Done after acquiring the lease; never claim an undo.
     let _pipeline = ctx
@@ -48,9 +59,6 @@ pub(crate) fn apply(ctx: &Ctx, id: &str, contract: &str) -> Result<Returned> {
         .try_lock(&format!("gate-{id}"))?
         .context("Waiting for current gate admission")?;
     let task = ctx.store.get(id)?;
-    if task.status == corral_core::Status::Done {
-        return Ok(Returned::AlreadyLanded { task: task.id });
-    }
     ensure!(
         task.contract_revision()? == contract,
         "handoff_stale_choice: task/spec changed; refresh take-back"
@@ -58,6 +66,22 @@ pub(crate) fn apply(ctx: &Ctx, id: &str, contract: &str) -> Result<Returned> {
     let journal = lifecycle::for_task(&ctx.store, &task)?
         .context("take_back: task has no transfer lineage")?;
     let transfer = journal.transfer.as_ref().context("transfer missing")?;
+    if let Some(landed) = &task.landed
+        && task.current_run().is_some_and(|r| r.id == landed.run)
+    {
+        return Ok(Returned::AlreadyLanded {
+            task: task.id.clone(),
+            sha: landed.sha.clone(),
+        });
+    }
+    if task.status == corral_core::Status::Dropped
+        || (task.status == corral_core::Status::Done && !lifecycle::plan_only(transfer.goal))
+    {
+        return Ok(Returned::Terminal {
+            task: task.id,
+            status: task.status,
+        });
+    }
     if transfer.disposition == Disposition::Returned {
         return Ok(Returned::Ready {
             task: task.id,
@@ -72,15 +96,18 @@ pub(crate) fn apply(ctx: &Ctx, id: &str, contract: &str) -> Result<Returned> {
     let task = ctx.store.update(id, |task| {
         let mut journal =
             super::read_journal(&ctx.store, &journal.id)?.context("journal missing")?;
-        journal
-            .transfer
-            .as_mut()
-            .context("transfer missing")?
-            .disposition = Disposition::TakingBack;
+        let transfer = journal.transfer.as_mut().context("transfer missing")?;
+        if transfer.disposition != Disposition::TakingBack || transfer.contract_revision != contract
+        {
+            transfer.record(instruction.clone())?;
+            transfer.disposition = Disposition::TakingBack;
+            transfer.contract_revision = contract.into();
+            transfer.advance()?;
+        }
         task.dispatch_hold = true;
         task.queued = false;
         task.dispatch_plan = None;
-        ctx.store.save_record(JOURNALS, &journal.id, &journal)?;
+        super::recovery::save(&ctx.store, &journal)?;
         ctx.store.log_event(
             Some(&task.id),
             "handoff_takeback_held",
@@ -88,7 +115,11 @@ pub(crate) fn apply(ctx: &Ctx, id: &str, contract: &str) -> Result<Returned> {
         )?;
         Ok(())
     })?;
-    if task.launch.is_some() {
+    if task
+        .launch
+        .as_ref()
+        .is_some_and(|l| l.stage != corral_core::LaunchStage::Submitting)
+    {
         crate::launch::cancel(ctx, &task)?;
     }
     let task = ctx.store.get(id)?;
@@ -100,22 +131,40 @@ pub(crate) fn apply(ctx: &Ctx, id: &str, contract: &str) -> Result<Returned> {
         });
     }
     let (_, package, _) = super::read_package(&ctx.store, &journal.id)?;
-    let plan_only = lifecycle::plan_only(package.goal);
-    let snapshot = if plan_only {
+    let plan_only = lifecycle::plan_only(transfer.goal);
+    let source = if plan_only || (transfer.fresh_seed && super::adopt::pending_seed(ctx, &task)?) {
         None
+    } else if super::adopt::pending_seed(ctx, &task)? {
+        let snapshot = package
+            .snapshot
+            .as_ref()
+            .context("take_back: pending captured seed is missing")?;
+        let (path, branch) = super::adopt::seed_path(ctx, &task)?;
+        Some((path, snapshot.state.base.clone(), branch))
+    } else if let Some(run) = task.current_run() {
+        Some((
+            run.worktree.clone(),
+            run.base_sha.clone(),
+            run.branch.clone(),
+        ))
+    } else if let Some(snapshot) = &package.snapshot {
+        let (path, branch) = super::adopt::seed_path(ctx, &task)?;
+        Some((path, snapshot.state.base.clone(), branch))
     } else {
-        match transfer.return_snapshot.clone() {
-            Some(snapshot) => Some(snapshot),
-            None => match task.current_run() {
-                Some(run) => Some(Snapshot::capture(
-                    &ctx.store,
-                    &run.worktree,
-                    &run.base_sha,
-                    &run.branch,
-                )?),
-                None => package.snapshot.clone(),
-            },
+        None
+    };
+    let snapshot = match (&transfer.return_snapshot, &source) {
+        (Some(snapshot), Some((path, _, _))) => {
+            snapshot.validate_source(path)?;
+            Some(snapshot.clone())
         }
+        (None, Some((path, base, branch))) => {
+            Some(Snapshot::capture(&ctx.store, path, base, branch)?)
+        }
+        (None, None) => None,
+        (Some(_), None) => anyhow::bail!(
+            "take_back_changed: pinned board source disappeared; refresh/reconcile, never use an empty source"
+        ),
     };
     // Pin latest work BEFORE restoration, so restart cannot recapture an older source.
     ctx.store.update(id, |_| {
@@ -133,6 +182,12 @@ pub(crate) fn apply(ctx: &Ctx, id: &str, contract: &str) -> Result<Returned> {
         "back-{}-{short}",
         task.id.trim_start_matches("T-").to_ascii_lowercase()
     );
+    let _creating = snapshot
+        .as_ref()
+        .map(|_| {
+            crate::assistant::scratch::creation_admission(ctx, &journal.assistant, Some(&slug))
+        })
+        .transpose()?;
     let scratch = snapshot
         .as_ref()
         .map(|snapshot| -> Result<AssistantScratch> {
@@ -155,6 +210,31 @@ pub(crate) fn apply(ctx: &Ctx, id: &str, contract: &str) -> Result<Returned> {
             })
         })
         .transpose()?;
+    let scratch = if !plan_only && scratch.is_none() {
+        // The package explicitly contains no code and no board run exists: this is a
+        // genuine fresh scratch, never fallback for a missing captured source.
+        let session = ctx.store.get_assistant(&journal.assistant)?;
+        Some(match session.scratch.iter().find(|s| s.slug == slug) {
+            Some(existing) => {
+                ensure!(
+                    corral_git::is_clean(&existing.path)?
+                        && corral_git::rev_sha(&existing.path, "HEAD")?
+                            == corral_git::rev_sha(&existing.path, &existing.base)?,
+                    "take_back_changed: newly prepared scratch changed; reconcile it before enabling a writer"
+                );
+                existing.clone()
+            }
+            None => crate::assistant::scratch::create(
+                ctx,
+                &journal.assistant,
+                &package.project,
+                Some(&slug),
+                None,
+            )?,
+        })
+    } else {
+        scratch
+    };
     let plan_bytes = task
         .plans
         .last()
@@ -269,8 +349,15 @@ pub(crate) fn apply(ctx: &Ctx, id: &str, contract: &str) -> Result<Returned> {
             })?;
         let transfer = journal.transfer.as_mut().context("transfer missing")?;
         transfer.disposition = Disposition::Returned;
+        transfer.advance()?;
+        transfer.goal = if plan_only {
+            super::Goal::PlanContinue
+        } else {
+            super::Goal::ImplementationPrepare
+        };
         transfer.returned_scratch = scratch.as_ref().map(|s| s.slug.clone());
         transfer.renewed_assistant = false;
+        let current_contract = task.contract_revision()?;
         let scope = task
             .cowork
             .as_mut()
@@ -285,8 +372,9 @@ pub(crate) fn apply(ctx: &Ctx, id: &str, contract: &str) -> Result<Returned> {
                 .map_or_else(String::new, |s| s.slug.clone()),
         };
         scope.intent = CompletionIntent::Verify;
+        scope.contract_revision = current_contract;
         task.dispatch_hold = true;
-        ctx.store.save_record(JOURNALS, &journal.id, &journal)?;
+        super::recovery::save(&ctx.store, &journal)?;
         ctx.store.log_event(
             Some(&task.id),
             "handoff_returned",

@@ -8,7 +8,6 @@ use corral_core::{
 use super::{
     Goal,
     lifecycle::{self, Disposition},
-    read_package,
 };
 
 pub(crate) fn require<T: TaskRef + ?Sized>(
@@ -17,6 +16,7 @@ pub(crate) fn require<T: TaskRef + ?Sized>(
     kind: Kind,
     automatic: bool,
 ) -> Result<()> {
+    super::source::require_not_pending(store, task)?;
     let Some(journal) = lifecycle::for_task(store, task)? else {
         return Ok(());
     };
@@ -24,6 +24,25 @@ pub(crate) fn require<T: TaskRef + ?Sized>(
         .transfer
         .as_ref()
         .context("handoff_reconciling: publication incomplete")?;
+    crate::hold::require_clear(store, task)?;
+    corral_core::Park::require_unparked_ref(task)?;
+    let live = store.config_layers()?.config()?;
+    live.validate_review()?;
+    ensure!(
+        !live.automation.paused && !live.dispatch.paused && live.autopilot_enabled(),
+        "handoff_paused: current live pause/automation stop prevents another effect"
+    );
+    if kind == Kind::Accept {
+        let policy = live.task_review_policy(task);
+        ensure!(
+            !policy.gate.is_empty()
+                && !matches!(
+                    policy.reviewer,
+                    corral_core::Reviewer::None | corral_core::Reviewer::Pm
+                ),
+            "handoff_shipping: a fresh gate and an independent reviewer are required"
+        );
+    }
     let returned = transfer.disposition == Disposition::Returned && transfer.renewed_assistant;
     let owner = if returned {
         let c = store.get_assistant_container(&journal.assistant)?;
@@ -56,7 +75,24 @@ pub(crate) fn require<T: TaskRef + ?Sized>(
         transfer.contract_revision == task.contract_revision()?,
         "handoff_scope_changed: renew the instruction for the current task revision"
     );
-    let _ = read_package(store, &journal.id)?; // Required source bytes remain durable; never import their authority.
+    if !lifecycle::plan_only(transfer.goal)
+        && matches!(
+            kind,
+            Kind::Dispatch | Kind::Gate | Kind::Review | Kind::Repair | Kind::Accept
+        )
+    {
+        crate::approved_plan(&crate::Ctx::from_store(store.clone()), task)?;
+        ensure!(
+            !task
+                .last_plan_head()?
+                .is_some_and(|p| !p.document.dependencies.is_empty()),
+            "handoff_scope: proposed implementation members require a separate explicit current-revision scope choice"
+        );
+        ensure!(
+            !transfer.candidate_pending,
+            "handoff_candidate_pending: adopt the completed source candidate after plan acceptance; do not check historical code or start a replacement worker"
+        );
+    }
     match transfer.goal {
         Goal::PlanReviewOnly => {
             ensure!(
@@ -66,12 +102,27 @@ pub(crate) fn require<T: TaskRef + ?Sized>(
             let plan = task
                 .last_plan_head()?
                 .context("plan_review_only: reviewable plan missing")?;
+            let target = transfer
+                .review_target
+                .as_ref()
+                .context("plan_review_only: pinned review target missing")?;
+            let current = lifecycle::review_target(task)?;
+            ensure!(
+                target.plan == current.plan
+                    && target.sha256 == current.sha256
+                    && target.spec_revision == current.spec_revision
+                    && target.producer_run == current.producer_run
+                    && target.producer_profile == current.producer_profile,
+                "plan_review_only: selected plan/spec/producer changed; refresh"
+            );
             ensure!(
                 kind == Kind::AcceptPlan
-                    || plan
-                        .current_review
-                        .as_ref()
-                        .is_none_or(|r| r.verdict.is_none()),
+                    || current.review_floor == target.review_floor
+                    || (Some(current.review_floor) == target.review_floor.checked_add(1)
+                        && plan
+                            .current_review
+                            .as_ref()
+                            .is_some_and(|r| !r.cancelled && r.verdict.is_none())),
                 "plan_review_only: review completed; return findings without rewriting or another attempt"
             );
         }
@@ -140,7 +191,11 @@ pub(crate) fn provenance<T: TaskRef + ?Sized>(
     Ok(Some(OperatingOrigin::ExplicitOwner {
         approval: format!("handoff/{}", journal.id),
         confirmed_by: "owner handoff".into(),
-        confirmed_at: corral_core::clock::now(),
+        confirmed_at: journal
+            .transfer
+            .as_ref()
+            .context("transfer missing")?
+            .instructed_at(),
     }))
 }
 

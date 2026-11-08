@@ -389,6 +389,7 @@ fn sync_scoped(
     drop(inventory);
     // Post-land hooks run commands that may call corral: never under storage or the lease (T-509).
     crate::hooks::reconcile_post_land(ctx)?;
+    crate::assistant::workflow::handoff::recovery::reconcile(ctx)?;
     crate::hold::resume_gates(ctx)?;
     crate::agent::gate_queue::advance_heads(ctx, &ctx.store.unfinished_native_heads()?)?;
     crate::plan_pilot::advance_all(ctx, now)?;

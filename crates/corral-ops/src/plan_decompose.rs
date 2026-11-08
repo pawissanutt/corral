@@ -275,9 +275,16 @@ fn apply_with_origin(
 ) -> Result<Vec<String>> {
     // Plan acceptance is not an implementation instruction. Defer all card publication
     // (including self-projection) until a separate exact-revision execution choice.
-    if crate::assistant::workflow::handoff::lifecycle::for_task(&ctx.store, &ctx.store.head(id)?)?
+    let handoff_head = ctx.store.head(id)?;
+    if crate::assistant::workflow::handoff::lifecycle::for_task(&ctx.store, &handoff_head)?
         .and_then(|j| j.transfer)
-        .is_some_and(|t| crate::assistant::workflow::handoff::lifecycle::plan_only(t.goal))
+        .is_some_and(|t| {
+            crate::assistant::workflow::handoff::lifecycle::plan_only(t.goal)
+                || handoff_head
+                    .last_plan
+                    .as_ref()
+                    .is_some_and(|p| !p.document.dependencies.is_empty())
+        })
     {
         return Ok(Vec::new());
     }
