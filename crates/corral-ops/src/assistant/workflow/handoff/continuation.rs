@@ -100,6 +100,8 @@ pub(crate) fn start(
         .try_lock(&format!("gate-{}", choice.task))?
         .context("handoff: gate admission must settle")?;
     let before = ctx.store.get(&choice.task)?;
+    let source_journal = lifecycle::for_task(&ctx.store, &before)?.context("transfer missing")?;
+    super::planner_draft::require_current(ctx, &before, &source_journal)?;
     let latest_seed = super::continuation_seed::capture(ctx, &before, choice, digest)?;
     let task = ctx.store.update(&choice.task, |task| {
         let mut journal = lifecycle::for_task(&ctx.store, task)?.context("transfer missing")?;
@@ -116,6 +118,7 @@ pub(crate) fn start(
                 && task.contract_revision()? == choice.contract_revision,
             "handoff_stale_choice: task/spec/disposition changed; refresh"
         );
+        super::planner_draft::require_current(ctx, task, &journal)?;
         let actual_plan = task
             .last_plan_head()?
             .map(|_| {
@@ -217,6 +220,7 @@ pub(super) fn finish_start(ctx: &Ctx, id: &str) -> Result<Task> {
     {
         return Ok(task);
     }
+    super::planner_draft::require_current(ctx, &task, &journal)?;
     let selected = journal
         .transfer
         .as_ref()
@@ -276,6 +280,7 @@ pub(super) fn finish_start(ctx: &Ctx, id: &str) -> Result<Task> {
     }
     ctx.store.update(id, |task| {
         let mut journal = lifecycle::for_task(&ctx.store, task)?.context("transfer missing")?;
+        super::planner_draft::require_current(ctx, task, &journal)?;
         let transfer = journal.transfer.as_mut().context("transfer missing")?;
         ensure!(
             transfer.disposition == Disposition::Starting
@@ -452,6 +457,9 @@ pub(crate) fn save(ctx: &Ctx, id: &str, contract: &str, instruction: Instruction
 /// Saving is a durable held intermediate state, not a claim that a writer has exited.
 pub(super) fn finish_save(ctx: &Ctx, id: &str) -> Result<Task> {
     let holders = super::settlement::settle(ctx, id)?;
+    if holders.is_empty() {
+        super::planner_draft::capture(ctx, id)?;
+    }
     ctx.store.update(id, |task| {
         let mut journal = lifecycle::for_task(&ctx.store, task)?.context("transfer missing")?;
         let transfer = journal.transfer.as_mut().context("transfer missing")?;

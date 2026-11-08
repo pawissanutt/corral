@@ -115,7 +115,7 @@ pub(super) fn publish(ctx: &Ctx, task: &str, prepared: &Prepared) -> Result<()> 
     Ok(())
 }
 
-fn attach(
+pub(super) fn attach(
     ctx: &Ctx,
     task: &mut corral_core::Task,
     stable: &str,

@@ -137,6 +137,7 @@ pub(crate) fn apply(
             holders: active,
         });
     }
+    super::planner_draft::capture(ctx, id)?;
     let (_, package, _) = super::read_package(&ctx.store, &journal.id)?;
     let plan_only = lifecycle::plan_only(transfer.goal);
     let destination = ctx.store.get_assistant(&journal.assistant)?;
@@ -269,17 +270,8 @@ pub(crate) fn apply(
     } else {
         scratch
     };
-    let plan_bytes = task
-        .plans
-        .last()
-        .map(|plan| {
-            crate::artifact_storage::artifact_read_confined_limited(
-                ctx,
-                &plan.artifact,
-                corral_core::assistant_workflow::DOCUMENT_MAX as u64,
-            )
-        })
-        .transpose()?;
+    let current = super::read_journal(&ctx.store, &journal.id)?.context("transfer missing")?;
+    let plan_bytes = super::planner_draft::returned(ctx, &task, &current)?;
     ctx.store.update(id, |task| {
         ensure!(
             task.contract_revision()? == contract && holders(task).is_empty(),
@@ -287,6 +279,7 @@ pub(crate) fn apply(
         );
         let mut journal =
             super::read_journal(&ctx.store, &journal.id)?.context("journal missing")?;
+        super::planner_draft::require_current(ctx, task, &journal)?;
         ctx.store
             .stage_assistant_container(&journal.assistant, |container, ended| {
                 ensure!(

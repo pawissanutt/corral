@@ -113,6 +113,99 @@ fn a_new_formal_source_appends_actual_producer_once_without_replacing_prior_plan
 }
 
 #[test]
+fn take_back_retains_the_latest_settled_unsubmitted_planner_draft_without_submitting_it() {
+    let (f, session, previous) = returned();
+    let prepared = publish(
+        &f,
+        &session,
+        "Source draft before the board's newer work.",
+        Goal::PlanContinue,
+    );
+    let choice = select(&f, &prepared);
+    let task = transfer::commit(&f.ctx, &choice, &choice.digest().unwrap(), instruction()).unwrap();
+    let output = crate::scratch_reclaim::Attempt::Planner {
+        task: &task.id,
+        run: "D2",
+    }
+    .open(&f.ctx)
+    .unwrap();
+    let latest = "Exact newest unsubmitted planner draft, including unresolved questions.\n";
+    std::fs::write(output.join("plan.md"), latest).unwrap();
+    let stopped = f
+        .ctx
+        .store
+        .update(&task.id, |task| {
+            let mut planner = task.plan_runs.last().unwrap().clone();
+            planner.id = "D2".into();
+            planner.output_dir = output.clone();
+            planner.submitted = None;
+            planner.state = corral_core::PlanRunState::Cancelled;
+            planner.ended = Some(corral_core::clock::now());
+            planner.spec_revision = crate::plan_spec_revision(task)?;
+            task.plan_runs.push(planner);
+            Ok(())
+        })
+        .unwrap();
+    let row = f
+        .ctx
+        .store
+        .scratch_row(&format!("planner-{}-D2", task.id))
+        .unwrap()
+        .unwrap();
+    assert!(planner_draft::retention(&f.ctx, &row).unwrap().is_some());
+    let saved = continuation::save(
+        &f.ctx,
+        &task.id,
+        &stopped.contract_revision().unwrap(),
+        instruction(),
+    )
+    .unwrap();
+    assert!(adopt::prompt(&f.ctx, &saved).unwrap().contains(latest));
+    assert!(planner_draft::retention(&f.ctx, &row).unwrap().is_none());
+    let choice = continuation::preview(&f.ctx, &task.id, Goal::PlanContinue).unwrap();
+    std::fs::write(output.join("plan.md"), "Changed after exact preview.").unwrap();
+    assert!(
+        continuation::start(&f.ctx, &choice, &choice.digest().unwrap(), instruction()).is_err()
+    );
+    assert!(f.ctx.store.get(&task.id).unwrap().dispatch_hold);
+    std::fs::write(output.join("plan.md"), latest).unwrap();
+    std::fs::remove_dir_all(&output).unwrap(); // committed context outlives its stopped host's scratch
+    assert!(matches!(
+        takeback::apply(
+            &f.ctx,
+            &task.id,
+            &stopped.contract_revision().unwrap(),
+            instruction()
+        )
+        .unwrap(),
+        Returned::Ready {
+            plan_only: true,
+            ..
+        }
+    ));
+    let reopened = corral_core::Store::open(f.ctx.store.root()).unwrap();
+    let c = reopened.get_assistant_container(&session).unwrap();
+    let plan = c
+        .workflow
+        .as_ref()
+        .unwrap()
+        .current
+        .current_plan
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        super::super::publication::load_artifact(&reopened, &plan.artifact).unwrap(),
+        latest.as_bytes(),
+        "take-back must preserve the current unsubmitted draft, not rewind to the submitted predecessor"
+    );
+    assert_eq!(plan.stage, DesignStage::Draft);
+    let task = reopened.get(&task.id).unwrap();
+    assert_eq!(task.plans, previous.plans);
+    assert_eq!(task.plan_runs, stopped.plan_runs);
+    assert!(task.runs.is_empty());
+}
+
+#[test]
 fn a_new_raw_draft_requires_new_formal_planning_without_reusing_predecessor_stopping_semantics() {
     let (f, session, previous) = returned();
     // Invalid as acceptance evidence, deliberately only a historical stopping-state fixture.

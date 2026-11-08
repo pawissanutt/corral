@@ -26,6 +26,7 @@ pub(crate) mod plan_adoption;
 #[cfg(test)]
 mod plan_adoption_tests;
 pub(crate) mod plan_goal;
+pub(crate) mod planner_draft;
 pub(crate) mod recovery;
 mod settlement;
 mod source;

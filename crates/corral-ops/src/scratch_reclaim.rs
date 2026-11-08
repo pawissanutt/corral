@@ -587,6 +587,9 @@ fn resume(ctx: &Ctx, row: &ScratchRow, now: Timestamp) -> Result<()> {
 
 /// Why the closed or deferred directory of `row` is still in use, read-only.
 pub(crate) fn in_use_now(ctx: &Ctx, row: &ScratchRow, now: Timestamp) -> Result<Option<String>> {
+    if let Some(reason) = crate::assistant::workflow::handoff::planner_draft::retention(ctx, row)? {
+        return Ok(Some(reason));
+    }
     let dir = ctx.store.scratch_path(&row.path)?;
     in_use(ctx, pane_of(ctx, row, now)?.as_deref(), &dir)
 }

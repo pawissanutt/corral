@@ -217,7 +217,7 @@ fn fence(ctx: &Ctx, task: &mut Task, prepared: &Prepared, instruction: &Instruct
         })
         .transpose()?
         .unwrap_or_default();
-    if prepared.package().plan.is_some() {
+    if prepared.package().plan.is_some() || lifecycle::plan_only(prepared.package().goal) {
         task.plan_required = Some(true);
     }
     task.cowork = Some(Cowork {
@@ -406,6 +406,7 @@ pub(crate) fn commit(
                 continuation_seed: None,
                 draft_predecessor: None,
                 imported_plan_run: None,
+                planner_drafts: Default::default(),
             });
             if let Some(previous) = ctx.store.record::<String>(TASKS, &task.id)? {
                 let previous = super::read_journal(&ctx.store, &previous)?

@@ -64,6 +64,29 @@ pub(crate) fn dispatch(
 ) -> Result<DispatchOutcome<Box<TaskHead>>> {
     corral_core::Park::require_unparked_ref(head)?;
     crate::tracker::check_action(head, "dispatch tracker to the plan pipeline")?;
+    let refreshed = if head
+        .cowork
+        .as_ref()
+        .is_some_and(|c| c.review == corral_core::CoworkReview::TransferV1)
+    {
+        let contract = head.contract_revision()?;
+        crate::assistant::workflow::handoff::planner_draft::before_plan(ctx, head)?;
+        let current = ctx.store.head(&head.id)?;
+        ensure!(
+            current.contract_revision()? == contract
+                && current.last_plan_run.as_ref().map(|r| &r.id)
+                    == head.last_plan_run.as_ref().map(|r| &r.id)
+                && current.current_run_head()?.as_ref().map(|r| r.id.clone())
+                    == head.current_run_head()?.as_ref().map(|r| r.id.clone()),
+            "handoff_plan_changed: scope/run changed while settling prior planner"
+        );
+        corral_core::Park::require_unparked_ref(&current)?;
+        crate::tracker::check_action(&current, "dispatch tracker to the plan pipeline")?;
+        Some(current)
+    } else {
+        None
+    };
+    let head = refreshed.as_ref().unwrap_or(head);
     let task = &head.shell_task()?;
     let project = task
         .project

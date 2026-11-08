@@ -181,6 +181,9 @@ pub(crate) fn draft_pending<T: TaskRef + ?Sized>(
     task: &T,
     transfer: &lifecycle::Transfer,
 ) -> Result<bool> {
+    if super::planner_draft::pending(task, transfer)? {
+        return Ok(true);
+    }
     let Some(id) = &transfer.draft_predecessor else {
         return Ok(false);
     };
