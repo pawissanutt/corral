@@ -621,6 +621,7 @@ fn barrier_7_refs_in_records_events_and_runs_keep_blobs(env: Env) -> Result<()> 
             doc: json!({"prompt": in_run.blob.to_string()}),
             index: Vec::new(),
         }],
+        records: Vec::new(),
         events: Vec::new(),
         reservations: vec![in_run.reservation.clone()],
     }))?;

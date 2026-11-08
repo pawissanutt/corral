@@ -411,6 +411,9 @@ impl Tx<'_> {
             summary: op.summary,
         };
         self.insert_task(head, op.rows)?;
+        for record in &op.records {
+            self.put_record(record)?;
+        }
         for mut event in op.events {
             event.task.get_or_insert_with(|| id.clone());
             self.append_event(event)?;

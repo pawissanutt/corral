@@ -44,6 +44,25 @@ pub(super) fn cases() -> Vec<Case> {
 }
 
 fn task_operations(make: MakeFixture<'_>) -> Result<()> {
+    // Creation joins the caller's record unit: a handoff task and its journal/index
+    // marker must either both exist or neither. A record CAS conflict allocates no rival.
+    let records = make();
+    let mut create = create_op(&records, "held transfer", Vec::new());
+    create.records.push(record(
+        "transfers",
+        "source",
+        None,
+        Some(json!({"task":"T-001","held":true})),
+        records.clock.now(),
+    ));
+    apply(&records, Operation::CreateTask(create.clone()))?;
+    refused(
+        &records,
+        Operation::CreateTask(create),
+        "duplicate source marker",
+        conflict,
+    )?;
+
     let fx = make();
     let num = base_task(&fx)?;
     let mut bad = create_op(&fx, "x", Vec::new());

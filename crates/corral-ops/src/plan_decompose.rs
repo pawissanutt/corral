@@ -273,6 +273,14 @@ fn apply_with_origin(
     plan_id: &str,
     origin: crate::operating::Origin,
 ) -> Result<Vec<String>> {
+    // Plan acceptance is not an implementation instruction. Defer all card publication
+    // (including self-projection) until a separate exact-revision execution choice.
+    if crate::assistant::workflow::handoff::lifecycle::for_task(&ctx.store, &ctx.store.head(id)?)?
+        .and_then(|j| j.transfer)
+        .is_some_and(|t| crate::assistant::workflow::handoff::lifecycle::plan_only(t.goal))
+    {
+        return Ok(Vec::new());
+    }
     // A plan of at most one scope projects onto its own task, and an automatic multi-scope
     // publication stages its children from the parent's head shell: both read and write the
     // parent as a head. Only the owner's decomposition reads the full parent.

@@ -73,6 +73,7 @@ pub(super) fn create_op(fx: &Fixture, title: &str, rows: Vec<HistoryRow>) -> Cre
         doc: json!({"body": title}),
         summary: json!({"runs": 0}),
         rows,
+        records: Vec::new(),
         events: vec![event(fx, None, "created", json!({}))],
         reservations: Vec::new(),
     }

@@ -20,7 +20,12 @@ pub(crate) fn needed<T: corral_core::TaskRef + ?Sized>(
     task: &T,
     opts: &DispatchOpts,
 ) -> bool {
-    opts.plan
+    crate::assistant::workflow::handoff::lifecycle::for_task(&ctx.store, task)
+        .ok()
+        .flatten()
+        .and_then(|j| j.transfer)
+        .is_some_and(|t| crate::assistant::workflow::handoff::lifecycle::plan_only(t.goal))
+        || opts.plan
         || task.dispatch_plan().as_ref().is_some_and(|p| p.plan)
         || ((*task.design()
             || ctx
@@ -261,6 +266,9 @@ fn launch(
     if let Some(notes) = &claim.notes {
         text.push_str(&format!("\n## Required plan changes\n\n{notes}\n"));
     }
+    text.push_str(&crate::assistant::workflow::handoff::adopt::prompt(
+        ctx, head,
+    )?);
     text.push_str(&crate::comments::owner_comments_head(head, task)?);
     text.push_str(&crate::scratch_reclaim::prompt_section(
         ctx,

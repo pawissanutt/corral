@@ -356,6 +356,7 @@ impl Store {
                 doc: split.doc,
                 summary: split.summary,
                 rows: split.rows.into_values().collect(),
+                records: self.buffered_records(),
                 events: self.buffered_events(),
                 reservations: Vec::new(),
             }))

@@ -6,6 +6,7 @@ use corral_core::{
 };
 
 use crate::Ctx;
+use crate::assistant::workflow::handoff::admission as transfer;
 
 mod cowork;
 #[cfg(test)]
@@ -40,8 +41,9 @@ pub(crate) fn require<T: TaskRef + ?Sized>(
     kind: OperatingActionKind,
 ) -> Result<()> {
     crate::hold::require_clear(store, task)?;
+    transfer::require(store, task, kind, true)?;
     cowork::validate(task, kind)?;
-    if !cowork::require(store, task, kind)? {
+    if !transfer::explicit(store, task, kind)? && !cowork::require(store, task, kind)? {
         require_grant(store, task, kind)?;
     }
     require_recovery(store, task)?;
@@ -110,8 +112,12 @@ pub(crate) fn require_diagnosis<T: TaskRef + ?Sized>(
     owner: bool,
 ) -> Result<()> {
     crate::hold::require_clear(store, task)?;
+    transfer::require(store, task, OperatingActionKind::Repair, !owner)?;
     cowork::validate(task, OperatingActionKind::Repair)?;
-    if !owner && !cowork::diagnosis(store, task)? {
+    if !owner
+        && !transfer::explicit(store, task, OperatingActionKind::Repair)?
+        && !cowork::diagnosis(store, task)?
+    {
         require_grant_for(store, task, GrantOperation::Diagnosis)?;
     }
     require_recovery(store, task)
@@ -192,9 +198,11 @@ pub(crate) fn authorize(
     action: OperatingActionIdentity,
     origin: Origin,
 ) -> Result<ActionAuthorization> {
+    let task = ctx.store.head(&action.task)?;
+    transfer::require(&ctx.store, &task, action.kind, origin == Origin::Automatic)?;
     let carried_owner = if origin == Origin::Automatic {
-        let task = ctx.store.head(&action.task)?;
-        let provenance = cowork::provenance(&task, &action)?;
+        let provenance = transfer::provenance(&ctx.store, &task, &action)?
+            .or(cowork::provenance(&task, &action)?);
         if provenance.is_some() {
             require(&ctx.store, &task, action.kind)?;
         }
@@ -214,7 +222,9 @@ pub(crate) fn authorize(
         let previous = load(ctx, &action.task, &action.run, action.kind, &action.attempt)?;
         if previous.action.plan == action.plan && previous.action.round == action.round {
             ensure!(
-                carried_owner.is_none() || cowork::carried(&previous),
+                carried_owner.is_none()
+                    || cowork::carried(&previous)
+                    || transfer::carried(&previous),
                 "cannot convert another owner approval into a co-work instruction"
             );
             if previous.action != action {
@@ -290,7 +300,7 @@ pub(crate) fn authorize(
 /// A definitely unsubmitted automatic preparation is stale churn: fresh automatic authority
 /// replaces it. Its consent and verification result are never reused.
 fn rederivable(ctx: &Ctx, previous: &ActionAuthorization, origin: Origin) -> Result<bool> {
-    if cowork::carried(previous) && origin == Origin::Owner {
+    if (cowork::carried(previous) || transfer::carried(previous)) && origin == Origin::Owner {
         let task = ctx.store.head(&previous.action.task)?;
         require(&ctx.store, &task, previous.action.kind)?;
     } else if origin != Origin::Automatic || !is_automatic(previous) {
@@ -314,7 +324,13 @@ pub(crate) fn submit<R>(
         &authorization.action,
         |store, task| {
             crate::hold::require_clear(store, task)?;
-            if is_automatic(authorization) || cowork::carried(authorization) {
+            transfer::require(
+                store,
+                task,
+                authorization.action.kind,
+                automatic_driver(authorization),
+            )?;
+            if automatic_driver(authorization) {
                 if cowork::carried(authorization) {
                     ensure!(
                         cowork::confirmed(task, authorization.action.kind),
@@ -344,7 +360,13 @@ pub(crate) fn submit_head<R>(
         &authorization.action,
         |store, head| {
             crate::hold::require_clear(store, &*head)?;
-            if is_automatic(authorization) || cowork::carried(authorization) {
+            transfer::require(
+                store,
+                &*head,
+                authorization.action.kind,
+                automatic_driver(authorization),
+            )?;
+            if automatic_driver(authorization) {
                 if cowork::carried(authorization) {
                     ensure!(
                         cowork::confirmed(&*head, authorization.action.kind),
@@ -381,7 +403,9 @@ pub(crate) fn identity(
 
 /// Automatic executors can carry the original finish instruction without a workspace grant.
 pub(crate) fn automatic_driver(authorization: &ActionAuthorization) -> bool {
-    is_automatic(authorization) || cowork::carried(authorization)
+    is_automatic(authorization)
+        || cowork::carried(authorization)
+        || transfer::carried(authorization)
 }
 
 pub(crate) fn is_automatic(authorization: &ActionAuthorization) -> bool {
@@ -395,6 +419,7 @@ pub(crate) fn require_origin<T: TaskRef + ?Sized>(
     origin: Origin,
 ) -> Result<()> {
     crate::hold::require_clear(store, task)?;
+    transfer::require(store, task, kind, origin == Origin::Automatic)?;
     match origin {
         Origin::Owner => Ok(()),
         Origin::Automatic => require(store, task, kind),

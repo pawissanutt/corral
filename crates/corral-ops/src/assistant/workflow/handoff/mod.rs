@@ -12,10 +12,18 @@ use corral_core::{
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+pub(crate) mod admission;
+pub(crate) mod adopt;
 mod content;
 pub mod context;
+pub mod lifecycle;
+pub(crate) mod takeback;
+pub mod transfer;
+pub use takeback::Returned;
 mod git;
+pub mod owner;
 mod preview;
+pub(crate) mod renew;
 mod restore;
 mod retention;
 pub use content::Content;
@@ -87,6 +95,10 @@ pub struct Journal {
     pub reserved: bool,
     /// A retained source is never cleanup authorization.
     pub source_retained: bool,
+    /// C3 extends this journal in place. Old reserved C2 packages remain fenced and
+    /// reconciling until actual task/ownership publication completes.
+    #[serde(default)]
+    pub transfer: Option<lifecycle::Transfer>,
 }
 
 /// Only successful preparation/restore verification can construct this value. C3 must
@@ -339,6 +351,7 @@ pub fn reserve(
         previous_phase: j.previous_phase,
         reserved: true,
         source_retained: true,
+        transfer: None,
     };
     ensure!(
         store.insert_record(JOURNALS, &j.id, &reserved)?,
@@ -430,5 +443,7 @@ pub fn recover(store: &Store, id: &str) -> Result<Prepared> {
 
 #[cfg(test)]
 mod crash_tests;
+#[cfg(test)]
+mod lifecycle_tests;
 #[cfg(test)]
 mod tests;
