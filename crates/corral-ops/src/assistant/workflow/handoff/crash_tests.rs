@@ -119,6 +119,116 @@ fn handoff_publication_crash_matrix_reconciles_package_and_reservation_without_e
     }
 }
 
+// Slow: one held-publication interruption, source-session loss and blocked attachments; owning trigger is handoff/.
+#[test]
+fn handoff_publication_crash_matrix_recovers_one_held_card_after_source_close_and_attachment_failure()
+ {
+    use super::plan_adoption_tests::instruction;
+    let mut f = ts::fx();
+    let (session, c, expected) = planning(&mut f);
+    f.ctx.store.save_config().unwrap();
+    let prepared = prepare(&f.ctx.store, &session, &c, &expected, request(), None).unwrap();
+    let choice =
+        transfer::preview(&f.ctx, prepared.id(), "Held source recovery", None, true).unwrap();
+    FAILPOINT.with_borrow_mut(|hook| {
+        *hook = Some(Box::new(|point| {
+            if point == "handoff_task_created" {
+                panic!("held card durable before adoption/ownership");
+            }
+        }))
+    });
+    let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        transfer::commit(&f.ctx, &choice, &choice.digest().unwrap(), instruction()).unwrap()
+    }));
+    FAILPOINT.with_borrow_mut(|hook| *hook = None);
+    assert!(interrupted.is_err());
+    let tasks = f.ctx.store.list().unwrap();
+    assert_eq!(tasks.len(), 1);
+    let held = f.ctx.store.get(&tasks[0].id).unwrap();
+    assert!(held.dispatch_hold && held.runs.is_empty() && held.plan_runs.is_empty());
+    assert!(
+        crate::operating::require(&f.ctx.store, &held, corral_core::OperatingActionKind::Plan)
+            .is_err()
+    );
+    let journal = read_journal(&f.ctx.store, prepared.id()).unwrap().unwrap();
+    assert!(!journal.transfer.as_ref().unwrap().ownership_committed);
+    assert!(f.ctx.store.pm_inbox_items().unwrap().is_empty());
+    // Canonical source-session closure is a fixture for losing source availability;
+    // no actual SDK host/process existed in this generation-zero source.
+    f.ctx.store.end_assistant(&session).unwrap();
+    let cap = f.ctx.store.config.artifacts.max_bytes;
+    f.ctx.store.config.artifacts.max_bytes = 1;
+    f.ctx.store.save_config().unwrap();
+    let mut reopened = f.ctx.clone();
+    reopened.store = Store::open(f.ctx.store.root()).unwrap();
+    recovery::reconcile(&reopened).unwrap();
+    let blocked = read_journal(&reopened.store, prepared.id())
+        .unwrap()
+        .unwrap();
+    assert!(!blocked.transfer.as_ref().unwrap().ownership_committed && blocked.waiting.is_some());
+    assert_eq!(
+        reopened
+            .store
+            .get_assistant_container(&session)
+            .unwrap()
+            .workflow
+            .unwrap()
+            .current
+            .owner,
+        ScopeOwner::Local
+    );
+    assert!(reopened.store.pm_inbox_items().unwrap().is_empty());
+    reopened.store.config.artifacts.max_bytes = cap;
+    reopened.store.save_config().unwrap();
+    recovery::reconcile(&reopened).unwrap();
+    recovery::reconcile(&reopened).unwrap();
+    let final_task = reopened.store.get(&held.id).unwrap();
+    let complete = lifecycle::for_task(&reopened.store, &final_task)
+        .unwrap()
+        .unwrap();
+    let transfer = complete.transfer.unwrap();
+    assert!(
+        transfer.ownership_committed && transfer.adoption_proven && !transfer.notification_pending
+    );
+    assert!(
+        final_task.dispatch_hold && final_task.runs.is_empty() && final_task.plan_runs.is_empty()
+    );
+    assert_eq!(reopened.store.list().unwrap().len(), 1);
+    assert_eq!(reopened.store.pm_inbox_items().unwrap().len(), 1);
+    assert!(
+        reopened
+            .store
+            .get_assistant(&session)
+            .unwrap()
+            .ended
+            .is_some()
+    );
+    assert_eq!(
+        reopened
+            .store
+            .get_assistant_container(&session)
+            .unwrap()
+            .workflow
+            .unwrap()
+            .current
+            .owner,
+        ScopeOwner::Board {
+            task: held.id.clone()
+        }
+    );
+    let events = reopened.store.events().unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.kind == "handoff_ownership_committed")
+            .count(),
+        1
+    );
+    eprintln!(
+        "HELD_PUBLICATION_RECOVERY: one durable card survived source-session closure and attachment-cap failure; no early owner/outbox, then once-only Board ownership/notification and zero launches; no live-host death claimed"
+    );
+}
+
 // Slow: persisted partial seed/index restart under a moved integration base; owning trigger is handoff/.
 #[test]
 fn handoff_materialization_restart_preserves_pinned_layers_and_the_moved_base() {

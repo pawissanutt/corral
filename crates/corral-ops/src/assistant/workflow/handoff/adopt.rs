@@ -75,7 +75,15 @@ pub(crate) fn prepare_task(ctx: &Ctx, id: &str, prepared: &Prepared) -> Result<(
                     "handoff_adoption: task run changed"
                 );
                 if candidate && ready {
-                    candidate_run(ctx, task, prepared, snapshot, &path, &branch, &run_id, goal)?;
+                    candidate_run(
+                        ctx,
+                        task,
+                        prepared,
+                        snapshot,
+                        (&path, &branch),
+                        &run_id,
+                        goal,
+                    )?;
                 }
                 let mut journal =
                     super::read_journal(&ctx.store, prepared.id())?.context("journal missing")?;
@@ -157,11 +165,11 @@ fn candidate_run(
     task: &mut Task,
     prepared: &Prepared,
     snapshot: &Snapshot,
-    path: &Path,
-    branch: &str,
+    destination: (&Path, &str),
     run_id: &str,
     goal: super::Goal,
 ) -> Result<()> {
+    let (path, branch) = destination;
     ensure!(
         run_id == format!("R{}", task.runs.len() + 1) && !task.runs.iter().any(|r| r.id == run_id),
         "handoff_adoption: candidate run identity already exists or changed"
@@ -297,8 +305,7 @@ pub(super) fn advance_candidate(ctx: &Ctx, id: &str) -> Result<()> {
             task,
             &prepared,
             snapshot,
-            &path,
-            &branch,
+            (&path, &branch),
             &run_id,
             transfer.goal,
         )?;
@@ -543,7 +550,7 @@ pub(crate) fn start_head(
         run.worktree.is_dir(),
         "handoff_missing: adopted code seed disappeared; no empty-source fallback"
     );
-    verify_worktree(&snapshot, &run.worktree, &run.branch)?;
+    verify_worktree(snapshot, &run.worktree, &run.branch)?;
     Ok(Some(snapshot.state.head.clone()))
 }
 
