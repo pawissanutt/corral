@@ -6,6 +6,14 @@ set -euo pipefail
 exec </dev/null
 cd "$(dirname "$0")/.."
 
+# Keep the native mbx lease across compilation, prebuilt execution and gaps.
+if [[ ${1:-} == --corral-mbx-protected ]]; then
+  shift
+  python3 scripts/cargo_cache_targets.py --verify-protection
+elif [[ ${CORRAL_BUILD_CACHE:-off} == mbx && ${CORRAL_MBX_TARGETS:-private} == managed ]]; then
+  exec python3 scripts/cargo_cache.py --protect-script "$PWD/scripts/pi-lane.sh" "$@"
+fi
+
 repo=$PWD
 package=packages/corral-pi
 timer="$PWD/scripts/gate_timer.py"

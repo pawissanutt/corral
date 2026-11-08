@@ -15,6 +15,8 @@ import subprocess
 import sys
 from typing import NoReturn, Protocol, TypeAlias
 
+import cargo_cache_targets as targets
+
 Json: TypeAlias = str | int | float | bool | None | list["Json"] | dict[str, "Json"]
 
 
@@ -136,6 +138,15 @@ def main() -> None:
         fail("ambient mbx configuration is not supported by the Corral profile")
 
     args = sys.argv[1:]
+    protected_script = args[1:] if args[:1] == ["--protect-script"] else None
+    if protected_script is not None:
+        if not protected_script:
+            fail("--protect-script requires a script path")
+        protected_script[0] = os.path.abspath(protected_script[0])
+        args = ["metadata"]
+    target_mode = os.environ.get("CORRAL_MBX_TARGETS", "private")
+    if target_mode not in ("private", "managed"):
+        fail("CORRAL_MBX_TARGETS must be private or managed")
     cargo = cargo_launcher()
     toolchain = [args[0]] if args and args[0].startswith("+") else []
     command = args[len(toolchain):]
@@ -170,8 +181,22 @@ def main() -> None:
         fail("workspace .mbx.toml is not supported by the Corral profile")
     if cache.resolve().is_relative_to(workspace):
         fail("CORRAL_MBX_CACHE_DIR must be outside the workspace")
-    reject_managed_target(target)
-    reject_managed_target(build)
+    target_settings: dict[str, str] = {}
+    if target_mode == "managed":
+        target_settings = targets.settings(
+            cache, workspace, target,
+            explicit_target is not None or bool(os.environ.get("CARGO_TARGET_DIR")),
+        )
+        root = Path(target_settings["MBX_TARGET_ROOT"])
+        for path in (target, build):
+            view = targets.managed_path(path, root)
+            if view is None:
+                reject_managed_target(path)
+            elif view != targets.managed_path(target, root):
+                fail("intermediate build directory belongs to another managed target")
+    else:
+        reject_managed_target(target)
+        reject_managed_target(build)
     managed_root = cache / "corral-disabled-targets"
     records = managed_root / "v1"
     if managed_root.is_symlink() or records.is_symlink():
@@ -202,6 +227,13 @@ def main() -> None:
         "MBX_SHARE_WORKSPACE_ROOT": "0", "MBX_DISPLAY": "plain",
         "MBX_SUMMARY": "full",
     })
+    environment.update(target_settings)
+    if protected_script is not None:
+        try:
+            status = targets.protect_script(environment, workspace, target, protected_script)
+        except OSError as error:
+            fail(f"cannot protect managed-target workflow: {error}")
+        raise SystemExit(status if status >= 0 else 128 - status)
     os.execve(binary, [str(binary), *args], environment)
 
 

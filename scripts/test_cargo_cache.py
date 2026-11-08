@@ -4,6 +4,7 @@
 # ///
 """Exercise the Cargo adapter's process and target-safety boundaries."""
 
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -38,6 +39,7 @@ class CargoCacheTests(unittest.TestCase):
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.target = self.work / "target"
+        self.write_executable(self.bin / "b3sum", '#!/usr/bin/env python3\nprint("a" * 64)\n')
         self.write_executable(
             self.bin / "cargo",
             """#!/usr/bin/env python3
@@ -113,6 +115,80 @@ else:
             "MBX_CACHE_DIR": str(self.root / "cache"),
             "MBX_TARGET_ROOT": str(self.root / "cache" / "corral-disabled-targets"),
         })
+
+    def test_managed_targets_are_opt_in_and_budgeted(self) -> None:
+        self.write_executable(self.mbx, '''#!/usr/bin/env python3
+import json, os, sys
+if sys.argv[1:] == ["--version"]:
+    print("mbx 1.29.2")
+else:
+    print(json.dumps({key: value for key, value in os.environ.items() if key.startswith("MBX_")}))
+    sys.exit(19)
+''')
+        settings = {"CORRAL_BUILD_CACHE": "mbx", "CORRAL_MBX_TARGETS": "managed"}
+        result = self.run_adapter("check", **settings)
+        self.assertEqual(result.returncode, 19, result.stderr)
+        profile = json.loads(result.stdout)
+        self.assertEqual(profile["MBX_TARGET_VIEWS"], "1")
+        self.assertEqual(profile["MBX_TARGET_ROOT"], str(self.root / "cache" / "corral-managed-targets"))
+        self.assertEqual(profile["MBX_TARGET_MAX_SIZE"], "200GiB")
+        self.assertEqual(profile["MBX_TARGET_MAX_AGE"], "7d")
+        self.assertEqual(profile["MBX_GC_MAX_TOTAL_SIZE"], "230GiB")
+        self.assertEqual(profile["MBX_TARGET_LANES"], "0")
+        self.target.mkdir()
+        sentinel = self.target / "existing-output"
+        sentinel.write_text("keep")
+        for overrides in ({}, {"CARGO_TARGET_DIR": str(self.target)}):
+            with self.subTest(overrides=overrides):
+                result = self.run_adapter("check", **settings, **overrides)
+                self.assertEqual(result.returncode, 19, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["MBX_TARGET_VIEWS"], "0")
+                self.assertEqual(sentinel.read_text(), "keep")
+        result = self.run_adapter("check", CORRAL_BUILD_CACHE="mbx", CORRAL_MBX_TARGETS="invalid")
+        self.assertEqual(result.returncode, 2)
+        self.write_executable(self.bin / "b3sum", '#!/usr/bin/env python3\nprint("invalid")\n')
+        result = self.run_adapter("check", **settings)
+        self.assertEqual(result.returncode, 2)
+
+    def test_workflow_failure_releases_lease_and_requires_live_descriptor(self) -> None:
+        managed = self.root / "cache" / "corral-managed-targets" / "v1" / ("a" * 64)
+        managed.mkdir(parents=True)
+        managed.with_suffix(".json").write_text(json.dumps({
+            "version": 1, "workspace_root": str(self.work), "updated_secs": 0,
+        }))
+        self.target.symlink_to(managed)
+        script = self.work / "fail.sh"
+        settings = {"CORRAL_BUILD_CACHE": "mbx", "CORRAL_MBX_TARGETS": "managed"}
+        for ending, expected in (("exit 7", 7), ("kill -TERM $$", 143), ('kill -KILL "$PPID"', -9)):
+            with self.subTest(ending=ending):
+                script.write_text(
+                    '#!/bin/bash\nset -eu\n[[ $1 == --corral-mbx-protected ]]\n'
+                    f'"{sys.executable}" "{ADAPTER.with_name("cargo_cache_targets.py")}" --verify-protection\n'
+                    f'{ending}\n'
+                )
+                result = self.run_adapter("--protect-script", str(script), **settings)
+                self.assertEqual(result.returncode, expected, result.stderr)
+                with managed.with_suffix(".lock").open("r+b") as lease:
+                    fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = subprocess.run(
+            [sys.executable, str(ADAPTER.with_name("cargo_cache_targets.py")), "--verify-protection"],
+            cwd=self.work, env={**self.environment,
+                "CORRAL_MBX_PROTECTED_WORKSPACE": str(self.work),
+                "CORRAL_MBX_PROTECTED_TARGET": str(self.target),
+                "CORRAL_MBX_PROTECTED_FD": "999999"},
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 2)
+        for record in ({"version": 1, "workspace_root": str(self.root / "other")}, []):
+            with self.subTest(record=record):
+                managed.with_suffix(".json").write_text(json.dumps(record))
+                result = self.run_adapter("check", **settings)
+                self.assertEqual(result.returncode, 2, result.stderr)
+        managed.with_suffix(".json").unlink()
+        self.target.unlink()
+        self.target.symlink_to(managed.parent / ("b" * 64))
+        result = self.run_adapter("check", **settings)
+        self.assertEqual(result.returncode, 2, result.stderr)
 
     def test_mbx_masks_config_rustflags_without_overwriting_explicit_flags(self) -> None:
         self.environment.pop("RUSTFLAGS", None)
