@@ -1,0 +1,114 @@
+diff --git a/dist/agent.d.ts b/dist/agent.d.ts
+index 0147d05470d36019e0db0bf236fa0046f384a9a3..e09fdb946c226341bf735d5fc286fe709d31d79e 100644
+--- a/dist/agent.d.ts
++++ b/dist/agent.d.ts
+@@ -1,6 +1,14 @@
+ import { type ClientIdentity, type ImageContent, type Message, type SimpleStreamOptions, type ThinkingBudgets, type Transport } from "@earendil-works/pi-ai";
+ import type { AfterToolCallContext, AfterToolCallResult, AgentEvent, AgentLoopTurnUpdate, AgentMessage, AgentState, BeforeToolCallContext, BeforeToolCallResult, FinishTurn, PrepareNextTurnContext, PrepareRequest, QueueMode, StreamFn, ToolExecutionMode } from "./types.ts";
+ export type { QueueMode } from "./types.ts";
++/** Synchronous host boundary, always before the actual object queue mutation. */
++export interface AgentQueueChange {
++    action: "enqueue" | "drain" | "clear" | "remove";
++    mode: "steer" | "follow_up";
++    messages: AgentMessage[];
++    cause?: string;
++    nextRun: boolean;
++}
+ /** Initial state for {@link Agent}. `systemPrompt` and `tools` become the leading system message unless `messages` already starts with one. */
+ export type AgentInitialState = Partial<Omit<AgentState, "pendingToolCalls" | "isStreaming" | "streamingMessage" | "errorMessage">>;
+ /** Options for constructing an {@link Agent}. */
+@@ -93,6 +101,9 @@ export declare class Agent {
+     /** Controls how queued follow-up messages are drained. */
+     set followUpMode(mode: QueueMode);
+     get followUpMode(): QueueMode;
++    setQueueHook(hook: ((change: AgentQueueChange) => void) | undefined): void;
++    getQueuedMessages(): AgentMessage[];
++    removeQueuedMessage(message: AgentMessage, cause?: string): boolean;
+     /** Queue a message to be injected after the current assistant turn finishes. */
+     steer(message: AgentMessage): void;
+     /** Queue a message to run only after the agent would otherwise stop. */
+diff --git a/dist/agent.js b/dist/agent.js
+index e34d91afe7aa539ffff9f886352b02f23a1a51ea..56b49f12c26fc0c47fc4c54ee47c4c065b552fe7 100644
+--- a/dist/agent.js
++++ b/dist/agent.js
+@@ -60,10 +60,12 @@ function createMutableAgentState(initialState) {
+ class PendingMessageQueue {
+     messages = [];
+     mode;
+-    constructor(mode) {
++    constructor(mode, before) {
+         this.mode = mode;
++        this.before = before;
+     }
+     enqueue(message) {
++        this.before("enqueue", [message]);
+         this.messages.push(message);
+     }
+     hasItems() {
+@@ -75,12 +77,21 @@ class PendingMessageQueue {
+         const first = this.messages[0];
+         return first ? [first] : [];
+     }
+-    drain() {
++    drain(nextRun = false) {
+         const drained = this.peek();
++        if (drained.length) this.before("drain", drained, undefined, nextRun);
+         this.messages = this.messages.slice(drained.length);
+         return drained;
+     }
++    remove(message, cause) {
++        const index = this.messages.indexOf(message);
++        if (index < 0) return false;
++        this.before("remove", [message], cause);
++        this.messages.splice(index, 1);
++        return true;
++    }
+     clear() {
++        if (this.messages.length) this.before("clear", this.messages.slice());
+         this.messages = [];
+     }
+ }
+@@ -138,8 +149,10 @@ export class Agent {
+         this.prepareRequest = runtimeOptions.prepareRequest;
+         this.prepareNextTurn = runtimeOptions.prepareNextTurn;
+         this.prepareNextTurnWithContext = runtimeOptions.prepareNextTurnWithContext;
+-        this.steeringQueue = new PendingMessageQueue(runtimeOptions.steeringMode ?? "one-at-a-time");
+-        this.followUpQueue = new PendingMessageQueue(runtimeOptions.followUpMode ?? "one-at-a-time");
++        const before = (mode) => (action, messages, cause, nextRun = false) =>
++            this.queueHook?.({ mode, action, messages, cause, nextRun });
++        this.steeringQueue = new PendingMessageQueue(runtimeOptions.steeringMode ?? "one-at-a-time", before("steer"));
++        this.followUpQueue = new PendingMessageQueue(runtimeOptions.followUpMode ?? "one-at-a-time", before("follow_up"));
+         this.sessionId = runtimeOptions.sessionId;
+         this.thinkingBudgets = runtimeOptions.thinkingBudgets;
+         this.transport = runtimeOptions.transport ?? "auto";
+@@ -183,6 +196,15 @@ export class Agent {
+     get followUpMode() {
+         return this.followUpQueue.mode;
+     }
++    /** Host-only synchronous journal boundary; a throw prevents the queue mutation. */
++    setQueueHook(hook) { this.queueHook = hook; }
++    /** Snapshot all objects, not just the next poll's selection. */
++    getQueuedMessages() {
++        return [...this.steeringQueue.messages, ...this.followUpQueue.messages];
++    }
++    removeQueuedMessage(message, cause) {
++        return this.steeringQueue.remove(message, cause) || this.followUpQueue.remove(message, cause);
++    }
+     /** Queue a message to be injected after the current assistant turn finishes. */
+     steer(message) {
+         this.steeringQueue.enqueue(message);
+@@ -260,12 +282,12 @@ export class Agent {
+             throw new Error("No messages to continue from");
+         }
+         if (lastMessage.role === "assistant") {
+-            const queuedSteering = this.steeringQueue.drain();
++            const queuedSteering = this.steeringQueue.drain(true);
+             if (queuedSteering.length > 0) {
+                 await this.runPromptMessages(queuedSteering, { skipInitialSteeringPoll: true });
+                 return;
+             }
+-            const queuedFollowUps = this.followUpQueue.drain();
++            const queuedFollowUps = this.followUpQueue.drain(true);
+             if (queuedFollowUps.length > 0) {
+                 await this.runPromptMessages(queuedFollowUps);
+                 return;

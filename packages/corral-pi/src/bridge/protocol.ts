@@ -13,9 +13,9 @@ export const INPUT_REPLY_MS = 30_000;
 /** Room left in a frame for the reply envelope around a page of events. */
 export const EVENT_PAGE_BYTES = FRAME_MAX_BYTES - 4 * 1024;
 
-export type Command = "hello" | "get_state" | "submit_input" | "cancel" | "events_since" | "shutdown" | "questions";
+export type Command = "hello" | "get_state" | "submit_input" | "cancel" | "events_since" | "shutdown" | "questions" | "queue_state" | "queue_withdraw";
 export const COMMANDS: readonly Command[] = [
-  "hello", "get_state", "submit_input", "cancel", "events_since", "shutdown", "questions",
+  "hello", "get_state", "submit_input", "cancel", "events_since", "shutdown", "questions", "queue_state", "queue_withdraw",
 ];
 /** At most this many questions in one `questions` request (corral sends its newest 128). */
 export const QUESTIONS_MAX = 256;
@@ -104,6 +104,21 @@ export function parseSubmitInput(args: Record<string, unknown>): SubmitInput {
     throw new BridgeRefusal("bad_input", "origin must be 1-64 characters of [A-Za-z0-9._:-]");
   }
   return { text, busyPolicy, idempotencyKey: key, origin };
+}
+
+export function parseQueueLimit(args: Record<string, unknown>): number {
+  const limit = args.limit === undefined ? 64 : args.limit;
+  if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 64) {
+    throw new BridgeRefusal("bad_input", "limit must be an integer in 1..64");
+  }
+  return limit;
+}
+
+export function parseQueueWithdraw(args: Record<string, unknown>): { key: string; op_key: string } {
+  if (typeof args.key !== "string" || !KEY.test(args.key) || typeof args.op_key !== "string" || !KEY.test(args.op_key)) {
+    throw new BridgeRefusal("bad_input", "key and op_key must be 1-128 characters of [A-Za-z0-9._:-]");
+  }
+  return { key: args.key, op_key: args.op_key };
 }
 
 export function parseTurn(args: Record<string, unknown>): number | undefined {

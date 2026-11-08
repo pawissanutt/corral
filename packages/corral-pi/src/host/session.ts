@@ -91,6 +91,7 @@ import { PlanningPolicy, type PlanningState } from "./planning-policy.ts";
 import { type ConnectionBinding, admitConnection, parseBinding } from "./connections.ts";
 import { CONNECTIONS, type ConnectionId, resolveConnection } from "../auth/connections.ts";
 import { failureClass, messageFailure, withProviderFailures } from "./provider-failure.ts";
+import { HostQueue } from "./queue.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -289,6 +290,8 @@ const panelStats = (stats: { readonly tokens: { readonly total: number }; readon
 
 export class HostSession {
   runtime!: AgentSessionRuntime;
+  /** Interactive host API only; deliberately absent from extension/model registries. */
+  readonly queue: HostQueue;
   readonly panels: NativePanels | undefined;
   private readonly unsubscribePanels: (() => void) | undefined;
   private terminalInput: InputObservation | undefined;
@@ -353,6 +356,15 @@ export class HostSession {
 
   private constructor(private readonly options: HostSessionOptions) {
     this.provider = options.provider ?? "openai-codex";
+    this.queue = new HostQueue({
+      generation: options.identity.generation, session: () => this.session,
+      enabled: () => (options.capabilities?.catalog ?? 0) >= 10 && options.capabilities?.enabled.includes("queue_control") === true,
+      interactive: () => this.attached === "interactive",
+      current: () => !this.closing && this.bound && this.session.sessionId === this.boundSessionId,
+      turn: next => next || !this.open ? this.turn + 1 : this.turn,
+      emit: (kind, data) => options.events.emit(kind, data),
+      fence: () => { this.closing = true; this.writeAbort.abort(); this.session.agent.abort(); },
+    });
     this.planning = options.identity.role === "assistant" ? new PlanningPolicy({
       read: async () => {
         // Bootstrap has no authenticated session yet. Once bound, use the dedicated,
@@ -1168,6 +1180,7 @@ export class HostSession {
 
   private watch(session: AgentSession): void {
     this.unsubscribe?.();
+    session.setQueueObserver(this.queue.observer);
     this.terminalInputSequence = 0;
     this.terminalInput = undefined;
     observeTerminalInput(session, this.options.events);
@@ -1422,8 +1435,9 @@ export class HostSession {
       generation: this.options.identity.generation, session_id: sessionId,
       bind_nonce_sha256: sha256Hex(bindNonce),
       ...(this.options.binding ? { binding: this.options.binding } : {}),
-    });
+    }, { immediate: true });
     this.boundSessionId = sessionId;
+    this.queue.bind(sessionId, sha256Hex(bindNonce));
     const commandFacts: CommandFact[] = [], monitorFacts: MonitorFact[] = [];
     for (const entry of this.session.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === COMMAND_ENTRY) commandFacts.push(entry.data as CommandFact);
@@ -1480,12 +1494,14 @@ export class HostSession {
     if (this.closing) return { disposition: "rejected", reason: "host_closing" };
     // Lifecycle transitions are the owner's: only text typed in the pane runs /resume.
     if (this.resume && /^\/resume(\s|$)/.test(input.text.trim())) return { disposition: "rejected", reason: "owner_only_command" };
+    const queueTag = this.queue.bridgeInput(input);
     try {
       await this.options.modules.delivery.accept({
         requestId, idempotencyKey: input.idempotencyKey, origin: input.origin, busyPolicy: input.busyPolicy,
         text: input.text, textSha256: sha256Hex(input.text), generation: this.options.identity.generation,
       }, this.deliveryHost());
     } catch (error) {
+      this.queue.observer.lifecycle({ tag: queueTag, event: "rejected", reason: `delivery_refused: ${String(error).slice(0, 256)}` });
       return { disposition: "rejected", reason: `delivery_refused: ${error instanceof Error ? error.message : error}` };
     }
     // Only a corral inbox delivery can carry the owner's answer to a bound permission question.
@@ -1494,7 +1510,10 @@ export class HostSession {
     if (input.origin === "corral-inbox") {
       for (const { key, revision } of answeredKeys(input.text)) this.options.herdr?.resolved(key, revision);
     }
-    if (this.closing) return { disposition: "rejected", reason: "host_closing" };
+    if (this.closing) {
+      this.queue.observer.lifecycle({ tag: queueTag, event: "rejected", reason: "host_closing" });
+      return { disposition: "rejected", reason: "host_closing" };
+    }
     return new Promise<SubmitResult>((resolve) => {
       let settled = false;
       const settle = (result: SubmitResult) => {
@@ -1503,7 +1522,7 @@ export class HostSession {
         resolve(result);
       };
       this.session.prompt(input.text, {
-        source: "rpc",
+        source: "rpc", queueTag,
         ...(input.busyPolicy === "steer" ? { streamingBehavior: "steer" as const } : {}),
         ...(input.busyPolicy === "follow_up" ? { streamingBehavior: "followUp" as const } : {}),
         preflightResult: (disposition) => {

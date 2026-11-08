@@ -5,7 +5,7 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { ExtensionUIContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionUIContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { type BridgeEvent, EventLog } from "../../src/bridge/events.ts";
@@ -93,6 +93,8 @@ export interface CodeFixture {
 
 export interface CodeFixtureOptions {
   readonly enabled?: readonly string[];
+  readonly catalog?: number;
+  readonly extend?: (pi: ExtensionAPI) => void;
   readonly bigBytes?: number;
   readonly ui?: "plain" | "rich";
 }
@@ -152,10 +154,11 @@ export async function codeHost(role: CodeRole, options: CodeFixtureOptions = {})
     localTools: (context: RoleContext) => [...(base.localTools?.(context) ?? []), ...local],
     extend(pi: Parameters<NonNullable<typeof base.extend>>[0], context: RoleContext) {
       base.extend?.(pi, context);
+      options.extend?.(pi);
       pi.registerTool(forbidden);
     },
   } };
-  const capabilities: CapabilitySet = { catalog: 4, digest: "a".repeat(64), preset: role === "pm" ? "full" : "standard",
+  const capabilities: CapabilitySet = { catalog: options.catalog ?? 4, digest: "a".repeat(64), preset: role === "pm" ? "full" : "standard",
     enabled: [...(options.enabled ?? ["codemode"])] };
   let host: HostSession | undefined;
   const client = new CorralClient({ corral: corral.path, root: work, identity, hostCap: "h".repeat(64),

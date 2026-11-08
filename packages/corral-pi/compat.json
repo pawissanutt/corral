@@ -32,7 +32,7 @@
   },
   "lock": {
     "file": "bun.lock",
-    "sha256": "5b7f34d98e432dc719073761ab22c6de5133595d9005b2a5d62b9f8c280ccbb1"
+    "sha256": "cc91375d1ecc06cedf65fb37a07cac3d2067d3e002f7361221179a085871160b"
   },
   "claude": {
     "task": "T-493",
@@ -81,6 +81,7 @@
     "checkpoints",
     "subagents",
     "oracle",
-    "headless"
+    "headless",
+    "queue_control"
   ]
 }

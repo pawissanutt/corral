@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { EventLog } from "../src/bridge/events.ts";
 import { FRAME_MAX_BYTES, type SubmitInput, type SubmitResult } from "../src/bridge/protocol.ts";
-import { type BridgeServer, startBridge } from "../src/bridge/server.ts";
+import { type BridgeHandlers, type BridgeServer, startBridge } from "../src/bridge/server.ts";
 import { type PeerLookup, loadPeerLookup } from "../src/host/peer.ts";
 import { connect, refusalOnConnect } from "./support/bridge-client.ts";
 import { nextEvent } from "./support/wait.ts";
@@ -32,6 +32,8 @@ interface HarnessOptions {
   readonly state?: () => Record<string, unknown>;
   readonly submissionsMax?: number;
   readonly inputReplyMs?: number;
+  readonly queueState?: BridgeHandlers["queueState"];
+  readonly queueWithdraw?: BridgeHandlers["queueWithdraw"];
 }
 
 async function bridge(peerOrOptions?: PeerLookup | HarnessOptions, capacity = 512): Promise<Harness> {
@@ -47,6 +49,8 @@ async function bridge(peerOrOptions?: PeerLookup | HarnessOptions, capacity = 51
     handlers: {
       hello: () => ({ protocol: 1 }),
       state: options.state ?? (() => ({ streaming: false })),
+      ...(options.queueState ? { queueState: options.queueState } : {}),
+      ...(options.queueWithdraw ? { queueWithdraw: options.queueWithdraw } : {}),
       submit: async (input) => {
         submitted.push(input);
         return options.submit ? options.submit(input) : { disposition: "started", turn: submitted.length };
@@ -98,12 +102,33 @@ test("a stale generation, an unknown command and an oversize frame are refused",
   const { path } = await bridge();
   const client = await connect(path);
   expect((await client.request(frame("get_state", {}, { generation: 2 }))).error?.code).toBe("stale_generation");
+  expect((await client.request(frame("queue_state"))).error?.code).toBe("capability_unavailable");
   expect((await client.request(frame("exec", {}))).error?.code).toBe("unknown_command");
   const big = await connect(path);
   const reply = await big.raw(JSON.stringify(frame("submit_input", { text: "x".repeat(70_000) })));
   expect(reply.error?.code).toBe("frame_too_large");
   await big.closed();
   client.close();
+});
+
+test("queue commands validate bounded selectors before dispatch and retain bridge identity checks", async () => {
+  const calls: unknown[] = [];
+  const { path } = await bridge({
+    queueState: limit => { calls.push(limit); return { available: true, generation: 3, items: [], more: false }; },
+    queueWithdraw: (key, op_key) => { calls.push({ key, op_key }); return { op_key, outcome: "unknown_item", replayed: false }; },
+  });
+  const client = await connect(path);
+  try {
+    for (const limit of [0, 65, 1.5, null, "2"]) expect((await client.request(frame("queue_state", { limit }))).error?.code).toBe("bad_input");
+    for (const args of [{}, { key: "k", op_key: "x".repeat(129) }, { key: "bad/key", op_key: "op" }]) {
+      expect((await client.request(frame("queue_withdraw", args))).error?.code).toBe("bad_input");
+    }
+    expect((await client.request(frame("queue_withdraw", { key: "k", op_key: "op" }, { generation: 2 }))).error?.code).toBe("stale_generation");
+    expect(calls).toEqual([]);
+    expect((await client.request(frame("queue_state"))).result).toMatchObject({ available: true, generation: 3 });
+    expect((await client.request(frame("queue_withdraw", { key: "k", op_key: "op" }))).result).toEqual({ op_key: "op", outcome: "unknown_item", replayed: false });
+    expect(calls).toEqual([64, { key: "k", op_key: "op" }]);
+  } finally { client.close(); }
 });
 
 test("submit_input is idempotent by key: a replay returns the first disposition, a changed payload is rejected", async () => {
