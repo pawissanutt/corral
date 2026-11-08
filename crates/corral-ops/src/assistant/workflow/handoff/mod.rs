@@ -19,6 +19,7 @@ mod code_pin;
 mod content;
 pub mod context;
 pub mod continuation;
+mod continuation_seed;
 pub use code_pin::CodePin;
 pub mod lifecycle;
 pub(crate) mod plan_goal;

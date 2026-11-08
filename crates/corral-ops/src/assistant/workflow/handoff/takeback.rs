@@ -144,19 +144,22 @@ pub(crate) fn apply(
         destination.ended.is_none(),
         "take_back: destination ended; board is held, resume an eligible continuation before restoring work"
     );
-    let recorded_base = package.source_base.clone().or_else(|| {
-        destination
-            .scratch
-            .iter()
-            .find(|s| Some(&s.path) == package.source_path.as_ref())
-            .map(|s| s.base.clone())
-    });
+    let recorded_base = transfer
+        .continuation_seed
+        .as_ref()
+        .map(|s| s.base.clone())
+        .or_else(|| package.source_base.clone())
+        .or_else(|| {
+            destination
+                .scratch
+                .iter()
+                .find(|s| Some(&s.path) == package.source_path.as_ref())
+                .map(|s| s.base.clone())
+        });
     let source = if plan_only || (transfer.fresh_seed && super::adopt::pending_seed(ctx, &task)?) {
         None
     } else if super::adopt::pending_seed(ctx, &task)? {
-        let snapshot = package
-            .snapshot
-            .as_ref()
+        let snapshot = super::continuation_seed::snapshot(&journal, &package)
             .context("take_back: pending captured seed is missing")?;
         let (path, branch) = super::adopt::seed_path(ctx, &task)?;
         Some((

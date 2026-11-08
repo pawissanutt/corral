@@ -20,7 +20,7 @@ pub(super) fn current(ctx: &Ctx, task: &impl TaskRef) -> Result<Option<CodePin>>
     let archived = (lifecycle::plan_only(transfer.goal) || !transfer.adoption_proven)
         && transfer.seed_run.is_none();
     let pending = super::adopt::pending_seed(ctx, task)?;
-    let (run, mut state) = if !archived
+    let (run, state) = if !archived
         && !pending
         && let Some(run) = task.current_run_head()?
     {
@@ -30,7 +30,7 @@ pub(super) fn current(ctx: &Ctx, task: &impl TaskRef) -> Result<Option<CodePin>>
         )
     } else {
         let (_, package, _) = super::read_package(&ctx.store, &journal.id)?;
-        let Some(snapshot) = package.snapshot else {
+        let Some(snapshot) = super::continuation_seed::snapshot(&journal, &package).cloned() else {
             return Ok(None);
         };
         let shell = task.shell_task()?;
@@ -46,13 +46,17 @@ pub(super) fn current(ctx: &Ctx, task: &impl TaskRef) -> Result<Option<CodePin>>
         };
         (None, state)
     };
+    of_state(run, state).map(Some)
+}
+
+pub(super) fn of_state(run: Option<String>, mut state: git::WorkState) -> Result<CodePin> {
     // Adoption changes branch aliases, never the chosen HEAD/index/work layers.
     state.branch.clear();
     state.branch_tip = state.head.clone();
     state.detached = false;
-    Ok(Some(CodePin {
+    Ok(CodePin {
         run,
         head: state.head.clone(),
         state_sha256: crate::verification::digest(&serde_json::to_vec(&state)?),
-    }))
+    })
 }

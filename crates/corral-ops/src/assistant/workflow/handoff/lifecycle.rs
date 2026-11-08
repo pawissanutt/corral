@@ -93,6 +93,8 @@ pub struct Transfer {
     pub consumed_choices: Vec<String>,
     pub code_pin: Option<super::code_pin::CodePin>,
     pub fresh_seed: bool,
+    #[serde(default)]
+    pub continuation_seed: Option<super::continuation_seed::Seed>,
     pub draft_predecessor: Option<String>,
     pub imported_plan_run: Option<String>,
 }

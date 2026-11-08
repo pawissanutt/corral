@@ -99,6 +99,8 @@ pub(crate) fn start(
         .store
         .try_lock(&format!("gate-{}", choice.task))?
         .context("handoff: gate admission must settle")?;
+    let before = ctx.store.get(&choice.task)?;
+    let latest_seed = super::continuation_seed::capture(ctx, &before, choice, digest)?;
     let task = ctx.store.update(&choice.task, |task| {
         let mut journal = lifecycle::for_task(&ctx.store, task)?.context("transfer missing")?;
         ensure!(
@@ -138,6 +140,10 @@ pub(crate) fn start(
         );
         if lifecycle::plan_only(choice.goal) {
             ensure!(
+                transfer.continuation_seed.is_none() || transfer.adoption_proven,
+                "handoff_reconciling: finish the pending seed before changing goals"
+            );
+            ensure!(
                 task.current_run().is_none_or(|r| r.outcome.is_some()
                     && r.gate
                         .as_ref()
@@ -152,6 +158,13 @@ pub(crate) fn start(
             // Existing owned code remains canonical across plan-only stops. Replaying
             // the original package here would duplicate a run or rewind later work.
             transfer.adoption_proven = false;
+        }
+        if let Some(seed) = &latest_seed {
+            transfer.continuation_seed = Some(seed.clone());
+            transfer.seed_run = Some(format!("R{}", task.runs.len() + 1));
+            transfer.adoption_proven = false;
+            transfer.fresh_seed = false;
+            transfer.candidate_pending = false;
         }
         transfer.record(instruction.clone())?;
         transfer.advance()?;
@@ -218,9 +231,9 @@ pub(super) fn finish_start(ctx: &Ctx, id: &str) -> Result<Task> {
     super::adopt::prepare_task(ctx, id, &prepared)?;
     let adopted = ctx.store.get(id)?;
     let current_code = super::code_pin::current(ctx, &adopted)?;
-    let seed = lifecycle::for_task(&ctx.store, &adopted)?
+    let final_transfer = lifecycle::for_task(&ctx.store, &adopted)?
         .and_then(|j| j.transfer)
-        .and_then(|t| t.seed_run);
+        .context("transfer missing after adoption")?;
     ensure!(
         match (&selected, &current_code) {
             (None, None) => true,
@@ -228,7 +241,12 @@ pub(super) fn finish_start(ctx: &Ctx, id: &str) -> Result<Task> {
                 expected.head == actual.head
                     && expected.state_sha256 == actual.state_sha256
                     && (expected.run == actual.run
-                        || (expected.run.is_none() && actual.run == seed)),
+                        || (expected.run.is_none() && actual.run == final_transfer.seed_run)
+                        || (actual.run.is_none()
+                            && final_transfer
+                                .continuation_seed
+                                .as_ref()
+                                .is_some_and(|seed| seed.selected == *expected))),
             _ => false,
         },
         "handoff_stale_choice: source changed during adoption; refresh/reconcile"
@@ -288,7 +306,10 @@ pub(super) fn finish_start(ctx: &Ctx, id: &str) -> Result<Task> {
             task.status = Status::Review;
         } else if transfer.goal == Goal::PlanContinue && task.plans.is_empty() {
             task.status = Status::Ready;
-        } else if task.runs.is_empty() {
+        } else if task.runs.is_empty()
+            || (transfer.continuation_seed.is_some()
+                && transfer.seed_run == Some(format!("R{}", task.runs.len() + 1)))
+        {
             task.status = if task.plans.last().is_some_and(|p| p.approval.is_none()) {
                 Status::Review
             } else {
