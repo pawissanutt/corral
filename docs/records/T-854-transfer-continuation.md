@@ -1,6 +1,6 @@
 # T-854 — Co-work transfer and continuation
 
-**Pre-resubmission snapshot:** integrated bounded checks pass as recorded below. The first quick gate failed on missing new-command rows in the exhaustive CLI-classification contract; that inventory is now repaired and its three tests pass. The run's subsequent authoritative gate result is recorded separately. Q3 selects an explicit unsupported/held shared-PM boundary, not successful settlement or an acceptance waiver. This is not a rollout claim.
+**Review round 1 active:** the previous quick gate passed, but review found a broken real planner-dispatch seam (F1) and unmet positive shared-PM settlement (F2). F1 now has a failing-first service regression and repaired ordered checkpoint path; F2 remains unfinished under Q4's bounded per-review enforcement decision. Earlier delivery/complete state is superseded; no new-round gate or rollout is claimed.
 
 ## Scope
 
@@ -57,6 +57,14 @@ After the clean current-main rebase: normal workflow **35/35, 12.27s**; independ
 Integrated core/ops production Clippy passes; CLI Clippy passed before rebase and the integrated CLI compiled/executed afterward. LSP had clean results, expected inactive-platform hints, bounded timeouts and unsupported Python/TOML; actual fresh compiler/tests provide the stated fallback. No universal clean-LSP claim. The integrated size audit exposed an 802-SLOC recovery file; moving unchanged recovery-message binding into the existing notice module restores headroom without new behavior/tests. Its first test compile caught a removed test-only parent import, which was restored rather than suppressing the error.
 
 One new owner-CLI E2E is retained. Variants are cheaper service/model contracts or extensions of existing journeys; restart cases are explicitly slow with an owning handoff trigger. Fixtures are small, with no history/load burners or paid providers. The first gate reported **29 added registrations (27 Rust, 2 Bun)**, all then unmeasured because fail-fast stopped before their execution; its initial `0.000s measured` is **not** zero added cost. Final observed added seconds remain a gate-artifact fact. The classification repair extends the existing table with all 11 handoff leaves, each `Refused` with a valid CLI shape and unchanged-workspace assertion; no new registration, relaxed assertion, production permission change or quarantine edit. Its suite passes **3/3, 3.65s**. The resubmission audit covers **80 changed Rust files, maximum 799 SLOC** (including the previously untouched inventory test). Q3 adds one 0.18s service contract, not another E2E or successful-drain claim.
+
+## Review round 1
+
+F1 reproduced `handoff_stop: admission is not held` through actual planner dispatch. Planner preparation now verifies the exact admitted Plan scope, temporarily closes admission under the existing launch/controller/gate leases, uses the unchanged held-stop settlement and draft checkpoint, then revalidates run/spec/driver/goal and ordinary admission inside the hold-release transaction. Failure/crash retains a visible held wait; Save/TakeBack's required hold was not weakened. One small service regression covers initial research/raw-draft manual dispatch, inert stopped-planner Save/continuation and normal automatic dispatch, exact latest draft in the next prompt, same history and no release of Saved. The engine records commands without executing an agent; this is not physical native-planner settlement proof.
+
+The regression failed first, then passes in **3.42s**; workflow **37/37, 17.91s** and production ops Clippy pass. The intermediate automatic test used invalid empty policy inputs; replacing them with the normal `availability` source preserved the Started/history/hold assertions. Production LSP is clean; test LSP timeouts were covered by actual compilation. One new service registration, no CLI E2E or crash matrix.
+
+F2 is still blocking. Q4 (`T-854_R1#18`) permits only the minimum enforced per-review PM execution/write-context and positive drain needed for existing A16, reusing existing ledger/journal and keeping unrelated PM contexts alive. It does not authorize a generic grant/audit system, arbitrary containment, global PM pause, transfer consent, UI expansion or an A16 waiver. The existing read-only trace must be consumed before choosing the smaller supported route/host implementation. Historical/unbound contexts remain held.
 
 ## Unresolved / not verified
 
