@@ -288,7 +288,7 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                         .generation(n)
                         .and_then(|g| g.connection.as_ref())
                         .map(|b| b.connection)
-                        .or_else(|| match current.provider.as_deref() {
+                        .or(match current.provider.as_deref() {
                             Some("anthropic") => {
                                 Some(corral_core::connection::ConnectionId::AnthropicSubscription)
                             }
