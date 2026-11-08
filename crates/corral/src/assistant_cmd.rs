@@ -52,6 +52,8 @@ pub enum AssistantCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Owner-only co-work transfer and current-revision continuation (JSON)
+    Handoff(crate::assistant_handoff_cmd::HandoffArgs),
     /// Scratch worktrees for spikes and co-work
     Scratch(ScratchArgs),
     /// Write permissions the owner gave a session: its grants, settings and revocation
@@ -199,6 +201,7 @@ fn status(ended: bool, live: bool) -> &'static str {
 
 pub fn run(ctx: &Ctx, args: AssistantArgs) -> Result<()> {
     match args.cmd {
+        AssistantCmd::Handoff(args) => crate::assistant_handoff_cmd::run(ctx, args)?,
         AssistantCmd::Create {
             profile,
             focus,

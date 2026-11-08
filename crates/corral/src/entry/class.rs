@@ -84,7 +84,9 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
         Cmd::Assistant(args) => match &args.cmd {
             AssistantCmd::List { .. } | AssistantCmd::Show { .. } => Read,
             AssistantCmd::Summary { id, .. } => file_if_own(id == session),
-            AssistantCmd::Create { .. } | AssistantCmd::End { .. } => Refused,
+            AssistantCmd::Create { .. } | AssistantCmd::End { .. } | AssistantCmd::Handoff(_) => {
+                Refused
+            }
             // Grants come only from the owner's dialog answer; a shell may only end its own.
             AssistantCmd::Permissions(args) => match &args.cmd {
                 None => Read,
@@ -359,6 +361,24 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
 mod planning_tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn managed_assistant_cannot_reach_owner_handoff_entry() {
+        let cli = crate::Cli::try_parse_from([
+            "corral",
+            "assistant",
+            "handoff",
+            "commit",
+            "--choice",
+            "missing.json",
+            "--digest",
+            "bound-choice",
+        ])
+        .unwrap();
+        let cmd = cli.cmd.unwrap();
+        assert_eq!(of(&cmd, "A-1"), CommandClass::Refused);
+        assert!(!planning_safe(&cmd));
+    }
 
     #[test]
     fn planning_projects_only_closed_reads_and_the_authenticated_operation_channel() {
