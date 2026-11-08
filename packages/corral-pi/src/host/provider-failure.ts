@@ -90,7 +90,11 @@ export function normalizeFailure(connection: ConnectionId, input: FailureInput, 
 
 export const failureClass = (failure: ProviderFailure): string => failure.category === "transient" ? "rate_limit"
   : failure.category === "subscription_quota" ? "quota" : failure.category;
-export const failureSummary = (failure: ProviderFailure): string => `${failure.connection}: ${failure.category} (${failure.scope})`;
+export function failureSummary(failure: ProviderFailure, message?: string): string {
+  // Keep only fixed local invariant codes, never the raw suffix (which may be provider text).
+  const diagnostic = message?.match(/^(claude_compaction_conflict|claude_query_incomplete):/)?.[1];
+  return `${diagnostic ? `${diagnostic}: ` : ""}${failure.connection}: ${failure.category} (${failure.scope})`;
+}
 
 export class NativeFailure extends Error {
   constructor(readonly failure: ProviderFailure) { super(failureSummary(failure)); }
@@ -139,7 +143,7 @@ export function withProviderFailures(connection: ConnectionId, stream: StreamFun
           const message = event.error as typeof event.error & FailureMessage;
           const failure = message.providerFailure ?? normalizeFailure(connection, http ?? { message: message.errorMessage });
           message.providerFailure = failure;
-          message.errorMessage = failureSummary(failure);
+          message.errorMessage = failureSummary(failure, message.errorMessage);
         }
         yield event;
       }

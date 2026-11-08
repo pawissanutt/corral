@@ -20,7 +20,7 @@ import {
 import { buildPromptBlocks, promptStream } from "./prompt.ts";
 import { DEFAULT_CACHE_TTL, resolveCacheRetention, type ClaudeCacheRetention } from "./cache-policy.ts";
 import { loadSdk, resolveClaudeCode } from "./sdk.ts";
-import { NativeFailure, normalizeFailure, type ProviderFailure } from "../host/provider-failure.ts";
+import { NativeFailure, failureSummary, normalizeFailure, type ProviderFailure } from "../host/provider-failure.ts";
 import { HOST_TOOL_DENIAL_HOOKS, canUseTool, resolveSdkTools } from "./tools.ts";
 
 /** The Pi API id of this lane; Anthropic models are re-addressed to it by the restricted provider. */
@@ -227,7 +227,8 @@ export function streamClaudeSdk(
         message: error instanceof Error ? error.message : undefined,
       });
       (output as typeof output & { providerFailure: ProviderFailure }).providerFailure = failure;
-      output.errorMessage = output.stopReason === "aborted" ? "Operation aborted" : new NativeFailure(failure).message;
+      output.errorMessage = output.stopReason === "aborted" ? "Operation aborted"
+        : failureSummary(failure, error instanceof Error ? error.message : undefined);
       recordCache();
       stream.push({ type: "error", reason: output.stopReason, error: output });
     } finally {

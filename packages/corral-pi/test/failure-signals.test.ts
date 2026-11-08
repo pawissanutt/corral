@@ -46,16 +46,19 @@ test("per-request structured evidence wins over Codex's quota-looking 429 rewrit
       await options!.fetch!("https://chatgpt.com/backend-api/codex/responses");
       const error = emptyOutput(current);
       error.stopReason = "error";
-      error.errorMessage = "You have hit your ChatGPT usage limit. sk-secret";
+      error.errorMessage = current.id === "local-invariant"
+        ? "claude_compaction_conflict: sk-secret" : "You have hit your ChatGPT usage limit. sk-secret";
       output.push({ type: "error", reason: "error", error }); output.end();
     })();
     return output;
   };
   const run = withProviderFailures("openai-subscription", source);
   for (const type of ["usage_limit_reached", "rate_limit_exceeded", "new_error"] as const) {
-    const stream = run(model, normalizeContext({ messages: [] }), { fetch: async () => Response.json({ error: { type } }, { status: type === "new_error" ? 418 : 429 }) });
+    const stream = run(type === "new_error" ? { ...model, id: "local-invariant" } : model, normalizeContext({ messages: [] }),
+      { fetch: async () => Response.json({ error: { type } }, { status: type === "new_error" ? 418 : 429 }) });
     const result = await stream.result() as FailureMessage;
     expect(result.providerFailure?.category).toBe(type === "usage_limit_reached" ? "subscription_quota" : type === "rate_limit_exceeded" ? "transient" : "unknown");
     expect(JSON.stringify(result)).not.toContain("sk-secret");
+    if (type === "new_error") expect(result.errorMessage?.split(":")[0]).toBe("claude_compaction_conflict");
   }
 });
