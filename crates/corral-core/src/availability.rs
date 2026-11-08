@@ -49,19 +49,45 @@ pub enum FailureCategory {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum FailureScope { Account, Model, Request, Unknown }
+pub enum FailureScope {
+    Account,
+    Model,
+    Request,
+    Unknown,
+}
 
 impl ProviderFailure {
     pub fn validate(&self) -> Result<()> {
         ensure!(self.version == 1, "unsupported provider failure version");
-        ensure!(self.request_ref.as_ref().is_none_or(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))), "invalid provider request reference");
-        ensure!(self.retry_after_secs.is_none_or(|s| s <= 31_536_000), "invalid provider retry hint");
+        ensure!(
+            self.request_ref.as_ref().is_none_or(|s| s.len() == 64
+                && s.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))),
+            "invalid provider request reference"
+        );
+        ensure!(
+            self.retry_after_secs.is_none_or(|s| s <= 31_536_000),
+            "invalid provider retry hint"
+        );
         if self.category == FailureCategory::SubscriptionQuota {
-            ensure!(self.connection.billing() == crate::connection::BillingMode::Subscription
-                && matches!(self.scope, FailureScope::Account | FailureScope::Model), "quota evidence requires a subscription and known scope");
+            ensure!(
+                self.connection.billing() == crate::connection::BillingMode::Subscription
+                    && matches!(self.scope, FailureScope::Account | FailureScope::Model),
+                "quota evidence requires a subscription and known scope"
+            );
         }
-        ensure!(self.reset_at.is_none() || self.category == FailureCategory::SubscriptionQuota, "only quota evidence carries a reset");
-        ensure!(self.retry_after_secs.is_none() || matches!(self.category, FailureCategory::SubscriptionQuota | FailureCategory::Transient), "only retryable evidence carries a retry hint");
+        ensure!(
+            self.reset_at.is_none() || self.category == FailureCategory::SubscriptionQuota,
+            "only quota evidence carries a reset"
+        );
+        ensure!(
+            self.retry_after_secs.is_none()
+                || matches!(
+                    self.category,
+                    FailureCategory::SubscriptionQuota | FailureCategory::Transient
+                ),
+            "only retryable evidence carries a retry hint"
+        );
         Ok(())
     }
 
@@ -82,19 +108,29 @@ impl ProviderFailure {
 
     /// No paid billing, auth, request, budget or unknown error is an availability workaround.
     pub fn availability(&self) -> Option<AvailabilityClass> {
-        if self.validate().is_err() { return None; }
+        if self.validate().is_err() {
+            return None;
+        }
         match self.category {
             FailureCategory::SubscriptionQuota => Some(AvailabilityClass::QuotaExhausted {
-                account: self.scope == FailureScope::Account, reset_at: self.reset_at,
+                account: self.scope == FailureScope::Account,
+                reset_at: self.reset_at,
             }),
-            FailureCategory::Transient => Some(AvailabilityClass::Transient { retry_after_secs: self.retry_after_secs }),
+            FailureCategory::Transient => Some(AvailabilityClass::Transient {
+                retry_after_secs: self.retry_after_secs,
+            }),
             FailureCategory::Unavailable => Some(AvailabilityClass::Unavailable),
             _ => None,
         }
     }
 
     pub fn summary(&self) -> String {
-        format!("{}: {} ({:?})", self.connection.id(), self.class(), self.scope)
+        format!(
+            "{}: {} ({:?})",
+            self.connection.id(),
+            self.class(),
+            self.scope
+        )
     }
 }
 

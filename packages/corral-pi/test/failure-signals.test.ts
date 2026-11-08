@@ -31,6 +31,8 @@ test("native failure evidence distinguishes subscription exhaustion from 429 and
     ["anthropic-subscription", { sdk_error: "rate_limit", rate_limit: { status: "rejected", rateLimitType: "five_hour", resetsAt: 1_800_000_600 } }, "subscription_quota"],
     ["anthropic-subscription", { sdk_error: "billing_error", rate_limit: { status: "rejected", rateLimitType: "five_hour" } }, "billing"],
     ["anthropic-subscription", { sdk_error: "unknown", rate_limit: { status: "rejected", rateLimitType: "novel_period" } }, "unknown"],
+    ["anthropic-subscription", { sdk_error: "rate_limit", rate_limit: { status: "rejected", rateLimitType: "novel_period" } }, "unknown"],
+    ["anthropic-subscription", { sdk_error: "rate_limit", rate_limit: { status: "rejected", rateLimitType: "five_hour", errorCode: "credits_required" } }, "billing"],
   ] as const;
   for (const [connection, input, category] of cases) expect(normalizeFailure(connection, input, at).category).toBe(category);
   expect(JSON.stringify(codex)).not.toContain("secret");

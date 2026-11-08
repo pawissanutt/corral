@@ -48,11 +48,12 @@ export function normalizeFailure(connection: ConnectionId, input: FailureInput, 
   else if (input.message?.startsWith("credentials_unavailable:") || input.status === 401 || input.status === 403
       || has("authentication_failed", "authentication_error", "invalid_api_key", "oauth_org_not_allowed", "cloud_credential_error", "account_on_hold", "verification_required")) {
     category = "auth"; scope = "account";
-  } else if (has("billing_error", "insufficient_quota", "credit_balance_too_low")
+  } else if (input.status === 402 || has("billing_error", "insufficient_quota", "credit_balance_too_low")
       || connection === "anthropic-api" && has("invalid_request_error") && typeof error.message === "string"
         && /credit balance is too low/i.test(error.message)
       || connection === "anthropic-subscription" && rate.status === "rejected"
-        && (rate.rateLimitType === "overage" || rate.isUsingOverage === true || rate.overageInUse === true)) {
+        && (rate.rateLimitType === "overage" || rate.isUsingOverage === true || rate.overageInUse === true
+          || rate.errorCode === "credits_required" || rate.overageDisabledReason === "out_of_credits" || rate.limitScope === "group_pool")) {
     category = "billing"; scope = "account";
   } else if (has("invalid_request", "invalid_request_error", "context_length_exceeded", "content_filter", "max_output_tokens")
       || input.terminal_reason === "prompt_too_long" || input.terminal_reason === "image_error") {
@@ -62,17 +63,22 @@ export function normalizeFailure(connection: ConnectionId, input: FailureInput, 
   } else if (connection === "openai-subscription" && has("usage_limit_reached")) {
     category = "subscription_quota"; scope = "account"; resetAt = reset(error.resets_at);
   } else if (connection === "anthropic-subscription" && (input.sdk_error === "rate_limit" || input.terminal_reason === "blocking_limit")
-      && rate.status === "rejected" && ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "seven_day_overage_included"].includes(String(rate.rateLimitType))) {
+      && rate.status === "rejected" && rate.limitScope === undefined && ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "seven_day_overage_included"].includes(String(rate.rateLimitType))) {
     category = "subscription_quota";
     scope = rate.rateLimitType === "seven_day_opus" || rate.rateLimitType === "seven_day_sonnet" ? "model" : "account";
     resetAt = reset(rate.resetsAt);
+  } else if (connection === "anthropic-subscription" && rate.status === "rejected" && input.sdk_error === "rate_limit") {
+    // A newly introduced subscription limit shape is not proof of exhaustion.
+    category = "unknown";
   } else if (has("rate_limit", "rate_limit_error", "rate_limit_exceeded", "overloaded", "overloaded_error", "server_error")
       || input.status === 429 || input.status !== undefined && input.status >= 500 && input.status <= 599) category = "transient";
   else if (input.status === 400 || input.status === 422) { category = "invalid_request"; scope = "request"; }
   if (input.terminal_reason === "budget_exhausted") { category = "local_budget"; scope = "request"; }
   const retry = input.headers?.get("retry-after");
-  const retrySeconds = retry === null || retry === undefined ? undefined : /^\d+$/.test(retry)
-    ? seconds(Number(retry)) : seconds(Math.max(0, Math.ceil((Date.parse(retry) - now) / 1000)));
+  const retryMs = input.headers?.get("retry-after-ms");
+  const retrySeconds = retryMs !== null && retryMs !== undefined && /^\d+$/.test(retryMs) ? seconds(Math.ceil(Number(retryMs) / 1000))
+    : retry === null || retry === undefined ? undefined : /^\d+$/.test(retry)
+      ? seconds(Number(retry)) : seconds(Math.max(0, Math.ceil((Date.parse(retry) - now) / 1000)));
   const request = input.request_id ?? input.headers?.get("x-request-id") ?? input.headers?.get("request-id");
   return { version: 1, connection, category, scope,
     ...(retrySeconds !== undefined && (category === "transient" || category === "subscription_quota") ? { retry_after_secs: retrySeconds } : {}),

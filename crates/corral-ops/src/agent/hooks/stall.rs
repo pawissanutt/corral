@@ -1,9 +1,9 @@
 //! Provider-stall seam. A corral-pi host reports provider errors as `agent_provider_error`
 //! events that feed provider_stall directly, so no screen or session-log scan runs for it: the
-//! stall is the latest turn of the current generation when that turn ended `provider_failed`
-//! with a transient class. provider_stall's own backoff state machine and state file drive it,
-//! and each due retry is a bounded `turn_nudge` in the container's inbox. An `auth` failure is
-//! never retried; the sync hook sends it to the owner. Owner: T-252 child recovery.
+//! stall is the latest current-generation turn ended `provider_failed`, classified from typed
+//! transport evidence (legacy hosts retain their string classes). provider_stall's backoff and
+//! state drive bounded transient `turn_nudge`s; confirmed quota escalates without wasting retries.
+//! Non-availability failures stop without a retry or paid launch. Owner: T-252 child recovery.
 use anyhow::{Context, Result};
 use corral_core::agent::{self, AgentTurn, ContainerRef, TurnClass};
 use corral_core::inbox::{Inbox, MessageBinding, Post, Urgency};
@@ -33,22 +33,43 @@ fn run_key(task: &str, container: &ContainerRef) -> Result<String> {
     Ok(format!("{task}-{run}"))
 }
 
-/// The stall of a container: its current generation's latest turn, ended `provider_failed` with
-/// a transient class, and no turn after it.
+/// Current-generation availability evidence, never pane/session prose. A later turn supersedes it.
 fn stall(n: u32, latest: Option<&AgentTurn>) -> Option<Stall> {
     let latest = latest?;
     let class = latest.provider_error.as_deref()?;
     let failed = latest.class == Some(TurnClass::ProviderFailed);
-    let at = latest
-        .ended
-        .filter(|_| failed && TRANSIENT.contains(&class))?;
-    Some(Stall {
-        at,
-        message: format!("provider {class} in turn {n}/{}", latest.seq),
-        class: AvailabilityClass::Transient {
+    let at = latest.ended.filter(|_| failed)?;
+    let availability = match &latest.provider_failure {
+        Some(failure) => failure.availability()?,
+        None if TRANSIENT.contains(&class) => AvailabilityClass::Transient {
             retry_after_secs: None,
         },
+        None => return None,
+    };
+    Some(Stall {
+        at,
+        message: latest
+            .provider_failure
+            .as_ref()
+            .map(|f| f.summary())
+            .unwrap_or_else(|| format!("provider {class} in turn {n}/{}", latest.seq)),
+        class: availability,
     })
+}
+
+/// New hosts fail closed for non-availability errors; legacy transient/auth handling is retained.
+fn terminal_failure(latest: Option<&AgentTurn>) -> Option<String> {
+    let latest =
+        latest.filter(|t| t.class == Some(TurnClass::ProviderFailed) && t.ended.is_some())?;
+    if let Some(failure) = &latest.provider_failure {
+        return failure
+            .availability()
+            .is_none()
+            .then(|| format!("{}; no automatic retry or paid fallback", failure.summary()));
+    }
+    let class = latest.provider_error.as_deref()?;
+    (!TRANSIENT.contains(&class) && class != "auth")
+        .then(|| format!("provider {class}; no automatic retry or paid fallback"))
 }
 
 /// A reviewer whose current generation's latest turn failed provider authentication goes to the
@@ -211,11 +232,23 @@ pub(crate) fn advance_agent<T: TaskRef + ?Sized>(
         task: task.id().clone(),
         run: run.id.clone(),
     };
-    let (step, state) = tick(ctx, task, &container, now)?;
-    let (Step::Escalate, Some(state)) = (step, state) else {
-        return Ok(None);
+    let immediate = match task.agent_head(&container)? {
+        Some(host) => terminal_failure(
+            task.latest_agent_turn(&container, host.binding.generation)?
+                .as_ref(),
+        ),
+        None => None,
     };
-    let reason = state.reason();
+    let reason = if let Some(reason) = immediate {
+        STALLS.delete(&ctx.store, &run_key(task.id(), &container)?)?;
+        reason
+    } else {
+        let (step, state) = tick(ctx, task, &container, now)?;
+        let (Step::Escalate, Some(state)) = (step, state) else {
+            return Ok(None);
+        };
+        state.reason()
+    };
     let from = *task.status();
     let saved = ctx.store.try_update_head(task.id(), |t| {
         if t.status != from {
@@ -229,9 +262,13 @@ pub(crate) fn advance_agent<T: TaskRef + ?Sized>(
         };
         current.blocked_excerpt = Some(reason.clone());
         t.status = Status::NeedsMe;
-        ctx.store.log_event(Some(task.id()), "provider_escalated", json!({
-            "key": run_key(task.id(), &container)?, "reason": reason, "attempts": state.attempts,
-        }))?;
+        ctx.store.log_event(
+            Some(task.id()),
+            "provider_escalated",
+            json!({
+                "key": run_key(task.id(), &container)?, "reason": reason,
+            }),
+        )?;
         if from != Status::NeedsMe {
             ctx.store.log_event(
                 Some(task.id()),
@@ -266,11 +303,14 @@ pub(crate) fn advance_reviewer(
     };
     let latest = task.latest_agent_turn(container, host.binding.generation)?;
     let key = run_key(&task.id, container)?;
-    if let Some(reason) = auth_failed(host.binding.generation, latest.as_ref(), container) {
+    if let Some(reason) = auth_failed(host.binding.generation, latest.as_ref(), container)
+        .or_else(|| terminal_failure(latest.as_ref()))
+    {
+        STALLS.delete(&ctx.store, &key)?;
         ctx.store.log_event(
             Some(&task.id),
             "provider_escalated",
-            json!({"key":key,"reason":reason,"class":"auth"}),
+            json!({"key":key,"reason":reason,"class":latest.as_ref().and_then(|t| t.provider_error.as_deref())}),
         )?;
         return Ok(Drive::Escalated(reason));
     }

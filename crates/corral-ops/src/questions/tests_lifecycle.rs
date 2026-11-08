@@ -139,6 +139,7 @@ fn refused_done_cancelled_turn_and_host_loss_leave_questions_pending() {
                 ended: Some(Timestamp::now()),
                 class: Some(TurnClass::Cancelled),
                 provider_error: None,
+                provider_failure: None,
                 provider: None,
                 model: None,
             });
@@ -416,6 +417,7 @@ fn awaiting_turn(fx: &Fx, id: &str) {
                 ended: Some(Timestamp::now()),
                 class: Some(TurnClass::AwaitingAnswer),
                 provider_error: None,
+                provider_failure: None,
                 provider: None,
                 model: None,
             });

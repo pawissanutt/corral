@@ -1187,10 +1187,10 @@ export class HostSession {
         this.options.events.emit("queue", { steering: event.steering.length, follow_up: event.followUp.length });
       } else if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") {
         const message = event.message.errorMessage ?? "";
-        if ((!message.includes("budget_exhausted") && !message.includes(": local_budget")) || !this.budget.state().stopped) {
-          const provider = session.model?.provider as ProviderId | undefined;
-          const connection = resolveConnection(provider ?? this.options.provider ?? "openai-codex", this.options.binding?.connection);
-          const failure = messageFailure(event.message, connection);
+        const provider = session.model?.provider as ProviderId | undefined;
+        const connection = resolveConnection(provider ?? this.options.provider ?? "openai-codex", this.options.binding?.connection);
+        const failure = messageFailure(event.message, connection);
+        if ((!message.includes("budget_exhausted") && failure.category !== "local_budget") || !this.budget.state().stopped) {
           this.report("provider_error", { class: provider === "amazon-bedrock" || provider === "llama.cpp"
             ? providerErrorClass(message) : failureClass(failure),
             ...(provider === "amazon-bedrock" || provider === "llama.cpp" ? {} : { failure }) });
