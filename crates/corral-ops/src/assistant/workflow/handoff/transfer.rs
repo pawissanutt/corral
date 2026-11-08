@@ -334,6 +334,7 @@ pub(crate) fn commit(
             Ok(())
         })?;
     crate::agent::failpoint("handoff_source_reserved");
+    super::source_boundary::attest(ctx, &id)?;
     // Revalidate AFTER reservation. External edits cannot silently become the chosen bytes.
     let prepared = super::recover(&ctx.store, &id)?;
     let mut journal = super::read_journal(&ctx.store, &id)?.context("reservation missing")?;
@@ -459,7 +460,7 @@ pub(crate) fn commit(
         let mut journal = super::read_journal(&ctx.store, &id)?.context("journal missing")?;
         let transfer = journal
             .transfer
-            .as_mut()
+            .as_ref()
             .context("task publication missing")?;
         ensure!(
             task.contract_revision()? == transfer.contract_revision,
@@ -467,6 +468,11 @@ pub(crate) fn commit(
         );
         ctx.store
             .stage_assistant_container(&journal.assistant, |container, _| {
+                journal
+                    .source_boundary
+                    .as_ref()
+                    .context("handoff_source_unsupported: current source drain proof missing")?
+                    .require_current(&ctx.store, container, &journal)?;
                 let index = container
                     .workflow
                     .as_mut()
@@ -503,6 +509,7 @@ pub(crate) fn commit(
             .as_mut()
             .context("completion missing")?
             .driver = CompletionDriver::Board;
+        let transfer = journal.transfer.as_mut().context("transfer disappeared")?;
         transfer.ownership_committed = true;
         transfer.notification_pending = true;
         journal.waiting = None;

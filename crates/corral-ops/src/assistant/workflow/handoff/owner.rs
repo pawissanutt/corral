@@ -187,7 +187,9 @@ pub fn read(ctx: &Ctx, id: &str) -> Result<Value> {
     let journal =
         super::read_journal(&ctx.store, id)?.context("handoff: preview is not yet reserved")?;
     let Some(transfer) = &journal.transfer else {
-        return Ok(json!({"transfer":journal.id,"state":"preparing","owner":"local_fenced"}));
+        return Ok(
+            json!({"transfer":journal.id,"state":"preparing","owner":"local_fenced", "waiting":journal.waiting, "source_drained":journal.source_boundary.is_some()}),
+        );
     };
     let task = ctx.store.get(&transfer.task)?;
     let waiting = match transfer.disposition {

@@ -103,6 +103,7 @@ test("a stale generation, an unknown command and an oversize frame are refused",
   const client = await connect(path);
   expect((await client.request(frame("get_state", {}, { generation: 2 }))).error?.code).toBe("stale_generation");
   expect((await client.request(frame("queue_state"))).error?.code).toBe("capability_unavailable");
+  expect((await client.request(frame("handoff_drain", {}))).error?.code).toBe("source_boundary_unavailable");
   expect((await client.request(frame("exec", {}))).error?.code).toBe("unknown_command");
   const big = await connect(path);
   const reply = await big.raw(JSON.stringify(frame("submit_input", { text: "x".repeat(70_000) })));

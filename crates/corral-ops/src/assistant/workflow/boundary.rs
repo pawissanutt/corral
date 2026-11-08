@@ -87,6 +87,26 @@ pub fn require_ordinary(
     Ok(())
 }
 
+/// A new source host cannot reinterpret a transfer reservation or Board ownership
+/// as local edit authority. Planning/local recovery may resume under the same policy.
+pub fn require_resume(store: &Store, session: &str, container: &AssistantContainer) -> Result<()> {
+    container.validate_protocol()?;
+    if let Some(index) = &container.workflow {
+        super::read_state(store, session, container, 0, 1)?;
+        ensure!(
+            index.current.owner == ScopeOwner::Local
+                && !matches!(
+                    index.current.phase,
+                    WorkflowPhase::HandoffPreparing
+                        | WorkflowPhase::HandoffReconciling
+                        | WorkflowPhase::BoardOwned
+                ),
+            "assistant_scope_owned: return or reconcile this scope before resuming its source host"
+        );
+    }
+    Ok(())
+}
+
 pub fn activities(store: &Store, session: &str) -> Result<Vec<Activity>> {
     Ok(store.record(LEDGER, session)?.unwrap_or_default())
 }

@@ -40,6 +40,8 @@ pub struct CompatPins {
     pub range: String,
     /// Catalog keys the installed host implements; a manifest without the list implements none.
     pub capabilities: BTreeSet<String>,
+    /// Prelaunch code compatibility only, never proof that a running source drained.
+    pub source_boundary: u64,
 }
 
 pub fn read_compat(assets: &Path) -> Result<CompatPins, LaunchRefusal> {
@@ -64,6 +66,10 @@ pub fn read_compat(assets: &Path) -> Result<CompatPins, LaunchRefusal> {
         .map(|range| CompatPins {
             range,
             capabilities,
+            source_boundary: value
+                .as_ref()
+                .and_then(|v| v["source_boundary"].as_u64())
+                .unwrap_or(0),
         })
         .ok_or_else(|| {
             refuse(
@@ -74,6 +80,27 @@ pub fn read_compat(assets: &Path) -> Result<CompatPins, LaunchRefusal> {
                 ),
             )
         })
+}
+
+/// A protected source can only open hosts whose asset contract implements the
+/// internal boundary protocol. Publication still needs an actual bound-host drain
+/// acknowledgement; this manifest marker alone never proves quiescence.
+pub(crate) fn require_source_boundary(
+    store: &corral_core::Store,
+    container: &corral_core::agent::ContainerRef,
+    assets: &Path,
+) -> Result<()> {
+    if let Some(session) = container.assistant() {
+        let source = store.get_assistant_container(session)?;
+        crate::assistant::workflow::boundary::require_resume(store, session, &source)?;
+        if source.workflow.is_some() {
+            anyhow::ensure!(
+                read_compat(assets)?.source_boundary == 1,
+                "source_boundary_unavailable: upgrade source host assets before resuming this scoped assistant"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// `(code, detail)` for each missing module, role first, each naming its owning child.

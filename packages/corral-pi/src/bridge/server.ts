@@ -26,6 +26,8 @@ export interface BridgeHandlers {
   questions?(updates: readonly QuestionUpdate[]): Record<string, unknown>;
   queueState?(limit: number): Record<string, unknown>;
   queueWithdraw?(key: string, op_key: string): Record<string, unknown>;
+  /** Internal C3 proof only; absent handlers/legacy hosts fail closed. */
+  handoffDrain?(args: Record<string, unknown>): Promise<Record<string, unknown>>;
 }
 
 export interface BridgeServerOptions {
@@ -148,6 +150,9 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
         return options.handlers.hello();
       case "get_state":
         return options.handlers.state();
+      case "handoff_drain":
+        if (!options.handlers.handoffDrain) throw new BridgeRefusal("source_boundary_unavailable", "this host cannot attest source drain");
+        return options.handlers.handoffDrain(frame.args);
       case "submit_input": {
         const input = parseSubmitInput(frame.args);
         const result = await submit(input, frame.id);
