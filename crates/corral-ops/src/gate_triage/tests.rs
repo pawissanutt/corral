@@ -318,7 +318,10 @@ fn delegated_pm_attributes_settled_needs_me_without_coding_or_gate_retry() {
     let state = diagnose(&reopened, &task.id, report.clone(), false).unwrap();
     assert_eq!(state.failures[0].gate, failed);
     assert_eq!(state.failures[0].resolved_by.as_ref(), Some(&repaired));
-    assert_eq!(state.failures[0].diagnoses, [report.clone()]);
+    assert_eq!(
+        state.failures[0].diagnoses.as_slice(),
+        std::slice::from_ref(&report)
+    );
     assert_eq!(state.diagnostic_history, ["repaired-green"]);
     assert_eq!(state.diagnostic_attempt.as_deref(), Some("repaired-green"));
     assert!(!state.retry_requested);
