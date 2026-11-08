@@ -402,6 +402,7 @@ pub(crate) fn commit(
                 consumed_choices: vec![digest.into()],
                 code_pin: None,
                 fresh_seed: false,
+                continuation_seed: None,
                 draft_predecessor: None,
                 imported_plan_run: None,
             });

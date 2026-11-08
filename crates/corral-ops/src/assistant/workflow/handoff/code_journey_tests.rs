@@ -239,6 +239,53 @@ fn dirty_saved_seed_returns_exact_layers_and_branch_without_residual_intent() {
     .unwrap();
     let latest =
         Snapshot::capture(&f.ctx.store, &run.worktree, &run.base_sha, &run.branch).unwrap();
+    let paused = continuation::save(
+        &f.ctx,
+        &running.id,
+        &running.contract_revision().unwrap(),
+        instruction(),
+    )
+    .unwrap();
+    assert_eq!(
+        paused.current_run().unwrap().outcome,
+        Some(corral_core::RunOutcome::Cancelled)
+    );
+    let next = continuation::preview(&f.ctx, &running.id, Goal::ImplementationPrepare).unwrap();
+    let resumed =
+        continuation::start(&f.ctx, &next, &next.digest().unwrap(), instruction()).unwrap();
+    assert!(
+        adopt::pending_seed(&f.ctx, &resumed).unwrap(),
+        "explicit continuation must seed the next run from the latest stopped work"
+    );
+    assert_eq!(resumed.status, corral_core::Status::Ready);
+    assert_eq!(
+        resumed.runs.len(),
+        1,
+        "the scheduler still owns next-run allocation"
+    );
+    let (seed, branch) = adopt::seed_path(&f.ctx, &resumed).unwrap();
+    adopt::verify_worktree(&latest, &seed, &branch).unwrap();
+    let mut next_run = resumed.current_run().unwrap().clone();
+    next_run.id = "R2".into();
+    next_run.worktree = seed;
+    next_run.branch = branch;
+    assert_eq!(
+        adopt::start_head(
+            &f.ctx,
+            &resumed,
+            &corral_core::RunHead::of(&next_run).unwrap()
+        )
+        .unwrap(),
+        Some(latest.state.head.clone())
+    );
+    assert!(
+        crate::operating::require(
+            &f.ctx.store,
+            &resumed,
+            corral_core::OperatingActionKind::Dispatch
+        )
+        .is_ok()
+    );
     let taken = takeback::apply(
         &f.ctx,
         &running.id,

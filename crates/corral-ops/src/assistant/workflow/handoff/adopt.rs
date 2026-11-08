@@ -17,6 +17,9 @@ pub(crate) fn prepare_task(ctx: &Ctx, id: &str, prepared: &Prepared) -> Result<(
     if journal.transfer.as_ref().is_some_and(|t| t.adoption_proven) {
         return Ok(());
     }
+    if super::continuation_seed::adopt(ctx, id, prepared, &journal)? {
+        return Ok(());
+    }
     let goal = journal.transfer.as_ref().context("transfer missing")?.goal;
     super::attachments::publish(ctx, id, prepared)?;
     if !journal
@@ -386,7 +389,16 @@ pub(crate) fn seed_path(ctx: &Ctx, task: &Task) -> Result<(PathBuf, String)> {
     let journal = lifecycle::for_task(&ctx.store, task)?.context("transfer missing")?;
     // A returned scope can produce a newer seed before any coding run exists. Never
     // reuse/overwrite that earlier scope's worktree or private Git checkpoint refs.
-    let short = &journal.package.blob.hash().as_str()[..8];
+    let seed_hash = journal
+        .transfer
+        .as_ref()
+        .and_then(|t| t.continuation_seed.as_ref())
+        .map_or(journal.package.blob.hash().as_str(), |s| {
+            s.selected.state_sha256.as_str()
+        });
+    let short = seed_hash
+        .get(..8)
+        .context("handoff_seed_changed: invalid seed identity")?;
     let suffix = format!(
         "{}-handoff-{short}-r{}",
         task.id,
@@ -591,15 +603,14 @@ pub(crate) fn start_head(
         }
         return Ok(Some(run.base_sha.clone()));
     }
-    let snapshot = package
-        .snapshot
+    let snapshot = super::continuation_seed::snapshot(&journal, &package)
         .context("handoff_missing: reserved code seed is missing")?;
     ensure!(
         run.worktree.is_dir(),
         "handoff_missing: adopted code seed disappeared; no empty-source fallback"
     );
     verify_worktree(&snapshot, &run.worktree, &run.branch)?;
-    Ok(Some(snapshot.state.head))
+    Ok(Some(snapshot.state.head.clone()))
 }
 
 pub(crate) fn prompt(ctx: &Ctx, task: &impl TaskRef) -> Result<String> {
