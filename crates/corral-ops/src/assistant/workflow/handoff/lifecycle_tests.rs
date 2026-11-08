@@ -310,11 +310,37 @@ fn exact_formal_plan_keeps_actual_producer_and_review_only_never_allocates_codin
         task.unfinished_native_containers().unwrap().is_empty(),
         "an imported producer record did not launch a planner host"
     );
+    let changed = f
+        .ctx
+        .store
+        .update(&task.id, |task| {
+            task.body.push_str("\nOwner revised the task scope.");
+            Ok(())
+        })
+        .unwrap();
+    let planning = continuation::preview(&f.ctx, &task.id, Goal::PlanContinue).expect(
+        "stale prior plan is context for renewed planning, not a review-only freshness refusal",
+    );
+    assert_eq!(
+        planning.contract_revision,
+        changed.contract_revision().unwrap()
+    );
+    assert!(continuation::preview(&f.ctx, &task.id, Goal::PlanReviewOnly).is_err());
+    let continued = continuation::start(
+        &f.ctx,
+        &planning,
+        &planning.digest().unwrap(),
+        instruction(),
+    )
+    .unwrap();
+    assert!(admission::require(&f.ctx.store, &continued, Kind::Plan, false).is_ok());
+    assert_eq!(continued.plans, changed.plans);
+    assert!(continued.runs.is_empty());
     assert!(matches!(
         takeback::apply(
             &f.ctx,
             &task.id,
-            &task.contract_revision().unwrap(),
+            &changed.contract_revision().unwrap(),
             instruction()
         )
         .unwrap(),

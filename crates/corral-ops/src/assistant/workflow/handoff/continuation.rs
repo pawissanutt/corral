@@ -50,7 +50,13 @@ pub fn preview(ctx: &Ctx, id: &str, goal: Goal) -> Result<Choice> {
     );
     let plan = task
         .last_plan_head()?
-        .map(|_| lifecycle::review_target(&task))
+        .map(|_| {
+            if goal == Goal::PlanReviewOnly {
+                lifecycle::review_target(&task)
+            } else {
+                lifecycle::plan_identity(&task)
+            }
+        })
         .transpose()?;
     ensure!(
         goal != Goal::PlanReviewOnly || plan.is_some(),
@@ -110,7 +116,13 @@ pub(crate) fn start(
         );
         let actual_plan = task
             .last_plan_head()?
-            .map(|_| lifecycle::review_target(task))
+            .map(|_| {
+                if choice.goal == Goal::PlanReviewOnly {
+                    lifecycle::review_target(task)
+                } else {
+                    lifecycle::plan_identity(task)
+                }
+            })
             .transpose()?;
         ensure!(
             actual_plan == choice.plan,
