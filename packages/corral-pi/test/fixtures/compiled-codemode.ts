@@ -109,6 +109,7 @@ try {
   const peek = text("managed-peek"), waited = text("managed-wait");
   if (!peek.includes("BEFORE")) throw new Error(`managed peek missing BEFORE: ${peek}; wait: ${waited}`);
   if (peek.includes("AFTER")) throw new Error(`managed peek waited for completion: ${peek}`);
+  if (!waited.includes("BEFORE")) throw new Error(`managed wait missing buffered BEFORE: ${waited}`);
   if (!waited.includes("AFTER")) throw new Error(`managed wait missing AFTER: ${waited}`);
   console.log("COMPILED_COMMAND launch/yield/peek/wait passed");
   if (modules.length < 2 || !modules.every((module) => /\$bunfs|~BUN|%7EBUN/.test(module))) {
