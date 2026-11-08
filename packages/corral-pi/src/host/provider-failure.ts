@@ -41,6 +41,7 @@ export function normalizeFailure(connection: ConnectionId, input: FailureInput, 
   const codes = [error.code, error.type, input.sdk_error];
   const has = (...values: string[]) => codes.some(code => typeof code === "string" && values.includes(code));
   const rate = record(input.rate_limit);
+  const claudeLimitFailure = input.sdk_error === "rate_limit" || input.terminal_reason === "blocking_limit";
   let category: ProviderFailure["category"] = "unknown";
   let scope: ProviderFailure["scope"] = "unknown";
   let resetAt: string | undefined;
@@ -63,12 +64,12 @@ export function normalizeFailure(connection: ConnectionId, input: FailureInput, 
     category = "unavailable"; scope = "model";
   } else if (connection === "openai-subscription" && has("usage_limit_reached")) {
     category = "subscription_quota"; scope = "account"; resetAt = reset(error.resets_at);
-  } else if (connection === "anthropic-subscription" && (input.sdk_error === "rate_limit" || input.terminal_reason === "blocking_limit")
+  } else if (connection === "anthropic-subscription" && claudeLimitFailure
       && rate.status === "rejected" && rate.limitScope === undefined && ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "seven_day_overage_included"].includes(String(rate.rateLimitType))) {
     category = "subscription_quota";
     scope = rate.rateLimitType === "seven_day_opus" || rate.rateLimitType === "seven_day_sonnet" ? "model" : "account";
     resetAt = reset(rate.resetsAt);
-  } else if (connection === "anthropic-subscription" && rate.status === "rejected" && input.sdk_error === "rate_limit") {
+  } else if (connection === "anthropic-subscription" && rate.status === "rejected" && claudeLimitFailure) {
     // A newly introduced subscription limit shape is not proof of exhaustion.
     category = "unknown";
   } else if (has("rate_limit", "rate_limit_error", "rate_limit_exceeded", "overloaded", "overloaded_error", "server_error")
