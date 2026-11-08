@@ -1,7 +1,7 @@
-//! C2 preparation foundation. No task, dispatch, ownership transfer or native session fork
-//! is created here. C3 consumes the stable journal marker in its held-task/outbox transaction.
-//! Prepare slow Git/blob work outside assistant locks; reserve inside the authenticated
-//! assistant transaction after drain. Until C3 exists public assistant_handoff stays closed.
+//! Immutable C2 packages and C3 held transfer/continuation share one journal and epoch.
+//! Prepare slow Git/blob work outside assistant locks; close source admission and drain
+//! before ownership publication. Guarded owner entry uses these services; native handoff
+//! and BeginExecution choices stay unavailable without their authenticated consumer.
 use super::{Expected, compare, current, publication::load_artifact};
 use anyhow::{Context as _, Result, ensure};
 use corral_core::{

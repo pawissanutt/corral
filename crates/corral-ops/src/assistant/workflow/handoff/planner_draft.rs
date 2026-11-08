@@ -353,13 +353,12 @@ pub(crate) fn retention(
         .rows
         .get(run)
         .filter(|d| d.pin == pin);
-    if let Some(archive) = archived {
-        if read(ctx, &task.id, &pin, true)?
+    if let Some(archive) = archived
+        && read(ctx, &task.id, &pin, true)?
             .as_ref()
             .is_none_or(|b| archive.body.as_ref() == Some(&Content::of(b)))
-        {
-            return Ok(None);
-        }
+    {
+        return Ok(None);
     }
     Ok(Some(
         "Co-work planner draft not checkpointed; retain until settled Save/return".into(),

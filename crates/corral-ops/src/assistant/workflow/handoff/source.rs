@@ -172,9 +172,9 @@ pub(super) fn require_not_pending<T: TaskRef + ?Sized>(
         };
         ensure!(
             !selected_driver
-                && !task
+                && task
                     .current_run_head()?
-                    .is_some_and(|r| Some(&r.worktree) == p.source_path.as_ref()),
+                    .is_none_or(|r| Some(&r.worktree) != p.source_path.as_ref()),
             "handoff_pending: source reservation is reconciling; no new pipeline effect"
         );
     }

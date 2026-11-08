@@ -1,5 +1,6 @@
-//! Local design persistence only. Public entry/execution/review/handoff are deliberately
-//! unavailable until their admission/lifecycle owners land. No board task is allocated here.
+//! Local design persistence and shared ownership boundaries. Persistence alone creates
+//! no task or execution authority. Explicit C3 owner entry lives in handoff; native
+//! named-action consumers remain fail-closed until authenticated.
 //! Lock order: authenticated admission, then the assistant's dispatch/store lock. Artifact
 //! preparation is content-addressed; state, history rows and receipt commit in one record unit.
 use anyhow::{Context, Result};

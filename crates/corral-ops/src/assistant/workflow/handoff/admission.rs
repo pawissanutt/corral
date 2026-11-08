@@ -107,9 +107,8 @@ pub(crate) fn require<T: TaskRef + ?Sized>(
     {
         crate::approved_plan(&crate::Ctx::from_store(store.clone()), task)?;
         ensure!(
-            !task
-                .last_plan_head()?
-                .is_some_and(|p| !p.document.dependencies.is_empty()),
+            task.last_plan_head()?
+                .is_none_or(|p| p.document.dependencies.is_empty()),
             "handoff_scope: proposed implementation members require a separate explicit current-revision scope choice"
         );
         ensure!(

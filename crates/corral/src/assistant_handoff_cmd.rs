@@ -3,7 +3,7 @@ use anyhow::{Context, Result, ensure};
 use clap::{Args, Subcommand, ValueEnum};
 use corral_ops::{Ctx, assistant::workflow::handoff as h};
 use serde::de::DeserializeOwned;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Args)]
 pub struct HandoffArgs {
@@ -107,7 +107,7 @@ impl From<GoalArg> for h::Goal {
         }
     }
 }
-fn load<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
+fn load<T: DeserializeOwned>(path: &Path) -> Result<T> {
     use std::io::Read as _;
     let file =
         corral_core::fs_guard::open_regular_nofollow(path).context("open selected handoff file")?;
