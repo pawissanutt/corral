@@ -115,7 +115,13 @@ fn project_permissions(action: &mut PmAction, policy: &EffectivePolicy) {
                     action.task.as_deref(),
                     &option.id,
                 ))
-                .is_none_or(|(kind, task)| !policy.allows(task, kind));
+                .is_none_or(|(kind, task)| {
+                    if action.kind == PmActionKind::Diagnosis {
+                        !policy.allows_diagnosis(task)
+                    } else {
+                        !policy.allows(task, kind)
+                    }
+                });
             if !option.requires_owner {
                 option.label = match option.id.as_str() {
                     "dispatch_owner" => "Start delegated work".into(),

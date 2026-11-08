@@ -70,6 +70,7 @@ fn policy(tasks: &[Task], config: &Config) -> EffectivePolicy {
                         acceptance_source: corral_core::PolicySource::Task,
                         plan_acceptance_source: corral_core::PolicySource::Task,
                         refusals: BTreeMap::new(),
+                        diagnosis_refusals: Vec::new(),
                     },
                 )
             })

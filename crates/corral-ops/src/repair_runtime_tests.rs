@@ -336,6 +336,7 @@ fn diagnosis_is_bounded_non_coding_and_only_recorded_owner_renewal_creates_an_al
     .unwrap();
     ctx.store
         .update_head(&id, |task| {
+            task.status = Status::NeedsMe;
             task.current_run_mut().unwrap().autopilot = Some(corral_core::AutopilotState {
                 stage: corral_core::AutoStage::Escalated,
                 reason: Some("PM diagnosis ready".into()),

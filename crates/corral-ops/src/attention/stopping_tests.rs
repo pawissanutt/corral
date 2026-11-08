@@ -128,6 +128,7 @@ fn assessment(task: &Task, configure: impl FnOnce(&mut Neighborhood<'_>)) -> Ass
                 acceptance_source: corral_core::PolicySource::Task,
                 plan_acceptance_source: corral_core::PolicySource::Task,
                 refusals: BTreeMap::new(),
+                diagnosis_refusals: Vec::new(),
             },
         )]),
     };

@@ -44,6 +44,7 @@ fn policy(task: &Task, config: &Config, refused: &[Action]) -> EffectivePolicy {
                     .iter()
                     .map(|action| (*action, vec!["stale authorization".into()]))
                     .collect(),
+                diagnosis_refusals: Vec::new(),
             },
         )]),
     }

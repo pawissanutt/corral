@@ -42,6 +42,7 @@ fn policy(task: &Task, config: &Config, refused: &[Action]) -> EffectivePolicy {
                     .iter()
                     .map(|action| (*action, vec![format!("{action:?} refused")]))
                     .collect(),
+                diagnosis_refusals: Vec::new(),
             },
         )]),
     }
