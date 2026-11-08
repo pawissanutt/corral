@@ -21,6 +21,8 @@ pub struct Target {
     pub task: String,
     pub contract_revision: String,
     pub run: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +96,7 @@ pub fn preview(
                 task: task.id.clone(),
                 contract_revision: task.contract_revision()?,
                 run: task.current_run().map(|r| r.id.clone()),
+                state: Some(super::target::pin(ctx, &task)?),
             })
         })
         .transpose()?;
@@ -308,6 +311,13 @@ pub(crate) fn commit(
     }
     let prepared = super::recover(&ctx.store, &choice.package)?;
     validate_goal(ctx, &prepared)?;
+    if existing.as_ref().is_none_or(|j| j.transfer.is_none())
+        && let Some(target) = &choice.into
+    {
+        let task = ctx.store.get(&target.task)?;
+        super::target::require(ctx, &task, target)?;
+        compatible(ctx, &task, &prepared)?;
+    }
     let id = prepared.id().to_owned();
     // Closing source admission and reservation share the assistant transaction.
     ctx.store
@@ -353,12 +363,7 @@ pub(crate) fn commit(
     } else {
         let mut initialize = |task: &mut Task| -> Result<()> {
             if let Some(target) = &choice.into {
-                ensure!(
-                    task.id == target.task
-                        && task.contract_revision()? == target.contract_revision
-                        && task.current_run().map(|r| &r.id) == target.run.as_ref(),
-                    "handoff_stale_choice: target task/spec/run changed; refresh"
-                );
+                super::target::require(ctx, task, target)?;
                 compatible(ctx, task, &prepared)?;
             }
             let fresh = super::read_journal(&ctx.store, &id)?.context("reservation missing")?;

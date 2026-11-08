@@ -201,6 +201,8 @@ fn verdict_report_inner(
     let mut superseded = None;
     let saved = ctx.store.update(id, |task| {
         check(task)?;
+        crate::assistant::workflow::handoff::admission::require(&ctx.store, task,
+            if input.attempt.is_none() { OperatingActionKind::AcceptPlan } else { OperatingActionKind::PlanReview }, false)?;
         let target = crate::reviewer::current_target(task);
         let config = plan::config(ctx)?;
         let selected = task.plans.last().filter(|p| p.id == input.plan).context(
@@ -288,8 +290,9 @@ fn verdict_report_inner(
         // Keep the snapshot's verdict without restarting its cancelled execution.
         let cancelled = task.plan_runs.iter().any(|r|
             Some(&r.id) == selected.run.as_ref() && r.state == PlanRunState::Cancelled);
-        // Recording a review is always allowed, including while automatic work
-        // is paused. Automatic acceptance is a separate fresh, scoped action.
+        // Ordinary review recording may proceed while automation is paused; a
+        // transferred scope already passed its current-driver fence above.
+        // Automatic acceptance is a separate fresh, scoped action.
         let accepted = verdict == Verdict::Approve && owner;
         if accepted {
             crate::plan_decompose::check_attachment(&ctx.store, task, input.plan)?;

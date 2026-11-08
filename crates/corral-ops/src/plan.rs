@@ -1,7 +1,7 @@
 //! Plan snapshots and the optional pre-dispatch approval boundary.
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use corral_core::{
     ArtifactKind, Config, PlanDocument, PlanRecord, PlanRunState, Task, TaskRef, Verdict,
 };
@@ -61,7 +61,7 @@ pub(crate) fn plan_submit_checked(
     path: &Path,
     check: &dyn Fn(&Task) -> Result<()>,
 ) -> Result<PlanRecord> {
-    plan_submit_prepared(ctx, id, path, check, &|_| Ok(()))
+    plan_submit_inner(ctx, id, path, check, Submission::Planner)
 }
 
 /// Internal provenance preparation shares submission's task transaction. It is not
@@ -73,8 +73,24 @@ pub(crate) fn plan_submit_prepared(
     check: &dyn Fn(&Task) -> Result<()>,
     prepare: &dyn Fn(&mut Task) -> Result<()>,
 ) -> Result<PlanRecord> {
+    plan_submit_inner(ctx, id, path, check, Submission::Adopted(prepare))
+}
+
+enum Submission<'a> {
+    Planner,
+    /// Trusted internal preparation, never an argument exposed to CLI/native callers.
+    Adopted(&'a dyn Fn(&mut Task) -> Result<()>),
+}
+
+fn plan_submit_inner(
+    ctx: &Ctx,
+    id: &str,
+    path: &Path,
+    check: &dyn Fn(&Task) -> Result<()>,
+    domain: Submission<'_>,
+) -> Result<PlanRecord> {
     let source = ctx.store.get(id)?;
-    require_submission(ctx, &source)?;
+    require_submission(ctx, &source, &domain)?;
     check(&source)?;
     crate::tracker::check_action(&ctx.store.get(id)?, "submit tracker to the plan pipeline")?;
     let bytes = read_plan(ctx, path)?;
@@ -108,9 +124,11 @@ pub(crate) fn plan_submit_prepared(
     )?;
     let mut previous = None;
     let saved = ctx.store.update(id, |task| {
-        require_submission(ctx, task)?;
+        require_submission(ctx, task, &domain)?;
         check(task)?;
-        prepare(task)?;
+        if let Submission::Adopted(prepare) = &domain {
+            prepare(task)?;
+        }
         crate::tracker::check_action(task, "submit tracker to the plan pipeline")?;
         check_criteria(task, &document)?;
         let revision = plan_spec_revision(task)?;
@@ -156,19 +174,25 @@ pub(crate) fn plan_submit_prepared(
     saved.plans.last().cloned().context("plan was not saved")
 }
 
-fn require_submission(ctx: &Ctx, task: &Task) -> Result<()> {
+fn require_submission(ctx: &Ctx, task: &Task, domain: &Submission<'_>) -> Result<()> {
     if crate::assistant::workflow::handoff::lifecycle::for_task(&ctx.store, task)?
         .and_then(|j| j.transfer)
-        .is_some_and(|t| t.ownership_committed)
+        .is_some_and(|t| !t.ownership_committed)
     {
-        crate::assistant::workflow::handoff::admission::require(
-            &ctx.store,
-            task,
-            corral_core::OperatingActionKind::Plan,
-            false,
-        )?;
+        ensure!(
+            matches!(domain, Submission::Adopted(_)) && task.dispatch_hold,
+            "handoff_owner: unpublished transfer accepts only its exact internal adoption, not planner/owner submissions"
+        );
+        // The adopter still checks current source proof, scope, producer and held target
+        // immediately after this domain check, including in the final task transaction.
+        return Ok(());
     }
-    Ok(())
+    crate::assistant::workflow::handoff::admission::require(
+        &ctx.store,
+        task,
+        corral_core::OperatingActionKind::Plan,
+        false,
+    )
 }
 
 /// Explicit task override; an absent value inherits project/workspace policy.
@@ -229,7 +253,15 @@ pub(crate) fn accepted_owner_notes<T: TaskRef + ?Sized>(
 pub fn approved_plan<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<Option<PlanRecord>> {
     crate::tracker::check_action(task, "submit tracker to the plan pipeline")?;
     let config = ctx.store.reopen()?.config;
-    if !*task.design() && !config.plan_required(task.project().as_deref(), *task.plan_required()) {
+    let transferred_formal = task
+        .cowork()
+        .as_ref()
+        .is_some_and(|c| c.review == corral_core::CoworkReview::TransferV1)
+        && task.last_plan_head()?.is_some();
+    if !*task.design()
+        && !config.plan_required(task.project().as_deref(), *task.plan_required())
+        && !transferred_formal
+    {
         return Ok(None);
     }
     config.validate_review()?;

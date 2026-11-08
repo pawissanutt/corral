@@ -139,6 +139,130 @@ fn explicit_plan_continuation_obeys_scope_and_plan_only_admission_in_assist() {
 }
 
 #[test]
+fn takeover_commits_once_then_waits_for_normal_slot_and_dependency_without_a_source_host() {
+    let (mut f, session, prepared) = setup(Goal::PlanContinue);
+    f.ctx.store.config.limits.running = 1;
+    f.ctx.store.save_config().unwrap();
+    let project = prepared.package().project.clone();
+    let dep = f
+        .ctx
+        .store
+        .create(
+            "Dependency fixture",
+            Some(&project),
+            Status::Done,
+            "fixture",
+        )
+        .unwrap();
+    let target = f
+        .ctx
+        .store
+        .create(
+            "Existing target",
+            Some(&project),
+            Status::Ready,
+            "fixture current scope",
+        )
+        .unwrap();
+    let target = f
+        .ctx
+        .store
+        .update(&target.id, |task| {
+            task.depends_on.push(dep.id.clone());
+            Ok(())
+        })
+        .unwrap();
+    let blocker = f
+        .ctx
+        .store
+        .create(
+            "Occupied-slot fixture, no actual process",
+            Some(&project),
+            Status::Running,
+            "fixture",
+        )
+        .unwrap();
+    f.ctx
+        .store
+        .update(&blocker.id, |task| {
+            task.runs.push(serde_json::from_value(serde_json::json!({
+                "id":"R1", "agent":"slot-fixture", "worktree":f._tmp.path().join("unused-slot"),
+                "branch":"corral/slot-fixture", "base":"main", "base_sha":"a".repeat(40),
+                "started":corral_core::clock::now()
+            }))?);
+            Ok(())
+        })
+        .unwrap();
+    let choice = transfer::preview(
+        &f.ctx,
+        prepared.id(),
+        "Continue exact planning scope",
+        Some(&target.id),
+        false,
+    )
+    .unwrap();
+    let owned =
+        transfer::commit(&f.ctx, &choice, &choice.digest().unwrap(), instruction()).unwrap();
+    assert_eq!(owned.id, target.id);
+    assert_eq!(crate::slot_usage(&f.ctx).unwrap().total(), 1);
+    let slot_wait = crate::slots::capacity_reason(&f.ctx.store, &owned, 0).unwrap();
+    assert!(slot_wait.is_some());
+    assert!(owned.runs.is_empty() && owned.plan_runs.is_empty() && !owned.dispatch_hold);
+    f.ctx.store.end_assistant(&session).unwrap(); // driver is durable, not a live source session
+    let replay =
+        transfer::commit(&f.ctx, &choice, &choice.digest().unwrap(), instruction()).unwrap();
+    assert_eq!(replay.id, owned.id);
+    f.ctx
+        .store
+        .update(&blocker.id, |task| {
+            task.status = Status::Done;
+            let run = task.current_run_mut().unwrap();
+            run.outcome = Some(corral_core::RunOutcome::Cancelled);
+            run.ended = Some(corral_core::clock::now());
+            Ok(())
+        })
+        .unwrap();
+    f.ctx
+        .store
+        .update(&dep.id, |task| {
+            task.status = Status::Ready;
+            Ok(())
+        })
+        .unwrap();
+    let dependency_wait = crate::queue::dependency_check(&f.ctx.store, &owned).unwrap();
+    assert!(
+        dependency_wait
+            .as_ref()
+            .is_some_and(|s| s.contains(&dep.id))
+    );
+    f.ctx
+        .store
+        .update(&dep.id, |task| {
+            task.status = Status::Done;
+            Ok(())
+        })
+        .unwrap();
+    let reopened = corral_core::Store::open(f.ctx.store.root()).unwrap();
+    let current = reopened.get(&owned.id).unwrap();
+    assert!(
+        crate::slots::capacity_reason(&reopened, &current, 0)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        crate::queue::dependency_check(&reopened, &current)
+            .unwrap()
+            .is_none()
+    );
+    assert!(admission::explicit(&reopened, &current, Kind::Plan).unwrap());
+    assert!(current.runs.is_empty() && current.plan_runs.is_empty());
+    assert_eq!(reopened.list().unwrap().len(), 3);
+    println!(
+        "SCHEDULING_WAIT slot={slot_wait:?} dependency={dependency_wait:?}; ownership retained once, zero launches"
+    );
+}
+
+#[test]
 fn save_with_an_unverified_writer_stays_saving_after_restart_and_cannot_reopen_a_host() {
     let (f, _, prepared) = setup(Goal::ImplementationShip);
     let task = commit(&f, &prepared, false);
@@ -336,6 +460,13 @@ fn exact_formal_plan_keeps_actual_producer_and_review_only_never_allocates_codin
         .store
         .update(&task.id, |task| {
             task.body.push_str("\nOwner revised the task scope.");
+            // Historical stopping-state fixture, deliberately not acceptance evidence.
+            task.plans[0].approval = Some(corral_core::PlanApproval {
+                by: "fixture-only".into(),
+                at: corral_core::clock::now(),
+                policy_digest: "not-acceptance-evidence".into(),
+                authorization: None,
+            });
             Ok(())
         })
         .unwrap();
