@@ -208,6 +208,150 @@ fn owner_investigation_replay_cannot_renew_a_diagnostic_retry_twice() {
 }
 
 #[test]
+fn delegated_pm_attributes_settled_needs_me_without_coding_or_gate_retry() {
+    use corral_core::{OperatingActionKind, Status, TaskRef as _};
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("app")).unwrap();
+    let mut store = Store::init(root.path()).unwrap();
+    store.config.projects.insert(
+        "app".into(),
+        corral_core::Project {
+            path: "app".into(),
+            dispatch: Default::default(),
+            default_profile: None,
+            base: None,
+            review: Default::default(),
+            artifact_retention: None,
+            post_land: Vec::new(),
+        },
+    );
+    store.save_config().unwrap();
+    let task = store
+        .create("Repaired candidate", Some("app"), Status::Review, "scope")
+        .unwrap();
+    let outside = store
+        .create("Not delegated", Some("app"), Status::NeedsMe, "scope")
+        .unwrap();
+    let preview = store
+        .preview_operating_policy(&corral_core::OperatingSelection {
+            tasks: [task.id.clone()].into(),
+            authority: corral_core::OperatingAuthority {
+                dispatch: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    store.config = store
+        .confirm_operating_policy(&preview, "fixture owner", store.now())
+        .unwrap();
+    let failed = gate("fail", "broken", "original-red");
+    let repaired = gate("pass", "fixed", "repaired-green");
+    observe(&store, &task.id, &failed).unwrap();
+    admit(&store, &task.id, Some(&failed), "fixed", "repaired-green").unwrap();
+    store
+        .update(&task.id, |task| {
+            task.status = Status::NeedsMe;
+            task.runs.push(serde_json::from_value(
+                json!({"id":"R1","agent":"fake","worktree":root.path(),
+            "branch":"b","base":"main","base_sha":"base","started":task.created,"outcome":"done",
+            "gate":repaired,"autopilot":{"stage":"escalated","at":task.created}}),
+            )?);
+            Ok(())
+        })
+        .unwrap();
+    store.set_attribution(corral_core::Actor::Pm, "pm").unwrap();
+    let ctx = Ctx::from_store(store.clone());
+    let proof = root.path().join("attribution.md");
+    std::fs::write(
+        &proof,
+        "Retained red and repaired candidate receipt explain the fixture defect.",
+    )
+    .unwrap();
+    let artifact = crate::add_artifact(
+        &ctx,
+        &task.id,
+        &proof,
+        Some(corral_core::ArtifactKind::Report),
+        None,
+    )
+    .unwrap();
+    let report = GateDiagnosis {
+        attempt: "original-red".into(),
+        class: FailureClass::Candidate,
+        explanation: "The repaired fixture fixes the evidenced candidate defect".into(),
+        evidence: vec![artifact.path],
+        baseline: None,
+        retry: false,
+    };
+    // Diagnosis is delegated, not coding eligibility or an owner impersonation.
+    let error = diagnose(&ctx, &outside.id, report.clone(), false).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("outside the confirmed workspace grant"),
+        "{error:#}"
+    );
+    assert!(
+        crate::operating::require(
+            &store,
+            &store.head(&task.id).unwrap(),
+            OperatingActionKind::Repair
+        )
+        .is_err()
+    );
+    diagnose(&ctx, &task.id, report.clone(), false).unwrap();
+    let head = store.head(&task.id).unwrap();
+    assert_eq!(head.status, Status::Review);
+    let run = head.current_run_head().unwrap().unwrap();
+    assert_eq!(run.gate.as_ref(), Some(&repaired));
+    assert_eq!(
+        run.autopilot.as_ref().unwrap().stage,
+        corral_core::AutoStage::Gating
+    );
+    require_pass(&store, &task.id, Some(&repaired)).unwrap();
+    assert!(require_pass(&store, &task.id, Some(&gate("pass", "broken", "unchanged"))).is_err());
+    drop(head);
+    let reopened = Ctx::from_store(store.reopen().unwrap());
+    observe(&reopened.store, &task.id, &repaired).unwrap();
+    let state = diagnose(&reopened, &task.id, report.clone(), false).unwrap();
+    assert_eq!(state.failures[0].gate, failed);
+    assert_eq!(state.failures[0].resolved_by.as_ref(), Some(&repaired));
+    assert_eq!(state.failures[0].diagnoses, [report.clone()]);
+    assert_eq!(state.diagnostic_history, ["repaired-green"]);
+    assert_eq!(state.diagnostic_attempt.as_deref(), Some("repaired-green"));
+    assert!(!state.retry_requested);
+    assert!(state.owner_investigations.is_empty());
+    let task_now = reopened.store.get(&task.id).unwrap();
+    assert_eq!(task_now.runs.len(), 1);
+    assert_eq!(task_now.rounds, 0);
+    assert!(reopened.store.repair_ledger(&task.id).unwrap().is_none());
+    let events = reopened
+        .store
+        .events_of(Some(&task.id), &["gate_diagnosis"])
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].actor, Some(corral_core::Actor::Pm));
+    assert_eq!(events[0].via.as_deref(), Some("pm"));
+    let mut changed = report.clone();
+    changed.class = FailureClass::Unknown;
+    assert!(diagnose(&reopened, &task.id, changed, false).is_err());
+    let mut invalid = report.clone();
+    invalid.evidence = vec!["not-attached".into()];
+    assert!(diagnose(&reopened, &task.id, invalid, false).is_err());
+    // Live holds, pause and revocation fence even identical historical delivery.
+    crate::hold::hold(&reopened, &task.id, Some("pause recovery")).unwrap();
+    assert!(diagnose(&reopened, &task.id, report.clone(), false).is_err());
+    crate::hold::release(&reopened, &task.id).unwrap();
+    reopened.store.pause_operating_policy(true).unwrap();
+    assert!(diagnose(&reopened, &task.id, report.clone(), false).is_err());
+    reopened.store.pause_operating_policy(false).unwrap();
+    reopened.store.assist_operating_policy().unwrap();
+    assert!(diagnose(&reopened, &task.id, report, false).is_err());
+}
+
+#[test]
 fn attribution_routes_without_rewriting_receipts_and_requires_fresh_candidate_success() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::init(root.path()).unwrap();

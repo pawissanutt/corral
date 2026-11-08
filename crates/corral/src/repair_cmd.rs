@@ -88,8 +88,9 @@ fn read<T: DeserializeOwned>(path: &Path) -> Result<T> {
     .with_context(|| format!("decoding {}", path.display()))
 }
 
-pub fn run(root: &Path, args: RepairArgs) -> Result<()> {
+pub fn run(root: &Path, args: RepairArgs, entry: &crate::entry::Entry) -> Result<()> {
     let store = Store::open_unobserved(&Store::find_root(root)?)?;
+    entry.apply(&store)?;
     let ctx = corral_ops::Ctx::from_store(store);
     let value = match args.cmd {
         RepairCmd::Status { id } => match corral_ops::repair_status(&ctx, &id)? {

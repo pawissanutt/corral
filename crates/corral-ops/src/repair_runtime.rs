@@ -589,7 +589,8 @@ fn diagnose(ctx: &Ctx, id: &str, owner: bool) -> Result<RepairLedger> {
             && task.current_run_head()?.is_some_and(|run| run.outcome == Some(corral_core::RunOutcome::Done))
             && task.launch.is_none(), "diagnosis requires a completed corrective attempt, not an active or queued writer");
         let mut ledger = ctx.store.repair_ledger(&id)?.context("no repair history")?;
-        if ledger.active()?.diagnosis.is_some() {
+        if let Some(diagnosis) = &ledger.active()?.diagnosis {
+            ensure!(diagnosis.proposal.is_none(), "PM diagnosis is complete; inspect its proposal, no new diagnosis allowance is available");
             return Ok(());
         }
         ensure!(

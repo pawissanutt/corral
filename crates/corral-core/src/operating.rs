@@ -190,6 +190,8 @@ pub struct EffectiveTaskPolicy {
     pub plan_acceptance_source: PolicySource,
     /// An absent action is allowed; entries contain concrete narrowing reasons.
     pub refusals: BTreeMap<OperatingActionKind, Vec<String>>,
+    /// Evidence-only diagnosis shares repair scope, but not coding lifecycle/round eligibility.
+    pub diagnosis_refusals: Vec<String>,
 }
 
 impl EffectiveTaskPolicy {
@@ -213,6 +215,12 @@ impl EffectivePolicy {
         self.tasks
             .get(task)
             .is_some_and(|policy| policy.allows(action))
+    }
+
+    pub fn allows_diagnosis(&self, task: &str) -> bool {
+        self.tasks
+            .get(task)
+            .is_some_and(|policy| policy.diagnosis_refusals.is_empty())
     }
 }
 
@@ -663,10 +671,7 @@ impl Store {
                     common.push("reviewed plan scope changed".into());
                 }
             }
-            if matches!(
-                task.status,
-                Status::NeedsMe | Status::Dropped | Status::Done
-            ) {
+            if matches!(task.status, Status::Dropped | Status::Done) {
                 common.push(format!("task lifecycle is {}", task.status.as_str()));
             }
             let has_owner_decisions = match task.plans.last() {
@@ -774,6 +779,14 @@ impl Store {
                 {
                     reasons.push("explicit owner-only plan acceptance".into());
                 }
+                if action == OperatingActionKind::Repair {
+                    resolved.diagnosis_refusals.extend(reasons.clone());
+                }
+                // NeedsMe stops executors, not evidence-backed diagnosis of a settled run.
+                // The diagnosis services validate their specific completed-candidate stage.
+                if task.status == Status::NeedsMe {
+                    reasons.push(format!("task lifecycle is {}", task.status.as_str()));
+                }
                 if action == OperatingActionKind::Repair
                     && !policy.turbo
                     && task.rounds >= resolved.review.max_rounds
@@ -815,10 +828,12 @@ fn task_policy(config: &Config, task: Option<&Task>) -> EffectiveTaskPolicy {
         acceptance_source: sources.accept,
         plan_acceptance_source: sources.plan_accept,
         refusals: BTreeMap::new(),
+        diagnosis_refusals: Vec::new(),
     }
 }
 
 fn deny_all(policy: &mut EffectiveTaskPolicy, reasons: &[String]) {
+    policy.diagnosis_refusals.extend_from_slice(reasons);
     if !reasons.is_empty() {
         for action in ACTIONS {
             policy.refusals.insert(action, reasons.to_vec());

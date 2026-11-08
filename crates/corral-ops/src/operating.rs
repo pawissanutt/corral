@@ -60,12 +60,33 @@ pub(crate) fn require_grant<T: TaskRef + ?Sized>(
     task: &T,
     kind: OperatingActionKind,
 ) -> Result<()> {
+    require_grant_for(store, task, GrantOperation::Execute(kind))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum GrantOperation {
+    Execute(OperatingActionKind),
+    Diagnosis,
+}
+
+fn require_grant_for<T: TaskRef + ?Sized>(
+    store: &Store,
+    task: &T,
+    operation: GrantOperation,
+) -> Result<()> {
     let effective = store.effective_operating_policy()?;
     let id = task.id();
+    let (allowed, label) = match operation {
+        GrantOperation::Execute(kind) => (effective.allows(id, kind), format!("{kind:?}")),
+        GrantOperation::Diagnosis => (effective.allows_diagnosis(id), "diagnosis".into()),
+    };
     let reasons = effective
         .tasks
         .get(id)
-        .and_then(|policy| policy.refusals.get(&kind))
+        .and_then(|policy| match operation {
+            GrantOperation::Execute(kind) => policy.refusals.get(&kind),
+            GrantOperation::Diagnosis => Some(&policy.diagnosis_refusals),
+        })
         .cloned()
         .unwrap_or_else(|| {
             if effective.reasons.is_empty() {
@@ -75,14 +96,14 @@ pub(crate) fn require_grant<T: TaskRef + ?Sized>(
             }
         });
     ensure!(
-        effective.allows(id, kind),
-        "automatic {kind:?} is not authorized for {id}: {}",
+        allowed,
+        "automatic {label} is not authorized for {id}: {}",
         reasons.join("; ")
     );
     Ok(())
 }
 
-/// Diagnosis consumes repair scope but cannot consume or enlarge the coding allowance.
+/// Diagnosis requires current repair scope, not coding eligibility or a new allowance.
 pub(crate) fn require_diagnosis<T: TaskRef + ?Sized>(
     store: &Store,
     task: &T,
@@ -91,7 +112,7 @@ pub(crate) fn require_diagnosis<T: TaskRef + ?Sized>(
     crate::hold::require_clear(store, task)?;
     cowork::validate(task, OperatingActionKind::Repair)?;
     if !owner && !cowork::diagnosis(store, task)? {
-        require_grant(store, task, OperatingActionKind::Repair)?;
+        require_grant_for(store, task, GrantOperation::Diagnosis)?;
     }
     require_recovery(store, task)
 }

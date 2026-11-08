@@ -142,10 +142,7 @@ impl Oracle<'_> {
                     common.push("reviewed plan scope changed".into());
                 }
             }
-            if matches!(
-                task.status,
-                Status::NeedsMe | Status::Dropped | Status::Done
-            ) {
+            if matches!(task.status, Status::Dropped | Status::Done) {
                 common.push(format!("task lifecycle is {}", task.status.as_str()));
             }
             let has_owner_decisions = match task.plans.last() {
@@ -251,6 +248,12 @@ impl Oracle<'_> {
                 {
                     reasons.push("explicit owner-only plan acceptance".into());
                 }
+                if action == OperatingActionKind::Repair {
+                    resolved.diagnosis_refusals.extend(reasons.clone());
+                }
+                if task.status == Status::NeedsMe {
+                    reasons.push(format!("task lifecycle is {}", task.status.as_str()));
+                }
                 if action == OperatingActionKind::Repair
                     && task.rounds >= resolved.review.max_rounds
                 {
@@ -288,10 +291,12 @@ fn task_policy(config: &Config, task: Option<&Task>) -> EffectiveTaskPolicy {
         acceptance_source: sources.accept,
         plan_acceptance_source: sources.plan_accept,
         refusals: BTreeMap::new(),
+        diagnosis_refusals: Vec::new(),
     }
 }
 
 fn deny_all(policy: &mut EffectiveTaskPolicy, reasons: &[String]) {
+    policy.diagnosis_refusals.extend_from_slice(reasons);
     if !reasons.is_empty() {
         for action in ACTIONS {
             policy.refusals.insert(action, reasons.to_vec());

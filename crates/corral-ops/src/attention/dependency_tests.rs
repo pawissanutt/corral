@@ -58,6 +58,7 @@ fn assessment(subject: &Task) -> Assessment {
                 acceptance_source: corral_core::PolicySource::Task,
                 plan_acceptance_source: corral_core::PolicySource::Task,
                 refusals: BTreeMap::new(),
+                diagnosis_refusals: Vec::new(),
             },
         )]),
     };
