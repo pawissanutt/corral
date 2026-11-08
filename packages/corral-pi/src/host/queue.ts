@@ -150,9 +150,9 @@ export class HostQueue {
     const data = { version: 1, ...this.binding, generation: this.options.generation, item: item.item, event,
       origin: item.origin, mode: item.mode, text_sha256: item.text_sha256, text_bytes: item.text_bytes,
       ...(item.idempotency_key ? { idempotency_key: item.idempotency_key } : {}),
-      ...(item.supersedes ? { supersedes: item.supersedes } : {}),
-      ...(item.origin === "pane" ? { text: pane, ...(pane !== item.text ? { truncated: true } : {}) } : {}), ...extra };
-    this.append(QUEUE_ENTRY, data);
+      ...(item.supersedes ? { supersedes: item.supersedes } : {}), ...extra };
+    this.append(QUEUE_ENTRY, { ...data,
+      ...(item.origin === "pane" ? { text: pane, ...(pane !== item.text ? { truncated: true } : {}) } : {}) });
     item.state = event;
     if (event === "queued") this.pending.add(item); else this.pending.delete(item);
     if (typeof extra.turn === "number") item.turn = extra.turn;
