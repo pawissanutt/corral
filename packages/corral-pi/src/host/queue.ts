@@ -103,7 +103,10 @@ export class HostQueue {
         }
       }
     },
-    canRestore: tag => this.tagged(tag)?.origin === "pane",
+    restoreInput: tag => {
+      const item = this.tagged(tag);
+      return item?.origin === "pane" ? item.text : undefined;
+    },
   };
 
   /** Allocated before asynchronous bridge preflight, retaining the original envelope digest. */
@@ -271,7 +274,10 @@ export class HostQueue {
     ).then(disposition => ({ disposition }), error => ({ disposition: "rejected", reason: String(error).slice(0, 256) }));
     // The immutable operation receipt proves withdrawal; the replacement's own lifecycle
     // proves admission/rejection and links back through supersedes. No second result authority.
-    this.healthy();
+    try { this.healthy(); }
+    catch (error) {
+      throw new BridgeRefusal("operation_uncertain", `operation ${op_key}: original withdrawn; replacement evidence unavailable: ${String(error)}`);
+    }
     if (operation) operation.replacement = { item: replacement.item, disposition };
     return { ...result, replacement: { ...disposition, item: replacement.item } };
   }

@@ -1464,7 +1464,10 @@ API. Edits withdraw the original, then run native input handlers once for a new 
 linked by `supersedes`; assistant input receives a fresh owner-input journal ID. A failed
 replacement leaves the original withdrawn and reports the replacement's real disposition.
 Rich mode keeps its existing read-only, count-only queue notices and draft protection; these
-APIs add no panel or keyboard controls. Compaction-held input is outside their scope.
+APIs add no panel or keyboard controls. On stock/plain paths where native Esc/dequeue restoration
+is enabled, only original pane-typed text is restored and removed; Corral and extension input
+stays queued under its original identity and provenance. Compaction-held input is outside the
+editable ledger's scope.
 
 ### Fixture installations
 

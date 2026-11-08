@@ -1,5 +1,5 @@
 diff --git a/dist/core/agent-session.d.ts b/dist/core/agent-session.d.ts
-index 2d847a8852537c78076b3b895c3b1a2a167bbd75..865a246f1b62880122f1d22604595181110c9781 100644
+index 2d847a8852537c78076b3b895c3b1a2a167bbd75..1806bdc924d2bc3fccdb5462da660df01ae15d8a 100644
 --- a/dist/core/agent-session.d.ts
 +++ b/dist/core/agent-session.d.ts
 @@ -12,7 +12,7 @@
@@ -11,7 +11,7 @@ index 2d847a8852537c78076b3b895c3b1a2a167bbd75..865a246f1b62880122f1d22604595181
  import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai/compat";
  import { type BashResult } from "./bash-executor.ts";
  import type { CacheWarmer, CacheWarmingStatus } from "./cache-warmer.ts";
-@@ -176,7 +176,15 @@ export interface ExtensionBindings {
+@@ -176,7 +176,16 @@ export interface ExtensionBindings {
  export type QueuedInputDisposition = "handled" | "queued";
  export type PromptDisposition = QueuedInputDisposition | "started";
  /** Options for AgentSession.prompt() */
@@ -19,7 +19,8 @@ index 2d847a8852537c78076b3b895c3b1a2a167bbd75..865a246f1b62880122f1d22604595181
 +    input(input: { text: string; images?: ImageContent[]; source: InputSource; mode: "prompt" | "steer" | "follow_up" }): unknown;
 +    lifecycle(event: { tag: unknown; event: PromptDisposition | "rejected"; reason?: string }): void;
 +    queue(change: AgentQueueChange & { entries: { message: AgentMessage; tag: unknown }[] }): void;
-+    canRestore?(tag: unknown): boolean;
++    /** Original pane text when native restoration is allowed; undefined keeps the item queued. */
++    restoreInput?(tag: unknown): string | undefined;
 +}
  export interface PromptOptions {
 +    /** Opaque per-invocation host provenance, not extension input text. */
@@ -27,7 +28,7 @@ index 2d847a8852537c78076b3b895c3b1a2a167bbd75..865a246f1b62880122f1d22604595181
      /** Whether to dispatch extension commands and expand skill commands and prompt templates (default: true) */
      expandPromptTemplates?: boolean;
      /** Image attachments */
-@@ -221,6 +229,8 @@ export interface SessionStats {
+@@ -221,6 +230,8 @@ export interface SessionStats {
  }
  export declare class AgentSession {
      readonly agent: Agent;
@@ -36,7 +37,7 @@ index 2d847a8852537c78076b3b895c3b1a2a167bbd75..865a246f1b62880122f1d22604595181
      readonly sessionManager: SessionManager;
      readonly settingsManager: SettingsManager;
      private _scopedModels;
-@@ -578,6 +588,7 @@ export declare class AgentSession {
+@@ -578,6 +589,7 @@ export declare class AgentSession {
       */
      steer(text: string, images?: ImageContent[], options?: {
          source?: InputSource;
@@ -44,7 +45,7 @@ index 2d847a8852537c78076b3b895c3b1a2a167bbd75..865a246f1b62880122f1d22604595181
      }): Promise<QueuedInputDisposition>;
      /**
       * Queue a follow-up message to be processed after the agent finishes.
-@@ -589,6 +600,7 @@ export declare class AgentSession {
+@@ -589,6 +601,7 @@ export declare class AgentSession {
       */
      followUp(text: string, images?: ImageContent[], options?: {
          source?: InputSource;
@@ -52,7 +53,7 @@ index 2d847a8852537c78076b3b895c3b1a2a167bbd75..865a246f1b62880122f1d22604595181
      }): Promise<QueuedInputDisposition>;
      /**
       * Internal: Queue a steering message (already expanded, no extension command check).
-@@ -642,7 +654,7 @@ export declare class AgentSession {
+@@ -642,7 +655,7 @@ export declare class AgentSession {
       * Useful for restoring to editor when user aborts.
       * @returns Object with steering and followUp arrays
       */
@@ -62,7 +63,7 @@ index 2d847a8852537c78076b3b895c3b1a2a167bbd75..865a246f1b62880122f1d22604595181
          followUp: string[];
      };
 diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
-index ccbb5a96b093a95499f1caa4a30371c3ebd4102a..26ce73d4e4d6928007155af65e6dc8ac3f97b8d2 100644
+index ccbb5a96b093a95499f1caa4a30371c3ebd4102a..c26a527bfb163c76c4ed2a93e067c2e1de5b773e 100644
 --- a/dist/core/agent-session.js
 +++ b/dist/core/agent-session.js
 @@ -102,6 +102,14 @@ export class AgentSession {
@@ -270,7 +271,7 @@ index ccbb5a96b093a95499f1caa4a30371c3ebd4102a..26ce73d4e4d6928007155af65e6dc8ac
      }
      /**
       * Throw an error if the text is an extension command.
-@@ -1959,13 +1990,15 @@ export class AgentSession {
+@@ -1959,13 +1990,16 @@ export class AgentSession {
       * Useful for restoring to editor when user aborts.
       * @returns Object with steering and followUp arrays
       */
@@ -285,10 +286,11 @@ index ccbb5a96b093a95499f1caa4a30371c3ebd4102a..26ce73d4e4d6928007155af65e6dc8ac
 +        const steering = [], followUp = [];
 +        for (const message of this.agent.getQueuedMessages()) {
 +            const tag = this._queueTags.get(message);
-+            if (options?.restore && this._queueObserver?.canRestore && !this._queueObserver.canRestore(tag)) continue;
++            const restored = options?.restore && this._queueObserver?.restoreInput ? this._queueObserver.restoreInput(tag) : undefined;
++            if (options?.restore && this._queueObserver?.restoreInput && restored === undefined) continue;
 +            const display = this._queueDisplay.get(message);
 +            this.agent.removeQueuedMessage(message, options?.restore ? "pane_restore" : "host");
-+            if (display) (display.mode === "steer" ? steering : followUp).push(display.text);
++            if (display) (display.mode === "steer" ? steering : followUp).push(restored ?? display.text);
 +        }
          return { steering, followUp };
      }
@@ -482,7 +484,7 @@ index c75d274e24b63ee7c8fa0c4c1736bf7fbfb42c90..342d1969ee7ebbccad48263476ca35cb
  export declare class InteractiveMode {
      private runtimeHost;
 diff --git a/dist/modes/interactive/interactive-mode.js b/dist/modes/interactive/interactive-mode.js
-index 615a6ba211a5d2bf165ab7d4c4dcc41819a452dd..3f01da2b0e7db21f72926fe05e1728fbcca46eaa 100644
+index 615a6ba211a5d2bf165ab7d4c4dcc41819a452dd..23e9135a01f434a41fe2843cbf29d1240b0e52ce 100644
 --- a/dist/modes/interactive/interactive-mode.js
 +++ b/dist/modes/interactive/interactive-mode.js
 @@ -453,7 +453,7 @@ export class InteractiveMode {
@@ -539,6 +541,15 @@ index 615a6ba211a5d2bf165ab7d4c4dcc41819a452dd..3f01da2b0e7db21f72926fe05e1728fb
          const restored = this.restoreQueuedMessagesToEditor();
          if (restored === 0) {
              this.showStatus("No queued messages to restore");
+@@ -3927,7 +3940,7 @@ export class InteractiveMode {
+      * Clears both session queue and compaction queue.
+      */
+     clearAllQueues() {
+-        const { steering, followUp } = this.session.clearQueue();
++        const { steering, followUp } = this.session.clearQueue({ restore: true });
+         const compactionSteering = this.compactionQueuedMessages
+             .filter((msg) => msg.mode === "steer")
+             .map((msg) => msg.text);
 @@ -3943,6 +3956,13 @@ export class InteractiveMode {
      updatePendingMessagesDisplay() {
          this.pendingMessagesContainer.clear();
