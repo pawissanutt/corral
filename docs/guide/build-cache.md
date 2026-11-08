@@ -161,11 +161,18 @@ supervisor crash. Never unlink lease files.
 After a workflow finishes, its target is collectible. Any later manual command
 that reuses prebuilt outputs must also hold a lease; a sequence of bare Cargo or
 binary invocations does not acquire whole-workflow protection. For a custom
-Bash workflow, use `python3 scripts/cargo_cache.py --protect-script /absolute/workflow.sh`;
-the script receives `--corral-mbx-protected` as its first argument and must shift
-it, then run `python3 /absolute/scripts/cargo_cache_targets.py --verify-protection`
-from the workspace root before consuming outputs. A single adapter Cargo command
-uses mbx's own per-command lease.
+Bash workflow, use `python3 scripts/cargo_cache.py --protect-script /absolute/workflow.sh`.
+The workflow must start from the workspace root and check the supervisor's private
+first-argument marker before consuming outputs (this is not a public Corral CLI flag):
+
+```sh
+[[ ${1:-} == --corral-mbx-protected ]] || exit 2
+shift
+python3 /absolute/scripts/cargo_cache_targets.py --verify-protection
+# Commands that build and consume prebuilt outputs follow here.
+```
+
+A single adapter Cargo command uses mbx's own per-command lease.
 
 Automatic collection can evict inactive live checkouts under budget pressure;
 it does not promise every retained checkout a warm target. Active leases can
