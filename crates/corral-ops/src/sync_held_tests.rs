@@ -1,5 +1,5 @@
 use super::*;
-use corral_core::{HerdrRef, Store};
+use corral_core::{HerdrRef, Run, Store};
 
 #[test]
 fn held_run_reconciliation_closes_only_gone_or_idle_backlog_runs() {

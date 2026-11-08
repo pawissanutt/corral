@@ -12,6 +12,7 @@ pub(super) const TASKS: &str = "assistant-handoff-tasks";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Disposition {
+    Saving,
     Saved,
     Starting,
     Continuing,

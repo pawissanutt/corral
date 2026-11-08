@@ -1,6 +1,8 @@
 use super::*;
 use crate::agent::test_support as ts;
-use corral_core::{OperatingActionKind as Kind, Status, assistant_workflow::DesignStage};
+use corral_core::{
+    OperatingActionKind as Kind, Status, TaskRef as _, assistant_workflow::DesignStage,
+};
 use lifecycle::{Disposition, Instruction};
 
 fn instruction() -> Instruction {
@@ -115,6 +117,86 @@ fn explicit_plan_continuation_obeys_scope_and_plan_only_admission_in_assist() {
     );
 }
 
+#[test]
+fn save_with_an_unverified_writer_stays_saving_after_restart_and_cannot_reopen_a_host() {
+    let (f, _, prepared) = setup(Goal::ImplementationShip);
+    let task = commit(&f, &prepared, false);
+    assert_eq!(
+        task.cowork
+            .as_ref()
+            .unwrap()
+            .completion
+            .as_ref()
+            .unwrap()
+            .intent,
+        corral_core::CompletionIntent::Ship
+    );
+    f.ctx
+        .store
+        .update(&task.id, |task| {
+            task.runs.push(serde_json::from_value(serde_json::json!({
+                "id":"R1", "agent":"unknown-legacy", "worktree":f._tmp.path().join("unverified"),
+                "branch":"corral/unverified", "base":"main", "base_sha":"a".repeat(40),
+                "started":corral_core::clock::now()
+            }))?);
+            task.status = Status::Running;
+            Ok(())
+        })
+        .unwrap();
+    let current = f.ctx.store.get(&task.id).unwrap();
+    assert!(
+        continuation::save(
+            &f.ctx,
+            &task.id,
+            &current.contract_revision().unwrap(),
+            instruction()
+        )
+        .is_err()
+    );
+    let reopened = corral_core::Store::open(f.ctx.store.root()).unwrap();
+    let held = reopened.get(&task.id).unwrap();
+    let journal = lifecycle::for_task(&reopened, &held).unwrap().unwrap();
+    assert_eq!(
+        journal.transfer.as_ref().unwrap().disposition,
+        Disposition::Saving
+    );
+    assert!(journal.waiting.as_ref().is_some_and(|s| !s.is_empty()));
+    assert!(held.dispatch_hold && !held.queued && held.dispatch_plan.is_none());
+    assert_eq!(
+        held.current_run().unwrap().outcome,
+        None,
+        "do not invent writer death"
+    );
+    assert_eq!(
+        held.cowork
+            .as_ref()
+            .unwrap()
+            .completion
+            .as_ref()
+            .unwrap()
+            .intent,
+        corral_core::CompletionIntent::Verify
+    );
+    assert!(continuation::preview(&f.ctx, &task.id, Goal::ImplementationShip).is_err());
+    assert!(
+        crate::agent::open_generation(
+            &reopened,
+            &crate::agent::BindTarget::Worker {
+                task: task.id.clone(),
+                run: "R1".into()
+            },
+            "stale-pane"
+        )
+        .is_err()
+    );
+    recovery::reconcile(&f.ctx).unwrap();
+    let after = lifecycle::for_task(&reopened, &reopened.get(&task.id).unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.transfer.unwrap().disposition, Disposition::Saving);
+    assert_eq!(reopened.list().unwrap().len(), 1);
+}
+
 const FORMAL: &str = "---\ngoal: Repair cache\nnon_goals: []\ndecisions: [keep format]\naffected_paths: [file]\ncontracts: []\ndependencies: []\nacceptance: [{scenario: cache repair, expected: correct value}]\nverification: [unit check]\nowner_decisions: []\n---\n\nExact assistant-produced plan.\n";
 
 #[test]
@@ -224,6 +306,24 @@ fn exact_formal_plan_keeps_actual_producer_and_review_only_never_allocates_codin
             .profile,
         task.plan_runs[0].profile
     );
+    assert!(
+        task.unfinished_native_containers().unwrap().is_empty(),
+        "an imported producer record did not launch a planner host"
+    );
+    assert!(matches!(
+        takeback::apply(
+            &f.ctx,
+            &task.id,
+            &task.contract_revision().unwrap(),
+            instruction()
+        )
+        .unwrap(),
+        Returned::Ready {
+            scratch: None,
+            plan_only: true,
+            ..
+        }
+    ));
 }
 
 #[test]

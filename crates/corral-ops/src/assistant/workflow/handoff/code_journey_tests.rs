@@ -164,6 +164,20 @@ fn dirty_saved_seed_returns_exact_layers_and_branch_without_residual_intent() {
                 .as_str()
         )
     );
+    // A direct native resume/bind is also effect admission, not a way around Save.
+    let target = crate::agent::BindTarget::Worker {
+        task: current.id.clone(),
+        run: current.runs[0].id.clone(),
+    };
+    assert!(
+        crate::agent::open_generation(&f.ctx.store, &target, "stale-pane").is_err(),
+        "Save must prevent a native generation from reopening the preserved candidate"
+    );
+    assert_eq!(
+        f.ctx.store.get(&current.id).unwrap().runs[0].agent_host,
+        current.runs[0].agent_host,
+        "refused resume must not rotate the binding"
+    );
     let planning = continuation::preview(&f.ctx, &current.id, Goal::PlanContinue).unwrap();
     continuation::start(
         &f.ctx,
@@ -187,4 +201,72 @@ fn dirty_saved_seed_returns_exact_layers_and_branch_without_residual_intent() {
         "goal changes cannot duplicate an owned candidate"
     );
     assert_eq!(resumed.runs[0].worktree, current.runs[0].worktree);
+    // Recover a running native writer whose host exited without a turn-end report.
+    // An open historical turn must not make take-back wait forever for a forbidden Done.
+    f.ctx.herdr = corral_herdr::Herdr::with_bin(
+        f._tmp.path().join("herdr-must-not-run"),
+        Some("isolated-fixture".into()),
+    );
+    let socket = f.ctx.herdr.socket_path().unwrap();
+    f.ctx
+        .store
+        .update(&current.id, |task| {
+            task.status = corral_core::Status::Running;
+            let run = task.current_run_mut().unwrap();
+            run.outcome = None;
+            run.herdr = Some(corral_core::HerdrRef {
+                workspace_id: "fixture-workspace".into(),
+                pane_id: "worker-pane".into(),
+                socket: Some(socket.clone()),
+            });
+            Ok(())
+        })
+        .unwrap();
+    let mut host = ts::bind(&f, &target, "worker-pane", "worker-session");
+    host.identity.project = current.project.clone().unwrap();
+    ts::committed(&ts::hello(&f, &host));
+    ts::committed(&ts::send(
+        &f,
+        &ts::event_input(&host, 1, "turn_started", 1),
+        "event",
+    ));
+    let running = f.ctx.store.get(&current.id).unwrap();
+    let run = running.current_run().unwrap();
+    std::fs::write(
+        run.worktree.join("latest-repair"),
+        b"not in the original package\0\xff",
+    )
+    .unwrap();
+    let latest =
+        Snapshot::capture(&f.ctx.store, &run.worktree, &run.base_sha, &run.branch).unwrap();
+    let taken = takeback::apply(
+        &f.ctx,
+        &running.id,
+        &running.contract_revision().unwrap(),
+        instruction(),
+    )
+    .unwrap();
+    let Returned::Ready {
+        scratch: Some(slug),
+        plan_only: false,
+        ..
+    } = taken
+    else {
+        panic!("native writer did not settle: {taken:?}")
+    };
+    let local = f.ctx.store.get_assistant(&session).unwrap();
+    let scratch = local.scratch.iter().find(|s| s.slug == slug).unwrap();
+    adopt::verify_worktree(&latest, &scratch.path, &scratch.branch).unwrap();
+    let stopped = f.ctx.store.get(&current.id).unwrap();
+    let run = stopped.current_run().unwrap();
+    assert_eq!(run.outcome, Some(corral_core::RunOutcome::Cancelled));
+    let state = run.agent_host.as_ref().unwrap();
+    assert_eq!(state.binding.health, corral_core::agent::HostHealth::Fenced);
+    assert!(
+        state.turns[0].ended.is_none(),
+        "do not fabricate an authenticated turn end"
+    );
+    assert!(stopped.dispatch_hold);
+    assert_eq!(f.ctx.store.list().unwrap().len(), 1);
+    assert!(crate::agent::open_generation(&f.ctx.store, &target, "stale-pane").is_err());
 }
