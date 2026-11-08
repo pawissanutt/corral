@@ -15,7 +15,10 @@ function snapshot(fx: CodeFixture) {
 
 // One real host journey: a tool barrier decides both orderings without sleeps or live providers.
 test("object withdrawal beats a poll, start beats withdrawal, and evidence precedes both", async () => {
-  const fx = await codeHost("worker", { catalog: 10, enabled: ["queue_control"] });
+  const fx = await codeHost("worker", { catalog: 10, enabled: ["queue_control"],
+    extend: pi => pi.on("input", event => event.text === "pane restore"
+      ? { action: "transform", text: "expanded pane restore" } : { action: "continue" }),
+  });
   fx.host.markAttached("interactive");
   try {
     // First-session persistence: no user/assistant message is needed to flush custom evidence.
@@ -37,6 +40,14 @@ test("object withdrawal beats a poll, start beats withdrawal, and evidence prece
       idempotencyKey: key, origin: "corral-inbox" }, key);
     expect((await submit("cancel-me", "steer")).disposition).toBe("queued");
     expect((await submit("start-me", "follow_up")).disposition).toBe("queued");
+    await fx.host.session.steer("pane restore");
+    await fx.host.session.followUp("extension kept", undefined, { source: "extension" });
+    const external = snapshot(fx).filter(item => item.origin !== "pane");
+    const pane = snapshot(fx).find(item => item.origin === "pane");
+    expect(fx.host.session.getSteeringMessages()).toContain("expanded pane restore");
+    expect(fx.host.session.clearQueue({ restore: true })).toEqual({ steering: ["pane restore"], followUp: [] });
+    expect(snapshot(fx)).toEqual(external);
+    expect(ledger(fx).filter(entry => entry.item === pane?.item).at(-1)).toMatchObject({ event: "withdrawn", actor: "pane_restore" });
     const withdrawn = fx.host.queue.bridgeWithdraw("cancel-me", "op-cancel");
     expect(withdrawn.outcome).toBe("withdrawn");
     expect(fx.host.queue.bridgeWithdraw("cancel-me", "op-cancel")).toEqual({ ...withdrawn, replayed: true });
