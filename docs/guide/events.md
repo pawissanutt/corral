@@ -44,6 +44,14 @@ starting a fresh default wait at the tail could skip events between subscription
 Sequences are durable, increasing database positions. Readers resume from the stored sequence;
 they do not depend on a JSONL file's size, rotation or byte boundaries.
 
+## Candidate annotation events
+
+[Candidate review annotations](annotations.md) append `annotation_opened`,
+`annotation_replied`, `annotation_resolved` or `annotation_reopened` with `thread` and
+`entry` in the detail. They commit with the canonical annotation rows and head summary.
+Reads, identical request-key replays and refusals emit none. These are informational
+review-context events, not evidence, verdicts, acceptance or a gate on open threads.
+
 ## Recovery provenance
 
 [Workflow recovery](recovery.md) previews emit no authorization or configuration event.

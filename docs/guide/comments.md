@@ -27,6 +27,10 @@ Dispatch and reviewer prompts include the thread under **Owner comments**, with 
 file as its durable source. This also gives the review autopilot's reviewer the context.
 Custom prompt templates receive the comments even when they have no comment placeholder.
 
+For owner-only review notes anchored to exact committed candidate code, use
+[candidate review annotations](annotations.md). Unlike comments, annotations are not
+included in prompts or verification/review identities.
+
 ## Delivering a note
 
 ```sh
