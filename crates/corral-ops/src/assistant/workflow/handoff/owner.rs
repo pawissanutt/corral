@@ -183,9 +183,33 @@ pub fn take_back(
     super::takeback::apply(ctx, task, contract_revision, instruction)
 }
 
+pub fn retreat(
+    ctx: &Ctx,
+    choice: &super::retreat::Choice,
+    selected_digest: &str,
+) -> Result<super::retreat::Outcome> {
+    let journal = super::read_journal(&ctx.store, &choice.package)?.context("transfer missing")?;
+    let instruction = instruction(
+        ctx,
+        &journal.assistant,
+        &format!("retreat {} {selected_digest}", choice.package),
+    )?;
+    super::retreat::run(ctx, choice, selected_digest, instruction)
+}
+
 pub fn read(ctx: &Ctx, id: &str) -> Result<Value> {
     let journal =
         super::read_journal(&ctx.store, id)?.context("handoff: preview is not yet reserved")?;
+    if let Some(retreat) = &journal.retreat {
+        let c = ctx.store.get_assistant_container(&journal.assistant)?;
+        return Ok(
+            json!({"transfer":journal.id,"state":if retreat.complete {"retreated"} else {"retreating"},
+            "task":retreat.choice.card.as_ref().map(|c| &c.task),"waiting":journal.waiting,
+            "current_owner":c.workflow.as_ref().map(|w| &w.current.owner),
+            "current_phase":c.workflow.as_ref().map(|w| &w.current.phase),"source_retained":journal.source_retained,
+            "cancelled":journal.cancelled,"returned_prepare_only":true}),
+        );
+    }
     let Some(transfer) = &journal.transfer else {
         return Ok(
             json!({"transfer":journal.id,"state":"preparing","owner":"local_fenced", "waiting":journal.waiting, "source_drained":journal.source_boundary.is_some()}),

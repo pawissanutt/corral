@@ -12,7 +12,22 @@ use std::collections::BTreeSet;
 pub(super) fn task(ctx: &Ctx, prepared: &Prepared) -> Result<Option<String>> {
     let p = prepared.package();
     let container = ctx.store.get_assistant_container(&p.assistant)?;
-    if let Some(reference) = super::super::current(&container)?.handoff.as_ref()
+    let mut reference = super::super::current(&container)?.handoff.clone();
+    if reference
+        .as_ref()
+        .is_some_and(|r| r.blob == prepared.publication.package.blob)
+    {
+        // Reservation replaced the visible pointer; preserve the earlier returned
+        // lineage from THIS journal rather than cold-filing another task.
+        let journal = super::read_journal(&ctx.store, prepared.id())?
+            .context("source reservation missing")?;
+        ensure!(
+            journal.previous_handoff_known,
+            "handoff_source_lineage: earlier scope is unknown; reconcile instead of filing a rival"
+        );
+        reference = journal.previous_handoff;
+    }
+    if let Some(reference) = reference
         && reference.blob != prepared.publication.package.blob
     {
         let old: Package = serde_json::from_slice(
@@ -120,7 +135,7 @@ pub(super) fn require_not_pending<T: TaskRef + ?Sized>(
     store: &corral_core::Store,
     task: &T,
 ) -> Result<()> {
-    let Some((session, _)) = task.cowork().as_ref().and_then(|c| c.assistant_driver()) else {
+    let Some((session, scratch)) = task.cowork().as_ref().and_then(|c| c.assistant_driver()) else {
         return Ok(());
     };
     if !store.assistant_exists(session)? {
@@ -144,10 +159,22 @@ pub(super) fn require_not_pending<T: TaskRef + ?Sized>(
             }
             .load(store)?,
         )?;
+        let selected_driver = if scratch.is_empty() {
+            p.source_path.is_none()
+        } else {
+            let assistant = store.get_assistant(session)?;
+            let entry = assistant
+                .scratch
+                .iter()
+                .find(|s| s.slug == scratch)
+                .context("handoff_pending: current tracking scratch identity is missing")?;
+            p.source_path.as_ref() == Some(&entry.path)
+        };
         ensure!(
-            !task
-                .current_run_head()?
-                .is_some_and(|r| Some(&r.worktree) == p.source_path.as_ref()),
+            !selected_driver
+                && !task
+                    .current_run_head()?
+                    .is_some_and(|r| Some(&r.worktree) == p.source_path.as_ref()),
             "handoff_pending: source reservation is reconciling; no new pipeline effect"
         );
     }
