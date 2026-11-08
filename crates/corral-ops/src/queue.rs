@@ -26,7 +26,7 @@ pub fn enqueue(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<Task> {
     let task = ctx.store.get(&task.id)?;
     corral_core::Park::require_unparked(&task)?;
     if !opts.plan
-        && let Some(reason) = pending_plan_reason(&task)?
+        && let Some(reason) = pending_plan_reason(&ctx.store, &task)?
     {
         bail!(
             "cannot enqueue {}: {reason}; use --plan to explicitly replan",
@@ -229,7 +229,22 @@ mod plan_intent;
 pub(crate) use plan_intent::queued_plan_requested;
 
 /// Only the latest submission for the current task contract can hold admission.
-pub(crate) fn pending_plan_reason(task: &Task) -> Result<Option<String>> {
+pub(crate) fn pending_plan_reason(store: &Store, task: &Task) -> Result<Option<String>> {
+    if task
+        .cowork
+        .as_ref()
+        .is_some_and(|c| c.review == corral_core::CoworkReview::TransferV1)
+        && let Some(journal) =
+            crate::assistant::workflow::handoff::lifecycle::for_task(store, task)?
+        && crate::assistant::workflow::handoff::plan_adoption::draft_pending(
+            task,
+            journal.transfer.as_ref().context("transfer missing")?,
+        )?
+    {
+        // This projection is not authority. The executor still checks current driver,
+        // exact durable instruction, named holds, capacity and dependencies.
+        return Ok(None);
+    }
     let Some(plan) = task.plans.last() else {
         return Ok(None);
     };
@@ -597,7 +612,7 @@ pub(crate) fn blocked_reason(
 ) -> Result<Option<String>> {
     corral_core::Park::require_unparked(task)?;
     if matches!(task.status, Status::Idea | Status::Backlog | Status::Ready)
-        && let Some(reason) = pending_plan_reason(task)?
+        && let Some(reason) = pending_plan_reason(store, task)?
     {
         return Ok(Some(reason));
     }
@@ -722,7 +737,7 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
                         .unwrap_or_else(|| format!("waiting for {work:?} admission"))
                 })
             } else if !queued_plan_requested(&task)
-                && let Some(reason) = pending_plan_reason(&task)?
+                && let Some(reason) = pending_plan_reason(&store, &task)?
             {
                 reason
             } else if store.config.dispatch.paused {

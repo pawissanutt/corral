@@ -57,7 +57,7 @@ impl Admission {
         // The plan, capacity and slot checks read head fields and current containers only.
         let shell = task.shell_task()?;
         if !self.plan_requested(task, opts)
-            && let Some(reason) = crate::queue::pending_plan_reason(&shell)?
+            && let Some(reason) = crate::queue::pending_plan_reason(store, &shell)?
         {
             return Ok(Some(reason));
         }

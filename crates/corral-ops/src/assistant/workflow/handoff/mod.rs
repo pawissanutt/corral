@@ -22,6 +22,9 @@ pub mod continuation;
 mod continuation_seed;
 pub use code_pin::CodePin;
 pub mod lifecycle;
+pub(crate) mod plan_adoption;
+#[cfg(test)]
+mod plan_adoption_tests;
 pub(crate) mod plan_goal;
 pub(crate) mod recovery;
 mod settlement;

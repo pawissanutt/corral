@@ -169,10 +169,10 @@ fn pending_plan_tracks_only_latest_current_unaccepted_submission() {
         Some(Verdict::Escalate),
         Some(Verdict::Changes),
     ] {
-        let (_tmp, _ctx, mut task) = fixture();
+        let (_tmp, ctx, mut task) = fixture();
         set_review(&mut task, verdict);
         // When admission evaluates that latest submission.
-        let reason = crate::queue::pending_plan_reason(&task).unwrap();
+        let reason = crate::queue::pending_plan_reason(&ctx.store, &task).unwrap();
         // Then review and owner waits block, but requested revisions do not.
         assert_eq!(reason.is_some(), verdict != Some(Verdict::Changes));
     }
@@ -182,7 +182,7 @@ fn pending_plan_tracks_only_latest_current_unaccepted_submission() {
 fn historical_pending_plan_does_not_block_newest_approved_or_stale_plan() {
     // Given a pending plan followed by a newer approved or obsolete revision.
     for approved in [false, true] {
-        let (_tmp, _ctx, mut task) = fixture();
+        let (_tmp, ctx, mut task) = fixture();
         let mut latest = task.plans[0].clone();
         latest.id = "P2".into();
         if approved {
@@ -197,7 +197,7 @@ fn historical_pending_plan_does_not_block_newest_approved_or_stale_plan() {
         }
         task.plans.push(latest);
         // When admission considers plan history.
-        let reason = crate::queue::pending_plan_reason(&task).unwrap();
+        let reason = crate::queue::pending_plan_reason(&ctx.store, &task).unwrap();
         // Then only the newest submission is relevant.
         assert!(reason.is_none());
     }

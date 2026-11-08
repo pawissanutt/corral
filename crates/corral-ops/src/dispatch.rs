@@ -170,7 +170,7 @@ fn dispatch_with(
         plan: admission.plan_requested(&task, opts),
         ..opts.clone()
     };
-    let pending_plan = crate::queue::pending_plan_reason(&task)?;
+    let pending_plan = crate::queue::pending_plan_reason(&ctx.store, &task)?;
     if !opts.plan
         && let Some(reason) = &pending_plan
     {

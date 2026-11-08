@@ -218,7 +218,7 @@ fn save_with_an_unverified_writer_stays_saving_after_restart_and_cannot_reopen_a
     assert_eq!(reopened.list().unwrap().len(), 1);
 }
 
-const FORMAL: &str = "---\ngoal: Repair cache\nnon_goals: []\ndecisions: [keep format]\naffected_paths: [file]\ncontracts: []\ndependencies: []\nacceptance: [{scenario: cache repair, expected: correct value}]\nverification: [unit check]\nowner_decisions: []\n---\n\nExact assistant-produced plan.\n";
+pub(super) const FORMAL: &str = "---\ngoal: Repair cache\nnon_goals: []\ndecisions: [keep format]\naffected_paths: [file]\ncontracts: []\ndependencies: []\nacceptance: [{scenario: cache repair, expected: correct value}]\nverification: [unit check]\nowner_decisions: []\n---\n\nExact assistant-produced plan.\n";
 
 #[test]
 fn exact_formal_plan_keeps_actual_producer_and_review_only_never_allocates_coding_or_replacement_planner()

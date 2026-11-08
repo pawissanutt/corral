@@ -61,18 +61,20 @@ pub(crate) fn plan_submit_checked(
     path: &Path,
     check: &dyn Fn(&Task) -> Result<()>,
 ) -> Result<PlanRecord> {
+    plan_submit_prepared(ctx, id, path, check, &|_| Ok(()))
+}
+
+/// Internal provenance preparation shares submission's task transaction. It is not
+/// authorization: the caller's check and current ownership admission still run first.
+pub(crate) fn plan_submit_prepared(
+    ctx: &Ctx,
+    id: &str,
+    path: &Path,
+    check: &dyn Fn(&Task) -> Result<()>,
+    prepare: &dyn Fn(&mut Task) -> Result<()>,
+) -> Result<PlanRecord> {
     let source = ctx.store.get(id)?;
-    if crate::assistant::workflow::handoff::lifecycle::for_task(&ctx.store, &source)?
-        .and_then(|j| j.transfer)
-        .is_some_and(|t| t.ownership_committed)
-    {
-        crate::assistant::workflow::handoff::admission::require(
-            &ctx.store,
-            &source,
-            corral_core::OperatingActionKind::Plan,
-            false,
-        )?;
-    }
+    require_submission(ctx, &source)?;
     check(&source)?;
     crate::tracker::check_action(&ctx.store.get(id)?, "submit tracker to the plan pipeline")?;
     let bytes = read_plan(ctx, path)?;
@@ -106,7 +108,9 @@ pub(crate) fn plan_submit_checked(
     )?;
     let mut previous = None;
     let saved = ctx.store.update(id, |task| {
+        require_submission(ctx, task)?;
         check(task)?;
+        prepare(task)?;
         crate::tracker::check_action(task, "submit tracker to the plan pipeline")?;
         check_criteria(task, &document)?;
         let revision = plan_spec_revision(task)?;
@@ -150,6 +154,21 @@ pub(crate) fn plan_submit_checked(
         crate::plan_review::close_plan_review(ctx, &previous)?;
     }
     saved.plans.last().cloned().context("plan was not saved")
+}
+
+fn require_submission(ctx: &Ctx, task: &Task) -> Result<()> {
+    if crate::assistant::workflow::handoff::lifecycle::for_task(&ctx.store, task)?
+        .and_then(|j| j.transfer)
+        .is_some_and(|t| t.ownership_committed)
+    {
+        crate::assistant::workflow::handoff::admission::require(
+            &ctx.store,
+            task,
+            corral_core::OperatingActionKind::Plan,
+            false,
+        )?;
+    }
+    Ok(())
 }
 
 /// Explicit task override; an absent value inherits project/workspace policy.
