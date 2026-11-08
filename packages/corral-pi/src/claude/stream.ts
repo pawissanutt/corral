@@ -14,8 +14,8 @@ import { registerApiProvider } from "@earendil-works/pi-ai/compat";
 import { buildCustomToolServers } from "./custom-tools.ts";
 import { ReplayCache, cacheScope } from "./cache.ts";
 import {
-  type StreamEvent, applyStreamEvent, assertPiCompactionOwner, assistantFailure, emptyOutput,
-  hasPromptUsage, mapStopReason, recordClaudeCache, resultFailure, updateUsage,
+  type StreamEvent, applyStreamEvent, assertPiCompactionOwner, emptyOutput,
+  hasPromptUsage, mapStopReason, nativeSdkFailure, recordClaudeCache, updateUsage,
 } from "./events.ts";
 import { buildPromptBlocks, promptStream } from "./prompt.ts";
 import { DEFAULT_CACHE_TTL, resolveCacheRetention, type ClaudeCacheRetention } from "./cache-policy.ts";
@@ -184,15 +184,8 @@ export function streamClaudeSdk(
           updateUsage(model, output, message.usage);
         }
         if (message.type === "rate_limit_event") rateLimit = message.rate_limit_info;
-        const failure = message.type === "assistant" ? assistantFailure(message)
-          : message.type === "result" ? resultFailure(message) : undefined;
-        if (failure) throw new NativeFailure(normalizeFailure("anthropic-subscription", {
-          ...(message.type === "assistant" ? { sdk_error: message.message.stop_reason === "refusal" ? "invalid_request" : message.error,
-            request_id: message.request_id } : {}),
-          ...(message.type === "result" ? { terminal_reason: message.terminal_reason,
-            status: "api_error_status" in message && typeof message.api_error_status === "number" ? message.api_error_status : undefined } : {}),
-          rate_limit: rateLimit,
-        }));
+        const failure = nativeSdkFailure(message, rateLimit, "coding");
+        if (failure) throw failure;
         if (!started) {
           stream.push({ type: "start", partial: output });
           started = true;
