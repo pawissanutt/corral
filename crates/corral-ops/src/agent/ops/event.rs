@@ -37,6 +37,8 @@ struct EventPayload {
     #[serde(default)]
     class: Option<String>,
     #[serde(default)]
+    failure: Option<corral_core::availability::ProviderFailure>,
+    #[serde(default)]
     budget: Option<serde_json::Value>,
     /// turn_ended only: the owner typed into the pane while this turn was open.
     #[serde(default)]
@@ -120,6 +122,18 @@ fn validate(envelope: &Envelope, payload: &EventPayload) -> Result<()> {
     {
         return Err(bad("a continuation origin names its continuation key"));
     }
+    if let Some(failure) = &payload.failure {
+        if payload.kind != EventKind::ProviderError
+            || payload.class.as_deref() != Some(failure.class())
+        {
+            return Err(bad(
+                "typed failure is only valid on a matching provider_error",
+            ));
+        }
+        failure
+            .validate()
+            .map_err(|_| bad("invalid sanitized provider failure"))?;
+    }
     match (&payload.class, payload.kind) {
         (Some(class), EventKind::ProviderError) if word(class, 64) => Ok(()),
         (None, EventKind::TurnStarted | EventKind::TurnEnded | EventKind::BudgetExhausted) => {
@@ -152,6 +166,7 @@ fn turn(generation: u32, seq: u64) -> AgentTurn {
         ended: None,
         class: None,
         provider_error: None,
+        provider_failure: None,
         provider: None,
         model: None,
     }
@@ -190,6 +205,7 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         provider,
         model,
         class,
+        failure,
         budget,
         owner_input,
         cancelled,
@@ -263,11 +279,36 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 post_pending.push("event:agent_budget_exhausted".into());
             }
             (EventKind::ProviderError, index) => {
+                if let Some(failure) = &failure {
+                    let current = index
+                        .and_then(|i| state.turns.get(i))
+                        .filter(|turn| turn.started.is_some() && turn.ended.is_none())
+                        .ok_or_else(|| bad("typed provider failure requires an open turn"))?;
+                    let connection = state
+                        .generation(n)
+                        .and_then(|g| g.connection.as_ref())
+                        .map(|b| b.connection)
+                        .or_else(|| match current.provider.as_deref() {
+                            Some("anthropic") => {
+                                Some(corral_core::connection::ConnectionId::AnthropicSubscription)
+                            }
+                            Some("openai-codex") => {
+                                Some(corral_core::connection::ConnectionId::OpenaiSubscription)
+                            }
+                            _ => None,
+                        });
+                    if connection != Some(failure.connection)
+                        || current.provider.as_deref() != Some(failure.connection.provider())
+                    {
+                        return Err(bad("provider failure differs from the bound connection"));
+                    }
+                }
                 let i = index.unwrap_or_else(|| {
                     state.turns.push(turn(n, seq));
                     state.turns.len() - 1
                 });
                 state.turns[i].provider_error = class.clone();
+                state.turns[i].provider_failure = failure.clone();
                 post_pending.push("event:agent_provider_error".into());
             }
         }
@@ -287,6 +328,7 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 "kind": kind_name, "turn": seq, "generation": n,
                 "class": if kind == EventKind::BudgetExhausted { Some("budget_exhausted") } else { class.as_deref() }, "fenced": closes,
                 "budget": budget, "provider": provider, "model": model, "request": request,
+                "failure": failure,
             }),
             effect: Some(ReceiptEffect {
                 kind: "turn".into(),

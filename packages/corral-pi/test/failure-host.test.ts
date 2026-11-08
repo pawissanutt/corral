@@ -72,4 +72,4 @@ for (const provider of ["openai-codex", "anthropic"] as const) test(`${provider}
     await host?.close(); overrideSdk(undefined); globalThis.fetch = oldFetch;
     assets.cleanup(); rmSync(work, { recursive: true, force: true });
   }
-}, 15_000);
+});
