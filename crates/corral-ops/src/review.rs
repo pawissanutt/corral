@@ -552,6 +552,9 @@ fn approve_landed_inner(
         if !awaiting_owner(t)? || t.current_run_head()?.is_none_or(|r| r.id != run.id) {
             bail!("stale_retry: task or run changed before landing");
         }
+        crate::assistant::workflow::handoff::admission::require(
+            store, t, corral_core::OperatingActionKind::Accept, expected.is_some(),
+        )?;
         crate::operating::require_completion(t)?;
         // Ordinary explicit owner overrides retain their non-policy-PASS semantics.
         // Automatic landing and versioned completion instructions never waive triage.

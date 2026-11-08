@@ -266,8 +266,16 @@ fn advance(
         let repo = ctx
             .store
             .project_path(task.project.as_deref().context("task has no project")?)?;
-        let start =
-            crate::plan_recovery::retry::start_head(&ctx.store, &task, &RunHead::of(&run)?)?;
+        let start = match crate::assistant::workflow::handoff::adopt::start_head(
+            ctx,
+            &*task,
+            &RunHead::of(&run)?,
+        )? {
+            Some(head) => head,
+            None => {
+                crate::plan_recovery::retry::start_head(&ctx.store, &task, &RunHead::of(&run)?)?
+            }
+        };
         if run.worktree.is_dir() {
             corral_git::ensure_evidence_excluded(&repo)?;
             if corral_git::current_branch(&run.worktree)? != run.branch
@@ -670,5 +678,8 @@ fn prepare_prompt(ctx: &Ctx, task: &TaskHead) -> Result<()> {
             }
         }
     }
+    prompt.push_str(&crate::assistant::workflow::handoff::adopt::prompt(
+        ctx, task,
+    )?);
     crate::prompt::store_run_prompt(ctx, &task.id, &run.id, &prompt).map(drop)
 }

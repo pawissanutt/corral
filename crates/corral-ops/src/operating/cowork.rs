@@ -22,9 +22,11 @@ pub(super) fn confirmed<T: TaskRef + ?Sized>(task: &T, kind: OperatingActionKind
 pub(super) fn validate<T: TaskRef + ?Sized>(task: &T, kind: OperatingActionKind) -> Result<()> {
     let cowork = task.cowork_run();
     ensure!(
-        cowork.is_none_or(
-            |c| c.completion.is_some() == (c.review == corral_core::CoworkReview::CompletionV1)
-        ),
+        cowork.is_none_or(|c| c.completion.is_some()
+            == matches!(
+                c.review,
+                corral_core::CoworkReview::CompletionV1 | corral_core::CoworkReview::TransferV1
+            )),
         "completion scope has no compatible reader fence; upgrade/reconcile Corral"
     );
     if let Some(scope) = cowork.and_then(|cowork| cowork.completion.as_ref()) {

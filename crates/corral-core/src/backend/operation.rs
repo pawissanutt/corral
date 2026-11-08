@@ -215,8 +215,9 @@ pub enum UpdateForm {
 }
 
 /// Allocates the next task number (replacing `lock/next-id`) and the id `<prefix>-<num:03>`,
-/// and commits the head, rows and events. Events without a task get the new id. Requires a
-/// non-empty uppercase ASCII prefix and unique row keys.
+/// and commits the head, rows, records and events. Events without a task get the new id.
+/// Record CAS conflicts roll back task allocation as well. Requires a non-empty uppercase
+/// ASCII prefix and unique row keys.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CreateTask {
     pub id_prefix: String,
@@ -225,6 +226,8 @@ pub struct CreateTask {
     pub doc: Value,
     pub summary: Value,
     pub rows: Vec<HistoryRow>,
+    #[serde(default)]
+    pub records: Vec<RecordWrite>,
     pub events: Vec<NewEvent>,
     pub reservations: Vec<ReservationUse>,
 }

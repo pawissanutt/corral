@@ -751,6 +751,9 @@ pub enum CoworkReview {
     Required,
     /// Minimum-reader fence: old controllers must not mistake Verify for legacy Ship.
     CompletionV1,
+    /// Minimum reader for goal-bounded transfer/admission. Older controllers must refuse
+    /// rather than treating a saved or plan-only transfer as an ordinary completion.
+    TransferV1,
 }
 
 /// A task file: `.corral/tasks/<id>-<slug>.md` = YAML frontmatter (this struct minus `body`/`path`) + markdown body.

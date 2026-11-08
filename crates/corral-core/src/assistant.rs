@@ -486,6 +486,46 @@ impl Store {
         records::save_container(self, id, container)
     }
 
+    /// Join an existing task mutation's record unit. The caller already owns the board
+    /// writer lock; taking another writer lock here would deadlock. This makes transfer
+    /// ownership, its task projection and journal one publication, not three readbacks.
+    pub fn stage_assistant_container<R>(
+        &self,
+        id: &str,
+        f: impl FnOnce(&mut AssistantContainer, bool) -> Result<R>,
+    ) -> Result<R> {
+        anyhow::ensure!(
+            self.has_record_unit(),
+            "assistant staging requires a writer unit"
+        );
+        let ended = self.read_assistant(id)?.ended.is_some();
+        let mut container = self.read_assistant_container(id)?;
+        let result = f(&mut container, ended)?;
+        container.validate_protocol()?;
+        self.write_assistant_container(id, &container)?;
+        Ok(result)
+    }
+
+    /// Stage the session projection beside its container in a task-owned writer unit.
+    pub fn stage_assistant_session<R>(
+        &self,
+        id: &str,
+        f: impl FnOnce(&mut AssistantSession) -> Result<R>,
+    ) -> Result<R> {
+        anyhow::ensure!(
+            self.has_record_unit(),
+            "assistant staging requires a writer unit"
+        );
+        let mut session = self.read_assistant(id)?;
+        let result = f(&mut session)?;
+        anyhow::ensure!(
+            session.id == id && session.version == ASSISTANT_VERSION,
+            "assistant identity is immutable"
+        );
+        self.write_assistant(&session)?;
+        Ok(result)
+    }
+
     /// Serialize host updates with lifecycle operations. Never call from inside a task update.
     pub fn update_assistant_container<R>(
         &self,

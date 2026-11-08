@@ -325,14 +325,30 @@ impl Draft<'_> {
         } else {
             None
         };
+        let transfer_fenced = task
+            .cowork
+            .as_ref()
+            .is_some_and(|c| c.review == CoworkReview::TransferV1);
         task.cowork = Some(Cowork {
             completion,
             session: self.session.to_owned(),
             scratch: self.scratch.slug.clone(),
             run: id.clone(),
-            review: self.review,
+            review: if transfer_fenced {
+                CoworkReview::TransferV1
+            } else {
+                self.review
+            },
             owner_confirmed: self.owner_confirmed,
         });
+        if transfer_fenced {
+            crate::assistant::workflow::handoff::renew::submitted(
+                ctx,
+                task,
+                self.session,
+                &self.scratch.slug,
+            )?;
+        }
         if !task.labels.iter().any(|label| label == LABEL) {
             task.labels.push(LABEL.into());
         }
@@ -474,7 +490,8 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
         scratch.branch,
         match review {
             CoworkReview::None => "none",
-            CoworkReview::Required | CoworkReview::CompletionV1 => "required",
+            CoworkReview::Required | CoworkReview::CompletionV1 | CoworkReview::TransferV1 =>
+                "required",
         }
     );
     if let Some(note) = opts.note.filter(|note| !note.trim().is_empty()) {

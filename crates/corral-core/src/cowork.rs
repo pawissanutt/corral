@@ -31,7 +31,12 @@ pub struct CompletionScope {
 // optional intent field would let an old controller deserialize Verify as legacy Ship.
 impl Serialize for crate::Cowork {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if self.completion.is_some() != (self.review == crate::CoworkReview::CompletionV1) {
+        if self.completion.is_some()
+            != matches!(
+                self.review,
+                crate::CoworkReview::CompletionV1 | crate::CoworkReview::TransferV1
+            )
+        {
             return Err(serde::ser::Error::custom(
                 "completion scope requires the completion_v1 review fence",
             ));

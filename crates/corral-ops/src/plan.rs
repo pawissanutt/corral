@@ -61,7 +61,19 @@ pub(crate) fn plan_submit_checked(
     path: &Path,
     check: &dyn Fn(&Task) -> Result<()>,
 ) -> Result<PlanRecord> {
-    check(&ctx.store.get(id)?)?;
+    let source = ctx.store.get(id)?;
+    if crate::assistant::workflow::handoff::lifecycle::for_task(&ctx.store, &source)?
+        .and_then(|j| j.transfer)
+        .is_some_and(|t| t.ownership_committed)
+    {
+        crate::assistant::workflow::handoff::admission::require(
+            &ctx.store,
+            &source,
+            corral_core::OperatingActionKind::Plan,
+            false,
+        )?;
+    }
+    check(&source)?;
     crate::tracker::check_action(&ctx.store.get(id)?, "submit tracker to the plan pipeline")?;
     let bytes = read_plan(ctx, path)?;
     PlanDocument::parse(std::str::from_utf8(&bytes).context("plan must be UTF-8")?)?;
