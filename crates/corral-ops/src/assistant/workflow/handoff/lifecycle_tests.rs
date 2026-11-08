@@ -206,6 +206,24 @@ fn exact_formal_plan_keeps_actual_producer_and_review_only_never_allocates_codin
             .disposition,
         Disposition::Continuing
     );
+    // A later stopped planner does not become the author of the retained exact plan.
+    let mut history = task.clone();
+    let mut later = task.plan_runs[0].clone();
+    later.id = "D2".into();
+    later.profile = "not-the-author".into();
+    later.state = corral_core::PlanRunState::Cancelled;
+    history.plan_runs.push(later);
+    let pinned = lifecycle::review_target(&history).unwrap();
+    assert_eq!(pinned.producer_run, "D1");
+    assert_eq!(pinned.producer_profile, task.plan_runs[0].profile);
+    let review_source = crate::plan_review::source_task(&history).unwrap();
+    assert_eq!(
+        corral_core::plan_policy::planner(&review_source)
+            .unwrap()
+            .unwrap()
+            .profile,
+        task.plan_runs[0].profile
+    );
 }
 
 #[test]
