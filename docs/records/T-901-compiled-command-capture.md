@@ -41,9 +41,10 @@ watch notification cannot observe the spool before that callback updates the pee
 The command still blocks on its completion FIFO until the peek has returned and job_wait
 starts. The watcher closes both on success and in fixture cleanup.
 
-Retain the existing compiled startup/reload/launch/yield/peek/wait journey, all three output
+Retain the existing compiled startup/reload/launch/yield/peek/wait journey, the original output
 conditions, the embedded-worker check, and all existing time limits. Split the combined
-assertion into three descriptive failures, including observed output. No runtime changes,
+assertion into descriptive failures, including observed output. Review F2 additionally
+requires completed wait to retain BEFORE as well as AFTER. No runtime changes,
 new test cases, quarantine, unrelated held-task changes, or T-890 recovery are included.
 
 ## Evidence and acceptance mapping
@@ -68,3 +69,20 @@ The receipted post-rebase quick gate and candidate/base proof are separate run a
 Independent review and the normal full landing gate remain Corral's subsequent checks;
 this report does not claim their completion. T-890's failed receipt remains unchanged.
 No provider calls, owner credentials, live herdr fixtures, or load tests were needed.
+
+## Review round 1 rework
+
+F1: The reviewer correctly distinguishes the demonstrated capture-readiness defect from the
+unknown historical T-890 cause. Owner-only decision `T-901/R1/Q1` asks whether bounded proof
+of that defect is sufficient with the historical subcondition explicitly unresolved, or
+whether the task must remain blocked on exact historical identification. Until answered,
+this report does not claim that obligation met or reinterpret it as runtime-cause proof.
+
+F2: The compiled completed-wait assertion now requires both BEFORE and AFTER. The scratch
+`completed-buffer-assertion-probe.mjs` executes the fixture's actual assertion block with
+peek BEFORE and wait AFTER-only. Before the fix it failed because the fixture accepted that
+lost-buffer result; after the fix it passes by observing the expected rejection for missing
+buffered BEFORE. This is assertion-contract evidence, not a compiled runtime reproducer.
+The existing compiled journey then passed with both wait conditions enforced (one test,
+zero failures, 8.590 s body), and package typecheck passed after another LSP indexing timeout.
+No test registrations or timeout changes were added.
