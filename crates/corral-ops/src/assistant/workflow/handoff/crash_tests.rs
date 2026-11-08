@@ -118,3 +118,124 @@ fn handoff_publication_crash_matrix_reconciles_package_and_reservation_without_e
         assert!(require_source_releasable(&reopened, &session, &source).is_err());
     }
 }
+
+// Slow: persisted partial seed/index restart under a moved integration base; owning trigger is handoff/.
+#[test]
+fn handoff_materialization_restart_preserves_pinned_layers_and_the_moved_base() {
+    let mut f = ts::fx();
+    let source = f._tmp.path().join("repo");
+    let base = repo(&source);
+    git::git(&source, &["branch", "main", &base], None).unwrap();
+    f.ctx.store.config.projects.insert(
+        "app".into(),
+        serde_json::from_value(serde_json::json!({"path":"repo","base":"main"})).unwrap(),
+    );
+    f.ctx.store.save_config().unwrap();
+    let integration = f._tmp.path().join("integration");
+    git::git(
+        &source,
+        &["worktree", "add", integration.to_str().unwrap(), "main"],
+        None,
+    )
+    .unwrap();
+    std::fs::write(source.join("committed"), b"source commit\0\xff").unwrap();
+    git::git(&source, &["add", "committed"], None).unwrap();
+    git::git(&source, &["commit", "-m", "source work"], None).unwrap();
+    std::fs::write(source.join("file"), b"staged\0\xff\r\n").unwrap();
+    git::git(&source, &["add", "file"], None).unwrap();
+    std::fs::write(source.join("file"), b"work\0\xfe\r\n").unwrap();
+    std::fs::remove_file(source.join("deleted")).unwrap();
+    std::fs::write(source.join("untracked"), b"retained\r\n\0\xff").unwrap();
+    let snapshot = Snapshot::capture(&f.ctx.store, &source, &base, "work").unwrap();
+    let task = f
+        .ctx
+        .store
+        .create(
+            "Reserved materialization",
+            Some("app".into()),
+            corral_core::Status::Backlog,
+            "",
+        )
+        .unwrap();
+    f.ctx
+        .store
+        .update(&task.id, |t| {
+            t.dispatch_hold = true;
+            Ok(())
+        })
+        .unwrap();
+    let destination = f._tmp.path().join("interrupted-seed");
+    let branch = "reserved/restart-seed";
+    git::git(
+        &source,
+        &[
+            "worktree",
+            "add",
+            "--no-checkout",
+            "-b",
+            branch,
+            destination.to_str().unwrap(),
+            &snapshot.state.head,
+        ],
+        None,
+    )
+    .unwrap();
+    // Persist a real prefix of materialization: linked worktree, raw index and one
+    // exact file. No success/adoption/approval/PASS is recorded for this prefix.
+    let index = String::from_utf8(
+        git::git(
+            &destination,
+            &["rev-parse", "--path-format=absolute", "--git-path", "index"],
+            None,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        index.trim(),
+        snapshot.state.index.load(&f.ctx.store).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(destination.join("file"), b"work\0\xfe\r\n").unwrap();
+    assert!(!destination.join("untracked").exists());
+    std::fs::write(
+        integration.join("integration-only"),
+        b"new main must survive",
+    )
+    .unwrap();
+    git::git(&integration, &["add", "integration-only"], None).unwrap();
+    git::git(&integration, &["commit", "-m", "advance integration"], None).unwrap();
+    let moved = corral_git::rev_sha(&source, "main").unwrap();
+    assert_ne!(moved, base);
+    let mut resumed = f.ctx.clone();
+    resumed.store = Store::open(f.ctx.store.root()).unwrap();
+    let task = resumed.store.get(&task.id).unwrap();
+    adopt::restore_worktree(&resumed, &task, &snapshot, &destination, branch).unwrap();
+    adopt::verify_worktree(&snapshot, &destination, branch).unwrap();
+    adopt::restore_worktree(&resumed, &task, &snapshot, &destination, branch).unwrap();
+    assert_eq!(corral_git::rev_sha(&source, "main").unwrap(), moved);
+    assert_eq!(
+        std::fs::read(integration.join("integration-only")).unwrap(),
+        b"new main must survive"
+    );
+    assert_eq!(
+        git::scan(&source, &snapshot.state.base, "work")
+            .unwrap()
+            .state,
+        snapshot.state
+    );
+    assert_eq!(
+        std::fs::read(destination.join("untracked")).unwrap(),
+        b"retained\r\n\0\xff"
+    );
+    std::fs::write(destination.join("file"), b"later owner work").unwrap();
+    assert!(adopt::restore_worktree(&resumed, &task, &snapshot, &destination, branch).is_err());
+    assert_eq!(
+        std::fs::read(destination.join("file")).unwrap(),
+        b"later owner work"
+    );
+    assert!(resumed.store.get(&task.id).unwrap().runs.is_empty());
+    eprintln!(
+        "MATERIALIZATION_RESTART: exact committed/index/binary/work/untracked layers recovered from persisted prefix; moved main and later owner edits untouched; internal materializer contract, no approval/PASS or code execution"
+    );
+}

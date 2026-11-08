@@ -13,6 +13,8 @@ use corral_ops::agent::{BindTarget, open_generation, payload_sha256, tool_reques
 use corral_ops::assistant::owner_action::kinds::{self, Class, KINDS, Target};
 use serde_json::{Value, json};
 
+#[path = "assistant_owner_action_cli/handoff.rs"]
+mod handoff;
 #[path = "assistant_owner_action_cli/implement_now.rs"]
 mod implement_now;
 
