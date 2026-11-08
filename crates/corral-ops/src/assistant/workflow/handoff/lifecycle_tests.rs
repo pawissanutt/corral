@@ -186,7 +186,17 @@ fn exact_formal_plan_keeps_actual_producer_and_review_only_never_allocates_codin
     std::fs::write(&path, FORMAL.replace("cache", "other")).unwrap();
     assert!(crate::plan_submit(&f.ctx, &task.id, &path).is_err());
     assert_eq!(f.ctx.store.get(&task.id).unwrap().plans, task.plans);
-    assert!(transfer::preview(&f.ctx, prepared.id(), "review", None, false).is_ok());
+    assert!(
+        transfer::preview(
+            &f.ctx,
+            prepared.id(),
+            "Continue selected scope",
+            None,
+            false
+        )
+        .is_ok()
+    );
+    assert!(transfer::preview(&f.ctx, prepared.id(), "changed selection", None, false).is_err());
     assert_eq!(
         read_journal(&f.ctx.store, prepared.id())
             .unwrap()

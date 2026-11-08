@@ -50,6 +50,7 @@ pub(super) fn apply(
         }
         ensure!(parent.children.is_empty(), "task already has children");
         let current_contract = parent.contract_revision()?;
+        let before_projection = current_contract.clone();
         let source_contract = if let Some(previous) = PUBLICATIONS.load(store, &parent.id)? {
             if previous.backlink == backlink {
                 ensure!(
@@ -86,6 +87,11 @@ pub(super) fn apply(
             }
             Ok(())
         })?;
+        crate::assistant::workflow::handoff::continuation::carry_plan_link(
+            store,
+            parent,
+            &before_projection,
+        )?;
         let projected_contract = parent.contract_revision()?;
         let scopes = document
             .dependencies

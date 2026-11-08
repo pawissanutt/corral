@@ -50,12 +50,18 @@ pub(crate) fn submitted(
             && scope.contract_revision == contract,
         "handoff_instruction: candidate instruction is stale"
     );
-    cowork.review = CoworkReview::TransferV1;
-    transfer.goal = if scope.intent == CompletionIntent::Ship {
+    let goal = if scope.intent == CompletionIntent::Ship {
         Goal::ImplementationShip
     } else {
         Goal::ImplementationVerify
     };
+    if !transfer.renewed_assistant || transfer.goal != goal {
+        let instruction = super::owner::completion_instruction(session, &scope.instruction)?;
+        transfer.record(instruction)?;
+        transfer.advance()?;
+    }
+    cowork.review = CoworkReview::TransferV1;
+    transfer.goal = goal;
     transfer.contract_revision = contract;
     transfer.renewed_assistant = true;
     task.dispatch_hold = false;

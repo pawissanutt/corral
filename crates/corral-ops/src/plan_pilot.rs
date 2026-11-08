@@ -154,7 +154,11 @@ fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
     if crate::recovery::reconcile_pending(ctx, id)? {
         return Ok(());
     }
-    let shell = ctx.store.head(id)?.to_shell_task()?;
+    let current = ctx.store.head(id)?;
+    if crate::assistant::workflow::handoff::plan_goal::review_only(ctx, &current)? {
+        return Ok(());
+    }
+    let shell = current.to_shell_task()?;
     if shell.hold.is_some() || shell.park.is_some() || idle(ctx, &shell, now)? {
         return Ok(());
     }
