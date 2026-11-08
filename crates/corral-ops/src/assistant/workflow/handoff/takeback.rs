@@ -413,7 +413,7 @@ pub(crate) fn apply(
     })
 }
 
-fn holders(task: &Task) -> Vec<String> {
+pub(super) fn holders(task: &Task) -> Vec<String> {
     let mut holders = Vec::new();
     if let Some(launch) = &task.launch {
         holders.push(format!("launch {:?}", launch.stage));

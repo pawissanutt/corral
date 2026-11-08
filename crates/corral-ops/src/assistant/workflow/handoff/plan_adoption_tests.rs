@@ -2,7 +2,7 @@ use super::*;
 use crate::agent::test_support as ts;
 use corral_core::{OperatingActionKind as Kind, TaskRef as _, assistant_workflow::DesignStage};
 
-fn instruction() -> lifecycle::Instruction {
+pub(super) fn instruction() -> lifecycle::Instruction {
     lifecycle::Instruction::Shell {
         text: "fixture selected current plan source".into(),
         at: corral_core::clock::now(),
@@ -58,7 +58,7 @@ fn select(f: &ts::Fx, prepared: &Prepared) -> transfer::Choice {
     .unwrap()
 }
 
-fn board() -> (ts::Fx, String, corral_core::Task) {
+pub(super) fn board() -> (ts::Fx, String, corral_core::Task) {
     let mut f = ts::fx();
     let (session, _, _) = tests::planning(&mut f);
     f.ctx.store.save_config().unwrap();

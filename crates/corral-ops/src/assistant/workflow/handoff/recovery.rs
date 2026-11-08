@@ -8,6 +8,9 @@ use corral_core::Store;
 const WORK: &str = "assistant-handoff-work";
 
 fn pending(journal: &Journal) -> bool {
+    if journal.retreat.as_ref().is_some_and(|r| !r.complete) {
+        return true;
+    }
     !journal.cancelled
         && journal.selection.is_some()
         && journal.transfer.as_ref().is_none_or(|t| {
@@ -23,7 +26,7 @@ fn pending(journal: &Journal) -> bool {
 
 pub(super) fn save(store: &Store, journal: &Journal) -> Result<()> {
     let mut journal = journal.clone();
-    if journal.selection.is_some() {
+    if journal.selection.is_some() || journal.retreat.is_some() {
         journal.version = 2;
     }
     let key = crate::verification::digest(journal.id.as_bytes());
@@ -65,6 +68,15 @@ pub(crate) fn reconcile(ctx: &Ctx) -> Result<()> {
 }
 
 fn advance(ctx: &Ctx, journal: &Journal) -> Result<()> {
+    if let Some(retreat) = journal.retreat.as_ref().filter(|r| !r.complete) {
+        return super::retreat::run(
+            ctx,
+            &retreat.choice,
+            &retreat.digest,
+            retreat.instruction.clone(),
+        )
+        .map(drop);
+    }
     let selection = journal
         .selection
         .as_ref()

@@ -142,6 +142,21 @@ fn dirty_saved_seed_returns_exact_layers_and_branch_without_residual_intent() {
     .unwrap();
     let selected =
         transfer::preview(&f.ctx, next.id(), "save finished current work", None, true).unwrap();
+    f.ctx
+        .store
+        .settle_assistant_container(&session, |c, _| reserve(&f.ctx.store, &session, c, &next))
+        .unwrap();
+    let reserved_choice =
+        transfer::preview(&f.ctx, next.id(), "save finished current work", None, true).unwrap();
+    assert_eq!(
+        reserved_choice.into, selected.into,
+        "a bare C2 reservation must not hide returned lineage or offer a duplicate task"
+    );
+    let tracked = f.ctx.store.get(&saved.id).unwrap();
+    assert!(
+        source::require_not_pending(&f.ctx.store, &tracked).is_err(),
+        "the current returned scratch is fenced even when the historical run worktree differs or is absent"
+    );
     let current = transfer::commit(
         &f.ctx,
         &selected,

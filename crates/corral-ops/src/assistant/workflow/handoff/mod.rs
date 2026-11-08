@@ -28,6 +28,9 @@ mod plan_adoption_tests;
 pub(crate) mod plan_goal;
 pub(crate) mod planner_draft;
 pub(crate) mod recovery;
+pub mod retreat;
+#[cfg(test)]
+mod retreat_tests;
 mod settlement;
 mod source;
 mod source_boundary;
@@ -129,6 +132,8 @@ pub struct Journal {
     pub cancelled: bool,
     #[serde(default)]
     pub waiting: Option<String>,
+    #[serde(default)]
+    pub retreat: Option<retreat::Record>,
 }
 
 /// Only successful preparation/restore verification can construct this value. C3 must
@@ -419,6 +424,7 @@ pub fn reserve(
         previous_handoff_known: true,
         cancelled: false,
         waiting: None,
+        retreat: None,
     };
     ensure!(
         store.insert_record(JOURNALS, &j.id, &reserved)?,
@@ -434,8 +440,11 @@ pub fn read_journal(store: &Store, id: &str) -> Result<Option<Journal>> {
         .context("handoff_incompatible: upgrade/reconcile transfer journal")?;
     if let Some(j) = &row {
         ensure!(
-            ((j.version == VERSION && j.transfer.is_none() && j.selection.is_none())
-                || (j.version == 2 && j.selection.is_some()))
+            ((j.version == VERSION
+                && j.transfer.is_none()
+                && j.selection.is_none()
+                && j.retreat.is_none())
+                || (j.version == 2 && (j.selection.is_some() || j.retreat.is_some())))
                 && j.id == id
                 && j.reserved
                 && (j.source_retained || j.cancelled),

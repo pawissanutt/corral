@@ -45,6 +45,15 @@ pub enum HandoffCmd {
     },
     /// Inspect current authoritative outcome and waits
     Show { package: String },
+    /// Bind cancellation/prepare-only return of a reserved, unpublished selection
+    RetreatPreview { package: String },
+    /// Invalidate the old selection and return only verified quiet local work
+    Retreat {
+        #[arg(long)]
+        choice: PathBuf,
+        #[arg(long)]
+        digest: String,
+    },
     /// Bind a new goal to current spec, plan, findings and code
     ContinuePreview {
         task: String,
@@ -152,6 +161,13 @@ pub fn run(ctx: &Ctx, args: HandoffArgs) -> Result<()> {
             serde_json::to_value(h::owner::commit(ctx, &load(&choice)?, &digest)?)?
         }
         HandoffCmd::Show { package } => h::owner::read(ctx, &package)?,
+        HandoffCmd::RetreatPreview { package } => {
+            let choice = h::retreat::preview(ctx, &package)?;
+            serde_json::json!({"digest":choice.digest()?,"choice":choice})
+        }
+        HandoffCmd::Retreat { choice, digest } => {
+            serde_json::to_value(h::owner::retreat(ctx, &load(&choice)?, &digest)?)?
+        }
         HandoffCmd::ContinuePreview { task, goal } => {
             let choice = h::continuation::preview(ctx, &task, goal.into())?;
             serde_json::json!({"digest":choice.digest()?,"choice":choice})
