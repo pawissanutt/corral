@@ -135,7 +135,7 @@ fn queue_due(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<Change>> {
     let mut candidate = task.clone();
     candidate.status = Status::Ready;
     let opts = DispatchOpts::default();
-    if let Some(reason) = crate::queue::pending_plan_reason(&candidate)? {
+    if let Some(reason) = crate::queue::pending_plan_reason(&ctx.store, &candidate)? {
         bail!("{reason}");
     }
     let plan = crate::queue::resolve_plan(ctx, &candidate, &opts)?;

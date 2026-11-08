@@ -1,6 +1,6 @@
 //! Exact plan provenance and code seed adoption; no imported approval or PASS.
 use anyhow::{Context, Result, ensure};
-use corral_core::{PlanRun, PlanRunState, Run, RunOutcome, Status, Task, TaskRef};
+use corral_core::{Run, RunOutcome, Status, Task, TaskRef};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
@@ -27,9 +27,14 @@ pub(crate) fn prepare_task(ctx: &Ctx, id: &str, prepared: &Prepared) -> Result<(
         .as_ref()
         .is_some_and(|t| t.ownership_committed)
     {
-        adopt_plan(ctx, &ctx.store.get(id)?, prepared)?;
+        super::plan_adoption::adopt(ctx, &ctx.store.get(id)?, prepared)?;
     }
     let task = ctx.store.get(id)?;
+    let current = super::read_journal(&ctx.store, prepared.id())?.context("transfer missing")?;
+    let draft_pending = super::plan_adoption::draft_pending(
+        &task,
+        current.transfer.as_ref().context("transfer missing")?,
+    )?;
     if !lifecycle::plan_only(goal)
         && let Some(snapshot) = &prepared.package().snapshot
     {
@@ -63,7 +68,7 @@ pub(crate) fn prepare_task(ctx: &Ctx, id: &str, prepared: &Prepared) -> Result<(
                     None,
                 )?
                 .is_empty();
-            let ready = crate::approved_plan(ctx, &task).is_ok();
+            let ready = !draft_pending && crate::approved_plan(ctx, &task).is_ok();
             ctx.store.update(id, |task| {
                 ensure!(
                     task.runs.len() == previous_runs,
@@ -120,7 +125,9 @@ pub(crate) fn prepare_task(ctx: &Ctx, id: &str, prepared: &Prepared) -> Result<(
             "handoff_scope_changed: held task changed during adoption; refresh/reconcile"
         );
         transfer.adoption_proven = true;
-        if transfer.goal == super::Goal::PlanContinue && task.plans.is_empty() {
+        if super::plan_adoption::draft_pending(task, transfer)?
+            || (transfer.goal == super::Goal::PlanContinue && task.plans.is_empty())
+        {
             task.status = Status::Ready;
         }
         if transfer.goal == super::Goal::PlanReviewOnly && transfer.review_target.is_none() {
@@ -229,6 +236,7 @@ pub(super) fn advance_candidate(ctx: &Ctx, id: &str) -> Result<()> {
     let transfer = journal.transfer.as_ref().context("transfer missing")?;
     if transfer.disposition != lifecycle::Disposition::Continuing
         || !transfer.candidate_pending
+        || super::plan_adoption::draft_pending(&task, transfer)?
         || task.dispatch_hold
         || task.hold.is_some()
         || task.park.is_some()
@@ -262,7 +270,9 @@ pub(super) fn advance_candidate(ctx: &Ctx, id: &str) -> Result<()> {
     ctx.store.try_update(id, |task| {
         let mut journal = lifecycle::for_task(&ctx.store, task)?.context("transfer missing")?;
         let transfer = journal.transfer.as_mut().context("transfer missing")?;
-        if transfer.disposition != lifecycle::Disposition::Continuing || !transfer.candidate_pending
+        if transfer.disposition != lifecycle::Disposition::Continuing
+            || !transfer.candidate_pending
+            || super::plan_adoption::draft_pending(task, transfer)?
         {
             return Ok(false);
         }
@@ -302,82 +312,6 @@ pub(super) fn advance_candidate(ctx: &Ctx, id: &str) -> Result<()> {
         )?;
         Ok(true)
     })?;
-    Ok(())
-}
-
-fn adopt_plan(ctx: &Ctx, task: &Task, prepared: &Prepared) -> Result<()> {
-    let Some(plan) = &prepared.package().plan else {
-        return Ok(());
-    };
-    let bytes = super::super::publication::load_artifact(&ctx.store, &plan.artifact)?;
-    if corral_core::PlanDocument::parse(std::str::from_utf8(&bytes)?).is_err() {
-        // An incomplete draft is prompt input, never rewritten into an invented formal plan.
-        return Ok(());
-    }
-    if let Some(existing) = task.plans.last() {
-        ensure!(
-            existing.artifact.sha256 == plan.artifact.blob.hash().as_str(),
-            "handoff_plan_changed: target contains another plan"
-        );
-        return Ok(());
-    }
-    let assistant = ctx.store.get_assistant(&prepared.package().assistant)?;
-    // This submitted provenance record describes the ACTUAL producer. No planner is
-    // launched, and review independence resolves against this profile, not a replacement.
-    if task.plan_runs.is_empty() {
-        ctx.store.update(&task.id, |task| {
-            let now = corral_core::clock::now();
-            task.plan_runs.push(PlanRun {
-                agent_host: None,
-                execution: None,
-                route: None,
-                delivery: Default::default(),
-                inbox: Default::default(),
-                id: "D1".into(),
-                profile: assistant.profile.clone(),
-                harness: "corral-pi".into(),
-                model: None,
-                vendor: None,
-                effort: None,
-                spec_revision: crate::plan_spec_revision(task)?,
-                started: now,
-                ended: Some(now),
-                herdr: None,
-                output_dir: ctx.store.dir().join("handoff-plan").join(&task.id),
-                submitted: None,
-                rounds: 0,
-                state: PlanRunState::Planning,
-                pending_reply: None,
-            });
-            // Provenance only: no planner host, pane, or delivery was launched.
-            let producer = task.plan_runs.last_mut().context("producer missing")?;
-            producer.inbox.settled = Some(now);
-            let producer_run = producer.id.clone();
-            let mut journal = super::read_journal(&ctx.store, prepared.id())?
-                .context("handoff journal missing")?;
-            journal
-                .transfer
-                .as_mut()
-                .context("transfer missing")?
-                .imported_plan_run = Some(producer_run);
-            super::recovery::save(&ctx.store, &journal)?;
-            Ok(())
-        })?;
-    }
-    let temp = tempfile::tempdir().context("prepare exact plan submission")?;
-    let path = temp.path().join("plan.md");
-    std::fs::write(&path, &bytes).context("write exact plan snapshot")?;
-    let submitted = crate::plan::plan_submit_checked(ctx, &task.id, &path, &|task| {
-        ensure!(
-            task.dispatch_hold,
-            "handoff_reconciling: task must remain held during adoption"
-        );
-        Ok(())
-    })?;
-    ensure!(
-        submitted.artifact.sha256 == plan.artifact.blob.hash().as_str(),
-        "handoff_plan_changed: submitted bytes differ"
-    );
     Ok(())
 }
 

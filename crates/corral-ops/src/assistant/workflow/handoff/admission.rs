@@ -94,6 +94,11 @@ pub(crate) fn require<T: TaskRef + ?Sized>(
         transfer.contract_revision == task.contract_revision()?,
         "handoff_scope_changed: renew the instruction for the current task revision"
     );
+    let draft_pending = super::plan_adoption::draft_pending(task, transfer)?;
+    ensure!(
+        !draft_pending || kind == Kind::Plan,
+        "handoff_draft_pending: submit the current draft as a new formal plan before review, acceptance or implementation"
+    );
     if !lifecycle::plan_only(transfer.goal)
         && matches!(
             kind,
@@ -151,7 +156,7 @@ pub(crate) fn require<T: TaskRef + ?Sized>(
                     || (!automatic && kind == Kind::AcceptPlan),
                 "plan_only: planning/review stops before implementation"
             );
-            if kind != Kind::AcceptPlan {
+            if kind != Kind::AcceptPlan && !draft_pending {
                 ensure!(
                     !task.last_plan_head()?.is_some_and(|p| p.approval.is_some()
                         || p.current_review.as_ref().is_some_and(|r| matches!(

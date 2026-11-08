@@ -24,7 +24,11 @@ pub(crate) fn needed<T: corral_core::TaskRef + ?Sized>(
         .ok()
         .flatten()
         .and_then(|j| j.transfer)
-        .is_some_and(|t| crate::assistant::workflow::handoff::lifecycle::plan_only(t.goal))
+        .is_some_and(|t| {
+            crate::assistant::workflow::handoff::lifecycle::plan_only(t.goal)
+                || crate::assistant::workflow::handoff::plan_adoption::draft_pending(task, &t)
+                    .unwrap_or(true)
+        })
         || opts.plan
         || task.dispatch_plan().as_ref().is_some_and(|p| p.plan)
         || ((*task.design()
@@ -33,6 +37,23 @@ pub(crate) fn needed<T: corral_core::TaskRef + ?Sized>(
                 .config
                 .plan_required(task.project().as_deref(), *task.plan_required()))
             && !matches!(crate::approved_plan(ctx, task), Ok(Some(_))))
+}
+
+pub(crate) fn replacement_allowed<T: corral_core::TaskRef + ?Sized>(
+    store: &corral_core::Store,
+    task: &T,
+    opts: &DispatchOpts,
+) -> Result<bool> {
+    if opts.plan
+        || task
+            .last_plan_run_head()?
+            .is_none_or(|r| r.state != PlanRunState::Cancelled)
+    {
+        return Ok(true);
+    }
+    // Only the durable exact current transfer instruction composes with this guard;
+    // no generic force bit, evictable owner-input pointer or workspace grant is minted.
+    crate::assistant::workflow::handoff::admission::explicit(store, task, OperatingActionKind::Plan)
 }
 
 pub(crate) fn dispatch(
@@ -102,12 +123,7 @@ pub(crate) fn dispatch(
         crate::session_scope::check_launch_in(ctx, store)?;
         crate::queue::check_snapshot_head(ctx, store, head, current.head())?;
         ensure!(
-            opts.plan
-                || current
-                    .head()
-                    .last_plan_run
-                    .as_ref()
-                    .is_none_or(|r| r.state != PlanRunState::Cancelled),
+            replacement_allowed(store, &*current, opts)?,
             "cancelled plan run requires explicit replacement dispatch with --plan"
         );
         let reason = admission.reason(ctx, store, &*current, opts)?;

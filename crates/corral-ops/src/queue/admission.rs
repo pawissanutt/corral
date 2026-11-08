@@ -23,7 +23,7 @@ pub(crate) fn enqueue_ready(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<
     let head = ctx.store.head(&head.id)?;
     let task = head.shell_task()?;
     if !opts.plan
-        && let Some(reason) = pending_plan_reason(&task)?
+        && let Some(reason) = pending_plan_reason(&ctx.store, &task)?
     {
         bail!(
             "cannot enqueue {}: {reason}; use --plan to explicitly replan",
