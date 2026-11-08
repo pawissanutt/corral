@@ -358,7 +358,7 @@ pub(crate) fn save(ctx: &Ctx, id: &str, contract: &str, instruction: Instruction
         .store
         .try_lock(&format!("gate-{id}"))?
         .context("Waiting for current gate admission")?;
-    ctx.store.update(id, |task| {
+    let saved = ctx.store.update(id, |task| {
         if task.status == Status::Done {
             return Ok(());
         } // Already landed; never claim rollback.
@@ -379,27 +379,69 @@ pub(crate) fn save(ctx: &Ctx, id: &str, contract: &str, instruction: Instruction
             ),
             "handoff: take-back must settle first"
         );
-        if transfer.disposition != Disposition::Saved {
+        if !matches!(
+            transfer.disposition,
+            Disposition::Saved | Disposition::Saving
+        ) || transfer.contract_revision != contract
+        {
             transfer.record(instruction)?;
             transfer.advance()?;
         }
-        transfer.disposition = Disposition::Saved;
+        transfer.contract_revision = contract.into();
+        transfer.disposition = Disposition::Saving;
         task.dispatch_hold = true;
         task.queued = false;
         task.dispatch_plan = None;
-        task.cowork
+        let scope = task
+            .cowork
             .as_mut()
             .context("reader fence missing")?
             .completion
             .as_mut()
-            .context("scope missing")?
-            .intent = CompletionIntent::Verify;
+            .context("scope missing")?;
+        scope.intent = CompletionIntent::Verify;
+        scope.contract_revision = contract.into();
         super::recovery::save(&ctx.store, &journal)?;
         ctx.store.log_event(
             Some(&task.id),
-            "handoff_saved",
+            "handoff_save_held",
             json!({"transfer":journal.id}),
         )?;
         Ok(())
-    })
+    })?;
+    if saved.status == Status::Done {
+        return Ok(saved);
+    }
+    finish_save(ctx, id)
+}
+
+/// Called with the controller, launch and gate leases, including by restart recovery.
+/// Saving is a durable held intermediate state, not a claim that a writer has exited.
+pub(super) fn finish_save(ctx: &Ctx, id: &str) -> Result<Task> {
+    let holders = super::settlement::settle(ctx, id)?;
+    ctx.store.update(id, |task| {
+        let mut journal = lifecycle::for_task(&ctx.store, task)?.context("transfer missing")?;
+        let transfer = journal.transfer.as_mut().context("transfer missing")?;
+        ensure!(
+            transfer.disposition == Disposition::Saving && task.dispatch_hold,
+            "handoff_save_changed: pending save changed; reconcile"
+        );
+        ensure!(
+            transfer.contract_revision == task.contract_revision()?,
+            "handoff_scope_changed: task changed during stop; refresh the instruction"
+        );
+        if !holders.is_empty() {
+            journal.waiting = Some(holders.join("; "));
+            super::recovery::save(&ctx.store, &journal)?;
+            return Ok(());
+        }
+        transfer.disposition = Disposition::Saved;
+        journal.waiting = None;
+        super::recovery::save(&ctx.store, &journal)?;
+        ctx.store
+            .log_event(Some(id), "handoff_saved", json!({"transfer":journal.id}))?;
+        Ok(())
+    })?;
+    ensure!(holders.is_empty(), "handoff_saving: {}", holders.join("; "));
+    ctx.store.get(id)
 }

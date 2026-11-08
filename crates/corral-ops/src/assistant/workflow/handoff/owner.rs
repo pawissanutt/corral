@@ -191,6 +191,7 @@ pub fn read(ctx: &Ctx, id: &str) -> Result<Value> {
     };
     let task = ctx.store.get(&transfer.task)?;
     let waiting = match transfer.disposition {
+        Disposition::Saving => Some("Stopping scoped writers; board remains held".to_string()),
         Disposition::Saved => Some("Saved for later; explicit continuation required".to_string()),
         Disposition::Starting => {
             Some("Reconciling the selected current-revision continuation".to_string())

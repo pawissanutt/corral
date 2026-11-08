@@ -23,6 +23,7 @@ pub use code_pin::CodePin;
 pub mod lifecycle;
 pub(crate) mod plan_goal;
 pub(crate) mod recovery;
+mod settlement;
 mod source;
 pub(crate) mod takeback;
 pub mod transfer;

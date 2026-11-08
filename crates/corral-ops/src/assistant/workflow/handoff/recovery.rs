@@ -15,7 +15,7 @@ fn pending(journal: &Journal) -> bool {
                 || t.notification_pending
                 || matches!(
                     t.disposition,
-                    Disposition::Starting | Disposition::TakingBack
+                    Disposition::Saving | Disposition::Starting | Disposition::TakingBack
                 )
                 || (t.disposition == Disposition::Continuing && t.candidate_pending)
         })
@@ -79,7 +79,7 @@ fn advance(ctx: &Ctx, journal: &Journal) -> Result<()> {
         .map(drop);
     };
     match transfer.disposition {
-        Disposition::Starting => {
+        Disposition::Starting | Disposition::Saving => {
             let _pipeline = ctx
                 .store
                 .try_lock(&format!("autopilot-{}", transfer.task))?
@@ -92,7 +92,11 @@ fn advance(ctx: &Ctx, journal: &Journal) -> Result<()> {
                 .store
                 .try_lock(&format!("gate-{}", transfer.task))?
                 .context("Waiting for gate admission")?;
-            super::continuation::finish_start(ctx, &transfer.task)?;
+            if transfer.disposition == Disposition::Saving {
+                super::continuation::finish_save(ctx, &transfer.task)?;
+            } else {
+                super::continuation::finish_start(ctx, &transfer.task)?;
+            }
         }
         Disposition::TakingBack => {
             let instruction = transfer

@@ -1,12 +1,16 @@
 use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Context, Result};
-use corral_core::{AutoStage, Run, RunOutcome, Status, TaskHead};
+use corral_core::{AutoStage, RunOutcome, Status, TaskHead};
 use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
-use crate::{Ctx, ProcessControl, SystemProcesses, omo};
+use crate::{Ctx, ProcessControl, SystemProcesses};
+
+#[path = "sync_activity.rs"]
+mod activity;
+use activity::omo_recently_active;
 
 #[path = "sync_excerpt.rs"]
 mod excerpt;
@@ -883,17 +887,6 @@ fn reconcile(
         note: note.to_string(),
         stage: None,
     }))
-}
-
-/// OmO runs only: the newest session file for the run's worktree changed after the run started and
-/// less than `window` before `now`.
-fn omo_recently_active(ctx: &Ctx, run: &Run, now: Timestamp, window: SignedDuration) -> bool {
-    if !omo::is_omo(run) {
-        return false;
-    }
-    let agent = omo::agent_dir(ctx.store.config.sync.omo_agent_dir.as_deref());
-    omo::last_activity(&agent, &run.worktree)
-        .is_some_and(|t| t >= run.started && now.duration_since(t) < window)
 }
 
 #[cfg(test)]

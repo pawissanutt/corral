@@ -346,6 +346,18 @@ fn adopt_plan(ctx: &Ctx, task: &Task, prepared: &Prepared) -> Result<()> {
                 state: PlanRunState::Planning,
                 pending_reply: None,
             });
+            // Provenance only: no planner host, pane, or delivery was launched.
+            let producer = task.plan_runs.last_mut().context("producer missing")?;
+            producer.inbox.settled = Some(now);
+            let producer_run = producer.id.clone();
+            let mut journal = super::read_journal(&ctx.store, prepared.id())?
+                .context("handoff journal missing")?;
+            journal
+                .transfer
+                .as_mut()
+                .context("transfer missing")?
+                .imported_plan_run = Some(producer_run);
+            super::recovery::save(&ctx.store, &journal)?;
             Ok(())
         })?;
     }

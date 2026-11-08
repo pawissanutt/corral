@@ -300,6 +300,26 @@ fn reap_one(job: &JobRecord) -> Result<(JobState, String, bool)> {
     })
 }
 
+/// A scope transfer needs an observed empty group, not just a successful kill
+/// request or a historical `group_clear` flag. Unknown/reused ownership is a wait.
+#[cfg(target_os = "linux")]
+pub(crate) fn stop_for_handoff(job: &JobRecord) -> Result<bool> {
+    let (Some(pid), Some(start)) = (job.pid, job.start_time.as_deref()) else {
+        return Ok(false);
+    };
+    match owned_group(pid, start)? {
+        Group::Empty => return Ok(true),
+        Group::Reused | Group::Unanchored(_) => return Ok(false),
+        Group::Owned(_) => kill_group(pid)?,
+    }
+    Ok(matches!(owned_group(pid, start)?, Group::Empty))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn stop_for_handoff(_job: &JobRecord) -> Result<bool> {
+    anyhow::bail!("handoff_stop: process-group settlement is unavailable on this platform")
+}
+
 #[cfg(unix)]
 fn kill_group(pid: u32) -> Result<()> {
     use rustix::process::{Pid, Signal, kill_process_group};

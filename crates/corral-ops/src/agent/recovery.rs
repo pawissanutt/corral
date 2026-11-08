@@ -109,6 +109,10 @@ fn open(ctx: &Ctx, container: &ContainerRef) -> Result<(AgentRunState, Option<Ta
 mod labels;
 use labels::health;
 
+#[path = "recovery_quiesce.rs"]
+mod quiesce;
+pub(crate) use quiesce::stop_for_handoff;
+
 /// Cancels a turn of a live host. It never fences: the run, its questions and its receipts stay
 /// live, and an in-flight call keeps its own truthful receipt.
 pub fn cancel(ctx: &Ctx, args: &CancelArgs) -> Result<()> {
@@ -257,6 +261,7 @@ pub(crate) fn recover_with(
     adopt: Option<(&str, &corral_core::ResolvedProfile, bool)>,
     mut restore: Option<&mut dyn FnMut() -> Result<()>>,
 ) -> Result<(Value, Prepared)> {
+    quiesce::require_host_start(ctx, container)?;
     let (state, _) = open(ctx, container)?;
     if let (None, Some(pending)) = (&restore, state.pending_rewind()) {
         bail!(

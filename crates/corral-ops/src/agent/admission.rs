@@ -689,6 +689,9 @@ pub(crate) fn open_generation_bound(
             // Attribute this retained-vector mutation, not its bounded caller/preflight.
             let known = corral_core::work::followup("T-626", "native_generation_open");
             store.update(task_id, |task| {
+                crate::assistant::workflow::handoff::admission::require_host_start(
+                    store, task, &container,
+                )?;
                 let project = task
                     .project
                     .clone()

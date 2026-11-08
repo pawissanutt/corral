@@ -10,6 +10,25 @@ use super::{
     lifecycle::{self, Disposition},
 };
 
+/// A native bind/resume opens another writer just as dispatch does. Check both
+/// before recovery touches the old host and in the generation-opening transaction.
+/// The PM and assistants have their own scope ownership, never task-host admission.
+pub(crate) fn require_host_start<T: TaskRef + ?Sized>(
+    store: &Store,
+    task: &T,
+    container: &corral_core::agent::ContainerRef,
+) -> Result<()> {
+    use corral_core::agent::ContainerRef;
+    let kind = match container {
+        ContainerRef::Worker { .. } => Kind::Dispatch,
+        ContainerRef::Reviewer { .. } => Kind::Review,
+        ContainerRef::Planner { .. } => Kind::Plan,
+        ContainerRef::PlanReviewer { .. } => Kind::PlanReview,
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => return Ok(()),
+    };
+    require(store, task, kind, false)
+}
+
 pub(crate) fn require<T: TaskRef + ?Sized>(
     store: &Store,
     task: &T,

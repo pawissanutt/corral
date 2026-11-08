@@ -93,7 +93,7 @@ pub(crate) fn apply(
         transfer.ownership_committed && lifecycle::board_owner(&ctx.store, &journal)?,
         "take_back: board is not current driver"
     );
-    let task = ctx.store.update(id, |task| {
+    ctx.store.update(id, |task| {
         let mut journal =
             super::read_journal(&ctx.store, &journal.id)?.context("journal missing")?;
         let transfer = journal.transfer.as_mut().context("transfer missing")?;
@@ -107,6 +107,13 @@ pub(crate) fn apply(
         task.dispatch_hold = true;
         task.queued = false;
         task.dispatch_plan = None;
+        let cowork = task.cowork.as_mut().context("reader fence missing")?;
+        cowork.owner_confirmed = false;
+        cowork
+            .completion
+            .as_mut()
+            .context("completion scope missing")?
+            .intent = CompletionIntent::Verify;
         super::recovery::save(&ctx.store, &journal)?;
         ctx.store.log_event(
             Some(&task.id),
@@ -115,16 +122,16 @@ pub(crate) fn apply(
         )?;
         Ok(())
     })?;
-    if task
-        .launch
-        .as_ref()
-        .is_some_and(|l| l.stage != corral_core::LaunchStage::Submitting)
-    {
-        crate::launch::cancel(ctx, &task)?;
-    }
+    let mut active = super::settlement::settle(ctx, id)?;
     let task = ctx.store.get(id)?;
-    let active = holders(&task);
+    active.extend(holders(&task));
     if !active.is_empty() {
+        ctx.store.records_transaction(|| {
+            let mut current =
+                super::read_journal(&ctx.store, &journal.id)?.context("transfer disappeared")?;
+            current.waiting = Some(active.join("; "));
+            super::recovery::save(&ctx.store, &current)
+        })?;
         return Ok(Returned::Waiting {
             task: task.id,
             holders: active,
@@ -429,11 +436,10 @@ fn holders(task: &Task) -> Vec<String> {
         if run.review.as_ref().is_some_and(|r| r.verdict.is_none()) {
             holders.push(format!("review {}", run.id));
         }
-        if run
-            .agent_host
-            .as_ref()
-            .is_some_and(|a| a.turns.iter().any(|t| t.ended.is_none()))
-        {
+        if run.agent_host.as_ref().is_some_and(|a| {
+            a.binding.health != corral_core::agent::HostHealth::Fenced
+                && a.turns.iter().any(|t| t.ended.is_none())
+        }) {
             holders.push(format!("open worker turn {}", run.id));
         }
     }
