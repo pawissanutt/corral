@@ -75,6 +75,11 @@ pub(crate) fn next_plan_attempt<T: corral_core::TaskRef + ?Sized>(
     })
 }
 
+pub(crate) fn source_task<T: corral_core::TaskRef + ?Sized>(task: &T) -> Result<Task> {
+    // A later cancelled/unfinished planner is not the producer of the selected plan.
+    corral_core::plan_policy::approval_shell(task)
+}
+
 pub fn plan_review(ctx: &Ctx, id: &str, reviewer: Option<&str>) -> Result<PlanReview> {
     review_with_origin(ctx, id, reviewer, crate::operating::Origin::Owner, None)
 }

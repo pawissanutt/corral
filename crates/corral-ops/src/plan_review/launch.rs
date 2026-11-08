@@ -43,7 +43,7 @@ pub(super) fn review_with_origin(
     let head = ctx.store.head(id)?;
     // The launch reads head fields, the last plan with its current review and the last
     // planning run, which the head's shell holds; counts come from the plan's facts.
-    let task = head.shell_task()?;
+    let task = super::source_task(&head)?;
     let config = plan::config(ctx)?;
     let mut review_ctx = ctx.clone();
     review_ctx.store.config = config.clone();

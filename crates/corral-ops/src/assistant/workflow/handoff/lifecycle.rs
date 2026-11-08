@@ -181,8 +181,13 @@ pub(super) fn review_target<T: TaskRef + ?Sized>(task: &T) -> Result<ReviewTarge
     let plan = task
         .last_plan_head()?
         .context("plan_review_only: no formal reviewable plan")?;
-    let producer = task.last_plan_run_head()?.filter(|r| Some(r.id.as_str()) == plan.run.as_deref())
-        .context("plan_review_only: exact plan producer is unavailable; do not replace it with a planner")?;
+    let run = plan
+        .run
+        .as_deref()
+        .context("plan_review_only: exact plan producer is unnamed")?;
+    let producer = task.plan_run_head(run)?.context(
+        "plan_review_only: exact plan producer is unavailable; do not replace it with a planner",
+    )?;
     ensure!(
         plan.spec_revision == crate::plan_spec_revision(task)?,
         "plan_review_only: plan/spec changed; refresh"
