@@ -135,8 +135,10 @@ pub(crate) fn start(
         }
         if !lifecycle::plan_only(choice.goal)
             && lifecycle::plan_only(transfer.goal)
-            && (task.current_run().is_none_or(|r| r.outcome.is_some()))
+            && task.current_run().is_none()
         {
+            // Existing owned code remains canonical across plan-only stops. Replaying
+            // the original package here would duplicate a run or rewind later work.
             transfer.adoption_proven = false;
         }
         transfer.record(instruction.clone())?;

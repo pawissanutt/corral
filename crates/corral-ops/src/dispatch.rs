@@ -273,8 +273,15 @@ fn dispatch_with(
     } else {
         format!("{}-r{n}", task.id)
     };
-    let branch = format!("corral/{suffix}");
-    let worktree = repo.join(".worktrees").join(&suffix);
+    let (worktree, branch) =
+        if crate::assistant::workflow::handoff::adopt::has_seed_for(ctx, &task, &run_id)? {
+            crate::assistant::workflow::handoff::adopt::seed_path(ctx, &task)?
+        } else {
+            (
+                repo.join(".worktrees").join(&suffix),
+                format!("corral/{suffix}"),
+            )
+        };
     let base_sha = target
         .as_ref()
         .map(|(target, _)| target.head.clone())

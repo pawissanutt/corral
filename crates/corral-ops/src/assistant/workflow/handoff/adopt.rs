@@ -152,6 +152,10 @@ fn candidate_run(
     run_id: &str,
     goal: super::Goal,
 ) -> Result<()> {
+    ensure!(
+        run_id == format!("R{}", task.runs.len() + 1) && !task.runs.iter().any(|r| r.id == run_id),
+        "handoff_adoption: candidate run identity already exists or changed"
+    );
     let now = corral_core::clock::now();
     let repo = ctx.store.project_path(&prepared.package().project)?;
     let base = ctx
@@ -362,16 +366,20 @@ fn adopt_plan(ctx: &Ctx, task: &Task, prepared: &Prepared) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn seed_path(ctx: &Ctx, task: &Task) -> Result<(PathBuf, String)> {
+pub(crate) fn seed_path(ctx: &Ctx, task: &Task) -> Result<(PathBuf, String)> {
     let repo = ctx
         .store
         .project_path(task.project.as_deref().context("project missing")?)?;
     let run = seed_run(ctx, task)?;
-    let suffix = if run == "R1" {
-        task.id.clone()
-    } else {
-        format!("{}-r{}", task.id, run.trim_start_matches('R'))
-    };
+    let journal = lifecycle::for_task(&ctx.store, task)?.context("transfer missing")?;
+    // A returned scope can produce a newer seed before any coding run exists. Never
+    // reuse/overwrite that earlier scope's worktree or private Git checkpoint refs.
+    let short = &journal.package.blob.hash().as_str()[..8];
+    let suffix = format!(
+        "{}-handoff-{short}-r{}",
+        task.id,
+        run.trim_start_matches('R')
+    );
     Ok((
         repo.join(".worktrees").join(&suffix),
         format!("corral/{suffix}"),

@@ -483,6 +483,7 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
             let task = ctx.store.get(id)?;
             check_into(&task, project)?;
             check_completion(&task, session, slug)?;
+            crate::assistant::workflow::handoff::renew::preflight(ctx, &task, opts.intent)?;
             Some(task.id)
         }
         None => None,

@@ -28,20 +28,21 @@ pub(crate) fn instruction(ctx: &Ctx, _session: &str, text: &str) -> Result<Instr
 
 /// Only a provenance copy for the separately guarded C1 candidate submission. This
 /// does not authorize a handoff, ownership change, dispatch or native plan execution.
-pub(crate) fn completion_instruction(session: &str, text: &str) -> Result<Instruction> {
-    let via = match owner_action::authority() {
-        OwnerAuthority::ViaAssistant(via) => {
-            ensure!(
-                via.confirmed && via.session == session && via.kind == "finish",
-                "completion_instruction: current candidate needs its existing payload-bound finish action"
-            );
-            Some(via.clone())
-        }
-        OwnerAuthority::Shell => None,
-    };
+pub(crate) fn require_completion_owner(ctx: &Ctx) -> Result<()> {
+    // A return revoked the old loop. A generic finish confirmation cannot prove that
+    // it was delivered for the new returned scope; C4 must consume that native choice.
+    ensure!(
+        matches!(owner_action::authority(), OwnerAuthority::Shell),
+        "completion_unavailable: renewed returned-scope intent needs the guarded owner entry or an authenticated current-scope native consumer"
+    );
+    crate::automation_controls::require_automation_owner(&ctx.store)
+}
+
+pub(crate) fn completion_instruction(ctx: &Ctx, text: &str) -> Result<Instruction> {
+    require_completion_owner(ctx)?;
     Ok(Instruction::Completion {
         instruction: text.into(),
-        via,
+        via: None,
         at: corral_core::clock::now(),
     })
 }

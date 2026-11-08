@@ -74,6 +74,9 @@ pub struct Package {
     pub execution: Option<DesignArtifact>,
     pub snapshot: Option<Snapshot>,
     pub source_path: Option<std::path::PathBuf>,
+    /// Recorded base reference (normally the integration branch), distinct from its captured SHA.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_base: Option<String>,
 }
 
 /// Immutable preview descriptor, NOT a transfer journal or ownership state.
@@ -241,7 +244,19 @@ pub fn prepare(
         return Ok(prepared);
     }
     let snapshot = source
-        .map(|(path, base, branch)| Snapshot::capture(store, path, base, branch))
+        .map(|(path, base, branch)| -> Result<Snapshot> {
+            let base = String::from_utf8(git::git(
+                path,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--end-of-options",
+                    &format!("{base}^{{commit}}"),
+                ],
+                None,
+            )?)?;
+            Snapshot::capture(store, path, base.trim(), branch)
+        })
         .transpose()?;
     let code_clean = if let Some(snapshot) = &snapshot {
         let restore = tempfile::tempdir().context("prepare restoration verification")?;
@@ -274,6 +289,7 @@ pub fn prepare(
         execution: w.execution.clone(),
         snapshot,
         source_path: source.map(|s| s.0.to_path_buf()),
+        source_base: source.map(|s| s.1.to_string()),
     };
     let preview = package.context_preview(store)?;
     let bytes = serde_json::to_vec(&package)?;
@@ -504,6 +520,8 @@ pub(super) fn checkpoint(store: &Store, id: &str, validate_source: bool) -> Resu
     })
 }
 
+#[cfg(test)]
+mod code_journey_tests;
 #[cfg(test)]
 mod crash_tests;
 #[cfg(test)]
