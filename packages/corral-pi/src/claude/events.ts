@@ -5,6 +5,8 @@ import {
   type ThinkingContent, type ToolCall, calculateCost, parseStreamingJson,
 } from "@earendil-works/pi-ai";
 
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { NativeFailure, normalizeFailure } from "../host/provider-failure.ts";
 import { mapSdkToolNameToPi, mapToolArgs } from "./tools.ts";
 import type { ReplayObservation } from "./cache.ts";
 import type { ClaudeCacheRetention } from "./cache-policy.ts";
@@ -159,6 +161,20 @@ export function applyStreamEvent(context: EventContext, event: StreamEvent): voi
     output.stopReason = mapStopReason(event.delta.stop_reason);
     updateUsage(context.model, output, event.usage);
   }
+}
+
+/** Both SDK lanes share one typed failure mapping; raw SDK strings are never display authority. */
+export function nativeSdkFailure(message: SDKMessage, rateLimit: unknown, lane: "coding" | "search"): NativeFailure | undefined {
+  const failed = message.type === "assistant" ? assistantFailure(message)
+    : message.type === "result" ? resultFailure(message) : undefined;
+  if (!failed) return undefined;
+  return new NativeFailure(normalizeFailure("anthropic-subscription", {
+    ...(message.type === "assistant" ? { sdk_error: message.message.stop_reason === "refusal" ? "invalid_request" : message.error,
+      request_id: message.request_id } : {}),
+    ...(message.type === "result" ? { sdk_subtype: message.subtype, terminal_reason: message.terminal_reason,
+      status: "api_error_status" in message && typeof message.api_error_status === "number" ? message.api_error_status : undefined } : {}),
+    rate_limit: rateLimit,
+  }), lane === "search" && message.type === "result" && message.subtype === "error_max_turns" ? "search turn limit:" : undefined);
 }
 
 interface ResultMessage {

@@ -219,12 +219,13 @@ test("failed native Claude searches are not passed off as verified results", asy
 test("Claude terminal failures retain reported usage instead of becoming zero-token transcripts", async () => {
   fakeClaude(async function* () {
     yield { type: "result", subtype: "error_max_turns", is_error: true,
-      errors: ["search turn limit"], usage: { input_tokens: 30, output_tokens: 5 } };
+      errors: ["search turn limit sk-SYNTHETIC-SECRET"], usage: { input_tokens: 30, output_tokens: 5 } };
   });
   const fx = await fixture("anthropic", async () => { throw new Error("unexpected HTTP"); });
   await expect(fx.run("turn-limit")).rejects.toThrow("search turn limit");
   const assistant = fx.transcript().map((entry) => record(entry.message)).find((m) => m.role === "assistant");
   expect(record(assistant?.usage)).toMatchObject({ input: 30, output: 5, totalTokens: 35 });
+  expect(JSON.stringify(assistant)).not.toContain("sk-SYNTHETIC-SECRET");
   expect(fx.refs.at(-1)?.outcome).toBe("uncertain");
   expect(fx.budgetRecords).toHaveLength(1);
 });

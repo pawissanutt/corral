@@ -20,6 +20,7 @@ export interface FailureInput {
   readonly body?: unknown;
   readonly headers?: Headers;
   readonly sdk_error?: string;
+  readonly sdk_subtype?: string;
   readonly rate_limit?: unknown;
   readonly terminal_reason?: unknown;
   readonly request_id?: unknown;
@@ -56,7 +57,7 @@ export function normalizeFailure(connection: ConnectionId, input: FailureInput, 
           || rate.errorCode === "credits_required" || rate.overageDisabledReason === "out_of_credits" || rate.limitScope === "group_pool")) {
     category = "billing"; scope = "account";
   } else if (has("invalid_request", "invalid_request_error", "context_length_exceeded", "content_filter", "max_output_tokens")
-      || input.terminal_reason === "prompt_too_long" || input.terminal_reason === "image_error") {
+      || input.sdk_subtype === "error_max_turns" || input.terminal_reason === "prompt_too_long" || input.terminal_reason === "image_error") {
     category = "invalid_request"; scope = "request";
   } else if (has("model_not_found", "not_found_error", "usage_not_included") || input.status === 404) {
     category = "unavailable"; scope = "model";
@@ -92,12 +93,12 @@ export const failureClass = (failure: ProviderFailure): string => failure.catego
   : failure.category === "subscription_quota" ? "quota" : failure.category;
 export function failureSummary(failure: ProviderFailure, message?: string): string {
   // Keep only fixed local invariant codes, never the raw suffix (which may be provider text).
-  const diagnostic = message?.match(/^(claude_compaction_conflict|claude_query_incomplete):/)?.[1];
+  const diagnostic = message?.match(/^(claude_compaction_conflict|claude_query_incomplete|search turn limit):/)?.[1];
   return `${diagnostic ? `${diagnostic}: ` : ""}${failure.connection}: ${failure.category} (${failure.scope})`;
 }
 
 export class NativeFailure extends Error {
-  constructor(readonly failure: ProviderFailure) { super(failureSummary(failure)); }
+  constructor(readonly failure: ProviderFailure, diagnostic?: string) { super(failureSummary(failure, diagnostic)); }
 }
 
 export type FailureMessage = { errorMessage?: string; providerFailure?: ProviderFailure };

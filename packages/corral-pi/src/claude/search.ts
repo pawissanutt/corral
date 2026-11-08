@@ -3,11 +3,12 @@ import { mkdirSync } from "node:fs";
 import type { Options, Query } from "@anthropic-ai/claude-agent-sdk";
 import { createAssistantMessageEventStream, type AssistantMessageEventStream, type Model,
   type SimpleStreamOptions, type TranscriptContext } from "@earendil-works/pi-ai";
-import { assertPiCompactionOwner, assistantFailure, emptyOutput, resultFailure, updateUsage } from "./events.ts";
+import { assertPiCompactionOwner, emptyOutput, nativeSdkFailure, updateUsage } from "./events.ts";
 import { buildPromptBlocks, promptStream } from "./prompt.ts";
 import { loadSdk, resolveClaudeCode } from "./sdk.ts";
 import { resolveCacheRetention } from "./cache-policy.ts";
 import { claudeEnvironment, claudeSystemPrompt, type ClaudeLaneConfig } from "./stream.ts";
+import { NativeFailure, failureSummary, normalizeFailure, type ProviderFailure } from "../host/provider-failure.ts";
 
 export function streamClaudeSearch(
   config: ClaudeLaneConfig, model: Model<string>, context: TranscriptContext, options?: SimpleStreamOptions,
@@ -18,6 +19,7 @@ export function streamClaudeSearch(
     let query: Query | undefined;
     let closed = false;
     let completed = false;
+    let rateLimit: unknown;
     const close = () => { if (query && !closed) { closed = true; query.close(); } };
     const abort = () => { if (query) void query.interrupt().catch(() => undefined).finally(close); };
     options?.signal?.addEventListener("abort", abort, { once: true });
@@ -56,8 +58,8 @@ export function streamClaudeSearch(
         assertPiCompactionOwner(message);
         // Error results (including max-turn exhaustion) can still report consumed quota.
         if (message.type === "result") updateUsage(model, output, message.usage);
-        const failure = message.type === "assistant" ? assistantFailure(message)
-          : message.type === "result" ? resultFailure(message) : undefined;
+        if (message.type === "rate_limit_event") rateLimit = message.rate_limit_info;
+        const failure = nativeSdkFailure(message, rateLimit, "search");
         if (failure) throw failure;
         if (message.type === "result" && message.subtype === "success") {
           completed = true;
@@ -69,7 +71,12 @@ export function streamClaudeSearch(
       stream.push({ type: "done", reason: "stop", message: output });
     } catch (error) {
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = error instanceof Error ? error.message : String(error);
+      const failure = error instanceof NativeFailure ? error.failure : normalizeFailure("anthropic-subscription", {
+        message: error instanceof Error ? error.message : undefined,
+      });
+      (output as typeof output & { providerFailure: ProviderFailure }).providerFailure = failure;
+      output.errorMessage = output.stopReason === "aborted" ? "Operation aborted"
+        : failureSummary(failure, error instanceof Error ? error.message : undefined);
       stream.push({ type: "error", reason: output.stopReason, error: output });
     } finally {
       options?.signal?.removeEventListener("abort", abort);
