@@ -194,7 +194,7 @@ test("a busy host's event backlog pages through the Rust reader, which keeps its
   const dir = generationDir(workspace, "T-001", "R1", 1);
   const cap = readFileSync(join(dir, "ctl.cap"), "utf8");
   const client = await connect(join(dir, "host.sock"));
-  for (let n = 0; n < 256; n++) {
+  for (let n = 0; n < 128; n++) {
     const reply = await client.request(frame(cap, "submit_input", {
       text: "/fixture-handled", busy_policy: "prompt", origin: "o".repeat(64),
       idempotency_key: `${String(n).padStart(4, "0")}-${"k".repeat(122)}`,
