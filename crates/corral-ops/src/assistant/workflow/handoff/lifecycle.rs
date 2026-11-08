@@ -97,6 +97,8 @@ pub struct Transfer {
     pub continuation_seed: Option<super::continuation_seed::Seed>,
     pub draft_predecessor: Option<String>,
     pub imported_plan_run: Option<String>,
+    #[serde(default)]
+    pub planner_drafts: super::planner_draft::Checkpoints,
 }
 
 impl Transfer {

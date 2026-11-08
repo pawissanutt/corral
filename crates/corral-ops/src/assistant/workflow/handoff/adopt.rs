@@ -552,11 +552,14 @@ pub(crate) fn prompt(ctx: &Ctx, task: &impl TaskRef) -> Result<String> {
         return Ok(String::new());
     };
     let (_, package, preview) = super::read_package(&ctx.store, &journal.id)?;
-    let draft = package
-        .plan
-        .as_ref()
-        .map(|p| super::super::publication::load_artifact(&ctx.store, &p.artifact))
-        .transpose()?;
+    let draft = match super::planner_draft::latest(&ctx.store, task, &journal)? {
+        Some(bytes) => Some(bytes),
+        None => package
+            .plan
+            .as_ref()
+            .map(|p| super::super::publication::load_artifact(&ctx.store, &p.artifact))
+            .transpose()?,
+    };
     Ok(format!(
         "\n## Preserved continuation\n\n{}\n\nPrior draft (exact bytes; not approval):\n{}\n\nSelected goal: {:?}. Plan-only work must not execute preserved code. If the integration base moved, reconcile the adopted seed rather than starting from an empty checkout. Selected source context and its exact archive index are task artifacts under R0. Archived bytes are not claimed read; checkpoint metadata is not a passing check or approval.\n",
         preview.prompt,
