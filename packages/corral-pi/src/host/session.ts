@@ -780,6 +780,11 @@ export class HostSession {
       ? managed.operations : local).exec(...args) };
   }
 
+  private async recoverPlanReviews(): Promise<void> {
+    // A legacy/ordinary assistant without a workflow has no review lifecycle to recover.
+    if (this.planning?.snapshot().expected) await this.planReviews?.recover();
+  }
+
   /** Internal integration seam. Public entry/choice UI is deliberately not exposed here. */
   async enterPlanning(input: string): Promise<PlanningState> {
     if (!this.planning || !this.bound) throw new Error("planning requires a bound assistant");
@@ -985,7 +990,7 @@ export class HostSession {
       this.questionUi.install(pi);
     }
     pi.on("session_start", async () => {
-      if (this.bound) { this.commands?.bound(); await this.planReviews?.recover(); }
+      if (this.bound) { this.commands?.bound(); await this.recoverPlanReviews(); }
     });
     const code = this.code;
     if (code) {
@@ -1506,7 +1511,7 @@ export class HostSession {
     this.options.events.emit("bound", { generation: this.options.identity.generation, session_id: sessionId });
     this.commands?.bound(commandFacts, monitorFacts);
     await this.questionUi?.recover();
-    await this.planReviews?.recover();
+    await this.recoverPlanReviews();
     return receipt;
   }
 
