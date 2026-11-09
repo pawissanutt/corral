@@ -349,19 +349,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
     if let Cmd::Annotation(args) = &cmd {
         args.cmd.preflight()?;
     }
-    let entry = crate::entry::Entry::new(&cmd, matches, &start_dir(&root)?).map_err(|error| {
-        if matches!(&cmd, Cmd::Annotation(args) if args.cmd.mutates())
-            && error.is::<crate::entry::AssistantRefused>()
-        {
-            corral_ops::annotations::annotation_error(
-                corral_ops::annotations::AnnotationCode::NotOwner,
-                "assistant shells cannot author owner annotations",
-                serde_json::Value::Null,
-            )
-        } else {
-            error
-        }
-    })?;
+    let entry = crate::entry::Entry::new(&cmd, matches, &start_dir(&root)?)?;
     let open = |root: &Option<PathBuf>| entry.open(&start_dir(root)?);
     match cmd {
         Cmd::Mode(args) => crate::mode_cmd::run(open(&root)?, args),

@@ -191,6 +191,31 @@ const ROWS: &[(&str, &[&str], Class)] = &[
     ("lessons pin", &["L-1"], Refused),
     ("lessons delete", &["L-1"], Refused),
     ("lessons due", &[], Read),
+    ("annotation list", &["T-001"], Read),
+    ("annotation show", &["T-001", "N1"], Read),
+    (
+        "annotation open",
+        &[
+            "T-001", "--run", "R1", "--base", "abc", "--head", "def", "--path", "x", "--text",
+            "note",
+        ],
+        Refused,
+    ),
+    (
+        "annotation reply",
+        &["T-001", "N1", "--revision", "1", "--text", "note"],
+        Refused,
+    ),
+    (
+        "annotation resolve",
+        &["T-001", "N1", "--revision", "1"],
+        Refused,
+    ),
+    (
+        "annotation reopen",
+        &["T-001", "N1", "--revision", "1"],
+        Refused,
+    ),
     ("plan progress", &["T-001"], Read),
     ("plan recovery", &["T-001"], Read),
     ("plan verify", &["T-001"], Refused),
