@@ -727,8 +727,23 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
     let queued: Vec<QueueEntry> = tasks
         .into_iter()
         .map(|task| {
+            // A retained launch is the current operation, not the next run's admission.
+            let owner_wait = match task.launch.as_ref().and_then(|l| l.authorization.as_ref()) {
+                Some(authorization) => {
+                    match crate::operating::owner_consent_drift(&fresh, authorization) {
+                        Ok(Some(reason)) => {
+                            Some(crate::operating::stale_owner_queue(&task.id, reason))
+                        }
+                        Ok(None) => None,
+                        Err(error) => Some(format!("{error:#}")),
+                    }
+                }
+                None => None,
+            };
             let reason = if let Some(park) = &task.park {
                 park.refusal(&task.id)
+            } else if let Some(reason) = owner_wait {
+                reason
             } else if let Some(work) = task.review_wait {
                 resource_wait.clone().unwrap_or_else(|| {
                     task.current_run()

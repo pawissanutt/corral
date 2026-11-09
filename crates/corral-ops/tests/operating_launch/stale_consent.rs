@@ -176,6 +176,13 @@ fn meaningful_change_holds_owner_queue_once_until_an_explicit_owner_dispatch() {
         let record = fx.ctx.store.authorized_submission(&approval.id).unwrap();
         assert_eq!(record.authorization, approval, "{case}");
         assert!(record.authorization_history.is_empty(), "{case}");
+        // Queue readback must explain this held launch, not hypothetical next-run admission.
+        let queued = corral_ops::dispatch_queue(&fx.fresh()).unwrap();
+        assert_eq!(
+            queued.iter().find(|entry| entry.id == id).unwrap().reason,
+            error,
+            "{case}"
+        );
         // When the owner explicitly dispatches the held card.
         corral_ops::dispatch(&fx.fresh(), &id, &Default::default()).unwrap();
         // Then fresh owner consent supersedes the stale one in place and the run submits once.
