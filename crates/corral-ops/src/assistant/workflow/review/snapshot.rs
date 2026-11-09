@@ -58,13 +58,18 @@ fn write_exact(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
         Ok(_) => {}
         Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
             ensure!(
-                fs::symlink_metadata(path)?.file_type().is_file(),
+                fs::symlink_metadata(path)
+                    .with_context(|| format!("inspect review snapshot {}", path.display()))?
+                    .file_type()
+                    .is_file(),
                 "review snapshot is not regular"
             );
             let mut existing = Vec::new();
-            fs::File::open(path)?
+            fs::File::open(path)
+                .with_context(|| format!("open review snapshot {}", path.display()))?
                 .take(DOCUMENT_MAX as u64 + 1)
-                .read_to_end(&mut existing)?;
+                .read_to_end(&mut existing)
+                .context("read bounded review snapshot")?;
             ensure!(
                 existing == bytes,
                 "review snapshot differs from canonical bytes"
@@ -142,15 +147,19 @@ pub(super) fn observe(store: &Store, plan: &PlanRevision) -> Result<Option<BlobH
         let path = root.join(&source.path);
         let observation = match fs::symlink_metadata(&path) {
             Ok(meta) if meta.file_type().is_file() && meta.len() <= DOCUMENT_MAX as u64 => {
-                let canonical = path.canonicalize()?;
+                let canonical = path
+                    .canonicalize()
+                    .with_context(|| format!("resolve review source {}", path.display()))?;
                 ensure!(
                     canonical.starts_with(&root),
                     "review source escapes registered project"
                 );
                 let mut bytes = Vec::new();
-                fs::File::open(canonical)?
+                fs::File::open(&canonical)
+                    .with_context(|| format!("open review source {}", canonical.display()))?
                     .take(DOCUMENT_MAX as u64 + 1)
-                    .read_to_end(&mut bytes)?;
+                    .read_to_end(&mut bytes)
+                    .context("read bounded review source")?;
                 ensure!(
                     bytes.len() <= DOCUMENT_MAX,
                     "review source exceeds observation bound"
