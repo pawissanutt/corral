@@ -26,6 +26,15 @@ PI_CONTRACTS = (
 # Each catalog entry names a behavior, not merely a duration. Changes to these owners
 # restore the whole relevant torture suite; budget fixtures alone do not opt them in.
 SLOW_OWNERS = {
+    # Local advisory review recovery covers each durable publication/accounting boundary.
+    "=assistant::workflow::tests::review_tests::assistant_local_review_restart_boundaries_never_replay_inference": (
+        "crates/corral-ops/src/assistant/workflow/review/",
+        "crates/corral-ops/src/assistant/workflow/review_tests.rs",
+        "crates/corral-ops/src/assistant/workflow/publication.rs",
+        "crates/corral-ops/src/agent/ops/assistant_workflow.rs",
+        "crates/corral-ops/src/agent/ops/auxiliary.rs",
+        "crates/corral-core/src/assistant_workflow.rs",
+    ),
     # Bounded annotation CAS contention uses the service and its exact Store lease/append owners.
     "=annotations::tests::annotations_reply_resolve_race_uses_revision_cas": (
         "crates/corral-ops/src/annotations.rs", "crates/corral-ops/src/annotations_tests.rs",
