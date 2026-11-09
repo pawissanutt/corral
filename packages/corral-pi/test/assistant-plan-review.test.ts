@@ -187,10 +187,19 @@ test("reload fences an in-flight start or claim acknowledgement without admittin
 test("review terminal labels retain auxiliary accounting on failure, timeout and unusable output", async () => {
   const dir = mkdtempSync(join(tmpdir(), "corral-review-outcomes-"));
   try {
-    const cases: { state: string; result: AuxiliaryResult | Error }[] = [
+    const oversized = "x".repeat(1_048_577);
+    const cases: { state: string; result: AuxiliaryResult | Error; truncated?: true }[] = [
       { state: "incomplete", result: { text: "\0\n", outcome: "completed", report: { status: "completed", stopReason: "completed" } } },
       { state: "timed_out", result: { text: "partial", outcome: "uncertain", report: { status: "partial", stopReason: "timeout" } } },
       { state: "failed", result: new Error("provider failure") }, { state: "unavailable", result: new Error("model_unavailable") },
+      { state: "timed_out", result: { text: oversized, outcome: "uncertain", report: { status: "partial", stopReason: "timeout" } } },
+      { state: "cancelled", result: { text: oversized, outcome: "uncertain", report: { status: "partial", stopReason: "cancelled" } } },
+      { state: "failed", result: { text: oversized, outcome: "uncertain", report: { status: "partial", stopReason: "provider_error" } } },
+      { state: "incomplete", result: { text: oversized, outcome: "completed", report: { status: "completed", stopReason: "completed" } } },
+      { state: "timed_out", truncated: true, result: { text: "partial", outcome: "uncertain", report: { status: "partial", stopReason: "timeout" } } },
+      { state: "cancelled", truncated: true, result: { text: "partial", outcome: "uncertain", report: { status: "partial", stopReason: "cancelled" } } },
+      { state: "failed", truncated: true, result: { text: "partial", outcome: "uncertain", report: { status: "partial", stopReason: "provider_error" } } },
+      { state: "incomplete", truncated: true, result: { text: "partial", outcome: "completed", report: { status: "completed", stopReason: "completed" } } },
     ];
     for (const item of cases) {
       let r = record(dir), executions = 0; const records: Record<string, unknown>[] = [];
@@ -198,6 +207,11 @@ test("review terminal labels retain auxiliary accounting on failure, timeout and
         settings: { explore: { model: null, max_parallel: 1, max_turns: 2, timeout_secs: 30 } },
         async record(p) { records.push(p); return { session_id: p.request, session_file: join(dir, "fixture.jsonl") }; },
         async execute() { executions++; if (item.result instanceof Error) throw item.result; return item.result; } });
+      if (item.truncated) {
+        const startReview = runtime.startReview.bind(runtime);
+        runtime.startReview = (...args) => { const handle = startReview(...args);
+          return { ...handle, done: handle.done.then(result => ({ ...result, truncated: true })) }; };
+      }
       const controller = new PlanReviews({ auxiliary: runtime, async call() { return r; },
         async event(_r, e) { if (e.action === "claim") return { ...r, claimed: true };
           if (e.action === "settle") r = { ...r, lifecycle: String(e.lifecycle) }; return r; },
