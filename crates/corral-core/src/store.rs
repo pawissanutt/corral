@@ -263,6 +263,7 @@ impl Store {
     /// `prepare` runs before configuration is loaded, including on idempotent init.
     pub fn init_with(root: &Path, prepare: impl FnOnce(&Store) -> Result<()>) -> Result<Store> {
         let dir = root.join(".corral");
+        let new_database = !crate::sqlite::SqliteBackend::db_path(&dir).is_file();
         if root.join(".git").exists() {
             let ignore = root.join(".gitignore");
             let mut contents = if ignore.exists() {
@@ -307,7 +308,16 @@ impl Store {
             )?;
         }
         db::init(&dir)?;
-        Self::open_with(root, prepare)
+        Self::open_with(root, |store| {
+            prepare(store)?;
+            // A brand-new workspace may inherit explicit independent limits. Initialize
+            // their fence through the validated writer; idempotent init never converts an
+            // existing store merely because a user/file preference changed.
+            if new_database && store.config_layers()?.config()?.limits.capacity.is_some() {
+                store.edit_config(|_| Ok(()))?;
+            }
+            Ok(())
+        })
     }
 
     /// Opens an existing store at `root` (no walking).

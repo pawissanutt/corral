@@ -759,6 +759,15 @@ pub enum CoworkReview {
 /// A task file: `.corral/tasks/<id>-<slug>.md` = YAML frontmatter (this struct minus `body`/`path`) + markdown body.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
+    /// Scheduling lane survives stage changes; it is never an operating authorization.
+    #[serde(default, skip_serializing_if = "crate::CapacityLane::is_normal")]
+    pub capacity_lane: crate::CapacityLane,
+    /// Execution commitment, distinct from a provisional launch. None predates capacity v2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_started: Option<bool>,
+    /// Bounded projection of the checkpoint journal's running gate, not a second receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_checkpoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hold: Option<crate::TaskHold>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

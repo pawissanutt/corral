@@ -65,7 +65,7 @@ their bounded wait.
                                 `store` and its diagnostics directory store.holders/
   rollback/<id>/db              databases archived by a rollback, never deleted automatically
   migration.json                durable journal, retained after publication and finalize
-  state/schema-version          the legacy fence, `4` once the database is published
+  state/schema-version          `4` after database publication; `5` after independent-capacity activation
 ```
 
 Until `corral migrate --finalize` runs, the legacy tree (`tasks/`, `state/`, `artifacts/`,
@@ -185,8 +185,14 @@ can open. An opener that can't get the shared gate within 2 s refuses with "stor
 progress (corral migrate --status)".
 
 An opener accepts the store only when the journal is `published`, `finalizing` or `finalized` with
-fence 4 and `db/corral.db` present, or when there's no journal, the fence is 4 and the database
-was created by `corral init`. Any other state refuses with that state's message.
+fence 4 or 5 and `db/corral.db` present, or when there's no journal, the fence is 4 or 5 and the
+database was created by `corral init`. Fence 5 protects the independent-capacity scheduler's
+reservation semantics from older writers; its validated activation precedes config publication.
+The versioned `capacity-model/activation` record is published only after backfill and the
+validated configuration's atomic file publication. An absent
+completion receipt blocks independent scheduling, even on fence 5, until validated activation resumes.
+It is not a database-file migration or permission to downgrade the fence. See
+[capacity configuration](configuration.md#independent-pools-opt-in). Other states refuse.
 
 ### TaskHead and current containers
 
@@ -220,6 +226,13 @@ switches, waits and decisions, applied inbox effects, observe cursors) is reache
 
 Each decoded child row counts in `nested_row_decodes`. The full `Task` and `Run` still assemble
 the vectors unchanged, and each container CAS guard keeps the read set it had before v2.
+
+Independent-capacity accounting uses durable head fields: `capacity_started` keeps a goal
+unfinished across run replacement, replanning and pauses; explicit `false` suppresses legacy
+history inference after completion/abandonment. A started goal keeps its `capacity_lane`.
+`capacity_checkpoint` retains advisory gate reservations until settlement. Historical aggregate
+gate/reviewer claims are summary counters, so hot admission never scans their growing history.
+Validated activation backfills these fields before enabling the new scheduler.
 
 `TaskHeadMut` exposes the head fields and projections mutably and adds append-only operations:
 `start_run`, `start_plan_run`, `push_plan`, `push_aggregate_attempt`, `add_comment` and
@@ -515,7 +528,7 @@ The fence is restored only after `cleaned`, so no 0.3.x writer runs while a cand
 | Journal | `db` | `db.migrating` | `db.discard` |
 |---|---|---|---|
 | none, fence 2/3 | absent | absent | absent |
-| none, fence 4, created by init | present | absent | absent |
+| none, fence 4 or 5, created by init | present | absent | absent |
 | `fenced` | absent | absent | absent |
 | `importing` | absent | present or absent | absent |
 | `verified` | exactly one of `db` and `db.migrating` | | absent |

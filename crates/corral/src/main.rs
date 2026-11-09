@@ -370,6 +370,9 @@ pub enum Cmd {
     /// Start an agent run for a task
     Dispatch {
         id: String,
+        /// Explicitly designate new work for reserved ad-hoc capacity (not extra authority)
+        #[arg(long)]
+        adhoc: bool,
         /// Run a read-only planning session without a Git candidate
         #[arg(long)]
         plan: bool,

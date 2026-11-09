@@ -34,6 +34,65 @@ fn gate() -> GateRecord {
 }
 
 #[test]
+fn single_agent_and_gate_pools_allow_one_unfinished_task_to_finish() {
+    let mut fx = Fixture::new(1);
+    fx.ctx.store.config.limits.capacity = Some(corral_core::CapacityLimits {
+        unfinished: 1,
+        agents: 1,
+        gates: 1,
+        adhoc_reserve: 0,
+    });
+    fx.ctx.store.save_config().unwrap();
+    let id = fx.task();
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            task.status = Status::Running;
+            Ok(())
+        })
+        .unwrap();
+    let gate = ReviewLaunch::reserve(&fx.ctx, &id, Kind::Gate).unwrap();
+    let usage = crate::slot_usage(&fx.ctx).unwrap().independent.unwrap();
+    assert_eq!(
+        (usage.agents.total(), usage.gates, usage.unfinished.total()),
+        (1, 1, 1)
+    );
+    drop(gate);
+    // The worker settles before review. Its existing unfinished position is retained.
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            task.status = Status::Review;
+            task.current_run_mut().unwrap().outcome = Some(RunOutcome::Done);
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        crate::wip::reason(&fx.ctx.store, &fx.ctx.store.get(&id).unwrap())
+            .unwrap()
+            .is_none()
+    );
+    let reviewer = ReviewLaunch::reserve(&fx.ctx, &id, Kind::Reviewer).unwrap();
+    let usage = crate::slot_usage(&fx.ctx).unwrap().independent.unwrap();
+    assert_eq!(
+        (usage.agents.total(), usage.gates, usage.unfinished.total()),
+        (1, 0, 1)
+    );
+    drop(reviewer);
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            task.status = Status::Done;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        crate::slot_usage(&fx.ctx).unwrap().independent.unwrap(),
+        crate::capacity::CapacityUsage::default()
+    );
+}
+
+#[test]
 fn current_gate_reservation_shares_full_worker_capacity() {
     // Given full global and project worker capacity with gate counting enabled.
     let (fx, ids) = full_workers(2);

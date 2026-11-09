@@ -7,6 +7,9 @@ use crate::Ctx;
 /// Component counts are visible even when excluded by an explicit counting switch.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct SlotUsage {
+    /// Independent scheduler counters when opted in; legacy components remain available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub independent: Option<crate::capacity::CapacityUsage>,
     pub tasks: usize,
     /// Durable coding work in progress, independent of slot ownership.
     pub wip: usize,
@@ -23,6 +26,9 @@ pub struct SlotUsage {
 
 impl SlotUsage {
     pub fn total(&self) -> usize {
+        if let Some(used) = &self.independent {
+            return used.agents.total();
+        }
         self.tasks
             + self.reservations
             + if self.count_reviews { self.reviews } else { 0 }
@@ -40,7 +46,13 @@ impl SlotUsage {
     }
 
     pub fn from_tasks(tasks: &[Task], limits: &Limits) -> Self {
-        Self::from_iter(tasks.iter(), limits)
+        let mut usage = Self::from_iter(tasks.iter(), limits);
+        if limits.capacity.is_some() {
+            let independent = crate::capacity::CapacityUsage::from_tasks(tasks);
+            usage.wip = independent.unfinished.total();
+            usage.independent = Some(independent);
+        }
+        usage
     }
 
     fn from_iter<'a>(tasks: impl Iterator<Item = &'a Task>, limits: &Limits) -> Self {
@@ -114,6 +126,9 @@ impl SlotUsage {
 
 /// The soft coding-slot target automatic admission fills up to, never above the hard limit.
 pub fn soft_target(limits: &Limits) -> usize {
+    if let Some(capacity) = &limits.capacity {
+        return capacity.normal_agents();
+    }
     limits
         .running_target
         .map_or(limits.running, |target| target.min(limits.running))
@@ -142,6 +157,9 @@ pub(crate) fn capacity_reason<T: corral_core::TaskFieldsRef + ?Sized>(
     task: &T,
     credit: usize,
 ) -> Result<Option<String>> {
+    if store.config.limits.capacity.is_some() {
+        return crate::capacity::admission::agent_reason(store, task, credit);
+    }
     let tasks = crate::pm_next::heads::open(store)?;
     let limits = &store.config.limits;
     let used = SlotUsage::from_heads(&tasks, limits)
@@ -183,7 +201,9 @@ pub(crate) fn finishing_first(store: &Store, candidate: &str) -> Result<Option<S
     }
     let heads = crate::pm_next::heads::open(store)?;
     let usage = SlotUsage::from_heads(&heads, &store.config.limits);
-    if usage.reviews + usage.gates >= store.config.limits.review {
+    if store.config.limits.capacity.is_none()
+        && usage.reviews + usage.gates >= store.config.limits.review
+    {
         return Ok(None);
     }
     for head in heads.iter() {
@@ -266,6 +286,10 @@ pub(crate) fn finishing_first(store: &Store, candidate: &str) -> Result<Option<S
             Some(ReviewWork::Gate | ReviewWork::Reviewer) => {}
             None => continue,
         }
+        // Independent gates cannot compete with a new agent claim.
+        if store.config.limits.capacity.is_some() && work == Some(ReviewWork::Gate) {
+            continue;
+        }
         if let Some(kind) = work
             && crate::review_budget::retained_preparation(store, &task.id, &run.id, kind)?
         {
@@ -322,6 +346,11 @@ impl SlotUsage {
                 };
                 usage.reservations += usize::from(counted && !recorded);
             }
+        }
+        if limits.capacity.is_some() {
+            let independent = crate::capacity::CapacityUsage::from_heads(heads);
+            usage.wip = independent.unfinished.total();
+            usage.independent = Some(independent);
         }
         usage
     }

@@ -123,6 +123,20 @@ impl Entry {
         Ok(Ctx::from_store(store))
     }
 
+    /// A validated capacity edit may be the operation that installs its compatibility fence.
+    /// Apply entry authority first, edit under normal config locks, then load effective config.
+    pub fn open_for_capacity_config(
+        &self,
+        start: &Path,
+        edit: impl FnOnce(&Store) -> Result<()>,
+    ) -> Result<Ctx> {
+        let store = Store::open_with(&Store::find_root(start)?, |store| {
+            self.apply(store)?;
+            edit(store)
+        })?;
+        Ok(Ctx::from_store(store))
+    }
+
     pub fn init(&self, root: &Path) -> Result<Store> {
         Store::init_with(root, |store| self.apply(store))
     }

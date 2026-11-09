@@ -4,7 +4,8 @@
 //! lives and registers in `lock/store.holders/<pid>-<start>`; maintenance takes the gate
 //! exclusively, so no v2 connection exists while it runs. An open accepts only a published,
 //! finalizing or finalized migration journal, or no journal with a database `corral init`
-//! created, each with fence 4 at `state/schema-version`; every other state is refused naming
+//! created, with fence 4 (legacy scheduling) or 5 (independent capacity) at
+//! `state/schema-version`; every other state is refused naming
 //! the command that moves it on. One handle per database is shared by a process.
 
 use std::collections::HashMap;
@@ -20,6 +21,12 @@ use crate::sqlite::{SqliteBackend, SqliteOptions};
 
 /// The fence value of a v2 store.
 pub const FENCE: &str = "4";
+/// Independent agent/gate scheduling requires readers that understand its reservations.
+pub const CAPACITY_FENCE: &str = "5";
+
+pub(crate) fn supported_fence(value: Option<&str>) -> bool {
+    matches!(value, Some(FENCE | CAPACITY_FENCE))
+}
 pub const JOURNAL: &str = "migration.json";
 pub const GATE: &str = "store";
 pub const HOLDERS: &str = "store.holders";
@@ -190,7 +197,7 @@ fn check_openable(corral: &Path) -> Result<()> {
     let fence = fence(corral)?;
     match journal(corral)? {
         Some((state, _)) if matches!(state.as_str(), "published" | "finalizing" | "finalized") => {
-            if fence.as_deref() != Some(FENCE) {
+            if !supported_fence(fence.as_deref()) {
                 bail!(
                     "store migration is {state} but the fence reads {}; run `corral migrate --status`",
                     fence.as_deref().unwrap_or("nothing")
@@ -214,8 +221,10 @@ fn check_openable(corral: &Path) -> Result<()> {
             bail!("unknown store migration state {state:?}; run `corral migrate --status`")
         }
         None => match fence.as_deref() {
-            Some(FENCE) if db_dir_present(corral) => Ok(()),
-            Some(FENCE) => bail!("the store database is missing; run `corral init` to create it"),
+            Some(FENCE | CAPACITY_FENCE) if db_dir_present(corral) => Ok(()),
+            Some(FENCE | CAPACITY_FENCE) => {
+                bail!("the store database is missing; run `corral init` to create it")
+            }
             Some(other) => bail!(
                 "this workspace uses the legacy file store (schema {other}); run `corral migrate` to move it into the database"
             ),
@@ -331,14 +340,28 @@ pub(crate) fn init(corral: &Path) -> Result<Arc<Db>> {
 }
 
 fn write_fence(corral: &Path) -> Result<()> {
+    write_fence_value(corral, FENCE)
+}
+
+/// Caller holds the dispatch/config boundary. Old writers refuse this marker at runtime.
+pub(crate) fn publish_capacity_fence(corral: &Path) -> Result<()> {
+    let current = fence(corral)?;
+    anyhow::ensure!(
+        supported_fence(current.as_deref()),
+        "capacity activation requires a compatible database store"
+    );
+    write_fence_value(corral, CAPACITY_FENCE)
+}
+
+fn write_fence_value(corral: &Path, value: &str) -> Result<()> {
     let state = corral.join("state"); // path-guard: allow (migration fence)
     fs::create_dir_all(&state).with_context(|| format!("creating {}", state.display()))?;
     let path = state.join("schema-version");
-    if fence(corral)?.as_deref() == Some(FENCE) {
+    if fence(corral)?.as_deref() == Some(value) {
         return Ok(());
     }
     let tmp = state.join("schema-version.tmp");
-    fs::write(&tmp, format!("{FENCE}\n")).with_context(|| format!("writing {}", tmp.display()))?;
+    fs::write(&tmp, format!("{value}\n")).with_context(|| format!("writing {}", tmp.display()))?;
     fs::File::open(&tmp)
         .and_then(|file| file.sync_all())
         .with_context(|| format!("syncing {}", tmp.display()))?;

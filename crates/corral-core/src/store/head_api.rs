@@ -866,7 +866,11 @@ impl Store {
             );
         }
         self.check_runtime()?;
-        let before = shell_task(&head.base.task)?;
+        let mut before = shell_task(&head.base.task)?;
+        if self.config.limits.capacity.is_some() && before.capacity_started.is_none() {
+            // Keep legacy commitment evidence before reducing the task to head fields.
+            before.capacity_started = Some(crate::capacity::head_committed(&head.base));
+        }
         let mut base_doc = head_doc_of(&head.base.task)?;
         base_doc["annotations"] = serde_json::to_value(&head.base.annotation_summary)?;
         let base_summary = serde_json::to_value(&head.base.summary)?;
@@ -874,7 +878,12 @@ impl Store {
         let preserve_updated = head.preserve_updated;
         let mut normalized = shell_task(&head.head.task)?;
         let now = self.now();
-        super::normalize::task(&mut normalized, Some(&before), now)?;
+        super::normalize::task(
+            &mut normalized,
+            Some(&before),
+            now,
+            self.config.limits.capacity.is_some(),
+        )?;
         head.head.task = crate::task_head_fields(&normalized);
         let (mut new, rows, history_edit) = head.finish()?;
         let mut after = shell_task(&new.task)?;

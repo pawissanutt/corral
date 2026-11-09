@@ -327,6 +327,7 @@ pub(crate) fn row_lines(
     }
     let typed = editing.and_then(|e| e.error);
     for err in typed.into_iter().chain(errors.iter().copied()) {
+        let err = super::capacity::error_text(row, err);
         let mut l = Builder::default();
         l.text(format!("{INDENT}✗ {err}"), Style::new().fg(theme::RED));
         out.push(l.finish(i));

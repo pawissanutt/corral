@@ -28,6 +28,8 @@ pub struct Neighborhood<'a> {
     cold_tasks: Option<&'a [Task]>,
     pub(super) slots: usize,
     pub(super) review_slots: usize,
+    pub(super) independent: crate::capacity::CapacityUsage,
+    independent_tasks: BTreeMap<&'a str, crate::capacity::CapacityUsage>,
     pub(super) project_slots: BTreeMap<Option<&'a str>, usize>,
     landed: BTreeMap<&'a str, bool>,
     answers: BTreeMap<String, (String, bool)>,
@@ -45,7 +47,7 @@ fn landed(task: &(impl TaskFieldsRef + ?Sized), run: Option<&str>, auto_done: bo
 }
 
 impl<'a> Neighborhood<'a> {
-    /// Cold compatibility constructor: old complete snapshot/draft semantics remain available.
+    /// Cold complete-snapshot constructor, using the selected scheduler model's counters.
     pub fn new(tasks: &'a [Task], config: &'a Config, policy: &'a EffectivePolicy) -> Self {
         let mut n = Self::from_views(
             tasks.iter().map(|task| {
@@ -170,10 +172,16 @@ impl<'a> Neighborhood<'a> {
         let mut by_id = BTreeMap::new();
         let mut slots = 0;
         let mut review_slots = 0;
+        let mut independent = crate::capacity::CapacityUsage::default();
+        let mut independent_tasks = BTreeMap::new();
         let mut project_slots = BTreeMap::new();
         for (task, usage) in views {
             slots += usage.total();
             review_slots += usage.reviews + usage.gates;
+            if let Some(used) = &usage.independent {
+                independent.merge(used);
+                independent_tasks.insert(task.id().as_str(), used.clone());
+            }
             *project_slots.entry(task.project().as_deref()).or_default() += usage.total();
             by_id.insert(task.id().as_str(), task);
             tasks.push(task);
@@ -193,11 +201,54 @@ impl<'a> Neighborhood<'a> {
             cold_tasks: None,
             slots,
             review_slots,
+            independent,
+            independent_tasks,
             project_slots,
             landed: BTreeMap::new(),
             answers: BTreeMap::new(),
             decisions: BTreeMap::new(),
         }
+    }
+
+    pub(super) fn plan_review_wait(
+        &self,
+        task: &corral_core::TaskHeadFields,
+        pending: bool,
+    ) -> Option<String> {
+        if self.config.limits.capacity.is_some() {
+            self.agent_wait(task, usize::from(pending))
+        } else {
+            (self.review_slots >= self.config.limits.review)
+                .then(|| "Waiting for a plan-review slot".into())
+        }
+    }
+
+    pub(super) fn agent_wait(
+        &self,
+        task: &corral_core::TaskHeadFields,
+        credit: usize,
+    ) -> Option<String> {
+        let limits = self.config.limits.capacity.as_ref()?;
+        let own = self.independent_tasks.get(task.id.as_str());
+        let mut used = self.independent.clone();
+        used.agents = used.agents.credited(
+            task.capacity_lane,
+            credit.min(own.map_or(0, |u| u.agents.total())),
+        );
+        used.agent_reason(limits, task.capacity_lane)
+    }
+
+    pub(super) fn unfinished_wait(&self, task: &corral_core::TaskHeadFields) -> Option<String> {
+        let limits = self.config.limits.capacity.as_ref()?;
+        if self
+            .independent_tasks
+            .get(task.id.as_str())
+            .is_some_and(|u| u.unfinished.total() > 0)
+        {
+            return None;
+        }
+        self.independent
+            .unfinished_reason(limits, task.capacity_lane)
     }
 
     pub fn task(&self, id: &str) -> Option<&dyn TaskRef> {

@@ -185,6 +185,11 @@ impl ConfigDoc {
             }
         } else if let Some(value) = after {
             self.set_str(key, &value.to_string())?;
+        } else if key == "limits.capacity" {
+            // The mode toggle means legacy, not inherit a possibly enabled user table.
+            // This explicit transition may replace the table, unlike a generic scalar edit.
+            self.unset(key)?;
+            self.set_str(key, "false")?;
         } else {
             self.unset(key)?;
         }

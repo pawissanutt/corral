@@ -16,6 +16,13 @@ fn available_heads(store: &Store, credit: usize, cap: usize) -> Result<usize> {
     let heads = crate::pm_next::heads::open(store)?;
     let limits = &store.config.limits;
     let usage = SlotUsage::from_heads(&heads, limits);
+    if let Some(capacity) = &limits.capacity {
+        let used = crate::capacity::CapacityUsage::from_heads(&heads).agents;
+        return Ok(capacity
+            .agents
+            .saturating_sub(used.total())
+            .min(capacity.normal_agents().saturating_sub(used.normal)));
+    }
     let shared: std::collections::BTreeSet<_> = heads
         .iter()
         .filter(|head| {
@@ -59,7 +66,7 @@ pub(crate) fn free_slots(ctx: &Ctx) -> Result<usize> {
 
 /// Automatic capacity below the hard limit: what P0 and red-main candidates may still use.
 pub(crate) fn headroom_slots(ctx: &Ctx) -> Result<usize> {
-    free_slots_below(ctx, ctx.store.config.limits.running)
+    free_slots_below(ctx, ctx.store.config.limits.agent_limit())
 }
 
 /// Promotion-only observation can use the admission actually sampled by its attention pass.
@@ -68,7 +75,7 @@ pub(crate) fn headroom_from_admission(ctx: &Ctx, admission: &Option<String>) -> 
     if ctx.store.config.dispatch.paused || admission.is_some() {
         return Ok(0);
     }
-    available_heads(&ctx.store, 0, ctx.store.config.limits.running)
+    available_heads(&ctx.store, 0, ctx.store.config.limits.agent_limit())
 }
 
 fn free_slots_below(ctx: &Ctx, cap: usize) -> Result<usize> {
@@ -95,6 +102,13 @@ pub(crate) fn automatic_capacity_reason(store: &Store, task: &Task) -> Result<Op
             ));
         }
     }
+    if store.config.limits.capacity.is_some() {
+        return crate::capacity::admission::agent_reason(
+            store,
+            task,
+            usize::from(task.holds_dispatch_slot()),
+        );
+    }
     let limits = &store.config.limits;
     let target = crate::soft_target(limits);
     if target < limits.running && !crate::slots::uses_headroom(task) {
@@ -117,6 +131,13 @@ pub(crate) fn automatic_capacity_reason(store: &Store, task: &Task) -> Result<Op
 
 /// Explicitly authorized queue work may use the headroom up to the hard limit.
 pub(crate) fn queued_capacity_reason(store: &Store, task: &Task) -> Result<Option<String>> {
+    if store.config.limits.capacity.is_some() {
+        return crate::capacity::admission::agent_reason(
+            store,
+            task,
+            usize::from(task.holds_dispatch_slot()),
+        );
+    }
     let credit = usize::from(task.holds_dispatch_slot());
     let running = store.config.limits.running;
     if available_heads(store, credit, running)? == 0 {
@@ -241,7 +262,7 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     fresh.reload_config()?;
     let ctx = &fresh;
     // Backlog candidates may reach the hard limit only when P0 or red-main; each is rechecked.
-    let hard = ctx.store.config.limits.running;
+    let hard = ctx.store.config.limits.agent_limit();
     if free_slots_below(ctx, hard)? == 0 {
         return Ok(vec![]);
     }

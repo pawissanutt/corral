@@ -45,7 +45,7 @@ impl BoardView {
         let right = match (col, usage_badge) {
             (Status::Running, Some(usage)) => {
                 let avail = (area.width as usize).saturating_sub(title.width() + 6);
-                let style = if usage.total() >= config.limits.running {
+                let style = if usage.total() >= config.limits.agent_limit() {
                     Style::new().fg(theme::ORANGE)
                 } else {
                     theme::dim()

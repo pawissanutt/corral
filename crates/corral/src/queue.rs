@@ -77,14 +77,18 @@ pub fn run(ctx: &Ctx, command: QueueCmd) -> Result<()> {
             } else {
                 let limits = &ctx.store.config.limits;
                 let usage = corral_ops::slot_usage(ctx)?;
-                println!(
-                    "coding slots: running {} / soft {} / hard {} ({} released by parked runs); review process budget: {}",
-                    usage.total(),
-                    corral_ops::soft_target(limits),
-                    limits.running,
-                    usage.parked,
-                    limits.review
-                );
+                if limits.capacity.is_some() {
+                    println!("{}", corral_tui::board::slot_summary(&usage, limits));
+                } else {
+                    println!(
+                        "coding slots: running {} / soft {} / hard {} ({} released by parked runs); review process budget: {}",
+                        usage.total(),
+                        corral_ops::soft_target(limits),
+                        limits.running,
+                        usage.parked,
+                        limits.review
+                    );
+                }
                 for entry in entries {
                     println!(
                         "{} {} {}: {}",

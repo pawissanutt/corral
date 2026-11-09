@@ -66,7 +66,10 @@ impl Admission {
         } else {
             None
         };
-        if reason.is_none() && !crate::plan_dispatch::needed(ctx, task, opts) {
+        if reason.is_none()
+            && (store.config.limits.capacity.is_some()
+                || !crate::plan_dispatch::needed(ctx, task, opts))
+        {
             reason = crate::wip::reason(store, &shell)?;
         }
         if reason.is_none() {
@@ -127,7 +130,13 @@ impl Admission {
             store: store.clone(),
             ..ctx.clone()
         })?);
-        detail["review_headroom"] = json!(store.config.limits.review);
+        if let Some(capacity) = &store.config.limits.capacity {
+            detail["review_headroom"] = json!(0);
+            detail["capacity"] = json!(capacity);
+            detail["lane"] = json!(task.capacity_lane());
+        } else {
+            detail["review_headroom"] = json!(store.config.limits.review);
+        }
         detail["route"] = json!(plan.route);
         store.log_event(Some(task.id()), "dispatch_policy", detail)
     }

@@ -180,7 +180,7 @@ fn next_commands(
 ) -> Vec<String> {
     let cmd = |s: &str| format!("corral migrate {s}");
     match journal.map(|j| j.state) {
-        None if super::journal::fence_value(fence) == Some(crate::store::db::FENCE) => Vec::new(),
+        None if crate::store::db::supported_fence(super::journal::fence_value(fence)) => Vec::new(),
         None => vec![cmd("--dry-run"), cmd("--apply")],
         Some(JournalState::Fenced | JournalState::Importing | JournalState::Verified) => {
             vec![cmd("--apply"), cmd("--rollback")]
@@ -207,8 +207,9 @@ pub(super) fn status(m: &Migrate) -> Result<Status> {
     let mut status = Status {
         state: match &journal {
             Some(j) => j.state.as_str().to_owned(),
-            None if super::journal::fence_value(fence.as_deref())
-                == Some(crate::store::db::FENCE) =>
+            None if crate::store::db::supported_fence(super::journal::fence_value(
+                fence.as_deref(),
+            )) =>
             {
                 "v2".to_owned()
             }

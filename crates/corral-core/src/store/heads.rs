@@ -512,6 +512,12 @@ impl Default for InboxHead {
 /// A task's own fields without any history vector; `body` is the head document's body member.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskHeadFields {
+    #[serde(default, skip_serializing_if = "crate::CapacityLane::is_normal")]
+    pub capacity_lane: crate::CapacityLane,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_started: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_checkpoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hold: Option<crate::TaskHold>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

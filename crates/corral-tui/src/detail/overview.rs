@@ -103,11 +103,16 @@ impl DetailView {
     fn overview_lines(&self) -> Vec<Line<'static>> {
         let task = &self.task;
         let run = task.current_run();
+        let unfinished = corral_core::capacity::task_committed(task);
         let mut lines = Vec::new();
         section(&mut lines, "What this is for", &purpose(task));
         let state = match task.status {
+            Status::Idea | Status::Backlog if unfinished => {
+                "Started work waiting to continue; still unfinished."
+            }
             Status::Idea => "Idea - not scheduled.",
             Status::Backlog => "Not started.",
+            Status::Ready if unfinished => "Ready to continue unfinished work.",
             Status::Ready => "Ready for execution.",
             Status::Running => "Work is in progress.",
             Status::NeedsMe => "Work needs attention.",
@@ -116,6 +121,12 @@ impl DetailView {
             Status::Dropped => "Dropped.",
         };
         section(&mut lines, "Where we are", state);
+        if task.capacity_lane == corral_core::CapacityLane::Adhoc {
+            lines.push(Line::styled(
+                "Ad-hoc scheduling lane (uses reserve, not extra permission).",
+                theme::dim(),
+            ));
+        }
         if task.tracker {
             lines.push(Line::from(format!(
                 "{} child tasks. Open Plan [8] for their status.",

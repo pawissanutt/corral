@@ -218,12 +218,20 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
         gate.failed_cmd =
             Some("process_lost: the checkpoint ended before its gate finished".into());
         let outcome = (gate.result, gate.failed_cmd.clone());
-        store.update(id, |_| {
+        store.update(id, |task| {
+            if task.capacity_checkpoint.as_deref() == Some(journal.attempts[index].id.as_str()) {
+                task.capacity_checkpoint = None;
+            }
             journal.save(&store, id)?;
             staged.as_ref().map_or(Ok(()), |staged| {
                 staged.stage(&store, (outcome.0, outcome.1.as_deref()))
             })
         })?;
+    }
+    // Avoid preparing a verification checkout when the independent gate pool is full.
+    // Publication rechecks under dispatch; lost own attempts were reconciled above first.
+    if let Some(reason) = crate::capacity::admission::gate_reason(&store, 0)? {
+        bail!("{reason}");
     }
     let policy = crate::verification::policy(ctx, &tracker)?;
     crate::verification::require_gate(&policy, &tracker)?;
@@ -285,9 +293,13 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
     let contract = crate::gate_tier::aggregate(&store.config, &tracker, &policy);
     let prepared = gate::prepare(ctx, &attempt.identity, run, &verify, &contract)?;
     journal.attempts.push(attempt.clone());
-    store.update(id, |task| {
+    store.dispatch_update(id, |admission, task| {
         crate::plan_recovery::require_active(&store, task)?;
         crate::hold::require_clear(&store, task)?;
+        if let Some(reason) = crate::capacity::admission::gate_reason(admission, 0)? {
+            bail!("{reason}");
+        }
+        task.capacity_checkpoint = Some(attempt.id.clone());
         task.review_wait = None;
         journal.save(&store, id)?;
         store.log_event(
@@ -348,7 +360,7 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
         .context("checkpoint attempt missing")?;
     *stored = attempt.clone();
     let staged = prepared.put_result(ctx)?;
-    store.update(id, |_| {
+    store.update(id, |task| {
         let canonical = Journal::load(&store, id)?;
         if let Some(cancelled) = canonical
             .attempts
@@ -357,6 +369,9 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
         {
             attempt = cancelled.clone();
             journal = canonical;
+        }
+        if task.capacity_checkpoint.as_deref() == Some(attempt.id.as_str()) {
+            task.capacity_checkpoint = None;
         }
         journal.save(&store, id)?;
         store.log_event(
@@ -412,6 +427,9 @@ pub(crate) fn cancel(ctx: &Ctx, id: &str, reason: &str) -> Result<bool> {
         current.fix_command = None;
         current.failed_step = None;
         task.review_reservation = None;
+        if task.capacity_checkpoint.as_deref() == Some(attempt.id.as_str()) {
+            task.capacity_checkpoint = None;
+        }
         journal.save(&ctx.store, id)?;
         if let Some(staged) = &staged { staged.stage(&ctx.store, (GateResult::Cancelled, None))?; }
         ctx.store.log_event(Some(id), "gate_cancelled", json!({"target":"checkpoint","attempt":attempt.id,"result":"cancelled","reason":reason}))?;

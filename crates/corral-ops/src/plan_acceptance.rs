@@ -252,7 +252,12 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
             gate::prepare(ctx, &attempt.identity, run, &verify, &contract)
         })
         .transpose()?;
-    ctx.store.update(id, |task| {
+    ctx.store.dispatch_update(id, |admission, task| {
+        if attempt.code
+            && let Some(reason) = crate::capacity::admission::gate_reason(admission, 0)?
+        {
+            bail!("{reason}");
+        }
         ensure!(
             task.aggregate_attempts.len() == tracker.aggregate_attempts.len()
                 && task.aggregate_acceptance().is_none(),

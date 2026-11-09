@@ -8,7 +8,75 @@ use super::super::tests::{HEAD_COMMENT, SLOT_COMMENT, c, fixture, k, press, rend
 use crate::{Action, Tone, View};
 
 fn saved(action: Action) -> bool {
+    if let Action::Toast(ref toast) = action
+        && toast.tone != Tone::Good
+    {
+        eprintln!("{toast:?}");
+    }
     matches!(action, Action::Toast(t) if t.tone == Tone::Good)
+}
+
+#[test]
+fn independent_capacity_is_previewed_validated_and_explicitly_saved() {
+    use super::super::capacity::CapacityField;
+    let fx = fixture();
+    let before = fx.toml();
+    let mut view = SettingsView::new(&fx.ctx);
+    view.select_field(&Field::CapacityMode);
+    view.set(&fx.ctx, &Field::CapacityMode, "on").unwrap();
+    assert_eq!(
+        view.current().unwrap().field,
+        Field::Capacity(CapacityField::Unfinished)
+    );
+    assert_eq!(fx.toml(), before, "staging the model must not activate it");
+    for width in [80, 120, 160] {
+        let screen = super::super::tests::render_at(&mut view, &fx.ctx, width, 24);
+        assert_eq!(screen.lines().count(), 24);
+    }
+    view.set(&fx.ctx, &Field::Capacity(CapacityField::Agents), "1")
+        .unwrap();
+    assert!(
+        !view.errors.is_empty(),
+        "reserve must leave normal agent capacity"
+    );
+    let error = view
+        .errors
+        .iter()
+        .find(|error| error.starts_with("limits.capacity.adhoc_reserve"))
+        .unwrap();
+    assert_eq!(
+        view.rows().iter().filter(|row| row.owns(error)).count(),
+        1,
+        "the reserve field owns its error, not the model toggle as well"
+    );
+    assert!(!saved(view.on_key(c('s'), &fx.ctx)));
+    assert_eq!(fx.toml(), before);
+    view.set(&fx.ctx, &Field::Capacity(CapacityField::Agents), "2")
+        .unwrap();
+    assert!(view.errors.is_empty());
+    assert!(saved(view.on_key(c('s'), &fx.ctx)));
+    let store = Store::open(&fx.root).unwrap();
+    let limits = store.config.limits.capacity.as_ref().unwrap();
+    assert_eq!(
+        (
+            limits.agents,
+            limits.unfinished,
+            limits.gates,
+            limits.adhoc_reserve
+        ),
+        (2, 6, 2, 1)
+    );
+    store.require_capacity_schema().unwrap();
+    assert!(!view.rows().iter().any(|row| matches!(
+        row.field,
+        Field::SlotLimit | Field::RunningTarget | Field::WipLimit
+    )));
+    view.set(&fx.ctx, &Field::CapacityMode, "off").unwrap();
+    assert!(saved(view.on_key(c('s'), &fx.ctx)));
+    let legacy = Store::open(&fx.root).unwrap();
+    assert!(legacy.config.limits.capacity.is_none());
+    assert_eq!(legacy.config.limits.running, 3);
+    legacy.require_capacity_schema().unwrap(); // Disabling never downgrades compatibility.
 }
 
 #[test]

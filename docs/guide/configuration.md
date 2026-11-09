@@ -77,7 +77,79 @@ Sections: [limits](#limits) · [resources](#resources) · [dispatch](#dispatch) 
 
 ## limits
 
-How many agents run at once.
+### Independent pools (opt-in)
+
+Use four controls instead of a shared worker/gate/reviewer pool:
+
+```toml
+[limits.capacity]
+unfinished = 6
+agents = 4
+gates = 1
+adhoc_reserve = 1
+```
+
+| Control | Meaning |
+|---|---|
+| `unfinished` | Started tasks not yet completed at their delivery destination or explicitly abandoned. Includes planning, paused/blocked tasks, review and repair. A tracker parent is not counted again above its children. |
+| `agents` | Concurrent board-worker, planner and reviewer leases. PM and interactive-assistant limits remain separate. |
+| `gates` | Dedicated concurrent Corral-managed gate executions, including aggregate verification and checkpoints. Gates do not consume the agent pool; reviewers do not consume the gate pool. Machine-pressure guards still apply. This does not intercept every worker shell command or reserve host CPU. |
+| `adhoc_reserve` | Room reserved in **both** agents and unfinished tasks for explicitly designated ad-hoc work. Normal usage is limited to `agents - adhoc_reserve` and `unfinished - adhoc_reserve`; new execution starts must fit both the normal and total maxima. There is no reserved gate slot. |
+
+The example allows three normal agents plus one ad-hoc agent, five normal unfinished tasks
+plus one ad-hoc task, and one gate independently. Ad-hoc work counts only once: it does not
+shrink the normal allowance a second time. All maxima must be positive; the reserve must be
+smaller than both `agents` and `unfinished`.
+
+Settings → General → Independent pools stages a visible draft. Review all four values and
+save explicitly, or activate through the validated config command:
+
+```bash
+corral config set limits.capacity '{ unfinished = 6, agents = 4, gates = 1, adhoc_reserve = 1 }'
+corral dispatch T-042 --adhoc --queue
+```
+
+These are examples, not recommended live values for every workspace. The old soft target is
+not automatically converted: its gap can be larger than the entire unfinished-work budget.
+Selecting ad-hoc capacity is **not** dispatch authority, a paid allowance, or a bypass of
+dependencies, holds, resource guards or review requirements. Its lane survives retries and
+review; ordinary manual dispatch and P0 priority do not implicitly select the reserved lane.
+A new co-work task can also be explicitly finished with
+`corral assistant scratch finish <slug> --title "..." --adhoc`. Ordinary finishes stay normal;
+`--into` repairs retain the existing task's lane rather than accepting `--adhoc`.
+
+Activation raises the store compatibility fence to **5 before publishing the configuration**,
+so older Corral writers fail closed. A completion receipt is written only after backfill and
+atomic config publication; fence 5 alone cannot expose an interrupted migration. Resume an incomplete activation through a validated
+capacity config write, which repeats backfill before enabling scheduling. A raw config-file edit cannot activate the new model on
+an existing fence-4 store. A fresh `corral init` can honor already configured independent
+user defaults through the validated writer. Existing checkpoint reservations and historical aggregate work are folded into the
+new counters during activation, without treating an unknown process as completed. Once
+upgraded, the store requires a compatible binary even if independent scheduling is later
+turned off. A failed activation can leave the upgraded fence with the old configuration;
+retry the validated edit after resolving its reported blocker. Do not downgrade the marker.
+
+Lowering a limit below current usage stops new admission; it does not kill running work.
+Adopting work already performed outside the board can also put unfinished work over its
+limit; it is counted, and new execution waits while existing work finishes.
+An existing task keeps its durable started commitment through resume, gate, review and repair,
+including returning to Ready or cancelling/replacing a run. Finishing never needs a second
+position, and a run cancellation cannot silently turn an unfinished goal into unstarted work. A pause/hold label alone does not prove an agent
+stopped: its lease is retained until completion or authoritative slot-release evidence.
+An open worker may therefore occupy an agent lease while its independent gate runs.
+
+`corral config set limits.capacity false` explicitly selects legacy scheduling, overriding
+an inherited independent-mode table without downgrading the store fence. Merely removing a
+workspace key would inherit the user preference instead. `true` is not accepted: enabling
+requires the four explicit limits.
+
+While `limits.capacity` is a limits table, legacy `running`, `running_target`, `wip`, `review`,
+`count_reviews` and `count_gates` do not control these pools. Their stored values remain for
+an explicit return to legacy scheduling. `per_project` caps apply to agents, not gates.
+
+### Legacy shared slots
+
+Without a `limits.capacity` table (absent or explicitly `false`), the existing behavior and defaults remain unchanged:
 
 | Key | Default | Meaning |
 |---|---|---|

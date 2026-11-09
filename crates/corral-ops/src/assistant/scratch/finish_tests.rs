@@ -2,6 +2,18 @@ use super::*;
 use corral_core::UsageEntry;
 
 #[test]
+fn only_an_explicit_new_task_finish_uses_the_adhoc_lane() {
+    let mut options = Finish::default();
+    assert_eq!(options.new_task_lane(false).unwrap(), CapacityLane::Normal);
+    assert_eq!(options.new_task_lane(true).unwrap(), CapacityLane::Normal);
+    options.adhoc = true;
+    assert!(options.new_task_lane(false).is_err());
+    assert_eq!(options.new_task_lane(true).unwrap(), CapacityLane::Adhoc);
+    options.into = Some("T-1");
+    assert!(options.new_task_lane(true).is_err());
+}
+
+#[test]
 fn window_with_only_zero_usage_is_explicitly_unavailable() {
     let from: Timestamp = "2026-01-01T00:00:00Z".parse().unwrap();
     let to: Timestamp = "2026-01-01T00:00:02Z".parse().unwrap();

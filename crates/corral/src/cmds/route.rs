@@ -169,6 +169,7 @@ pub(super) fn dispatch(
     opts: DispatchOpts,
     explain_only: bool,
     json: bool,
+    adhoc: bool,
 ) -> Result<()> {
     if explain_only {
         explain_plan(
@@ -190,6 +191,9 @@ pub(super) fn dispatch(
             println!("queue:   {}", entry.reason);
         }
         return Ok(());
+    }
+    if adhoc {
+        corral_ops::capacity::designate_adhoc(ctx, id)?;
     }
     if opts.queue_if_blocked {
         let task = corral_ops::enqueue(ctx, id, &opts)?;

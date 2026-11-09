@@ -7,6 +7,7 @@ mod automation;
 mod automation_tests;
 #[cfg(test)]
 mod cache_tests;
+mod capacity;
 mod card_preview;
 mod cards;
 #[cfg(test)]
@@ -260,9 +261,7 @@ impl SettingsView {
         let selected = self.current().map(|r| r.field);
         model::set_value(&mut self.draft, field, text)?;
         self.revalidate(ctx);
-        if let Some(selected) = selected {
-            self.select_field(&selected);
-        }
+        model::restore_selection(self, field, selected);
         Ok(())
     }
 

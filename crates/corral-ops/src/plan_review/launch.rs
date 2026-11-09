@@ -300,11 +300,12 @@ pub(super) fn review_with_origin(
         }
         let heads = crate::pm_next::heads::open(store)?;
         let usage = crate::slots::SlotUsage::from_heads(&heads, &store.config.limits);
-        if usage.reviews + usage.gates >= store.config.limits.review {
+        if store.config.limits.capacity.is_none()
+            && usage.reviews + usage.gates >= store.config.limits.review {
             bail!("review process limit reached");
         }
         let shell = t.shell_task()?;
-        if store.config.limits.count_reviews
+        if (store.config.limits.capacity.is_some() || store.config.limits.count_reviews)
             && let Some(reason) = crate::slots::capacity_reason(store, &shell, 0)? {
                 bail!("{reason}");
             }

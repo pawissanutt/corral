@@ -139,7 +139,7 @@ impl App {
             }
         } else {
             let attention = crate::attention::load(&ctx, jiff::Timestamp::now());
-            self.counts = self.counts.with_attention(&attention);
+            self.counts = self.counts.clone().with_attention(&attention);
         }
     }
 
@@ -215,11 +215,12 @@ impl Counts {
         };
 
         Self {
+            slots: slots.clone(),
             needs: count(Status::NeedsMe),
             used: slots.total(),
-            limit: config.limits.running,
+            limit: config.limits.agent_limit(),
             wip: slots.wip,
-            wip_limit: config.limits.wip,
+            wip_limit: config.limits.unfinished_limit(),
             review: count(Status::Review),
             ready: count(Status::Ready),
             tasks: slots.tasks,

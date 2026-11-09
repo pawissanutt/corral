@@ -195,6 +195,13 @@ impl Defaults {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Limits {
+    /// Explicit independent scheduler budgets; absent preserves legacy admission.
+    #[serde(
+        default,
+        deserialize_with = "crate::capacity::deserialize_optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub capacity: Option<crate::CapacityLimits>,
     /// Global run slots (Running + NeedsMe): the hard limit. Default 3.
     pub running: usize,
     /// Workspace-wide work in progress limit; zero disables the limit.
@@ -219,6 +226,7 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Limits {
+            capacity: None,
             running: 3,
             wip: default_wip_limit(),
             running_target: None,
@@ -746,17 +754,8 @@ impl Config {
         }
         out.extend(self.ui.problems());
         out.extend(self.resources.problems());
+        out.extend(crate::capacity::limits_problems(&self.limits));
         out.extend(self.storage.problems(root, &self.projects));
-        if self.limits.running == 0 {
-            out.push("limits.running must be > 0".to_string());
-        }
-        if self
-            .limits
-            .running_target
-            .is_some_and(|t| t == 0 || t > self.limits.running)
-        {
-            out.push("limits.running_target must be within 1..=limits.running".to_string());
-        }
         if self.sync.startup_grace_secs == 0 {
             out.push("sync.startup_grace_secs must be > 0".to_string());
         }
@@ -765,9 +764,6 @@ impl Config {
         }
         if !(30..=3600).contains(&self.review_infra_wait_secs()) {
             out.push("review.infra_wait_secs must be within 30..=3600".into());
-        }
-        if self.limits.review == 0 {
-            out.push("limits.review must be > 0".to_string());
         }
         if self.dispatch.max_auto_promotions_per_day == 0 {
             out.push("dispatch.max_auto_promotions_per_day must be > 0".to_string());

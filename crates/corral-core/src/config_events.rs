@@ -292,7 +292,12 @@ impl Store {
         let _lock = self.lock("config")?;
         let layers = self.config_layers()?;
         let text = layers.identity();
-        let parsed = parse_layers(&layers, self.root(), self.observation()?.is_some());
+        let parsed =
+            parse_layers(&layers, self.root(), self.observation()?.is_some()).and_then(|config| {
+                crate::capacity::activation::require_config(self, &config)
+                    .map_err(|error| format!("{error:#}"))?;
+                Ok(config)
+            });
         let config = match parsed {
             Ok(config) => config,
             Err(error) => {
@@ -446,7 +451,13 @@ impl Store {
             // before its final matching approval, under the same board lock.
             ApprovalPublication::ConfirmAfterConfig => {}
         }
+        if config.limits.capacity.is_some() {
+            crate::capacity::activation::activate(self, before.limits.capacity.is_none())?;
+        }
         atomic_write(&path, &doc.to_string())?;
+        if config.limits.capacity.is_some() {
+            crate::capacity::activation::complete(self)?;
+        }
         self.observe_config(&config, &layers.identity(), source)?;
         Ok(config)
     }
@@ -541,7 +552,11 @@ impl Store {
         if hash == self.config_hash {
             return Ok(false);
         }
-        match parse_layers(&layers, self.root(), true) {
+        match parse_layers(&layers, self.root(), true).and_then(|config| {
+            crate::capacity::activation::require_config(self, &config)
+                .map_err(|error| format!("{error:#}"))?;
+            Ok(config)
+        }) {
             Ok(config) => {
                 self.observe_config(&config, &text, ConfigSource::FileEdit)?;
                 self.warn_deprecated_max_diff_lines(&config);

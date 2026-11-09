@@ -105,6 +105,15 @@ impl Evaluation {
                 self.hard(
                     "review-capacity",
                     (|| {
+                        if ctx.store.config.limits.capacity.is_some() {
+                            let reason = if stage == RecoveryAdmissionStage::Gate {
+                                crate::capacity::admission::gate_reason(&ctx.store, 0)?
+                            } else {
+                                crate::capacity::admission::agent_reason(&ctx.store, task, 0)?
+                            };
+                            ensure!(reason.is_none(), "{}", reason.unwrap_or_default());
+                            return Ok(());
+                        }
                         let heads = crate::pm_next::heads::open(&ctx.store)?;
                         let usage =
                             crate::slots::SlotUsage::from_heads(&heads, &ctx.store.config.limits);

@@ -104,6 +104,30 @@ fn shared_slot_header_renders_at_wide_and_narrow_terminal_widths() {
             std::fs::write(dir.join(format!("board-{width}.html")), html).unwrap();
         }
     }
+
+    // The independent header must not pair canonical usage with dormant legacy limits.
+    fx.ctx.store.config.limits.wip = 99;
+    fx.ctx.store.config.limits.capacity = Some(corral_core::CapacityLimits {
+        unfinished: 8,
+        agents: 5,
+        gates: 2,
+        adhoc_reserve: 2,
+    });
+    let mut app = fx.app(Mode::Board);
+    for (width, height) in [(160, 45), (80, 30)] {
+        let mut term = Terminal::new(TestBackend::new(width, height)).unwrap();
+        term.draw(|frame| app.draw(frame)).unwrap();
+        let text = buffer_text(term.backend().buffer());
+        let header = text.lines().next().unwrap();
+        for fraction in ["A3/5", "G1/2", "U3/8", "R2"] {
+            assert!(header.contains(fraction), "{header}");
+        }
+        assert!(
+            !header.contains("WIP") && !header.contains("slots"),
+            "{header}"
+        );
+        assert!(app.hits.iter().all(|(rect, _)| rect.right() <= width));
+    }
 }
 
 fn css(color: Color, fallback: &str) -> String {
