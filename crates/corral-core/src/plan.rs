@@ -305,9 +305,21 @@ impl PlanRun {
     }
 }
 
+/// A deliberately selected execution context, not proof of a running/drained host.
+/// Missing on historical/shared-PM attempts; those must never be relabelled isolated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PlanReviewContext {
+    C3PmIsolatedV1 {
+        profile: Box<crate::ResolvedProfile>,
+    },
+}
+
 /// One independent review attempt against a plan and policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanReview {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<PlanReviewContext>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cancelled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

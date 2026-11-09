@@ -304,6 +304,8 @@ pub struct PlanHead {
 /// A plan review without its inbox history.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanReviewHead {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<crate::PlanReviewContext>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cancelled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -332,6 +334,7 @@ impl PlanReviewHead {
     /// Project the actual review's scalars and native/inbox facts, without history.
     pub fn of(review: &crate::PlanReview) -> Self {
         Self {
+            context: review.context.clone(),
             cancelled: review.cancelled,
             agent_host: review
                 .agent_host

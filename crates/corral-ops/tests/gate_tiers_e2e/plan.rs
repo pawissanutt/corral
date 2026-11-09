@@ -440,6 +440,7 @@ fn published_plan_added_member_dispatches_with_default_quick_gate() {
         .store
         .update(&design, |task| {
             task.plans[0].reviews.push(corral_core::PlanReview {
+                context: None,
                 cancelled: false,
                 agent_host: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,

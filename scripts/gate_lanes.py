@@ -33,6 +33,12 @@ SLOW_OWNERS = {
     ),
     "handoff_publication_crash_matrix": ("crates/corral-ops/src/assistant/workflow/handoff/",),
     "handoff_materialization_restart": ("crates/corral-ops/src/assistant/workflow/handoff/",),
+    "handoff_pm_context_restart": (
+        "crates/corral-ops/src/plan_review", "crates/corral-ops/src/plan_pm_context_tests.rs",
+        "crates/corral-ops/src/agent/admission.rs", "crates/corral-ops/src/agent/recovery_quiesce.rs",
+        "crates/corral-ops/src/agent/ops/planning.rs", "crates/corral-core/src/plan.rs",
+        "packages/corral-pi/src/roles/plan-reviewer/", "packages/corral-pi/src/host/session.ts",
+    ),
     "scratch_gc_resume_startup_interleaving": (
         "crates/corral-core/src/assistant", "crates/corral-ops/src/assistant/scratch",
         "crates/corral-ops/src/agent/ops/assistant", "crates/corral-ops/src/agent/launch.rs",

@@ -230,11 +230,11 @@ pub(crate) fn plan_review(
     let Some(plan) = task.plans.last() else {
         return Ok(None);
     };
-    let Some(review) = plan
-        .reviews
-        .last()
-        .filter(|r| r.verdict.is_none() && r.reviewer != "pm")
-    else {
+    let Some(review) = plan.reviews.last().filter(|r| {
+        r.verdict.is_none()
+            && !r.cancelled
+            && (r.reviewer != "pm" || crate::plan_review::context::dedicated_record(r))
+    }) else {
         return Ok(None);
     };
     let attempt = format!("{}-{}", plan.id, review.id);

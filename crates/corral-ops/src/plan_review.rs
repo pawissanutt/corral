@@ -8,6 +8,7 @@ use serde_json::json;
 
 use crate::{Ctx, plan};
 
+pub(crate) mod context;
 mod launch;
 pub(crate) mod prepared;
 use launch::review_with_origin;
@@ -36,9 +37,12 @@ pub(crate) fn terminalize_pending(plan: &mut PlanRecord, reason: &str) {
 
 /// Close only a dedicated reviewer workspace, never the shared PM.
 pub(crate) fn close_plan_review(ctx: &Ctx, plan: &PlanRecord) -> Result<()> {
-    let Some(review) = plan.reviews.last().filter(|r| r.reviewer != "pm") else {
+    let Some(review) = plan.reviews.last() else {
         return Ok(());
     };
+    if !context::can_close_record(ctx, review)? {
+        return Ok(());
+    }
     let Some(herdr) = &review.herdr else {
         return Ok(());
     };
@@ -248,7 +252,7 @@ fn verdict_report_inner(
                 } else {
                     corral_core::plan_policy::plan_reviewer_authorized(
                         &ctx.store, &config, task, review, &plan::expected_reviewer(&config, task)?)?
-                        && (review.reviewer != "pm" || crate::availability::pm_plan_reviewer(ctx, &config, task).is_ok())
+                        && (review.reviewer != "pm" || context::pm_authorized(ctx, &config, task, review).is_ok())
                 };
                 review.reviewer.clone()
             }
@@ -319,6 +323,7 @@ fn verdict_report_inner(
             None => {
                 terminalize_pending(p, "Superseded by an owner decision.");
                 p.reviews.push(PlanReview {
+                context: None,
                 cancelled: false,
                 agent_host: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,

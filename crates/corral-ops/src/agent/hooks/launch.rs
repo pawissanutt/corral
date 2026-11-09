@@ -58,6 +58,7 @@ pub fn plan_command(
     prompt_file: &Path,
 ) -> Result<String> {
     consulted("launch");
+    crate::plan_review::context::require_profile(&ctx.store, target, resolved)?;
     let model = resolved
         .model
         .clone()
