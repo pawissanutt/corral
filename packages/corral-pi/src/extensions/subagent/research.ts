@@ -11,6 +11,8 @@ export interface ResearchOptions {
 }
 export interface ResearchReport {
   readonly status: "completed" | "partial" | "failed";
+  /** Review coverage is independent of why inference stopped. */
+  readonly snapshotCoverage?: "complete" | "incomplete";
   readonly stopReason: "completed" | "turn_limit" | "time_reserve" | "timeout" | "cancelled" | "provider_error" | "empty_response" | "output_limit";
 }
 

@@ -158,9 +158,10 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
       ? signal.reason instanceof Error && signal.reason.name === "TimeoutError" ? "timeout" : "cancelled"
       : limitReached ? synthesisUsed ?? "turn_limit" : failed ? "provider_error" : synthesisUsed ?? "completed";
     const result = researchResult(session.messages, stopReason);
-    if (snapshots && !snapshots.complete()) return { text: result.text,
-      report: { status: "partial", stopReason: "turn_limit" }, outcome };
-    return { ...result, outcome };
+    if (!snapshots) return { ...result, outcome };
+    const snapshotCoverage = snapshots.complete() ? "complete" : "incomplete";
+    return { ...result, report: { ...result.report, snapshotCoverage,
+      status: snapshotCoverage === "incomplete" && result.report.status === "completed" ? "partial" : result.report.status }, outcome };
   } finally {
     signal.removeEventListener("abort", abort);
     unsubscribe();

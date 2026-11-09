@@ -93,11 +93,15 @@ export class PlanReviews {
     try {
       const result = await handle.done;
       text = result.text;
-      lifecycle = result.outcome === "completed" && result.report?.status === "completed" && /[\p{L}\p{N}\p{P}\p{S}]/u.test(text) && !result.truncated
-        ? "completed" : result.report?.stopReason === "timeout" ? "timed_out" : result.report?.stopReason === "cancelled" ? "cancelled"
-        : result.report?.stopReason === "provider_error" ? "failed" : "incomplete";
-      summary = `Advisory review of r${r.revision}: ${lifecycle}. ${result.report?.stopReason ?? result.outcome}.`;
-      if (Buffer.byteLength(text) > 1024 * 1024) { lifecycle = "incomplete"; summary = "Findings exceed 1 MiB; inspect auxiliary transcript. No successful review claimed."; text = undefined; }
+      const reason = result.report?.stopReason;
+      lifecycle = reason === "timeout" ? "timed_out" : reason === "cancelled" ? "cancelled" : reason === "provider_error" ? "failed"
+        : result.outcome === "completed" && result.report?.status === "completed" && result.report.snapshotCoverage !== "incomplete"
+          && /[\p{L}\p{N}\p{P}\p{S}]/u.test(text) && !result.truncated ? "completed" : "incomplete";
+      const oversized = Buffer.byteLength(text) > 1024 * 1024;
+      if (oversized) { if (lifecycle === "completed") lifecycle = "incomplete"; text = undefined; }
+      summary = `Advisory review of r${r.revision}: ${lifecycle}. ${reason ?? result.outcome}.`
+        + (result.report?.snapshotCoverage ? ` Snapshot coverage: ${result.report.snapshotCoverage}.` : "")
+        + (oversized ? " Findings exceed 1 MiB; inspect auxiliary transcript. No successful review claimed." : "");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       lifecycle = /Research timeout/.test(message) ? "timed_out" : /Research cancelled/.test(message) ? "cancelled"
