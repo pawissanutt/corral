@@ -12,8 +12,8 @@ use super::plan_scope::ScopeWrite;
 use super::read::Stored;
 use super::{Store, id_number};
 use crate::backend::{
-    ApplyError, CreateTask, HistoryRow, ImportBatch, ImportedTask, Operation, Outcome, RowWrite,
-    TaskChange, TaskHeader, TaskNum, TaskPart, UpdateForm,
+    ApplyError, CreateTask, HistoryRow, ImportBatch, ImportedTask, Operation, Outcome, ReadView,
+    RowWrite, TaskChange, TaskHeader, TaskNum, TaskPart, UpdateForm,
 };
 use crate::{RecoveryRecord, Task, TaskRecord};
 
@@ -167,9 +167,16 @@ impl Store {
     /// Reads `id` for a read-modify-write; save the changed copy with [`Store::save_held`].
     #[track_caller]
     pub(super) fn hold(&self, id: &str) -> Result<Held> {
-        let location = std::panic::Location::caller();
         let id = Store::normalize_id(id)?;
-        match self.read_stored_at(&id, location)? {
+        let view = self.reader()?;
+        self.hold_on(&id, &*view)
+    }
+
+    /// Hydrate on the fresh lock-local view that the callback's record reads will share.
+    #[track_caller]
+    pub(super) fn hold_on(&self, id: &str, view: &dyn ReadView) -> Result<Held> {
+        let id = Store::normalize_id(id)?;
+        match self.stored_on(view, &id, std::panic::Location::caller())? {
             Some(stored) => Ok(Held { stored }),
             None => bail!("task {id} not found"),
         }

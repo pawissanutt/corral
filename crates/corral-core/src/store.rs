@@ -606,9 +606,10 @@ impl Store {
         let _board = self.lock("dispatch")?;
         let id = Self::normalize_id(id)?;
         let _lock = self.lock(&id)?;
-        let held = self.hold(&id)?;
+        let view = self.view()?;
+        let held = self.hold_on(&id, view.as_ref())?;
         let mut task = held.task();
-        let _unit = self.event_unit();
+        let _unit = self.event_unit_on(view)?;
         f(&mut task)?;
         self.save_held(&held, &task)
     }

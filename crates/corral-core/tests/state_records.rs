@@ -52,6 +52,10 @@ fn records_from_another_handle_join_task_commit_and_rollback_on_both_backends() 
                     Some(json!({"value":1}))
                 );
                 other.save_record("test", "current", &json!({"value":2}))?;
+                assert_eq!(
+                    store.record::<Value>("test", "current")?,
+                    Some(json!({"value":2}))
+                );
                 task.title = "committed".into();
                 Ok(())
             })
@@ -66,7 +70,18 @@ fn records_from_another_handle_join_task_commit_and_rollback_on_both_backends() 
 
         // When another callback buffers a deletion and an insertion but fails.
         let result = store.update(&task.id, |_| {
+            assert_eq!(
+                store.record::<Value>("test", "current")?,
+                Some(json!({"value":2}))
+            );
             other.delete_record("test", "current")?;
+            assert_eq!(store.record::<Value>("test", "current")?, None);
+            assert!(
+                store
+                    .record_rows("test")?
+                    .iter()
+                    .all(|row| row.key != "current")
+            );
             other.save_record("test", "discarded", &true)?;
             anyhow::bail!("callback refused")
         });
@@ -88,6 +103,9 @@ fn record_unit_reads_one_committed_view_across_handles_and_keys() {
     for fake in [false, true] {
         // Given an atomic pair and independent handles to its backend.
         let (dir, store) = fixture(fake);
+        let task = store
+            .create("fresh locked authority", None, Status::Ready, "")
+            .unwrap();
         store
             .records_transaction(|| {
                 store.save_record("unit-view", "first", &0)?;
@@ -121,8 +139,22 @@ fn record_unit_reads_one_committed_view_across_handles_and_keys() {
                 result?;
                 assert_eq!(after.0, before.0 + 1, "writer must publish one operation");
 
+                // A task update must read fresh lock-local authority, not this outer
+                // unit's pre-lock view or keyed cache. Leaving it restores the outer view.
+                store.update(&task.id, |_| {
+                    assert_eq!(store.record::<u64>("unit-view", "first")?, Some(1));
+                    assert_eq!(store.record::<u64>("unit-view", "second")?, Some(1));
+                    assert!(
+                        store
+                            .record_rows("unit-view")?
+                            .iter()
+                            .all(|row| row.doc == json!(1))
+                    );
+                    Ok(())
+                })?;
                 // Then both keyed and area reads still describe the original committed pair.
                 assert_eq!(first, Some(0));
+                assert_eq!(store.record::<u64>("unit-view", "first")?, Some(0));
                 assert_eq!(store.record::<u64>("unit-view", "second")?, Some(0));
                 let rows = store.record_rows("unit-view")?;
                 assert_eq!(rows.len(), 2);
