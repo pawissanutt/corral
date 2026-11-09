@@ -768,6 +768,7 @@ fn reviewed_plan(task: &Task) -> corral_core::PlanRecord {
             owner_decisions: Vec::new(),
         },
         reviews: vec![corral_core::PlanReview {
+            context: None,
             cancelled: false,
             agent_host: None,
             delivery: corral_core::inbox::DeliveryMode::Legacy,

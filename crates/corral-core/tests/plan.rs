@@ -398,6 +398,7 @@ fn plan_history_and_pending_reviews_round_trip_through_store() {
     assert!(task.plans.is_empty());
     let at = "2026-10-15T00:00:00Z".parse().unwrap();
     let review = PlanReview {
+        context: None,
         cancelled: false,
         agent_host: None,
         delivery: corral_core::inbox::DeliveryMode::Legacy,

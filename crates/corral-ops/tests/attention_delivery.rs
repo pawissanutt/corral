@@ -159,6 +159,7 @@ fn world() -> World {
                 .unwrap()
                 .reviews
                 .push(corral_core::PlanReview {
+                    context: None,
                     cancelled: false,
                     agent_host: None,
                     delivery: corral_core::inbox::DeliveryMode::Inbox,

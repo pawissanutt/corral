@@ -78,6 +78,7 @@ fn resource_episodes_are_compatible_and_force_is_one_stage_not_capacity() {
         .store
         .update(&busy.id, |task| {
             task.plans[0].reviews.push(PlanReview {
+                context: None,
                 id: "PR1".into(),
                 reviewer: "gpt-sol".into(),
                 policy_digest,

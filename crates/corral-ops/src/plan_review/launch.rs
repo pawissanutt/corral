@@ -108,6 +108,8 @@ pub(super) fn review_with_origin(
         None,
         None,
     )?;
+    let isolated_pm = super::context::requested(&head, &name);
+    let selected_pm_profile = isolated_pm.then(|| preferred.clone());
     let resolved = if let Some(record) = reviewer_recovery {
         crate::recovery::check_reviewer(record, &preferred)?;
         if let Some(reason) = crate::routing::known_model_unavailability(&review_ctx, &preferred) {
@@ -115,8 +117,25 @@ pub(super) fn review_with_origin(
         }
         preferred
     } else {
-        crate::availability::plan_reviewer(&review_ctx, &task, name == "pm", preferred)?
+        crate::availability::plan_reviewer(
+            &review_ctx,
+            &task,
+            name == "pm" && !isolated_pm,
+            preferred,
+        )?
     };
+    if let Some(selected) = selected_pm_profile {
+        ensure!(
+            resolved == selected,
+            "c3_pm_context_profile_changed: PM availability must not substitute the selected profile/model/effort"
+        );
+        ensure!(
+            crate::agent::hooks::is_corral_pi(&resolved.harness),
+            "c3_pm_context_unsupported: PM-selected C3 review requires the native isolated review route"
+        );
+        plan::independent_reviewer(&config, &task, &resolved.profile)?;
+    }
+    let shared_pm = name == "pm" && !isolated_pm;
     let selected = task
         .plans
         .last()
@@ -129,6 +148,12 @@ pub(super) fn review_with_origin(
     let retained = prepared::load(ctx, &task.id)?;
     if let Some(retained) = &retained {
         retained.check(selected)?;
+        if isolated_pm {
+            ensure!(
+                matches!(retained.review.context.as_ref(), Some(corral_core::PlanReviewContext::C3PmIsolatedV1 { profile }) if **profile == resolved),
+                "c3_pm_context_unbound: historical shared-PM preparation cannot be relabelled isolated, or its selected profile changed"
+            );
+        }
         ensure!(
             retained.review.reviewer == name
                 && reviews == retained.previous_reviews
@@ -200,6 +225,9 @@ pub(super) fn review_with_origin(
         serde_json::to_string_pretty(&selected.document)?,
         notes_file.display(),
     );
+    if isolated_pm {
+        text.push_str(&format!("\n## Execution context\n\nLogical reviewer: pm. Actual role: plan_reviewer, isolated task/plan/attempt session. Profile: {}; model: {:?}; effort: {:?}. This is not the live workspace PM conversation or its full permissions. Only the fixed read-only review surface and bound notes/verdict are available; no unrelated PM conversation or effects are copied.\n", resolved.profile, resolved.model, resolved.effort));
+    }
     text.push_str(&crate::review_contracts::plan_context_head(
         ctx, &head, &task, &route,
     )?);
@@ -207,7 +235,7 @@ pub(super) fn review_with_origin(
     text.push_str(&crate::scratch_reclaim::prompt_section(ctx, &dir));
     // The renderer sizes the prompt to decide how `{prompt_file}` may reach the reviewer.
     std::fs::write(&prompt_file, &text).context("writing plan review prompt")?;
-    let native = crate::agent::hooks::is_corral_pi(&resolved.harness) && name != "pm";
+    let native = crate::agent::hooks::is_corral_pi(&resolved.harness) && !shared_pm;
     let command = prepared::command(ctx, &resolved, &task, &prompt_file, native)?;
     let receipt = crate::launch_exit::receipt(ctx, &task.id, &format!("{plan_id}-{attempt}"))?;
     let command = crate::launch_exit::arm(ctx, &command, &receipt)?;
@@ -222,6 +250,9 @@ pub(super) fn review_with_origin(
             spec_revision: selected.spec_revision.clone(),
             previous_reviews: reviews,
             review: PlanReview {
+                context: isolated_pm.then(|| corral_core::PlanReviewContext::C3PmIsolatedV1 {
+                    profile: Box::new(resolved.clone()),
+                }),
                 cancelled: false,
                 agent_host: None,
                 delivery: if native {
@@ -318,7 +349,7 @@ pub(super) fn review_with_origin(
     let mut launch = || -> Result<HerdrRef> {
         let herdr = if let Some(herdr) = preparation.live_pane(ctx)? {
             herdr
-        } else if name == "pm" {
+        } else if shared_pm {
             let pane_id = match crate::pm::live_pm_pane(ctx)? {
                 Some(pane) => pane,
                 None => crate::pm::open_pm(ctx)?,
@@ -346,6 +377,12 @@ pub(super) fn review_with_origin(
                 socket: Some(ctx.herdr.socket_path()?),
             }
         };
+        if isolated_pm {
+            ensure!(
+                crate::pm::recorded_pane(ctx)?.as_deref() != Some(herdr.pane_id.as_str()),
+                "c3_pm_context_unowned: dedicated attempt cannot occupy the shared PM pane"
+            );
+        }
         preparation.review.herdr = Some(herdr.clone());
         preparation.save(ctx, &task.id)?;
         let attach = ctx.store.update_head(&task.id, |t| {
@@ -356,7 +393,9 @@ pub(super) fn review_with_origin(
             Ok(())
         });
         if let Err(error) = attach {
-            if name != "pm" {
+            // No native identity was bound yet. Retain the scoped PM preparation;
+            // its pane reference alone cannot authorize workspace-wide cleanup.
+            if !shared_pm && !isolated_pm {
                 ctx.herdr.workspace_close(&herdr.workspace_id)?;
             }
             return Err(error);
@@ -428,7 +467,7 @@ pub(super) fn review_with_origin(
                 ("target", "plan-review"),
             ],
         )?;
-        if name == "pm" {
+        if shared_pm {
             crate::availability::pm_plan_reviewer(ctx, &config, &task)?;
             let delivery = crate::operating::submit_head(
                 ctx,

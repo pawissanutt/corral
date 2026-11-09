@@ -71,8 +71,30 @@ fn shared_pm_review_stays_held_and_uncancelled_through_save_takeback_and_reopen(
         .is_err()
     );
     assert_eq!(ctx.store.get(&task.id).unwrap().plans, task.plans);
+    // Cancellation/verdict flags are still not an enforced write-context drain.
+    ctx.store
+        .update(&task.id, |task| {
+            let review = task.plans[0].reviews.last_mut().unwrap();
+            review.cancelled = true;
+            review.verdict = Some(corral_core::Verdict::Escalate);
+            review.pending_reply = None;
+            Ok(())
+        })
+        .unwrap();
+    recovery::reconcile(&ctx).unwrap();
+    let still_held = ctx.store.get(&task.id).unwrap();
+    let journal = lifecycle::for_task(&ctx.store, &still_held)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        journal.transfer.as_ref().unwrap().disposition,
+        lifecycle::Disposition::TakingBack,
+        "terminal review metadata must not fabricate legacy shared-PM settlement"
+    );
+    assert!(lifecycle::board_owner(&ctx.store, &journal).unwrap());
+    assert_eq!(ctx.store.get_assistant_container(&session).unwrap(), source);
     eprintln!(
-        "SHARED_PM_HELD: exact unsupported review wait survives Save/TakeBack/reopen; no cancellation, Local return or late verdict mutation; record/service fixture, not successful PM settlement"
+        "SHARED_PM_HELD: unsupported review wait survives Save/TakeBack/reopen and fixture terminal flags; no Local return or late verdict mutation; record/service fixture, not successful PM settlement"
     );
 }
 

@@ -586,6 +586,12 @@ pub(crate) fn open_generation_bound(
             .agent
             .capabilities
             .resolve_for(target.role(), project.as_deref(), supported);
+    capabilities = crate::plan_review::context::generation_capabilities(
+        store,
+        target,
+        capabilities,
+        connection,
+    )?;
     if matches!(target, BindTarget::Pm { project } if project.is_empty()) {
         // The workspace's own guidance is owner-controlled, not a project's text.
         // Rebuild so this trust decision is included in the durable snapshot digest.

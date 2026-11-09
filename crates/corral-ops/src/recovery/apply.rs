@@ -172,6 +172,7 @@ fn accept_plan(ctx: &Ctx, input: &RecoveryInput, record: &RecoveryRecord) -> Res
             .context("plan replaced")?;
         crate::plan_review::terminalize_pending(p, "Superseded by explicit owner recovery.");
         p.reviews.push(PlanReview {
+            context: None,
             id: format!("PR{}", p.reviews.len() + 1),
             reviewer: "owner".into(),
             policy_digest: record.preview.contract_digest.clone(),

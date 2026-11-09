@@ -169,7 +169,20 @@ test("a planner session activates exactly its loadout, refuses source writes and
 
 test("a plan reviewer's verdict carries only the verdict and notes; corral binds the attempt", async () => {
   const bound = await bind("plan_reviewer");
+  const target = join(bound.cwd, "reviewer-escape.txt");
+  for (const excludeFromContext of [false, true]) {
+    const action = await bound.host.session.extensionRunner.emitUserBash({
+      type: "user_bash", command: `touch '${target}'`, cwd: bound.cwd, excludeFromContext,
+    });
+    expect(action?.result?.exitCode).toBe(1);
+    expect(action?.operations).toBeUndefined();
+  }
   await turn(bound, 1, [
+    { callId: "review-write", name: "write", arguments: { path: target, content: "escape" } },
+    { callId: "review-bash", name: "bash", arguments: { command: `touch '${target}'` } },
+  ]);
+  expect(existsSync(target)).toBeFalse();
+  await turn(bound, 2, [
     { callId: "call-verdict", name: "corral_plan_verdict", arguments: { verdict: "changes", notes: "Name the test." } },
   ]);
   const verdicts = bound.corral.calls().map((call) => call.envelope).filter((e) => e.op === "plan_verdict");

@@ -45,6 +45,9 @@ pub(super) fn settle(ctx: &Ctx, id: &str) -> Result<Vec<String>> {
         waiting.push(format!("planner {} has no verifiable native host", run.id));
     }
     for (plan, review) in task.pending_plan_reviewers()? {
+        if review.reviewer == "pm" {
+            continue; // All unbound PM history is checked below, including terminal metadata.
+        }
         if task
             .plan_review(&plan, &review.id)?
             .is_none_or(|r| r.agent_host.is_none())
@@ -55,12 +58,42 @@ pub(super) fn settle(ctx: &Ctx, id: &str) -> Result<Vec<String>> {
             ));
         }
     }
+    for review in task
+        .plans
+        .iter()
+        .flat_map(|plan| &plan.reviews)
+        .filter(|r| r.reviewer == "pm" && !crate::plan_review::context::drain_supported(r))
+    {
+        waiting.push(format!(
+            "plan review {} has no dedicated verifiable native host",
+            review.id
+        ));
+    }
+    // A cancellation/verdict flag cannot retire an unbound shared-PM write context.
     // A shared PM is never in this inventory and is never signalled. A legacy or
     // unconfirmed holder cannot be made safe by merely closing its pane.
     if !waiting.is_empty() {
         return Ok(waiting);
     }
     let mut containers = task.unfinished_native_containers()?;
+    // Recheck even previously fenced contexts on recovery: flags are not stop proof,
+    // and an earlier notes-archive failure must not turn a retry into false success.
+    for plan in &task.plans {
+        for review in plan
+            .reviews
+            .iter()
+            .filter(|r| r.reviewer == "pm" && crate::plan_review::context::drain_supported(r))
+        {
+            let container = ContainerRef::PlanReviewer {
+                task: id.into(),
+                plan: plan.id.clone(),
+                review: review.id.clone(),
+            };
+            if !containers.contains(&container) {
+                containers.push(container);
+            }
+        }
+    }
     if let Some(run) = task.current_run().filter(|r| r.agent_host.is_some()) {
         let worker = ContainerRef::Worker {
             task: id.into(),
@@ -97,6 +130,7 @@ pub(super) fn settle(ctx: &Ctx, id: &str) -> Result<Vec<String>> {
     if !waiting.is_empty() {
         return Ok(waiting);
     }
+    super::pm_notes::capture(ctx, id)?;
     // Normal cancellation owns review/gate accounting and deliberately protects PM
     // panes. It is invoked only after dedicated native writers/executors are gone.
     crate::review_budget::cancel_task(ctx, id, "co-work scope held")?;

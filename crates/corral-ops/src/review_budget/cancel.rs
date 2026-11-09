@@ -107,7 +107,7 @@ pub(crate) fn cancel_task(ctx: &Ctx, id: &str, reason: &str) -> Result<()> {
 fn cancel_plan_reviews(ctx: &Ctx, id: &str, reason: &str) -> Result<()> {
     let head = ctx.store.head(id)?;
     for (plan, review) in head.pending_plan_reviewers()? {
-        if review.reviewer != "pm"
+        if crate::plan_review::context::can_close(ctx, &review)?
             && let Some(herdr) = &review.herdr
             && head
                 .last_plan_run

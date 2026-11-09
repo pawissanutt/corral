@@ -321,6 +321,11 @@ fn exited(ctx: &Ctx, pane: &str) -> Result<bool> {
     Ok(true)
 }
 
+/// Remembered PM ownership is protected even when its liveness is uncertain.
+pub(crate) fn recorded_pane(ctx: &Ctx) -> Result<Option<String>> {
+    Ok(STATE.load(&ctx.store, "state")?.map(|state| state.pane_id))
+}
+
 /// The PM pane remembered in the canonical PM record, when herdr still has it.
 pub(crate) fn live_pm_pane(ctx: &Ctx) -> Result<Option<String>> {
     if let Some(state) = STATE.load(&ctx.store, "state")?

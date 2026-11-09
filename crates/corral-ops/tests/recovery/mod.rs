@@ -371,6 +371,7 @@ fn binding_only_preview_and_recovery_model_floor_are_distinct() {
         .store
         .update(&f.id, |task| {
             task.plans[0].reviews.push(PlanReview {
+                context: None,
                 id: "PR1".into(),
                 reviewer: "gpt-astra".into(),
                 policy_digest: preview.contract_digest.clone(),

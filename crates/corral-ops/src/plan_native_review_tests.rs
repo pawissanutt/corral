@@ -3,10 +3,11 @@ use super::*;
 use corral_core::agent::{AgentRole, ContainerRef, paths};
 use corral_core::inbox::DeliveryMode;
 
-#[test]
-fn real_plan_review_service_binds_native_generation_and_bootstrap_before_submit() {
-    let (tmp, mut ctx, id) = preview_fixture();
-    let assets = tmp.path().join("native-review-assets");
+#[path = "plan_pm_context_tests.rs"]
+mod pm_context;
+
+fn native_assets(tmp: &std::path::Path, ctx: &mut Ctx) -> std::path::PathBuf {
+    let assets = tmp.join("native-review-assets");
     for (relative, text) in [
         ("package.json".to_owned(), "{\"name\":\"corral-pi\"}"),
         ("bun.lock".into(), "{}"),
@@ -34,123 +35,144 @@ fn real_plan_review_service_binds_native_generation_and_bootstrap_before_submit(
         std::fs::write(path, text).unwrap();
     }
     ctx.store.config.agent.assets_dir = Some(assets.clone());
-    ctx.store.config.review.reviewer = Some("gpt-review".into());
-    let profile = ctx.store.config.profiles.get_mut("gpt-review").unwrap();
-    profile.harness = corral_core::CORRAL_PI_HARNESS.into();
-    profile.model = Some("gpt-6.1-sol".into());
-    profile.vendor = Some("openai".into());
-    ctx.store.save_config().unwrap();
-    let plan = ctx.store.get(&id).unwrap().plans.last().unwrap().clone();
-    let source = exact_review_only_source(&ctx, &id, &plan);
-    let source_before = ctx.store.get_assistant_container(&source).unwrap();
-    let producer = ctx.store.get(&id).unwrap().plan_runs[0].clone();
-    // This fake engine's only pane lives entirely in the disposable fixture.
-    std::fs::write(tmp.path().join("engine/planner-live"), "").unwrap();
-    let review = crate::plan_review(&ctx, &id, Some("gpt-review")).unwrap();
-    assert_eq!(review.delivery, DeliveryMode::Inbox);
-    let state = review
-        .agent_host
-        .as_ref()
-        .expect("real native state in the complete return");
-    assert_eq!(state.binding.role, AgentRole::PlanReviewer);
-    assert_eq!(state.binding.generation, 1);
-    assert!(state.current_generation().is_some());
-    let container = ContainerRef::PlanReviewer {
-        task: id.clone(),
-        plan: plan.id.clone(),
-        review: review.id.clone(),
-    };
-    let stored = ctx.store.head(&id).unwrap();
-    let actual = stored.agent_generation(&container, 1).unwrap().unwrap();
-    assert_eq!(actual.pane, review.herdr.as_ref().unwrap().pane_id);
-    let command = std::fs::read_to_string(tmp.path().join("engine/launch-command")).unwrap();
-    assert!(command.contains("agent launch --bootstrap"), "{command}");
-    assert!(command.contains(&assets.display().to_string()));
-    assert!(!command.contains("fixture-planner"));
-    assert_eq!(
-        ctx.store
-            .get(&id)
-            .unwrap()
-            .plans
-            .last()
-            .unwrap()
-            .reviews
-            .last()
-            .unwrap(),
-        &review
-    );
-    // Bind the generation the NORMAL service launched, rather than allocating a
-    // second one. This is an authenticated protocol fixture, not a real SDK/model.
-    let reviewer = reviewer_from_bootstrap(&ctx, &container);
-    let fx = crate::agent::test_support::Fx {
-        _tmp: tempfile::tempdir().unwrap(),
-        ctx: ctx.clone(),
-    };
-    crate::agent::test_support::committed(&crate::agent::test_support::hello(&fx, &reviewer));
-    let request =
-        crate::agent::tool_request_id(&reviewer.identity.session_id, "review-only-verdict");
-    let notes = "Fixture independent findings: clarify the widget rotation bound.";
-    let payload = serde_json::json!({"verdict":"changes","notes":notes});
-    let input =
-        crate::agent::test_support::envelope(&reviewer, "plan_verdict", &request, payload, false);
-    let recorded = crate::agent::test_support::committed(&crate::agent::test_support::send(
-        &fx,
-        &input,
-        "plan_verdict",
-    ));
-    assert_eq!(recorded.result["outcome"], "recorded");
-    let replay = crate::agent::test_support::send(&fx, &input, "plan_verdict");
-    assert!(matches!(
-        &replay,
-        crate::agent::CallResponse::Receipt { replayed: true, .. }
-    ));
-    assert_eq!(replay.receipt(), Some(&recorded));
-    assert!(ctx.store.config.autopilot_enabled());
-    for _ in 0..2 {
-        let current = ctx.store.get(&id).unwrap();
-        crate::plan_pilot::reconcile(
+    assets
+}
+
+#[test]
+fn real_plan_review_service_binds_native_generation_and_bootstrap_before_submit() {
+    for (logical_reviewer, verdict) in [("gpt-review", Verdict::Changes), ("pm", Verdict::Approve)]
+    {
+        let (tmp, mut ctx, id) = preview_fixture();
+        let assets = native_assets(tmp.path(), &mut ctx);
+        ctx.store.config.review.reviewer = Some(logical_reviewer.into());
+        let profile = ctx.store.config.profiles.get_mut("gpt-review").unwrap();
+        profile.harness = corral_core::CORRAL_PI_HARNESS.into();
+        profile.model = Some("gpt-6.1-sol".into());
+        profile.vendor = Some("openai".into());
+        ctx.store.save_config().unwrap();
+        let plan = ctx.store.get(&id).unwrap().plans.last().unwrap().clone();
+        let source = exact_source(
             &ctx,
-            &current,
-            crate::pane_liveness::Snapshot::injected(&std::collections::HashMap::new()),
-            Timestamp::now(),
-        )
-        .unwrap();
+            &id,
+            &plan,
+            crate::assistant::workflow::handoff::Goal::PlanReviewOnly,
+        );
+        let source_before = ctx.store.get_assistant_container(&source).unwrap();
+        let producer = ctx.store.get(&id).unwrap().plan_runs[0].clone();
+        // This fake engine's only pane lives entirely in the disposable fixture.
+        std::fs::write(tmp.path().join("engine/planner-live"), "").unwrap();
+        let review = crate::plan_review(&ctx, &id, Some(logical_reviewer)).unwrap();
+        assert_eq!(review.reviewer, logical_reviewer);
+        assert_eq!(review.delivery, DeliveryMode::Inbox);
+        let state = review
+            .agent_host
+            .as_ref()
+            .expect("real native state in the complete return");
+        assert_eq!(state.binding.role, AgentRole::PlanReviewer);
+        assert_eq!(state.binding.generation, 1);
+        assert!(state.current_generation().is_some());
+        let container = ContainerRef::PlanReviewer {
+            task: id.clone(),
+            plan: plan.id.clone(),
+            review: review.id.clone(),
+        };
+        let stored = ctx.store.head(&id).unwrap();
+        let actual = stored.agent_generation(&container, 1).unwrap().unwrap();
+        assert_eq!(actual.pane, review.herdr.as_ref().unwrap().pane_id);
+        let command = std::fs::read_to_string(tmp.path().join("engine/launch-command")).unwrap();
+        assert!(command.contains("agent launch --bootstrap"), "{command}");
+        assert!(command.contains(&assets.display().to_string()));
+        assert!(!command.contains("fixture-planner"));
+        assert_eq!(
+            ctx.store
+                .get(&id)
+                .unwrap()
+                .plans
+                .last()
+                .unwrap()
+                .reviews
+                .last()
+                .unwrap(),
+            &review
+        );
+        // Bind the generation the NORMAL service launched, rather than allocating a
+        // second one. This is an authenticated protocol fixture, not a real SDK/model.
+        let reviewer = reviewer_from_bootstrap(&ctx, &container);
+        let fx = crate::agent::test_support::Fx {
+            _tmp: tempfile::tempdir().unwrap(),
+            ctx: ctx.clone(),
+        };
+        crate::agent::test_support::committed(&crate::agent::test_support::hello(&fx, &reviewer));
+        let request =
+            crate::agent::tool_request_id(&reviewer.identity.session_id, "review-only-verdict");
+        let notes = "Fixture independent findings: clarify the widget rotation bound.";
+        let payload = serde_json::json!({"verdict":verdict,"notes":notes});
+        let input = crate::agent::test_support::envelope(
+            &reviewer,
+            "plan_verdict",
+            &request,
+            payload,
+            false,
+        );
+        let recorded = crate::agent::test_support::committed(&crate::agent::test_support::send(
+            &fx,
+            &input,
+            "plan_verdict",
+        ));
+        assert_eq!(recorded.result["outcome"], "recorded");
+        let replay = crate::agent::test_support::send(&fx, &input, "plan_verdict");
+        assert!(matches!(
+            &replay,
+            crate::agent::CallResponse::Receipt { replayed: true, .. }
+        ));
+        assert_eq!(replay.receipt(), Some(&recorded));
+        assert!(ctx.store.config.autopilot_enabled());
+        for _ in 0..2 {
+            let current = ctx.store.get(&id).unwrap();
+            crate::plan_pilot::reconcile(
+                &ctx,
+                &current,
+                crate::pane_liveness::Snapshot::injected(&std::collections::HashMap::new()),
+                Timestamp::now(),
+            )
+            .unwrap();
+        }
+        let stopped = ctx.store.get(&id).unwrap();
+        assert_eq!(stopped.plans.len(), 1);
+        assert_eq!(stopped.plan_runs.len(), 1);
+        assert_eq!(stopped.plan_runs[0].id, producer.id);
+        assert_eq!(stopped.plan_runs[0].profile, producer.profile);
+        assert_eq!(stopped.plan_runs[0].rounds, producer.rounds);
+        assert_eq!(stopped.plans[0].run, plan.run);
+        assert_eq!(stopped.plans[0].artifact, plan.artifact);
+        assert_eq!(stopped.plans[0].reviews.len(), 1);
+        assert_eq!(stopped.plans[0].reviews[0].verdict, Some(verdict));
+        assert_eq!(stopped.plans[0].reviews[0].notes.as_deref(), Some(notes));
+        assert!(
+            stopped.plans[0].approval.is_none()
+                && stopped.runs.is_empty()
+                && stopped.launch.is_none()
+                && stopped.landed.is_none()
+        );
+        assert_eq!(
+            ctx.store.get_assistant_container(&source).unwrap(),
+            source_before
+        );
+        assert!(
+            crate::operating::require(
+                &ctx.store,
+                &stopped,
+                corral_core::OperatingActionKind::Dispatch
+            )
+            .is_err()
+        );
+        eprintln!(
+            "REVIEW_ONLY_NATIVE: normal dedicated launch + actor-bound {logical_reviewer}/{verdict:?} receipt/replay; exact plan/spec/producer retained, terminal pilot does not rewrite/replace planner or start code/gate/landing; scripted protocol fixture only"
+        );
+        let _ = std::fs::remove_dir_all(
+            crate::agent::launch::runtime_root().join(paths::store_id(&ctx.store)),
+        );
     }
-    let stopped = ctx.store.get(&id).unwrap();
-    assert_eq!(stopped.plans.len(), 1);
-    assert_eq!(stopped.plan_runs.len(), 1);
-    assert_eq!(stopped.plan_runs[0].id, producer.id);
-    assert_eq!(stopped.plan_runs[0].profile, producer.profile);
-    assert_eq!(stopped.plan_runs[0].rounds, producer.rounds);
-    assert_eq!(stopped.plans[0].run, plan.run);
-    assert_eq!(stopped.plans[0].artifact, plan.artifact);
-    assert_eq!(stopped.plans[0].reviews.len(), 1);
-    assert_eq!(stopped.plans[0].reviews[0].verdict, Some(Verdict::Changes));
-    assert_eq!(stopped.plans[0].reviews[0].notes.as_deref(), Some(notes));
-    assert!(
-        stopped.plans[0].approval.is_none()
-            && stopped.runs.is_empty()
-            && stopped.launch.is_none()
-            && stopped.landed.is_none()
-    );
-    assert_eq!(
-        ctx.store.get_assistant_container(&source).unwrap(),
-        source_before
-    );
-    assert!(
-        crate::operating::require(
-            &ctx.store,
-            &stopped,
-            corral_core::OperatingActionKind::Dispatch
-        )
-        .is_err()
-    );
-    eprintln!(
-        "REVIEW_ONLY_NATIVE: normal dedicated independent launch + actor-bound Changes receipt/replay; exact plan/spec/producer retained, terminal pilot does not rewrite/replace planner or start code/gate/landing; scripted protocol fixture only"
-    );
-    let _ = std::fs::remove_dir_all(
-        crate::agent::launch::runtime_root().join(paths::store_id(&ctx.store)),
-    );
 }
 
 fn source_expected(
@@ -165,7 +187,12 @@ fn source_expected(
     }
 }
 
-fn exact_review_only_source(ctx: &Ctx, id: &str, plan: &corral_core::PlanRecord) -> String {
+fn exact_source(
+    ctx: &Ctx,
+    id: &str,
+    plan: &corral_core::PlanRecord,
+    goal: crate::assistant::workflow::handoff::Goal,
+) -> String {
     use crate::assistant::workflow::{self, handoff as h};
     use corral_core::assistant::{NewOwnerInput, OwnerInputSource};
     use corral_core::assistant_workflow::{DesignStage, WorkflowPhase};
@@ -178,7 +205,11 @@ fn exact_review_only_source(ctx: &Ctx, id: &str, plan: &corral_core::PlanRecord)
     // Explicit test provenance; no real native owner/choice consent is claimed.
     ctx.store
         .update_assistant_container(&session, |c| {
-            let text = "fixture: review this exact existing plan, no rewrite or implementation";
+            let text = if matches!(goal, h::Goal::PlanContinue) {
+                "fixture: continue planning this same task; preserve newer settled drafts; no implementation"
+            } else {
+                "fixture: review this exact existing plan, no rewrite or implementation"
+            };
             let input = c.journal_owner_input(
                 &session,
                 NewOwnerInput {
@@ -235,7 +266,7 @@ fn exact_review_only_source(ctx: &Ctx, id: &str, plan: &corral_core::PlanRecord)
         })
         .unwrap();
     let c = ctx.store.get_assistant_container(&session).unwrap();
-    let request=h::Request {project:"app".into(),scope:vec!["widget.rs".into()],goal:h::Goal::PlanReviewOnly,
+    let request=h::Request {project:"app".into(),scope:vec!["widget.rs".into()],goal,
         context:serde_json::from_value(serde_json::json!({"mode":"task","brief":{
             "goal":"review exact existing plan","constraints":["no author rewrite or implementation"],"decisions":[],"completed":[],
             "remaining":["independent plan review"],"findings":[],"failed_approaches":[],"assumptions":[],"evidence":[],
