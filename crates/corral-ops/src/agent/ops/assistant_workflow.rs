@@ -1,5 +1,5 @@
-//! Closed assistant-only operations. Only read/stage/publish are implemented in this member;
-//! lifecycle transitions explicitly refuse until the corresponding policy/service is present.
+//! Closed assistant-only operations. Model actions cannot publish host lifecycle events or
+//! acquire execution authority; local review remains an exact-snapshot advisory operation.
 use anyhow::{Context, Result};
 use corral_core::agent::{AGENT_RECORD_VERSION, ReceiptState, RequestOrigin, RequestReceipt};
 use serde::Deserialize;
@@ -56,13 +56,7 @@ enum PlanAction {
     },
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-enum ReviewAction {
-    Start { expected: Expected, input: String },
-    Read { review: Option<String> },
-    Cancel { expected: Expected, review: String },
-}
+use workflow::review::Action as ReviewAction;
 
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
@@ -185,24 +179,7 @@ fn unavailable(ctx: &Ctx, envelope: &Envelope, owner: &str) -> Result<CallRespon
 pub(crate) fn call(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallResponse> {
     match op {
         AgentOp::AssistantPlan => plan(ctx, envelope),
-        AgentOp::AssistantPlanReview => {
-            let action: ReviewAction =
-                super::payload(envelope, "action, expected?, input?, review?")?;
-            // Fields are deliberately parsed even for unavailable actions: unknown or
-            // host-only lifecycle fields must never become an open-ended effect request.
-            match action {
-                ReviewAction::Start { expected, input } => {
-                    let _ = (expected, input);
-                }
-                ReviewAction::Read { review } => {
-                    let _ = review;
-                }
-                ReviewAction::Cancel { expected, review } => {
-                    let _ = (expected, review);
-                }
-            }
-            unavailable(ctx, envelope, "assistant-local-plan-review-lifecycle")
-        }
+        AgentOp::AssistantPlanReview => review(ctx, envelope),
         AgentOp::AssistantHandoff => {
             let action: HandoffAction =
                 super::payload(envelope, "action, expected?, question?, question_revision?")?;
@@ -235,6 +212,61 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRe
         )
         .into()),
     }
+}
+
+fn review(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
+    let action: ReviewAction = super::payload(
+        envelope,
+        "action, expected?, input?, review?, offset?, pending_after?",
+    )?;
+    let session = envelope
+        .identity
+        .assistant
+        .as_deref()
+        .context("assistant identity missing")?;
+    if let ReviewAction::Read {
+        review,
+        offset,
+        pending_after,
+    } = action
+    {
+        let origin = lookup(ctx, envelope)?;
+        let result = ctx
+            .store
+            .inspect_assistant_container(session, |container, ended| {
+                admission::recheck_assistant(container, ended, envelope.identity.generation)?;
+                workflow::review::read(
+                    &ctx.store,
+                    session,
+                    container,
+                    review.as_deref(),
+                    offset,
+                    pending_after,
+                )
+            })?;
+        return Ok(unstored(&origin, result));
+    }
+    let reference = admission::container_of(&envelope.identity);
+    let admitted = match admission::admit(ctx, envelope, Mode::Mutation { settles_turn: None })? {
+        Admission::Replay(stored) => return receipts::respond(ctx, &reference, *stored, true),
+        Admission::New(admitted) => admitted,
+    };
+    receipts::commit_assistant(ctx, &admitted, |container| {
+        let result = match action {
+            ReviewAction::Start { expected, input } => {
+                workflow::review::start(&ctx.store, session, container, &expected, &input)?
+            }
+            ReviewAction::Cancel { expected, review } => {
+                workflow::review::cancel(&ctx.store, session, container, &expected, &review)?
+            }
+            ReviewAction::Read { .. } => unreachable!("closed read dispatch"),
+        };
+        Ok(Commit {
+            result,
+            effect: None,
+            post_pending: Vec::new(),
+        })
+    })
 }
 
 /// Host-only lifecycle channel. ev IDs are authenticated just like owner-input provenance;

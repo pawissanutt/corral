@@ -7,7 +7,7 @@ use corral_core::{
     assistant_workflow::*,
     blob_ref::BlobHash,
 };
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
@@ -44,18 +44,25 @@ pub(super) fn materialize(
 fn write_exact(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     fs::create_dir_all(path.parent().context("snapshot directory")?)
         .context("create review snapshot directory")?;
-    match OpenOptions::new().write(true).create_new(true).open(&path) {
-        Ok(mut f) => {
-            f.write_all(&bytes).context("write exact review snapshot")?;
-            f.sync_all().context("sync review snapshot")?;
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+    let mut prepared =
+        tempfile::NamedTempFile::new_in(path.parent().context("snapshot directory")?)
+            .context("prepare atomic review snapshot")?;
+    prepared
+        .write_all(bytes)
+        .context("write exact review snapshot")?;
+    prepared
+        .as_file()
+        .sync_all()
+        .context("sync review snapshot")?;
+    match prepared.persist_noclobber(path) {
+        Ok(_) => {}
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
             ensure!(
-                fs::symlink_metadata(&path)?.file_type().is_file(),
+                fs::symlink_metadata(path)?.file_type().is_file(),
                 "review snapshot is not regular"
             );
             let mut existing = Vec::new();
-            fs::File::open(&path)?
+            fs::File::open(path)?
                 .take(DOCUMENT_MAX as u64 + 1)
                 .read_to_end(&mut existing)?;
             ensure!(
@@ -63,7 +70,7 @@ fn write_exact(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
                 "review snapshot differs from canonical bytes"
             );
         }
-        Err(error) => return Err(error).context("create exact review snapshot"),
+        Err(error) => return Err(error.error).context("create exact review snapshot"),
     }
     Ok(())
 }

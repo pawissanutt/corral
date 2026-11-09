@@ -417,11 +417,19 @@ fn assistant_workflow_closed_schemas_role_generation_and_lifecycle_fail_closed()
             "assistant_plan",
             json!({"action": "enter", "input": "ev-1-1"}),
         ),
-        ("assistant_plan_review", json!({"action": "read"})),
         ("assistant_handoff", json!({"action": "read"})),
     ] {
         assert_eq!(ts::code(&f.send(op, op, payload)), Some("op_unavailable"));
     }
+    assert_eq!(
+        ts::committed(&f.send(
+            "review-read",
+            "assistant_plan_review",
+            json!({"action":"read"})
+        ))
+        .result["reviews"],
+        json!([])
+    );
     assert_eq!(f.container(), before);
     assert_eq!(
         ts::code(&f.send("unknown", "assistant_plan", json!({"action": "drained"}))),

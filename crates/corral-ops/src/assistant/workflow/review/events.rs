@@ -75,7 +75,7 @@ pub fn apply_event(
         }
         Event::Stage { offset, chunk } => {
             if r.generation != generation || r.lifecycle.terminal() {
-                return Ok(projection(store, session, container, &r)?);
+                return projection(store, session, container, &r);
             }
             if chunk.is_empty() || chunk.len() > CHUNK_MAX {
                 return Err(bad("review chunks require 1-16 KiB UTF-8 bytes"));
@@ -109,7 +109,7 @@ pub fn apply_event(
                 return Err(bad("invalid review terminal event"));
             }
             if r.lifecycle.terminal() {
-                return Ok(projection(store, session, container, &r)?);
+                return projection(store, session, container, &r);
             }
             if lifecycle == LocalReviewState::Completed
                 && (r.lifecycle != LocalReviewState::Running || r.accounting != "completed")
@@ -126,7 +126,9 @@ pub fn apply_event(
                 if text.len() != bytes as usize || BlobHash::of(text.as_bytes()) != *digest {
                     return Err(bad("review result digest/length mismatch"));
                 }
-                if text.trim().is_empty() && lifecycle == LocalReviewState::Completed {
+                if text.chars().all(|c| c.is_whitespace() || c.is_control())
+                    && lifecycle == LocalReviewState::Completed
+                {
                     return Err(bad("empty review is incomplete"));
                 }
                 r.findings = Some(artifact(store, session, &r.workflow, text.as_bytes())?);
@@ -187,6 +189,13 @@ pub fn apply_event(
     Ok(result)
 }
 
+pub struct Accounting<'a> {
+    pub action: &'a str,
+    pub model: Option<&'a str>,
+    pub outcome: Option<AuxiliaryOutcome>,
+    pub max: usize,
+}
+
 pub fn accounting(
     store: &Store,
     session: &str,
@@ -194,11 +203,14 @@ pub fn accounting(
     generation: u32,
     association: &Association,
     request: &str,
-    action: &str,
-    model: Option<&str>,
-    outcome: Option<AuxiliaryOutcome>,
-    max: usize,
+    event: Accounting<'_>,
 ) -> Result<Value> {
+    let Accounting {
+        action,
+        model,
+        outcome,
+        max,
+    } = event;
     let mut r = load(store, session, &association.workflow, &association.review)?;
     if current(container)?.id != r.workflow
         || r.generation != generation
@@ -220,6 +232,20 @@ pub fn accounting(
         .iter()
         .position(|u| u.request.as_deref() == Some(request));
     match action {
+        "check" => {
+            let w = current(container)?;
+            if r.lifecycle != LocalReviewState::Running
+                || w.owner != ScopeOwner::Local
+                || w.phase != WorkflowPhase::Planning
+            {
+                return Err(bad(
+                    "local review no longer live; no provider effect admitted",
+                ));
+            }
+            return Ok(
+                json!({"session_file": file, "session_id": request, "generation": generation}),
+            );
+        }
         "prepare" => {
             if r.lifecycle != LocalReviewState::Queued
                 || position.is_some()

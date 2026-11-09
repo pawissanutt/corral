@@ -71,6 +71,7 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
   let synthesis: "turn_limit" | "time_reserve" | undefined;
   let synthesisUsed: typeof synthesis;
   let limitReached = false;
+  let reviewFenced = false;
   const thinkingLevel = invocation.kind === "explore"
     ? researchBudget(invocation.research ?? {}, invocation.maxTurns).thinkingLevel : "off";
   const extension = (pi: ExtensionAPI) => {
@@ -93,9 +94,12 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
     // Change tools before the SDK snapshots the next turn (turn_start is too late).
     pi.on("before_agent_start", () => { reserveSynthesis(1); });
     pi.on("turn_end", () => { reserveSynthesis(turns + 1); });
-    pi.on("turn_start", (_event, ctx) => {
+    pi.on("turn_start", async (_event, ctx) => {
       limitReached = ++turns > invocation.maxTurns || synthesisUsed !== undefined;
-      if (signal.aborted || limitReached) void ctx.abort();
+      if (invocation.checkReview && !signal.aborted && !limitReached) {
+        try { await invocation.checkReview(); } catch { reviewFenced = true; }
+      }
+      if (signal.aborted || limitReached || reviewFenced) void ctx.abort();
     });
     pi.on("context", event => {
       if (!synthesis) return;
@@ -148,9 +152,9 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
       promptError = error;
     }
     const failed = promptError !== undefined || session.messages.some((message) => message.role === "assistant" && ["error", "aborted"].includes(message.stopReason));
-    const outcome = signal.aborted || failed ? "uncertain" : "completed";
+    const outcome = signal.aborted || failed || reviewFenced ? "uncertain" : "completed";
     if (invocation.kind !== "explore") return { text: session.getLastAssistantText() ?? "No text response", outcome };
-    const stopReason: ResearchReport["stopReason"] = signal.aborted
+    const stopReason: ResearchReport["stopReason"] = reviewFenced ? "cancelled" : signal.aborted
       ? signal.reason instanceof Error && signal.reason.name === "TimeoutError" ? "timeout" : "cancelled"
       : limitReached ? synthesisUsed ?? "turn_limit" : failed ? "provider_error" : synthesisUsed ?? "completed";
     const result = researchResult(session.messages, stopReason);

@@ -13,7 +13,7 @@ use super::{Expected, bad, compare, current};
 
 mod events;
 mod snapshot;
-pub use events::{Association, Event, accounting, apply_event};
+pub use events::{Accounting, Association, Event, accounting, apply_event};
 
 const RECORDS: &str = "assistant-local-reviews";
 fn count(store: &Store, session: &str, workflow: &str) -> Result<u32> {
@@ -23,6 +23,30 @@ fn count(store: &Store, session: &str, workflow: &str) -> Result<u32> {
             &super::key(session, workflow),
         )?
         .unwrap_or(0))
+}
+
+const PENDING: &str = "assistant-local-review-pending";
+fn number(id: &str) -> Result<u32> {
+    let n = id
+        .strip_prefix("LR")
+        .and_then(|n| n.parse::<u32>().ok())
+        .filter(|n| *n > 0 && *n <= HISTORY_MAX && id == format!("LR{n}"))
+        .ok_or_else(|| bad("invalid local review ID"))?;
+    Ok(n)
+}
+fn pending(store: &Store, session: &str, workflow: &str, required: bool) -> Result<Vec<String>> {
+    let ids: Option<Vec<String>> = store.record(PENDING, &super::key(session, workflow))?;
+    if required && ids.is_none() {
+        return Err(bad("recovery_required: local review outbox missing"));
+    }
+    let ids = ids.unwrap_or_default();
+    if ids.len() > HISTORY_MAX as usize {
+        return Err(bad("review outbox exceeds capacity"));
+    }
+    for id in &ids {
+        number(id)?;
+    }
+    Ok(ids)
 }
 
 #[derive(Debug, Deserialize)]
@@ -36,6 +60,8 @@ pub enum Action {
         review: Option<String>,
         #[serde(default)]
         offset: usize,
+        #[serde(default)]
+        pending_after: u32,
     },
     Cancel {
         expected: Expected,
@@ -47,12 +73,7 @@ fn row(session: &str, workflow: &str, review: &str) -> String {
     format!("{session}/{workflow}/{review}")
 }
 fn load(store: &Store, session: &str, workflow: &str, review: &str) -> Result<LocalReview> {
-    if !review
-        .strip_prefix("LR")
-        .is_some_and(|n| n.parse::<u32>().is_ok_and(|n| n > 0 && n <= HISTORY_MAX))
-    {
-        return Err(bad("invalid local review ID"));
-    }
+    number(review)?;
     store
         .record(RECORDS, &row(session, workflow, review))?
         .context("unknown local review")
@@ -98,6 +119,28 @@ fn save(
         .state_revision
         .checked_add(1)
         .context("workflow revision overflow")?;
+    let mut obligations = pending(store, session, &review.workflow, previous.is_some())?;
+    let unsettled = container.state.usage_sessions.iter().any(|u| {
+        u.request.as_deref() == Some(&review.invocation)
+            && matches!(
+                u.outcome,
+                Some(
+                    corral_core::agent::AuxiliaryOutcome::Prepared
+                        | corral_core::agent::AuxiliaryOutcome::Running
+                )
+            )
+    });
+    let needed = !review.lifecycle.terminal() || !review.notice_delivered || unsettled;
+    obligations.retain(|id| id != &review.id);
+    if needed {
+        obligations.push(review.id.clone());
+    }
+    obligations.sort_by(|a, b| a.len().cmp(&b.len()).then(a.cmp(b)));
+    store.save_record(
+        PENDING,
+        &super::key(session, &review.workflow),
+        &obligations,
+    )?;
     store.save_record(RECORDS, &row(session, &review.workflow, &review.id), review)?;
     crate::agent::failpoint("local_review_staged");
     Ok(())
@@ -233,9 +276,13 @@ pub fn read(
     container: &AssistantContainer,
     id: Option<&str>,
     offset: usize,
+    pending_after: u32,
 ) -> Result<Value> {
+    if pending_after > HISTORY_MAX {
+        return Err(bad("review outbox cursor exceeds capacity"));
+    }
     let Some(index) = &container.workflow else {
-        return Ok(json!({"reviews": [], "active": null}));
+        return Ok(json!({"reviews": [], "count": 0, "pending": [], "next_pending_after": null}));
     };
     let w = &index.current;
     if let Some(id) = id {
@@ -251,8 +298,20 @@ pub fn read(
             while !text.is_char_boundary(end) {
                 end -= 1;
             }
-            result["text"] = json!(&text[offset..end]);
-            result["next_offset"] = json!((end < text.len()).then_some(end));
+            loop {
+                result["text"] = json!(&text[offset..end]);
+                result["next_offset"] = json!((end < text.len()).then_some(end));
+                if serde_json::to_vec(&result)?.len() <= corral_core::agent::RESULT_MAX_BYTES {
+                    break;
+                }
+                end = offset + (end - offset) / 2;
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                if end == offset {
+                    return Err(bad("review metadata leaves no room for a findings page"));
+                }
+            }
         }
         return Ok(result);
     }
@@ -260,14 +319,33 @@ pub fn read(
     let issued = count(store, session, &w.id)?;
     let mut reviews = Vec::new();
     for i in issued.saturating_sub(2) + 1..=issued {
-        reviews.push(projection(
+        let p = projection(
             store,
             session,
             container,
             &load(store, session, &w.id, &format!("LR{i}"))?,
-        )?);
+        )?;
+        reviews.push(json!({"review":p["review"], "revision":p["revision"], "current_revision":p["current_revision"],
+            "freshness":p["freshness"], "source_freshness":p["source_freshness"], "lifecycle":p["lifecycle"],
+            "accounting":p["accounting"], "result_revision":p["result_revision"], "notice_delivered":p["notice_delivered"]}));
     }
-    Ok(json!({"reviews": reviews, "count": issued}))
+    let mut ids = Vec::new();
+    for id in pending(store, session, &w.id, issued > 0)? {
+        let n = number(&id)?;
+        if n > pending_after {
+            ids.push((n, id));
+        }
+    }
+    let more = ids.len() > 16;
+    ids.truncate(16);
+    let next = if more {
+        ids.last().map(|(n, _)| *n)
+    } else {
+        None
+    };
+    Ok(
+        json!({"reviews": reviews, "count": issued, "pending": ids.into_iter().map(|(_,id)|id).collect::<Vec<_>>(), "next_pending_after": next}),
+    )
 }
 
 fn projection(
@@ -283,16 +361,30 @@ fn projection(
         .as_ref()
         .is_some_and(|p| p.revision == r.plan.revision && p.artifact == r.plan.artifact);
     let source_current = snapshot::observe(store, &r.plan)?;
-    Ok(json!({
+    let mut summary_end = r.summary.len().min(256);
+    while !r.summary.is_char_boundary(summary_end) {
+        summary_end -= 1;
+    }
+    let encoded = serde_json::to_vec(r)?;
+    let result = json!({
         "review": r.id, "workflow": r.workflow, "result_revision": r.result_revision,
         "revision": r.plan.revision, "digest": r.plan.artifact.blob.hash(), "stage": r.plan.stage,
         "current_revision": current_revision, "freshness": if current {"current"} else {"stale"},
         "source_freshness": match (&r.source, &source_current) { (None, _) => "not_observed", (Some(a), Some(b)) if a == b => "current", _ => "changed" },
         "source": r.source, "lifecycle": r.lifecycle, "accounting": r.accounting,
+        "publication_pending": r.lifecycle == LocalReviewState::Running && r.accounting == "completed",
         "invocation": r.invocation, "generation": r.generation, "model": r.model,
-        "findings": r.findings, "summary": r.summary, "notice_delivered": r.notice_delivered,
+        "findings": r.findings, "summary": &r.summary[..summary_end], "notice_delivered": r.notice_delivered,
+        "summary_truncated": summary_end < r.summary.len(),
+        "record": {"blob": BlobHash::of(&encoded).to_ref(), "bytes": encoded.len()},
         "snapshot_file": snapshot::file(store, session, r), "plan": r.plan.artifact,
         "context_file": snapshot::file(store, session, r).with_extension("context.json"), "context": r.context,
-        "advisory": true,
-    }))
+        "advisory": true, "purpose": "assistant_plan_review",
+    });
+    if serde_json::to_vec(&result)?.len() > corral_core::agent::RESULT_MAX_BYTES {
+        return Err(bad(
+            "review metadata exceeds the bounded receipt; use a shorter workspace path",
+        ));
+    }
+    Ok(result)
 }

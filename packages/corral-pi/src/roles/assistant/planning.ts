@@ -80,7 +80,7 @@ export const assistantPlanReviewTool: CorralToolSpec = {
   op: "assistant_plan_review",
   parameters: Type.Union([
     Type.Object({ ...action("start"), expected, input: Type.String() }, closed),
-    Type.Object({ ...action("read"), review: Type.Optional(Type.String()), offset: Type.Optional(natural) }, closed),
+    Type.Object({ ...action("read"), review: Type.Optional(Type.String()), offset: Type.Optional(natural), pending_after: Type.Optional(Type.Integer({ minimum: 0, maximum: 4096 })) }, closed),
     Type.Object({ ...action("cancel"), expected, review: Type.String() }, closed),
   ]),
   payload: (params) => ({ ...params }),
