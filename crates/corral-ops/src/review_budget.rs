@@ -351,7 +351,15 @@ pub(crate) fn reviewer_waiting(ctx: &Ctx, id: &str) -> Result<bool> {
     let _reads = corral_core::UnqueuedReads::begin();
     let task = ctx.store.head(id)?;
     let active = active_processes(ctx, id, Kind::Reviewer)?;
-    if crate::resources::admission(ctx)?.is_some() || active >= ctx.store.config.limits.review {
+    if crate::resources::admission(ctx)?.is_some() {
+        return Ok(true);
+    }
+    if ctx.store.config.limits.capacity.is_some() {
+        return Ok(
+            crate::capacity::admission::review_reason(&ctx.store, &task, Kind::Reviewer)?.is_some(),
+        );
+    }
+    if active >= ctx.store.config.limits.review {
         return Ok(true);
     }
     let replacing = task.current_run.as_ref().is_some_and(|run| {
@@ -477,8 +485,15 @@ impl<'a> ReviewLaunch<'a> {
             if !force_resources && let Some(reason) = crate::resources::admission(ctx)? {
                 return Ok(Some(reason));
             }
+            let independent = store.config.limits.capacity.is_some();
+            if independent
+                && let Some(reason) =
+                    crate::capacity::admission::review_reason(store, &*current, kind)?
+            {
+                return Ok(Some(reason));
+            }
             let limit = store.config.limits.review;
-            if active >= limit {
+            if !independent && active >= limit {
                 return Ok(Some(format!(
                     "review process limit reached ({active}/{limit})"
                 )));
@@ -489,10 +504,11 @@ impl<'a> ReviewLaunch<'a> {
             {
                 return Ok(Some(reason));
             }
-            let counted = match kind {
-                Kind::Gate => store.config.limits.count_gates,
-                Kind::Reviewer => store.config.limits.count_reviews,
-            };
+            let counted = !independent
+                && match kind {
+                    Kind::Gate => store.config.limits.count_gates,
+                    Kind::Reviewer => store.config.limits.count_reviews,
+                };
             let replacing = current.current_run_head()?.is_some_and(|r| match kind {
                 Kind::Reviewer => r
                     .review

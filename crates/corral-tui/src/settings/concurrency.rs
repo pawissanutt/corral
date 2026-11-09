@@ -11,6 +11,9 @@ use super::model::{Field, Kind, Row};
 use crate::theme;
 
 pub(super) fn rows(cfg: &Config) -> Vec<Row> {
+    if cfg.limits.capacity.is_some() {
+        return super::capacity::rows(cfg);
+    }
     let l = &cfg.limits;
     vec![
         Row::new(
@@ -41,11 +44,15 @@ pub(super) fn rows(cfg: &Config) -> Vec<Row> {
         .help("Coding tasks not landed (Running/Blocked/parked/Review). 0 = off.")
         .key("limits.wip")
         .stepper(),
+        super::capacity::mode_row(false),
     ]
 }
 
 /// Steps a stepper row by one. `None` for rows that do not step.
 pub(super) fn step(cfg: &mut Config, field: &Field, forward: bool) -> Option<()> {
+    if matches!(field, Field::Capacity(_)) {
+        return super::capacity::step(cfg, field, forward);
+    }
     let by = |n: usize| {
         if forward {
             n.saturating_add(1)
@@ -66,6 +73,9 @@ pub(super) fn step(cfg: &mut Config, field: &Field, forward: bool) -> Option<()>
 /// Heading lines drawn above `row` in General: the concurrency group before its first row, and a
 /// "Board and PM" heading before the rest.
 pub(super) fn heading(cfg: &Config, row: &Row, width: usize) -> Vec<FormLine> {
+    if let Some(lines) = super::capacity::heading(cfg, row, width) {
+        return lines;
+    }
     let bold = Style::new().fg(theme::CYAN).add_modifier(Modifier::BOLD);
     match row.field {
         Field::SlotLimit => {

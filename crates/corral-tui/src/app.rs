@@ -133,8 +133,9 @@ use worker::WorkerMsg;
 #[cfg(test)]
 use worker::spawn_worker;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct Counts {
+    slots: corral_ops::SlotUsage,
     needs: usize,
     used: usize,
     limit: usize,

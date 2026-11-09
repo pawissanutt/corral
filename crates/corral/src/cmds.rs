@@ -563,6 +563,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
         Cmd::Queue { cmd } => crate::queue::run(&open(&root)?, cmd),
         Cmd::Dispatch {
             id,
+            adhoc,
             plan,
             profile,
             headless,
@@ -575,7 +576,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             let mut opts = profile.dispatch_opts(headless, base, queue);
             opts.force_resources = force;
             opts.plan = plan;
-            route::dispatch(&open(&root)?, &id, opts, explain, json)
+            route::dispatch(&open(&root)?, &id, opts, explain, json, adhoc)
         }
         Cmd::Reply {
             id,

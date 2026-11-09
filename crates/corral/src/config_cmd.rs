@@ -78,21 +78,34 @@ pub fn run(start: &Path, cmd: ConfigCmd, entry: &crate::entry::Entry) -> Result<
                     "use `corral mode` for operating policy changes; activation requires an exact finite preview and explicit confirmation"
                 );
             }
-            let store = entry.open(&root)?.store;
             let layer = if user {
                 ConfigLayer::User
             } else {
                 ConfigLayer::Workspace
             };
             let whole_review = parts.as_slice() == ["review"];
-            store.edit_config_layer_from(layer, ConfigSource::Cli, |doc| {
+            let whole_capacity = parts.as_slice() == ["limits", "capacity"];
+            let edit = |store: &Store| {
+                store.edit_config_layer_from(layer, ConfigSource::Cli, |doc| {
                 let legacy_review = whole_review && doc.get("review.autopilot")?.is_some();
+                if whole_capacity {
+                    // This explicit model replacement is not a generic table-to-scalar edit.
+                    doc.unset(&key)?;
+                }
                 doc.set_str(&key, &value)?;
                 if legacy_review || whole_review && doc.get("review.autopilot")?.is_some() {
                     bail!("review.autopilot is legacy evidence, not an independent control; use `corral mode`");
                 }
                 Ok(())
-            })?;
+            }).map(|_| ())
+            };
+            let store = if matches!(parts.as_slice(), ["limits", "capacity", ..]) {
+                entry.open_for_capacity_config(&root, edit)?.store
+            } else {
+                let store = entry.open(&root)?.store;
+                edit(&store)?;
+                store
+            };
             let layers = store.config_layers()?;
             let doc = layers.doc(layer)?;
             if let Some(item) = doc.get(&key)? {

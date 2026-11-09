@@ -1,10 +1,39 @@
-use anyhow::{Result, bail};
+use anyhow::{Result, bail, ensure};
 use jiff::Timestamp;
 
 use super::Store;
 use crate::{AttentionLedger, Status, Task};
 
-pub(super) fn task(task: &mut Task, before: Option<&Task>, now: Timestamp) -> Result<()> {
+pub(super) fn task(
+    task: &mut Task,
+    before: Option<&Task>,
+    now: Timestamp,
+    independent: bool,
+) -> Result<()> {
+    let previous_commitment = before.and_then(|task| {
+        task.capacity_started
+            .or_else(|| independent.then(|| crate::capacity::task_committed(task)))
+    });
+    if independent || task.capacity_started.is_some() || previous_commitment.is_some() {
+        if previous_commitment == Some(true)
+            && !matches!(task.status, Status::Done | Status::Dropped)
+            && let Some(before) = before
+        {
+            ensure!(
+                task.capacity_lane == before.capacity_lane,
+                "started task {} keeps its scheduling lane until completion or abandonment",
+                task.id
+            );
+        }
+        let started = if task.tracker || matches!(task.status, Status::Done | Status::Dropped) {
+            false
+        } else {
+            task.capacity_started.unwrap_or(false)
+                || previous_commitment.unwrap_or(false)
+                || matches!(task.status, Status::Running | Status::Review)
+        };
+        task.capacity_started = Some(started);
+    }
     if !crate::Park::supports(task.status) {
         task.park = None;
     }
@@ -134,13 +163,13 @@ mod tests {
                 super::super::batch::draft_task(1, "Status", None, from, "", crate::clock::now());
             before.status_since = Some(earlier);
             let mut created = before.clone();
-            task(&mut created, None, now).unwrap();
+            task(&mut created, None, now, false).unwrap();
             assert_eq!(created.status_since, Some(now), "creation: {from:?}");
             for to in STATUSES {
                 let mut changed = before.clone();
                 changed.status = to;
                 changed.status_since = Some(Timestamp::from_second(30).unwrap());
-                task(&mut changed, Some(&before), now).unwrap();
+                task(&mut changed, Some(&before), now, false).unwrap();
                 assert_eq!(
                     changed.status_since,
                     Some(if from == to { earlier } else { now }),
@@ -164,7 +193,7 @@ mod tests {
             changed.infra_wait = Some(wait());
             changed.attention.push_notice(notice()).unwrap();
             changed.status_since = Some(now);
-            task(&mut changed, Some(&before), now).unwrap();
+            task(&mut changed, Some(&before), now, false).unwrap();
             assert_eq!(changed.status_since, None, "{status:?}");
 
             changed.status = if status == Status::Ready {
@@ -172,7 +201,7 @@ mod tests {
             } else {
                 Status::Ready
             };
-            task(&mut changed, Some(&before), now).unwrap();
+            task(&mut changed, Some(&before), now, false).unwrap();
             assert_eq!(changed.status_since, Some(now), "{status:?}");
         }
     }

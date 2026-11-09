@@ -212,7 +212,7 @@ impl Store {
             let mut t = task.clone();
             let now = self.now();
             t.updated = now;
-            super::normalize::task(&mut t, None, now)?;
+            super::normalize::task(&mut t, None, now, self.config.limits.capacity.is_some())?;
             self.insert_exact(&t)?;
             return Ok(t);
         };
@@ -235,7 +235,12 @@ impl Store {
         let mut t = task.clone();
         t.path = PathBuf::new();
         let now = self.now();
-        super::normalize::task(&mut t, Some(&before), now)?;
+        super::normalize::task(
+            &mut t,
+            Some(&before),
+            now,
+            self.config.limits.capacity.is_some(),
+        )?;
         t.updated = if t == before { before.updated } else { now };
         let record = TaskRecord {
             task: t.clone(),
@@ -347,7 +352,7 @@ impl Store {
         t.path = PathBuf::new();
         let now = self.now();
         t.updated = now;
-        super::normalize::task(&mut t, None, now)?;
+        super::normalize::task(&mut t, None, now, self.config.limits.capacity.is_some())?;
         let split = split(&TaskRecord {
             task: t.clone(),
             recoveries: Vec::new(),

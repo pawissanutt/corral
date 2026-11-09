@@ -118,6 +118,12 @@ fn owner_finish_materializes_gated_reviewed_work_and_autopilot_lands_it() {
     // A missing classification previously missed every reviewer routing rule.
     let mut fx = fx;
     fx.ctx.store.config.review.reviewer = None;
+    fx.ctx.store.config.limits.capacity = Some(corral_core::CapacityLimits {
+        unfinished: 1,
+        agents: 1,
+        gates: 1,
+        adhoc_reserve: 0,
+    });
     fx.ctx.store.config.review.accept = Some(Accept::Owner);
     fx.ctx.store.config.routing.reviewer_rules.push(
         serde_json::from_value(json!({
@@ -129,6 +135,7 @@ fn owner_finish_materializes_gated_reviewed_work_and_autopilot_lands_it() {
     // When the owner finishes it as a fix for the cache, review is mandatory.
     let opts = Finish {
         title: Some("Fix the cache"),
+        adhoc: true,
         ..Finish::default()
     };
     let finished = scratch::finish(&fx.ctx, "A-1", "cache-fix", &opts).unwrap();
@@ -139,6 +146,8 @@ fn owner_finish_materializes_gated_reviewed_work_and_autopilot_lands_it() {
     );
     let task = fx.ctx.store.get(&finished.task).unwrap();
     assert_eq!(task.title, "Fix the cache");
+    assert_eq!(task.capacity_lane, corral_core::CapacityLane::Adhoc);
+    assert_eq!(task.capacity_started, Some(true));
     assert_eq!(task.origin, Some(Origin::Assistant));
     assert_eq!(task.labels, ["cowork"]);
     assert_eq!(task.kind.as_deref(), Some("backend"));

@@ -12,7 +12,7 @@ subcommands() {
   awk '/^Commands:/{on=1; next} on && /^[^ ]/{on=0} on && /^  [a-z]/{print $1}' | grep -vx help || true
 }
 
-help_of() { "$CORRAL" "$@" --help </dev/null 2>&1; }
+help_of() { "$CORRAL" "$@" --help </dev/null 2>&1 | awk '{sub(/[ \t]+$/, ""); print}'; }
 
 emit() {
   local depth=$1; shift

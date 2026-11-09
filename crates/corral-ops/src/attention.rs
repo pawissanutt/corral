@@ -504,7 +504,11 @@ fn ready(
         .project
         .as_ref()
         .and_then(|project| n.config.limits.per_project.get(project));
-    if usage >= n.config.limits.running
+    let independent_wait = n
+        .unfinished_wait(task)
+        .or_else(|| n.agent_wait(task, credit));
+    if independent_wait.is_some()
+        || (n.config.limits.capacity.is_none() && usage >= n.config.limits.running)
         || project_cap.is_some_and(|cap| project_usage >= *cap)
         || n.resource_wait.is_some()
     {
@@ -514,12 +518,15 @@ fn ready(
             "launch_capacity",
             WaitClass::Capacity,
             Responsible::Executor,
-            n.resource_wait.clone().unwrap_or_else(|| {
-                format!(
-                    "Waiting for dispatch capacity ({usage}/{})",
-                    n.config.limits.running
-                )
-            }),
+            n.resource_wait
+                .clone()
+                .or(independent_wait)
+                .unwrap_or_else(|| {
+                    format!(
+                        "Waiting for dispatch capacity ({usage}/{})",
+                        n.config.limits.agent_limit()
+                    )
+                }),
         );
         condition
             .resume
@@ -612,11 +619,17 @@ fn plan(
         }
         return false;
     }
+    let capacity_wait = n.plan_review_wait(
+        task,
+        plan.current_review
+            .as_ref()
+            .is_some_and(|r| r.verdict.is_none() && !r.cancelled),
+    );
     if plan
         .current_review
         .as_ref()
         .is_none_or(|review| review.verdict.is_none() && review.herdr.is_none())
-        && n.review_slots >= n.config.limits.review
+        && let Some(reason) = capacity_wait
     {
         let mut condition = row(
             task,
@@ -632,7 +645,7 @@ fn plan(
                         .map_or(plan.added, |review| review.at),
                 ),
             ),
-            "Waiting for a plan-review slot".into(),
+            reason,
         );
         condition
             .resume

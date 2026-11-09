@@ -211,8 +211,8 @@ pub fn move_task_with_decision(
     Ok(task)
 }
 
-/// (used, limit): used = tasks whose status holds a slot (Running, NeedsMe); limit = config.limits.running.
+/// Agent/shared-slot usage and the active model's hard agent/slot ceiling.
 pub fn slots(ctx: &Ctx) -> Result<(usize, usize)> {
     let used = crate::slot_usage(ctx)?.total();
-    Ok((used, ctx.store.config.limits.running))
+    Ok((used, ctx.store.config.limits.agent_limit()))
 }

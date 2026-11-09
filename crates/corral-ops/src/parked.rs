@@ -104,11 +104,22 @@ pub(crate) fn precedence_reason<T: TaskRef + ?Sized>(
     let tasks = crate::pm_next::heads::open(store)?;
     let ahead = ahead_of(store, &tasks, task)?;
     let limits = &store.config.limits;
-    let used = SlotUsage::from_heads(&tasks, limits)
-        .total()
-        .saturating_sub(credit);
+    let (used, ceiling) = if let Some(capacity) = &limits.capacity {
+        (
+            crate::capacity::CapacityUsage::from_heads(&tasks)
+                .agents
+                .total(),
+            capacity.agents,
+        )
+    } else {
+        (
+            SlotUsage::from_heads(&tasks, limits).total(),
+            limits.running,
+        )
+    };
+    let used = used.saturating_sub(credit);
     Ok(
-        (!ahead.is_empty() && used + ahead.len() >= limits.running).then(|| {
+        (!ahead.is_empty() && used.saturating_add(ahead.len()) >= ceiling).then(|| {
             format!(
                 "waiting: {} take the next coding slot first (red-main fixes, then woken runs)",
                 ahead.join(", ")
@@ -131,8 +142,16 @@ pub(crate) fn gate_precedence<T: corral_core::TaskFieldsRef + ?Sized>(
         .filter(|o| o.id != *task.id() && red_main(*o) && o.review_wait == Some(ReviewWork::Gate))
         .map(|o| o.id.clone())
         .collect();
+    let (active, limit) = if let Some(limits) = &store.config.limits.capacity {
+        (
+            crate::capacity::CapacityUsage::from_heads(&crate::pm_next::heads::open(store)?).gates,
+            limits.gates,
+        )
+    } else {
+        (active, store.config.limits.review)
+    };
     Ok(
-        (!waiting.is_empty() && active + waiting.len() >= store.config.limits.review).then(|| {
+        (!waiting.is_empty() && active.saturating_add(waiting.len()) >= limit).then(|| {
             format!(
                 "waiting: red-main fix {} takes the next gate slot",
                 waiting.join(", ")

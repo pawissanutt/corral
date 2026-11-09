@@ -21,7 +21,7 @@ use crate::{Action, Hit, HitMap, MouseCtx, Toast, Tone, View};
 pub(crate) use cards::CardExtra;
 
 pub(crate) use cards::card_lines;
-use slots::slot_badge;
+pub(crate) use slots::slot_badge;
 pub use slots::slot_summary;
 
 mod autopilot;

@@ -49,6 +49,9 @@ pub fn count(heads: &[TaskHead]) -> usize {
 
 /// The claim lock serializes this check with creation of coding launch reservations.
 pub(crate) fn reason(store: &Store, task: &Task) -> Result<Option<String>> {
+    if store.config.limits.capacity.is_some() {
+        return crate::capacity::admission::unfinished_reason(store, task);
+    }
     let limit = store.config.limits.wip;
     if limit == 0
         || !matches!(task.status, Status::Ready | Status::Backlog | Status::Idea)

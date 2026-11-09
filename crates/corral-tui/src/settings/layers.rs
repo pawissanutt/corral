@@ -94,6 +94,8 @@ pub(super) fn key(row: &Row, cfg: &Config) -> Option<String> {
         Field::SlotLimit
         | Field::RunningTarget
         | Field::WipLimit
+        | Field::CapacityMode
+        | Field::Capacity(_)
         | Field::DefaultProfile
         | Field::PmAgent
         | Field::PmPushEvents

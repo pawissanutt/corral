@@ -68,6 +68,7 @@ pub(super) struct PlanningPhase {
 #[derive(Debug, PartialEq)]
 pub(super) struct PlanReviewPhase {
     pub id: String,
+    pub cancelled: bool,
     pub at: Timestamp,
     pub verdict: Option<Verdict>,
     pub herdr: Option<HerdrRef>,
@@ -117,6 +118,7 @@ macro_rules! plan_review {
         let review = $review;
         PlanReviewPhase {
             id: review.id.clone(),
+            cancelled: review.cancelled,
             at: review.at,
             verdict: review.verdict,
             herdr: review.herdr.clone(),

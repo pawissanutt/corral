@@ -89,6 +89,14 @@ fn checkpoint_runs_full_on_the_target_head_and_records_an_advisory_attempt() {
     let seen_dir = tempfile::tempdir().unwrap();
     let f = Fixture::new(Delivery::Integration, &[&seen(seen_dir.path())]);
     tiered(&f, None);
+    let mut store = f.ctx.store.reopen().unwrap();
+    store.config.limits.capacity = Some(corral_core::CapacityLimits {
+        unfinished: 2,
+        agents: 1,
+        gates: 1,
+        adhoc_reserve: 0,
+    });
+    store.save_config().unwrap();
     let gate = ScopeGate {
         tier: "quick".into(),
         tests: Vec::new(),
@@ -110,12 +118,60 @@ fn checkpoint_runs_full_on_the_target_head_and_records_an_advisory_attempt() {
             .amend_member_gate(&f.plan, &amendment, |_, _| Ok(()), |_, _| Ok(None))
             .unwrap();
     }
+    let blocker = f
+        .ctx
+        .store
+        .create("another gate", Some("app"), corral_core::Status::Review, "")
+        .unwrap();
+    f.ctx
+        .store
+        .update(&blocker.id, |task| {
+            task.runs.push(
+                serde_json::from_value(serde_json::json!({
+                    "id":"R1", "agent":"rev", "worktree":f.repo, "branch":"main", "base":"main",
+                    "base_sha":"head", "started":"2026-01-01T00:00:00Z", "outcome":"done"
+                }))
+                .unwrap(),
+            );
+            task.review_reservation = Some(corral_core::ReviewWork::Gate);
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        plan_checkpoint(&f.ctx, &f.plan)
+            .unwrap_err()
+            .to_string()
+            .contains("gates full")
+    );
+    assert!(
+        f.ctx
+            .store
+            .head(&f.plan)
+            .unwrap()
+            .capacity_checkpoint
+            .is_none()
+    );
+    f.ctx
+        .store
+        .update(&blocker.id, |task| {
+            task.review_reservation = None;
+            Ok(())
+        })
+        .unwrap();
     let before = refs(&f);
     let head = git(&f.repo, &["rev-parse", "refs/heads/feature/plan"]);
     // When the owner runs a checkpoint.
     let attempt = plan_checkpoint(&f.ctx, &f.plan).unwrap();
     // Then the full tier ran with an empty expected-failure set on the target head.
     assert_eq!(attempt.id, "C1");
+    assert!(
+        f.ctx
+            .store
+            .head(&f.plan)
+            .unwrap()
+            .capacity_checkpoint
+            .is_none()
+    );
     assert!(attempt.advisory && !attempt.automatic);
     assert_eq!(attempt.gate.result, GateResult::Pass);
     assert_eq!(

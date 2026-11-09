@@ -11,6 +11,23 @@ use super::preferences::{self, Preference};
 use super::automation::{self, Key, Scope};
 use super::gate::Gates;
 
+pub(super) fn restore_selection(
+    view: &mut super::SettingsView,
+    changed: &Field,
+    selected: Option<Field>,
+) {
+    if *changed == Field::CapacityMode {
+        view.scroll = 0;
+        view.select_field(if view.draft.limits.capacity.is_some() {
+            &Field::Capacity(super::capacity::CapacityField::Unfinished)
+        } else {
+            &Field::SlotLimit
+        });
+    } else if let Some(selected) = selected {
+        view.select_field(&selected);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Section {
     General,
@@ -57,6 +74,8 @@ pub(crate) enum Field {
     RunningTarget,
     /// `limits.wip`: unfinished coding work; zero disables it.
     WipLimit,
+    CapacityMode,
+    Capacity(super::capacity::CapacityField),
     DefaultProfile,
     PmAgent,
     PmPushEvents,
@@ -197,6 +216,7 @@ impl Row {
         };
         let boundary = rest.is_empty() || rest.starts_with([' ', ':', '.']);
         match self.kind {
+            _ if self.field == Field::CapacityMode => rest.is_empty() || rest.starts_with(':'),
             Kind::ListItem => boundary && err.contains(&self.value),
             // Whole-entry rows own `<key>: ...` only; their field rows own `<key>.<field> ...`.
             Kind::Entry | Kind::Header | Kind::Info => rest.is_empty() || rest.starts_with(':'),
@@ -450,6 +470,9 @@ pub(crate) fn set_value(cfg: &mut Config, field: &Field, text: &str) -> Result<(
             cfg.limits.running_target = opt(text).map(|t| number(&t)).transpose()?
         }
         Field::WipLimit => cfg.limits.wip = number(text)?,
+        Field::CapacityMode | Field::Capacity(_) => {
+            return super::capacity::set_value(cfg, field, text);
+        }
         Field::DefaultProfile => cfg.defaults.profile = opt(text),
         Field::PmAgent => cfg.pm.agent = text.trim().to_string(),
         Field::PmPushEvents => cfg.pm.push_events = text == "on",

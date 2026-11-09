@@ -63,7 +63,7 @@ pub(crate) fn with_admission(
     let used =
         crate::SlotUsage::from_heads(&super::heads::open(&ctx.store)?, &ctx.store.config.limits)
             .total();
-    let limit = ctx.store.config.limits.running;
+    let limit = ctx.store.config.limits.agent_limit();
     let operating = ctx.store.effective_operating_policy()?;
     for task in &tasks {
         if matches!(task.status, Status::Done | Status::Dropped)

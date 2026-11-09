@@ -54,6 +54,51 @@ fn reason(fx: &Fixture, id: &str) -> String {
 }
 
 #[test]
+fn independent_pools_reserve_adhoc_room_without_subtracting_finishing_headroom() {
+    let mut fx = Fixture::new();
+    fx.ctx.store.config.limits.capacity = Some(corral_core::CapacityLimits {
+        unfinished: 4,
+        agents: 3,
+        gates: 1,
+        adhoc_reserve: 1,
+    });
+    fx.save();
+    let first = fx.task("First normal", Status::Backlog);
+    let second = fx.task("Second normal", Status::Backlog);
+    let waiting = fx.task("Waiting normal", Status::Backlog);
+    fx.grant(&[&first, &second, &waiting]);
+    advance(&fx.ctx, Fixture::now()).unwrap();
+    assert_eq!(status(&fx, &first.id), Status::Running);
+    assert_eq!(status(&fx, &second.id), Status::Running);
+    assert_eq!(status(&fx, &waiting.id), Status::Backlog);
+    assert_eq!(free_slots(&fx.ctx).unwrap(), 0);
+    let adhoc = fx.task("Explicit ad-hoc", Status::Ready);
+    // Seed the trusted designation: this fixture exercises admission, not owner UI provenance.
+    fx.ctx
+        .store
+        .update(&adhoc.id, |t| {
+            t.capacity_lane = corral_core::CapacityLane::Adhoc;
+            Ok(())
+        })
+        .unwrap();
+    crate::dispatch(&fx.ctx, &adhoc.id, &DispatchOpts::default()).unwrap();
+    let heads = crate::pm_next::heads::open(&fx.ctx.store).unwrap();
+    let usage = crate::capacity::CapacityUsage::from_heads(&heads);
+    assert_eq!((usage.agents.normal, usage.agents.adhoc), (2, 1));
+    assert_eq!(usage.unfinished.total(), 3);
+    finish(&fx, &first.id);
+    advance(&fx.ctx, Fixture::now()).unwrap();
+    assert_eq!(status(&fx, &waiting.id), Status::Running);
+    let heads = crate::pm_next::heads::open(&fx.ctx.store).unwrap();
+    assert_eq!(
+        crate::capacity::CapacityUsage::from_heads(&heads)
+            .agents
+            .total(),
+        3
+    );
+}
+
+#[test]
 fn automatic_backlog_stops_at_soft_target_while_p0_and_manual_use_headroom_up_to_hard() {
     // Given three ordinary Backlog tasks.
     let mut fx = soft_fixture();

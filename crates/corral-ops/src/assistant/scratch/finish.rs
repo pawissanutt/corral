@@ -8,8 +8,9 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use corral_core::assistant::{AssistantLanding, AssistantScratch, validate_id};
 use corral_core::{
-    ArtifactKind, CompletionDriver, CompletionIntent, CompletionScope, Cowork, CoworkReview,
-    GateRules, Origin, Run, RunOutcome, Status, Task, TaskKind, TaskRef as _, TaskSize, Usage,
+    ArtifactKind, CapacityLane, CompletionDriver, CompletionIntent, CompletionScope, Cowork,
+    CoworkReview, GateRules, Origin, Run, RunOutcome, Status, Task, TaskKind, TaskRef as _,
+    TaskSize, Usage,
 };
 use jiff::Timestamp;
 use serde::Serialize;
@@ -30,6 +31,8 @@ pub struct Finish<'a> {
     pub project: Option<&'a str>,
     pub kind: Option<TaskKind>,
     pub size: Option<TaskSize>,
+    /// Explicit owner choice for a new task only; repairs keep the existing lane.
+    pub adhoc: bool,
     pub review: Option<CoworkReview>,
     /// Verify runs the same checks/repairs but never lands. Omitted repairs retain their intent.
     pub intent: Option<CompletionIntent>,
@@ -38,6 +41,23 @@ pub struct Finish<'a> {
     /// The candidate commit the owner was shown: the finish refuses `stale_candidate` unless the
     /// scratch HEAD is still that commit (a hex prefix of at least 7 digits).
     pub expected_head: Option<&'a str>,
+}
+
+impl Finish<'_> {
+    fn new_task_lane(&self, independent: bool) -> Result<CapacityLane> {
+        if !self.adhoc {
+            return Ok(CapacityLane::Normal);
+        }
+        anyhow::ensure!(
+            self.into.is_none(),
+            "--adhoc selects a new task's lane; --into retains its existing lane"
+        );
+        anyhow::ensure!(
+            independent,
+            "ad-hoc reserve requires independent capacity limits"
+        );
+        Ok(CapacityLane::Adhoc)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -364,6 +384,11 @@ impl Draft<'_> {
 pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result<Finished> {
     validate_id(session)?;
     validate_slug(slug)?;
+    let new_lane = opts.new_task_lane(ctx.store.config.limits.capacity.is_some())?;
+    if opts.adhoc {
+        crate::require_automation_owner(&ctx.store)?;
+        ctx.store.require_capacity_schema()?;
+    }
     if opts.intent.is_some()
         && matches!(owner_action::authority(), OwnerAuthority::ViaAssistant(via) if !via.confirmed)
     {
@@ -554,6 +579,7 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
                 "session": session, "slug": slug, "run": run, "branch": scratch.branch,
                 "head": head, "candidate": candidate, "base": base, "review": review,
                 "owner_confirmed": owner_confirmed, "into": into.is_some(),
+                "capacity_lane": task.capacity_lane,
             }),
         )
     };
@@ -587,6 +613,7 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
                     task.origin = Some(Origin::Assistant);
                     task.kind = opts.kind.map(|kind| kind.to_string());
                     task.size = opts.size;
+                    task.capacity_lane = new_lane;
                     run = draft.apply(ctx, task)?;
                     log_finished(task, &run)?;
                     Ok(())

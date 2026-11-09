@@ -455,7 +455,14 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
     ctx.store
         .submission_effect_barrier("aggregate_review_observed");
     let mut superseded = Vec::new();
-    ctx.store.update_head(id, |task| {
+    ctx.store.dispatch_update_head(id, |admission, task| {
+        if admission.config.limits.capacity.is_some() {
+            ensure!(chosen_head.facts.pending_children == 0,
+                "an aggregate reviewer is still pending; settle or cancel it before starting another");
+            if let Some(reason) = crate::capacity::admission::agent_reason(admission, &*task, 0)? {
+                bail!("{reason}");
+            }
+        }
         // The attempt projection compares its review facts too, so a review child edited and
         // edited back (A->B->A) refuses as a genuine change does.
         ensure!(

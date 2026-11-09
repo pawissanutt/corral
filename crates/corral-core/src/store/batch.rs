@@ -53,7 +53,7 @@ impl Store {
         let stage = tempfile::tempdir_in(fresh.dir()).context("staging task batch")?;
         for task in &mut tasks {
             let now = fresh.now();
-            super::normalize::task(task, None, now)?;
+            super::normalize::task(task, None, now, fresh.config.limits.capacity.is_some())?;
             task.updated = now;
         }
         let files = snapshots
@@ -132,6 +132,9 @@ pub(super) fn draft_task(
     now: jiff::Timestamp,
 ) -> Task {
     Task {
+        capacity_lane: crate::CapacityLane::Normal,
+        capacity_started: None,
+        capacity_checkpoint: None,
         park: None,
         landed: None,
         infra_wait: None,

@@ -219,6 +219,9 @@ mod tests {
     fn task(id: &str, status: Status, updated: i64) -> Task {
         let ts = Timestamp::from_second(updated).unwrap();
         Task {
+            capacity_lane: corral_core::CapacityLane::Normal,
+            capacity_started: None,
+            capacity_checkpoint: None,
             hold: None,
             park: None,
             landed: None,

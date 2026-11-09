@@ -3,6 +3,42 @@ use std::process::{Command, Output, Stdio};
 
 use serde_json::{Value, json};
 
+#[test]
+fn capacity_edit_can_explicitly_activate_a_raw_or_inherited_new_model() {
+    let root = tempfile::tempdir().unwrap();
+    let mut store = corral_core::Store::init(root.path()).unwrap();
+    store.config.limits.capacity = Some(corral_core::CapacityLimits {
+        unfinished: 6,
+        agents: 4,
+        gates: 1,
+        adhoc_reserve: 1,
+    });
+    // Simulate new user/file configuration reaching a workspace still protected by fence 4.
+    std::fs::write(store.config_path(), store.config.to_toml()).unwrap();
+    assert!(corral_core::Store::open(root.path()).is_err());
+    ok(
+        root.path(),
+        &[
+            "config",
+            "set",
+            "limits.capacity",
+            "{ unfinished = 6, agents = 4, gates = 1, adhoc_reserve = 1 }",
+        ],
+    );
+    let active = corral_core::Store::open(root.path()).unwrap();
+    active.require_capacity_schema().unwrap();
+    assert_eq!(
+        active
+            .config
+            .limits
+            .capacity
+            .as_ref()
+            .unwrap()
+            .adhoc_reserve,
+        1
+    );
+}
+
 const FIRST: &str = "2026-10-14T10:00:00Z";
 const LAST: &str = "2026-10-15T10:00:00Z";
 

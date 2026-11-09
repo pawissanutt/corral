@@ -147,7 +147,7 @@ pub enum ScratchCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Finish a scratch into a task on the owner's instruction, gate it and review it only on request (owner)
+    /// Submit a scratch as a task or repair; confirmed finishes require gate and independent review (owner)
     Finish {
         slug: String,
         /// Title of the new task
@@ -160,7 +160,10 @@ pub enum ScratchCmd {
         kind: Option<TaskKind>,
         #[arg(long, conflicts_with = "into")]
         size: Option<TaskSize>,
-        /// none, or required to run the normal reviewer after a passing gate
+        /// Explicitly use ad-hoc capacity for a new task; repairs retain the existing lane
+        #[arg(long, conflicts_with = "into")]
+        adhoc: bool,
+        /// Legacy review option; confirmed owner finishes always require independent review
         #[arg(long, default_value = "none", value_parser = ["none", "required"])]
         review: String,
         /// Add the run to this existing task instead; refused while it has a live run
@@ -540,6 +543,7 @@ fn scratch(ctx: &Ctx, cmd: ScratchCmd) -> Result<()> {
             project,
             kind,
             size,
+            adhoc,
             review,
             into,
             note,
@@ -559,6 +563,7 @@ fn scratch(ctx: &Ctx, cmd: ScratchCmd) -> Result<()> {
                 project: project.as_deref(),
                 kind,
                 size,
+                adhoc,
                 review: Some(review),
                 into: into.as_deref(),
                 note: note.as_deref(),

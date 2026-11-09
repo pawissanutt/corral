@@ -52,7 +52,7 @@ impl App {
                 corral_core::UPDATE_NOTICE
             ));
         }
-        let c = self.counts;
+        let c = &self.counts;
         let waiting = c.review + c.ready + c.tasks;
         let idle = self.clock.now().saturating_duration_since(self.synced_at);
         if waiting > 0 && idle >= super::SYNC_STALL_AFTER {
@@ -86,7 +86,7 @@ impl App {
             width: area.width.saturating_sub(search.width),
             ..area
         };
-        let c = self.counts;
+        let c = &self.counts;
         let root = self.ctx.store.root();
         let name = root.file_name().map_or_else(
             || root.display().to_string(),
@@ -95,7 +95,12 @@ impl App {
         let narrow = area.width < 140;
         let name = if narrow { truncate(&name, 10) } else { name };
         let gap = || Span::raw(if narrow { " " } else { "   " });
-        let slot_text = if c.reviews == 0 && c.gates == 0 && c.reservations == 0 {
+        let independent =
+            c.slots.independent.is_some() && self.ctx.store.config.limits.capacity.is_some();
+        let show_slots = self.ctx.store.config.ui.show_wip && !independent;
+        let slot_text = if independent {
+            String::new()
+        } else if c.reviews == 0 && c.gates == 0 && c.reservations == 0 {
             format!("⟳ {}/{} slots", c.used, c.limit)
         } else if narrow {
             format!(
@@ -122,6 +127,17 @@ impl App {
         } else {
             theme::BLUE
         };
+        let work_text = if independent && self.ctx.store.config.ui.show_wip {
+            crate::board::slot_badge(&c.slots, &self.ctx.store.config.limits, usize::MAX)
+                .trim()
+                .to_owned()
+        } else if independent {
+            format!("U{}/{}", c.wip, c.wip_limit)
+        } else if c.wip_limit == 0 {
+            format!("WIP {}/off", c.wip)
+        } else {
+            format!("WIP {}/{}", c.wip, c.wip_limit)
+        };
         let mut spans = vec![
             Span::styled(
                 " corral",
@@ -130,11 +146,14 @@ impl App {
             Span::styled(" · ", theme::dim()),
             Span::styled(name, Style::new().fg(theme::FG)),
             gap(),
-            Span::raw(if c.wip_limit == 0 {
-                format!("WIP {}/off", c.wip)
-            } else {
-                format!("WIP {}/{}", c.wip, c.wip_limit)
-            }),
+            Span::styled(
+                work_text,
+                if independent {
+                    Style::new().fg(slots_color)
+                } else {
+                    Style::default()
+                },
+            ),
             gap(),
             Span::styled(
                 if narrow {
@@ -146,18 +165,10 @@ impl App {
             ),
             gap(),
             Span::styled(
-                if self.ctx.store.config.ui.show_wip {
-                    slot_text
-                } else {
-                    String::new()
-                },
+                if show_slots { slot_text } else { String::new() },
                 Style::new().fg(slots_color),
             ),
-            if self.ctx.store.config.ui.show_wip {
-                gap()
-            } else {
-                Span::raw("")
-            },
+            if show_slots { gap() } else { Span::raw("") },
             Span::styled(
                 if narrow {
                     format!("◆ {}", c.review)
@@ -205,8 +216,9 @@ impl App {
         for (i, s) in spans.iter().enumerate() {
             let w = s.width() as u16;
             let hit = match i {
+                4 if independent => Some(Hit::Column(Status::Running)),
                 6 => Some(Hit::Column(Status::NeedsMe)),
-                8 => Some(Hit::Column(Status::Running)),
+                8 if !independent => Some(Hit::Column(Status::Running)),
                 10 => Some(Hit::Column(Status::Review)),
                 12 => Some(Hit::Column(Status::Ready)),
                 14 => Some(Hit::Key(hit::press(KeyCode::Char('S')))),

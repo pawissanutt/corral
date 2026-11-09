@@ -5,6 +5,22 @@ use unicode_width::UnicodeWidthStr;
 /// Slot use (T-053): `"2/3 used: 1 task · 1 review"`. Zero components are left out; review and gate work that
 /// `limits.count_reviews` / `count_gates` keeps off the count is shown but marked `uncounted`.
 pub fn slot_summary(u: &SlotUsage, limits: &Limits) -> String {
+    if let (Some(used), Some(cap)) = (&u.independent, &limits.capacity) {
+        return format!(
+            "agents {}/{} (normal {}/{}) · gates {}/{} · unfinished {}/{} (normal {}/{}) · ad-hoc reserve {}",
+            used.agents.total(),
+            cap.agents,
+            used.agents.normal,
+            cap.normal_agents(),
+            used.gates,
+            cap.gates,
+            used.unfinished.total(),
+            cap.unfinished,
+            used.unfinished.normal,
+            cap.normal_unfinished(),
+            cap.adhoc_reserve
+        );
+    }
     let parts = slot_parts(u, limits, false);
     let used = format!("{}/{} used{}", u.total(), limits.running, soft(limits));
     if parts.is_empty() {
@@ -49,7 +65,32 @@ fn slot_parts(u: &SlotUsage, limits: &Limits, short: bool) -> Vec<String> {
 
 /// The Running column's title badge: the slot fraction plus, when anything besides tasks holds or reserves a
 /// slot, the breakdown - long when it fits in `avail` cells, else short, else just the fraction.
-pub(super) fn slot_badge(u: &SlotUsage, limits: &Limits, avail: usize) -> String {
+pub(crate) fn slot_badge(u: &SlotUsage, limits: &Limits, avail: usize) -> String {
+    if let (Some(used), Some(cap)) = (&u.independent, &limits.capacity) {
+        let agents = format!(" A{}/{} ", used.agents.total(), cap.agents);
+        return [
+            format!(
+                " A{}/{} G{}/{} U{}/{} R{} ",
+                used.agents.total(),
+                cap.agents,
+                used.gates,
+                cap.gates,
+                used.unfinished.total(),
+                cap.unfinished,
+                cap.adhoc_reserve
+            ),
+            format!(
+                " A{}/{} G{}/{} ",
+                used.agents.total(),
+                cap.agents,
+                used.gates,
+                cap.gates
+            ),
+        ]
+        .into_iter()
+        .find(|text| text.width() <= avail)
+        .unwrap_or(agents);
+    }
     let frac = format!(" {}/{}{} ", u.total(), limits.running, soft(limits));
     if u.reviews + u.gates + u.reservations + u.parked == 0 {
         return frac;

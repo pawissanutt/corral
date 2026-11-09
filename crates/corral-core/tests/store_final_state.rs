@@ -505,6 +505,12 @@ fn a_child_pushed_and_demoted_in_one_operation_is_stored() {
                 h.push_plan_review("P0002", review.clone())?;
                 h.push_plan(plan.clone())?;
                 h.push_aggregate_review("A0002", aggregate.clone())?;
+                h.last_aggregate_attempt_mut().unwrap().gate = Some(
+                    serde_json::from_value(serde_json::json!({
+                        "result":"running", "at":"2026-01-01T00:00:00Z", "sha":"head"
+                    }))
+                    .unwrap(),
+                );
                 h.push_aggregate_attempt(attempt.clone())
             })
             .unwrap();
@@ -515,6 +521,10 @@ fn a_child_pushed_and_demoted_in_one_operation_is_stored() {
             task.aggregate_attempts[1].reviews.last().unwrap(),
             &aggregate
         );
+        let summary = store.head("T-001").unwrap().summary;
+        assert_eq!(summary.held_aggregate_gates, 1);
+        // One pending review on A1 and two on the now-historical A2.
+        assert_eq!(summary.pending_aggregate_reviews, 3);
         assert_eq!(
             store.head("T-001").unwrap().summary,
             HistorySummary::of_record(&store.task_record("T-001").unwrap()).unwrap()

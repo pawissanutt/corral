@@ -76,6 +76,11 @@ pub struct HistorySummary {
     pub held_reviews: u64,
     #[serde(with = "crate::container_facts::fixed")]
     pub pending_plan_reviews: u64,
+    /// Held work on historical aggregate attempts, separate from coding-run components.
+    #[serde(with = "crate::container_facts::fixed")]
+    pub held_aggregate_gates: u64,
+    #[serde(with = "crate::container_facts::fixed")]
+    pub pending_aggregate_reviews: u64,
     /// Per-run cost subtotals, summed run by run.
     pub cost: CostTotals,
     /// Pane references of history containers per socket.
@@ -222,6 +227,15 @@ impl HistorySummary {
         }
         for (seq, attempt) in history(&task.aggregate_attempts).iter().enumerate() {
             summary.aggregate_attempts += 1;
+            summary.held_aggregate_gates += u64::from(
+                attempt
+                    .gate
+                    .as_ref()
+                    .is_some_and(crate::GateRecord::holds_slot),
+            );
+            summary.pending_aggregate_reviews += crate::container_facts::len_u64(
+                attempt.reviews.iter().filter(|r| r.pending()).count(),
+            );
             for (r, review) in attempt.reviews.iter().enumerate() {
                 summary.add_panes(herdr_panes(
                     &format!("aggregate_review:{:06}/{:06}", seq + 1, r + 1),
@@ -432,6 +446,13 @@ impl HistorySummary {
 
     pub fn fold_attempt_head(&mut self, attempt: &crate::AttemptHead) {
         self.aggregate_attempts += 1;
+        self.held_aggregate_gates += u64::from(
+            attempt
+                .gate
+                .as_ref()
+                .is_some_and(crate::GateRecord::holds_slot),
+        );
+        self.pending_aggregate_reviews += attempt.facts.pending_children;
         self.add_sockets(&attempt.facts.pane_refs);
     }
 
