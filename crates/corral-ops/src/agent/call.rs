@@ -1,5 +1,6 @@
 //! `corral agent call --op <op>`: the enumerated v1 op list with its allowed roles and owning
 //! child, rejection codes, the response shape and routing to the op handlers.
+use super::ops::payload as parse;
 use anyhow::Result;
 use corral_core::Task;
 use corral_core::agent::{
@@ -7,7 +8,6 @@ use corral_core::agent::{
     RefusalCode, RequestIdentity, RequestReceipt, pm_state,
 };
 use serde::Deserialize;
-use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use super::admission::{self, Admission, Mode};
@@ -50,6 +50,7 @@ pub enum AgentOp {
     ReadArtifacts,
     ReadContent,
     ReadLessons,
+    ReadAnnotations,
     InboxRead,
     InboxResolve,
     Job,
@@ -93,7 +94,7 @@ const ASSISTANT: &[AgentRole] = &[AgentRole::Assistant];
 const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm, AgentRole::Assistant];
 
 impl AgentOp {
-    pub const ALL: [AgentOp; 45] = [
+    pub const ALL: [AgentOp; 46] = [
         AgentOp::Hello,
         AgentOp::Event,
         AgentOp::ReceiptLookup,
@@ -123,6 +124,7 @@ impl AgentOp {
         AgentOp::ReadArtifacts,
         AgentOp::ReadContent,
         AgentOp::ReadLessons,
+        AgentOp::ReadAnnotations,
         AgentOp::InboxRead,
         AgentOp::InboxResolve,
         AgentOp::Job,
@@ -172,6 +174,7 @@ impl AgentOp {
             AgentOp::ReadArtifacts => "read_artifacts",
             AgentOp::ReadContent => "read_content",
             AgentOp::ReadLessons => "read_lessons",
+            AgentOp::ReadAnnotations => "read_annotations",
             AgentOp::InboxRead => "inbox_read",
             AgentOp::InboxResolve => "inbox_resolve",
             AgentOp::Job => "job",
@@ -199,6 +202,7 @@ impl AgentOp {
     pub fn roles(self) -> &'static [AgentRole] {
         match self {
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup => ALL_ROLES,
+            AgentOp::ReadAnnotations => super::ops::annotations::ROLES,
             AgentOp::Todo
             | AgentOp::MemoryList
             | AgentOp::MemoryRead
@@ -237,7 +241,9 @@ impl AgentOp {
     /// The role module that handles the op; `None` for the ops `call` handles itself.
     fn route(self, role: AgentRole) -> Option<Route> {
         match self {
-            AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup => None,
+            AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup | AgentOp::ReadAnnotations => {
+                None
+            }
             AgentOp::MemoryList
             | AgentOp::MemoryRead
             | AgentOp::MemoryPut
@@ -336,6 +342,7 @@ pub enum RejectCode {
     FixedRule,
     /// write_permission: the session already holds its maximum of active grants.
     GrantsFull,
+    AnnotationRefused,
 }
 
 impl RejectCode {
@@ -369,6 +376,7 @@ impl RejectCode {
             RejectCode::ConfirmationRequired => "confirmation_required",
             RejectCode::FixedRule => "fixed_rule",
             RejectCode::GrantsFull => "grants_full",
+            RejectCode::AnnotationRefused => "annotation_refused",
         }
     }
 }
@@ -439,6 +447,8 @@ impl std::error::Error for Rejection {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CallResponse {
+    /// Bounded response, not an agent receipt. Annotation entries own mutation retry identity.
+    Unstored { envelope: Value },
     /// Committed now or replayed from the container.
     Receipt {
         receipt: RequestReceipt,
@@ -465,7 +475,7 @@ impl CallResponse {
     pub fn receipt(&self) -> Option<&RequestReceipt> {
         match self {
             CallResponse::Receipt { receipt, .. } => Some(receipt),
-            CallResponse::Lookup { .. } | CallResponse::Rejected { .. } => None,
+            _ => None,
         }
     }
 
@@ -473,20 +483,21 @@ impl CallResponse {
     pub fn found(&self) -> Option<&RequestReceipt> {
         match self {
             CallResponse::Lookup { found, .. } => found.as_deref(),
-            CallResponse::Receipt { .. } | CallResponse::Rejected { .. } => None,
+            _ => None,
         }
     }
 
     pub fn rejection(&self) -> Option<&Rejection> {
         match self {
             CallResponse::Rejected { rejection, .. } => Some(rejection),
-            CallResponse::Receipt { .. } | CallResponse::Lookup { .. } => None,
+            _ => None,
         }
     }
 
     /// The single JSON object `corral agent call` prints.
     pub fn to_json(&self) -> Result<Value> {
         Ok(match self {
+            CallResponse::Unstored { envelope } => envelope.clone(),
             CallResponse::Receipt { receipt, replayed } => {
                 let mut value = serde_json::to_value(receipt)?;
                 if *replayed {
@@ -555,22 +566,19 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
                 request_id: partial.request_id,
                 identity: partial.identity,
             };
-            super::receipts::log_rejection(ctx, &response, input)?;
+            super::ops::log_parse_rejection(ctx, &response, op_flag, input)?;
             return Ok(response);
         }
     };
     let role = envelope.identity.role;
     let outcome = if !op.roles().contains(&role) {
-        Err(Rejection::new(
-            RejectCode::OpNotAllowed,
-            format!("role {} may not call {}", role.as_str(), op.as_str()),
-        )
-        .into())
+        Err(super::ops::role_not_allowed(op, role))
     } else {
         match op {
             AgentOp::Hello => super::ops::hello(ctx, &envelope),
             AgentOp::Event => super::ops::event(ctx, &envelope),
             AgentOp::ReceiptLookup => super::ops::receipt_lookup(ctx, &envelope),
+            AgentOp::ReadAnnotations => super::ops::annotations::read(ctx, &envelope),
             AgentOp::Todo => super::ops::todo::call(ctx, &envelope),
             AgentOp::MemoryList
             | AgentOp::MemoryRead
@@ -618,14 +626,11 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
     if response
         .rejection()
         .is_some_and(|r| r.code != RejectCode::OpUnavailable)
+        && !super::ops::annotations::handles(&envelope)
     {
         super::receipts::log_rejection(ctx, &response, input)?;
     }
     Ok(response)
-}
-
-fn parse<T: DeserializeOwned>(envelope: &Envelope, expected: &str) -> Result<T> {
-    super::ops::payload(envelope, expected)
 }
 
 fn question_effect(key: &str) -> Option<ReceiptEffect> {

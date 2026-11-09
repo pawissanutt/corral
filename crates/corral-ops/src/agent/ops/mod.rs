@@ -1,6 +1,7 @@
 //! Handlers of the ops request-receipts lands (hello, event and receipt_lookup), and the role
 //! modules integration-seams declares for the rest: `worker` (worker-role), `reviewer`
 //! (reviewer-role) and `pm` (pm-role). `call.rs` routes every op to one of them.
+pub(crate) mod annotations;
 pub(crate) mod assistant;
 pub(crate) mod assistant_workflow;
 mod auxiliary;
@@ -32,6 +33,30 @@ pub(crate) use lookup::receipt_lookup;
 
 use super::call::{AgentOp, RejectCode, Rejection};
 use super::envelope::{Envelope, error_category};
+
+/// Even envelope-level annotation refusals must be observational (including a model parent).
+pub(crate) fn log_parse_rejection(
+    ctx: &crate::Ctx,
+    response: &super::call::CallResponse,
+    op: &str,
+    input: &[u8],
+) -> Result<()> {
+    if !annotations::observational_rejection(op, input) {
+        super::receipts::log_rejection(ctx, response, input)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn role_not_allowed(op: AgentOp, role: corral_core::agent::AgentRole) -> anyhow::Error {
+    if op == AgentOp::ReadAnnotations {
+        return annotations::role_refusal();
+    }
+    Rejection::new(
+        RejectCode::OpNotAllowed,
+        format!("role {} may not call {}", role.as_str(), op.as_str()),
+    )
+    .into()
+}
 
 /// An op whose owning child has not landed: refused before any effect, naming the child.
 pub(crate) fn unavailable(op: AgentOp, owner: &'static str) -> anyhow::Error {

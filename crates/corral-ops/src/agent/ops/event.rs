@@ -182,6 +182,9 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     if envelope.payload.get("kind").and_then(|v| v.as_str()) == Some("auxiliary") {
         return super::auxiliary::auxiliary(ctx, envelope);
     }
+    if envelope.payload.get("kind").and_then(|v| v.as_str()) == Some("owner_annotation") {
+        return super::annotations::owner_event(ctx, envelope);
+    }
     if envelope.payload.get("kind").and_then(|v| v.as_str()) == Some("owner_input") {
         return super::owner_input::journal(ctx, envelope);
     }
