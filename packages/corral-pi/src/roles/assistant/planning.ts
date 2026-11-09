@@ -74,12 +74,13 @@ export const assistantPlanTool: CorralToolSpec = {
 export const assistantPlanReviewTool: CorralToolSpec = {
   name: "corral_assistant_plan_review",
   label: "Local plan review",
-  description: "Independent advisory review of an exact local design revision, never a board verdict "
-    + "or execution consent. Currently unavailable until the local-review lifecycle is installed.",
+  description: "Request one asynchronous independent advisory review of an exact immutable local design revision, "
+    + "never a board verdict or execution consent. Cite the genuine owner review request. Start returns promptly; "
+    + "read preserves reviewed/current revision and source-freshness labels. No automatic re-review or provider fallback.",
   op: "assistant_plan_review",
   parameters: Type.Union([
     Type.Object({ ...action("start"), expected, input: Type.String() }, closed),
-    Type.Object({ ...action("read"), review: Type.Optional(Type.String()) }, closed),
+    Type.Object({ ...action("read"), review: Type.Optional(Type.String()), offset: Type.Optional(natural) }, closed),
     Type.Object({ ...action("cancel"), expected, review: Type.String() }, closed),
   ]),
   payload: (params) => ({ ...params }),

@@ -2,6 +2,7 @@
 // Public /plan choices and native presentation are owned by the choice-experience consumer.
 import type { AuxiliaryHandle, AuxiliaryRuntime, PlanReviewAssociation, ReviewMission } from "../extensions/subagent/runtime.ts";
 import { sha256Hex } from "../tools/corral.ts";
+import { utf8Prefix } from "../roles/assistant/owner-action.ts";
 import type { WorkflowExpected } from "./planning-policy.ts";
 
 type RecordValue = Record<string, unknown>;
@@ -96,8 +97,9 @@ export class PlanReviews {
       if (Buffer.byteLength(text) > 1024 * 1024) { lifecycle = "incomplete"; summary = "Findings exceed 1 MiB; inspect auxiliary transcript. No successful review claimed."; text = undefined; }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      lifecycle = /Research timeout/.test(message) ? "timed_out" : /Research cancelled/.test(message) ? "cancelled" : "failed";
-      summary = message.slice(0, 512);
+      lifecycle = /Research timeout/.test(message) ? "timed_out" : /Research cancelled/.test(message) ? "cancelled"
+        : /disabled|model_unavailable|not configured|budget_exceeded|quota_exceeded/.test(message) ? "unavailable" : "failed";
+      summary = utf8Prefix(message, 1024);
     }
     if (text?.trim()) {
       let offset = 0;

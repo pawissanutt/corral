@@ -101,6 +101,7 @@ export class AuxiliaryRuntime {
   private readonly webSearch = new Slots(1);
   private readonly controllers = new Set<AbortController>();
   private readonly requests = new Map<string, Promise<AuxiliaryResponse>>();
+  private readonly reviews = new Map<string, AuxiliaryHandle>();
   private stopped = false;
   constructor(private readonly options: AuxiliaryOptions) {
     this.explore = new Slots(options.settings.explore?.max_parallel ?? 1);
@@ -116,8 +117,9 @@ export class AuxiliaryRuntime {
   }
   /** Host-owned advisory review. Same pool/accounting/provider, independent of turn signals. */
   startReview(request: string, mission: ReviewMission): AuxiliaryHandle {
-    const previous = this.requests.get(request);
-    if (previous) return { request, done: previous, cancel: () => {} };
+    const previous = this.reviews.get(request);
+    if (previous) return previous;
+    if (this.requests.has(request)) throw new Error("review invocation collides with another auxiliary request");
     const controller = new AbortController();
     const prompt = `Independently review local plan ${mission.association.workflow}/${mission.association.review} digest ${mission.association.digest}. `
       + "Read both complete immutable snapshots with read_review_snapshot before drawing conclusions. "
@@ -126,7 +128,9 @@ export class AuxiliaryRuntime {
       + "State missing coverage honestly. Never edit, approve a board plan, authorize execution, delegate or file tasks.";
     const done = this.perform("explore", request, prompt, controller.signal, undefined, mission);
     this.requests.set(request, done);
-    return { request, done, cancel: () => controller.abort(new Error("local plan review cancelled")) };
+    const handle = { request, done, cancel: () => controller.abort(new Error("local plan review cancelled")) };
+    this.reviews.set(request, handle);
+    return handle;
   }
   private slots(kind: AuxiliaryKind): Slots {
     switch (kind) {
