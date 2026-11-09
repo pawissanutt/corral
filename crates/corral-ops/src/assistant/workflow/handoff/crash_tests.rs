@@ -262,7 +262,7 @@ fn handoff_materialization_restart_preserves_pinned_layers_and_the_moved_base() 
         .store
         .create(
             "Reserved materialization",
-            Some("app".into()),
+            Some("app"),
             corral_core::Status::Backlog,
             "",
         )
