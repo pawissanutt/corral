@@ -309,7 +309,9 @@ pub(super) fn finish_start(ctx: &Ctx, id: &str) -> Result<Task> {
         }
         if transfer.goal == Goal::PlanReviewOnly {
             task.status = Status::Review;
-        } else if transfer.goal == Goal::PlanContinue && task.plans.is_empty() {
+        } else if transfer.goal == Goal::PlanContinue
+            && (task.plans.is_empty() || super::plan_adoption::draft_pending(task, transfer)?)
+        {
             task.status = Status::Ready;
         } else if task.runs.is_empty()
             || (transfer.continuation_seed.is_some()

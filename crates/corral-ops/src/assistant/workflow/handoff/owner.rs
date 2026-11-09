@@ -222,6 +222,9 @@ pub fn read(ctx: &Ctx, id: &str) -> Result<Value> {
         Disposition::Starting => {
             Some("Reconciling the selected current-revision continuation".to_string())
         }
+        Disposition::CheckpointingPlan => {
+            Some("Preserving prior planning context before dispatch".to_string())
+        }
         Disposition::TakingBack => Some("Waiting for current operation to settle".to_string()),
         Disposition::Returned => {
             Some("Assistant prepare-only; separate Check/Ship required".to_string())

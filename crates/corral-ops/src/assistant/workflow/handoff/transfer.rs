@@ -412,6 +412,7 @@ pub(crate) fn commit(
                 draft_predecessor: None,
                 imported_plan_run: None,
                 planner_drafts: Default::default(),
+                plan_checkpoint: None,
             });
             if let Some(previous) = ctx.store.record::<String>(TASKS, &task.id)? {
                 let previous = super::read_journal(&ctx.store, &previous)?

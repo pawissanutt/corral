@@ -25,7 +25,7 @@ case "$1 $2" in
     else ok '{}'; fi ;;
   "pane report-metadata") [ "$3" = w1:p1 ]; ok '{}' ;;
   "pane run") printf '%s' "$4" > launch-command; touch review-live; ok '{}' ;;
-  "pane process-info") ok '{"process_info":{"shell_pid":10,"foreground_processes":[]}}' ;;
+  "pane process-info") ok '{"process_info":{"shell_pid":10,"foreground_processes":[{"pid":11,"argv":["fixture-planner"]}]}}' ;;
   "pane close") [ "$3" != pm-pane ]; rm -f review-live; ok '{}' ;;
   "workspace close") [ "$3" != pm-space ]; if [ -f pm-colocated ] && [ "$3" = w1 ]; then exit 95; fi; ok '{}' ;;
   "agent prompt") [ "$3" = pm-pane ]; ok '{}' ;;
@@ -190,7 +190,7 @@ fn handoff_pm_context_restart_drains_only_the_bound_attempt_and_returns_latest_p
         plan: plan.id.clone(),
         review: review.id.clone(),
     };
-    let reviewer = reviewer_from_bootstrap(&ctx, &container);
+    let reviewer = planning_host_from_bootstrap(&ctx, &container);
     let recipient = corral_core::inbox::Recipient::PlanReview {
         task: id.clone(),
         plan: plan.id.clone(),
@@ -263,6 +263,111 @@ fn handoff_pm_context_restart_drains_only_the_bound_attempt_and_returns_latest_p
     // Model an owner moving an unrelated PM pane into the review workspace.
     std::fs::write(tmp.path().join("engine/pm-colocated"), "").unwrap();
     let current = ctx.store.get(&id).unwrap();
+    let resumed_instruction = h::lifecycle::Instruction::Shell {
+        text: "fixture: save then explicitly continue the latest planning draft".into(),
+        at: corral_core::clock::now(),
+    };
+    h::continuation::save(
+        &ctx,
+        &id,
+        &current.contract_revision().unwrap(),
+        resumed_instruction.clone(),
+    )
+    .unwrap();
+    assert!(review_process.reaped());
+    let choice = h::continuation::preview(&ctx, &id, h::Goal::PlanContinue).unwrap();
+    h::continuation::start(
+        &ctx,
+        &choice,
+        &choice.digest().unwrap(),
+        resumed_instruction,
+    )
+    .unwrap();
+    // Fail preservation after the native history recheck, before any D3 allocation.
+    // Unlike the old boolean-only hold, this must remain indexed and recoverable.
+    let mut ctx = ctx;
+    let planner_opts = crate::DispatchOpts {
+        profile: Some("gpt-review".into()),
+        ..Default::default()
+    };
+    let normal_cap = ctx.store.config.artifacts.max_bytes;
+    ctx.store.config.artifacts.max_bytes = 4;
+    ctx.store.save_config().unwrap();
+    assert!(crate::dispatch(&ctx, &id, &planner_opts).is_err());
+    let preparing = ctx.store.get(&id).unwrap();
+    let pending = h::lifecycle::for_task(&ctx.store, &preparing)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        pending.transfer.as_ref().unwrap().disposition,
+        h::lifecycle::Disposition::CheckpointingPlan
+    );
+    assert!(pending.waiting.is_some() && preparing.dispatch_hold);
+    assert_eq!(preparing.plan_runs.len(), 2);
+    let mut unbound = pending.clone();
+    unbound.transfer.as_mut().unwrap().plan_checkpoint = None;
+    assert!(h::plan_checkpoint::require(&ctx.store, &preparing, &unbound).is_err());
+    let mut changed_intent = pending.clone();
+    changed_intent.transfer.as_mut().unwrap().goal = h::Goal::ImplementationShip;
+    assert!(h::plan_checkpoint::require(&ctx.store, &preparing, &changed_intent).is_err());
+    let mut boolean_only = pending.clone();
+    boolean_only.transfer.as_mut().unwrap().disposition = h::lifecycle::Disposition::Continuing;
+    assert!(h::plan_checkpoint::require(&ctx.store, &preparing, &boolean_only).is_err());
+    let pending_choice = pending.transfer.as_ref().unwrap().choice_digest.clone();
+    h::recovery::reconcile(&ctx).unwrap();
+    assert!(
+        h::lifecycle::for_task(&ctx.store, &ctx.store.get(&id).unwrap())
+            .unwrap()
+            .unwrap()
+            .waiting
+            .is_some()
+    );
+    ctx.store = corral_core::Store::open(ctx.store.root()).unwrap();
+    ctx.store.config.artifacts.max_bytes = normal_cap;
+    ctx.store.save_config().unwrap();
+    h::recovery::reconcile(&ctx).unwrap();
+    let recovered = ctx.store.get(&id).unwrap();
+    let recovered_journal = h::lifecycle::for_task(&ctx.store, &recovered)
+        .unwrap()
+        .unwrap();
+    let recovered_transfer = recovered_journal.transfer.as_ref().unwrap();
+    assert_eq!(
+        recovered_transfer.disposition,
+        h::lifecycle::Disposition::Continuing
+    );
+    assert_eq!(recovered_transfer.choice_digest, pending_choice);
+    assert!(recovered_transfer.plan_checkpoint.is_none() && recovered_journal.waiting.is_none());
+    assert!(!recovered.dispatch_hold && recovered.plan_runs.len() == 2 && !pm_process.reaped());
+    let dispatched = crate::dispatch(&ctx, &id, &planner_opts);
+    assert!(
+        matches!(&dispatched, Ok(crate::DispatchOutcome::Started { run_id, .. }) if run_id == "D3"),
+        "native PM history must settle during actual planner dispatch: {dispatched:?}"
+    );
+    let after_dispatch = ctx.store.get(&id).unwrap();
+    assert!(
+        std::fs::read_to_string(after_dispatch.plan_runs[2].output_dir.join("prompt.md"))
+            .unwrap()
+            .contains(latest)
+    );
+    // Bind the genuinely prepared native planner generation, without allocating a
+    // replacement or executing an SDK/model; its owned process is a stand-in.
+    let planner_container = ContainerRef::Planner {
+        task: id.clone(),
+        run: "D3".into(),
+    };
+    let planner = planning_host_from_bootstrap(&ctx, &planner_container);
+    assert_eq!(planner.identity.role, AgentRole::Planner);
+    let mut planner_process = HostProc::spawn(true);
+    hello_process(&fx, &planner, &planner_process);
+    let draft_input = ts::envelope(
+        &planner,
+        "plan_write",
+        &crate::agent::tool_request_id(&planner.identity.session_id, "continued-draft"),
+        json!({"content":latest,"offset":0}),
+        false,
+    );
+    ts::committed(&ts::send(&fx, &draft_input, "plan_write"));
+    let current = ctx.store.get(&id).unwrap();
     let instruction = h::lifecycle::Instruction::Shell {
         text: "fixture: take back this task's latest work".into(),
         at: corral_core::clock::now(),
@@ -279,7 +384,7 @@ fn handoff_pm_context_restart_drains_only_the_bound_attempt_and_returns_latest_p
     .unwrap_err();
     eprintln!("C3_PM_ARCHIVE_HELD: {interrupted:#}");
     assert!(
-        review_process.reaped(),
+        review_process.reaped() && planner_process.reaped(),
         "archive failure occurs only after physical settlement"
     );
     let pending = ctx.store.get(&id).unwrap();
@@ -405,6 +510,25 @@ fn handoff_pm_context_restart_drains_only_the_bound_attempt_and_returns_latest_p
         _tmp: tempfile::tempdir().unwrap(),
         ctx: reopened.clone(),
     };
+    let late_draft = ts::envelope(
+        &planner,
+        "plan_write",
+        &crate::agent::tool_request_id(&planner.identity.session_id, "late-draft"),
+        json!({"content":"late draft overwrite","offset":0}),
+        false,
+    );
+    assert!(ts::code(&ts::send(&after, &late_draft, "plan_write")).is_some());
+    assert!(
+        crate::agent::open_generation(
+            &reopened.store,
+            &BindTarget::Planner {
+                task: id.clone(),
+                run: "D3".into(),
+            },
+            "late-planner-restart"
+        )
+        .is_err()
+    );
     let late = ts::envelope(
         &reviewer,
         "plan_write",

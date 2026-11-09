@@ -27,6 +27,7 @@ fn native_assets(tmp: &std::path::Path, ctx: &mut Ctx) -> std::path::PathBuf {
             ),
             "export default {};",
         ),
+        ("src/roles/planner/index.ts".into(), "export default {};"),
         ("src/delivery/index.ts".into(), "export default {};"),
         ("src/auth/index.ts".into(), "export default {};"),
     ] {
@@ -97,7 +98,7 @@ fn real_plan_review_service_binds_native_generation_and_bootstrap_before_submit(
         );
         // Bind the generation the NORMAL service launched, rather than allocating a
         // second one. This is an authenticated protocol fixture, not a real SDK/model.
-        let reviewer = reviewer_from_bootstrap(&ctx, &container);
+        let reviewer = planning_host_from_bootstrap(&ctx, &container);
         let fx = crate::agent::test_support::Fx {
             _tmp: tempfile::tempdir().unwrap(),
             ctx: ctx.clone(),
@@ -305,7 +306,7 @@ fn exact_source(
     session
 }
 
-fn reviewer_from_bootstrap(
+fn planning_host_from_bootstrap(
     ctx: &Ctx,
     container: &ContainerRef,
 ) -> crate::agent::test_support::Host {
@@ -313,13 +314,19 @@ fn reviewer_from_bootstrap(
         launch::{BOOTSTRAP_FILE, Bootstrap, generation_dir},
         test_support as ts,
     };
-    let ContainerRef::PlanReviewer { task, plan, review } = container else {
-        panic!("reviewer fixture")
-    };
-    let recipient = corral_core::inbox::Recipient::PlanReview {
-        task: task.clone(),
-        plan: plan.clone(),
-        review: review.clone(),
+    let recipient = match container {
+        ContainerRef::PlanReviewer { task, plan, review } => {
+            corral_core::inbox::Recipient::PlanReview {
+                task: task.clone(),
+                plan: plan.clone(),
+                review: review.clone(),
+            }
+        }
+        ContainerRef::Planner { task, run } => corral_core::inbox::Recipient::PlanRun {
+            task: task.clone(),
+            plan_run: run.clone(),
+        },
+        _ => panic!("planning fixture"),
     };
     let b: Bootstrap = serde_json::from_slice(
         &std::fs::read(
@@ -330,15 +337,19 @@ fn reviewer_from_bootstrap(
         .unwrap(),
     )
     .unwrap();
+    let tag = format!(
+        "fixture-c3-{}",
+        &paths::sha256_hex(container.key().as_bytes())[..16]
+    );
     ts::Host {
         identity: serde_json::from_value(
             serde_json::json!({"store":b.store,"project":b.project,"role":b.role,
         "task":b.task,"run":b.run,"review":b.review,"callback":b.callback,"assistant":b.assistant,
-        "session_id":"fixture-c3-independent-review","generation":b.generation}),
+        "session_id":tag,"generation":b.generation}),
         )
         .unwrap(),
-        host_cap: ts::secret("fixture-c3-review-host", b.generation),
-        ctl_cap: ts::secret("fixture-c3-review-ctl", b.generation),
+        host_cap: ts::secret(&format!("{tag}-host"), b.generation),
+        ctl_cap: ts::secret(&format!("{tag}-ctl"), b.generation),
         nonce: b.bind_nonce,
         pane: b.pane,
         sessions: b.session_dir,
