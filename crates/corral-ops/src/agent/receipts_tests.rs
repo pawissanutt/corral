@@ -120,6 +120,7 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                 "event",
                 "receipt_lookup",
                 "todo",
+                "read_annotations",
                 "owner_action",
                 "write_permission",
                 "assistant_plan",
@@ -149,6 +150,7 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                 "read_route",
                 "read_artifacts",
                 "read_lessons",
+                "read_annotations",
                 "inbox_read",
                 "inbox_resolve",
                 "memory_list",
@@ -171,6 +173,7 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                 "gate",
                 "done",
                 "read_content",
+                "read_annotations",
                 "job",
                 "job_monitor",
                 "memory_list",
@@ -188,7 +191,8 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                     "evidence",
                     "artifact",
                     "verdict",
-                    "read_content"
+                    "read_content",
+                    "read_annotations"
                 ])
             }
         };
