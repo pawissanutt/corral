@@ -49,7 +49,8 @@ threads-required = 2
 [profile.quick]
 default-filter = '''
 not (
-  (binary_id(=corral-ops) & test(=annotations::tests::annotations_reply_resolve_race_uses_revision_cas))
+  (binary_id(=corral-ops) & test(=assistant::workflow::tests::review_tests::assistant_local_review_restart_boundaries_never_replay_inference))
+| (binary_id(=corral-ops) & test(=annotations::tests::annotations_reply_resolve_race_uses_revision_cas))
 | (binary_id(=corral-ops) & test(handoff_pm_context_restart))
 | (binary_id(=corral-ops) & (test(handoff_publication_crash_matrix) | test(handoff_materialization_restart)))
 | (binary_id(=corral-ops) & test(scratch_gc_resume_startup_interleaving))
@@ -79,10 +80,12 @@ path = "junit.xml"
 # (scripts/gate_lanes.py). Plan verify and legacy/missing context run all tests.
 # Handoff: durable publication/seed recovery and isolated PM-context retirement across restart.
 # PM-context ownership triggers are plan_review/, native admission/recovery/planning ops and its role.
+# Local review: disposable-store reopen/atomic-publication boundaries must never replay inference.
 [profile.slow]
 slow-timeout = "30s"
 default-filter = '''
-(binary_id(=corral-ops) & test(handoff_pm_context_restart))
+(binary_id(=corral-ops) & test(=assistant::workflow::tests::review_tests::assistant_local_review_restart_boundaries_never_replay_inference))
+| (binary_id(=corral-ops) & test(handoff_pm_context_restart))
 | (binary_id(=corral-ops) & test(=annotations::tests::annotations_reply_resolve_race_uses_revision_cas))
 | (binary_id(=corral-ops) & (test(handoff_publication_crash_matrix) | test(handoff_materialization_restart)))
 | (binary_id(=corral-ops) & test(scratch_gc_resume_startup_interleaving))
