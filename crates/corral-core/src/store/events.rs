@@ -43,12 +43,25 @@ thread_local! {
     static UNITS: RefCell<Vec<Rc<Unit>>> = const { RefCell::new(Vec::new()) };
 }
 
+struct ReadScope {
+    unit: Rc<Unit>,
+    view: Option<super::head::PinnedView>,
+    reads: BTreeMap<(String, String), Option<StoredRecord>>,
+}
+
 /// Dropping a unit discards uncommitted events, including on callback error or unwind.
-pub(super) struct EventUnit(Option<Rc<Unit>>);
+pub(super) struct EventUnit {
+    owned: Option<Rc<Unit>>,
+    read_scope: Option<ReadScope>,
+}
 
 impl Drop for EventUnit {
     fn drop(&mut self) {
-        if let Some(owned) = &self.0 {
+        if let Some(scope) = self.read_scope.take() {
+            *scope.unit.view.borrow_mut() = scope.view;
+            *scope.unit.reads.borrow_mut() = scope.reads;
+        }
+        if let Some(owned) = &self.owned {
             UNITS.with(|units| units.borrow_mut().retain(|unit| !Rc::ptr_eq(unit, owned)));
         }
     }
@@ -111,7 +124,10 @@ impl Store {
 
     pub(super) fn event_unit(&self) -> EventUnit {
         if self.current_unit().is_some() {
-            return EventUnit(None);
+            return EventUnit {
+                owned: None,
+                read_scope: None,
+            };
         }
         let unit = Rc::new(Unit {
             db: Arc::clone(&self.db),
@@ -124,7 +140,33 @@ impl Store {
             gate: RefCell::default(),
         });
         UNITS.with(|units| units.borrow_mut().push(Rc::clone(&unit)));
-        EventUnit(Some(unit))
+        EventUnit {
+            owned: Some(unit),
+            read_scope: None,
+        }
+    }
+
+    /// The task and its authority records must share the view opened under its locks.
+    /// Even a nested update must not inherit a pre-lock view/key cache. Keep staged
+    /// writes/deletes in the unit; restore only the parent's read state on scope exit.
+    pub(super) fn event_unit_on(
+        &self,
+        view: Box<dyn crate::backend::ReadView + Send>,
+    ) -> Result<EventUnit> {
+        let mut scope = self.event_unit();
+        let unit = self
+            .current_unit()
+            .context("task read scope needs an event unit")?;
+        let previous_view = unit
+            .view
+            .replace(Some(Arc::new(std::sync::Mutex::new(view))));
+        let previous_reads = unit.reads.take();
+        scope.read_scope = Some(ReadScope {
+            unit,
+            view: previous_view,
+            reads: previous_reads,
+        });
+        Ok(scope)
     }
 
     fn current_unit(&self) -> Option<Rc<Unit>> {
