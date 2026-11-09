@@ -739,11 +739,12 @@ export class HostSession {
     if (!policy) return tool;
     const original = tool;
     if (tool.name === "corral_assistant_plan_review" && this.planReviews) tool = { ...tool, execute: async (...args) => {
+      const lifetime = this.planReviews?.lifetime();
       const result = await original.execute(...args);
       const receipt = result.details as { state?: string; result?: unknown } | undefined;
       if (receipt?.state === "committed") {
         const action = (args[1] as Record<string, unknown>).action;
-        if (action === "start") await this.planReviews?.launch(receipt.result);
+        if (action === "start") await this.planReviews?.launch(receipt.result, lifetime);
         if (action === "cancel") this.planReviews?.cancelOwned(receipt.result);
       }
       return result;
@@ -983,7 +984,9 @@ export class HostSession {
       this.questionUi = new OwnerQuestionUi(this.ownerQuestions, () => this.bound && !this.closing);
       this.questionUi.install(pi);
     }
-    pi.on("session_start", () => { if (this.bound) this.commands?.bound(); });
+    pi.on("session_start", async () => {
+      if (this.bound) { this.commands?.bound(); await this.planReviews?.recover(); }
+    });
     const code = this.code;
     if (code) {
       pi.registerTool(codemodeTool(code, (names) =>
@@ -1432,6 +1435,9 @@ export class HostSession {
   continued(): Promise<void> {
     return this.continuations;
   }
+
+  /** Local review lifetimes started so far have settled and their notices were attempted. */
+  async reviewNoticed(): Promise<void> { await this.planReviews?.drained(); }
 
   /** Every detached Code Mode cell's notice started so far has been delivered or refused. */
   async codeNoticed(): Promise<void> {

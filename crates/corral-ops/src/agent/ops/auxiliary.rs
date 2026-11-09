@@ -121,10 +121,12 @@ pub(super) fn auxiliary(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> 
                     generation,
                     association,
                     &payload.request,
-                    &payload.action,
-                    payload.model.as_deref(),
-                    payload.outcome,
-                    max,
+                    review::Accounting {
+                        action: &payload.action,
+                        model: payload.model.as_deref(),
+                        outcome: payload.outcome,
+                        max,
+                    },
                 )?
             };
             Ok(Commit {

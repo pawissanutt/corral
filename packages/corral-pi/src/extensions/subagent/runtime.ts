@@ -32,6 +32,7 @@ export interface Invocation {
   readonly maxTurns: number;
   readonly research?: ResearchOptions;
   readonly review?: ReviewMission;
+  readonly checkReview?: () => Promise<void>;
   readonly deadlineAt?: number;
   readonly serviceTier?: "priority";
   readonly observe?: (event: HelperEvent) => void;
@@ -90,6 +91,7 @@ class Slots {
 export interface AuxiliaryObservation {
   readonly request: string; readonly parent: string; readonly kind: AuxiliaryKind;
   readonly model: string; state: string; sessionFile?: string;
+  readonly purpose?: "assistant_plan_review"; readonly planReview?: PlanReviewAssociation;
 }
 export class AuxiliaryRuntime {
   private readonly observations = new Map<string, AuxiliaryObservation>();
@@ -162,7 +164,8 @@ export class AuxiliaryRuntime {
     const deadlineAt = Date.now() + settings.timeout_secs * 1000;
     const timeout = AbortSignal.timeout(settings.timeout_secs * 1000);
     const signal = AbortSignal.any([controller.signal, timeout, ...(outer ? [outer] : [])]);
-    const observation: AuxiliaryObservation = { request, parent: options.sessionId(), kind, model: `${provider}/${model}`, state: "preparing" };
+    const observation: AuxiliaryObservation = { request, parent: options.sessionId(), kind, model: `${provider}/${model}`, state: "preparing",
+      ...(review ? { purpose: "assistant_plan_review", planReview: review.association } as const : {}) };
     this.observations.set(request, observation);
     const common = { kind: "auxiliary", request, usage_kind: kind,
       ...(review ? { plan_review: review.association } : {}) };
@@ -192,7 +195,7 @@ export class AuxiliaryRuntime {
         sessionFile: reference.session_file, sessionId: request,
         maxTurns: kind === "explore" ? researchBudget(research ?? {}, options.settings.explore?.max_turns ?? 1).maxTurns : 1,
         ...(kind === "explore" ? { research: research ?? {}, deadlineAt } : {}),
-        ...(review ? { review } : {}),
+        ...(review ? { review, checkReview: async () => { await options.record({ ...common, action: "check" }); } } : {}),
         ...(serviceTier ? { serviceTier } : {}),
         observe: event => { if (!signal.aborted) this.history.observe(request, event); } }, signal);
       outcome = result.outcome;

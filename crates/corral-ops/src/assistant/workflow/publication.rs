@@ -74,6 +74,16 @@ fn writable(container: &AssistantContainer, expected: &Expected) -> Result<()> {
     Ok(())
 }
 
+// Advisory review bookkeeping can advance state_revision during an upload. The caller
+// STILL needs the exact current workflow CAS (writable above); only the upload association
+// may survive when its immutable plan/epoch/workflow context is unchanged. No consent carries.
+fn same_upload_context(staged: &Expected, fresh: &Expected) -> bool {
+    staged.workflow == fresh.workflow
+        && staged.authority_epoch == fresh.authority_epoch
+        && staged.plan_revision == fresh.plan_revision
+        && staged.state_revision <= fresh.state_revision
+}
+
 /// Chunk retries at an already-written offset must match exact bytes. Staging never increments
 /// the plan or state revision; publication consumes the complete upload with its CAS context.
 pub fn stage(
@@ -95,12 +105,17 @@ pub fn stage(
         expected: expected.clone(),
         text: String::new(),
     });
-    if staging.expected != *expected {
-        return Err(bad("staged upload belongs to another workflow revision"));
+    if !same_upload_context(&staging.expected, expected) {
+        return Err(bad(
+            "staged upload belongs to another workflow/plan/authority epoch",
+        ));
     }
+    let rebound = staging.expected != *expected;
+    staging.expected = expected.clone();
     let end = offset
         .checked_add(chunk.len())
         .ok_or_else(|| bad("invalid stage offset"))?;
+    let appended = offset == staging.text.len();
     if offset < staging.text.len() {
         if staging.text.as_bytes().get(offset..end) != Some(chunk.as_bytes()) {
             return Err(crate::agent::Rejection::new(
@@ -111,11 +126,13 @@ pub fn stage(
         }
     } else if offset == staging.text.len() && end <= DOCUMENT_MAX {
         staging.text.push_str(chunk);
-        store.save_record(STAGING, &key, &staging)?;
     } else {
         return Err(bad(
             "stage offset must be the next byte; document limit is 1 MiB",
         ));
+    }
+    if rebound || appended {
+        store.save_record(STAGING, &key, &staging)?;
     }
     Ok(
         json!({"workflow": expected.workflow, "state_revision": expected.state_revision,
@@ -151,7 +168,7 @@ pub fn publish(
     let staging: Staging = store
         .record(STAGING, &staging_key)?
         .ok_or_else(|| bad("no staged design"))?;
-    if staging.expected != payload.expected
+    if !same_upload_context(&staging.expected, &payload.expected)
         || staging.text.len() != payload.bytes as usize
         || staging.text.trim().is_empty()
         || BlobHash::of(staging.text.as_bytes()) != payload.digest
