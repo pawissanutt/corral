@@ -283,6 +283,7 @@ pub(crate) fn record(
     now: Timestamp,
     via: &str,
 ) -> Result<(LifecycleOutcome, Option<String>)> {
+    let mut removal_failed = false;
     let decision = match &found.finding {
         Finding::Reclaim { bytes, absent, .. } => match worktrees::reclaim(ctx, found, via) {
             Ok(()) => Decision {
@@ -297,6 +298,7 @@ pub(crate) fn record(
                 next_check_at: None,
             },
             Err(error) => {
+                removal_failed = true;
                 ctx.store.log_event(
                     Some(&found.task),
                     "storage_reclaim_failed",
@@ -308,10 +310,12 @@ pub(crate) fn record(
                     }),
                 )?;
                 Decision {
-                    outcome: LifecycleOutcome::Failed,
+                    // Keep the failure event and reason, while scheduling the unfinished
+                    // cleanup through the existing bounded deferred-work index.
+                    outcome: LifecycleOutcome::Deferred,
                     reason: Some(format!("{error:#}")),
                     bytes: None,
-                    next_check_at: None,
+                    next_check_at: Some(next_check(stored, now)?),
                 }
             }
         },
@@ -334,7 +338,16 @@ pub(crate) fn record(
         next_check_at: None,
         at: now,
     };
-    let result = (decision.outcome, decision.reason.clone());
+    // The durable row is deferred for retry; the current GC report must still
+    // report this particular removal attempt as failed.
+    let result = (
+        if removal_failed {
+            LifecycleOutcome::Failed
+        } else {
+            decision.outcome
+        },
+        decision.reason.clone(),
+    );
     write(
         ctx,
         &key,

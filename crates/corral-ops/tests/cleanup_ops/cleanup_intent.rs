@@ -183,6 +183,75 @@ fn retained_branch_cleanup_refuses_missing_changed_or_unpreserved_approval_after
 }
 
 #[test]
+fn transient_git_removal_failure_retries_after_backoff() {
+    let fx = Fx::new();
+    fx.owner_ready();
+    let run = fx.run();
+    let holder = Holder::start(&run.worktree);
+    corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, true).unwrap();
+    drop(holder);
+    let path = run.worktree.to_str().unwrap();
+    git(&fx.app, &["worktree", "lock", path]);
+    let now = corral_core::clock::now();
+    corral_ops::storage_gc::lifecycle_pass(&fx.ctx, now).unwrap();
+    let row = || {
+        fx.ctx
+            .store
+            .lifecycle_row(&fx.id, &run.id, "worktree")
+            .unwrap()
+            .unwrap()
+    };
+    let failed = row();
+    let events = fx
+        .ctx
+        .store
+        .events_of(Some(&fx.id), &["storage_reclaim_failed"])
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert!(
+        events[0].detail["error"]
+            .as_str()
+            .unwrap()
+            .contains("locked")
+    );
+    assert!(run.worktree.is_dir());
+    assert_eq!(failed.outcome, LifecycleOutcome::Deferred);
+    corral_ops::storage_gc::lifecycle_pass(&fx.ctx, now).unwrap();
+    assert_eq!(row().at, failed.at, "no immediate retry");
+    let later = now
+        .checked_add(jiff::SignedDuration::from_secs(60))
+        .unwrap();
+    corral_ops::storage_gc::lifecycle_pass(&fx.ctx, later).unwrap();
+    let retried = row();
+    assert_eq!(retried.outcome, LifecycleOutcome::Deferred);
+    assert_eq!(
+        retried.next_check_at,
+        Some(
+            now.checked_add(jiff::SignedDuration::from_secs(180))
+                .unwrap()
+        )
+    );
+    git(&fx.app, &["worktree", "unlock", path]);
+    corral_ops::storage_gc::lifecycle_pass(&fx.ctx, later).unwrap();
+    assert_eq!(row().at, retried.at, "no immediate second retry");
+    let later = now
+        .checked_add(jiff::SignedDuration::from_secs(180))
+        .unwrap();
+    corral_ops::storage_gc::lifecycle_pass(&fx.ctx, later).unwrap();
+    assert_eq!(row().outcome, LifecycleOutcome::Reclaimed);
+    assert!(!run.worktree.exists());
+    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_ok());
+    assert_eq!(
+        fx.ctx
+            .store
+            .events_of(Some(&fx.id), &["storage_reclaim_failed"])
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
 fn a_failed_keep_branch_strategy_removal_is_retried() {
     failed_removal_is_retried(ApproveStrategy::KeepBranch, false);
 }
