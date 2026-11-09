@@ -28,6 +28,10 @@ struct Payload {
     model: Option<String>,
     #[serde(default)]
     outcome: Option<AuxiliaryOutcome>,
+    #[serde(default)]
+    plan_review: Option<crate::assistant::workflow::review::Association>,
+    #[serde(default)]
+    review_event: Option<crate::assistant::workflow::review::Event>,
 }
 fn bad(message: &str) -> anyhow::Error {
     Rejection::new(RejectCode::BadRequest, message).into()
@@ -59,6 +63,77 @@ pub(super) fn auxiliary(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> 
     let generation = envelope.identity.generation;
     let file = paths::usage_session_file(&ctx.store, &container, &payload.request);
     let snapshot = admitted.resolved.generation(&container, generation)?;
+    if payload.plan_review.is_none() && payload.review_event.is_some() {
+        return Err(bad("review lifecycle requires its exact association"));
+    }
+    // Settlement/recovery must remain possible after capability reload. Only claim and
+    // provider accounting admission require subagents; they never enable it themselves.
+    if let Some(association) = &payload.plan_review {
+        use crate::assistant::workflow::review;
+        let session = envelope
+            .identity
+            .assistant
+            .as_deref()
+            .ok_or_else(|| bad("local plan reviews are assistant-only"))?;
+        if payload.usage_kind != Some(UsageSessionKind::Explore) {
+            return Err(bad("local review must use explore accounting"));
+        }
+        let available = snapshot.as_ref().is_some_and(|g| g.capability("subagents"));
+        if (!matches!(payload.review_event, Some(ref event) if !matches!(event, review::Event::Claim))
+            && payload.action != "finish")
+            && !available
+        {
+            return Err(Rejection::new(
+                RejectCode::OpNotAllowed,
+                "local review explore capability disabled",
+            )
+            .into());
+        }
+        let max = snapshot
+            .as_ref()
+            .and_then(|g| g.capabilities.as_ref())
+            .and_then(|s| s.features.get("subagents"))
+            .and_then(|f| f.settings.get("max_parallel"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1) as usize;
+        return receipts::commit_assistant(ctx, &admitted, |container| {
+            let result = if let Some(event) = payload.review_event {
+                if payload.action != "review"
+                    || payload.model.is_some()
+                    || payload.outcome.is_some()
+                {
+                    return Err(bad("invalid review lifecycle payload"));
+                }
+                review::apply_event(
+                    &ctx.store,
+                    session,
+                    container,
+                    generation,
+                    association,
+                    &payload.request,
+                    event,
+                )?
+            } else {
+                review::accounting(
+                    &ctx.store,
+                    session,
+                    container,
+                    generation,
+                    association,
+                    &payload.request,
+                    &payload.action,
+                    payload.model.as_deref(),
+                    payload.outcome,
+                    max,
+                )?
+            };
+            Ok(Commit {
+                result,
+                effect: None,
+                post_pending: Vec::new(),
+            })
+        });
+    }
     let feature = match payload.usage_kind {
         Some(UsageSessionKind::Explore) => "subagents",
         Some(UsageSessionKind::Oracle) => "oracle",

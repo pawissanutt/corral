@@ -196,6 +196,48 @@ pub struct DecisionEvidence {
     pub consumed_at: Timestamp,
 }
 
+/// Advisory review identity and exact immutable observation, separate from auxiliary usage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalReviewState {
+    Prepared,
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    TimedOut,
+    Interrupted,
+    Incomplete,
+    Unavailable,
+}
+impl LocalReviewState {
+    pub fn terminal(self) -> bool {
+        !matches!(self, Self::Prepared | Self::Queued | Self::Running)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalReview {
+    pub id: String,
+    pub workflow: String,
+    pub result_revision: u32,
+    pub plan: PlanRevision,
+    pub context: DesignArtifact,
+    pub request: OwnerInput,
+    pub invocation: String,
+    pub generation: u32,
+    pub lifecycle: LocalReviewState,
+    pub accounting: String,
+    pub model: Option<String>,
+    pub findings: Option<DesignArtifact>,
+    /// Digest of observed registered source facts; absent means explicitly unobserved.
+    pub source: Option<BlobHash>,
+    pub summary: String,
+    pub notice_delivered: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Workflow {

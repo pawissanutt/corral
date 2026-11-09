@@ -7,6 +7,20 @@ import { researchBudget, type ResearchOptions, type ResearchReport } from "./res
 
 export type AuxiliaryKind = "explore" | "oracle" | "web_search";
 export type Outcome = "completed" | "uncertain" | "not_started";
+export interface PlanReviewAssociation {
+  readonly workflow: string; readonly review: string; readonly digest: string;
+}
+export interface ReviewSnapshot {
+  readonly path: string; readonly digest: string; readonly bytes: number;
+}
+export interface ReviewMission {
+  readonly association: PlanReviewAssociation;
+  readonly plan: ReviewSnapshot; readonly context: ReviewSnapshot;
+}
+export interface AuxiliaryHandle {
+  readonly request: string; readonly done: Promise<AuxiliaryResponse>;
+  cancel(): void;
+}
 export interface Invocation {
   readonly request: string;
   readonly kind: AuxiliaryKind;
@@ -17,6 +31,7 @@ export interface Invocation {
   readonly sessionId: string;
   readonly maxTurns: number;
   readonly research?: ResearchOptions;
+  readonly review?: ReviewMission;
   readonly deadlineAt?: number;
   readonly serviceTier?: "priority";
   readonly observe?: (event: HelperEvent) => void;
@@ -99,6 +114,20 @@ export class AuxiliaryRuntime {
     this.requests.set(key, request);
     return request;
   }
+  /** Host-owned advisory review. Same pool/accounting/provider, independent of turn signals. */
+  startReview(request: string, mission: ReviewMission): AuxiliaryHandle {
+    const previous = this.requests.get(request);
+    if (previous) return { request, done: previous, cancel: () => {} };
+    const controller = new AbortController();
+    const prompt = `Independently review local plan ${mission.association.workflow}/${mission.association.review} digest ${mission.association.digest}. `
+      + "Read both complete immutable snapshots with read_review_snapshot before drawing conclusions. "
+      + "Assess original request coverage, retained behavior/exclusions, grounded code claims, unresolved choices, failure cases, dependencies, implementability and observable verification. "
+      + "Inspect relevant code with read-only tools. Return advisory findings with severity, plan sections, actual source citations and concrete recommendations; no findings is valid. "
+      + "State missing coverage honestly. Never edit, approve a board plan, authorize execution, delegate or file tasks.";
+    const done = this.perform("explore", request, prompt, controller.signal, undefined, mission);
+    this.requests.set(request, done);
+    return { request, done, cancel: () => controller.abort(new Error("local plan review cancelled")) };
+  }
   private slots(kind: AuxiliaryKind): Slots {
     switch (kind) {
       case "explore": return this.explore;
@@ -106,7 +135,7 @@ export class AuxiliaryRuntime {
       case "web_search": return this.webSearch;
     }
   }
-  private async perform(kind: AuxiliaryKind, request: string, prompt: string, outer?: AbortSignal, research?: ResearchOptions): Promise<AuxiliaryResponse> {
+  private async perform(kind: AuxiliaryKind, request: string, prompt: string, outer?: AbortSignal, research?: ResearchOptions, review?: ReviewMission): Promise<AuxiliaryResponse> {
     const { options } = this;
     const settings = options.settings[kind];
     if (!settings) throw new Error(`${kind} is disabled`);
@@ -131,7 +160,8 @@ export class AuxiliaryRuntime {
     const signal = AbortSignal.any([controller.signal, timeout, ...(outer ? [outer] : [])]);
     const observation: AuxiliaryObservation = { request, parent: options.sessionId(), kind, model: `${provider}/${model}`, state: "preparing" };
     this.observations.set(request, observation);
-    const common = { kind: "auxiliary", request, usage_kind: kind };
+    const common = { kind: "auxiliary", request, usage_kind: kind,
+      ...(review ? { plan_review: review.association } : {}) };
     let release: (() => void) | undefined;
     let prepared = false;
     let started = false;
@@ -158,6 +188,7 @@ export class AuxiliaryRuntime {
         sessionFile: reference.session_file, sessionId: request,
         maxTurns: kind === "explore" ? researchBudget(research ?? {}, options.settings.explore?.max_turns ?? 1).maxTurns : 1,
         ...(kind === "explore" ? { research: research ?? {}, deadlineAt } : {}),
+        ...(review ? { review } : {}),
         ...(serviceTier ? { serviceTier } : {}),
         observe: event => { if (!signal.aborted) this.history.observe(request, event); } }, signal);
       outcome = result.outcome;
@@ -186,8 +217,8 @@ export class AuxiliaryRuntime {
       }
     }
     if (!result) throw new Error("auxiliary request did not finish");
-    return { ...result, text: kind === "web_search" ? result.text : result.text.slice(0, 32768),
-      truncated: kind !== "web_search" && result.text.length > 32768,
+    return { ...result, text: kind === "web_search" || review ? result.text : result.text.slice(0, 32768),
+      truncated: !review && kind !== "web_search" && result.text.length > 32768,
       request, generation: options.generation,
       ...(observation.sessionFile ? { sessionFile: observation.sessionFile } : {}),
     };

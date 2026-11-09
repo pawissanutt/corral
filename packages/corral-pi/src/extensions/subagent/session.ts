@@ -9,6 +9,7 @@ import { executionRefusal, exploreLoadout } from "../../roles/common/execution.t
 import type { AuxiliaryResult, Invocation } from "./runtime.ts";
 import type { HelperEvent } from "./inspection.ts";
 import { researchBudget, researchPrompt, researchResult, type ResearchReport } from "./research.ts";
+import { reviewSnapshots } from "./review-snapshot.ts";
 
 /** Project only visible response text and tool activity; never forward thinking or signatures. */
 export function observeHelperEvent(event: Sdk.AgentSessionEvent, emit: (event: HelperEvent) => void): void {
@@ -63,7 +64,9 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
   const model = options.models.getModel(options.provider, invocation.model);
   if (!model) throw new Error(`model_unavailable: ${options.provider}/${invocation.model}`);
   const loadout = invocation.kind === "explore" ? exploreLoadout(options.parentLoadout) : [];
-  const allowed = new Set(loadout);
+  const snapshots = invocation.review ? reviewSnapshots(invocation.review) : undefined;
+  if (snapshots && !loadout.includes("read")) throw new Error("local review unavailable: parent has no file-read capability");
+  const allowed = new Set([...loadout, ...(snapshots ? [snapshots.tool.name] : [])]);
   let turns = 0;
   let synthesis: "turn_limit" | "time_reserve" | undefined;
   let synthesisUsed: typeof synthesis;
@@ -72,6 +75,7 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
     ? researchBudget(invocation.research ?? {}, invocation.maxTurns).thinkingLevel : "off";
   const extension = (pi: ExtensionAPI) => {
     for (const tool of options.localTools.filter((tool) => allowed.has(tool.name))) pi.registerTool(tool);
+    if (snapshots) pi.registerTool(snapshots.tool);
     pi.on("tool_call", (event) => {
       const reason = executionRefusal(event.toolName, event.parentToolCallId !== undefined, allowed);
       return reason ? { block: true, reason } : undefined;
@@ -119,7 +123,7 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
     },
   });
   const { session } = await sdk.createAgentSessionFromServices({ services, sessionManager: manager, model,
-    tools: loadout, scopedModels: [{ model, thinkingLevel }], thinkingLevel });
+    tools: [...loadout, ...(snapshots ? [snapshots.tool.name] : [])], scopedModels: [{ model, thinkingLevel }], thinkingLevel });
   if (invocation.serviceTier) {
     // Keep the SDK stream, guarded provider and budget wrapper; scope the option to this child.
     const stream = session.agent.streamFunction;
@@ -136,7 +140,7 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
     signal.throwIfAborted();
     await session.bindExtensions({ mode: "print", abortHandler: abort });
     const prompt = invocation.kind === "explore"
-      ? researchPrompt(invocation.prompt, invocation.research ?? {}, options.cwd, loadout, invocation.maxTurns) : invocation.prompt;
+      ? researchPrompt(invocation.prompt, invocation.research ?? {}, options.cwd, [...allowed], invocation.maxTurns) : invocation.prompt;
     let promptError: unknown;
     try { await session.prompt(prompt, { source: "rpc" }); }
     catch (error) {
@@ -149,7 +153,10 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
     const stopReason: ResearchReport["stopReason"] = signal.aborted
       ? signal.reason instanceof Error && signal.reason.name === "TimeoutError" ? "timeout" : "cancelled"
       : limitReached ? synthesisUsed ?? "turn_limit" : failed ? "provider_error" : synthesisUsed ?? "completed";
-    return { ...researchResult(session.messages, stopReason), outcome };
+    const result = researchResult(session.messages, stopReason);
+    if (snapshots && !snapshots.complete()) return { text: result.text,
+      report: { status: "partial", stopReason: "turn_limit" }, outcome };
+    return { ...result, outcome };
   } finally {
     signal.removeEventListener("abort", abort);
     unsubscribe();

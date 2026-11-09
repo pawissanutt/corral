@@ -1,5 +1,7 @@
 #[path = "boundary_tests.rs"]
 mod boundary_tests;
+#[path = "review_tests.rs"]
+mod review_tests;
 
 use corral_core::assistant::{AssistantContainer, NewOwnerInput, OwnerInputSource};
 use corral_core::assistant_workflow::*;
