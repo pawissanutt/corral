@@ -58,6 +58,9 @@ pub fn collect_container(container: &ContainerRef, store: &Store) -> Result<Usag
             _ => agent::container_run(&task, container).and_then(|run| run.model.as_deref()),
         };
         collect_state(state, model, store)
+    } else if let ContainerRef::Assistant { session } = container {
+        let assistant = store.get_assistant_container(session)?;
+        collect_state(&assistant.state, None, store)
     } else {
         let pm = pm_state::load(store)?.context("no bound Pi PM")?;
         collect_state(&pm.state, None, store)

@@ -391,6 +391,7 @@ pub fn reserve(
                 )),
         "handoff_busy: uncertain effect receipt requires reconciliation"
     );
+    super::review::cancel_active(store, session, container)?;
     let index = container.workflow.as_mut().context("workflow missing")?;
     ensure!(
         index.current.owner == ScopeOwner::Local && index.current.phase == j.previous_phase,

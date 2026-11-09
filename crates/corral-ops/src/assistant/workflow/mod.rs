@@ -16,6 +16,7 @@ pub mod boundary;
 pub mod handoff;
 mod publication;
 mod read;
+pub mod review;
 pub use publication::{Publish, publish, stage};
 pub use read::{read_revision, read_state};
 

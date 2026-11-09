@@ -87,7 +87,8 @@ import { memoryContext } from "./memory.ts";
 import { transcriptPreview } from "./transcript-preview.ts";
 import { AssistantRelink } from "./assistant-relink.ts";
 import { AssistantResume } from "./assistant-resume.ts";
-import { PlanningPolicy, type PlanningState } from "./planning-policy.ts";
+import { PlanningPolicy, type PlanningState, type WorkflowExpected } from "./planning-policy.ts";
+import { PlanReviews, reviewAssociation } from "./plan-review.ts";
 import { type ConnectionBinding, admitConnection, parseBinding } from "./connections.ts";
 import { CONNECTIONS, type ConnectionId, resolveConnection } from "../auth/connections.ts";
 import { failureClass, messageFailure, withProviderFailures } from "./provider-failure.ts";
@@ -337,6 +338,7 @@ export class HostSession {
   private readonly permissions: BashPermissions | undefined;
   private readonly checkpoints: Checkpoints | undefined;
   private readonly auxiliary: AuxiliaryRuntime | undefined;
+  private readonly planReviews: PlanReviews | undefined;
   private auxiliaryModels: Models | undefined;
   private searchModels: Models | undefined;
   private readonly budget: RunBudget;
@@ -375,6 +377,8 @@ export class HostSession {
           payload: { action: "read", limit: 1 }, turn: this.currentTurn(),
         });
         if (receipt.state !== "committed") throw new Error(`planning read refused: ${JSON.stringify(receipt.result)}`);
+        const phase = (receipt.result as { phase?: string } | undefined)?.phase;
+        if (phase && ["handoff_preparing", "handoff_reconciling", "board_owned", "closed"].includes(phase)) this.planReviews?.cancelAll();
         return receipt.result;
       },
       record: async transition => {
@@ -563,6 +567,32 @@ export class HostSession {
         },
       });
     }
+    this.planReviews = options.identity.role === "assistant" ? new PlanReviews({
+      auxiliary: auxiliary.explore ? this.auxiliary : undefined,
+      call: async (id, payload) => {
+        if (!this.bound) throw new Error("host_not_bound");
+        const receipt = await options.client.call("assistant_plan_review", {
+          requestId: toolRequestId(this.sessionId(), `local-review:${id}:${++this.planningRead}`), payload, turn: this.currentTurn(),
+        });
+        if (receipt.state !== "committed") throw new Error(`local review refused: ${JSON.stringify(receipt.result)}`);
+        return receipt.result;
+      },
+      event: async (review, review_event) => {
+        const payload = { kind: "auxiliary", action: "review", usage_kind: "explore", request: review.invocation,
+          plan_review: reviewAssociation(review), review_event };
+        const event = options.events.emit("local_plan_review", payload);
+        const receipt = await options.client.call("event", {
+          requestId: eventRequestId(options.identity.generation, event.seq), payload, turn: this.currentTurn(),
+        });
+        if (receipt.state !== "committed") throw new Error(`local review lifecycle refused: ${JSON.stringify(receipt.result)}`);
+        return receipt.result;
+      },
+      notify: async (key, text) => {
+        const disposition = await this.commandNotice(key, text);
+        return ["started", "queued", "duplicate"].includes(disposition);
+      },
+      error: error => { options.events.emit("local_plan_review_error", { message: error instanceof Error ? error.message : String(error) }); },
+    }) : undefined;
     const dialogEnabled = askUserEnabled(options.identity.role, options.capabilities?.enabled ?? []);
     this.ownerQuestions = dialogEnabled ? new PendingQuestions({
       session: () => options.sessionManager.getSessionId(), generation: options.identity.generation,
@@ -708,7 +738,17 @@ export class HostSession {
     const policy = this.planning;
     if (!policy) return tool;
     const original = tool;
-    if (tool.name.startsWith("lsp_")) tool = { ...tool, execute: async (...args) => {
+    if (tool.name === "corral_assistant_plan_review" && this.planReviews) tool = { ...tool, execute: async (...args) => {
+      const result = await original.execute(...args);
+      const receipt = result.details as { state?: string; result?: unknown } | undefined;
+      if (receipt?.state === "committed") {
+        const action = (args[1] as Record<string, unknown>).action;
+        if (action === "start") await this.planReviews?.launch(receipt.result);
+        if (action === "cancel") this.planReviews?.cancelOwned(receipt.result);
+      }
+      return result;
+    } };
+    else if (tool.name.startsWith("lsp_")) tool = { ...tool, execute: async (...args) => {
       await this.planningResource("lsp", "lsp_startup");
       return original.execute(...args);
     } };
@@ -753,6 +793,12 @@ export class HostSession {
     });
     this.session.setActiveToolsByName([...this.initialTools]);
     return result;
+  }
+
+  /** Internal C4 consumer seam: no new command, question store or execution authority. */
+  async reviewPlan(input: string, expected: WorkflowExpected, id: string) {
+    if (!this.bound || !this.planReviews) throw new Error("local review requires bound assistant");
+    return this.planReviews.start(id, expected, input);
   }
 
   async drainPlanning(): Promise<PlanningState> {
@@ -1132,6 +1178,7 @@ export class HostSession {
       // InteractiveMode exits the process after runtime disposal; main's finally never runs.
       // Await the release here, but keep reporting through extension reloads.
       if (event.reason === "quit") await this.options.herdr?.close();
+      await this.planReviews?.close(event.reason === "reload");
       if (event.reason === "reload") await this.auxiliary?.cancelAll(); else await this.auxiliary?.close();
       this.commands?.pause();
       await this.jobs?.shutdown();
@@ -1402,6 +1449,7 @@ export class HostSession {
     this.writeAbort.abort();
     await this.code?.close();
     const aborted = this.session.abort();
+    await this.planReviews?.close();
     await this.auxiliary?.close();
     await this.jobs?.shutdown();
     await this.assistantShell?.close();
@@ -1452,6 +1500,7 @@ export class HostSession {
     this.options.events.emit("bound", { generation: this.options.identity.generation, session_id: sessionId });
     this.commands?.bound(commandFacts, monitorFacts);
     await this.questionUi?.recover();
+    await this.planReviews?.recover();
     return receipt;
   }
 
