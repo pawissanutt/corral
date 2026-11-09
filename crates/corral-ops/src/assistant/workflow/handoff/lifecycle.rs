@@ -16,6 +16,7 @@ pub enum Disposition {
     Saved,
     Starting,
     Continuing,
+    CheckpointingPlan,
     TakingBack,
     Returned,
 }
@@ -99,6 +100,8 @@ pub struct Transfer {
     pub imported_plan_run: Option<String>,
     #[serde(default)]
     pub planner_drafts: super::planner_draft::Checkpoints,
+    #[serde(default)]
+    pub plan_checkpoint: Option<super::plan_checkpoint::Pending>,
 }
 
 impl Transfer {

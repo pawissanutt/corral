@@ -18,7 +18,10 @@ fn pending(journal: &Journal) -> bool {
                 || t.notification_pending
                 || matches!(
                     t.disposition,
-                    Disposition::Saving | Disposition::Starting | Disposition::TakingBack
+                    Disposition::Saving
+                        | Disposition::Starting
+                        | Disposition::TakingBack
+                        | Disposition::CheckpointingPlan
                 )
                 || (t.disposition == Disposition::Continuing && t.candidate_pending)
         })
@@ -26,6 +29,11 @@ fn pending(journal: &Journal) -> bool {
 
 pub(super) fn save(store: &Store, journal: &Journal) -> Result<()> {
     let mut journal = journal.clone();
+    if let Some(transfer) = journal.transfer.as_mut()
+        && transfer.disposition != Disposition::CheckpointingPlan
+    {
+        transfer.plan_checkpoint = None;
+    }
     if journal.selection.is_some() || journal.retreat.is_some() {
         journal.version = 2;
     }
@@ -91,7 +99,7 @@ fn advance(ctx: &Ctx, journal: &Journal) -> Result<()> {
         .map(drop);
     };
     match transfer.disposition {
-        Disposition::Starting | Disposition::Saving => {
+        Disposition::Starting | Disposition::Saving | Disposition::CheckpointingPlan => {
             let _pipeline = ctx
                 .store
                 .try_lock(&format!("autopilot-{}", transfer.task))?
@@ -104,7 +112,9 @@ fn advance(ctx: &Ctx, journal: &Journal) -> Result<()> {
                 .store
                 .try_lock(&format!("gate-{}", transfer.task))?
                 .context("Waiting for gate admission")?;
-            if transfer.disposition == Disposition::Saving {
+            if transfer.disposition == Disposition::CheckpointingPlan {
+                super::plan_checkpoint::finish(ctx, &transfer.task)?;
+            } else if transfer.disposition == Disposition::Saving {
                 super::continuation::finish_save(ctx, &transfer.task)?;
             } else {
                 super::continuation::finish_start(ctx, &transfer.task)?;

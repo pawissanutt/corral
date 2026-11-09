@@ -32,9 +32,15 @@ pub(crate) fn stop_for_handoff(ctx: &Ctx, container: &ContainerRef) -> Result<Ve
             crate::assistant::workflow::handoff::lifecycle::Disposition::Saving
                 | crate::assistant::workflow::handoff::lifecycle::Disposition::Saved
                 | crate::assistant::workflow::handoff::lifecycle::Disposition::TakingBack
+                | crate::assistant::workflow::handoff::lifecycle::Disposition::CheckpointingPlan
         ),
         "handoff_stop: no pending stop instruction"
     );
+    if transfer.disposition
+        == crate::assistant::workflow::handoff::lifecycle::Disposition::CheckpointingPlan
+    {
+        crate::assistant::workflow::handoff::plan_checkpoint::require(&ctx.store, &task, &journal)?;
+    }
     let (state, _) = snapshot(ctx, container)?;
     let n = state.binding.generation;
     ensure!(
