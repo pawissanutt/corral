@@ -82,7 +82,9 @@ a new thread with a fresh candidate identity and request key.
 Only the owner can mutate via the CLI. `AI_AGENT` or `PI_CODING_AGENT` set (even empty),
 `CORRAL_PM=1`, assistant shells and run-worktree cwds refuse `not_owner` without a write.
 List/show remain readable from agent/PM/run shells; assistant reads retain their normal session
-admission. Owner authors are derived from authenticated entry attribution, never an input flag.
+admission. Assistant mutation refusals use `not_owner` in JSON; without JSON they retain the
+normal `assistant_refused` diagnostic and exit 2. Owner authors are derived from authenticated
+entry attribution, never an input flag.
 Pi panel authorship is owner via an authenticated host-only surface, not the pane's agent.
 
 Refusals exit nonzero. With `--json`, stderr contains

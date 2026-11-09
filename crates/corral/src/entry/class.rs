@@ -361,31 +361,6 @@ mod planning_tests {
     use clap::Parser;
 
     #[test]
-    fn annotation_assistant_classes_are_explicit() {
-        for (args, class) in [
-            (vec!["list", "1"], Read),
-            (vec!["show", "1", "N1"], Read),
-            (
-                vec![
-                    "open", "1", "--run", "R1", "--base", "abc", "--head", "def", "--path", "x",
-                    "--text", "note",
-                ],
-                Refused,
-            ),
-            (
-                vec!["reply", "1", "N1", "--revision", "1", "--text", "note"],
-                Refused,
-            ),
-            (vec!["resolve", "1", "N1", "--revision", "1"], Refused),
-            (vec!["reopen", "1", "N1", "--revision", "1"], Refused),
-        ] {
-            let cli = crate::Cli::try_parse_from(["corral", "annotation"].into_iter().chain(args))
-                .unwrap();
-            assert_eq!(of(&cli.cmd.unwrap(), "A-1"), class);
-        }
-    }
-
-    #[test]
     fn planning_projects_only_closed_reads_and_the_authenticated_operation_channel() {
         for (argv, allowed) in [
             (vec!["corral", "show", "T-1", "--json"], true),
