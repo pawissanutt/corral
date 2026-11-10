@@ -40,6 +40,7 @@ test("assistant close verifies MCP/LSP exit before settling their admissions exa
     const mcp = McpSettingsSchema.parse({ servers: { docs: { projects: ["demo"], command: process.execPath,
       args: [peers[0]!.script], tools: { lookup: "read" } } } });
     writeFileSync(join(cwd, "fixture.ts"), "const def = 1;\n");
+    writeFileSync(join(cwd, "notes.txt"), "not a supported LSP target\n");
     host = await HostSession.create({ sdk, identity, cwd, agentDir: join(work, "agent"), model: "gpt-6.1-sol", client,
       events: new EventLog(1), network, modules, ui: "plain",
       capabilities: { catalog: 9, digest: "b".repeat(64), preset: "standard", enabled: ["todo", "mcp.enabled", "lsp"], mcp },
@@ -47,6 +48,32 @@ test("assistant close verifies MCP/LSP exit before settling their admissions exa
         args: [peers[1]!.script], extensions: { ".ts": "typescript" } } } } } as never },
       sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")) });
     await host.session.bindExtensions({}); await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
+    const transitions = () => corral.calls().flatMap(c => c.envelope.payload.kind === "assistant_boundary"
+      ? [c.envelope.payload.transition as { action: string; tool: string; id: string }] : []);
+    fixtureTransport().script([{ toolCalls: [
+      { callId: "missing", name: "lsp_definition", arguments: { path: "missing.ts", line: 1, column: 1 } },
+      { callId: "unsupported", name: "lsp_diagnostics", arguments: { path: "notes.txt" } },
+    ] }, { text: "targets refused" }]);
+    await host.session.prompt("Inspect rejected targets", { source: "interactive" });
+    expect(existsSync(peers[1]!.pid)).toBeFalse();
+    const toolStarts = transitions().filter(t => t.action === "start" && t.tool.startsWith("lsp_"));
+    expect(toolStarts.map(t => t.tool).sort()).toEqual(["lsp_definition", "lsp_diagnostics"]);
+    expect(transitions().filter(t => t.action === "settle" && toolStarts.some(start => start.id === t.id))).toHaveLength(2);
+    const rejected = host.session.messages.filter(m => m.role === "toolResult" && ["lsp_definition", "lsp_diagnostics"].includes(m.toolName));
+    expect(rejected).toHaveLength(2);
+    expect(rejected.every(m => m.role === "toolResult" && m.isError)).toBeTrue();
+    console.log("rejected targets: no LSP process or manager admission; both per-tool admissions settled");
+    // Exercise the actual no-executor session_shutdown path before a real LSP start.
+    const firstPid = Number(readFileSync(peers[0]!.pid, "utf8"));
+    const firstMcp = { pid: firstPid, start: startTimeOf(firstPid) }; owned.push(firstMcp);
+    expect(firstMcp.start).toBeDefined();
+    await host.session.reload();
+    expect(processGroup(firstMcp.pid, firstMcp.start).members).toBe(0);
+    expect(transitions().filter(t => t.action === "start" && t.tool === "lsp_startup")).toHaveLength(0);
+    expect(host.session.sessionManager.getEntries().filter(e => e.type === "custom" && e.customType === "corral_effect_lifecycle"
+      && (e.data as { admission: string }).admission.endsWith(":lsp"))).toHaveLength(0);
+    const afterReload = transitions().length;
+    console.log("empty LSP shutdown/reload: no lifetime admission, seal or settlement; owned MCP exited");
     fixtureTransport().script([{ toolCalls: [{ callId: "lsp", name: "lsp_definition", arguments: { path: "fixture.ts", line: 1, column: 7 } }] }, { text: "done" }]);
     await host.session.prompt("Inspect fixture", { source: "interactive" });
     for (const peer of peers) {
@@ -54,16 +81,17 @@ test("assistant close verifies MCP/LSP exit before settling their admissions exa
       const pid = Number(readFileSync(peer.pid, "utf8")); owned.push({ pid, start: startTimeOf(pid) });
       expect(owned.at(-1)!.start).toBeDefined();
     }
-    const transitions = () => corral.calls().flatMap(c => c.envelope.payload.kind === "assistant_boundary"
-      ? [c.envelope.payload.transition as { action: string; tool: string; id: string }] : []);
     const resourceIds = transitions().filter(t => t.action === "start" && ["mcp_connect", "lsp_startup"].includes(t.tool)).map(t => t.id);
-    expect(resourceIds).toHaveLength(2);
+    const retiredMcp = transitions().slice(0, afterReload).find(t => t.action === "settle" && t.id.endsWith(":mcp"))?.id;
+    expect(retiredMcp).toBeDefined();
+    const currentIds = resourceIds.filter(id => id !== retiredMcp);
+    expect(currentIds).toHaveLength(2);
     const call = client.call.bind(client), attempts: string[] = [];
-    const refused = resourceIds.find(id => id.endsWith(":mcp"));
+    const refused = currentIds.find(id => id.endsWith(":mcp"));
     client.call = async (...args) => {
       const transition = args[1].payload?.transition as { action?: string; id?: string } | undefined;
       if (transition?.action === "settle" && transition.id && resourceIds.includes(transition.id)) {
-        const child = owned[transition.id.endsWith(":mcp") ? 0 : 1]!;
+        const child = owned[transition.id.endsWith(":mcp") ? 1 : 2]!;
         expect(processGroup(child.pid, child.start).members).toBe(0);
         attempts.push(transition.id);
         if (transition.id === refused) throw new Error("fixture settlement CAS conflict; terminal proof retained");
@@ -72,17 +100,22 @@ test("assistant close verifies MCP/LSP exit before settling their admissions exa
     };
     await expect(host.close()).rejects.toThrow("managed resource shutdown/settlement incomplete");
     await expect(host.close()).rejects.toThrow("managed resource shutdown/settlement incomplete");
-    expect(attempts.sort()).toEqual(resourceIds.sort()); // no shutdown or settlement retry
+    expect(attempts.sort()).toEqual(currentIds.sort()); // no shutdown or settlement retry
     const settled = transitions().filter(t => t.action === "settle" && resourceIds.includes(t.id));
     expect(settled.map(t => t.id)).toEqual(resourceIds.filter(id => id !== refused));
     const journal = host.session.sessionManager.getEntries().filter(e => e.type === "custom" && e.customType === "corral_effect_lifecycle");
-    expect(journal.filter(e => e.type === "custom" && (e.data as { event: { action: string } }).event.action === "terminal")).toHaveLength(2);
+    const terminals = journal.flatMap(e => {
+      const data = (e as { data: { admission: string; event: { action: string } } }).data;
+      return data.event.action === "terminal" ? [data.admission] : [];
+    });
+    expect(terminals.sort()).toEqual([...resourceIds].sort()); // exactly one terminal per original admission
     const recovered = new PlanningPolicy({ read: async () => JSON.parse(readFileSync(join(work, "planning-boundary.json"), "utf8")),
       record: async () => { throw new Error("resumed policy must not synthesize settlement"); }, fence() {} });
     await recovered.refresh(); expect(recovered.restricted).toBeTrue();
     for (const child of owned) expect(processGroup(child.pid, child.start).members).toBe(0);
   } finally {
     // Fixture-only ownership cleanup, including the pre-fix close leak. Never guess a PID.
+    try { await host?.close(); } catch { /* retained CAS/unknown outcome, never retried as repair */ }
     for (const child of owned) if (startTimeOf(child.pid) === child.start) {
       try { process.kill(child.pid, "SIGKILL"); } catch { /* already exited */ }
     }

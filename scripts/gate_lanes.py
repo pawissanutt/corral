@@ -89,11 +89,17 @@ SLOW_OWNERS = {
 PI_SLOW = (
     ("test/browser.test.ts", "a cancelled call stops its browser and removes its profile",
      "T-768: load-sensitive live browser cancellation"),
+    ("src/extensions/lsp/lsp.test.ts", "LSP close joins concurrent preparation and retains positive not started evidence",
+     "T-932: preparation/close race with joined startup flights"),
+    ("test/assistant-planning-policy.test.ts", "LSP preparation shares pending admission and close cannot certify an unacknowledged startup",
+     "T-932: host admission acknowledgement/close race retains uncertainty"),
 )
 # Owners include the test support files that hold its synchronization and cleanup checks.
 PI_SLOW_OWNERS = (
     "packages/corral-pi/src/extensions/browser/", "packages/corral-pi/test/browser.test.ts",
     "packages/corral-pi/test/support/exits.ts", "packages/corral-pi/test/support/wait.ts",
+    "packages/corral-pi/src/extensions/lsp/", "packages/corral-pi/src/host/session.ts",
+    "packages/corral-pi/src/host/managed-effects.ts", "packages/corral-pi/test/assistant-planning-policy.test.ts",
 )
 
 

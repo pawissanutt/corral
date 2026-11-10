@@ -113,7 +113,9 @@ class PolicyTests(unittest.TestCase):
         self.assertTrue(gate_lanes.pi_slow(["packages/corral-pi/test/support/exits.ts"]))
         self.assertTrue(gate_lanes.pi_slow(["packages/corral-pi/test/support/wait.ts"]))
         self.assertFalse(gate_lanes.pi_slow(["packages/corral-pi/test/support/fake-browser.ts"]))
-        self.assertFalse(gate_lanes.pi_slow(["packages/corral-pi/src/host/session.ts", "docs/a.md"]))
+        self.assertTrue(gate_lanes.pi_slow(["packages/corral-pi/src/host/session.ts", "docs/a.md"]))
+        self.assertTrue(gate_lanes.pi_slow(["packages/corral-pi/src/extensions/lsp/client.ts"]))
+        self.assertFalse(gate_lanes.pi_slow(["docs/a.md"]))
         for prefix in gate_lanes.PI_SLOW_OWNERS:
             self.assertTrue((ROOT / prefix).exists(), prefix)
         for path, name, reason in gate_lanes.PI_SLOW:

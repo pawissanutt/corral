@@ -745,6 +745,9 @@ export class HostSession {
 
   private async resourceEvidence(id: string, event: Lifecycle): Promise<void> {
     if (!this.planning) return;
+    // Target validation may reject an LSP call without preparing any executor. Admit
+    // the manager only at its awaited preparation fence, before publication/spawn.
+    if (id === "lsp" && event.action === "prepare") await this.planningResource(id, "lsp_startup");
     const pending = this.planningResources.get(id);
     if (!pending) {
       if (event.action === "seal") return; // no admission in THIS manager lifetime
@@ -797,10 +800,6 @@ export class HostSession {
         if (action === "cancel") this.planReviews?.cancelOwned(receipt.result);
       }
       return result;
-    } };
-    else if (tool.name.startsWith("lsp_")) tool = { ...tool, execute: async (...args) => {
-      await this.planningResource("lsp", "lsp_startup");
-      return original.execute(...args);
     } };
     else if (tool.name === "bash" || tool.name === "job_start") tool = { ...tool, execute: async (...args) => {
       assistantShellBackend(this.assistantShell?.verifiedDrain === true, policy.snapshot());
