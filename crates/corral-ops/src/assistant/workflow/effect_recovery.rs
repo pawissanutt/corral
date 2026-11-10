@@ -7,6 +7,8 @@ use serde_json::{Value, json};
 
 use super::{boundary, effect_evidence as facts};
 
+#[path = "effect_association.rs"]
+mod association;
 #[path = "effect_recovery_authority.rs"]
 mod authority;
 #[path = "effect_journal.rs"]
@@ -141,6 +143,7 @@ pub struct Preview {
     pub version: u32,
     pub request: Request,
     pub context: Value,
+    pub blocked: Option<String>,
     pub boundary_sha256: String,
     pub boundary_version: Option<u64>,
     pub selected: Vec<Selected>,
@@ -265,6 +268,15 @@ pub fn outcome(store: &Store, assistant: &str, generation: u32, admission: &str)
 pub fn preview(store: &Store, request: &Request) -> Result<Preview> {
     request.validate()?;
     store.inspect_assistant_container(&request.assistant, |container, ended| {
+        let _task = request
+            .task
+            .as_deref()
+            .map(|id| {
+                store
+                    .try_lock(&Store::normalize_id(id)?)?
+                    .context("task writer busy; obtain a fresh preview later")
+            })
+            .transpose()?;
         let _profiles = request
             .task
             .as_ref()
@@ -283,7 +295,7 @@ fn context(
     request: &Request,
     container: &AssistantContainer,
     ended: bool,
-) -> Result<Value> {
+) -> Result<(Value, Option<String>)> {
     container.validate_protocol()?;
     let source = container
         .state
@@ -300,6 +312,13 @@ fn context(
         .as_ref()
         .context("source bound session missing; no executor identity inferred")?;
     let session = store.get_assistant(&request.assistant)?;
+    let (association, blocked) = match association::resolve(store, request, container) {
+        Ok(pin) => (serde_json::to_value(pin)?, None),
+        Err(error) => {
+            let reason = format!("{error:#}");
+            (json!({"complete":false,"blocked":reason}), Some(reason))
+        }
+    };
     let task = request
         .task
         .as_deref()
@@ -337,7 +356,7 @@ fn context(
     }).transpose()?;
     // Full immutable pins cover owner-input/grants, scratch, task driver/run/check/budget and
     // workflow changes without modifying any of them. Task writers share the dispatch lock.
-    Ok(
+    Ok((
         json!({"store":container.state.binding.store, "project":container.state.binding.project,
         "assistant":request.assistant,"source":{"generation":source.n,"bound":source.bound,"fenced":source.fenced,"assets_sha256":source.assets_sha256},
         "current_binding":container.state.binding,
@@ -347,9 +366,10 @@ fn context(
         "container_sha256":digest(container)?,
         "container_version":store.record_row("assistant-containers", &request.assistant)?.map(|r| r.version),
         "session_version":store.record_row("assistant-sessions", &request.assistant)?.map(|r| r.version),
-        "task":task_pin,
+        "task":task_pin,"association":association,
         "authority":"record-only; no drain, input, consent, driver or budget change"}),
-    )
+        blocked,
+    ))
 }
 
 fn proof(
@@ -430,7 +450,7 @@ fn build(
     ended: bool,
     staged: Option<&Preview>,
 ) -> Result<Preview> {
-    let context = context(store, request, container, ended)?;
+    let (context, blocked) = context(store, request, container, ended)?;
     let active = boundary::activities(store, &request.assistant)?;
     ensure!(
         active.len() <= 128,
@@ -521,6 +541,7 @@ fn build(
         version: 1,
         request: request.clone(),
         context,
+        blocked,
         boundary_sha256: digest(&active)?,
         boundary_version: store
             .record_row(boundary::LEDGER, &request.assistant)?
@@ -562,6 +583,11 @@ fn apply_confirmed(store: &Store, confirmation: Confirmation) -> Result<(Receipt
         "stale effect recovery preview; inspect a fresh exact proposal"
     );
     ensure!(
+        fresh.blocked.is_none(),
+        "effect recovery association blocked: {}",
+        fresh.blocked.as_deref().unwrap_or("unknown")
+    );
+    ensure!(
         fresh.selected.iter().all(|s| s.blocked.is_none()),
         "unknown selected executors cannot be reconciled"
     );
@@ -583,6 +609,15 @@ fn apply_confirmed(store: &Store, confirmation: Confirmation) -> Result<(Receipt
     let _board = store
         .try_lock("dispatch")?
         .context("assistant/task writer busy; no reconciliation applied")?;
+    let _task = request
+        .task
+        .as_deref()
+        .map(|id| {
+            store
+                .try_lock(&Store::normalize_id(id)?)?
+                .context("task writer busy; no reconciliation applied")
+        })
+        .transpose()?;
     let _profiles = request
         .task
         .as_ref()

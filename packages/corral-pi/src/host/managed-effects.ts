@@ -6,6 +6,7 @@ import type { ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { processGroup, startTimeOf } from "../extensions/jobs/runtime.ts";
 import { sha256Hex } from "../tools/corral.ts";
+import type { RpcOutcome } from "./managed-rpc.ts";
 
 export class OwnedStdio extends StdioTransport {
   private observedClose = false;
@@ -50,9 +51,11 @@ export type Executor = { kind: "preparing"; resource: string; config_sha256: str
 export interface Terminal {
   disposition: "completed" | "shutdown_verified" | "not_started";
   executor_sha256: string; exit_observed: boolean; group_clear: boolean; requests_terminal: boolean;
-  outcome: string; delivery: string; requests: string[];
+  outcome: string; delivery: string; requests: RpcOutcome[];
 }
 export type Lifecycle = { action: "prepare" | "bind"; instance: string; executor: Executor }
+  | { action: "rpc_prepared"; instance: string; id: string; method: string }
+  | { action: "rpc_unknown"; instance: string; reason: string; requests: RpcOutcome[] }
   | { action: "terminal"; instance: string; terminal: Terminal } | { action: "seal" };
 export type EvidenceSink = (event: Lifecycle) => Promise<void>;
 
@@ -65,9 +68,10 @@ export function executorDigest(executor: Executor): string {
   } } : executor.kind === "http" ? { ...common, connection: executor.connection } : common));
 }
 export function terminal(executor: Executor, disposition: Terminal["disposition"], outcome: string,
-  requests: string[] = []): Terminal {
+  requests: RpcOutcome[] = []): Terminal {
   return { disposition, executor_sha256: executorDigest(executor), exit_observed: executor.kind === "process",
-    group_clear: executor.kind === "process", requests_terminal: true, outcome, delivery: "lifecycle_journal", requests };
+    group_clear: executor.kind === "process", requests_terminal: requests.every(request => request.state !== "unknown"),
+    outcome, delivery: "lifecycle_journal", requests };
 }
 
 export class ManagedInstance {
@@ -126,7 +130,13 @@ export class ManagedInstance {
     }
   }
   // Caller must have observed the owned transport/child exit, not merely sent a signal.
-  async stopped(outcome: string, requests: string[] = []): Promise<void> {
+  async rpcPrepared(id: string, method: string): Promise<void> {
+    await this.emit({ action: "rpc_prepared", instance: this.token, id, method });
+  }
+  async rpcUnknown(reason: string, requests: RpcOutcome[]): Promise<void> {
+    await this.emit({ action: "rpc_unknown", instance: this.token, reason, requests });
+  }
+  async stopped(outcome: string, requests: RpcOutcome[] = []): Promise<void> {
     if (this.executor.kind === "process") await this.verifyProcess();
     if (this.executor.kind === "preparing") {
       if (!this.protected) return;

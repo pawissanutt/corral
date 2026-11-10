@@ -85,6 +85,19 @@ fn ancestor(
     anyhow::bail!("retained command is not on the exact model-call parent chain")
 }
 
+fn complete_ancestry(parents: &BTreeMap<String, Option<String>>, from: &str) -> Result<()> {
+    let mut cursor = Some(from.to_string());
+    let mut seen = BTreeSet::new();
+    while let Some(id) = cursor {
+        ensure!(
+            seen.len() < 16_384 && seen.insert(id.clone()),
+            "ambiguous/cyclic original parent chain"
+        );
+        cursor = parents.get(&id).context("original conversation parent chain is incomplete; excerpts cannot prove settlement")?.clone();
+    }
+    Ok(())
+}
+
 pub(super) fn verify(
     store: &Store,
     assistant: &str,
@@ -232,6 +245,10 @@ pub(super) fn verify(
             && value["message"]["role"] == "toolResult"
             && value["message"]["toolCallId"] == call
         {
+            ensure!(
+                value["message"]["toolName"] == "bash",
+                "legacy tool result contradicts the exact bash call identity"
+            );
             results.push(source());
         }
         ensure!(
@@ -248,6 +265,7 @@ pub(super) fn verify(
     }
     let model =
         model.context("exact model bash call unavailable (nested/legacy identity unknown)")?;
+    complete_ancestry(&parents, &model.id)?;
     ensure!(
         results.len() == 1,
         "exact retained tool result linkage missing/ambiguous"

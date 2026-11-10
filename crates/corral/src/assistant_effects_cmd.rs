@@ -15,7 +15,7 @@ pub struct Target {
     /// Original, fenced host generation (not the current host's generation)
     #[arg(long)]
     pub generation: u32,
-    /// Associated task to pin, including its current driver, contract and repair/check counters
+    /// Explicit matching associated task; omission requires a complete no-associated-task proof
     #[arg(long)]
     pub task: Option<String>,
     /// Exact full admission ID; repeat to select a proved subset

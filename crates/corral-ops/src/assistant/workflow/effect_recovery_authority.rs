@@ -48,6 +48,11 @@ pub fn confirm(store: &Store, proposal: &Preview, reason: &str) -> Result<Confir
         "effect recovery preview is stale"
     );
     ensure!(
+        proposal.blocked.is_none(),
+        "effect recovery association blocked: {}",
+        proposal.blocked.as_deref().unwrap_or("unknown")
+    );
+    ensure!(
         proposal.selected.iter().all(|s| s.blocked.is_none()),
         "selected unknown executors cannot be reconciled"
     );

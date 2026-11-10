@@ -32,6 +32,9 @@ impl Fixture {
             "app".into(),
             serde_json::from_value(json!({"path": "."})).unwrap(),
         );
+        if project.is_some() {
+            fx.ctx.store.save_config().unwrap();
+        }
         let session = fx
             .ctx
             .store

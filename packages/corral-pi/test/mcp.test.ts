@@ -76,14 +76,22 @@ test("configured stdio MCP connects and closes without the in-process network gu
 test("MCP close joins startup but never converts an unanswered remote request into shutdown proof", async () => {
   const peer = await mcpServer(), raw = globalThis.fetch.bind(globalThis);
   const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
-  let holdInitialize = true, loseReply = false;
+  let holdInitialize = true, loseReply = false, dispatched = 0;
+  let reply: "normal" | "task" | "malformed" | "rpc_error" = "normal";
   const settings = McpSettingsSchema.parse({ servers: { docs: { projects: ["demo"], url: peer.url, tools: { lookup: "read" } } } });
   const facts: import("../src/host/managed-effects.ts").Lifecycle[] = [];
   const send: typeof raw = async (input, init) => {
-    const message = typeof init?.body === "string" ? JSON.parse(init.body) as { method?: string } : {};
+    const message = typeof init?.body === "string" ? JSON.parse(init.body) as { method?: string; id?: number | string } : {};
     if (message.method === "initialize" && holdInitialize) { started.resolve(); await release.promise; }
+    if (message.id !== undefined) dispatched++;
     const result = await raw(input, init);
     if (message.method === "tools/call" && loseReply) throw new Error("fixture disconnected after remote dispatch; no reply observed");
+    if (message.method === "tools/call" && reply !== "normal") {
+      const payload = reply === "task" ? { result: { task: { taskId: "async-1", status: "working" } } }
+        : reply === "malformed" ? { result: { content: "not an array" } }
+        : { error: { code: -32602, message: "fixture rejected arguments" } };
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: message.id, ...payload }), { headers: { "content-type": "application/json" } });
+    }
     return result;
   };
   const access = new McpAccess(settings, "assistant", "demo", process.cwd(), send, async event => { facts.push(event); });
@@ -93,7 +101,22 @@ test("MCP close joins startup but never converts an unanswered remote request in
     expect(facts.filter(f => f.action === "terminal")).toHaveLength(1);
     await access.close(); expect(facts.filter(f => f.action === "terminal")).toHaveLength(1);
     await expect(access.refresh()).rejects.toThrow("MCP session is closed");
-    holdInitialize = false; loseReply = true;
+    holdInitialize = false;
+    // Identity publication is an async pre-dispatch fence. Closing during it must join
+    // that work and positively record not-started, never send the queued request later.
+    const preparing = Promise.withResolvers<void>(), permit = Promise.withResolvers<void>();
+    const fenced: import("../src/host/managed-effects.ts").Lifecycle[] = [];
+    const before = dispatched;
+    const guarded = new McpAccess(settings, "assistant", "demo", process.cwd(), send, async event => {
+      fenced.push(event);
+      if (event.action === "rpc_prepared") { preparing.resolve(); await permit.promise; }
+    });
+    const queued = guarded.refresh(); await preparing.promise;
+    const stopped = guarded.close(); permit.resolve(); await queued; await stopped;
+    expect(dispatched).toBe(before);
+    const terminal = fenced.find(event => event.action === "terminal");
+    expect(terminal?.action === "terminal" && terminal.terminal.requests[0]?.state).toBe("not_started");
+    loseReply = true;
     const unknown: import("../src/host/managed-effects.ts").Lifecycle[] = [];
     const next = new McpAccess(settings, "assistant", "demo", process.cwd(), send, async event => { unknown.push(event); });
     await next.refresh();
@@ -101,6 +124,23 @@ test("MCP close joins startup but never converts an unanswered remote request in
     await expect(next.close()).rejects.toThrow("ownership retained");
     await expect(next.close()).rejects.toThrow("ownership retained");
     expect(unknown.some(f => f.action === "terminal")).toBeFalse();
+    loseReply = false;
+    for (const mode of ["task", "malformed", "rpc_error"] as const) {
+      reply = mode;
+      const outcomes: import("../src/host/managed-effects.ts").Lifecycle[] = [];
+      const variant = new McpAccess(settings, "assistant", "demo", process.cwd(), send, async event => { outcomes.push(event); });
+      await variant.refresh();
+      if (mode === "task") await variant.call("docs", "lookup", {});
+      else await expect(variant.call("docs", "lookup", {})).rejects.toThrow();
+      if (mode === "rpc_error") { await variant.close(); expect(outcomes.filter(f => f.action === "terminal")).toHaveLength(1); }
+      else {
+        await expect(variant.close()).rejects.toThrow("ownership retained");
+        expect(outcomes.some(f => f.action === "terminal")).toBeFalse();
+        const retained = outcomes.find(event => event.action === "rpc_unknown");
+        expect(retained?.action === "rpc_unknown" && retained.requests.some(request => request.method === "tools/call" && request.state === "unknown")).toBeTrue();
+        if (mode === "task") expect(retained?.action === "rpc_unknown" && retained.requests.find(request => request.method === "tools/call")?.remote_task_id).toBe("async-1");
+      }
+    }
   } finally { release.resolve(); await peer.close(); }
 });
 

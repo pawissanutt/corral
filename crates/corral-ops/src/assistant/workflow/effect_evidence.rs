@@ -90,7 +90,72 @@ pub struct Terminal {
     pub requests_terminal: bool,
     pub outcome: String,
     pub delivery: String,
-    pub requests: Vec<String>,
+    pub requests: Vec<RpcOutcome>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RpcState {
+    ValidatedResult,
+    RpcError,
+    NotStarted,
+    Unknown,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RpcOutcome {
+    pub id: String,
+    pub method: String,
+    pub state: RpcState,
+    pub reply_sha256: Option<String>,
+    pub error_code: Option<i64>,
+    pub delivery: String,
+    pub remote_task_id: Option<String>,
+}
+fn rpc_identity(id: &str, method: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 256
+        && !id.chars().any(char::is_control)
+        && !method.is_empty()
+        && method.len() <= 256
+        && !method.chars().any(char::is_control)
+}
+impl RpcOutcome {
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            rpc_identity(&self.id, &self.method)
+                && self.reply_sha256.as_ref().is_none_or(|value| hash(value))
+                && self.remote_task_id.as_ref().is_none_or(|id| !id.is_empty()
+                    && id.len() <= 256
+                    && !id.chars().any(char::is_control))
+                && (self.remote_task_id.is_none() || self.state == RpcState::Unknown),
+            "invalid owned RPC identity/response digest"
+        );
+        match self.state {
+            RpcState::ValidatedResult => ensure!(
+                self.reply_sha256.is_some()
+                    && self.error_code.is_none()
+                    && self.delivery == "adapter_observed",
+                "validated RPC result lacks terminal evidence"
+            ),
+            RpcState::RpcError => ensure!(
+                self.reply_sha256.is_some()
+                    && self.error_code.is_some()
+                    && self.delivery == "adapter_observed",
+                "RPC error lacks matching terminal evidence"
+            ),
+            RpcState::NotStarted => ensure!(
+                self.reply_sha256.is_none()
+                    && self.error_code.is_none()
+                    && self.delivery == "runtime_fence",
+                "RPC not-started requires a positive runtime fence"
+            ),
+            RpcState::Unknown => ensure!(
+                self.error_code.is_none() && self.delivery == "unknown",
+                "unknown RPC result cannot be labelled delivered"
+            ),
+        }
+        Ok(())
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -105,6 +170,14 @@ pub enum Disposition {
 pub struct Instance {
     pub executor: Executor,
     pub terminal: Option<Terminal>,
+    pub requests: BTreeMap<String, String>,
+    pub failure: Option<RpcFailure>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RpcFailure {
+    pub reason: String,
+    pub requests: Vec<RpcOutcome>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -131,6 +204,16 @@ pub enum Lifecycle {
     Bind {
         instance: String,
         executor: Executor,
+    },
+    RpcPrepared {
+        instance: String,
+        id: String,
+        method: String,
+    },
+    RpcUnknown {
+        instance: String,
+        reason: String,
+        requests: Vec<RpcOutcome>,
     },
     Terminal {
         instance: String,
@@ -210,12 +293,32 @@ impl Evidence {
                     && !terminal.outcome.is_empty()
                     && !terminal.delivery.is_empty()
                     && terminal.delivery.len() <= 128
-                    && terminal.requests.len() <= 128
-                    && terminal
+                    && terminal.requests.len() <= 128,
+                "terminal proof identity/result mismatch"
+            );
+            let mut request_ids = std::collections::BTreeSet::new();
+            for request in &terminal.requests {
+                request.validate()?;
+                ensure!(
+                    instance.requests.get(&request.id) == Some(&request.method),
+                    "RPC identity was not durably prepared before dispatch"
+                );
+                ensure!(
+                    request_ids.insert(&request.id),
+                    "duplicate RPC identity in executor proof"
+                );
+            }
+            ensure!(
+                request_ids.len() == instance.requests.len(),
+                "terminal proof omits owned RPC identities"
+            );
+            ensure!(
+                terminal.requests_terminal
+                    == terminal
                         .requests
                         .iter()
-                        .all(|r| !r.is_empty() && r.len() <= 256),
-                "terminal proof identity/result mismatch"
+                        .all(|r| r.state != RpcState::Unknown),
+                "RPC terminal aggregate contradicts its request outcomes"
             );
             match (&instance.executor, &terminal.disposition) {
                 (Executor::Preparing { .. }, Disposition::NotStarted) => ensure!(
@@ -231,7 +334,7 @@ impl Evidence {
                 ),
                 (Executor::Http { .. }, Disposition::Completed | Disposition::ShutdownVerified) => {
                     ensure!(
-                        terminal.requests_terminal,
+                        terminal.requests_terminal && instance.failure.is_none(),
                         "remote request outcome unknown; disconnect is not terminal proof"
                     )
                 }
@@ -304,6 +407,8 @@ pub(super) fn transition(evidence: &mut Evidence, event: Lifecycle) -> Result<()
                 Instance {
                     executor,
                     terminal: None,
+                    requests: BTreeMap::new(),
+                    failure: None,
                 },
             );
         }
@@ -321,6 +426,59 @@ pub(super) fn transition(evidence: &mut Evidence, event: Lifecycle) -> Result<()
                 "executor identity cannot be replaced"
             );
             prior.executor = executor;
+        }
+        Lifecycle::RpcPrepared {
+            instance,
+            id,
+            method,
+        } => {
+            let prior = evidence
+                .instances
+                .get_mut(&instance)
+                .context("unknown RPC executor instance")?;
+            ensure!(
+                !matches!(prior.executor, Executor::Preparing { .. })
+                    && prior.terminal.is_none()
+                    && prior.failure.is_none()
+                    && rpc_identity(&id, &method)
+                    && prior.requests.len() < 128
+                    && !prior.requests.contains_key(&id),
+                "RPC identity must be prepared exactly once before dispatch"
+            );
+            prior.requests.insert(id, method);
+        }
+        Lifecycle::RpcUnknown {
+            instance,
+            reason,
+            requests,
+        } => {
+            let prior = evidence
+                .instances
+                .get_mut(&instance)
+                .context("unknown RPC executor instance")?;
+            ensure!(
+                prior.terminal.is_none()
+                    && !reason.trim().is_empty()
+                    && reason.len() <= 1024
+                    && requests.len() == prior.requests.len()
+                    && requests.len() <= 128,
+                "invalid unknown RPC observation"
+            );
+            let mut ids = std::collections::BTreeSet::new();
+            for request in &requests {
+                request.validate()?;
+                ensure!(
+                    ids.insert(&request.id)
+                        && prior.requests.get(&request.id) == Some(&request.method),
+                    "unknown RPC observation changes owned identities"
+                );
+            }
+            let failure = RpcFailure { reason, requests };
+            ensure!(
+                prior.failure.as_ref().is_none_or(|old| old == &failure),
+                "unknown RPC observation is immutable"
+            );
+            prior.failure = Some(failure);
         }
         Lifecycle::Terminal { instance, terminal } => {
             let prior = evidence

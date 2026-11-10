@@ -76,6 +76,16 @@ pub(super) fn require_prefix(
             );
             earlier.executor = later.executor.clone();
         }
+        for (id, method) in &earlier.requests {
+            ensure!(
+                later.requests.get(id) == Some(method),
+                "canonical/journal RPC ownership contradicts"
+            );
+        }
+        earlier.requests = later.requests.clone();
+        if earlier.failure.is_none() {
+            earlier.failure = later.failure.clone();
+        }
         if earlier.terminal.is_none() {
             earlier.terminal = later.terminal.clone();
         }
