@@ -57,6 +57,11 @@ export function planningState(snapshot: unknown): PlanningState {
     ...(state.boundary ? { boundary: state.boundary as PlanningState["boundary"] } : {}) };
 }
 
+export type AdmissionHandle = (() => Promise<void>) & {
+  readonly id: string;
+  evidence(event: import("./managed-effects.ts").Lifecycle): Promise<void>;
+};
+
 export class PlanningPolicy {
   private state: PlanningState = { phase: "recovering" };
   private fenced = false;
@@ -107,7 +112,7 @@ export class PlanningPolicy {
   }
 
   /** Called at actual dispatch, AFTER async permission dialogs and every tool_call handler. */
-  async begin(id: string, tool: string): Promise<() => Promise<void>> {
+  async begin(id: string, tool: string): Promise<AdmissionHandle> {
     return this.ordered(async () => {
       await this.load();
       const reason = this.refusal(tool);
@@ -120,11 +125,12 @@ export class PlanningPolicy {
         // Lost acknowledgements are not absence. Leave the local/canonical identity visible.
         this.fenced = true; this.port.fence(); throw error;
       }
-      return () => this.ordered(async () => {
+      let settlement: Promise<void> | undefined;
+      return Object.assign(() => settlement ??= this.ordered(async () => {
         const settled = await this.port.record({ action: "settle", id: key, uncertain: false });
         this.active.delete(key);
         this.accept(settled);
-      });
+      }), { id: key, evidence: (event: import("./managed-effects.ts").Lifecycle) => this.record({ action: "evidence", id: key, event }) });
     });
   }
   async execute<T>(name: string, input: Record<string, unknown>, id: string, effect: () => Promise<T>): Promise<T> {

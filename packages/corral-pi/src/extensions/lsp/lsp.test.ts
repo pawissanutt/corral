@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 import { FrameDecoder, encodeFrame } from "./framing.ts";
+import { processGroup } from "../jobs/runtime.ts";
+import type { Lifecycle } from "../../host/managed-effects.ts";
 import { capabilityRegistry } from "../registry.ts";
 import { DEFAULT_SERVERS, LSP_TOOL_NAMES, LspError, type LspServerSpec, MAX_ITEMS, MAX_OUTPUT_BYTES, configuredServers, lspToolkit } from "./index.ts";
 
@@ -225,8 +227,19 @@ test("a server that exits mid-request is lsp_server_exited, and the next call st
 });
 
 test("an answer over the frame limit is lsp_protocol_error, not unbounded memory", async () => {
-  const made = lspToolkit({ root, servers: [fake("--oversize-definition")], limits: { ...LIMITS, maxFrameBytes: 32 * 1024 } });
+  const facts: Lifecycle[] = [];
+  const made = lspToolkit({ root, servers: [fake("--oversize-definition")], limits: { ...LIMITS, maxFrameBytes: 32 * 1024 },
+    ...(process.platform === "linux" ? { evidence: async (event: Lifecycle) => {
+      if (event.action === "terminal") {
+        const binding = facts.find(f => f.action === "bind");
+        if (!binding || binding.action !== "bind" || binding.executor.kind !== "process") throw new Error("process was not bound");
+        expect(processGroup(binding.executor.process.pid, binding.executor.process.start_time).members).toBe(0);
+      }
+      facts.push(event);
+    } } : {}) });
   toolkits.push(made);
   const error = await failure(call(made, "lsp_definition", { path: "src/main.fk", line: 2, column: 5 }));
   expect(error.code).toBe("lsp_protocol_error");
+  await made.shutdown();
+  expect(facts.filter(f => f.action === "terminal")).toHaveLength(process.platform === "linux" ? 1 : 0);
 });

@@ -163,6 +163,7 @@ async function main(): Promise<void> {
   async function restartAssistant(code: number): Promise<void> {
     await physicalTerminal?.drainInput(1000);
     terminal?.stop();
+    await session.close();
     await session.runtime.dispose();
     await session.drained();
     await bridge.close();

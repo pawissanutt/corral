@@ -6,6 +6,7 @@ use corral_core::{CommentAuthor, Origin};
 
 use crate::agent_cmd::AgentCmd;
 use crate::assistant_cmd::{AssistantCmd, PermissionsCmd, ScratchCmd};
+use crate::assistant_effects_cmd::EffectsCmd;
 use crate::attention_cmd::AttentionCmd;
 use crate::automation_cmd::AutomationCmd;
 use crate::completion_cmd::{CriteriaCmd, EvidenceCmd};
@@ -43,6 +44,13 @@ fn read_unless(mutates: bool) -> CommandClass {
     if mutates { Refused } else { Read }
 }
 
+fn effect_read(cmd: &EffectsCmd) -> bool {
+    match cmd {
+        EffectsCmd::Preview(_) | EffectsCmd::Receipt { .. } | EffectsCmd::Outcome { .. } => true,
+        EffectsCmd::Apply { .. } => false,
+    }
+}
+
 fn file_if_own(own: bool) -> CommandClass {
     if own { File } else { Refused }
 }
@@ -53,7 +61,8 @@ pub fn planning_safe(cmd: &Cmd) -> bool {
     matches!(cmd,
         Cmd::Agent(args) if matches!(args.cmd, AgentCmd::Call { .. }))
         || matches!(cmd, Cmd::Show { .. } | Cmd::List { .. })
-        || matches!(cmd, Cmd::Assistant(args) if matches!(args.cmd, AssistantCmd::Show { .. } | AssistantCmd::List { .. }))
+        || matches!(cmd, Cmd::Assistant(args) if matches!(args.cmd, AssistantCmd::Show { .. } | AssistantCmd::List { .. })
+            || matches!(&args.cmd, AssistantCmd::Effects(effects) if effect_read(&effects.cmd)))
 }
 
 /// Classifies `cmd` for the assistant whose own session ID is `session`.
@@ -84,6 +93,7 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
         Cmd::Assistant(args) => match &args.cmd {
             AssistantCmd::List { .. } | AssistantCmd::Show { .. } => Read,
             AssistantCmd::Summary { id, .. } => file_if_own(id == session),
+            AssistantCmd::Effects(args) => read_unless(!effect_read(&args.cmd)),
             AssistantCmd::Create { .. } | AssistantCmd::End { .. } | AssistantCmd::Handoff(_) => {
                 Refused
             }

@@ -87,7 +87,8 @@ import { memoryContext } from "./memory.ts";
 import { transcriptPreview } from "./transcript-preview.ts";
 import { AssistantRelink } from "./assistant-relink.ts";
 import { AssistantResume } from "./assistant-resume.ts";
-import { PlanningPolicy, type PlanningState, type WorkflowExpected } from "./planning-policy.ts";
+import { PlanningPolicy, type AdmissionHandle, type PlanningState, type WorkflowExpected } from "./planning-policy.ts";
+import { ManagedEffects, type Lifecycle } from "./managed-effects.ts";
 import { PlanReviews, reviewAssociation } from "./plan-review.ts";
 import { type ConnectionBinding, admitConnection, parseBinding } from "./connections.ts";
 import { CONNECTIONS, type ConnectionId, resolveConnection } from "../auth/connections.ts";
@@ -334,7 +335,8 @@ export class HostSession {
   private readonly settings: ReturnType<typeof restrictedSettings> & ReturnType<typeof compactionSettings>;
   private readonly controls: HostControls;
   private readonly hooks: Hooks | undefined;
-  private readonly additionalLsp: LspToolkit | undefined;
+  private additionalLsp: LspToolkit | undefined;
+  private readonly additionalLspFactory: (() => LspToolkit) | undefined;
   private readonly permissions: BashPermissions | undefined;
   private readonly checkpoints: Checkpoints | undefined;
   private readonly auxiliary: AuxiliaryRuntime | undefined;
@@ -348,11 +350,17 @@ export class HostSession {
   /** Continuation rechecks, kept off `calls` so lifecycle reports and budget records never wait on one. */
   private continuations: Promise<void> = Promise.resolve();
   private closing = false;
+  private closeResult: Promise<void> | undefined;
+  private readonly managedEffects = new ManagedEffects(
+    resource => this.resourceEvidence(resource, { action: "seal" }),
+    resource => this.releasePlanningResource(resource),
+  );
   private readonly relink: AssistantRelink | undefined;
   private readonly resume: AssistantResume | undefined;
   private readonly planning: PlanningPolicy | undefined;
   private planningRead = 0;
-  private readonly planningResources = new Map<string, Promise<() => Promise<void>>>();
+  private readonly planningResources = new Map<string, Promise<AdmissionHandle>>();
+  private readonly resourcePublicationFailures = new Map<string, unknown[]>();
 
   readonly provider: ProviderId;
 
@@ -500,7 +508,9 @@ export class HostSession {
     const lspEnabled = !options.capabilities || options.capabilities.catalog < 5
       ? options.identity.role === "worker" : options.capabilities.enabled.includes("lsp");
     if (lspEnabled && options.identity.role !== "worker") {
-      this.additionalLsp = lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp), registerCapability });
+      this.additionalLspFactory = () => lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp), registerCapability,
+        ...(this.planning ? { evidence: (event: Lifecycle) => this.resourceEvidence("lsp", event) } : {}) });
+      this.additionalLsp = this.additionalLspFactory();
     }
     this.jobs = this.jobRuntime(registerCapability);
     this.assistantShell = this.planning ? new AssistantShell({
@@ -623,7 +633,11 @@ export class HostSession {
         this.dialogPi.sendUserMessage(message, { deliverAs: "followUp" });
         return message;
       }, this.ownerQuestions, () => this.questionUi?.busy === true)] : []),
-      ...(this.additionalLsp?.tools ?? []), ...(webEnabled && options.network.web ? webTools(options.network.web,
+      ...(this.additionalLsp?.tools ?? []).map(tool => ({ ...tool, execute: (...args: Parameters<ToolDefinition["execute"]>) => {
+        const current = this.additionalLsp?.tools.find(candidate => candidate.name === tool.name);
+        if (!current) throw new Error("LSP runtime unavailable; no effect started");
+        return current.execute(...args);
+      } })), ...(webEnabled && options.network.web ? webTools(options.network.web,
         subscriptionSearch ? async (id, query, count, signal) => {
           if (!this.auxiliary) throw new Error("subscription search is disabled");
           return (await this.auxiliary.run("web_search", id, JSON.stringify({ query, count }), signal)).text;
@@ -719,12 +733,47 @@ export class HostSession {
 
   private async planningResource(id: string, tool: string): Promise<void> {
     if (!this.planning) return;
+    if (id === "mcp" || id === "lsp") this.managedEffects.requireOpen(id);
     let pending = this.planningResources.get(id);
     if (!pending) {
       pending = this.planning.begin(`${this.options.identity.generation}:${id}`, tool);
       this.planningResources.set(id, pending);
     }
     await pending;
+    if (id === "mcp" || id === "lsp") this.managedEffects.requireOpen(id);
+  }
+
+  private async resourceEvidence(id: string, event: Lifecycle): Promise<void> {
+    if (!this.planning) return;
+    const pending = this.planningResources.get(id);
+    if (!pending) {
+      if (event.action === "seal") return; // no admission in THIS manager lifetime
+      throw new Error("managed executor has no local admission; proof publication refused");
+    }
+    const handle = await pending;
+    this.options.sessionManager.appendCustomEntry("corral_effect_lifecycle", {
+      version: 1, assistant: this.options.identity.assistant, generation: this.options.identity.generation,
+      session_id: this.sessionId(), admission: handle.id, event,
+    });
+    try { await handle.evidence(event); }
+    catch (error) {
+      if (event.action !== "terminal" && event.action !== "seal") throw error;
+      const failures = this.resourcePublicationFailures.get(id) ?? [];
+      failures.push(error); this.resourcePublicationFailures.set(id, failures);
+      // Terminal observation is retained even when publication lost a CAS. Allow every
+      // owning executor to finish and journal its aggregate seal, but never release it.
+    }
+    const failures = this.resourcePublicationFailures.get(id);
+    if (event.action === "seal" && failures) {
+      throw new AggregateError(failures, "retained terminal proof needs supported metadata reconciliation");
+    }
+  }
+
+  private stopManagedResources(): Promise<void> {
+    return this.managedEffects.stopAll([
+      ["mcp", async () => { await this.mcp?.close(); }],
+      ["lsp", async () => { await this.additionalLsp?.shutdown(); }],
+    ]);
   }
 
   private async releasePlanningResource(id: string): Promise<void> {
@@ -767,6 +816,7 @@ export class HostSession {
 
   private async planningMcp(): Promise<void> {
     if (!this.mcp) return;
+    if (this.mcp.state().configured === false) { await this.mcp.refresh(); return; }
     await this.planningResource("mcp", "mcp_connect");
     await this.mcp.refresh();
   }
@@ -790,10 +840,7 @@ export class HostSession {
     if (!this.planning || !this.bound) throw new Error("planning requires a bound assistant");
     requireVerifiedPlanningDrain(this.assistantShell?.verifiedDrain === true); // before the mode/fence changes
     const result = await this.planning.enter(input, async () => {
-      await this.mcp?.close();
-      await this.releasePlanningResource("mcp");
-      await this.additionalLsp?.shutdown();
-      await this.releasePlanningResource("lsp");
+      await this.stopManagedResources();
       await this.jobs?.shutdown();
       await this.assistantShell?.shutdown();
     });
@@ -1003,24 +1050,24 @@ export class HostSession {
       });
     }
     if (this.additionalLsp) {
+      if (this.managedEffects.newLifetime("lsp")) this.additionalLsp = this.additionalLspFactory?.();
       pi.on("session_start", () => { if (!policy) void this.additionalLsp?.warm(); });
       pi.on("session_shutdown", async () => {
-        await this.additionalLsp?.shutdown();
-        await this.releasePlanningResource("lsp");
+        await this.managedEffects.stop("lsp", async () => { await this.additionalLsp?.shutdown(); });
       });
     }
     const settings = this.options.capabilities?.mcp;
     const search = this.options.capabilities?.enabled.includes("tool_search") === true;
     if (settings) {
+      this.managedEffects.newLifetime("mcp");
       this.mcp = new McpAccess(settings, this.options.identity.role, this.options.identity.project,
-        this.options.cwd, this.options.network.mcp);
+        this.options.cwd, this.options.network.mcp, this.planning ? event => this.resourceEvidence("mcp", event) : undefined);
       if (!policy) await this.mcp.refresh();
       else if (this.bound && !policy.restricted) await this.planningMcp();
       this.mcp.attach(pi, search);
       const access = this.mcp;
       pi.on("session_shutdown", async () => {
-        await access.close();
-        await this.releasePlanningResource("mcp");
+        await this.managedEffects.stop("mcp", () => access.close());
       });
     }
     if (search) pi.registerTool(toolSearch(pi, (name) => this.loadout.includes(name)));
@@ -1449,8 +1496,15 @@ export class HostSession {
     await this.code?.notified();
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
     this.closing = true;
+    // Close both resource admission barriers synchronously, even if another cleanup fails.
+    const resources = this.stopManagedResources();
+    void resources.catch(() => {}); // observed below, without an early unhandled rejection
+    return this.closeResult ??= this.closeOwned(resources);
+  }
+
+  private async closeOwned(resources: Promise<void>): Promise<void> {
     this.questionUi?.close();
     this.commands?.pause();
     this.unsubscribePanels?.();
@@ -1465,7 +1519,7 @@ export class HostSession {
     await this.jobs?.shutdown();
     await this.assistantShell?.close();
     await aborted;
-    await this.mcp?.close();
+    await resources;
     this.session.dispose();
     await released;
   }

@@ -20,10 +20,10 @@ use serde_json::{Value, json};
 
 use super::{Expected, bad, compare, prepare_entry, summary};
 
-const LEDGER: &str = "assistant-effect-admission";
+pub(super) const LEDGER: &str = "assistant-effect-admission";
 const MAX_ACTIVE: usize = 128;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Activity {
     pub id: String,
@@ -52,6 +52,10 @@ pub enum BoundaryAction {
     Settle {
         id: String,
         uncertain: bool,
+    },
+    Evidence {
+        id: String,
+        event: super::effect_evidence::Lifecycle,
     },
 }
 
@@ -253,6 +257,9 @@ pub fn apply(
                 uncertain: false,
             });
             store.save_record(LEDGER, session, &active)?;
+        }
+        BoundaryAction::Evidence { id, event } => {
+            super::effect_evidence::publish(store, session, container, generation, &id, event)?;
         }
         BoundaryAction::Settle { id, uncertain } => {
             let mut active = activities(store, session)?;

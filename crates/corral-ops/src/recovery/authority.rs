@@ -39,9 +39,14 @@ pub(super) fn require_owner_for(ctx: &Ctx, interaction: OwnerInteraction) -> Res
 }
 
 pub(super) fn require_owner(ctx: &Ctx) -> Result<()> {
+    require_owner_store(&ctx.store)
+}
+
+/// Shared ceremony fence only; this does not grant any recovery operation or waiver.
+pub(crate) fn require_owner_store(store: &corral_core::Store) -> Result<()> {
     require_unmanaged()?;
     let cwd = std::env::current_dir().context("reading recovery owner directory")?;
-    crate::automation_controls::require_owner_entry(&ctx.store, &cwd, false, false)?;
+    crate::automation_controls::require_owner_entry(store, &cwd, false, false)?;
     // A pane binding is not an owner interaction. Refuse even if environment role flags vanished.
     // The CLI ceremony is deliberately outside herdr: a pane may be a planner/reviewer or
     // a PM with no task, and absent/contradictory role metadata is not owner authority.

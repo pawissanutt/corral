@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { ManagedEffects } from "../src/host/managed-effects.ts";
 import { PlanningPolicy, planningBookkeeping, planningState } from "../src/host/planning-policy.ts";
 
 const workflow = (phase = "planning") => ({ version: 1, workflow: "W1", state_revision: 1,
@@ -64,4 +65,12 @@ test("lost start acknowledgement and old-generation activity remain fenced on re
   await expect(ordinary.execute("write", {}, "uncertain", async () => { writes++; })).rejects.toThrow("lost acknowledgement");
   expect(ordinary.restricted).toBeTrue();
   expect(writes).toBe(0);
+  let shutdowns = 0, seals = 0, settlements = 0;
+  const resources = new ManagedEffects(async () => { seals++; }, async () => { settlements++; });
+  const failed = () => resources.stop("lsp", async () => { shutdowns++; throw new Error("owned group exit unproved"); });
+  await expect(failed()).rejects.toThrow("unproved");
+  await expect(failed()).rejects.toThrow("unproved");
+  expect(() => resources.requireOpen("lsp")).toThrow("stopped");
+  expect(() => resources.newLifetime("lsp")).toThrow("unknown");
+  expect({ shutdowns, seals, settlements }).toEqual({ shutdowns: 1, seals: 0, settlements: 0 });
 });

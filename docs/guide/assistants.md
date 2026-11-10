@@ -298,6 +298,70 @@ wakes and usage references. Pi session files live under `.corral/agent/sessions/
 `summary --file` replaces the Markdown body, using its first line as the frontmatter
 summary. Ending is idempotent.
 
+### Retained effect admissions after host loss
+
+A fenced/dead host is **not** a drained executor. Inspect stale admissions using the
+read-only, JSON `effects` service, selecting exact full admission IDs and the original
+fenced generation (never substituting a successor's generation):
+
+```sh
+corral assistant effects preview A-1 --task T-42 --generation 1 --admission '7:exact-tool-call-id' --request incident-1
+corral assistant effects receipt A-1 incident-1
+corral assistant effects outcome A-1 --generation 1 --admission '7:exact-tool-call-id'
+```
+
+The preview pins the original/current host bindings (including unbound), source session,
+workflow or explicit absence, task contract/current run/driver, scratch, repair history,
+complete admission digest/version, selected executor proofs and every retained blocker.
+It is a CAS proposal, not authorization. Unselected or unproved MCP/LSP rows remain active.
+A successful bash reconciliation cannot prove another executor stopped.
+
+Version-1 executor evidence is stored separately from legacy admission rows. Local process
+proof binds an instance, configuration digest, PID, kernel start identity and boot identity;
+it requires observed exit and actual owned-group clearance, not just a sent signal. HTTP
+MCP requires terminal matching requests as well as transport closure. Cancellation, timeout
+or a lost remote reply stays unknown, even for a nominally read-only tool. Earlier effect
+outcome and executor quiescence are separate: shutdown never means an earlier effect was
+successful, undone or safe to replay. Unsupported platforms/evidence versions fail closed.
+
+Managed shutdown closes startup admission, joins owned work and attempts all instances.
+It journals terminal facts before canonical proof/settlement. Failed shutdown keeps its
+ownership handles; failed bookkeeping keeps its proof and admission. Repeated disposal
+reuses that outcome rather than repeating shutdown as ledger repair. A new empty manager
+cannot clear an old manager's resources. A complete retained original-host lifecycle
+journal can recover lost proof publication; incomplete or contradictory journals cannot.
+The narrow legacy bash verifier reads the recorded canonical conversation and requires
+unambiguous model-call/job/parent-chain, exit, group-clear and consumed-delivery evidence.
+It does not accept supplied excerpts, summaries, PIDs, filesystem paths or assertions.
+Evidence is streamed and bounded; truncation/unavailability is an explicit blocker.
+
+Only an unmanaged owner terminal outside herdr can apply an inspected proposal:
+
+```sh
+corral assistant effects apply A-1 --task T-42 --generation 1 --admission '7:exact-tool-call-id' --request incident-1 --digest SHA256 --reason 'Reconcile retained terminal evidence only'
+```
+
+This redisplays the complete proposal and requires a nonblank reason and an exact
+assistant/task/digest-bound typed challenge on the controlling terminal. EOF, redirected
+stdin, saved/managed agent identity, stale context or cancellation authorizes nothing.
+There is no `--yes`, JSON confirmation, model/PM tool or prior-consent bypass.
+
+Apply atomically removes **only** selected proved rows and publishes immutable per-row
+outcomes, a keyed receipt and audit/proof references. It performs no executor operations
+and changes no input, consent, workflow epoch, driver, task checks or repair/diagnostic
+allowance. Identical request or already-reconciled-row replay is acknowledgement only;
+use receipt lookup after uncertain acknowledgement, never repeat the original effect.
+Changed source/current generation, evidence, task/driver, admission version or another
+preview pin requires a fresh preview. Reconciliation is never `handoff_drain`: normal
+handoff still requires its actual current-host attestation and all other authority checks.
+
+For the A-77 incident, any future owner application additionally requires reviewed,
+landed, deployed compatible CLI/host assets and a fresh exact A-77/T-924 preview. T-855's
+startup repair is an independent reviewed/deployed prerequisite for a later restart;
+this service does not restart anything. Original takeover approval, history and scratch
+remain intact. T-924 keeps its two spent repairs and only its separately approved extra
+third cycle. Missing historical MCP/LSP proof may legitimately leave handoff blocked.
+
 ## Cost
 
 `corral stats` adds a separate assistant role row and per-session cost lines when sessions

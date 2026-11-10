@@ -13,14 +13,20 @@ use crate::agent::test_support::{self as ts, Fx, Host};
 use crate::agent::tool_request_id;
 use crate::agent::{AgentOp, BindTarget, CallResponse, FAILPOINT, fence_generation};
 
-struct Fixture {
-    fx: Fx,
-    host: Host,
-    session: String,
+pub(super) struct Fixture {
+    pub(super) fx: Fx,
+    pub(super) host: Host,
+    pub(super) session: String,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
+        Self::configured(None)
+    }
+    pub(super) fn in_project(project: &str) -> Self {
+        Self::configured(Some(project))
+    }
+    fn configured(project: Option<&str>) -> Self {
         let mut fx = ts::fx();
         fx.ctx.store.config.projects.insert(
             "app".into(),
@@ -32,6 +38,22 @@ impl Fixture {
             .create_assistant("pi", None, Some("a-pane"), None)
             .unwrap()
             .id;
+        if let Some(project) = project {
+            fx.ctx
+                .store
+                .update_assistant(&session, |s| {
+                    s.project = Some(project.into());
+                    Ok(())
+                })
+                .unwrap();
+            fx.ctx
+                .store
+                .update_assistant_container(&session, |c| {
+                    c.state.binding.project = project.into();
+                    Ok(())
+                })
+                .unwrap();
+        }
         let host = ts::bind(
             &fx,
             &BindTarget::Assistant {
@@ -50,7 +72,7 @@ impl Fixture {
         }
         Self { fx, host, session }
     }
-    fn container(&self) -> AssistantContainer {
+    pub(super) fn container(&self) -> AssistantContainer {
         self.fx
             .ctx
             .store
@@ -116,7 +138,7 @@ impl Fixture {
     fn no_tasks(&self) {
         assert!(self.fx.ctx.store.list().unwrap().is_empty());
     }
-    fn boundary(&self, seq: u64, transition: Value) -> CallResponse {
+    pub(super) fn boundary(&self, seq: u64, transition: Value) -> CallResponse {
         ts::send(
             &self.fx,
             &ts::envelope(
