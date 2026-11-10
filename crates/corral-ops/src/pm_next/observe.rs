@@ -35,16 +35,10 @@ struct LoadCheck {
     log: String,
 }
 
+#[cfg(test)]
 pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
     let board = crate::attention::board_hot(ctx, ctx.store.now())?;
-    with_assessments(ctx, &board.tasks)
-}
-
-pub(crate) fn with_assessments(
-    ctx: &Ctx,
-    assessments: &[crate::attention::TaskAssessment],
-) -> Result<Vec<PmObservation>> {
-    with_admission(ctx, assessments, None)
+    with_admission(ctx, &board.tasks, None)
 }
 
 pub(crate) fn with_admission(

@@ -742,17 +742,9 @@ fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Va
                 return page(lessons, 0, 100);
             }
             let tasks: Vec<_> = ctx.store.list()?.into_iter().filter(includes).collect();
-            // Existing read-only observations/policy, never pm_next's workset/action executor.
-            let observations = crate::pm_next::observe::observations(ctx)?
-                .into_iter()
-                .filter(|o| {
-                    serde_json::to_value(o)
-                        .ok()
-                        .and_then(|v| v["task"].as_str().map(str::to_owned))
-                        .is_some_and(|id| tasks.iter().any(|t| t.id == id))
-                })
-                .collect::<Vec<_>>();
-            let next = crate::pm_next::pm_select(&observations, "corral");
+            // Share CLI priority and effective authority, but select within approved projects.
+            // This projects a readback only; it never invokes pm_act or sync.
+            let next = crate::pm_workset::next_for_projects(ctx, &projects)?;
             if op == AgentOp::ReadNext {
                 return Ok(serde_json::to_value(next)?);
             }

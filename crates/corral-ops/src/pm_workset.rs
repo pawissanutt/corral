@@ -101,8 +101,10 @@ pub struct PmWorkset {
 }
 
 mod options;
+mod scope;
 pub(crate) use options::authority;
 use options::{option_authority, option_target};
+pub(crate) use scope::next_for_projects;
 
 fn project_permissions(action: &mut PmAction, policy: &EffectivePolicy) {
     for option in &mut action.options {
@@ -220,7 +222,7 @@ fn selected_task_identity(ctx: &Ctx, id: &str) -> Result<Vec<u8>> {
 
 /// The workset and the effective policy it was computed from, both from one read of the board.
 pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)> {
-    project(ctx, None)
+    project(ctx, None, None)
 }
 
 /// Reuse the current refresh's assessment; executable authority still comes from fresh policy.
@@ -228,12 +230,13 @@ pub fn pm_workset_with_attention(
     ctx: &Ctx,
     attention: &crate::attention::AttentionBoard,
 ) -> Result<PmWorkset> {
-    project(ctx, Some(attention)).map(|(workset, _)| workset)
+    project(ctx, Some(attention), None).map(|(workset, _)| workset)
 }
 
 fn project(
     ctx: &Ctx,
     attention: Option<&crate::attention::AttentionBoard>,
+    projects: Option<&std::collections::BTreeSet<String>>,
 ) -> Result<(PmWorkset, EffectivePolicy)> {
     if !ctx.store.is_snapshot() {
         // Legacy recovery can read artifact files and wait for publication storage. Do not
@@ -251,13 +254,14 @@ fn project(
     } else {
         None
     };
-    ctx.read_step(|read| project_snapshot(read, attention, admission.as_ref()))
+    ctx.read_step(|read| project_snapshot(read, attention, admission.as_ref(), projects))
 }
 
 fn project_snapshot(
     ctx: &Ctx,
     attention: Option<&crate::attention::AttentionBoard>,
     sampled_admission: Option<&Option<String>>,
+    projects: Option<&std::collections::BTreeSet<String>>,
 ) -> Result<(PmWorkset, EffectivePolicy)> {
     {
         let _prepare = corral_core::work::Preparation::enter();
@@ -267,11 +271,15 @@ fn project_snapshot(
     }
     let _hot = corral_core::work::HotScope::enter();
     let heads = crate::pm_next::heads::inputs(ctx)?;
-    let policy = ctx.store.effective_operating_policy()?;
+    let mut policy = ctx.store.effective_operating_policy()?;
+    let has_operating_scope = !policy.tasks.is_empty();
     let tasks = heads
         .iter()
         .map(crate::pm_next::heads::shell)
         .collect::<Result<Vec<_>>>()?;
+    let mut scope = scope::ProjectScope::new(&tasks, projects, &policy);
+    // Narrow recommendations, never add authority or change its revision-bound identity.
+    policy.tasks.retain(|id, _| scope.includes(id));
     let fresh;
     let board = if let Some(board) = attention {
         board
@@ -300,6 +308,7 @@ fn project_snapshot(
     );
     let mut observations =
         crate::pm_next::observe::with_admission(ctx, &board.tasks, sampled_admission)?;
+    scope.observations(&mut observations);
     observations.sort_by_key(crate::pm_next::rank);
     let mut actions = Vec::new();
     let mut decisions = Vec::new();
@@ -324,7 +333,7 @@ fn project_snapshot(
             decisions.extend(crate::pm_decisions::workspace_decision(ctx, action)?);
             continue;
         };
-        if !policy.tasks.is_empty()
+        if has_operating_scope
             && !policy.tasks.contains_key(&task.id)
             && action.kind != PmActionKind::IdeaPromotion
         {
@@ -339,6 +348,7 @@ fn project_snapshot(
             continue;
         }
         let mut executable_options = Vec::new();
+        let canonical_action = scope.canonical_action(&action, &bin);
         for option in &action.options {
             if option.requires_owner {
                 continue;
@@ -380,7 +390,7 @@ fn project_snapshot(
             let id = crate::verification::digest(&serde_json::to_vec(&(
                 &policy.revision,
                 &target_identity,
-                &action,
+                &canonical_action,
                 &option.id,
             ))?);
             executable_options.push((option.id.clone(), target.id.clone(), kind, id));
@@ -413,7 +423,8 @@ fn project_snapshot(
         }
     }
     crate::pm_decisions::merge_pending(ctx, &mut decisions)?;
-    if !policy.tasks.is_empty() {
+    scope.decisions(&mut decisions);
+    if has_operating_scope {
         decisions.retain(|decision| policy.tasks.contains_key(&decision.task));
     }
     let mut progress = ScopedProgress {
@@ -528,6 +539,7 @@ fn project_snapshot(
     } else {
         OperatingStatus::Waiting
     };
+    // The PM inbox is workspace-scoped, like the native inbox_read tool, not task authority.
     let inbox = crate::pm_next::inbox::cards(ctx, &bin)?;
     let next = actions
         .first()
