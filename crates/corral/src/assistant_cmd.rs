@@ -37,6 +37,9 @@ pub enum AssistantCmd {
         id: String,
         #[arg(long)]
         json: bool,
+        /// With --json: bounded host readback; history rows become counts
+        #[arg(long, requires = "json")]
+        host: bool,
     },
     /// End a session (stopping a running host), keeping its record and transcript references
     End {
@@ -241,7 +244,7 @@ pub fn run(ctx: &Ctx, args: AssistantArgs) -> Result<()> {
                 }
             }
         }
-        AssistantCmd::Show { id, json } => {
+        AssistantCmd::Show { id, json, host } => {
             let session = ctx.store.get_assistant(&id)?;
             let (container, workflow) =
                 ctx.store.inspect_assistant_container(&id, |container, _| {
@@ -251,16 +254,20 @@ pub fn run(ctx: &Ctx, args: AssistantArgs) -> Result<()> {
                     Ok((container.clone(), workflow))
                 })?;
             let usage = corral_ops::assistant_usage(&ctx.store, &session)?;
-            let host = corral_ops::assistant::host::host_assets(&ctx.store, &container.state);
+            let host_assets =
+                corral_ops::assistant::host::host_assets(&ctx.store, &container.state);
             let directory = corral_ops::assistant::directory(&ctx.store, &session)?;
             if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "session": session, "body": session.body, "container": container, "usage": usage,
-                        "host": host, "workflow": workflow, "directory": directory,
-                    }))?
-                );
+                let value = serde_json::json!({
+                    "session": session, "body": session.body, "container": container, "usage": usage,
+                    "host": host_assets, "workflow": workflow, "directory": directory,
+                });
+                if host {
+                    let bounded = corral_ops::assistant::show::host_projection(value);
+                    println!("{}", serde_json::to_string(&bounded)?);
+                } else {
+                    println!("{}", serde_json::to_string_pretty(&value)?);
+                }
             } else {
                 println!(
                     "{} {} focus={} profile={} pane={}",
@@ -281,8 +288,8 @@ pub fn run(ctx: &Ctx, args: AssistantArgs) -> Result<()> {
                         .unwrap_or_else(|| "unknown".into())
                 );
                 if session.ended.is_none() {
-                    println!("{}", host.line(&session.id));
-                    println!("owner actions: {}", host.owner_actions.join(", "));
+                    println!("{}", host_assets.line(&session.id));
+                    println!("owner actions: {}", host_assets.owner_actions.join(", "));
                 }
                 if container.workflow.is_some() {
                     println!("workflow: {}", serde_json::to_string(&workflow)?);
