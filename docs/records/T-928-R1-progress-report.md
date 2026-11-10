@@ -76,6 +76,22 @@ and one cheaper MCP manager contract test. Protocol variants stay at manager lev
 Added execution is approximately **1.2 seconds**, excluding compilation. No quarantine
 entry names these tests. No load, provider, large-history or overlapping new E2E matrix.
 
+## First quick-gate follow-up
+
+Attempt `ag-3b5c81800e75508e` failed the existing
+`assistant_entry_cli::every_command_variant_has_an_explicit_class` completeness assertion:
+its contract table lacked the four new effects command paths. The table now explicitly
+covers read-only preview/receipt/outcome and owner-only apply, preserving the exhaustive
+command-tree and refusal/no-mutation assertions. The same targeted integration test passes
+(3.72 s); no new test registration or production guard was added or relaxed. Fresh changed-file
+Rust diagnostics were clean. The gate reported five added registrations, all unmeasured
+after fail-fast; the targeted added-test timing above is not a fabricated gate measurement.
+
+The separately reported quarantined `pm_plan_cli` failure remains owned by **T-845** and
+untouched. Existing-suite timing overruns were report-only, not the blocking failure.
+The failed log is `5e4c50a4-T-928-R1-ag-3b5c81800e75508e.log`; a fresh receipted quick
+gate follows the fix's commit and final rebase.
+
 ## Research and limits
 
 Both original generation-1 read-only helpers' retained final messages were collected
