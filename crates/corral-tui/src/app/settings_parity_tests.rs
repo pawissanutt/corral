@@ -132,6 +132,19 @@ fn down(app: &mut App, count: usize) {
     }
 }
 
+/// Moves to a General row by its rendered selection marker, so rows added above it never shift the
+/// script. Bounded: an unreachable row fails with the screen instead of looping.
+fn down_to(app: &mut App, size: (u16, u16), label: &str) {
+    let marked = format!("▸ {label}");
+    for _ in 0..32 {
+        if draw_at(app, size.0, size.1).contains(&marked) {
+            return;
+        }
+        press(app, KeyCode::Down);
+    }
+    panic!("row {label:?} not reached\n{}", draw_at(app, size.0, size.1));
+}
+
 /// Only text editing keys: also used by the focused mouse text-entry exceptions.
 fn text(app: &mut App, value: &str) {
     app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
@@ -199,7 +212,7 @@ fn input_parity_keyboard_only_settings_journey() {
 
     // When General, Profiles, Harnesses, Projects and Artifacts are edited by keys alone.
     value(&mut app, "6");
-    down(&mut app, 3); // past the soft target and WIP rows
+    down_to(&mut app, (160, 55), "Default profile"); // past the concurrency rows
     press(&mut app, KeyCode::Right); // omp -> inherit
     press(&mut app, KeyCode::Right); // inherit -> claude
     down(&mut app, 1);

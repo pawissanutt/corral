@@ -4,7 +4,7 @@ use corral_core::Event;
 use corral_ops::capture_messages;
 use ratatui::layout::Rect;
 
-use super::{Fixture, draw_at, mouse, position};
+use super::{Fixture, down_to, draw_at, mouse, position};
 use crate::app::App;
 use crate::board::tests::code;
 use crate::choice::RunChoice;
@@ -43,10 +43,8 @@ fn config_lifecycle_settings_save_has_keyboard_mouse_event_parity() {
                 click_label(&mut app, size, "Default profile", " claude ");
                 click_label(&mut app, size, "s save", "s save");
             } else {
+                down_to(&mut app, size, "Default profile");
                 for key in [
-                    KeyCode::Down,
-                    KeyCode::Down,
-                    KeyCode::Down,
                     KeyCode::Right,
                     KeyCode::Right,
                     KeyCode::Char('s'),
