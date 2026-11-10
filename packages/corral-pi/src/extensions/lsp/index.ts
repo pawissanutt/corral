@@ -10,6 +10,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import type { RegisterCapability } from "../registry.ts";
+import type { EvidenceSink } from "../../host/managed-effects.ts";
 import { DEFAULT_LIMITS, type Diagnostic, LspClient, LspError, type LspLimits, type LspServerSpec, type Range } from "./client.ts";
 
 export { LspClient, LspError, type LspLimits, type LspServerSpec } from "./client.ts";
@@ -63,13 +64,14 @@ export interface LspToolkitOptions {
   readonly servers?: readonly LspServerSpec[];
   readonly limits?: Partial<LspLimits>;
   readonly registerCapability?: RegisterCapability;
+  readonly evidence?: EvidenceSink;
 }
 
 export interface LspToolkit {
   readonly tools: readonly ToolDefinition[];
   /** Starts servers for project markers at the worktree root, without blocking the first turn. */
   warm(): Promise<void>;
-  /** Stops every server this toolkit started; the next tool call starts a fresh one. */
+  /** Permanently closes admission and stops every owned server. A new runtime needs a new toolkit. */
   shutdown(): Promise<void>;
 }
 
@@ -114,6 +116,8 @@ export function lspToolkit(options: LspToolkitOptions): LspToolkit {
   const servers = options.servers ?? DEFAULT_SERVERS;
   const limits: LspLimits = { ...DEFAULT_LIMITS, ...options.limits };
   const clients = new Map<string, Promise<LspClient>>();
+  let stopped = false;
+  let shutdown: Promise<void> | undefined;
 
   const target = (path: string): { file: string; spec: LspServerSpec; languageId: string } => {
     let file: string;
@@ -136,6 +140,7 @@ export function lspToolkit(options: LspToolkitOptions): LspToolkit {
   };
 
   const client = async (spec: LspServerSpec, file: string): Promise<LspClient> => {
+    if (stopped) throw new LspError("lsp_server_unavailable", "LSP manager stopped; no executor started");
     let serverRoot = dirname(file);
     while (serverRoot !== root && !spec.rootMarkers?.some((marker) => existsSync(join(serverRoot, marker)))) {
       serverRoot = dirname(serverRoot);
@@ -144,12 +149,17 @@ export function lspToolkit(options: LspToolkitOptions): LspToolkit {
     const key = JSON.stringify([servers.indexOf(spec), serverRoot]);
     const existing = clients.get(key);
     if (existing) {
-      const current = await existing.catch(() => undefined);
-      if (current?.alive) return current;
+      const current = await existing.catch(error => {
+        if (!LspClient.startupSettled(error)) throw error;
+        return undefined;
+      });
+      if (current?.alive && !stopped) return current;
+      // Retain failed/unknown ownership instead of replacing it with an empty manager.
+      if (current) await current.shutdown();
     }
-    const started = LspClient.start(spec, serverRoot, limits, options.registerCapability);
+    if (stopped) throw new LspError("lsp_server_unavailable", "LSP manager stopped during startup");
+    const started = LspClient.start(spec, serverRoot, limits, options.registerCapability, options.evidence);
     clients.set(key, started);
-    started.catch(() => { if (clients.get(key) === started) clients.delete(key); });
     return started;
   };
 
@@ -245,10 +255,18 @@ export function lspToolkit(options: LspToolkitOptions): LspToolkit {
         try { await client(spec, join(root, ".lsp-warmup")); } catch { /* opportunistic */ }
       }));
     },
-    async shutdown() {
-      const running = [...clients.values()];
-      clients.clear();
-      await Promise.all(running.map((started) => started.then((server) => server.shutdown(), () => undefined)));
+    shutdown() {
+      stopped = true;
+      return shutdown ??= (async () => {
+        const results = await Promise.allSettled([...clients.values()].map(async started => {
+          let server: LspClient;
+          try { server = await started; }
+          catch (error) { if (LspClient.startupSettled(error)) return; throw error; }
+          await server.shutdown();
+        }));
+        const failures = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+        if (failures.length) throw new AggregateError(failures, "LSP shutdown/identity unknown; ownership retained");
+      })();
     },
   };
 }

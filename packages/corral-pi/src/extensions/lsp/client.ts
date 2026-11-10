@@ -7,6 +7,7 @@ import { delimiter, isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { FrameDecoder, encodeFrame } from "./framing.ts";
+import { ManagedInstance, childExit, type EvidenceSink } from "../../host/managed-effects.ts";
 import type { RegisterCapability } from "../registry.ts";
 
 export interface LspServerSpec {
@@ -103,7 +104,15 @@ interface Document {
   text: string;
 }
 
+const settledStartups = new WeakSet<object>();
+function retainSettledStartup(error: unknown): void {
+  if (error !== null && (typeof error === "object" || typeof error === "function")) settledStartups.add(error);
+}
+
 export class LspClient {
+  static startupSettled(error: unknown): boolean {
+    return error !== null && (typeof error === "object" || typeof error === "function") && settledStartups.has(error);
+  }
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
   private readonly documents = new Map<string, Document>();
@@ -114,19 +123,27 @@ export class LspClient {
   private stderr = "";
   private failure: LspError | undefined;
   private capabilities: Record<string, unknown> = {};
+  private shutdownResult: Promise<void> | undefined;
 
   private constructor(
     readonly spec: LspServerSpec,
     readonly root: string,
     private readonly limits: LspLimits,
     private readonly child: ChildProcessWithoutNullStreams,
+    private readonly managed: ManagedInstance,
   ) {}
 
-  static async start(spec: LspServerSpec, root: string, limits: LspLimits = DEFAULT_LIMITS, register?: RegisterCapability): Promise<LspClient> {
-    const program = resolveCommand(spec);
-    const child = spawn(program, spec.command.slice(1), { cwd: root, stdio: ["pipe", "pipe", "pipe"], shell: false });
-    const client = new LspClient(spec, root, limits, child);
+  static async start(spec: LspServerSpec, root: string, limits: LspLimits = DEFAULT_LIMITS, register?: RegisterCapability,
+    evidence?: EvidenceSink): Promise<LspClient> {
+    const managed = new ManagedInstance(`lsp:${spec.id}:${root}`, { spec, root }, evidence);
+    await managed.prepare();
+    let program: string;
+    try { program = resolveCommand(spec); }
+    catch (error) { await managed.notStarted(); retainSettledStartup(error); throw error; }
+    const child = spawn(program, spec.command.slice(1), { cwd: root, stdio: ["pipe", "pipe", "pipe"], shell: false, detached: process.platform === "linux" });
+    const client = new LspClient(spec, root, limits, child, managed);
     client.attach();
+    try {
     if (register && child.pid !== undefined) {
       try {
         const remove = register(child.pid);
@@ -136,6 +153,8 @@ export class LspClient {
         throw error;
       }
     }
+    if (child.pid === undefined) throw new Error("LSP spawn has no owned process identity");
+    await managed.bindProcess(child.pid);
     const init = await client.request("initialize", {
       processId: process.pid,
       rootUri: pathToFileURL(root).href,
@@ -155,6 +174,11 @@ export class LspClient {
     client.capabilities = init?.capabilities ?? {};
     client.notify("initialized", {});
     return client;
+    } catch (error) {
+      await client.shutdown();
+      retainSettledStartup(error);
+      throw error;
+    }
   }
 
   get alive(): boolean {
@@ -350,15 +374,24 @@ export class LspClient {
     return entry && entry.seq > since ? entry.diagnostics : undefined;
   }
 
-  async shutdown(timeoutMs = 2_000): Promise<void> {
-    if (this.failure) return;
+  shutdown(timeoutMs = 2_000): Promise<void> {
+    return this.shutdownResult ??= this.stop(timeoutMs);
+  }
+
+  private async stop(timeoutMs: number): Promise<void> {
     try {
-      await this.request("shutdown", null, timeoutMs);
-      this.notify("exit", null);
+      if (!this.failure) {
+        await this.request("shutdown", null, timeoutMs);
+        this.notify("exit", null);
+      }
     } catch {
-      // A server that cannot shut down cleanly is killed below; there is no caller to tell.
+      // Protocol failure says nothing about termination. Verify the owned child/group below.
     }
-    if (this.child.exitCode === null) this.child.kill("SIGKILL");
+    const exited = childExit(this.child, timeoutMs);
+    if (this.managed.process) this.managed.signal("SIGKILL");
+    else this.child.kill("SIGKILL"); // owned handle cleanup, never an input PID; no proof inferred
+    await exited;
+    await this.managed.stopped("owned local LSP executor terminated; earlier RPC outcomes unchanged");
     this.fail(new LspError("lsp_server_exited", `${this.spec.id} was shut down`));
   }
 }

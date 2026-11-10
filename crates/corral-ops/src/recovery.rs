@@ -12,7 +12,7 @@ pub use admission::recover_resource_input;
 pub(crate) use admission::{
     active_journal, admission_attempt, bind_active_journal, require_no_pending,
 };
-mod authority;
+pub(crate) mod authority;
 mod journal;
 mod landing;
 pub(crate) use journal::bind_journal;

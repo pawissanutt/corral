@@ -73,6 +73,37 @@ test("configured stdio MCP connects and closes without the in-process network gu
   await expect(access.call("docs", "lookup", {})).rejects.toThrow("MCP session is closed");
 });
 
+test("MCP close joins startup but never converts an unanswered remote request into shutdown proof", async () => {
+  const peer = await mcpServer(), raw = globalThis.fetch.bind(globalThis);
+  const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  let holdInitialize = true, loseReply = false;
+  const settings = McpSettingsSchema.parse({ servers: { docs: { projects: ["demo"], url: peer.url, tools: { lookup: "read" } } } });
+  const facts: import("../src/host/managed-effects.ts").Lifecycle[] = [];
+  const send: typeof raw = async (input, init) => {
+    const message = typeof init?.body === "string" ? JSON.parse(init.body) as { method?: string } : {};
+    if (message.method === "initialize" && holdInitialize) { started.resolve(); await release.promise; }
+    const result = await raw(input, init);
+    if (message.method === "tools/call" && loseReply) throw new Error("fixture disconnected after remote dispatch; no reply observed");
+    return result;
+  };
+  const access = new McpAccess(settings, "assistant", "demo", process.cwd(), send, async event => { facts.push(event); });
+  try {
+    const opening = access.refresh(); await started.promise;
+    const closing = access.close(); release.resolve(); await opening; await closing;
+    expect(facts.filter(f => f.action === "terminal")).toHaveLength(1);
+    await access.close(); expect(facts.filter(f => f.action === "terminal")).toHaveLength(1);
+    await expect(access.refresh()).rejects.toThrow("MCP session is closed");
+    holdInitialize = false; loseReply = true;
+    const unknown: import("../src/host/managed-effects.ts").Lifecycle[] = [];
+    const next = new McpAccess(settings, "assistant", "demo", process.cwd(), send, async event => { unknown.push(event); });
+    await next.refresh();
+    await expect(next.call("docs", "lookup", {})).rejects.toThrow("disconnected");
+    await expect(next.close()).rejects.toThrow("ownership retained");
+    await expect(next.close()).rejects.toThrow("ownership retained");
+    expect(unknown.some(f => f.action === "terminal")).toBeFalse();
+  } finally { release.resolve(); await peer.close(); }
+});
+
 test("MCP HTTP origins cannot borrow provider routes or follow redirects", async () => {
   // Given a purpose-specific configured local origin and a wire that records requests.
   const requests: string[] = [];
