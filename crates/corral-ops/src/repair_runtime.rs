@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
 
+pub(crate) const LEGACY_BLOCKER: &str = corral_core::LEGACY_REPAIR_BLOCKER;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FindingReport {
@@ -26,7 +28,7 @@ pub fn repair_status(ctx: &Ctx, id: &str) -> Result<Option<RepairLedger>> {
 }
 
 fn initial(history: &mut RepairHistory, run: &str) -> Result<()> {
-    if history.counters()?.initial_implementations == 0 {
+    if !history.has_initial_implementation()? {
         history.apply(RepairEvent::Started {
             receipt: RepairStartReceipt {
                 attempt_id: RepairAttemptId(format!("initial:{run}")),
@@ -41,6 +43,10 @@ fn initial(history: &mut RepairHistory, run: &str) -> Result<()> {
 
 fn load(store: &Store, task: &impl TaskRef) -> Result<Option<RepairLedger>> {
     if let Some(ledger) = store.repair_ledger(task.id())? {
+        ensure!(
+            ledger.allowances.len() == 1 || ledger.active()?.history.context().is_some(),
+            "legacy renewal lacks task-wide context; explicit reconciliation required"
+        );
         return Ok(Some(ledger));
     }
     let config = store.config_layers()?.config()?;
@@ -65,8 +71,9 @@ fn load(store: &Store, task: &impl TaskRef) -> Result<Option<RepairLedger>> {
                 || run.changes_round.as_ref().is_some_and(|r| r.n > 0)
             {
                 initial(&mut history, &run.id)?;
-                history.apply(RepairEvent::CodingBlocked { reason:
-                    "Corrective history predates staged accounting; reconcile it and obtain explicit owner renewal, never silently reset legacy attempts".into() })?;
+                history.apply(RepairEvent::CodingBlocked {
+                    reason: LEGACY_BLOCKER.into(),
+                })?;
             }
             history
         }
@@ -81,12 +88,7 @@ pub(crate) fn enabled(store: &Store, task: &impl TaskRef) -> Result<bool> {
 
 fn observe(ledger: &mut RepairLedger, report: FindingReport) -> Result<()> {
     let h = &mut ledger.active_mut()?.history;
-    if let Some(old) = h.events().iter().find_map(|event| match event {
-        RepairEvent::Finding { finding } if finding.observation_id == report.observation_id => {
-            Some(finding)
-        }
-        _ => None,
-    }) {
+    if let Some(old) = h.observation(&report.observation_id) {
         ensure!(
             old.identity == report.identity
                 && old.observed_failure == report.observed_failure
@@ -168,7 +170,8 @@ pub(crate) fn observations(
             RepairEvent::Started { receipt } if matches!(receipt.kind, RepairAttemptKind::InitialImplementation
                 | RepairAttemptKind::CurrentProfileRepair | RepairAttemptKind::StrongerProfileRepair) => Some(receipt.attempt_id.0.clone()),
             _ => None,
-        }).context("missing coding receipt")?;
+        }).or_else(|| ledger.active().ok()?.history.context()?.receipts.iter().rev().find(|r| matches!(r.kind,
+            RepairAttemptKind::InitialImplementation | RepairAttemptKind::CurrentProfileRepair | RepairAttemptKind::StrongerProfileRepair)).map(|r| r.attempt_id.0.clone())).context("missing coding receipt")?;
         if let Some(gate) = run.gate.as_ref().filter(|g| matches!(g.result, GateResult::Fail | GateResult::Stale)) {
             let command = gate.failed_cmd.as_deref().unwrap_or("unknown gate command");
             observe(&mut ledger, FindingReport {
@@ -181,8 +184,7 @@ pub(crate) fn observations(
         }
         if let Some(review) = run.review.as_ref().filter(|r| r.verdict == Some(Verdict::Changes)) {
             let observation_id = format!("review:{}:{}:{}:{correction}", run.id, review.sha, review.at);
-            if !ledger.active()?.history.events().iter().any(|event| matches!(event,
-                RepairEvent::Finding { finding } if finding.observation_id == observation_id)) {
+            if ledger.active()?.history.observation(&observation_id).is_none() {
                 let h = &mut ledger.active_mut()?.history;
                 let candidates = h.findings().into_iter().filter(|f| !matches!(f.resolution,
                     FindingResolution::Resolved { .. })).map(|f| f.finding_id.clone()).collect::<Vec<_>>();
@@ -436,9 +438,9 @@ pub(crate) fn start(
         profile == run.agent,
         "repair receipt profile differs from the prepared executor"
     );
+    crate::repair_migration::check_route(store, task, &ledger)?;
     let h = &mut ledger.active_mut()?.history;
-    let first = h.counters()?.initial_implementations == 0;
-    if first {
+    if !h.has_initial_implementation()? {
         initial(h, &run.id)?;
     }
     let id = RepairAttemptId(attempt.into());

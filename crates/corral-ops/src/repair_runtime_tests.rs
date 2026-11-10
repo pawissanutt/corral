@@ -3,6 +3,8 @@ use corral_core::{Profile, RepairPolicy, Status};
 use serde_json::json;
 #[path = "repair_runtime_cowork_tests.rs"]
 mod cowork_cycles;
+#[path = "repair_runtime_renewal_tests.rs"]
+mod renewals;
 
 struct FixedClock;
 impl FixedClock {

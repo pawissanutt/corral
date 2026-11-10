@@ -240,6 +240,10 @@ pub struct RepairHistory {
     current_profile: String,
     stronger_profile: Option<String>,
     events: Vec<RepairEvent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<crate::RepairContext>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    projection: Option<crate::RepairProjection>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -265,14 +269,38 @@ struct HistoryWire {
     current_profile: String,
     stronger_profile: Option<String>,
     events: Vec<RepairEvent>,
+    #[serde(default)]
+    context: Option<crate::RepairContext>,
+    #[serde(default)]
+    projection: Option<crate::RepairProjection>,
 }
 
 impl<'de> Deserialize<'de> for RepairHistory {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         let wire = HistoryWire::deserialize(deserializer)?;
         let restore = || -> Result<Self> {
-            ensure!(wire.version == 1, "unsupported repair history version");
+            ensure!(
+                matches!(
+                    (
+                        wire.version,
+                        wire.context.is_some(),
+                        wire.projection.is_some()
+                    ),
+                    (1, false, false) | (2, true, false) | (2, false, true)
+                ),
+                "unsupported repair history version/context"
+            );
             let mut history = Self::new(wire.policy, &wire.current_profile, wire.stronger_profile)?;
+            if let Some(context) = wire.context {
+                context.validate()?;
+                history.version = 2;
+                history.context = Some(context);
+            }
+            if let Some(projection) = wire.projection {
+                projection.validate()?;
+                history.version = 2;
+                history.projection = Some(projection);
+            }
             for event in wire.events {
                 history.apply(event)?;
             }
@@ -303,7 +331,68 @@ impl RepairHistory {
             current_profile: current_profile.to_owned(),
             stronger_profile,
             events: Vec::new(),
+            context: None,
+            projection: None,
         })
+    }
+
+    pub(crate) fn continuation(
+        policy: RepairPolicy,
+        profile: &str,
+        stronger: Option<String>,
+        context: crate::RepairContext,
+    ) -> Result<Self> {
+        context.validate()?;
+        let mut history = Self::new(policy, profile, stronger)?;
+        history.version = 2;
+        history.context = Some(context);
+        Ok(history)
+    }
+
+    pub fn context(&self) -> Option<&crate::RepairContext> {
+        self.context.as_ref()
+    }
+
+    pub fn projection(&self) -> Option<&crate::RepairProjection> {
+        self.projection.as_ref()
+    }
+
+    pub fn observation(&self, id: &str) -> Option<&RepairFinding> {
+        self.events
+            .iter()
+            .find_map(|event| match event {
+                RepairEvent::Finding { finding } if finding.observation_id == id => Some(finding),
+                _ => None,
+            })
+            .or_else(|| {
+                self.context
+                    .as_ref()?
+                    .findings
+                    .iter()
+                    .find(|f| f.observation_id == id)
+            })
+    }
+
+    /// Historical projection only: the evidence-checked ops importer supplies the ordered
+    /// events. This never invokes a runtime start or claims a historical live receipt existed.
+    pub fn projected(
+        policy: RepairPolicy,
+        profile: &str,
+        projection: crate::RepairProjection,
+        events: Vec<RepairEvent>,
+    ) -> Result<Self> {
+        projection.validate()?;
+        let mut history = Self::new(policy, profile, None)?;
+        history.version = 2;
+        history.projection = Some(projection);
+        for event in events {
+            history.apply(event)?;
+        }
+        Ok(history)
+    }
+
+    pub fn has_initial_implementation(&self) -> Result<bool> {
+        Ok(self.context.is_some() || self.counters()?.initial_implementations == 1)
     }
 
     pub fn policy(&self) -> &RepairPolicy {
@@ -351,6 +440,11 @@ impl RepairHistory {
     /// Latest observations in stable identity order, including evidence-backed resolutions.
     pub fn findings(&self) -> Vec<&RepairFinding> {
         let mut latest = std::collections::BTreeMap::new();
+        if let Some(context) = &self.context {
+            for finding in &context.findings {
+                latest.insert(&finding.finding_id, finding);
+            }
+        }
         for event in &self.events {
             if let RepairEvent::Finding { finding } = event {
                 latest.insert(&finding.finding_id, finding);
@@ -371,20 +465,20 @@ impl RepairHistory {
     pub fn apply(&mut self, event: RepairEvent) -> Result<ReceiptApplication> {
         match &event {
             RepairEvent::Finding { finding } => {
-                if let Some(previous) = self.events.iter().find_map(|event| match event {
-                    RepairEvent::Finding { finding: old }
-                        if old.observation_id == finding.observation_id =>
-                    {
-                        Some(old)
-                    }
-                    _ => None,
-                }) {
+                if let Some(previous) = self.observation(&finding.observation_id) {
                     ensure!(previous == finding, "conflicting finding observation ID");
                     return Ok(ReceiptApplication::Duplicate);
                 }
                 self.validate_finding(finding)?;
             }
             RepairEvent::Started { receipt } => {
+                ensure!(
+                    !self.context.as_ref().is_some_and(|c| c
+                        .receipts
+                        .iter()
+                        .any(|r| r.attempt_id == receipt.attempt_id)),
+                    "predecessor attempt identity cannot be reused"
+                );
                 if let Some(previous) = self.receipt(&receipt.attempt_id) {
                     ensure!(previous == receipt, "conflicting attempt ID");
                     return Ok(ReceiptApplication::Duplicate);
@@ -394,7 +488,7 @@ impl RepairHistory {
             RepairEvent::CodingBlocked { reason } => {
                 nonempty(reason)?;
                 ensure!(
-                    self.counters()?.initial_implementations == 1,
+                    self.has_initial_implementation()?,
                     "block requires initial implementation"
                 );
                 if let Some(previous) = self.coding_blocker() {
@@ -408,17 +502,37 @@ impl RepairHistory {
     }
 
     fn receipt(&self, id: &RepairAttemptId) -> Option<&RepairStartReceipt> {
-        self.events.iter().find_map(|event| match event {
-            RepairEvent::Started { receipt } if &receipt.attempt_id == id => Some(receipt),
-            _ => None,
-        })
+        self.events
+            .iter()
+            .find_map(|event| match event {
+                RepairEvent::Started { receipt } if &receipt.attempt_id == id => Some(receipt),
+                _ => None,
+            })
+            .or_else(|| {
+                self.context
+                    .as_ref()?
+                    .receipts
+                    .iter()
+                    .find(|r| &r.attempt_id == id)
+            })
     }
 
     fn latest_finding(&self, id: &FindingId) -> Option<&RepairFinding> {
-        self.events.iter().rev().find_map(|event| match event {
-            RepairEvent::Finding { finding } if &finding.finding_id == id => Some(finding),
-            _ => None,
-        })
+        self.events
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                RepairEvent::Finding { finding } if &finding.finding_id == id => Some(finding),
+                _ => None,
+            })
+            .or_else(|| {
+                self.context
+                    .as_ref()?
+                    .findings
+                    .iter()
+                    .rev()
+                    .find(|f| &f.finding_id == id)
+            })
     }
 
     fn validate_finding(&self, finding: &RepairFinding) -> Result<()> {
@@ -519,7 +633,7 @@ impl RepairHistory {
             RepairAttemptKind::CurrentProfileRepair | RepairAttemptKind::StrongerProfileRepair
         ) {
             ensure!(
-                counts.initial_implementations == 1,
+                self.has_initial_implementation()?,
                 "repair requires initial implementation"
             );
             ensure!(
@@ -539,7 +653,7 @@ impl RepairHistory {
         match &receipt.kind {
             RepairAttemptKind::InitialImplementation => {
                 ensure!(
-                    counts == RepairCounters::default(),
+                    self.context.is_none() && counts == RepairCounters::default(),
                     "initial implementation already started"
                 );
                 ensure!(
@@ -553,7 +667,7 @@ impl RepairHistory {
             }
             RepairAttemptKind::CurrentProfileRepair => {
                 ensure!(
-                    receipt.profile == self.current_profile,
+                    self.projection.is_some() || receipt.profile == self.current_profile,
                     "incorrect current profile"
                 );
                 ensure!(
@@ -623,7 +737,7 @@ impl RepairHistory {
             }
             RepairAttemptKind::PmDiagnosis => {
                 ensure!(
-                    counts.initial_implementations == 1,
+                    self.has_initial_implementation()?,
                     "diagnosis requires initial implementation"
                 );
                 ensure!(repairs_exhausted, "coding repair allowance remains");

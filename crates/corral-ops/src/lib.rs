@@ -39,6 +39,8 @@ mod dispatch;
 mod dispatch_policy;
 mod escalation;
 mod repair_cycle;
+#[doc(hidden)]
+pub mod repair_migration;
 mod repair_runtime;
 pub use repair_runtime::{
     FindingReport, repair_diagnose, repair_diagnose_owner, repair_diagnosed, repair_finding,

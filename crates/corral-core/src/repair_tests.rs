@@ -1,5 +1,7 @@
 use super::*;
 use serde_json::{Value, json};
+#[path = "repair_context_tests.rs"]
+mod continuation;
 
 fn finding() -> RepairFinding {
     let identity = FailureIdentity {
