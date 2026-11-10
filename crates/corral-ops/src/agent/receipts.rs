@@ -63,7 +63,9 @@ fn append(
 }
 
 pub(crate) fn pm_capacity(store: &Store) -> Result<()> {
-    if pm_state::child_count(store, "receipts")? >= RECEIPTS_MAX as u64 {
+    if pm_state::child_count(store, "receipts")? >= RECEIPTS_MAX as u64
+        && pm_state::reclaim_receipts(store)? == 0
+    {
         return Err(Rejection::new(
             RejectCode::ReceiptLimit,
             format!("the container already holds {RECEIPTS_MAX} receipts"),

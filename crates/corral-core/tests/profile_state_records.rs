@@ -1,5 +1,8 @@
 use corral_core::Store;
-use corral_core::agent::{AgentBinding, AgentPm, AgentRole, AgentRunState, HostHealth, pm_state};
+use corral_core::agent::{
+    AgentBinding, AgentPm, AgentRole, AgentRunState, HostHealth, RECEIPTS_MAX, RequestReceipt,
+    pm_state,
+};
 use serde_json::json;
 
 #[path = "state_record_support/mod.rs"]
@@ -147,4 +150,54 @@ fn failed_task_callback_discards_agent_pm_and_automation_records() {
     assert!(result.is_err());
     assert_eq!(pm_state::load(&store).unwrap(), None);
     assert!(store.record_row("automation", "current").unwrap().is_none());
+}
+
+fn receipt(store: &Store, n: usize, generation: u32, owed: bool) -> RequestReceipt {
+    serde_json::from_value(json!({
+        "version": 1, "request_id": format!("r-{n}"), "op": "event", "payload_sha256": "0",
+        "identity": {"store": corral_core::agent::paths::store_id(store), "project": "fixture",
+            "role": "pm", "session_id": "s", "generation": generation},
+        "state": "committed", "result": {}, "at": "2026-01-01T00:00:00Z",
+        "post_pending": if owed { vec!["event:agent_bound"] } else { vec![] },
+    }))
+    .unwrap()
+}
+
+#[test]
+fn full_pm_receipt_family_reclaims_settled_receipts_of_ended_generations() {
+    // Given a full PM receipt family: generation 1 is ended, its first receipt still owes an
+    // effect, and the newest receipt belongs to the current generation 2.
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::init(root.path()).unwrap();
+    let mut seeded = pm(&store);
+    seeded.state.binding.generation = 2;
+    seeded.state.receipts = (0..RECEIPTS_MAX)
+        .map(|n| receipt(&store, n, if n + 1 == RECEIPTS_MAX { 2 } else { 1 }, n == 0))
+        .collect();
+    pm_state::update(&store, |saved| {
+        *saved = Some(seeded);
+        Ok(((), true))
+    })
+    .unwrap();
+    // When a later append reclaims under the limit check, in the same transaction.
+    let evicted = pm_state::update_selected(&store, &pm_state::Selection::default(), |saved| {
+        let evicted = pm_state::reclaim_receipts(&store)?;
+        let pm = saved.as_mut().unwrap();
+        pm.state
+            .receipts
+            .push(receipt(&store, RECEIPTS_MAX, 2, false));
+        Ok((evicted, true))
+    })
+    .unwrap();
+    // Then the oldest settled half is gone, the append counted, and owed/current receipts stay.
+    assert_eq!(evicted, RECEIPTS_MAX as u64 / 2);
+    assert_eq!(
+        pm_state::child_count(&store, "receipts").unwrap(),
+        RECEIPTS_MAX as u64 / 2 + 1
+    );
+    let state = pm_state::load(&store).unwrap().unwrap().state;
+    let kept = |id: &str| state.receipt(id).is_some();
+    assert!(kept("r-0") && !kept("r-1") && !kept(&format!("r-{}", RECEIPTS_MAX / 2)));
+    assert!(kept(&format!("r-{}", RECEIPTS_MAX / 2 + 1)));
+    assert!(kept(&format!("r-{}", RECEIPTS_MAX - 1)) && kept(&format!("r-{RECEIPTS_MAX}")));
 }
