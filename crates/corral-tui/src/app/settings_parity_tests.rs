@@ -142,7 +142,10 @@ fn down_to(app: &mut App, size: (u16, u16), label: &str) {
         }
         press(app, KeyCode::Down);
     }
-    panic!("row {label:?} not reached\n{}", draw_at(app, size.0, size.1));
+    panic!(
+        "row {label:?} not reached\n{}",
+        draw_at(app, size.0, size.1)
+    );
 }
 
 /// Only text editing keys: also used by the focused mouse text-entry exceptions.
@@ -245,7 +248,7 @@ fn input_parity_keyboard_only_settings_journey() {
     keys(&mut app, "x"); // referenced default cannot be deleted
     assert_eq!(app.toasts.last().unwrap().0.tone, Tone::Warn);
     keys(&mut app, "1");
-    down(&mut app, 3);
+    down_to(&mut app, (160, 55), "Default profile");
     press(&mut app, KeyCode::Left); // claude-copy -> claude
     keys(&mut app, "2");
     down(&mut app, 1);
@@ -464,7 +467,7 @@ fn input_parity_keyboard_only_settings_discard_and_keep_editing() {
     let fx = Fixture::new();
     let before = fx.config();
     let mut app = fx.app();
-    down(&mut app, 6);
+    down_to(&mut app, (160, 55), "Mouse");
     press(&mut app, KeyCode::Enter);
 
     // When back is cancelled once, then confirmed as discard, using keys only.
@@ -504,7 +507,7 @@ fn input_parity_keyboard_only_settings_save_and_close() {
     // Given a staged boolean change.
     let fx = Fixture::new();
     let mut app = fx.app();
-    down(&mut app, 6);
+    down_to(&mut app, (160, 55), "Mouse");
     press(&mut app, KeyCode::Enter);
 
     // When the unsaved-changes prompt saves and closes.
