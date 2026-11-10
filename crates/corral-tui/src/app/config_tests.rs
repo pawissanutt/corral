@@ -24,8 +24,20 @@ fn events(app: &App, kind: &str) -> Vec<Event> {
         .collect()
 }
 
+/// A pointer user reaches a row below the fold with the wheel. Bounded: an unreachable row fails
+/// with the screen instead of looping.
 fn click_label(app: &mut App, size: (u16, u16), row: &str, label: &str) {
-    let screen = draw_at(app, size.0, size.1);
+    let mut screen = draw_at(app, size.0, size.1);
+    for _ in 0..32 {
+        if screen
+            .lines()
+            .any(|line| line.contains(row) && line.contains(label))
+        {
+            break;
+        }
+        mouse(app, MouseEventKind::ScrollDown, (size.0 / 2, size.1 / 2));
+        screen = draw_at(app, size.0, size.1);
+    }
     let at = position(&screen, row, label);
     mouse(app, MouseEventKind::Down(MouseButton::Left), at);
     mouse(app, MouseEventKind::Up(MouseButton::Left), at);
@@ -44,11 +56,7 @@ fn config_lifecycle_settings_save_has_keyboard_mouse_event_parity() {
                 click_label(&mut app, size, "s save", "s save");
             } else {
                 down_to(&mut app, size, "Default profile");
-                for key in [
-                    KeyCode::Right,
-                    KeyCode::Right,
-                    KeyCode::Char('s'),
-                ] {
+                for key in [KeyCode::Right, KeyCode::Right, KeyCode::Char('s')] {
                     app.handle_key(code(key));
                 }
             }
