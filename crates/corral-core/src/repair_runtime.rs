@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::{FindingResolution, RepairHistory, RepairPolicy, Store};
 
 pub const REPAIR_RUNTIME: &str = "repair-runtime";
+/// Recognized old fail-closed adoption marker, never evidence of zero spent repairs.
+pub const LEGACY_REPAIR_BLOCKER: &str = "Corrective history predates staged accounting; reconcile it and obtain explicit owner renewal, never silently reset legacy attempts";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "stage", rename_all = "snake_case")]
@@ -55,7 +57,7 @@ pub struct RepairLedger {
 impl RepairLedger {
     pub fn new(history: RepairHistory) -> Self {
         Self {
-            version: 1,
+            version: if history.projection().is_some() { 2 } else { 1 },
             allowances: vec![RepairAllowance {
                 history,
                 diagnosis: None,
@@ -65,12 +67,12 @@ impl RepairLedger {
     }
 
     pub fn active(&self) -> Result<&RepairAllowance> {
-        ensure!(self.version == 1, "unsupported repair ledger version");
+        self.validate()?;
         self.allowances.last().context("repair allowance missing")
     }
 
     pub fn active_mut(&mut self) -> Result<&mut RepairAllowance> {
-        ensure!(self.version == 1, "unsupported repair ledger version");
+        self.validate()?;
         self.allowances
             .last_mut()
             .context("repair allowance missing")
@@ -83,6 +85,12 @@ impl RepairLedger {
 
     pub fn transition(&self) -> Result<RepairTransition> {
         let active = self.active()?;
+        if self.allowances.len() > 1 && active.history.context().is_none() {
+            return Ok(RepairTransition::Owner {
+                reason: "legacy renewal lacks task-wide context; explicit reconciliation required"
+                    .into(),
+            });
+        }
         let h = &active.history;
         let c = h.counters()?;
         let RepairPolicy::V1 {
@@ -149,7 +157,8 @@ impl Store {
         ledger.active()?;
         if let Some(previous) = self.repair_ledger(task)? {
             ensure!(
-                ledger.allowances.len() == previous.allowances.len(),
+                ledger.version == previous.version
+                    && ledger.allowances.len() == previous.allowances.len(),
                 "new allowance requires explicit owner renewal"
             );
             let last = previous.allowances.len() - 1;
@@ -161,6 +170,8 @@ impl Store {
             let new = ledger.active()?;
             ensure!(
                 old.renewal == new.renewal
+                    && old.history.context() == new.history.context()
+                    && old.history.projection() == new.history.projection()
                     && old.history.policy() == new.history.policy()
                     && old.history.current_profile() == new.history.current_profile()
                     && old.history.stronger_profile() == new.history.stronger_profile()
@@ -219,11 +230,14 @@ impl Store {
                 renewal.previous_digest == ledger.digest()?,
                 "stale repair renewal"
             );
+            let context = crate::RepairContext::from_ledger(&ledger)?;
+            ledger.version = 2;
             ledger.allowances.push(RepairAllowance {
-                history: RepairHistory::new(policy, profile, stronger)?,
+                history: RepairHistory::continuation(policy, profile, stronger, context)?,
                 diagnosis: None,
                 renewal: Some(renewal),
             });
+            ledger.validate()?;
             self.save_record(REPAIR_RUNTIME, task, &ledger)?;
             self.log_event(
                 Some(task),

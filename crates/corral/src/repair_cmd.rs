@@ -95,7 +95,9 @@ pub fn run(root: &Path, args: RepairArgs, entry: &crate::entry::Entry) -> Result
     let value = match args.cmd {
         RepairCmd::Status { id } => match corral_ops::repair_status(&ctx, &id)? {
             Some(ledger) => {
-                serde_json::json!({"digest":ledger.digest()?, "transition":ledger.transition()?, "ledger":ledger})
+                serde_json::json!({"digest":ledger.digest()?, "transition":ledger.transition()?,
+                    "local_counters":ledger.active()?.history.counters()?, "task_counters":ledger.task_counters()?,
+                    "unresolved":ledger.unresolved()?, "ledger":ledger})
             }
             None => serde_json::Value::Null,
         },
