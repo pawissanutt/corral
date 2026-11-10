@@ -373,6 +373,9 @@ fn comment_rechecks_generation_in_its_commit_transaction() {
     assert!(saved.comments.is_empty() && saved.agent_pm_receipts.is_empty());
 }
 
+#[path = "pm_next_tests.rs"]
+mod next_tests;
+
 #[test]
 fn codemode_allowlisted_reads_leave_no_receipts_or_request_id_obligations() {
     let (fx, host) = fixture();
