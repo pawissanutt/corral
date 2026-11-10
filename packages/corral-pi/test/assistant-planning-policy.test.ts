@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { ManagedEffects } from "../src/host/managed-effects.ts";
+import { ManagedEffects, ManagedInstance, type Lifecycle } from "../src/host/managed-effects.ts";
+import { HostSession } from "../src/host/session.ts";
 import { PlanningPolicy, planningBookkeeping, planningState } from "../src/host/planning-policy.ts";
 
 const workflow = (phase = "planning") => ({ version: 1, workflow: "W1", state_revision: 1,
@@ -73,4 +74,60 @@ test("lost start acknowledgement and old-generation activity remain fenced on re
   expect(() => resources.requireOpen("lsp")).toThrow("stopped");
   expect(() => resources.newLifetime("lsp")).toThrow("unknown");
   expect({ shutdowns, seals, settlements }).toEqual({ shutdowns: 1, seals: 0, settlements: 0 });
+});
+
+// Slow catalog: T-932, hold the real host admission seam across close, without SDK/process fixtures.
+test.skipIf(process.env.CORRAL_PI_SLOW === "0")("LSP preparation shares pending admission and close cannot certify an unacknowledged startup", async () => {
+  for (const closeDuringAdmission of [false, true]) {
+    const state = workflow("ordinary"), started = Promise.withResolvers<void>(), permit = Promise.withResolvers<void>();
+    const transitions: Record<string, unknown>[] = [], facts: Lifecycle[] = [];
+    const policy = new PlanningPolicy({ read: async () => state, fence() {}, record: async t => {
+      transitions.push(t);
+      if (t.action === "start") {
+        state.boundary.activities.push({ id: String(t.id), tool: String(t.tool), uncertain: false });
+        started.resolve(); await permit.promise;
+      }
+      if (t.action === "settle") state.boundary.activities = state.boundary.activities.filter(a => a.id !== t.id);
+      return state;
+    } });
+    // Unit-test the host's actual preparation/publication methods; no provider, SDK runtime
+    // or store is needed to prove their ordering and shared pending-promise identity.
+    const host = Object.create(HostSession.prototype) as HostSession;
+    const effects = new ManagedEffects(id => host["resourceEvidence"](id, { action: "seal" }),
+      id => host["releasePlanningResource"](id));
+    Object.assign(host, { planning: policy, planningResources: new Map(), resourcePublicationFailures: new Map(), managedEffects: effects,
+      sessionId: () => "fixture", options: { identity: { assistant: "A-1", generation: 1 },
+        sessionManager: { appendCustomEntry(_kind: string, entry: { event: Lifecycle }) { facts.push(entry.event); } } } });
+    await policy.refresh();
+    const instances = ["one", "two"].map(id => new ManagedInstance(id, {}, event => host["resourceEvidence"]("lsp", event)));
+    const preparing = Promise.allSettled(instances.map(instance => instance.prepare()));
+    await started.promise;
+    expect(transitions.filter(t => t.action === "start")).toHaveLength(1);
+    expect(facts).toEqual([]); // no executor preparation/publication before admission acknowledgement
+    const shutdown = async () => {
+      const results = await preparing;
+      if (results.some(r => r.status === "rejected")) throw new Error("startup admission/identity unknown");
+      await Promise.all(instances.map(instance => instance.notStarted()));
+    };
+    const closing = closeDuringAdmission ? effects.stop("lsp", shutdown).then(() => undefined, error => error) : undefined;
+    permit.resolve();
+    const results = await preparing;
+    if (closeDuringAdmission) {
+      expect(results.every(r => r.status === "rejected")).toBeTrue();
+      expect((await closing) instanceof Error).toBeTrue();
+      await expect(effects.stop("lsp", shutdown)).rejects.toThrow("unknown");
+      expect(() => effects.newLifetime("lsp")).toThrow("unknown");
+      expect(facts).toEqual([]); // no empty terminal/seal or inferred not-started proof
+      expect(state.boundary.activities).toHaveLength(1);
+      expect(transitions.some(t => t.action === "settle")).toBeFalse();
+    } else {
+      expect(results.every(r => r.status === "fulfilled")).toBeTrue();
+      await effects.stop("lsp", shutdown); await effects.stop("lsp", shutdown);
+      expect(facts.map(f => f.action)).toEqual(["prepare", "prepare", "terminal", "terminal", "seal"]);
+      expect(transitions.filter(t => t.action === "start")).toHaveLength(1);
+      expect(transitions.filter(t => t.action === "settle")).toHaveLength(1);
+      expect(state.boundary.activities).toEqual([]);
+      expect(effects.newLifetime("lsp")).toBeTrue();
+    }
+  }
 });

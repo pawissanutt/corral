@@ -210,12 +210,52 @@ test("results are bounded in count and bytes; total keeps the server's count", a
 });
 
 test("paths outside the worktree, missing files and unconfigured file types are refused", async () => {
-  const made = kit(fake());
+  const facts: Lifecycle[] = [];
+  const made = lspToolkit({ root, servers: [fake()], limits: LIMITS, evidence: async event => { facts.push(event); } });
+  toolkits.push(made);
   expect((await failure(call(made, "lsp_diagnostics", { path: "../outside.fk" }))).code).toBe("lsp_path_refused");
   expect((await failure(call(made, "lsp_diagnostics", { path: "/etc/hostname" }))).message).toMatch(/lsp_path_refused: .*(outside the worktree|does not exist)/);
   expect((await failure(call(made, "lsp_diagnostics", { path: "src" }))).message).toBe("lsp_path_refused: src is not a regular file");
   expect((await failure(call(made, "lsp_diagnostics", { path: "notes.txt" }))).message)
     .toBe("lsp_unsupported_file: no language server is configured for .txt (configured: .fk)");
+  await made.shutdown();
+  expect(facts).toEqual([]); // validation and empty shutdown prepare/certify no executor
+});
+
+// Slow catalog: T-932, deterministic preparation/close interleaving; owner is the LSP lifecycle.
+test.skipIf(process.env.CORRAL_PI_SLOW === "0")("LSP close joins concurrent preparation and retains positive not started evidence", async () => {
+  const preparing = Promise.withResolvers<void>(), permit = Promise.withResolvers<void>();
+  const facts: Lifecycle[] = [];
+  const made = lspToolkit({ root, servers: [
+    { id: "missing-fk", command: ["/nonexistent/lsp"], languages: { ".fk": "fake" } },
+    { id: "missing-txt", command: ["/nonexistent/lsp"], languages: { ".txt": "text" } },
+  ], evidence: async event => {
+    facts.push(event);
+    if (event.action === "prepare") {
+      if (facts.filter(f => f.action === "prepare").length === 2) preparing.resolve();
+      await permit.promise;
+    }
+  } });
+  const opening = Promise.all([
+    failure(call(made, "lsp_diagnostics", { path: "src/main.fk" })),
+    failure(call(made, "lsp_diagnostics", { path: "notes.txt" })),
+  ]);
+  try {
+    await preparing.promise;
+    let closed = false;
+    const closing = made.shutdown().then(() => { closed = true; });
+    expect((await failure(call(made, "lsp_diagnostics", { path: "src/main.fk" }))).code).toBe("lsp_server_unavailable");
+    expect(closed).toBeFalse();
+    expect(facts.map(f => f.action)).toEqual(["prepare", "prepare"]);
+    permit.resolve();
+    expect((await opening).map(error => error.code)).toEqual(["lsp_server_unavailable", "lsp_server_unavailable"]);
+    await closing; await made.shutdown();
+    const starts = facts.flatMap(f => f.action === "prepare" ? [f.instance] : []);
+    const ends = facts.flatMap(f => f.action === "terminal" ? [f] : []);
+    expect(ends.map(f => f.instance).sort()).toEqual(starts.sort());
+    expect(ends.map(f => f.terminal.disposition)).toEqual(["not_started", "not_started"]);
+    expect(facts.some(f => f.action === "bind")).toBeFalse();
+  } finally { permit.resolve(); await opening; await made.shutdown(); }
 });
 
 test("a server that exits mid-request is lsp_server_exited, and the next call starts a fresh server", async () => {
