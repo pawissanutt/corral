@@ -6,10 +6,12 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{AgentPm, NativeRecord, paths};
+use super::{AgentPm, NativeRecord, RequestReceipt, paths};
 use crate::Store;
 
 const ENDED: &str = "agent-pm-ended-turns";
+/// A full receipt family is reclaimed down to this size, so the scan runs once per batch.
+const RECEIPTS_RETAINED: u64 = super::RECEIPTS_MAX as u64 / 2;
 
 pub(super) const KINDS: [&str; 10] = [
     "generations",
@@ -222,13 +224,17 @@ pub(super) fn save(store: &Store, old: Option<&(Head, AgentPm)>, pm: &AgentPm) -
         .map(|(_, pm)| split(pm).map(|(_, rows)| rows))
         .transpose()?
         .unwrap_or_default();
-    let mut head = old
-        .map(|(head, _)| head.clone())
-        .unwrap_or_else(|| head(shell.clone(), &Children::new()));
+    // Counters come from the stored head: `reclaim_receipts` may have rewritten them earlier
+    // in this same transaction, after `old` was read.
+    let stored = store.record::<Value>("agent-pm", "current")?;
+    let legacy = stored.as_ref().is_some_and(|d| d.get("layout").is_none());
+    let mut head = match stored.filter(|_| !legacy && old.is_some()) {
+        Some(doc) => serde_json::from_value(doc).context("decoding PM head")?,
+        None => old
+            .map(|(head, _)| head.clone())
+            .unwrap_or_else(|| head(shell.clone(), &Children::new())),
+    };
     head.pm = shell;
-    let legacy = store
-        .record::<Value>("agent-pm", "current")?
-        .is_some_and(|d| d.get("layout").is_none());
     if legacy {
         head.next.clear();
         head.counts.clear();
@@ -349,6 +355,49 @@ mod fixed_counts {
             .map(|(k, v)| v.parse().map(|v| (k, v)).map_err(serde::de::Error::custom))
             .collect()
     }
+}
+
+/// The PM container outlives every generation, so its receipts would otherwise fill the
+/// family for good. Once full, evict the oldest settled receipts of ended generations: a
+/// fenced generation can no longer commit, so dropping its replay answer only turns a stale
+/// retry into a liveness refusal. The current generation's receipts and any receipt still
+/// owing a settlement or post-commit effect are never evicted. Returns how many were evicted.
+pub(super) fn reclaim_receipts(store: &Store) -> Result<u64> {
+    let Some(doc) = store.record::<Value>("agent-pm", "current")? else {
+        return Ok(0);
+    };
+    if doc.get("layout").is_none() {
+        return Ok(0);
+    }
+    let mut head: Head = serde_json::from_value(doc).context("decoding PM head")?;
+    ensure!(head.layout == 2, "unsupported PM record layout");
+    let count = head.counts.get("receipts").copied().unwrap_or(0);
+    if count < super::RECEIPTS_MAX as u64 {
+        return Ok(0);
+    }
+    let current = head.pm.state.binding.generation;
+    let mut stale = Vec::new();
+    for row in store.record_rows(&area("receipts"))? {
+        let child: Child = serde_json::from_value(row.doc).context("decoding PM receipt")?;
+        let receipt: RequestReceipt =
+            serde_json::from_value(child.record).context("decoding PM receipt")?;
+        if receipt.identity.generation != current && !receipt.effects_pending() {
+            stale.push((child.ordinal, row.key));
+        }
+    }
+    stale.sort_unstable();
+    let evict = count
+        .saturating_sub(RECEIPTS_RETAINED)
+        .min(stale.len() as u64);
+    for (_, key) in stale.iter().take(evict as usize) {
+        store.delete_record(&area("receipts"), key)?;
+        store.delete_record(&work_area("receipts"), key)?;
+    }
+    if evict > 0 {
+        head.counts.insert("receipts".into(), count - evict);
+        store.save_record("agent-pm", "current", &head)?;
+    }
+    Ok(evict)
 }
 
 pub(super) fn delete(store: &Store) -> Result<()> {

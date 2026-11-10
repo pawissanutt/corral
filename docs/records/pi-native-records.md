@@ -99,7 +99,7 @@ containers too.
 | `version` | u32 | 1 | request-receipts |
 | `binding` | AgentBinding | one | request-receipts (`open_generation`) |
 | `generations` | AgentGeneration[] | ≤ 64 (`GENERATIONS_MAX`) | request-receipts |
-| `receipts` | RequestReceipt[] | ≤ 2048 (`RECEIPTS_MAX`); never evicted, a full container refuses `receipt_limit` | request-receipts, op-receipts, question-lifecycle |
+| `receipts` | RequestReceipt[] | ≤ 16384 (`RECEIPTS_MAX`); a full task-owned container refuses `receipt_limit`. The PM container, which outlives its generations, first evicts its oldest settled receipts of ended generations down to 8192; only when none qualify does it refuse | request-receipts, op-receipts, question-lifecycle |
 | `questions` | AgentQuestion[] | ≤ 8 pending, ≤ 1 blocking per container | question-lifecycle |
 | `turns` | AgentTurn[] | ≤ 512 (`TURNS_MAX`); the oldest ended turns are evicted first, open turns never | request-receipts (facts), worker-role and reviewer-role (`class`) |
 | `wakes` | WakeSubscription[] | ≤ 256 (`WAKES_MAX`) | op-receipts, worker-role |

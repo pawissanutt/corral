@@ -93,6 +93,12 @@ pub fn child_count(store: &Store, kind: &str) -> Result<u64> {
     super::pm_records::count(store, kind)
 }
 
+/// Evicts the oldest settled receipts of ended generations once the family is full.
+/// Call under the same transaction as the limit check it precedes.
+pub fn reclaim_receipts(store: &Store) -> Result<u64> {
+    super::pm_records::reclaim_receipts(store)
+}
+
 /// The binding and current host generation, independent of retained history.
 pub fn load_current(store: &Store) -> Result<Option<AgentPm>> {
     load_selected(store, &Selection::current())
