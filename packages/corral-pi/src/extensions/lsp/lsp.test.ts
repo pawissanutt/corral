@@ -9,7 +9,8 @@ import { fileURLToPath } from "node:url";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 import { FrameDecoder, encodeFrame } from "./framing.ts";
-import { processGroup } from "../jobs/runtime.ts";
+import { ownedToolkit } from "./testing/owned-toolkit.ts";
+import { processGroup, startTimeOf } from "../jobs/runtime.ts";
 import type { Lifecycle } from "../../host/managed-effects.ts";
 import { capabilityRegistry } from "../registry.ts";
 import { DEFAULT_SERVERS, LSP_TOOL_NAMES, LspError, type LspServerSpec, MAX_ITEMS, MAX_OUTPUT_BYTES, configuredServers, lspToolkit } from "./index.ts";
@@ -218,12 +219,40 @@ test("paths outside the worktree, missing files and unconfigured file types are 
 });
 
 test("a server that exits mid-request is lsp_server_exited, and the next call starts a fresh server", async () => {
-  const made = kit(fake("--exit-on-definition"));
-  const error = await failure(call(made, "lsp_definition", { path: "src/main.fk", line: 2, column: 5 }));
-  expect(error.code).toBe("lsp_server_exited");
-  expect(error.message).toMatch(/fake exited \(code 3\)/);
-  const again = await call(made, "lsp_diagnostics", { path: "src/main.fk" });
-  expect(again.complete).toBeTrue();
+  if (process.platform !== "linux") {
+    const made = kit(fake("--exit-on-definition"));
+    const error = await failure(call(made, "lsp_definition", { path: "src/main.fk", line: 2, column: 5 }));
+    expect(error.code).toBe("lsp_server_exited");
+    expect(error.message).toMatch(/fake exited \(code 3\)/);
+    expect((await call(made, "lsp_diagnostics", { path: "src/main.fk" })).complete).toBeTrue();
+    return;
+  }
+  const observations: Record<string, unknown>[] = [];
+  for (const mode of ["dead", "settled-startup"] as const) {
+    const probe = ownedToolkit(root, mode === "dead" ? fake("--exit-on-definition") : fake(), LIMITS, mode === "settled-startup");
+    const { toolkit: made, facts } = probe;
+    toolkits.push(made);
+    try {
+      const error = await failure(call(made, mode === "dead" ? "lsp_definition" : "lsp_diagnostics",
+        { path: "src/main.fk", line: 2, column: 5 }));
+      expect(error.code).toBe(mode === "dead" ? "lsp_server_exited" : "lsp_request_failed");
+      if (mode === "dead") expect(error.message).toMatch(/fake exited \(code 3\)/);
+      const again = await Promise.all([call(made, "lsp_diagnostics", { path: "src/main.fk" }),
+        call(made, "lsp_diagnostics", { path: "src/main.fk" })]);
+      await made.shutdown();
+      const bindings = facts.flatMap(event => event.action === "bind" && event.executor.kind === "process"
+        ? [{ instance: event.instance, process: event.executor.process }] : []);
+      const terminals = facts.flatMap(event => event.action === "terminal" ? [event.instance] : []);
+      observations.push({ mode, complete: again.map(result => result.complete), bindings: bindings.length,
+        terminals: terminals.length,
+        missing: bindings.filter(binding => terminals.filter(id => id === binding.instance).length !== 1).map(binding => binding.instance),
+        live: bindings.filter(binding => startTimeOf(binding.process.pid) === binding.process.start_time).map(binding => binding.process.pid) });
+    } finally { await probe.cleanup(); }
+  }
+  expect(observations).toEqual([
+    { mode: "dead", complete: [true, true], bindings: 2, terminals: 2, missing: [], live: [] },
+    { mode: "settled-startup", complete: [true, true], bindings: 2, terminals: 2, missing: [], live: [] },
+  ]);
 });
 
 test("an answer over the frame limit is lsp_protocol_error, not unbounded memory", async () => {
