@@ -29,6 +29,10 @@ fn git(repo: &std::path::Path, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap().trim().into()
 }
 fn fixture() -> (tempfile::TempDir, Ctx, Request) {
+    fixture_submissions([1, 2, 3], false)
+}
+
+fn fixture_submissions(order: [usize; 3], done: bool) -> (tempfile::TempDir, Ctx, Request) {
     corral_core::clock::pin_thread(Some("2026-11-01T00:00:00Z".parse().unwrap()));
     let root = tempfile::tempdir().unwrap();
     let repo = root.path().join("app");
@@ -58,7 +62,7 @@ fn fixture() -> (tempfile::TempDir, Ctx, Request) {
         .enumerate()
     {
         if index > 0 {
-            store.log_event(Some(&task.id),"autopilot",json!({"run":format!("R{index}"),"to":"changes","round":index,
+            store.log_event(Some(&task.id),"autopilot",json!({"run":format!("R{}",order[index-1]),"to":"changes","round":index,
                 "max_rounds":2,"effective_max_rounds":2,"round_limit_source":"task_review_policy.max_rounds",
                 "sha":git(&repo,&["rev-parse","HEAD"]),"reason":format!("required correction {index}")})).unwrap();
         }
@@ -80,7 +84,15 @@ fn fixture() -> (tempfile::TempDir, Ctx, Request) {
             if index == 2 { t.current_run_mut().unwrap().gate = Some(serde_json::from_value(json!({"sha":sha,"at":"2026-11-01T00:00:00Z","result":"fail","failed_cmd":"unit:atomicity"}))?); }
             Ok(())
         }).unwrap();
-        store.log_event(Some(&task.id),"cowork_finished",json!({"run":id,"head":sha,"session":"A-fixture","slug":"work","owner_confirmed":true})).unwrap();
+        let submitted_run = format!("R{}", order[index]);
+        if done {
+            store.log_event(Some(&task.id), "done", json!({"run":submitted_run,"identity":{
+                "version":2,"task":task.id,"run":submitted_run,"attempt":format!("submission-{index}"),
+                "head":sha,"tree":git(&repo,&["rev-parse","HEAD^{tree}"]),"integration_base":sha,"dispatch_base":sha,
+                "spec_digest":"fixture","policy_digest":"fixture","inputs_digest":"fixture"}})).unwrap();
+        } else {
+            store.log_event(Some(&task.id),"cowork_finished",json!({"run":submitted_run,"head":sha,"session":"A-fixture","slug":"work","owner_confirmed":true})).unwrap();
+        }
     }
     let head = store.head(&task.id).unwrap();
     let request = Request {
@@ -93,6 +105,175 @@ fn fixture() -> (tempfile::TempDir, Ctx, Request) {
     };
     drop(_actor);
     (root, Ctx::from_store(store), request)
+}
+
+fn refreshed(ctx: &Ctx, request: Request) -> Request {
+    let head = ctx.store.head(&request.task).unwrap();
+    Request {
+        expected_revision: head.rev,
+        expected_contract: head.contract_revision().unwrap(),
+        ..request
+    }
+}
+
+#[test]
+fn review1_chronology_refuses_swapped_runs_and_terminal_candidate_mismatch() {
+    let _clock = Clock;
+    for done in [false, true] {
+        let (_root, ctx, request) = fixture_submissions([1, 3, 2], done);
+        assert!(
+            preview(&ctx, &request).is_err(),
+            "accepted R1,R3,R2 for done={done}"
+        );
+        let (_root, ctx, request) = fixture_submissions([1, 2, 3], done);
+        assert!(preview(&ctx, &request).is_ok());
+        let task = ctx.store.get(&request.task).unwrap();
+        let older = task.runs[1].base_sha.clone();
+        ctx.store
+            .update(&request.task, |t| {
+                t.current_run_mut().unwrap().gate.as_mut().unwrap().sha = older;
+                Ok(())
+            })
+            .unwrap();
+        assert!(
+            preview(&ctx, &refreshed(&ctx, request)).is_err(),
+            "accepted contradictory terminal candidate for done={done}"
+        );
+    }
+}
+
+#[test]
+fn review1_terminal_changes_review_is_unresolved_and_unsupported_rows_refuse() {
+    let _clock = Clock;
+    let (_root, ctx, request) = fixture();
+    let notes = "terminal review: fix atomic rollback";
+    ctx.store
+        .update(&request.task, |t| {
+            let r = t.current_run_mut().unwrap();
+            r.gate = None;
+            r.review = Some(serde_json::from_value(
+                json!({"reviewer":"owner","verdict":"changes","notes":notes,
+            "sha":r.base_sha,"at":"2026-11-01T00:00:00Z"}),
+            )?);
+            Ok(())
+        })
+        .unwrap();
+    let request = refreshed(&ctx, request);
+    let proposal = preview(&ctx, &request).unwrap();
+    let observation=proposal.entries.iter().find(|e| matches!(&e.accounting,Some(corral_core::RepairEvent::Finding { finding }) if finding.observed_failure == notes))
+        .expect("terminal changes-review was omitted");
+    assert_eq!(observation.run.as_deref(), Some("R3"));
+    assert_eq!(observation.profile.as_deref(), Some("owner"));
+    assert_eq!(observation.actor.as_deref(), Some("owner"));
+    let finding = match observation.accounting.as_ref().unwrap() {
+        corral_core::RepairEvent::Finding { finding } => finding.clone(),
+        _ => unreachable!(),
+    };
+    assert!(matches!(
+        finding.matching,
+        corral_core::FindingMatch::Uncertain { .. }
+    ));
+    assert_eq!(
+        finding.resolution,
+        corral_core::FindingResolution::Unresolved
+    );
+    let review = ctx
+        .store
+        .head(&request.task)
+        .unwrap()
+        .current_run_head()
+        .unwrap()
+        .unwrap()
+        .review
+        .clone()
+        .unwrap();
+    assert_eq!(observation.source_digest, digest(&review).unwrap());
+    for (family, part) in [
+        ("review_run", corral_core::backend::TaskPart::ReviewRun),
+        ("finding", corral_core::backend::TaskPart::Finding),
+        (
+            "review_evidence",
+            corral_core::backend::TaskPart::ReviewEvidence,
+        ),
+        ("gate_attempt", corral_core::backend::TaskPart::GateAttempt),
+        (
+            "member_gate_history",
+            corral_core::backend::TaskPart::MemberGateHistory,
+        ),
+    ] {
+        let mut source = proposal.sources.clone();
+        let mut row = source.rows["run"][0].clone();
+        row.part = part;
+        row.key = "unsupported".into();
+        row.doc = json!({"version":1});
+        source.rows.get_mut(family).unwrap().push(row);
+        assert!(
+            chronology::reconstruct(&ctx.store, &ctx.store.head(&request.task).unwrap(), &source)
+                .is_err(),
+            "uninterpreted {family} evidence was silently retained"
+        );
+    }
+    let mut unmatched = proposal.sources.clone();
+    let mut event = unmatched.events.last().unwrap().clone();
+    event.seq.0 += 1;
+    event.event.kind = "verdict".into();
+    event.event.detail = json!({"run":"R3","reviewer":"owner","sha":review.sha,"verdict":"changes","notes":"an unrepresented prior review"});
+    unmatched.end.last_event = event.seq.0;
+    unmatched.events.push(event);
+    unmatched.end.event_count = unmatched.events.len();
+    assert!(
+        chronology::reconstruct(
+            &ctx.store,
+            &ctx.store.head(&request.task).unwrap(),
+            &unmatched
+        )
+        .is_err()
+    );
+    // Canonical event authorship must win over the nominal reviewer label.
+    {
+        let _actor = ctx.store.attribute(Actor::Pm);
+        ctx.store.log_event(Some(&request.task),"verdict",json!({"run":"R3","reviewer":"owner","sha":review.sha,"verdict":"changes","notes":notes,"review_at":review.at.to_string()})).unwrap();
+    }
+    let request = refreshed(&ctx, request);
+    let proposal = preview(&ctx, &request).unwrap();
+    let observed = proposal
+        .entries
+        .iter()
+        .find(|e| e.classification == "changes_review")
+        .unwrap();
+    assert_eq!(observed.actor.as_deref(), Some("pm"));
+    assert_eq!(observed.profile.as_deref(), Some("owner"));
+    assert_eq!(
+        observed.source_digest,
+        digest(proposal.sources.events.last().unwrap()).unwrap()
+    );
+    apply_checked(&ctx, authority::fixture(proposal)).unwrap();
+    let ledger = ctx.store.repair_ledger(&request.task).unwrap().unwrap();
+    assert!(ledger.unresolved().unwrap().contains(&finding.finding_id));
+    let renewed = ctx
+        .store
+        .renew_repair_allowance(
+            &request.task,
+            corral_core::RepairRenewal {
+                id: "isolated-review-lineage-fixture".into(),
+                previous_digest: ledger.digest().unwrap(),
+                reason: "fixture only".into(),
+                approved_by: "owner".into(),
+                at: ctx.store.now(),
+            },
+            RepairPolicy::V1 {
+                current_profile_limit: 1,
+                stronger_profile_limit: 0,
+                overall_limit: 1,
+                pm_diagnosis_allowance: 0,
+            },
+            "general",
+            None,
+        )
+        .unwrap();
+    assert!(renewed.unresolved().unwrap().contains(&finding.finding_id));
+    assert_eq!(renewed.allowances[0], ledger.allowances[0]);
+    assert_eq!(renewed.task_counters().unwrap().coding_repairs, 2);
 }
 
 #[test]

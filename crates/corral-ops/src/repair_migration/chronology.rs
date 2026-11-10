@@ -1,12 +1,15 @@
 use super::*;
 use corral_core::backend::StoredEvent;
 use corral_core::{
-    Actor, FailureIdentity, FindingId, FindingMatch, FindingResolution, GateResult,
-    RepairAttemptId, RepairAttemptKind, RepairEvent, RepairFinding, RepairStartReceipt, RunHead,
+    Actor, FailureIdentity, FindingId, FindingMatch, FindingResolution, RepairAttemptId,
+    RepairAttemptKind, RepairEvent, RepairFinding, RepairStartReceipt, RunHead,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::process::{Command, Stdio};
+
+#[path = "observations.rs"]
+mod observations;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -238,6 +241,18 @@ pub(super) fn reconstruct(
             .is_some_and(|e| e.event.kind == "created"),
         "canonical task genesis missing"
     );
+    ensure!(
+        source
+            .events
+            .last()
+            .is_some_and(|e| e.seq.0 == source.end.last_event)
+            && source
+                .events
+                .windows(2)
+                .all(|pair| pair[0].seq < pair[1].seq && pair[0].event.ts <= pair[1].event.ts),
+        "unsupported contradictory event chronology/end"
+    );
+    observations::supported_sources(source)?;
     let project = head
         .project
         .as_deref()
@@ -296,6 +311,7 @@ pub(super) fn reconstruct(
     let mut cap = None;
     let mut charges = 0u32;
     let mut last_submission: Option<(String, String)> = None;
+    let mut latest_candidates = BTreeMap::new();
     let mut last_issue = None;
     for event in &source.events {
         let issue = event.event.kind == "autopilot" && event.event.detail["to"] == "changes";
@@ -375,6 +391,14 @@ pub(super) fn reconstruct(
             let run = runs
                 .get(field(event, "run")?)
                 .context("submission references unknown run")?;
+            if let Some((previous, _)) = &last_submission {
+                ensure!(
+                    run.id == *previous
+                        || (!submitted_runs.contains(&run.id)
+                            && run.id == format!("R{}", submitted_runs.len() + 1)),
+                    "submission skips or reverses canonical run progression"
+                );
+            }
             let oid = if event.event.kind == "cowork_finished" {
                 field(event, "head")?
             } else {
@@ -403,6 +427,7 @@ pub(super) fn reconstruct(
             submitted.candidate = Some(oid.into());
             submitted.submission_actor = event.event.actor.clone();
             last_submission = Some((run.id.clone(), oid.to_owned()));
+            latest_candidates.insert(run.id.clone(), oid.to_owned());
             if initial_profile.is_none() {
                 ensure!(run.id == "R1", "initial submission is not canonical R1");
                 let profile = submitted
@@ -470,6 +495,16 @@ pub(super) fn reconstruct(
         pending.is_none() && submitted_runs.len() == runs.len(),
         "incomplete issuance/submission chronology"
     );
+    let current = head
+        .current_run_head()?
+        .context("canonical current run missing")?;
+    ensure!(
+        last_submission
+            .as_ref()
+            .is_some_and(|(run, _)| run == &current.id),
+        "terminal submission differs from canonical current run"
+    );
+    observations::candidate_pins(&runs, &latest_candidates, &current.id, &head.id, &commits)?;
     ensure!(
         charges == head.rounds && charges > 0,
         "canonical issuance count contradicts task rounds"
@@ -491,51 +526,8 @@ pub(super) fn reconstruct(
             "repair-cycle record contradicts submissions"
         );
     }
-    // Child records remain verbatim in the bounded source manifest, including earlier
-    // failures, diagnoses, fixes and provenance. Do not invent chronology stamps for rows.
-    // Latest gate failures are still unresolved even when no further coding was issued.
-    // A terminal red check is an observation, never an extra repair.
-    for run in runs.values() {
-        if let Some(gate) = &run.gate
-            && matches!(gate.result, GateResult::Fail | GateResult::Stale)
-        {
-            let command = gate
-                .failed_cmd
-                .as_deref()
-                .context("failed gate lacks command identity")?;
-            let identity = FailureIdentity {
-                criterion_or_test: command.into(),
-                affected_contract_or_location: "configured gate".into(),
-                failure_code: gate.result.as_str().into(),
-            };
-            entries.push(HistoricalEntry {
-                source: format!("run:{}:gate", run.id),
-                source_digest: digest(gate)?,
-                at: gate.at,
-                classification: "failed_check".into(),
-                actor: None,
-                submission_actor: None,
-                run: Some(run.id.clone()),
-                profile: Some(run.agent.clone()),
-                candidate: Some(gate.sha.clone()),
-                accounting: Some(RepairEvent::Finding {
-                    finding: RepairFinding {
-                        observation_id: format!(
-                            "legacy-gate:{}:{}:{}",
-                            source.store, run.id, gate.at
-                        ),
-                        finding_id: FindingId(identity.fingerprint()),
-                        fingerprint: identity.fingerprint(),
-                        identity,
-                        observed_failure: format!("{}: {command}", gate.result.as_str()),
-                        matching: FindingMatch::New,
-                        attempted_fixes: Vec::new(),
-                        resolution: FindingResolution::Unresolved,
-                    },
-                }),
-            });
-        }
-    }
+    // Observations must be projected or explicitly refused, not merely archived as raw rows.
+    observations::append(&runs, source, &mut entries)?;
     entries.sort_by_key(|e| e.at); // stable sort preserves canonical event order at equal stamps
     let limit = cap.context("canonical historical allowance not proved")?;
     ensure!(
