@@ -109,7 +109,8 @@ export class CorralClient {
     const args = identity.role === "pm"
       ? ["agent", "state", "--pm", "--json"]
       : identity.role === "assistant"
-        ? ["assistant", "show", identity.assistant ?? "", "--json"]
+        // Bounded: receipt/budget/usage history must not grow startup reads past maxBuffer.
+        ? ["assistant", "show", identity.assistant ?? "", "--json", "--host"]
         : ["show", identity.task ?? "", "--json"];
     return new Promise((resolve, reject) => {
       const child = execFile(corral, args, {
