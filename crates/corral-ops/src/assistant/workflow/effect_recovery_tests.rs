@@ -36,7 +36,17 @@ fn target_task(f: &Fixture) -> String {
         .store
         .update(&task.id, |t| {
             t.project = Some(f.container().state.binding.project.clone());
-            t.runs.push(ts::run("R1", "fixture-pane"));
+            let mut run = ts::run("R1", "fixture-pane");
+            run.worktree = f.fx.ctx.store.root().to_path_buf();
+            t.runs.push(run);
+            t.cowork = Some(corral_core::Cowork {
+                completion: None,
+                session: f.session.clone(),
+                scratch: String::new(),
+                run: "R1".into(),
+                review: corral_core::CoworkReview::None,
+                owner_confirmed: true,
+            });
             Ok(())
         })
         .unwrap();
@@ -65,12 +75,14 @@ fn legacy_file(f: &Fixture) -> std::path::PathBuf {
     let path = dir.join("retained.jsonl");
     let session_id = f.host.identity.session_id.clone();
     let entries = [
-        json!({"type":"session","id":session_id,"version":3}),
-        json!({"type":"message","id":"model","parentId":null,"message":{"role":"assistant","content":[{"type":"toolCall","id":"call-bash","name":"bash","arguments":{"command":"never replay"}}]}}),
+        json!({"type":"session","id":session_id,"version":3,"cwd":f.fx.ctx.store.root()}),
+        json!({"type":"custom","id":"earlier","parentId":null,"customType":"fixture_context","data":{}}),
+        json!({"type":"message","id":"model","parentId":"earlier","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_bash|fc_wire","name":"bash","arguments":{"command":"never replay"}}]}}),
         json!({"type":"custom","id":"prepared","parentId":"model","customType":"corral_command","data":{"job":"j1-1","generation":1,"consumed":false}}),
-        json!({"type":"custom","id":"terminal","parentId":"prepared","customType":"corral_command","data":{"job":"j1-1","generation":1,"consumed":false,"result":{"job":"j1-1","state":"exited","exit_code":0,"group_clear":true}}}),
+        json!({"type":"custom","id":"prepared-again","parentId":"prepared","customType":"corral_command","data":{"job":"j1-1","generation":1,"consumed":false}}),
+        json!({"type":"custom","id":"terminal","parentId":"prepared-again","customType":"corral_command","data":{"job":"j1-1","generation":1,"consumed":false,"result":{"job":"j1-1","state":"exited","exit_code":0,"group_clear":true}}}),
         json!({"type":"custom","id":"consumed","parentId":"terminal","customType":"corral_command","data":{"job":"j1-1","generation":1,"consumed":true,"delivery":"result","result":{"job":"j1-1","state":"exited","exit_code":0,"group_clear":true}}}),
-        json!({"type":"message","id":"result","parentId":"consumed","message":{"role":"toolResult","toolCallId":"call-bash","toolName":"bash","isError":true,"content":[{"type":"text","text":"record-unit CAS conflict"}]}}),
+        json!({"type":"message","id":"result","parentId":"consumed","message":{"role":"toolResult","toolCallId":"call_bash|fc_wire","toolName":"bash","isError":true,"content":[{"type":"text","text":"record-unit CAS conflict"}]}}),
     ];
     std::fs::write(
         &path,
@@ -92,12 +104,21 @@ fn assistant_effect_recovery_legacy_subset_is_exactly_once_and_unknown_resources
     let f = Fixture::in_project("app");
     let task = target_task(&f);
     let original_task = serde_json::to_vec(&f.fx.ctx.store.get(&task).unwrap()).unwrap();
-    start(&f, 51, "7:call-bash", "bash");
+    start(&f, 51, "7:call_bash|fc_wire", "bash");
     start(&f, 52, "1:1:mcp", "mcp_connect");
     start(&f, 53, "2:1:lsp", "lsp_startup");
     let path = legacy_file(&f);
     fence(&f);
-    let mut req = request(&f, "7:call-bash");
+    let mut req = request(&f, "7:call_bash|fc_wire");
+    let omitted = preview(&f.fx.ctx.store, &req).unwrap();
+    assert!(
+        omitted.blocked.is_some(),
+        "omission must not bypass the actual source task/driver"
+    );
+    assert!(
+        apply_fixture(&f, omitted).is_err(),
+        "a blocked association cannot mutate the ledger"
+    );
     req.task = Some(task.clone());
     let p = preview(&f.fx.ctx.store, &req).unwrap();
     assert_eq!(p.selected[0].blocked, None);
@@ -154,7 +175,10 @@ fn assistant_effect_recovery_legacy_subset_is_exactly_once_and_unknown_resources
             .len(),
         1
     );
-    let unknown = preview(&reopened, &request(&f, "1:1:mcp")).unwrap();
+    let mut unknown_request = req.clone();
+    unknown_request.admissions = vec!["1:1:mcp".into()];
+    unknown_request.request_id = "recover-unknown".into();
+    let unknown = preview(&reopened, &unknown_request).unwrap();
     assert!(
         unknown.selected[0]
             .blocked
@@ -187,16 +211,44 @@ fn assistant_effect_recovery_legacy_subset_is_exactly_once_and_unknown_resources
         original_task,
         "task/driver/run/checks/history/repair authority are unchanged"
     );
+    let one = association::fixture_bound(&reopened, &req, &f.container(), 1, 1).unwrap();
+    assert_eq!((one.task_heads_examined, one.coding_runs_examined), (1, 1));
+    let unrelated = reopened
+        .create("unrelated", None, corral_core::Status::Backlog, "")
+        .unwrap();
+    reopened
+        .update(&unrelated.id, |t| {
+            t.project = Some("app".into());
+            Ok(())
+        })
+        .unwrap();
+    let two = association::fixture_bound(&reopened, &req, &f.container(), 2, 1).unwrap();
+    assert_eq!((two.task_heads_examined, two.coding_runs_examined), (2, 1));
+    assert!(association::fixture_bound(&reopened, &req, &f.container(), 1, 1).is_err());
+    assert!(association::fixture_bound(&reopened, &req, &f.container(), 2, 0).is_err());
+    let mut wrong = req.clone();
+    wrong.task = Some(unrelated.id);
+    wrong.request_id = "wrong-task".into();
+    let wrong = preview(&reopened, &wrong).unwrap();
+    assert!(wrong.blocked.is_some());
+    assert!(apply_fixture(&f, wrong).is_err());
+    target_task(&f); // two retained source-task associations must not be treated as absence
+    let ambiguous = preview(&reopened, &req).unwrap();
+    assert!(ambiguous.blocked.is_some());
+    assert_eq!(
+        lookup(&reopened, &f.session, &req.request_id).unwrap(),
+        Some(receipt)
+    );
 }
 
 #[test]
 fn assistant_effect_recovery_refuses_stale_context_truncation_wrong_source_and_managed_actor() {
     let f = Fixture::in_project("app");
-    start(&f, 51, "7:call-bash", "bash");
+    start(&f, 51, "7:call_bash|fc_wire", "bash");
     let path = legacy_file(&f);
     fence(&f);
     let task = target_task(&f);
-    let mut req = request(&f, "7:call-bash");
+    let mut req = request(&f, "7:call_bash|fc_wire");
     req.task = Some(task.clone());
     let stale_task = preview(&f.fx.ctx.store, &req).unwrap();
     f.fx.ctx
@@ -229,7 +281,10 @@ fn assistant_effect_recovery_refuses_stale_context_truncation_wrong_source_and_m
             .replace("\"consumed\":true", "\"consumed\":false"),
         String::from_utf8(original.clone())
             .unwrap()
-            .replace("call-bash", "call-other"),
+            .replace("call_bash|fc_wire", "call-other"),
+        String::from_utf8(original.clone())
+            .unwrap()
+            .replace("\"id\":\"earlier\"", "\"id\":\"missing-earlier\""),
         String::from_utf8(original.clone())
             .unwrap()
             .trim_end()
@@ -285,9 +340,14 @@ fn assistant_effect_recovery_managed_proof_requires_real_identity_terminal_and_s
         ),
         (
             54,
+            json!({"action":"rpc_prepared","instance":"unique","id":"1","method":"tools/call"}),
+        ),
+        (
+            55,
             json!({"action":"terminal","instance":"unique","terminal":{"disposition":"shutdown_verified","executor_sha256":digest,
-            "exit_observed":true,"group_clear":true,"requests_terminal":true,"outcome":"earlier effect result unknown; executor terminated",
-            "delivery":"lifecycle_journal","requests":[]}}),
+            "exit_observed":true,"group_clear":true,"requests_terminal":false,"outcome":"earlier effect result unknown; executor terminated",
+            "delivery":"lifecycle_journal","requests":[{"id":"1","method":"tools/call","state":"unknown","reply_sha256":null,
+                "error_code":null,"delivery":"unknown","remote_task_id":null}]}}),
         ),
     ] {
         lifecycle.push(event.clone());
@@ -307,8 +367,56 @@ fn assistant_effect_recovery_managed_proof_requires_real_identity_terminal_and_s
     );
     let key = facts::key(&f.session, 1, "mcp-admission");
     let evidence: facts::Evidence = f.fx.ctx.store.record(facts::AREA, &key).unwrap().unwrap();
-    // Simulate terminal+seal journaled before canonical acknowledgement failed. Reconciliation
-    // reads these exact retained bytes, not a successor manager's empty registry.
+    // HTTP cannot turn an unknown RPC into proof by flipping the aggregate flag; a
+    // matching failed protocol result can be terminal without claiming effect success.
+    let mut http = evidence.clone();
+    http.sealed = true;
+    let instance = http.instances.get_mut("unique").unwrap();
+    instance.executor = facts::Executor::Http {
+        resource: "fixture".into(),
+        config_sha256: "c".repeat(64),
+        connection: "connection".into(),
+    };
+    instance.terminal.as_mut().unwrap().executor_sha256 =
+        facts::executor_digest(&instance.executor).unwrap();
+    assert!(http.require_terminal().is_err());
+    http.instances
+        .get_mut("unique")
+        .unwrap()
+        .terminal
+        .as_mut()
+        .unwrap()
+        .requests_terminal = true;
+    assert!(http.require_terminal().is_err());
+    let terminal = http
+        .instances
+        .get_mut("unique")
+        .unwrap()
+        .terminal
+        .as_mut()
+        .unwrap();
+    let rpc = &mut terminal.requests[0];
+    rpc.state = facts::RpcState::RpcError;
+    rpc.reply_sha256 = Some("d".repeat(64));
+    rpc.error_code = Some(-32602);
+    rpc.delivery = "adapter_observed".into();
+    assert!(http.require_terminal().is_ok());
+    http.instances.get_mut("unique").unwrap().requests.clear();
+    assert!(
+        http.require_terminal().is_err(),
+        "RPC ownership cannot be inferred after dispatch"
+    );
+    // Retain only the concrete binding canonically: RPC preparation and terminal/seal
+    // publication were lost. The complete original-host journal must carry that prefix.
+    let mut unpublished = evidence.clone();
+    let instance = unpublished.instances.get_mut("unique").unwrap();
+    instance.requests.clear();
+    instance.terminal = None;
+    f.fx.ctx
+        .store
+        .save_record(facts::AREA, &key, &unpublished)
+        .unwrap();
+    // Reconciliation reads these exact retained bytes, not a successor's empty registry.
     lifecycle.push(json!({"action":"seal"}));
     let mut retained = std::fs::read_to_string(&path).unwrap();
     for (n, event) in lifecycle.into_iter().enumerate() {

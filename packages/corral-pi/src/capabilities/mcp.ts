@@ -12,11 +12,12 @@ import {
 import { mcpControlTools } from "../host/mcp-tools.ts";
 import { sha256Hex } from "../tools/corral.ts";
 import { ManagedInstance, OwnedStdio, type EvidenceSink } from "../host/managed-effects.ts";
+import { ManagedRpc } from "../host/managed-rpc.ts";
 
 type OwnedConnection = {
   readonly name: string; readonly owner: ManagedInstance; readonly client: McpClient; readonly local: boolean;
-  readonly pending: Set<Promise<unknown>>; readonly requests: Map<string, boolean>;
-  unknown: boolean; closing?: Promise<void>;
+  readonly pending: Set<Promise<unknown>>; readonly sends: Set<Promise<void>>; readonly rpc: ManagedRpc;
+  closing?: Promise<void>;
 };
 
 const SchemaObject = z.record(z.string(), z.unknown());
@@ -87,7 +88,7 @@ export class McpAccess {
     const owner = new ManagedInstance(`mcp:${name}`, { name, settings, cwd: this.cwd }, this.evidence);
     await owner.prepare();
     const client = new McpClient({ name: "corral-pi", version: "1", requestTimeoutMs: 15_000 });
-    const owned: OwnedConnection = { name, owner, client, local: !!settings.command, pending: new Set(), requests: new Map(), unknown: false };
+    const owned: OwnedConnection = { name, owner, client, local: !!settings.command, pending: new Set(), sends: new Set(), rpc: new ManagedRpc() };
     this.owned.push(owned); server.current = owned; server.client = client;
     if (!settings.command) await owner.bindHttp();
     const transport: McpTransport = settings.command
@@ -101,19 +102,22 @@ export class McpAccess {
         start: () => transport.start(), close: () => transport.close(),
         onError: listener => transport.onError(listener), onClose: listener => transport.onClose(listener),
         onMessage: listener => transport.onMessage(message => {
-          if ("id" in message && !("method" in message) && owned.requests.has(String(message.id))) {
-            owned.requests.set(String(message.id), true);
-          }
+          owned.rpc.received(message);
           listener(message);
         }),
-        send: async (message, options) => {
-          if ("id" in message && "method" in message) {
-            if (owned.requests.size >= 128 && !owned.requests.has(String(message.id))) {
-              throw new McpDenied("request identity limit; explicitly reconnect after inspected settlement");
-            }
-            owned.requests.set(String(message.id), false);
-          }
-          await transport.send(message, options);
+        send: (message, options) => {
+          const id = owned.rpc.prepare(message);
+          const pending = (async () => {
+            try {
+              if (id !== undefined && "method" in message) await owner.rpcPrepared(id, message.method);
+              if (this.stopped || owned.closing || options?.signal?.aborted) throw new McpDenied("MCP stopped before protocol dispatch");
+            } catch (error) { if (id !== undefined) owned.rpc.notStarted(id); throw owned.rpc.fence(error); }
+            if (id !== undefined) owned.rpc.dispatch(id);
+            await transport.send(message, options);
+          })();
+          owned.sends.add(pending);
+          void pending.then(() => owned.sends.delete(pending), () => owned.sends.delete(pending));
+          return pending;
         },
         ...(transport instanceof StreamableHttpTransport ? { setProtocolVersion: (version: string) => transport.setProtocolVersion(version) } : {}),
       };
@@ -235,34 +239,29 @@ export class McpAccess {
         tools: server.tools.filter((tool) => toolAllowed(server.settings, this.role, tool.name)).map((tool) => tool.name),
         ...(server.error ? { error: server.error } : {}),
         ...(server.current ? { executor: { ...server.current.owner.snapshot(),
-          unknown_remote: !server.current.local && (server.current.unknown || [...server.current.requests.values()].some(done => !done)),
-          requests: [...server.current.requests].map(([id, terminal]) => ({ id, terminal })) } } : {}),
+          unknown_remote: !server.current.local && !server.current.rpc.settled,
+          requests: server.current.rpc.outcomes() } } : {}),
       })),
     };
   }
 
   private async observe<T>(owned: OwnedConnection, action: () => Promise<T>): Promise<T> {
     if (owned.closing) throw new McpDenied("MCP connection stopped before dispatch");
-    const pending = action(); owned.pending.add(pending);
+    const pending = owned.rpc.observe(action); owned.pending.add(pending);
     try { return await pending; }
-    catch (error) {
-      // An actual JSON-RPC error response IS terminal. Cancellation/timeout/disconnect of
-      // an unanswered remote request is not, irrespective of annotations or Promise state.
-      owned.unknown ||= [...owned.requests.values()].some(terminal => !terminal);
-      throw error;
-    }
     finally { owned.pending.delete(pending); }
   }
 
   private stop(owned: OwnedConnection): Promise<void> {
     return owned.closing ??= (async () => {
       await owned.client.close();
-      await Promise.allSettled([...owned.pending]);
-      if (!owned.local && (owned.unknown || [...owned.requests.values()].some(terminal => !terminal))) {
+      await Promise.allSettled([...owned.pending, ...owned.sends]);
+      if (!owned.local && !owned.rpc.settled) {
+        await owned.owner.rpcUnknown("remote request unanswered, invalid, contradictory or unsupported async task; connection close is not execution shutdown", owned.rpc.outcomes());
         throw new Error("MCP remote request outcome unknown; connection close is not execution shutdown");
       }
-      await owned.owner.stopped(owned.unknown ? "local executor terminated; earlier request outcome unknown"
-        : "owned transport closed; every observed request terminal", [...owned.requests.keys()].map(id => `${owned.owner.token}:${id}`));
+      await owned.owner.stopped(owned.rpc.unknown ? "local executor terminated; earlier request outcome unknown"
+        : "owned transport closed; every observed request terminal (not necessarily successful)", owned.rpc.outcomes());
     })();
   }
 

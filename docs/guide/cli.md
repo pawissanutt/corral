@@ -116,6 +116,7 @@ Commands:
   show         Show a session, its durable container and usage
   end          End a session (stopping a running host), keeping its record and transcript references
   summary      Replace a session's Markdown summary from a UTF-8 file
+  effects      Evidence-only stale executor reconciliation; unknown resources remain outstanding
   scratch      Scratch worktrees for spikes and co-work
   permissions  Write permissions the owner gave a session: its grants, settings and revocation
   help         Print this message or the help of the given subcommand(s)
@@ -202,6 +203,98 @@ Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
       --json         
   -h, --help         Print help
+```
+
+### `corral assistant effects`
+
+```text
+Evidence-only stale executor reconciliation; unknown resources remain outstanding
+
+Usage: corral assistant effects [OPTIONS] <COMMAND>
+
+Commands:
+  preview  Read-only exact proposal, executor evidence and retained blockers (JSON); never drain
+  apply    Reconcile only proved rows after an unmanaged owner types the exact terminal challenge
+  receipt  Read a saved request outcome; replay is acknowledgement, not renewed authority
+  outcome  Read the immutable reconciliation/audit for one original admission
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+#### `corral assistant effects preview`
+
+```text
+Read-only exact proposal, executor evidence and retained blockers (JSON); never drain
+
+Usage: corral assistant effects preview [OPTIONS] --generation <GENERATION> --admission <ADMISSION> --request <REQUEST> <ASSISTANT>
+
+Arguments:
+  <ASSISTANT>  Exact assistant whose original executors are being inspected
+
+Options:
+      --generation <GENERATION>  Original, fenced host generation (not the current host's generation)
+      --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --task <TASK>              Explicit matching associated task; omission requires a complete no-associated-task proof
+      --admission <ADMISSION>    Exact full admission ID; repeat to select a proved subset
+      --request <REQUEST>        Stable reconciliation request ID; use receipt lookup after an uncertain acknowledgement
+  -h, --help                     Print help
+```
+
+#### `corral assistant effects apply`
+
+```text
+Reconcile only proved rows after an unmanaged owner types the exact terminal challenge
+
+Usage: corral assistant effects apply [OPTIONS] --generation <GENERATION> --admission <ADMISSION> --request <REQUEST> --digest <DIGEST> --reason <REASON> <ASSISTANT>
+
+Arguments:
+  <ASSISTANT>  Exact assistant whose original executors are being inspected
+
+Options:
+      --generation <GENERATION>  Original, fenced host generation (not the current host's generation)
+      --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --task <TASK>              Explicit matching associated task; omission requires a complete no-associated-task proof
+      --admission <ADMISSION>    Exact full admission ID; repeat to select a proved subset
+      --request <REQUEST>        Stable reconciliation request ID; use receipt lookup after an uncertain acknowledgement
+      --digest <DIGEST>          Digest from the exact inspected preview; changes require a fresh preview
+      --reason <REASON>          Nonblank owner explanation retained with the immutable audit
+  -h, --help                     Print help
+```
+
+#### `corral assistant effects receipt`
+
+```text
+Read a saved request outcome; replay is acknowledgement, not renewed authority
+
+Usage: corral assistant effects receipt [OPTIONS] <ASSISTANT> <REQUEST>
+
+Arguments:
+  <ASSISTANT>
+  <REQUEST>
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+#### `corral assistant effects outcome`
+
+```text
+Read the immutable reconciliation/audit for one original admission
+
+Usage: corral assistant effects outcome [OPTIONS] --generation <GENERATION> --admission <ADMISSION> <ASSISTANT>
+
+Arguments:
+  <ASSISTANT>
+
+Options:
+      --generation <GENERATION>
+      --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --admission <ADMISSION>
+  -h, --help                     Print help
 ```
 
 ### `corral assistant scratch`

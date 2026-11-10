@@ -316,12 +316,25 @@ complete admission digest/version, selected executor proofs and every retained b
 It is a CAS proposal, not authorization. Unselected or unproved MCP/LSP rows remain active.
 A successful bash reconciliation cannot prove another executor stopped.
 
+Task association is resolved from retained session/scratch provenance, current co-work
+source/driver heads and coding-run locations, not informational focus text. A known
+association requires the explicit matching `--task`. Only a complete scan proving no
+associated task permits omission. Ambiguous, conflicting, missing, future-version or
+incomplete inventories produce a blocked preview; passing a different task cannot bypass
+it. The current readback bounds are 1,024 task heads and 4,096 coding-run rows. Exceeding
+those bounds is unavailability, never a workspace-only fallback.
+
 Version-1 executor evidence is stored separately from legacy admission rows. Local process
 proof binds an instance, configuration digest, PID, kernel start identity and boot identity;
 it requires observed exit and actual owned-group clearance, not just a sent signal. HTTP
-MCP requires terminal matching requests as well as transport closure. Cancellation, timeout
-or a lost remote reply stays unknown, even for a nominally read-only tool. Earlier effect
-outcome and executor quiescence are separate: shutdown never means an earlier effect was
+MCP journals each owned request identity before protocol dispatch and requires validated
+matching terminal responses as well as transport closure. Matching RPC errors remain known
+failed results; malformed results and unsupported asynchronous task acknowledgements are
+not terminal proof. Cancellation, timeout or a lost remote reply stays unknown, even for a
+nominally read-only tool. Retained observations include request identities, response
+digests and task identifiers when available; missing observations are never inferred.
+Earlier effect outcome and executor
+quiescence are separate: shutdown never means an earlier effect was
 successful, undone or safe to replay. Unsupported platforms/evidence versions fail closed.
 
 Managed shutdown closes startup admission, joins owned work and attempts all instances.
