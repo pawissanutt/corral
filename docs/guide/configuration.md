@@ -101,8 +101,9 @@ plus one ad-hoc task, and one gate independently. Ad-hoc work counts only once: 
 shrink the normal allowance a second time. All maxima must be positive; the reserve must be
 smaller than both `agents` and `unfinished`.
 
-Settings → General → Independent pools stages a visible draft. Review all four values and
-save explicitly, or activate through the validated config command:
+Settings → General → Independent pools (listed after Unfinished work, before Default profile)
+stages a visible draft. Review all four values and save explicitly, or activate through the
+validated config command:
 
 ```bash
 corral config set limits.capacity '{ unfinished = 6, agents = 4, gates = 1, adhoc_reserve = 1 }'
