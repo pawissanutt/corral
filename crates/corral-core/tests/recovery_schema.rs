@@ -253,10 +253,19 @@ fn future_store_fence_refuses_open_and_writes_without_task_effects() {
     let store = Store::init(tmp.path()).unwrap();
     let task = store.create("Future", None, Status::NeedsMe, "").unwrap();
     let before = store.fixture_task_text(&task.id).unwrap().into_bytes();
-    fs::write(store.dir().join("state").join("schema-version"), "5\n").unwrap();
+    let future = corral_core::STORE_SCHEMA_VERSION + 1;
+    let future_fence = format!("{future}\n");
+    fs::write(
+        store.dir().join("state").join("schema-version"),
+        &future_fence,
+    )
+    .unwrap();
     // When / Then
     let refused = Store::open_unobserved(tmp.path()).unwrap_err();
-    assert!(format!("{refused:#}").contains("schema 5"), "{refused:#}");
+    assert!(
+        format!("{refused:#}").contains(&format!("schema {future}")),
+        "{refused:#}"
+    );
     assert!(store.save(&task).is_err());
     assert_eq!(
         store.fixture_task_text(&task.id).unwrap().into_bytes(),
@@ -264,7 +273,7 @@ fn future_store_fence_refuses_open_and_writes_without_task_effects() {
     );
     assert_eq!(
         fs::read_to_string(store.dir().join("state").join("schema-version")).unwrap(),
-        "5\n"
+        future_fence
     );
 }
 

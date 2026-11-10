@@ -383,16 +383,27 @@ fn historical_or_stale_reviewer_approval_cannot_offer_owner_acceptance() {
 
 #[test]
 fn changed_plan_bytes_only_offer_inspection_not_invalid_verdict_commands() {
-    // Given a source changed after independent review.
+    // Given a valid pre-blob submitted snapshot, then changed bytes after review.
     let (tmp, ctx, id) = fixture();
+    let legacy = PLAN.replace("Design the PM flow", "Legacy submitted PM flow");
+    let hash = corral_core::blob_ref::BlobHash::of(legacy.as_bytes());
+    assert!(ctx.store.blob_row(&hash).unwrap().is_none());
+    let snapshot = ctx.store.dir().join("legacy-plan.md");
+    std::fs::write(&snapshot, &legacy).unwrap();
     ctx.store
         .update(&id, |t| {
-            t.plans[2].reviews[0].verdict = Some(Verdict::Approve);
+            let plan = &mut t.plans[2];
+            plan.artifact.path = "legacy-plan.md".into();
+            plan.artifact.sha256 = hash.as_str().into();
+            plan.document = corral_core::PlanDocument::parse(&legacy)?;
+            plan.reviews[0].verdict = Some(Verdict::Approve);
             Ok(())
         })
         .unwrap();
-    std::fs::write(tmp.path().join("plan.md"), "Changed plan bytes").unwrap();
-    // When readiness checks the exact source and snapshot.
+    let task = ctx.store.get(&id).unwrap();
+    corral_core::plan_policy::fresh(&ctx.store, &task, &task.plans[2]).unwrap();
+    std::fs::write(snapshot, "Changed plan bytes").unwrap();
+    // When readiness checks the authoritative submitted snapshot.
     let card = readbacks(tmp.path(), &ctx);
     // Then the owner sees the blocked decision without invalid review/approval options.
     assert_eq!(card["kind"], "owner");
