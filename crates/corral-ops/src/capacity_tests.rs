@@ -192,7 +192,7 @@ fn durable_lane_and_unfinished_position_survive_park_and_stage_change() {
     let head = store.head(&task.id).unwrap();
     assert_eq!(head.capacity_started, Some(true));
     assert_eq!(
-        CapacityUsage::from_heads(&[head.clone()])
+        CapacityUsage::from_heads(std::slice::from_ref(&head))
             .unfinished
             .total(),
         1
