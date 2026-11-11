@@ -37,10 +37,15 @@ profile metadata, actual submission actors and Git author/committer identities a
 Supported parent-run gate failures and changes reviews become ordered unresolved findings,
 not new repair charges. Unstructured findings remain explicitly uncertain rather than being
 semantically equated. Canonical verdict events must reconcile with the supported review
-snapshot; actual event authorship takes precedence over a nominal reviewer label.
+snapshot; actual event authorship takes precedence over a nominal reviewer label. Supported
+terminal `gate` events must match the parent run's SHA, result, failed command, attempt/log
+identity and tier evidence. Supplied full identity/command records must match as well. Their
+failure finding is attached to the event itself with its hash and actual actor, once only.
 
 Uninterpreted child review/finding/evidence, gate-attempt/history or nonempty diagnostic
-chronologies refuse import. Merely retaining their raw documents is not reconciliation.
+chronologies refuse import. Started/cancelled/other gate lifecycle histories, repeated gate
+events for a single snapshot, unknown event fields and unfinished/lost gate snapshots also
+refuse. Merely retaining their raw documents is not reconciliation.
 Those source records remain unchanged; this service does not silently drop them or reset a
 diagnostic retry. Extending that supported source subset requires a faithful interpreter.
 
@@ -85,10 +90,10 @@ are attached separately after the committed candidate's assigned quick gate.
 | Atomic evidence/history/receipt/consumed indexes; placeholder retained | `publish_repair_import` joins a task CAS and typed evidence reservation; migration fixtures read indexes and original placeholder proof back. Substantive history and stale previews refuse. Source blob refs remain pinned in the evidence index. |
 | Original two spent, exactly one third, no fourth or replay credit | Migration fixture imports max2 exhausted history, stages current1/stronger0/overall1/diagnosis0, rejects archived-attempt recovery, charges total3 with one initial, and refuses fourth/new request IDs. |
 | Authority retained, no activation/live recovery | No command/tool wiring; private non-deserializable confirmation capabilities; unmanaged controlling-terminal ceremony; negative managed/noninteractive confirmation check. Existing entry, dispatch hold, independent review and gate paths are unchanged. |
-| Proportional validation and cost | Four original low-layer registrations plus two review regressions; command output and each assigned quick gate receipt/log. |
+| Proportional validation and cost | Four original low-layer registrations plus three review regressions; command output and each assigned quick gate receipt/log. |
 
 Original submission registrations: one launch-admission regression, one core context contract
-test and two tiny import/service tests; the review correction below adds two regressions. No additional end-to-end journey, global policy/budget or
+test and two tiny import/service tests; the review corrections below add three regressions. No additional end-to-end journey, global policy/budget or
 existing assertion relaxations, quarantine or gate configuration changes. No intentional host load or provider requests.
 
 Targeted production lint/typecheck: `cargo clippy -p corral-core -p corral-ops --lib --
@@ -126,6 +131,38 @@ output. The same targeted production Clippy command passed again (25.21 s wall),
 journey or large history. The fresh assigned gate supplies final-candidate validation and added-test cost.
 No live T-924/T-933 import, renewal, recovery, pool work or owner input was performed; no
 CLI/MCP surface, budget, assertion, quarantine or policy was relaxed.
+
+## R1-review2 remaining F2 correction
+
+The second review closed F1 and terminal-review lineage, but reproduced canonical `gate`
+events being retained without reconciliation. This was a missing event-interpreter branch,
+not an absent parent snapshot: the snapshot's atomicity failure was already projected while
+different event evidence was ignored.
+
+One new regression in the existing tiny fixture reproduced all five accepted bad histories
+at `9e14c1cd`: R99, different full SHA, different failed command, contradictory known result,
+and unsupported result. Command:
+`cargo test -p corral-core -p corral-ops --lib review2_gate_events_are_reconciled_or_refused -- --nocapture`.
+It failed with all five accepted cases (0.48 s suite; 318.90 s wall including compilation),
+recorded in `.evidence/review2-baseline.log`.
+
+A closed terminal-event interpreter now binds each event to its canonical run/gate snapshot,
+including candidate/result/command and attempt/log/identity/tier evidence. Matching failures
+are projected on the event's own entry, retaining actual actor and content hash without a
+duplicate snapshot finding or an extra charge. Unsupported lifecycle, repeated-event and
+unrepresented histories refuse explicitly. This round changes no accounting, allowance,
+authority, CLI/MCP, capacity or recovery infrastructure.
+
+The regression covers the five public-preview contradictions, matching-event import and
+provenance, identity/command/tier/evidence mismatches, missing snapshots and unsupported
+lifecycle/repeated-event histories. Existing F1, review lineage and all original launch,
+archive, count and refusal assertions remain intact.
+
+`cargo test -p corral-core -p corral-ops --lib repair -- --nocapture` passed **32 core + 34 ops
+tests** (0.17 s + 9.97 s suite; 118.43 s wall), logged in `.evidence/review2-targeted.log`.
+Targeted production Clippy passed (46.96 s wall), logged in `.evidence/review2-clippy.log`.
+One lowest-layer registration was added, with no extra end-to-end journey or load generation.
+The assigned post-rebase quick gate supplies fresh final-candidate validation and added cost.
 
 Language-server coverage was incomplete: some changed files timed out during indexing or
 were reported unlinked despite module registration; its cfg-tail diagnostics also disagreed
