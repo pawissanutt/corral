@@ -15,6 +15,8 @@ import { dirname, join } from "node:path";
 
 import compat from "../../compat.json" with { type: "json" };
 import assistantContract from "../../assets/assistant-contract.md" with { type: "text" };
+import gptAssistant from "../../assets/families/gpt/assistant.md" with { type: "text" };
+import gptPm from "../../assets/families/gpt/pm.md" with { type: "text" };
 import pmContext from "../../assets/pm-context.md" with { type: "text" };
 import pmSkill from "../roles/pm/skills/corral-pm/SKILL.md" with { type: "text" };
 import requestExecution from "../../assets/request-execution.md" with { type: "text" };
@@ -28,6 +30,8 @@ import { piDocs } from "./pi-docs-macro.ts" with { type: "macro" };
 export const INSTALL_FILES: Readonly<Record<string, string>> = {
   "compat.json": `${JSON.stringify(compat, null, 2)}\n`,
   "assets/assistant-contract.md": assistantContract,
+  "assets/families/gpt/assistant.md": gptAssistant,
+  "assets/families/gpt/pm.md": gptPm,
   "assets/pm-context.md": pmContext,
   "src/roles/pm/skills/corral-pm/SKILL.md": pmSkill,
   "assets/request-execution.md": requestExecution,
