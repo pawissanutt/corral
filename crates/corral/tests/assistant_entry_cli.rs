@@ -419,6 +419,11 @@ const ROWS: &[(&str, &[&str], Class)] = &[
     ("route", &["T-001", "--clear-reviewer"], Refused),
     ("hold", &["T-001", "--reason", "urgent work first"], Refused),
     ("release", &["T-001"], Refused),
+    (
+        "waive-review",
+        &["T-001", "--reason", "owner emergency fix"],
+        Refused,
+    ),
     ("focus", &["T-001", "--all"], Refused),
     ("focus", &["--clear"], Refused),
     ("dispatch", &["T-001"], Refused),
