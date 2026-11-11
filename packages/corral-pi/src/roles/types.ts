@@ -137,6 +137,11 @@ export interface RoleModule {
   /** The role's contract, appended to the system prompt. */
   contract(context: RoleContext): string;
   /**
+   * The model-family working-style overlay for the session's current model, sent as its own
+   * prompt section each turn; undefined leaves the section out. It never carries authority.
+   */
+  calibration?(provider: string, model: string): string | undefined;
+  /**
    * The role's fixed shell refusals: checked for every bash call, top-level or nested, before any
    * configured bash rule, and never disabled by capability settings. A reason refuses the call.
    */

@@ -102,6 +102,9 @@ function checkRole(value: unknown, module: string, role: Role): RoleModule {
   if (candidate.shellRefusal !== undefined && typeof candidate.shellRefusal !== "function") {
     throw new ModuleInvalid(module, "shellRefusal must be a function");
   }
+  if (candidate.calibration !== undefined && typeof candidate.calibration !== "function") {
+    throw new ModuleInvalid(module, "calibration must be a function");
+  }
   checkLocalTools(candidate, module);
   return candidate as unknown as RoleModule;
 }

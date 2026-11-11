@@ -8,6 +8,7 @@ import { assetRoot, readAsset, renderContract } from "../common/assets.ts";
 import { receiptLookupTool } from "../common/tools.ts";
 import { requestContract, sessionTodoTool } from "../common/todo.ts";
 import { askUserContract } from "../common/ask-user.ts";
+import { calibrationReader } from "../common/family.ts";
 import type { CorralOp, RoleModule, UpstreamTool } from "../types.ts";
 import { assistantShellRefusal } from "./guard.ts";
 import { ownerActionTool } from "./owner-action.ts";
@@ -40,6 +41,7 @@ export function assistantRole(root: string): RoleModule {
         closeSync(fd);
       }
     },
+    calibration: calibrationReader(root, "assistant"),
     shellRefusal: assistantShellRefusal,
     extend: installWriteGuard,
   };

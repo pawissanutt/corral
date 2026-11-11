@@ -1071,6 +1071,14 @@ export class HostSession {
         () => this.session.model?.api === CLAUDE_SDK_API);
       this.questionUi.install(pi);
     }
+    // Follows the session's current model, so a mid-session model switch changes the overlay too.
+    const calibration = this.options.modules.role.calibration;
+    if (calibration) pi.on("before_agent_start", event => {
+      const model = this.runtime?.session.model;
+      const text = model ? calibration(model.provider, model.id) : undefined;
+      if (text) event.systemPromptOptions.sections.model_calibration = text;
+      else delete event.systemPromptOptions.sections.model_calibration;
+    });
     pi.on("session_start", async () => {
       if (this.bound) { this.commands?.bound(); await this.recoverPlanReviews(); }
     });
