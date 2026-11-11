@@ -355,11 +355,13 @@ fn herdr_dispatch_sync_reply_jump_retry() {
         .unwrap();
     // Hold the foreground process stable while asserting reported agent states.
     // A one-shot echo races the shell's completion update against report-agent.
+    // Keep the command on one line: a POSIX sh pane echoes each continuation line behind
+    // a `> ` prompt, which delivery reads as a composer that still holds the reply.
     ctx.store.config.agents.get_mut("fake").unwrap().command = format!(
         "python3 -u -c 'import socket,sys; print(\"corral-fake\",flush=True); \
          s=socket.socket(socket.AF_UNIX,socket.SOCK_DGRAM); \
-         s.sendto(b\"READY\", \"{}\")\n\
-         for line in sys.stdin:\n    print(\"received-corral\",flush=True)'",
+         s.sendto(b\"READY\", \"{}\"); \
+         [print(\"received-corral\",flush=True) for _ in sys.stdin]'",
         ready_path.display()
     );
     ctx.store.config.profiles.insert(
