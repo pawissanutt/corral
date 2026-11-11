@@ -47,6 +47,7 @@ pub const RESERVED: &[&str] = &[
     "run",
     "hold",
     "release",
+    "waive-review",
     "focus",
     "queue",
     "wait",
