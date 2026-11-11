@@ -136,9 +136,7 @@ prepare_test_binaries() {
     "$CORRAL_TEST_BUDGET_STATE" nextest-binaries --output "$CORRAL_GATE_BINARIES_METADATA" -- \
     bash scripts/cargo.sh nextest list "$@" --list-type binaries-only --message-format json || return
   CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_case.py prepare "$gate_dir/case.json" \
-    "$CORRAL_GATE_CARGO_METADATA" "$CORRAL_GATE_BINARIES_METADATA" >"$gate_dir/runner.sh" || return
-  # shellcheck disable=SC1091
-  source "$gate_dir/runner.sh"
+    "$CORRAL_GATE_CARGO_METADATA" "$CORRAL_GATE_BINARIES_METADATA" || return
 }
 
 if [[ $tier == quick ]]; then
@@ -183,14 +181,14 @@ if [[ $tier == quick ]]; then
   # Declared tests replace the module selection and may name any package. The 'quick'
   # nextest profile leaves out the slow group (.config/nextest.toml) unless tests are
   # declared; full landings restore torture suites on owning-module changes.
-  # Quarantine runs in every tier, even when the changed files select no Rust tests.
-  test_scope=(--workspace)
-  if ((${#test_scope[@]})); then
+  # Quarantine runs whenever Rust tests are in scope. A candidate that touches no crate and
+  # declares no tests builds no test binaries: neither run could observe its change.
+  if ((declared || ${#scope[@]})); then
     profile=(--profile quick)
-    list_args=("${test_scope[@]}" "${profile[@]}")
+    list_args=(--workspace "${profile[@]}")
     if ((declared)); then
       profile+=(--ignore-default-filter)
-      list_args=("${test_scope[@]}" "${profile[@]}" -E "$selection")
+      list_args=(--workspace "${profile[@]}" -E "$selection")
     fi
     begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest list ${list_args[*]}"
     prepare_test_binaries --workspace || on_error
@@ -211,7 +209,7 @@ if [[ $tier == quick ]]; then
     # Approved exclusions or the slow group may cover the whole selection; nextest would call
     # that an empty run. A declared selection that matched nothing still reaches nextest and
     # fails.
-    if ((!declared && ${#scope[@]} == 0)) || ((remaining == 0 && !(declared && selected == 0))); then
+    if ((remaining == 0 && !(declared && selected == 0))); then
       run_filter='none()'
     elif ((!declared && !workspace)); then
       package_filter=''
@@ -229,7 +227,7 @@ if [[ $tier == quick ]]; then
       cargo nextest run "${run_args[@]}"
     end_step
   else
-    printf '\nSkipping cargo nextest (no touched crates and no declared tests).\n'
+    printf '\nSkipping cargo nextest and quarantine (no touched crates and no declared tests).\n'
   fi
 
   if ((pi_touched)); then

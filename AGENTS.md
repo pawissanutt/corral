@@ -46,6 +46,9 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
   not just Cargo's build lock. Compile once per gate and reuse its candidate-bound metadata.
   Keep the gate/work-budget test-clock feature union aligned to avoid a redundant rebuild.
 - Check one crate: `cargo check -p <crate>`; test one crate: `cargo test -p <crate>`.
+- Test binaries carry no debuginfo (`[profile.test] debug = false`); panic messages keep
+  their file and line. When a backtrace needs line numbers, rerun that one test with
+  `CARGO_PROFILE_TEST_DEBUG=line-tables-only cargo test -p <crate> <name>`.
 - Before `corral done`, run the gate your run contract names. In a tiered run that is `corral gate <id> --wait`, exactly once after the final rebase: corral selects the tier (quick during review rounds and for Plan-target members), records the receipt, and autopilot reuses it. Audited tasks then capture evidence, record it against the attempt that gate printed, run `corral done <id> --check`, then `corral done`. Evidence recorded for a quick receipt follows the candidate only through corral's authorized carries (tier promotion, clean replay); any other change needs fresh evidence. Legacy and untiered runs keep the gate commands their contract lists.
 - `scripts/gate.sh` without `--tier` is the full landing tier: formatting, the exact
   800-SLOC Rust ceiling, Clippy, workspace nextest in `corral-test`, doctests, small work
@@ -57,9 +60,10 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
   changes; Darwin runs on platform/dependency changes; plan verify keeps both lanes.
   Missing/legacy context is conservative: all suites and optional lanes.
 - Install cargo-nextest before running the gate. `.config/nextest.toml` uses 12 slots,
-  serializes shared live fixtures and disables retries. The candidate-bound runner in
-  `scripts/gate_case.py` observes the 10s per-test reference and classifies candidate test
-  changes against the integration base. ALL time thresholds and load observations are
+  serializes shared live fixtures and disables retries. After each nextest run,
+  `scripts/gate_case.py` reads its JUnit report, observes the 10s per-test reference and
+  classifies candidate test changes against the integration base; no per-test wrapper
+  process runs. ALL time thresholds and load observations are
   report-only in T-761; enforcement is deferred to T-776. Timing never changes a command's
   exit status. Overruns appear in the log and `.evidence/<attempt>-existing-test-costs.md`
   for T-766. Assertions still fail. Native nextest reports without termination. Explicit

@@ -10,8 +10,11 @@ license = "Apache-2.0"
 
 # Persistence-heavy scenarios spend most of their CPU decoding task/config snapshots.
 # Optimize test code while retaining the test profile's debug assertions and overflow checks.
+# No debuginfo: it was 77% of the test executables' bytes. Panic locations are unaffected;
+# rerun with CARGO_PROFILE_TEST_DEBUG=line-tables-only for file/line in backtraces.
 [profile.test]
 opt-level = 1
+debug = false
 debug-assertions = true
 overflow-checks = true
 

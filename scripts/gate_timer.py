@@ -47,9 +47,16 @@ def stop(child: subprocess.Popen, grace: float = 10) -> None:
 
 
 def execute(command: list[str], seconds: float | None, respect_load: bool = False,
-            output: Path | None = None, grace: float = 10) -> dict:
+            output: Path | None = None, grace: float = 10, samples: Path | None = None) -> dict:
     started = time.monotonic()
-    before = load_snapshot() if respect_load else {'quiet': True}
+    def observe() -> dict:
+        """One load reading; a test phase also keeps it for per-test observations."""
+        snapshot = load_snapshot()
+        if samples is not None:
+            with samples.open('a') as log:
+                log.write(json.dumps({'at': time.time(), **snapshot}) + '\n')
+        return snapshot
+    before = observe() if respect_load else {'quiet': True}
     busy = not before['quiet']
     stream = output.open('w') if output else None
     interrupted = False
@@ -69,7 +76,7 @@ def execute(command: list[str], seconds: float | None, respect_load: bool = Fals
                 break
             except subprocess.TimeoutExpired:
                 if respect_load:
-                    busy |= not load_snapshot()['quiet']
+                    busy |= not observe()['quiet']
     except KeyboardInterrupt:
         if child is not None:
             stop(child, grace)
@@ -79,7 +86,7 @@ def execute(command: list[str], seconds: float | None, respect_load: bool = Fals
         if stream:
             stream.close()
     elapsed = time.monotonic() - started
-    after = load_snapshot() if respect_load else {'quiet': True}
+    after = observe() if respect_load else {'quiet': True}
     busy |= not after['quiet']
     return {'exit_code': code, 'budget_exceeded': seconds is not None and elapsed > seconds,
             'report_only': True, 'enforcement_load': None, 'seconds': elapsed,
@@ -109,7 +116,8 @@ def phase(path: Path, label: str, command: list[str], compile_only: bool = False
           output: Path | None = None) -> int:
     state = json.loads(path.read_text())
     result = execute(command, None if compile_only else max(0, state['limit'] - state['budgeted']),
-                     respect_load=not compile_only, output=output)
+                     respect_load=not compile_only, output=output,
+                     samples=None if compile_only else path.with_name('load-samples.jsonl'))
     seconds = result['seconds']
     if compile_only:
         state['compile'] += seconds
