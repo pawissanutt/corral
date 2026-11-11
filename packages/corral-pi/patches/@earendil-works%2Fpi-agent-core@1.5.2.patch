@@ -1,5 +1,5 @@
 diff --git a/dist/agent.d.ts b/dist/agent.d.ts
-index 0147d05470d36019e0db0bf236fa0046f384a9a3..e09fdb946c226341bf735d5fc286fe709d31d79e 100644
+index 0147d05..e09fdb9 100644
 --- a/dist/agent.d.ts
 +++ b/dist/agent.d.ts
 @@ -1,6 +1,14 @@
@@ -28,7 +28,7 @@ index 0147d05470d36019e0db0bf236fa0046f384a9a3..e09fdb946c226341bf735d5fc286fe70
      steer(message: AgentMessage): void;
      /** Queue a message to run only after the agent would otherwise stop. */
 diff --git a/dist/agent.js b/dist/agent.js
-index e34d91afe7aa539ffff9f886352b02f23a1a51ea..56b49f12c26fc0c47fc4c54ee47c4c065b552fe7 100644
+index e34d91a..56b49f1 100644
 --- a/dist/agent.js
 +++ b/dist/agent.js
 @@ -60,10 +60,12 @@ function createMutableAgentState(initialState) {

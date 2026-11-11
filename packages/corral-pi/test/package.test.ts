@@ -24,14 +24,14 @@ const WEB_LOCK_ADDITIONS = [
   "htmlparser2/domutils/dom-serializer/entities",
 ];
 
-test("package.json pins the GO runtime, Claude lane, local HTML converters and development tools", () => {
+test("package.json pins the current runtime, Claude lane, local HTML converters and development tools", () => {
   const pkg = json(join(PACKAGE_ROOT, "package.json"));
   const compat = json(join(PACKAGE_ROOT, "compat.json"));
   expect(go.verdict).toBe("GO");
   const goLock = bunApi().JSONC.parse(readFileSync(join(REPO, go.lock.file), "utf8")) as { packages: Record<string, string[]> };
   const locked = (name: string) => goLock.packages[name]![0]!.slice(name.length + 1);
   expect(pkg.dependencies).toEqual({
-    [go.pi.package]: go.pi.version, [compat.claude.package]: compat.claude.version, zod: compat.claude.zod,
+    [compat.pi.package]: compat.pi.version, [compat.claude.package]: compat.claude.version, zod: compat.claude.zod,
     ...Object.fromEntries(AWS_DEPENDENCIES.map((name) => [name, locked(name)])), ...WEB_DEPENDENCIES,
   });
   expect(pkg.devDependencies).toEqual({
@@ -41,25 +41,44 @@ test("package.json pins the GO runtime, Claude lane, local HTML converters and d
   expect(pkg.scripts.typecheck).toBe("tsc --noEmit -p tsconfig.json");
 });
 
-test("bun.lock preserves every GO entry and only adds the Claude SDK and local HTML dependency closure", () => {
+test("bun.lock preserves unrelated GO entries and limits changes to Pi, Mermaid, Claude and local HTML", () => {
   expect(sha256(join(REPO, go.lock.file))).toBe(go.lock.sha256);
-  const parse = (path: string) => bunApi().JSONC.parse(readFileSync(path, "utf8")) as { packages: Record<string, unknown[]> };
+  const parse = (path: string) => bunApi().JSONC.parse(readFileSync(path, "utf8")) as { packages: Record<string, [string, string, { dependencies?: Record<string, string> }, string]> };
   const goLock = parse(join(REPO, go.lock.file));
   const lock = parse(join(PACKAGE_ROOT, "bun.lock"));
-  for (const [name, entry] of Object.entries(goLock.packages)) expect([name, lock.packages[name]]).toEqual([name, entry]);
+  const compat = json(join(PACKAGE_ROOT, "compat.json"));
+  for (const [name, entry] of Object.entries(goLock.packages)) {
+    if (Object.hasOwn(compat.pi.packages, name)) {
+      expect(lock.packages[name]?.[0]).toBe(`${name}@${compat.pi.packages[name]}`);
+    } else if (name === "grok-mermaid") {
+      expect(lock.packages[name]).toBeUndefined();
+    } else {
+      expect([name, lock.packages[name]]).toEqual([name, entry]);
+    }
+  }
+  expect(lock.packages[compat.pi.package]?.[3]).toBe(compat.pi.integrity);
+  expect(lock.packages[compat.pi.package]?.[2]).toEqual({
+    ...goLock.packages[go.pi.package]?.[2],
+    dependencies: {
+      ...Object.fromEntries(Object.entries(goLock.packages[go.pi.package]?.[2]?.dependencies ?? {})
+        .filter(([name]) => name !== "grok-mermaid")
+        .map(([name, version]) => [name, compat.pi.packages[name] ?? version])),
+      "lovely-mermaid": "0.3.3",
+    },
+  });
+  expect(lock.packages["lovely-mermaid"]?.[0]).toBe("lovely-mermaid@0.3.3");
   const added = Object.keys(lock.packages).filter((name) => !(name in goLock.packages));
   expect(added.filter((name) => !name.startsWith("@anthropic-ai/claude-agent-sdk")).sort())
-    .toEqual([...WEB_LOCK_ADDITIONS].sort());
+    .toEqual([...WEB_LOCK_ADDITIONS, "lovely-mermaid"].sort());
   for (const [name, version] of Object.entries({ ...WEB_DEPENDENCIES, ...WEB_DEV_DEPENDENCIES })) {
     expect(lock.packages[name]?.[0]).toBe(`${name}@${version}`);
   }
-  const compat = json(join(PACKAGE_ROOT, "compat.json"));
   const sdk = lock.packages[compat.claude.package]!;
   expect([sdk[0], sdk[3]]).toEqual([`${compat.claude.package}@${compat.claude.version}`, compat.claude.integrity]);
   expect(lock.packages.zod?.[0]).toBe(`zod@${compat.claude.zod}`);
 });
 
-test("compat.json is derived from bun-go.json", () => {
+test("compat.json retains the immutable Bun proof and records the current Pi release", () => {
   const compat = json(join(PACKAGE_ROOT, "compat.json"));
   expect(compat.verdict).toBe(go.verdict);
   expect(compat.source).toEqual({
@@ -67,9 +86,11 @@ test("compat.json is derived from bun-go.json", () => {
     task: go.task, plan: go.plan,
   });
   expect(compat.bun).toEqual({ range: go.bun.range, tested: go.bun.tested });
-  for (const key of ["package", "version", "integrity", "upstreamCommit", "packages"]) {
-    expect(compat.pi[key]).toEqual(go.pi[key]);
-  }
+  expect(compat.pi.package).toBe(go.pi.package);
+  expect(compat.pi.version).toBe("1.5.2");
+  expect(compat.pi.integrity).toBe("sha512-mUWI04rqF1Vd/m1q+Ps1XeWsTXEVvRUnsmRa83I3Dzua0Tx5bYS93imeqtIfrXf7PkkaR6ERz+AuQhIJlom5yA==");
+  expect(compat.pi.upstreamCommit).toBe("b4afdddf44e059c67ccf5097e5317d913521b470");
+  expect(compat.pi.packages).toEqual(Object.fromEntries(Object.keys(go.pi.packages).map((name) => [name, "1.5.2"])));
   expect(compat.lock).toEqual({ file: "bun.lock", sha256: sha256(join(PACKAGE_ROOT, "bun.lock")) });
 });
 
@@ -82,7 +103,7 @@ test("a compiled host checks only its embedded Bun against the tested range", ()
 
 test("the frozen install satisfies the startup pins and an unpinned Bun is refused", () => {
   const compat = readCompat(PACKAGE_ROOT);
-  expect(checkRuntime(PACKAGE_ROOT, compat).pi).toBe(go.pi.version);
+  expect(checkRuntime(PACKAGE_ROOT, compat).pi).toBe(compat.pi.version);
   expect(() => checkRuntime(PACKAGE_ROOT, compat, "1.4.1")).toThrow(/bun_version_unsupported: bun 1\.4\.1 is outside/);
   expect(() => checkRuntime(PACKAGE_ROOT, { ...compat, lock: { ...compat.lock, sha256: "0".repeat(64) } }))
     .toThrow(/lock_digest_mismatch/);
