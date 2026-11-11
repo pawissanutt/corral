@@ -46,6 +46,7 @@ fn target_task(f: &Fixture) -> String {
                 run: "R1".into(),
                 review: corral_core::CoworkReview::None,
                 owner_confirmed: true,
+                review_waiver: None,
             });
             Ok(())
         })

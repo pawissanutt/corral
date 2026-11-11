@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::Cowork;
+
 #[path = "model_slots.rs"]
 mod slots;
 
@@ -727,33 +729,6 @@ pub struct TaskResult {
 pub struct LandingReceipt {
     pub run: String,
     pub sha: String,
-}
-
-/// Co-work source provenance, with either a run-bound legacy instruction or a versioned
-/// completion scope. New scopes carry a minimum-reader fence in their review tag.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct Cowork {
-    #[serde(default)]
-    pub completion: Option<crate::CompletionScope>,
-    pub session: String,
-    pub scratch: String,
-    pub run: String,
-    pub review: CoworkReview,
-    /// The owner confirmed this instruction. Legacy true means Ship; new intent is explicit.
-    #[serde(default)]
-    pub owner_confirmed: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CoworkReview {
-    None,
-    Required,
-    /// Minimum-reader fence: old controllers must not mistake Verify for legacy Ship.
-    CompletionV1,
-    /// Minimum reader for goal-bounded transfer/admission. Older controllers must refuse
-    /// rather than treating a saved or plan-only transfer as an ordinary completion.
-    TransferV1,
 }
 
 /// A task file: `.corral/tasks/<id>-<slug>.md` = YAML frontmatter (this struct minus `body`/`path`) + markdown body.

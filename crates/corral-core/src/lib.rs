@@ -34,7 +34,9 @@ mod config_validation;
 pub mod connection;
 pub mod container_facts;
 mod cowork;
-pub use cowork::{CompletionDriver, CompletionIntent, CompletionScope};
+pub use cowork::{
+    CompletionDriver, CompletionIntent, CompletionScope, Cowork, CoworkReview, ReviewWaiver,
+};
 pub mod dashboard;
 mod dispatch_config;
 mod edited;

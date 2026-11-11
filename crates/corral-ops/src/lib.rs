@@ -121,6 +121,7 @@ mod resume;
 mod revert;
 mod review;
 mod review_budget;
+pub mod review_waiver;
 mod reviewer;
 mod role_session;
 mod round_notice;

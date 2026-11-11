@@ -110,10 +110,11 @@ fn require_with<T: TaskRef + ?Sized>(
     if kind == OperatingActionKind::Accept {
         ensure!(
             !policy.gate.is_empty()
-                && !matches!(
-                    policy.reviewer,
-                    corral_core::Reviewer::None | corral_core::Reviewer::Pm
-                ),
+                && (task.review_waived()
+                    || !matches!(
+                        policy.reviewer,
+                        corral_core::Reviewer::None | corral_core::Reviewer::Pm
+                    )),
             "co-work shipping requires a gate and an independent reviewer"
         );
     }

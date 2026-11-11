@@ -88,8 +88,15 @@ fn render(
         ),
         (None, false) => "configured, but no gate result was recorded".to_string(),
     };
+    let waiver = task
+        .cowork_run()
+        .filter(|c| c.review_waived_for(&run.id))
+        .and_then(|c| c.review_waiver.as_ref());
     let review = match (&run.review, &p.reviewer) {
-        (_, Reviewer::None) => "none configured".to_string(),
+        (_, Reviewer::None) => waiver.map_or_else(
+            || "none configured".to_string(),
+            |w| format!("landed without review (waived by the owner: {})", w.reason),
+        ),
         (Some(r), _) => format!(
             "{} by {} at `{}`{}",
             r.verdict.map_or("no verdict", |v| v.as_str()),

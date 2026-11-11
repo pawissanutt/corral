@@ -150,6 +150,13 @@ pub enum Cmd {
     },
     /// Restore processing for a held task
     Release { id: String },
+    /// Owner only: land a confirmed co-work finish after its gate, without independent review
+    WaiveReview {
+        id: String,
+        /// Why this change may land unreviewed; recorded on the run, history and landing report
+        #[arg(long)]
+        reason: String,
+    },
     /// Hold lower-priority work until this task lands or is dropped
     Focus {
         #[arg(required_unless_present = "clear", conflicts_with = "clear")]

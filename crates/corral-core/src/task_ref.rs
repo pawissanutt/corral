@@ -263,6 +263,14 @@ macro_rules! head_fields {
         pub trait TaskFieldsRef {
             $(fn $name(&self) -> &$ty;)*
             fn cowork_run(&self) -> Option<&crate::Cowork>;
+            fn current_run_key(&self) -> Option<&str>;
+
+            /// The owner waived independent review for the current co-work run.
+            fn review_waived(&self) -> bool {
+                self.cowork_run()
+                    .zip(self.current_run_key())
+                    .is_some_and(|(cowork, run)| cowork.review_waived_for(run))
+            }
         }
 
         /// Copies every non-history field of `task` into head fields.
@@ -297,21 +305,25 @@ macro_rules! head_fields {
         impl TaskFieldsRef for Task {
             $(fn $name(&self) -> &$ty { &self.$name })*
             fn cowork_run(&self) -> Option<&crate::Cowork> { Task::cowork_run(self) }
+            fn current_run_key(&self) -> Option<&str> { self.current_run().map(|run| run.id.as_str()) }
         }
 
         impl TaskFieldsRef for TaskHeadFields {
             $(fn $name(&self) -> &$ty { &self.$name })*
             fn cowork_run(&self) -> Option<&crate::Cowork> { self.cowork.as_ref().filter(|cowork| self.current_run_id.as_deref().is_some_and(|run| cowork.applies_to(run))) }
+            fn current_run_key(&self) -> Option<&str> { self.current_run_id.as_deref() }
         }
 
         impl TaskFieldsRef for TaskHead {
             $(fn $name(&self) -> &$ty { &self.task.$name })*
             fn cowork_run(&self) -> Option<&crate::Cowork> { self.cowork.as_ref().filter(|cowork| self.current_run.as_ref().is_some_and(|run| cowork.applies_to(&run.id))) }
+            fn current_run_key(&self) -> Option<&str> { self.current_run.as_ref().map(|run| run.id.as_str()) }
         }
 
         impl TaskFieldsRef for TaskHeadMut {
             $(fn $name(&self) -> &$ty { &self.head().task.$name })*
             fn cowork_run(&self) -> Option<&crate::Cowork> { TaskFieldsRef::cowork_run(self.head()) }
+            fn current_run_key(&self) -> Option<&str> { TaskFieldsRef::current_run_key(self.head()) }
         }
     };
 }

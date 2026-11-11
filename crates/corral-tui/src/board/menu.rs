@@ -108,6 +108,10 @@ impl CardMenu {
             // Opens a read-only preview; applying needs the sheet's separate confirmation.
             items.push((KeyCode::Char('F'), "F", "recover…"));
         }
+        if corral_ops::review_waiver::eligible(task).is_ok() {
+            // Owner-only; the sheet asks for a reason before anything changes.
+            items.push((KeyCode::Char('B'), "B", "land without review…"));
+        }
         CardMenu {
             task_id: task.id.clone(),
             chip: None,

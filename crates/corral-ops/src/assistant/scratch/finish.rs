@@ -360,6 +360,7 @@ impl Draft<'_> {
                 self.review
             },
             owner_confirmed: self.owner_confirmed,
+            review_waiver: None,
         });
         if transfer_fenced {
             crate::assistant::workflow::handoff::renew::submitted(

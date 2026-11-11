@@ -151,6 +151,22 @@ impl BoardView {
                 self.overlay = Some(Overlay::Help(HelpView::new(self.nav.clone())))
             }
             KeyCode::Char('t') => return Action::OpenTour,
+            KeyCode::Char('B') => {
+                let Some(task) = self.selected_task().cloned() else {
+                    return Action::None;
+                };
+                return match corral_ops::review_waiver::eligible(&task) {
+                    Ok(()) => {
+                        self.overlay = Some(Overlay::Waive(waive::ConfirmWaive::new(&task)));
+                        Action::None
+                    }
+                    Err(error) => Action::Toast(Toast::new(
+                        Tone::Info,
+                        "Review cannot be skipped",
+                        format!("{error:#}"),
+                    )),
+                };
+            }
             KeyCode::Char('F') => {
                 return match self.selected_task() {
                     Some(t) if menu::recoverable(t) => Action::OpenRecover(t.id.clone()),

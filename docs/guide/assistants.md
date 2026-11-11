@@ -767,6 +767,13 @@ changes nothing. Then:
    reconciliation names the missing configuration and landing refuses `review_required` until
    `corral review-run <id> --reviewer <profile>` returns an approving verdict. No gate pass
    substitutes for review. Old/unconfirmed records retain their saved review choice.
+   The owner alone may waive review for one finished run of a confirmed Ship finish:
+   `corral waive-review <id> --reason "..."`, or **B** ("land without review…") on its
+   Review card. The gate still runs and must pass; no reviewer starts for that run. The run,
+   `corral show`, the card (`no-review`), `corral log` (`review_waived`) and the landing
+   report record it as landed without review, with the reason. It is refused while a review
+   is running, after a non-approving verdict (use `corral recover --action accept-code`),
+   during a repair round, and from agent, assistant or PM shells. A later run is reviewed.
 5. **Land.** Only Ship permits landing; Verify stops after checks. A Ship instruction's explicit
    owner instruction authorizes this task's gate, review, repair and landing even in Assist
    mode, without a workspace grant, an `owner_accept` attention or another owner decision.

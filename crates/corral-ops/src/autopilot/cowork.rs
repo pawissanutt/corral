@@ -213,6 +213,7 @@ impl Pilot<'_> {
         }
         if self.policy.reviewer == Reviewer::None
             && self.head.cowork_run().is_some_and(|c| c.owner_confirmed)
+            && !self.head.review_waived()
         {
             let reason = format!(
                 "reviewer unavailable: co-work finish needs an independent reviewer; configure the project reviewer, or run `corral review-run {} --reviewer <profile>`",

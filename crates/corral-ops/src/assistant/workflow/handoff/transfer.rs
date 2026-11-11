@@ -236,6 +236,7 @@ fn fence(ctx: &Ctx, task: &mut Task, prepared: &Prepared, instruction: &Instruct
             .map_or_else(String::new, |c| c.run.clone()),
         review: CoworkReview::TransferV1,
         owner_confirmed: true,
+        review_waiver: None,
         completion: Some(CompletionScope {
             version: 1,
             contract_revision: task.contract_revision()?,

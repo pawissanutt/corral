@@ -557,6 +557,13 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
         }
         Cmd::Hold { id, reason } => corral_ops::hold::hold(&open(&root)?, &id, reason.as_deref()),
         Cmd::Release { id } => corral_ops::hold::release(&open(&root)?, &id),
+        Cmd::WaiveReview { id, reason } => {
+            corral_ops::review_waiver::waive(&open(&root)?, &id, &reason)?;
+            println!(
+                "{id}: review waived; it lands once its gate passes, marked landed without review"
+            );
+            Ok(())
+        }
         Cmd::Focus { id, all, clear: _ } => {
             corral_ops::hold::focus(&open(&root)?, id.as_deref(), all)
         }

@@ -189,6 +189,8 @@ visible **Recover…** button opens the owner recovery sheet. The key and the bu
 same path, and neither applies anything. `r`, `R` and `u` keep their existing meanings.
 On the board, Blocked, Review and plan-decision cards offer **recover…** in the card menu
 (`.` or right-click). The Review screen has a **Recover…** button and `F`.
+A Review card of a confirmed co-work Ship finish also offers **land without review…** (`B`):
+an owner-only sheet that requires a reason, keeps the gate, and marks the card `no-review`.
 
 The sheet opens with a read-only preview, the same one `corral recover <id> --action …`
 prints. In order, it shows the target identity and current blockers, the action chooser
