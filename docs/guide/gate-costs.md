@@ -7,8 +7,12 @@ worker/reviewer contracts. Test-cost justification belongs in the candidate's ch
 ## Quarantined tests
 
 `.config/gate-quarantine.toml` lists exact nextest identities, their fixing tasks and reasons.
-Every quick and full gate runs these tests separately and reports their pass or failure; only
-ordinary test failures and quarantine infrastructure errors fail the gate. The fixing task
+Every gate that runs Rust tests runs them in one separate nextest invocation after the ordinary
+selection, at the profile's usual parallelism and without stopping at the first failure, and
+reports each test's pass or failure from that run's JUnit report. Only ordinary test failures
+and quarantine infrastructure errors (the run not completing, or a listed identity that did
+not run) fail the gate. A quick gate whose changed paths touch no crate and declare no tests
+builds no test binaries and runs neither the selection nor the quarantine. The fixing task
 must remove its own one-line entry when its fix lands.
 
 ## Fixed tiers and report-only timing references
@@ -47,8 +51,10 @@ the core/test-clock feature union. Linked worktrees keep local targets unless ex
 overridden, avoiding cross-candidate top-level CLI overwrites; docs use the actual target.
 The slower Clippy test-profile experiment was reverted.
 
-`gate_case.py` reports per-test observations and candidate body/attribute changes against
-the integration base. The log and `.evidence/<attempt>-existing-test-costs.md` retain the
+After each nextest run, `gate_case.py` reads its JUnit report and records per-test
+observations and candidate body/attribute changes against the integration base; no wrapper
+process runs per test. Load/core comes from the once-per-second samples the test phase
+records. The log and `.evidence/<attempt>-existing-test-costs.md` retain the
 T-766 gardening input; attach that report without changing the committed candidate. Native
 nextest reports at10s; documented integrations retain their pre-existing30s report-only
 guards, with reasons. These are not additional full-tier exclusions.

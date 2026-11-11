@@ -155,6 +155,7 @@ class PolicyTests(unittest.TestCase):
         self.write("src.rs", existing + "#[test] fn ordinary() { std::thread::sleep(std::time::Duration::from_millis(200)); }\n"
                    "#[test] fn exception() { std::thread::sleep(std::time::Duration::from_millis(200)); }\n")
         self.write(".config/nextest.toml", '[profile.default]\nslow-timeout="50ms"\n'
+                   '[profile.default.junit]\npath="junit.xml"\n'
                    '[[profile.default.overrides]]\nfilter="test(=exception)"\nslow-timeout="30s"\n')
         self.write(".config/gate.toml", "[tests]\nordinary_seconds=0.05\n")
         env = {**os.environ, "RUSTC_WRAPPER": ""}
@@ -167,31 +168,30 @@ class PolicyTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.write(file, result.stdout)
         with patch.dict(os.environ, {"CORRAL_INTEGRATION_BASE": baseline}):
-            key, _ = gate_case.prepare(Path("guard.json"), Path("cargo.json"), Path("binaries.json"))
+            gate_case.prepare(Path("case.json"), Path("cargo.json"), Path("binaries.json"))
+        config = json.loads(Path("case.json").read_text())
+        run = {"RUSTC_WRAPPER": "", "CORRAL_TEST_BUDGET_STATE": str(Path("budget.json").resolve()),
+               "CORRAL_GATE_BINARIES_METADATA": str(Path("binaries.json").resolve())}
         for quiet in (True, False):
-            # Mock load in a disposable entrypoint, never generate host load or add a
-            # production test hook. Both cases use the actual runner and actual nextest.
-            self.write("runner.py", f"import sys\nsys.path.insert(0, {str(ROOT / 'scripts')!r})\n"
-                       "import gate_case, gate_timer\n"
-                       f"gate_timer.load_snapshot=lambda: {{'quiet': {quiet!r}, 'load_per_core': {0.5 if quiet else 2.0}}}\n"
-                       "raise SystemExit(gate_case.main())\n")
-            env[key] = f"{sys.executable} {Path('runner.py').resolve()} {Path('guard.json').resolve()}"
-            result = cargo("nextest", "run", "--cargo-metadata", "cargo.json", "--binaries-metadata", "binaries.json")
-            output = result.stdout + result.stderr
-            self.assertEqual(result.returncode, 0, output)
-            self.assertRegex(output, r"PASS\s+\[[^]]+\].*exception")
-            self.assertRegex(output, r"PASS\s+\[[^]]+\].*existing")
-            self.assertRegex(output, r"PASS\s+\[[^]]+\].*ordinary")
-            self.assertIn("3 passed", output)
-        config = json.loads(Path("guard.json").read_text())
+            # Mock the recorded load, never generate host load or add a production test
+            # hook. Both cases use actual nextest and the report it writes.
+            self.write(config["samples"], json.dumps({"at": 0, "quiet": quiet,
+                                                      "load_per_core": 0.5 if quiet else 2.0}) + "\n")
+            with patch.dict(os.environ, run):
+                code, report = gate_case.observed("default", [
+                    "cargo", "nextest", "run", "--cargo-metadata", "cargo.json",
+                    "--binaries-metadata", "binaries.json"])
+            self.assertEqual(code, 0)
+            self.assertEqual(sorted((case["test"][1], case["passed"]) for case in gate_case.cases(report)),
+                             [("exception", True), ("existing", True), ("ordinary", True)])
         rows = [json.loads(line) for line in Path(config["metrics"]).read_text().splitlines()]
         existing_rows = [row for row in rows if row["test"][1] == "existing"]
-        self.assertEqual(len(existing_rows), 2)
-        self.assertTrue(all(row["classification"] == "existing-report" and row["exit_code"] == 0
+        self.assertEqual([row["busy_exempt"] for row in existing_rows], [False, True])
+        self.assertTrue(all(row["classification"] == "existing-report" and row["status"] == "passed"
                             and row["budget_exceeded"] and row["report_only"] for row in existing_rows))
         candidate_rows = [row for row in rows if row["test"][1] == "ordinary"]
         self.assertEqual(len(candidate_rows), 2)
-        self.assertTrue(all(row["exit_code"] == 0 and row["budget_exceeded"] and row["report_only"]
+        self.assertTrue(all(row["status"] == "passed" and row["budget_exceeded"] and row["report_only"]
                             for row in candidate_rows))
         with patch.dict(os.environ, {"CORRAL_GATE_ATTEMPT": "ratchet-fixture"}), contextlib.redirect_stdout(io.StringIO()):
             gate_timer.cost_audit(config, rows)
@@ -199,19 +199,18 @@ class PolicyTests(unittest.TestCase):
 
     def test_under_limit_candidate_is_reported_but_not_gardening_overrun(self):
         metrics = Path('case-metrics.jsonl')
-        result = {'exit_code': 0, 'budget_exceeded': False, 'report_only': True,
-                  'enforcement_load': None, 'seconds': 0.1,
-                  'load_before': {'load_per_core': 0.2},
-                  'load_after': {'load_per_core': 0.3}, 'busy_exempt': False}
-        with patch.object(gate_timer, 'execute', return_value=result):
-            self.assertEqual(gate_case.guarded(['unused'], 10, ['fixture', 'candidate'], metrics), 0)
-            self.assertEqual(gate_case.guarded(['unused'], 10, ['fixture', 'existing'], metrics,
-                                               'existing-report'), 0)
+        self.write('junit.xml', '<testsuites><testsuite name="fixture">'
+                   '<testcase name="candidate" time="0.1"/><testcase name="existing" time="0.1"/>'
+                   '</testsuite></testsuites>')
+        self.write('case.json', json.dumps({
+            'ratchet_base': 'fixture', 'seconds': 10, 'exemptions': [],
+            'enforce': [['fixture', 'candidate']], 'metrics': str(metrics.resolve()),
+            'samples': str(Path('load-samples.jsonl').resolve())}))
+        gate_case.harvest(Path('case.json'), Path('junit.xml'))
         rows = [json.loads(line) for line in metrics.read_text().splitlines()]
         self.assertEqual([row['test'] for row in rows], [['fixture', 'candidate']])
         self.write('budget.json', json.dumps({'tier': 'quick', 'measured': 1, 'budgeted': 1,
                                               'compile': 0, 'limit': 180}))
-        self.write('case.json', json.dumps({'ratchet_base': 'fixture'}))
         with tempfile.TemporaryFile(mode='w+') as output, patch.dict(os.environ, {'CORRAL_GATE_ATTEMPT': 'fixture'}):
             with contextlib.redirect_stdout(output):
                 gate_timer.report(Path('budget.json'))
@@ -267,8 +266,6 @@ class PolicyTests(unittest.TestCase):
             data = json.loads(state.read_text())
             self.assertEqual(data["budgeted"], before)
             self.assertTrue(data["phases"][-1]["busy_exempt"])
-            self.assertEqual(gate_case.guarded([sys.executable, "-c", "raise SystemExit(7)"],
-                             .05, ["fixture", "assertion-failure"], Path("case-metrics.jsonl")), 7)
         with patch.object(gate_timer.os, "getloadavg", side_effect=OSError("unavailable")):
             self.assertFalse(gate_timer.load_snapshot()["quiet"])
 

@@ -138,12 +138,19 @@ class GateTests(unittest.TestCase):
         cargo = self.repo / 'bin/cargo'
         recorder = cargo.read_text()
         # Model two selected tests: flaky always fails; ordinary fails on request.
-        # The ordinary invocation must actually exclude the exact flaky identity.
+        # The ordinary invocation must actually exclude the exact flaky identity, and the
+        # one quarantine run reports each verdict through its JUnit report.
         probe = '''if entry["args"][:2] == ["nextest", "run"] and "--run-ignored" not in visible:
     expression = visible[visible.index("-E") + 1] if "-E" in visible else "all()"
     identity = "binary_id(=pkg::suite) and test(=flaky)"
     if "--ignore-default-filter" in visible:
-        sys.exit(100 if expression == "(" + identity + ")" else 4)
+        if expression != "(" + identity + ")" or "--no-fail-fast" not in visible:
+            sys.exit(4)
+        report = Path("target/nextest/default/junit.xml")
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text('<testsuites><testsuite name="pkg::suite"><testcase name="flaky" '
+                          'time="0.1"><failure/></testcase></testsuite></testsuites>')
+        sys.exit(100)
     flaky_selected = "and not ((" + identity + "))" not in expression
     sys.exit(100 if flaky_selected or os.environ.get("ORDINARY_FAIL") == "1" else 0)
 '''
