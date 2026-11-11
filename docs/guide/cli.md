@@ -37,6 +37,7 @@ Commands:
   run                     Persist run progress, checkpoints, waits, decisions and resume receipts
   hold                    Suspend automatic processing and cancel gate/review work without stopping the worker
   release                 Restore processing for a held task
+  waive-review            Owner only: land a confirmed co-work finish after its gate, without independent review
   focus                   Hold lower-priority work until this task lands or is dropped
   queue                   Authorize, pause, and inspect the coding dispatch queue
   wait                    Wait for the first matching event, starting at the current tail by default (timeout exits 124)
@@ -116,6 +117,7 @@ Commands:
   show         Show a session, its durable container and usage
   end          End a session (stopping a running host), keeping its record and transcript references
   summary      Replace a session's Markdown summary from a UTF-8 file
+  handoff      Owner-only co-work transfer and current-revision continuation (JSON)
   effects      Evidence-only stale executor reconciliation; unknown resources remain outstanding
   scratch      Scratch worktrees for spikes and co-work
   permissions  Write permissions the owner gave a session: its grants, settings and revocation
@@ -169,6 +171,7 @@ Arguments:
 Options:
       --json
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --host         With --json: bounded host readback; history rows become counts
   -h, --help         Print help
 ```
 
@@ -203,6 +206,207 @@ Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
       --json
   -h, --help         Print help
+```
+
+### `corral assistant handoff`
+
+```text
+Owner-only co-work transfer and current-revision continuation (JSON)
+
+Usage: corral assistant handoff [OPTIONS] <COMMAND>
+
+Commands:
+  init              Register an ordinary source using its complete genuine current-generation input
+  prepare           Freeze selected context/code; creates no task or execution authority
+  preview           Inspect an immutable package and the exact choice digest
+  commit            Commit exactly the choice the owner selected
+  show              Inspect current authoritative outcome and waits
+  retreat-preview   Bind cancellation/prepare-only return of a reserved, unpublished selection
+  retreat           Invalidate the old selection and return only verified quiet local work
+  continue-preview  Bind a new goal to current spec, plan, findings and code
+  start             Start exactly a current-revision selected continuation
+  save              Hold the current task scope; no old start/ship authority survives
+  take-back         Settle old writers and return latest work, prepare-only (not rollback)
+  help              Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+#### `corral assistant handoff init`
+
+```text
+Register an ordinary source using its complete genuine current-generation input
+
+Usage: corral assistant handoff init [OPTIONS] --input <INPUT> <SESSION>
+
+Arguments:
+  <SESSION>
+
+Options:
+      --input <INPUT>
+      --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help           Print help
+```
+
+#### `corral assistant handoff prepare`
+
+```text
+Freeze selected context/code; creates no task or execution authority
+
+Usage: corral assistant handoff prepare [OPTIONS] --request <REQUEST> <SESSION>
+
+Arguments:
+  <SESSION>
+
+Options:
+      --request <REQUEST>
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --scratch <SCRATCH>
+  -h, --help               Print help
+```
+
+#### `corral assistant handoff preview`
+
+```text
+Inspect an immutable package and the exact choice digest
+
+Usage: corral assistant handoff preview [OPTIONS] --title <TITLE> <PACKAGE>
+
+Arguments:
+  <PACKAGE>
+
+Options:
+      --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --title <TITLE>
+      --into <INTO>
+      --save
+  -h, --help           Print help
+```
+
+#### `corral assistant handoff commit`
+
+```text
+Commit exactly the choice the owner selected
+
+Usage: corral assistant handoff commit [OPTIONS] --choice <CHOICE> --digest <DIGEST>
+
+Options:
+      --choice <CHOICE>
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --digest <DIGEST>
+  -h, --help             Print help
+```
+
+#### `corral assistant handoff show`
+
+```text
+Inspect current authoritative outcome and waits
+
+Usage: corral assistant handoff show [OPTIONS] <PACKAGE>
+
+Arguments:
+  <PACKAGE>
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+#### `corral assistant handoff retreat-preview`
+
+```text
+Bind cancellation/prepare-only return of a reserved, unpublished selection
+
+Usage: corral assistant handoff retreat-preview [OPTIONS] <PACKAGE>
+
+Arguments:
+  <PACKAGE>
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+#### `corral assistant handoff retreat`
+
+```text
+Invalidate the old selection and return only verified quiet local work
+
+Usage: corral assistant handoff retreat [OPTIONS] --choice <CHOICE> --digest <DIGEST>
+
+Options:
+      --choice <CHOICE>
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --digest <DIGEST>
+  -h, --help             Print help
+```
+
+#### `corral assistant handoff continue-preview`
+
+```text
+Bind a new goal to current spec, plan, findings and code
+
+Usage: corral assistant handoff continue-preview [OPTIONS] --goal <GOAL> <TASK>
+
+Arguments:
+  <TASK>
+
+Options:
+      --goal <GOAL>  [possible values: plan-continue, plan-review-only, implementation-prepare, implementation-verify, implementation-ship]
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+#### `corral assistant handoff start`
+
+```text
+Start exactly a current-revision selected continuation
+
+Usage: corral assistant handoff start [OPTIONS] --choice <CHOICE> --digest <DIGEST>
+
+Options:
+      --choice <CHOICE>
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --digest <DIGEST>
+  -h, --help             Print help
+```
+
+#### `corral assistant handoff save`
+
+```text
+Hold the current task scope; no old start/ship authority survives
+
+Usage: corral assistant handoff save [OPTIONS] --transfer <TRANSFER> --revision <REVISION> --contract <CONTRACT> <TASK>
+
+Arguments:
+  <TASK>
+
+Options:
+      --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --transfer <TRANSFER>
+      --revision <REVISION>
+      --contract <CONTRACT>
+  -h, --help                 Print help
+```
+
+#### `corral assistant handoff take-back`
+
+```text
+Settle old writers and return latest work, prepare-only (not rollback)
+
+Usage: corral assistant handoff take-back [OPTIONS] --transfer <TRANSFER> --revision <REVISION> --contract <CONTRACT> <TASK>
+
+Arguments:
+  <TASK>
+
+Options:
+      --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --transfer <TRANSFER>
+      --revision <REVISION>
+      --contract <CONTRACT>
+  -h, --help                 Print help
 ```
 
 ### `corral assistant effects`
@@ -2788,6 +2992,22 @@ Arguments:
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
+```
+
+## `corral waive-review`
+
+```text
+Owner only: land a confirmed co-work finish after its gate, without independent review
+
+Usage: corral waive-review [OPTIONS] --reason <REASON> <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --reason <REASON>  Why this change may land unreviewed; recorded on the run, history and landing report
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help             Print help
 ```
 
 ## `corral focus`

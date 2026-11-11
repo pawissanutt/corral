@@ -52,6 +52,7 @@ fn board_driver_sessions_inbox_badge_and_cowork_done() {
                 run: "R1".into(),
                 review: corral_core::CoworkReview::None,
                 owner_confirmed: false,
+                review_waiver: None,
             });
             Ok(())
         })

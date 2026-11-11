@@ -559,7 +559,9 @@ impl Config {
             } else {
                 Accept::Owner
             };
-            if !cowork.owner_confirmed && cowork.review == crate::CoworkReview::None {
+            if (!cowork.owner_confirmed && cowork.review == crate::CoworkReview::None)
+                || task.review_waived()
+            {
                 policy.reviewer = Reviewer::None;
             }
         }

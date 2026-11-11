@@ -152,6 +152,14 @@ pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
         if let Some(rv) = &r.review {
             println!("    review: {}", review_line(rv));
         }
+        if let Some(w) = t
+            .cowork
+            .as_ref()
+            .and_then(|c| c.review_waiver.as_ref())
+            .filter(|w| w.run == r.id)
+        {
+            println!("    review: waived by the owner at {}: {}", w.at, w.reason);
+        }
         if let Some(a) = &r.autopilot {
             let max = ctx
                 .store

@@ -159,6 +159,7 @@ fn owner_finish_materializes_gated_reviewed_work_and_autopilot_lands_it() {
         run: "R1".into(),
         review: CoworkReview::CompletionV1,
         owner_confirmed: true,
+        review_waiver: None,
     };
     assert_eq!(
         serde_json::to_value(task.cowork.as_ref().unwrap()).unwrap()["owner_confirmed"],
@@ -673,6 +674,7 @@ fn reviewer_none_applies_only_to_the_cowork_run() {
         run: "R2".into(),
         review: CoworkReview::None,
         owner_confirmed: false,
+        review_waiver: None,
     });
     assert_eq!(policy(&cowork), (Reviewer::None, Accept::Owner));
     // A later ordinary run of the same task is reviewed and accepted as the project says.

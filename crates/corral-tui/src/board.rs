@@ -44,6 +44,7 @@ mod menu;
 mod mouse;
 mod overlay;
 mod view;
+mod waive;
 pub(crate) use overlay::Overlay;
 #[cfg(test)]
 mod artifact_hot_tests;

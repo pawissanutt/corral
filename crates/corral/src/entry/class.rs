@@ -230,7 +230,9 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
             RunCmd::Progress(args) | RunCmd::Checkpoint(args) => read_unless(args.file.is_some()),
             RunCmd::Wait { .. } | RunCmd::Decision { .. } | RunCmd::Resume { .. } => Refused,
         },
-        Cmd::Hold { .. } | Cmd::Release { .. } | Cmd::Focus { .. } => Refused,
+        Cmd::Hold { .. } | Cmd::Release { .. } | Cmd::Focus { .. } | Cmd::WaiveReview { .. } => {
+            Refused
+        }
         Cmd::Queue { cmd } => match cmd {
             QueueCmd::List { .. } => Read,
             QueueCmd::Add { .. }

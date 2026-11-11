@@ -1,4 +1,5 @@
 use super::drop::ConfirmDrop;
+use super::waive::ConfirmWaive;
 use crate::View;
 use crate::overlays::{CaptureView, DispatchSheet, HelpView};
 use crate::shelf::panel::ShelfPanel;
@@ -9,6 +10,7 @@ pub(crate) enum Overlay {
     Help(HelpView),
     Shelf(ShelfPanel),
     Drop(ConfirmDrop),
+    Waive(ConfirmWaive),
 }
 
 impl Overlay {
@@ -19,6 +21,7 @@ impl Overlay {
             Self::Help(v) => v,
             Self::Shelf(v) => v,
             Self::Drop(v) => v,
+            Self::Waive(v) => v,
         }
     }
 
@@ -29,6 +32,7 @@ impl Overlay {
             Self::Help(v) => v,
             Self::Shelf(v) => v,
             Self::Drop(v) => v,
+            Self::Waive(v) => v,
         }
     }
 }
