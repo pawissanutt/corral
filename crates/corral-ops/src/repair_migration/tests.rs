@@ -277,6 +277,139 @@ fn review1_terminal_changes_review_is_unresolved_and_unsupported_rows_refuse() {
 }
 
 #[test]
+fn review2_gate_events_are_reconciled_or_refused() {
+    let _clock = Clock;
+    let mut accepted = Vec::new();
+    for variant in [
+        "unknown-run",
+        "different-candidate",
+        "different-command",
+        "different-result",
+        "unsupported-result",
+    ] {
+        let (_root, ctx, request) = fixture();
+        let sha = ctx
+            .store
+            .get(&request.task)
+            .unwrap()
+            .current_run()
+            .unwrap()
+            .base_sha
+            .clone();
+        let mut detail = json!({"run":"R3","sha":sha,"result":"fail","failed_cmd":"unit:atomicity","attempt":null,"log_sha256":null});
+        match variant {
+            "unknown-run" => detail["run"] = json!("R99"),
+            "different-candidate" => detail["sha"] = json!("f".repeat(40)),
+            "different-command" => detail["failed_cmd"] = json!("unit:unreconciled-gate-failure"),
+            "different-result" => detail["result"] = json!("pass"),
+            _ => detail["result"] = json!("unsupported-result"),
+        }
+        ctx.store
+            .log_event(Some(&request.task), "gate", detail)
+            .unwrap();
+        if preview(&ctx, &refreshed(&ctx, request)).is_ok() {
+            accepted.push(variant);
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "accepted unreconciled gate histories: {accepted:?}"
+    );
+    let (_root, ctx, request) = fixture();
+    let sha = ctx
+        .store
+        .get(&request.task)
+        .unwrap()
+        .current_run()
+        .unwrap()
+        .base_sha
+        .clone();
+    {
+        let _actor = ctx.store.attribute(Actor::Pm);
+        ctx.store.log_event(Some(&request.task),"gate",json!({"run":"R3","sha":sha,"result":"fail","failed_cmd":"unit:atomicity","attempt":null,"log_sha256":null})).unwrap();
+    }
+    let request = refreshed(&ctx, request);
+    let proposal = preview(&ctx, &request).unwrap();
+    let event = proposal.sources.events.last().unwrap();
+    let observed = proposal
+        .entries
+        .iter()
+        .find(|e| e.source == format!("event:{}", event.seq.0))
+        .unwrap();
+    let finding = match observed
+        .accounting
+        .as_ref()
+        .expect("supported gate event lost its finding")
+    {
+        corral_core::RepairEvent::Finding { finding } => finding.clone(),
+        _ => unreachable!(),
+    };
+    assert_eq!(finding.identity.criterion_or_test, "unit:atomicity");
+    assert_eq!(finding.identity.failure_code, "fail");
+    assert_eq!(observed.source_digest, digest(event).unwrap());
+    assert_eq!(observed.actor.as_deref(), Some("pm"));
+    assert_eq!(proposal.entries.iter().filter_map(|e| e.accounting.as_ref()).filter(|e| matches!(e,corral_core::RepairEvent::Finding {finding} if finding.identity.criterion_or_test=="unit:atomicity")).count(),1);
+    for (key, value) in [
+        ("run", json!("R2")),
+        ("attempt", json!("different-attempt")),
+        ("log_sha256", json!("f".repeat(64))),
+        (
+            "commands",
+            json!([{"command":"unrelated","exit_code":1,"log_start":0,"log_end":1}]),
+        ),
+        ("tier", json!("quick")),
+        ("unsupported_field", json!(true)),
+        (
+            "identity",
+            json!({"version":2,"task":request.task,"run":"R3","attempt":"different-attempt","head":sha,
+            "tree":git(&ctx.store.project_path("app").unwrap(),&["rev-parse","HEAD^{tree}"]),"integration_base":sha,"dispatch_base":sha,"spec_digest":"fixture","policy_digest":"fixture","inputs_digest":"fixture"}),
+        ),
+    ] {
+        let mut source = proposal.sources.clone();
+        source.events.last_mut().unwrap().event.detail[key] = value;
+        assert!(
+            chronology::reconstruct(&ctx.store, &ctx.store.head(&request.task).unwrap(), &source)
+                .is_err(),
+            "accepted gate {key} contradiction"
+        );
+    }
+    for kind in ["gate_started", "gate_cancelled", "gate_future_lifecycle"] {
+        let mut source = proposal.sources.clone();
+        source.events.last_mut().unwrap().event.kind = kind.into();
+        assert!(
+            chronology::reconstruct(&ctx.store, &ctx.store.head(&request.task).unwrap(), &source)
+                .is_err(),
+            "accepted unsupported {kind}"
+        );
+    }
+    let mut repeated = proposal.sources.clone();
+    let mut duplicate = event.clone();
+    duplicate.seq.0 += 1;
+    repeated.end.last_event = duplicate.seq.0;
+    repeated.events.push(duplicate);
+    repeated.end.event_count = repeated.events.len();
+    assert!(
+        chronology::reconstruct(
+            &ctx.store,
+            &ctx.store.head(&request.task).unwrap(),
+            &repeated
+        )
+        .is_err(),
+        "collapsed repeated gate observations into one snapshot"
+    );
+    apply_checked(&ctx, authority::fixture(proposal)).unwrap();
+    let ledger = ctx.store.repair_ledger(&request.task).unwrap().unwrap();
+    assert!(ledger.unresolved().unwrap().contains(&finding.finding_id));
+    assert_eq!(
+        (
+            ledger.task_counters().unwrap().initial_implementations,
+            ledger.task_counters().unwrap().coding_repairs
+        ),
+        (1, 2)
+    );
+}
+
+#[test]
 fn canonical_import_is_record_only_then_one_approved_continuation_cannot_be_reused() {
     let _clock = Clock;
     let (_root, ctx, request) = fixture();
