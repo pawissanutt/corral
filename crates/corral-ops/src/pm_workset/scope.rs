@@ -1,4 +1,8 @@
 //! Native PM reads share workset policy without widening their approved project set.
+#[cfg(test)]
+#[path = "scope_tests.rs"]
+mod tests;
+
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
@@ -8,12 +12,16 @@ use corral_core::{EffectivePolicy, Task};
 use super::{PmAction, PmActionKind, PmDecision};
 use crate::{Ctx, PmObservation};
 
+#[path = "scope_inbox.rs"]
+mod inbox;
+
 pub(crate) fn next_for_projects(ctx: &Ctx, projects: &BTreeSet<String>) -> Result<PmAction> {
     super::project(ctx, None, Some(projects)).map(|(workset, _)| workset.next)
 }
 
 pub(super) struct ProjectScope {
     tasks: Option<BTreeSet<String>>,
+    projects: Option<BTreeSet<String>>,
     policy: Option<EffectivePolicy>,
     promotion: Option<PmObservation>,
 }
@@ -36,9 +44,25 @@ impl ProjectScope {
                     .map(|task| task.id.clone())
                     .collect()
             }),
+            projects: projects.cloned(),
             policy: projects.map(|_| policy.clone()),
             promotion: None,
         }
+    }
+
+    pub(super) fn inbox(&self, ctx: &Ctx, bin: &str) -> Result<Vec<PmAction>> {
+        crate::pm_next::inbox::cards(ctx, bin, |item| {
+            inbox::includes(ctx, self.projects.as_ref(), item)
+        })
+    }
+
+    pub(super) fn enrich(
+        &self,
+        ctx: &Ctx,
+        action: PmAction,
+        allow_lessons: bool,
+    ) -> Result<PmAction> {
+        crate::pm_next::enrich(ctx, action, allow_lessons, self.projects.as_ref())
     }
 
     pub(super) fn includes(&self, id: &str) -> bool {

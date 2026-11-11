@@ -539,8 +539,7 @@ fn project_snapshot(
     } else {
         OperatingStatus::Waiting
     };
-    // The PM inbox is workspace-scoped, like the native inbox_read tool, not task authority.
-    let inbox = crate::pm_next::inbox::cards(ctx, &bin)?;
+    let inbox = scope.inbox(ctx, &bin)?;
     let next = actions
         .first()
         .map(|a| a.action.clone())
@@ -553,7 +552,7 @@ fn project_snapshot(
         .or_else(|| inbox.first().cloned())
         .or_else(|| waits.first().cloned())
         .unwrap_or_else(|| crate::pm_next::pm_select(&[], &bin));
-    let mut next = crate::pm_next::enrich(ctx, next, actions.is_empty())?;
+    let mut next = scope.enrich(ctx, next, actions.is_empty())?;
     if let Some(condition) = board
         .tasks
         .iter()

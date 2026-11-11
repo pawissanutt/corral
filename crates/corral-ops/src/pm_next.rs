@@ -668,7 +668,12 @@ pub fn pm_next(ctx: &Ctx) -> Result<PmAction> {
     Ok(crate::pm_workset(ctx)?.next)
 }
 
-pub(crate) fn enrich(ctx: &Ctx, mut action: PmAction, allow_lessons: bool) -> Result<PmAction> {
+pub(crate) fn enrich(
+    ctx: &Ctx,
+    mut action: PmAction,
+    allow_lessons: bool,
+    projects: Option<&std::collections::BTreeSet<String>>,
+) -> Result<PmAction> {
     let bin = format!(
         "{} --root {}",
         q(&crate::prompt::corral_bin()?.display().to_string()),
@@ -681,7 +686,11 @@ pub(crate) fn enrich(ctx: &Ctx, mut action: PmAction, allow_lessons: bool) -> Re
         )
         && let Some(due) = crate::lessons_due(ctx, corral_core::clock::now())?
             .into_iter()
-            .find(|d| d.pending.is_none() && !d.reasons.is_empty())
+            .find(|d| {
+                projects.is_none_or(|projects| projects.contains(&d.project))
+                    && d.pending.is_none()
+                    && !d.reasons.is_empty()
+            })
     {
         let command = if due.profile.is_some() {
             format!("{bin} lessons distill --project {}", q(&due.project))

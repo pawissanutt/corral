@@ -10,14 +10,18 @@ use crate::gate_script::q;
 
 const QUOTE_PREVIEW: usize = 240;
 
-pub(crate) fn cards(ctx: &Ctx, bin: &str) -> Result<Vec<PmAction>> {
-    Ok(ctx
-        .store
-        .pm_inbox_items()?
-        .iter()
-        .filter(|item| item.pending())
-        .map(|item| card(item, bin))
-        .collect())
+pub(crate) fn cards(
+    ctx: &Ctx,
+    bin: &str,
+    includes: impl Fn(&PmInboxItem) -> Result<bool>,
+) -> Result<Vec<PmAction>> {
+    let mut cards = Vec::new();
+    for item in ctx.store.pm_inbox_items()? {
+        if item.pending() && includes(&item)? {
+            cards.push(card(&item, bin));
+        }
+    }
+    Ok(cards)
 }
 
 pub(crate) fn card(item: &PmInboxItem, bin: &str) -> PmAction {

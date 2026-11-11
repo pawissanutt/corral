@@ -1623,10 +1623,12 @@ need a cited basis within the approved write scope and acceptance, and the owner
 any PM answer.
 
 PM `next` and `brief` share the CLI's read-only workset projection: authorized actions take
-priority over owner decisions, and task cards are selected within the approved projects.
-The PM inbox remains workspace-scoped, as with `inbox_read`. These tools never run sync or
-`pm act`, start work, or record a presentation. A separate board/sync loop is required for
-wakes: keep the board running or run `corral sync --watch` outside the PM. A healthy scoped Pi PM
+priority over owner decisions. Task cards, lesson recommendations and task/project-bound
+inbox requests are filtered to the approved projects before selection. Inbox items without
+typed task/project bindings remain workspace-wide; mixed or unresolved references are not
+assumed local. These tools never run sync or `pm act`, start work, or record a presentation.
+A separate board/sync loop is required for wakes: keep the board running or run
+`corral sync --watch` outside the PM. A healthy scoped Pi PM
 receives each pending question wake through the Pm inbox. Its subject retains the outbox
 dedupe key `qwake:<question>:<revision>`. Sync acknowledges the question's outbox only after
 publication; if corral crashes between publication and acknowledgement, the next pass finds
