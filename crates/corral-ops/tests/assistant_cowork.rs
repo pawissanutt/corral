@@ -335,6 +335,53 @@ fn owner_finish_materializes_gated_reviewed_work_and_autopilot_lands_it() {
 }
 
 #[test]
+fn owner_waived_finish_passes_gate_and_lands_without_a_reviewer() {
+    let fx = Fx::new(Some("rev"));
+    let made = fx.scratch("waived");
+    fx.commit(&made.path, "waived.txt");
+    let finished = scratch::finish(
+        &fx.ctx,
+        "A-1",
+        "waived",
+        &Finish {
+            title: Some("Owner-waived finish"),
+            ..Finish::default()
+        },
+    )
+    .unwrap();
+    corral_ops::review_waiver::waive(&fx.ctx, &finished.task, "owner inspected the fix").unwrap();
+    let submitted = fx.ctx.store.get(&finished.task).unwrap();
+    assert!(submitted.current_run().unwrap().gate.is_none());
+
+    // Exercise the real gate collection and autopilot landing, not just waiver policy.
+    corral_ops::sync(&fx.ctx).unwrap();
+    corral_ops::sync(&fx.ctx).unwrap();
+    let task = fx.ctx.store.get(&finished.task).unwrap();
+    assert_eq!(task.status, Status::Done, "{:?}", task.current_run());
+    let run = task.current_run().unwrap();
+    assert_eq!(
+        run.gate.as_ref().unwrap().result,
+        corral_core::GateResult::Pass
+    );
+    assert_eq!(run.gate.as_ref().unwrap().sha, finished.head);
+    assert!(run.review.is_none());
+    assert!(run.review_runs.is_empty(), "no reviewer may launch");
+    assert_eq!(task.landed.as_ref().unwrap().sha, finished.head);
+    assert_eq!(git(&fx.app, &["rev-parse", "main"]), finished.head);
+    let events = kinds(&fx.ctx, &task.id);
+    assert_eq!(events.iter().filter(|k| *k == "gate_started").count(), 1);
+    assert!(events.iter().any(|k| k == "cowork_landed"));
+    let record = task
+        .artifacts
+        .iter()
+        .find(|a| a.title == "Acceptance record")
+        .unwrap();
+    let report = String::from_utf8(corral_ops::artifact_read(&fx.ctx, record).unwrap()).unwrap();
+    assert!(report.contains("landed without review"), "{report}");
+    assert!(report.contains("owner inspected the fix"), "{report}");
+}
+
+#[test]
 fn finish_usage_window_uses_the_same_ordered_clock_as_scratch_creation() {
     struct Reset;
     impl Drop for Reset {
