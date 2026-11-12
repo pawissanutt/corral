@@ -1,7 +1,7 @@
 # PM runtime redesign: event-driven, cache-aware, later tiered
 
-Draft 3 of November 12, 2026, with build status added. Implemented on branches, not merged
-to main, installed or enabled; the live cost-setting edit is noted below. This is not an
+Draft 3 of November 12, 2026, with build status added. Merged to main, installed and partly
+enabled on the owner's machine on November 12: see "Live rollout" below. This is not an
 approved task contract and grants no authority.
 
 Owner direction of November 12:
@@ -40,14 +40,12 @@ service.
 - `pm-runtime` contains everything: Part 1, those fixes and all built Part 2 work, including
   the expert consult, the stable cache key and the fixes from the last review. Its head is
   the commit that adds this section; `git log pm-runtime` lists the steps.
-- Nothing from these branches is merged to main, installed or enabled in the running PM.
-- Turning it on needs an owner-approved merge, installation of the matching binary and Pi
-  host files, and a PM relaunch; recovery and optional experiments need separate switches.
+- Main was fast-forwarded to `pm-runtime` and the build installed on November 12, on the
+  owner's instruction. "Live rollout" below says what is on.
 
 The chronological source is `.evidence/pm-runtime-handoff.md` in the `pm-runtime` worktree.
-Live-machine changes below are reported by that handoff, not checked against the live
-machine here. Table defaults describe the new code after installation, not what the running
-PM currently has.
+The tables' "Build status" cells describe the state before rollout; "Live rollout" supersedes
+them where they say not installed, not enabled or not measured.
 
 Compaction replaces older conversation with a summary. Sync is the board's reconciliation
 pass. A full gate is the repository's complete verification script, not just a test suite.
@@ -115,6 +113,40 @@ recorded in the handoff.
 - Removing the PM's shell is not part of this cutover; the current role keeps `bash`.
 - Expert access to corral records is not built because helper sessions have no authenticated
   corral client.
+
+## Live rollout, November 12
+
+Done on the owner's instruction, outside the board. Install evidence (hashes, logs, the
+store backup and the previous binaries) is in `.evidence/install-5ada0531/` in the
+`pm-runtime` worktree.
+
+| Step | Result |
+|---|---|
+| Merge | Main fast-forwarded to `5ada0531`, then to the follow-up below. Not pushed. |
+| Install | CLI and Pi host built from `5ada0531`; assets `7eac0309…`; doctor passed; board restarted in its own pane. |
+| PM | `corral pm relaunch` started generation 25 from a lost generation 24, in the same conversation, on `gpt-6.1-sol`. Its context compacted from 265k to 157k tokens on the first turn. |
+| Push | `pm.push_events = false`. Twelve queued wakes and the smoke request reached the PM as inbox messages. |
+| Native reads | First try: `brief` and `next` both hit the host's 60-second call limit, in the minute the watch service first started. Retried one at a time: `brief` 8.0 s and `next` 7.8 s, bounded, no refusal. |
+| Supervisor | `pm.supervise = true`; user unit `corral-sync.service` enabled with `--interval 60`. Heartbeat healthy, store-owned server found. Automatic recovery has not been exercised live. |
+| Not enabled | Shadow, expert, stable cache key. |
+
+Found during rollout:
+
+- **The watch driver was too expensive at a fixed two seconds.** One sync pass costs about
+  seven CPU-seconds on this store, so the service used about 0.7 core beside a board that
+  already syncs. Follow-up commit `5b6aedd4` adds `corral sync --watch --interval`; at 15
+  seconds the service measured 31% of a core, and this host runs it at 60.
+- **The docs check had a failure the gate never reached.** The supervisor guide's config
+  example was invalid; the gate stops at the Pi lane, which runs before the docs step. Fixed
+  in `5b6aedd4`, which also regenerates the CLI reference.
+- **Native reads are slow, not just large.** Eight seconds each against a 60-second limit
+  leaves little room under load; they timed out once.
+- **An existing gate-claim retry repeats on every pass.** T-947 and T-950 cannot start a
+  gate (T-951 has the cause), and each sync pass claims and fails again. This predates the
+  rollout at about 100 events an hour; a second sync driver adds to it.
+
+`5b6aedd4` was checked with the docs check, clippy and formatting for the `corral` crate,
+not a gate.
 
 ## How it was checked
 
@@ -191,32 +223,20 @@ cost/cache comparison has been done for this build.
 
 ## What the owner has to decide or do
 
-1. **Merge to main.** Decide whether to accept Part 1's red gate: only the four
-   pre-existing live tests failed among reached steps, and later steps were not run;
-   the complete `pm-runtime` branch still needs its final gate result.
-2. **Install.** Give an explicit go to install the matching binary and Pi host files
-   together; this restarts the board and needs brief/next checks against the live candidate.
-3. **Relaunch the PM.** After installation, run `corral pm relaunch --replace` so the Sol
-   profile and compaction reserve take effect; the handoff says the live PM was not
-   relaunched when its configuration changed.
-4. **Choose `pm.push_events` on or off.** It defaults off and reportedly failed again
-   when re-enabled live; Pi's new inbox event route does not depend on it.
-5. **Choose background recovery.** Set `pm.supervise = true` only if wanted, then install
-   and configure the user unit as in [supervisor](../guide/supervisor.md), select the
-   existing store-owned herdr server, and run
-   `systemctl --user enable --now corral-sync.service`; nothing does this automatically.
-6. **Choose the three experiments separately.** Shadow, expert and the stable cache key
+1. **Merge, install, PM relaunch, push events and background recovery are done:** see
+   "Live rollout". Main is not pushed to the remote.
+2. **Choose the three experiments separately.** Shadow, expert and the stable cache key
    are each off; enabling shadow or expert also needs an explicit model, while the stable
    key needs `pm.cache_key.mode = "stable"` and a new generation.
-7. **Resolve question-deadline behavior.** An expired owner-set board-question deadline
+3. **Resolve question-deadline behavior.** An expired owner-set board-question deadline
    currently answers with the owner's pre-set instruction; choose whether to retain that
    behavior or change it to the design's "a timeout parks and never acts".
-8. **Approve or reject the team-of-PMs design.** Containers, leases and per-scope cursors
+4. **Approve or reject the team-of-PMs design.** Containers, leases and per-scope cursors
    remain unbuilt; approval also needs a choice of projects and their standing grants.
-9. **Set specialist autonomy.** Decide which commands and effects a future specialist
+5. **Set specialist autonomy.** Decide which commands and effects a future specialist
    may perform before that tier is built.
-10. **Decide later authority extensions separately.** Landing without the owner,
-    contract-amendment globs and extra repair rounds remain unapproved and unbuilt.
+6. **Decide later authority extensions separately.** Landing without the owner,
+   contract-amendment globs and extra repair rounds remain unapproved and unbuilt.
 
 ## Evidence
 
