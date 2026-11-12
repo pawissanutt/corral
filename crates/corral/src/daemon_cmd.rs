@@ -19,6 +19,8 @@ pub enum DaemonCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Print the workspace daemon socket path without connecting
+    Socket,
     /// Request a pass (exit 2 if no daemon answers)
     Nudge,
     /// Stop the daemon after its current pass
@@ -60,6 +62,11 @@ pub fn run(start: &Path, cmd: DaemonCmd, entry: &crate::entry::Entry) -> Result<
                 println!("{}", health.line());
             }
             std::process::exit(health_code(&health));
+        }
+        DaemonCmd::Socket => {
+            let store = entry.open(start)?.store;
+            println!("{}", daemon_client::socket_path(&store).display());
+            Ok(())
         }
         DaemonCmd::Nudge => {
             let store = entry.open(start)?.store;

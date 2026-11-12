@@ -265,7 +265,9 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
             ArtifactCmd::Gc { .. } | ArtifactCmd::SetTier { .. } => Refused,
         },
         Cmd::Daemon { cmd } => match cmd {
-            crate::daemon_cmd::DaemonCmd::Status { .. } => Read,
+            crate::daemon_cmd::DaemonCmd::Status { .. } | crate::daemon_cmd::DaemonCmd::Socket => {
+                Read
+            }
             crate::daemon_cmd::DaemonCmd::Run { .. }
             | crate::daemon_cmd::DaemonCmd::Nudge
             | crate::daemon_cmd::DaemonCmd::Stop { .. }

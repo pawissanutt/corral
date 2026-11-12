@@ -21,6 +21,7 @@ const ROWS: &[(&str, &[&str], Class)] = &[
     ("", &[], Refused),
     ("daemon run", &[], Refused),
     ("daemon status", &["--json"], Read),
+    ("daemon socket", &[], Read),
     ("daemon nudge", &[], Refused),
     ("daemon stop", &[], Refused),
     ("daemon install", &["--print"], Refused),
