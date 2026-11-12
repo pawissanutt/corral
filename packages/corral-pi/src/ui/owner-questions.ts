@@ -33,6 +33,8 @@ export class OwnerQuestionUi {
   private active: { id: string; abort: AbortController } | undefined;
   private opening = false;
   private epoch = 0;
+  // Typed drafts survive Escape and reopening for this session; an answered question drops its own.
+  private readonly drafts = new Map<string, string[]>();
   busy = false;
   constructor(private readonly questions: PendingQuestions, private readonly eligible: () => boolean,
     private readonly persist: (message: { customType: string; content: string; display: boolean }) => void,
@@ -164,6 +166,7 @@ export class OwnerQuestionUi {
         ctx.ui.notify(`${id}: no answer sent. Reopen with /questions if still pending.`, "info"); return;
       }
       const status = await this.questions.answer(id, answers);
+      this.drafts.delete(id);
       if (this.epoch === epoch) ctx.ui.notify(`${id}: ${status}`, "info");
     } catch (error) {
       if (this.epoch === epoch) ctx.ui.notify(`Owner answer unresolved: ${String(error)}. Inspect /questions before retrying; no missing answer is consent.`, "error");
@@ -176,7 +179,9 @@ export class OwnerQuestionUi {
   private async collect(ui: ExtensionUIContext, q: PendingQuestion, signal: AbortSignal): Promise<ChoiceAnswer[] | undefined> {
     const questions = q.questions.map(choice => ({ question: choice.question, options: choice.options.map(label => ({ label })),
       ...(choice.freeText === undefined ? {} : { freeText: choice.freeText }) }));
-    const shown = await askDialog(ui, questions, signal, { escape: "Esc keeps it pending", complete: true });
+    const drafts = this.drafts.get(q.id) ?? [];
+    this.drafts.set(q.id, drafts);
+    const shown = await askDialog(ui, questions, signal, { escape: "Esc keeps it pending", complete: true, drafts });
     if (signal.aborted) return undefined;
     if (shown && !shown.submitted) return undefined;
     const raw = shown?.answers ?? await sequential(ui, questions, signal);
@@ -194,7 +199,7 @@ export class OwnerQuestionUi {
   close(ended = false): void {
     this.epoch++;
     this.active?.abort.abort();
-    this.active = undefined; this.opening = false;
+    this.active = undefined; this.opening = false; this.drafts.clear();
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined; this.ctx = undefined; this.ui = undefined; this.busy = false;
     this.questions.close(ended);

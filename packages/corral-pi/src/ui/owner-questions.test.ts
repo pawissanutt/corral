@@ -159,8 +159,8 @@ test("/questions takes the owner's own typed answer, keeps drafts across questio
   await command(id, ctx);
   expect(screen).toContain("Other: ship 1.4");
   expect(q.get(id)?.status).toBe("pending"); expect(records).toEqual([]);
-  // A typed answer not among the options; Q2 forbids free text, so it has no Other row.
-  keys = [down, down, "ship 1.4 only after QA", "\r", down, down, "x", "\r", "\r"];
+  // Reopening keeps the draft; the answer is not among the options and Q2 has no Other row.
+  keys = [down, down, " only after QA", "\r", down, down, "x", "\r", "\r"];
   screens.length = 0;
   await command(id, ctx);
   const q2 = screens.filter(s => s.includes("Notify?"));

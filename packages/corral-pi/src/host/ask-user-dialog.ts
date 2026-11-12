@@ -10,7 +10,8 @@ export type DialogQuestion = { question: string; header?: string; options: Choic
 /** `selected` is empty for the owner's own typed answer, which is then the nonempty `text`. */
 export type DialogAnswer = { selected: string[]; text: string };
 export type DialogResult = { submitted: boolean; answers: (DialogAnswer | undefined)[] };
-export type DialogOptions = { escape?: string; complete?: boolean };
+/** `drafts` seeds each text row and receives every edit, so a caller can keep drafts across reopenings. */
+export type DialogOptions = { escape?: string; complete?: boolean; drafts?: string[] };
 
 const PASTE_START = "\x1b[200~";
 const PASTE_END = "\x1b[201~";
@@ -50,7 +51,12 @@ export class AskDialog implements Component, Focusable {
     private readonly changed: () => void = () => {}, private readonly options: DialogOptions = {}) {
     this.answers = questions.map(() => undefined);
     this.picks = questions.map(() => new Set());
-    this.inputs = questions.map(() => new Input({ prompt: "" }));
+    this.inputs = questions.map((_, i) => {
+      const input = new Input({ prompt: "" });
+      const draft = options.drafts?.[i];
+      if (draft) { input.setValue(draft); input.handleInput("\x05"); } // caret at the end
+      return input;
+    });
   }
 
   /** Ends the dialog once; answered questions are kept whether submitted or not. */
@@ -160,6 +166,7 @@ export class AskDialog implements Component, Focusable {
   private edit(data: string): void {
     const i = this.tab;
     if (data) this.inputs[i]!.handleInput(data);
+    if (this.options.drafts) this.options.drafts[i] = this.note(i);
     const answer = this.answers[i];
     if (!answer) return;
     if (answer.selected.length === 0) {
