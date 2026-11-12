@@ -276,8 +276,14 @@ fn bedrock_ids_price_from_the_bedrock_catalog_and_existing_lookups_are_unchanged
     let (price, source) = config.price_with_source(id).unwrap();
     assert!((price.input - 3.3).abs() < 1e-12);
     assert!((price.output - 16.5).abs() < 1e-12);
-    assert_eq!(source, "catalog-bedrock@pi-ai-1.5.0");
-    assert_eq!(bedrock_catalog_prices().len(), 197);
+    assert_eq!(source, "catalog-bedrock@pi-ai-1.5.2");
+    assert_eq!(bedrock_catalog_prices().len(), 202);
+    let (new_price, new_source) = config
+        .price_with_source("us.anthropic.claude-fable-5-2")
+        .unwrap();
+    assert!((new_price.input - 8.8).abs() < 1e-12);
+    assert!((new_price.output - 44.0).abs() < 1e-12);
+    assert_eq!(new_source, source);
     let (_, source) = config.price_with_source("claude-sonnet-4-6").unwrap();
     assert_eq!(source, CATALOG_SOURCE);
     assert!(config.price("anthropic.claude-unknown").is_none());
