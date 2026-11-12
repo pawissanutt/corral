@@ -62,13 +62,39 @@ fn append(
     Ok(receipt)
 }
 
+/// The PM receipt cap and the retention pass that runs before it is checked.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PmCapacity {
+    pub cap: u64,
+    pub limits: pm_state::RetentionLimits,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only: a small cap, so the at-cap path runs without a full receipt family.
+    pub(crate) static PM_CAPACITY: std::cell::Cell<Option<PmCapacity>> =
+        const { std::cell::Cell::new(None) };
+}
+
+fn pm_capacity_limits() -> PmCapacity {
+    #[cfg(test)]
+    if let Some(capacity) = PM_CAPACITY.with(std::cell::Cell::get) {
+        return capacity;
+    }
+    PmCapacity {
+        cap: RECEIPTS_MAX as u64,
+        limits: pm_state::RetentionLimits::PM,
+    }
+}
+
+/// Retention runs first, so a PM container at its cap with reclaimable history still admits,
+/// including a new generation's hello.
 pub(crate) fn pm_capacity(store: &Store) -> Result<()> {
-    if pm_state::child_count(store, "receipts")? >= RECEIPTS_MAX as u64
-        && pm_state::reclaim_receipts(store)? == 0
-    {
+    let PmCapacity { cap, limits } = pm_capacity_limits();
+    if pm_state::retain(store, &limits)?.receipt_count >= cap {
         return Err(Rejection::new(
             RejectCode::ReceiptLimit,
-            format!("the container already holds {RECEIPTS_MAX} receipts"),
+            format!("the container already holds {cap} receipts"),
         )
         .into());
     }
@@ -485,3 +511,7 @@ pub(crate) fn log_rejection(ctx: &Ctx, response: &CallResponse, input: &[u8]) ->
     let key = paths::sha256_hex(super::envelope::canonical_json(&key).as_bytes());
     rejections::log_rejection_once(&ctx.store, task, &key, detail).map(|_| ())
 }
+
+#[cfg(test)]
+#[path = "retention_tests.rs"]
+mod retention_tests;

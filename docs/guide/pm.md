@@ -174,6 +174,11 @@ receipted mutations answer, escalate or cancel a question, reply, comment or
 capture a task inside that project. Every mutation rechecks the current
 binding and target scope when it commits.
 
+`brief` and `next` return bounded cards: only evidence previews (and, as a last
+resort, the idea shortlist) are shortened, never action identity or authority.
+Read full evidence with `read_show` using `overview` and `automation`; briefs
+also report how many pending questions were omitted when the list cannot fit.
+
 `read_show` is bounded because this role has no raw filesystem tool. Its
 payload is `{task, section?, offset?, limit?}`: `section` is `overview`
 (the default), `spec`, `questions`, `comments` or `plans`; `offset` is a

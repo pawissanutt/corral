@@ -5,6 +5,15 @@ use std::path::{Path, PathBuf};
 
 #[derive(Subcommand)]
 pub enum PmCmd {
+    /// Recover the recorded corral-pi PM in the same conversation, without taking focus
+    Relaunch {
+        #[arg(long)]
+        replace: bool,
+        #[arg(long, default_value = "owner_request")]
+        reason: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Replay frozen events and score code policy or imported model decisions, offline
     Bench {
         #[arg(long)]
@@ -165,6 +174,21 @@ fn print_action(action: &PmAction) {
 pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Result<()> {
     match cmd {
         None => println!("PM pane {}", corral_ops::open_pm(&entry.open(start)?)?),
+        Some(PmCmd::Relaunch {
+            replace,
+            reason,
+            json,
+        }) => {
+            let pane = corral_ops::relaunch_pm(&entry.open(start)?, &reason, replace)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({"pane": pane}))?
+                );
+            } else {
+                println!("{pane}");
+            }
+        }
         Some(PmCmd::Bench {
             events,
             cases,

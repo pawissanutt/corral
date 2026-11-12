@@ -242,6 +242,10 @@ pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> R
     Ok(recover(ctx, container, replace, None)?.0)
 }
 
+#[path = "recovery_launch.rs"]
+mod launch;
+pub(crate) use launch::RecoveryLaunch;
+
 /// Resume, or with `adopt` (`corral pi` taking over a dead PM) the same fencing, drain and
 /// notice with generation n+1 opened in the adopting pane and launched in-process from the
 /// returned bootstrap instead of typed into the recorded pane.
@@ -251,7 +255,8 @@ pub(crate) fn recover(
     replace: bool,
     adopt: Option<(&str, &corral_core::ResolvedProfile, bool)>,
 ) -> Result<(Value, Prepared)> {
-    recover_with(ctx, container, replace, adopt, None)
+    let launch = adopt.map(RecoveryLaunch::from_adopt);
+    recover_with(ctx, container, replace, launch, None)
 }
 
 /// `recover` with a rewind's restore stages run after the fence, the drain and the
@@ -260,7 +265,7 @@ pub(crate) fn recover_with(
     ctx: &Ctx,
     container: &ContainerRef,
     replace: bool,
-    adopt: Option<(&str, &corral_core::ResolvedProfile, bool)>,
+    launch: Option<RecoveryLaunch<'_>>,
     mut restore: Option<&mut dyn FnMut() -> Result<()>>,
 ) -> Result<(Value, Prepared)> {
     quiesce::require_host_start(ctx, container)?;
@@ -276,17 +281,10 @@ pub(crate) fn recover_with(
     let n = state.binding.generation;
     ensure!(n > 0, "{} has no generation to resume", container.key());
     // Refuse unavailable assets, profiles or scope without stopping or fencing the old host.
-    let pm_profile = if matches!(container, ContainerRef::Pm) {
-        let resolved =
-            adopt.map_or_else(|| super::hooks::pm::profile(ctx), |(_, r, _)| Ok(r.clone()))?;
-        super::hooks::pm::project(ctx)?;
-        Some(resolved)
-    } else {
-        None
-    };
+    let pm_profile = launch::pm_profile(ctx, container, launch.as_ref())?;
     let mut plan = relaunch(ctx, container, &state)?;
-    let adopted = adopt.is_none() && super::pi::adopted(ctx, container, &plan.pane)?;
-    if let Some((pane, _, _)) = adopt {
+    let adopted = launch.is_none() && super::pi::adopted(ctx, container, &plan.pane)?;
+    if let Some(pane) = launch.as_ref().and_then(|launch| launch.pane) {
         plan.pane = pane.into();
     }
     if ctx.herdr.pane_get(&plan.pane)?.is_none() {
@@ -332,8 +330,8 @@ pub(crate) fn recover_with(
             ctx,
             &plan.pane,
             &resolved,
-            adopt.is_some(),
-            adopt.is_none_or(|(_, _, continued)| continued),
+            launch.as_ref().is_some_and(|launch| launch.adopted),
+            launch.as_ref().is_none_or(|launch| launch.continue_session),
         )?,
         (None, None) => bail!("the PM relaunch command is missing"),
     };
@@ -356,7 +354,7 @@ pub(crate) fn recover_with(
     if let ContainerRef::Reviewer { task, .. } = container {
         super::hooks::review::release_lost(ctx, task)?;
     }
-    if adopt.is_none() {
+    if launch.is_none() {
         ctx.herdr.pane_run(&plan.pane, &command)?;
     }
     if let Some(task) = container.task() {

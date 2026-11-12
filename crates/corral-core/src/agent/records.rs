@@ -11,6 +11,12 @@ pub const AGENT_RECORD_VERSION: u32 = 1;
 pub const RESULT_MAX_BYTES: usize = 8 * 1024;
 pub const RECEIPTS_MAX: usize = 16 * 1024;
 pub const GENERATIONS_MAX: usize = 64;
+/// PM container retention runs once either family reaches its high-water mark, leaving room
+/// under the cap for the append or launch that triggered it.
+pub const RECEIPTS_HIGH_WATER: usize = RECEIPTS_MAX - RECEIPTS_MAX / 16;
+pub const GENERATIONS_HIGH_WATER: usize = GENERATIONS_MAX - GENERATIONS_MAX / 8;
+/// The first capability catalog whose generations record budget accounting.
+pub const BUDGET_ACCOUNTING_CATALOG: u32 = 7;
 /// Ended turns beyond this count are evicted oldest first; open turns are never evicted.
 pub const TURNS_MAX: usize = 512;
 pub const WAKES_MAX: usize = 256;
@@ -101,6 +107,10 @@ pub struct AgentRunState {
     /// Cumulative reservations and settled usage; never rewind with a session cursor.
     #[serde(default)]
     pub budget: super::BudgetLedger,
+    /// PM only: what retention kept of the generations it retired. Absent until the first
+    /// retirement, which is one-way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired: Option<RetiredGenerations>,
 }
 
 impl AgentRunState {
@@ -121,6 +131,7 @@ impl AgentRunState {
             rewinds: Vec::new(),
             usage_sessions: Vec::new(),
             budget: super::BudgetLedger::default(),
+            retired: None,
         }
     }
 
@@ -138,6 +149,87 @@ impl AgentRunState {
 
     pub fn current_generation(&self) -> Option<&AgentGeneration> {
         self.generation(self.binding.generation)
+    }
+
+    /// Generation `n` was retired: it is absent and below the retention floor.
+    pub fn generation_retired(&self, n: u32) -> bool {
+        self.retired.as_ref().is_some_and(|r| n < r.floor) && self.generation(n).is_none()
+    }
+
+    /// A bound generation, retained or retired, predates budget accounting, so no hard
+    /// budget cap can be established for this container.
+    pub fn legacy_usage_gap(&self) -> bool {
+        self.retired.as_ref().is_some_and(|r| r.legacy_usage_gap)
+            || self
+                .generations
+                .iter()
+                .any(AgentGeneration::predates_budget_accounting)
+    }
+}
+
+/// The usage attribution of PM generations that retention retired: enough for the usage
+/// collector and the budget gap to answer exactly as they did while the records were retained.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetiredGenerations {
+    /// Every retired generation number is below it; it never decreases.
+    pub floor: u32,
+    /// A retired bound generation predates budget accounting.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub legacy_usage_gap: bool,
+    /// One entry per bound transcript file, from the oldest generation that bound it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transcripts: Vec<RetiredTranscript>,
+    /// One entry per distinct connection binding, with the generations that ran under it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connections: Vec<RetiredConnection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetiredTranscript {
+    pub generation: u32,
+    pub session_id: String,
+    pub session_file: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RetiredConnection {
+    pub generations: Vec<u32>,
+    pub binding: crate::connection::ConnectionBinding,
+}
+
+impl RetiredGenerations {
+    /// Keeps `generation`'s usage attribution and raises the floor past it.
+    pub fn archive(&mut self, generation: &AgentGeneration) {
+        self.floor = self.floor.max(generation.n.saturating_add(1));
+        self.legacy_usage_gap |= generation.predates_budget_accounting();
+        if let Some(bound) = &generation.bound {
+            let file = &bound.session_file;
+            match self
+                .transcripts
+                .iter_mut()
+                .find(|t| t.session_file == *file)
+            {
+                Some(kept) if kept.generation < generation.n => {}
+                Some(kept) => {
+                    kept.generation = generation.n;
+                    kept.session_id = bound.session_id.clone();
+                }
+                None => self.transcripts.push(RetiredTranscript {
+                    generation: generation.n,
+                    session_id: bound.session_id.clone(),
+                    session_file: file.clone(),
+                }),
+            }
+        }
+        if let Some(binding) = &generation.connection {
+            match self.connections.iter_mut().find(|c| c.binding == *binding) {
+                Some(kept) => kept.generations.push(generation.n),
+                None => self.connections.push(RetiredConnection {
+                    generations: vec![generation.n],
+                    binding: binding.clone(),
+                }),
+            }
+        }
     }
 }
 
@@ -210,6 +302,15 @@ impl AgentGeneration {
             Some(snapshot) => snapshot.enabled(key),
             None => key == "todo" && self.todo,
         }
+    }
+
+    /// Bound before its capability catalog recorded budget accounting.
+    pub fn predates_budget_accounting(&self) -> bool {
+        self.bound.is_some()
+            && self
+                .capabilities
+                .as_ref()
+                .is_none_or(|s| s.catalog < BUDGET_ACCOUNTING_CATALOG)
     }
 }
 

@@ -201,3 +201,107 @@ fn next_and_brief_share_workset_priority_without_leaking_foreign_actions() {
     assert_eq!(bytes[0], ts::task_bytes(&fx, &held.id));
     assert_eq!(bytes[1], ts::task_bytes(&fx, &inside.id));
 }
+
+#[test]
+fn argumentless_cards_bound_evidence_and_pending_questions_without_changing_identity() {
+    let (mut fx, host) = fixture();
+    fx.ctx.resource_probe = crate::resources::FixedResourceProbe::arc();
+    let id = ts::worker_task(&fx, "worker");
+    let worker = ts::bind(
+        &fx,
+        &BindTarget::Worker {
+            task: id.clone(),
+            run: "R1".into(),
+        },
+        "worker",
+        "worker-session",
+    );
+    ts::committed(&ts::hello(&fx, &worker));
+    ts::committed(&send(
+        &fx,
+        &worker,
+        "ask",
+        "ask",
+        json!({"kind":"clarification","text":"Which route?","blocking":false}),
+    ));
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            let state = task.runs[0].agent_host.as_mut().unwrap();
+            let question = state.questions[0].clone();
+            for n in 2..90 {
+                let mut pending = question.clone();
+                pending.key = format!("{id}/R1/Q{n}");
+                state.questions.push(pending);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let canonical = crate::pm_next(&fx.ctx).unwrap();
+    let cli = serde_json::to_value(&canonical).unwrap();
+    let budget = corral_core::agent::RESULT_MAX_BYTES;
+    let unchanged = super::super::super::pm_bound::bounded_next(&canonical, budget).unwrap();
+    assert_eq!(unchanged, cli);
+    // Exercise the pure projection with multibyte and JSON-escaped evidence.
+    // No gate subprocess or large persisted run record is needed for this defect.
+    let mut large = canonical.clone();
+    large.evidence.push("λ\\\"\n".repeat(budget));
+    for op in ["read_next", "read_brief"] {
+        let result = if op == "read_next" {
+            super::super::super::pm_bound::bounded_next(&large, budget).unwrap()
+        } else {
+            super::super::super::pm_bound::bounded_brief(
+                &large,
+                json!({"project":"corral","counts":{},"questions":[]}),
+                budget,
+            )
+            .unwrap()
+        };
+        assert!(serde_json::to_vec(&result).unwrap().len() <= budget);
+        let next = if op == "read_brief" {
+            &result["next"]
+        } else {
+            &result
+        };
+        for field in [
+            "kind",
+            "task",
+            "why",
+            "command",
+            "verify",
+            "options",
+            "recommended",
+            "requires_owner",
+        ] {
+            assert_eq!(next[field], cli[field], "{op}: {field}");
+        }
+        assert!(next["bounded"]["evidence_chars_omitted"].as_u64().unwrap() > 0);
+        assert!(
+            next["evidence"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item.as_str().unwrap().contains("[truncated:"))
+        );
+    }
+    let response = send(&fx, &host, "read_brief", "many-questions", json!({}));
+    let result = ts::committed(&response).result;
+    assert!(serde_json::to_vec(&result).unwrap().len() <= budget);
+    assert_eq!(result["questions_total"], 89);
+    let omitted = result["questions_omitted"].as_u64().unwrap();
+    assert!(omitted > 0);
+    assert_eq!(
+        result["questions"].as_array().unwrap().len() as u64 + omitted,
+        89
+    );
+    for field in [
+        "kind",
+        "task",
+        "command",
+        "options",
+        "recommended",
+        "requires_owner",
+    ] {
+        assert_eq!(result["next"][field], cli[field], "{field}");
+    }
+}

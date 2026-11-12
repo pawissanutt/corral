@@ -1,0 +1,15 @@
+[Unit]
+Description=Corral supervised sync (user service)
+
+[Service]
+Type=simple
+# Replace both placeholders with absolute paths before enabling this unit.
+ExecStart=/ABSOLUTE/PATH/TO/corral --root "<WORKSPACE>" sync --watch
+Restart=always
+RestartSec=5
+# Select the store's existing herdr server explicitly; never start one here.
+# Environment=CORRAL_HERDR_SESSION=your-session
+# Environment=HERDR_SOCKET_PATH=/absolute/path/to/herdr.sock
+
+[Install]
+WantedBy=default.target

@@ -10,6 +10,7 @@ use super::*;
 mod cancellation;
 mod records;
 mod recovery;
+mod refused;
 mod replacement;
 mod retired;
 

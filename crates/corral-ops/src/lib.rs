@@ -100,6 +100,7 @@ pub mod pm_inbox;
 mod pm_next;
 mod pm_policy;
 mod pm_questions;
+mod pm_supervisor;
 mod pm_workset;
 mod pricing;
 mod profile_selector;
@@ -258,13 +259,14 @@ pub use plan_review::{
 pub use plan_review_offer::{
     PlanReviewOffer, plan_review_offer, plan_review_retryable, plan_review_wait,
 };
-pub use pm::{SetupConnection, open_pm, open_setup_pm, setup_connection};
+pub use pm::{SetupConnection, open_pm, open_setup_pm, relaunch_pm, setup_connection};
 pub use pm_decisions::{pm_present, pm_resolve};
 pub use pm_health::pm_health;
 pub use pm_next::{PmAction, PmActionKind, PmObservation, PmOption, pm_card, pm_next, pm_select};
 pub use pm_policy::{pm_policy_health, reconcile_pm_policy};
 #[doc(hidden)]
 pub use pm_questions::set_transcript_settle_window;
+pub use pm_supervisor::supervise;
 pub use pm_workset::{
     OperatingStatus, PmActionOutcome, PmActionResult, PmDecision, PmExecutable, PmWorkset,
     ScopedProgress, pm_act, pm_workset, pm_workset_with_attention, pm_workset_with_policy,

@@ -98,8 +98,9 @@ containers too.
 |---|---|---|---|
 | `version` | u32 | 1 | request-receipts |
 | `binding` | AgentBinding | one | request-receipts (`open_generation`) |
-| `generations` | AgentGeneration[] | ≤ 64 (`GENERATIONS_MAX`) | request-receipts |
-| `receipts` | RequestReceipt[] | ≤ 16384 (`RECEIPTS_MAX`); a full task-owned container refuses `receipt_limit`. The PM container, which outlives its generations, first evicts its oldest settled receipts of ended generations down to 8192; only when none qualify does it refuse | request-receipts, op-receipts, question-lifecycle |
+| `generations` | AgentGeneration[] | ≤ 64 (`GENERATIONS_MAX`). The PM container retains at 56 (`GENERATIONS_HIGH_WATER`): ended generations with no receipts left are retired, oldest first, into `retired` | request-receipts |
+| `receipts` | RequestReceipt[] | ≤ 16384 (`RECEIPTS_MAX`); a full task-owned container refuses `receipt_limit`. The PM container, which outlives its generations, retains at 15360 receipts (`RECEIPTS_HIGH_WATER`) or 56 generations: it evicts its oldest settled receipts of ended generations down to half; only when none qualify does it refuse. Current-generation receipts are never evicted | request-receipts, op-receipts, question-lifecycle |
+| `retired` | RetiredGenerations? | PM container only: the floor every retired generation number is below, plus each retired generation's transcript, session, connection binding and pre-budget flag. Its first write moves the PM head to layout 3, which older binaries refuse (see [storage](../guide/storage.md)) | request-receipts |
 | `questions` | AgentQuestion[] | ≤ 8 pending, ≤ 1 blocking per container | question-lifecycle |
 | `turns` | AgentTurn[] | ≤ 512 (`TURNS_MAX`); the oldest ended turns are evicted first, open turns never | request-receipts (facts), worker-role and reviewer-role (`class`) |
 | `wakes` | WakeSubscription[] | ≤ 256 (`WAKES_MAX`) | op-receipts, worker-role |
@@ -470,6 +471,7 @@ container.
 | `agent_lost`, `agent_resumed`, `agent_call_reconciled` | container, generation, request ID | recovery |
 | `agent_session_reclassified` | `container`, `class` (`terminal_transcript`), `dir`, `sessions`, `closure` | recovery (`crates/corral-ops/src/agent/hooks/sync.rs`, `reclassify`) |
 | `delivery_fenced` | `envelope`, `endpoint`, `members` (each with `id` and `observed`) | recovery (`crates/corral-ops/src/agent/bridge/notice.rs`, `settle_unconfirmed`) |
+| `delivery_requeued` | `envelope`, `code` (`input_limit`), `generation`, `members` (message ids) | recovery and delivery (`crates/corral-core/src/inbox/envelope.rs`, `requeue_refused`) |
 | `agent_wake_posted` | wake key | worker-role, pm-role |
 | `agent_job_reaped` | `run`, `job`, `state` (`reaped` or `lost`), `detail` | background-shell |
 

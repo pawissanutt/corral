@@ -208,7 +208,7 @@ fn publish(inbox: &Inbox<'_>, question: &AgentQuestion, project: &str) -> Result
 /// The inbox outlives its PM binding. Check identity and every wake's project at the last
 /// send boundary, under dispatch, so a rebind cannot deliver an old project's question to
 /// its successor. The existing adapter still owns framing, retries and observation.
-struct ScopedPm(AgentPm);
+pub(crate) struct ScopedPm(pub(crate) AgentPm);
 
 fn in_scope(ctx: &Ctx, message: &Message, project: &str) -> Result<bool> {
     if message.kind != "question_wake" {

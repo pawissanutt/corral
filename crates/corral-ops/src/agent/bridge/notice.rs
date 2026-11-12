@@ -8,7 +8,9 @@
 //! nothing (the notice included) could reach n+1. Resume settles it without a resend: a
 //! `corral_delivery` entry in the continuing Pi session observes its members, and otherwise
 //! each unobserved member is marked failed `delivery_unknown`, which only an explicit
-//! `corral inbox retry` resends. The notice reports those as delivery unknown.
+//! `corral inbox retry` resends. The notice reports those as delivery unknown. An envelope n
+//! refused before admission (`input_limit`) reached nobody: its members go back to pending and
+//! reach n+1 in a fresh envelope, so the notice does not list them.
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
@@ -71,6 +73,12 @@ pub fn settle_unconfirmed(
         return Ok(Vec::new());
     }
     let entry = delivery_entry(session_file, inbox.key(), number, &envelope.payload_sha256)?;
+    if entry.is_none()
+        && let Some(refusal) = inbox.refusal(&envelope)?
+    {
+        inbox.requeue_refused(&envelope, &refusal)?;
+        return Ok(Vec::new());
+    }
     let reason = format!(
         "delivery_unknown: sent to the host at {} that was lost before it confirmed the \
          message; never resent automatically",

@@ -489,6 +489,7 @@ const ROWS: &[(&str, &[&str], Class)] = &[
     ("pm act", &["a-1"], Refused),
     ("pm present", &["d-1", "--delivery", "pane"], Refused),
     ("pm resolve", &["d-1", "--answer", "yes"], Refused),
+    ("pm relaunch", &[], Refused),
     (
         "pm inbox post",
         &["--kind", "question", "--subject", "Which cache?"],

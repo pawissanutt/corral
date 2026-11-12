@@ -22,6 +22,8 @@ use crate::delivery::{DeliveryStatus, deliver, owner};
 
 #[path = "planning_tests.rs"]
 mod planning;
+#[path = "refused_tests.rs"]
+mod refused;
 
 #[derive(Default)]
 struct Script {
@@ -29,6 +31,8 @@ struct Script {
     close_after_admit: bool,
     /// Admit inputs but hold their entries until `flush`.
     hold_entries: bool,
+    /// Refuse every new key with `input_limit`, as a generation out of input keys does.
+    input_limit: bool,
     held: Vec<Value>,
     keys: HashMap<String, (String, Value)>,
     submits: Vec<Value>,
@@ -148,6 +152,10 @@ fn respond(
                 let mut answer = reply(result["disposition"].as_str().unwrap(), true);
                 answer["result"]["replayed"] = json!(true);
                 return (answer, false);
+            }
+            if script.input_limit {
+                let refusal = json!({"code": "input_limit", "reason": "scripted"});
+                return (json!({"ok": false, "error": refusal}), false);
             }
             let entry = json!({"type": "custom", "customType": ENTRY_TYPE,
                 "id": format!("e{}", script.keys.len() + 1), "timestamp": "2026-10-24T00:00:00Z",

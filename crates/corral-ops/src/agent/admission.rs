@@ -175,6 +175,7 @@ fn authenticate(
     envelope: &Envelope,
     binding: &AgentBinding,
     generation: Option<&AgentGeneration>,
+    retired: bool,
     mode: Mode,
 ) -> Result<()> {
     let identity = &envelope.identity;
@@ -203,8 +204,17 @@ fn authenticate(
         ));
     }
     let n = identity.generation;
-    let generation = generation
-        .ok_or_else(|| reject(RejectCode::AuthFailed, format!("generation {n} is unknown")))?;
+    // A retired generation's record is gone; like any fenced generation it can never commit.
+    let generation = generation.ok_or_else(|| {
+        if retired {
+            reject(
+                RejectCode::AgentFenced,
+                format!("generation {n} was retired"),
+            )
+        } else {
+            reject(RejectCode::AuthFailed, format!("generation {n} is unknown"))
+        }
+    })?;
     let nonce_matches = || {
         envelope
             .auth
@@ -325,7 +335,16 @@ pub(crate) fn admit(ctx: &Ctx, envelope: &Envelope, mode: Mode) -> Result<Admiss
         .binding(&container)?
         .context("resolved container has no agent state")?;
     let generation = resolved.generation(&container, identity.generation)?;
-    authenticate(&ctx.store, envelope, &bound, generation.as_ref(), mode)?;
+    let retired =
+        matches!(&resolved, Resolved::Pm(pm) if pm.state.generation_retired(identity.generation));
+    authenticate(
+        &ctx.store,
+        envelope,
+        &bound,
+        generation.as_ref(),
+        retired,
+        mode,
+    )?;
     if let Some(stored) = resolved.receipt(&container, &envelope.request_id)? {
         same_request(&stored, &envelope.op, &envelope.payload_sha256)?;
         return Ok(Admission::Replay(Box::new(stored)));
@@ -366,66 +385,9 @@ pub(crate) fn admit(ctx: &Ctx, envelope: &Envelope, mode: Mode) -> Result<Admiss
     })))
 }
 
-/// What a launcher binds: never chosen by the model.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BindTarget {
-    Planner {
-        task: String,
-        run: String,
-    },
-    PlanReviewer {
-        task: String,
-        plan: String,
-        review: String,
-    },
-    Worker {
-        task: String,
-        run: String,
-    },
-    Reviewer {
-        task: String,
-        run: String,
-        review: String,
-        callback: String,
-    },
-    Pm {
-        project: String,
-    },
-    Assistant {
-        session: String,
-    },
-}
-
-impl BindTarget {
-    pub fn container(&self) -> ContainerRef {
-        match self {
-            BindTarget::Planner { task, run } => ContainerRef::Planner {
-                task: task.clone(),
-                run: run.clone(),
-            },
-            BindTarget::PlanReviewer { task, plan, review } => ContainerRef::PlanReviewer {
-                task: task.clone(),
-                plan: plan.clone(),
-                review: review.clone(),
-            },
-            BindTarget::Worker { task, run } => ContainerRef::Worker {
-                task: task.clone(),
-                run: run.clone(),
-            },
-            BindTarget::Reviewer {
-                task, run, review, ..
-            } => ContainerRef::Reviewer {
-                task: task.clone(),
-                run: run.clone(),
-                review: review.clone(),
-            },
-            BindTarget::Pm { .. } => ContainerRef::Pm,
-            BindTarget::Assistant { session } => ContainerRef::Assistant {
-                session: session.clone(),
-            },
-        }
-    }
-}
+#[path = "admission_target.rs"]
+mod bind_target;
+pub use bind_target::BindTarget;
 
 /// A new generation and its one-shot bind nonce, returned once for the bootstrap file.
 #[derive(Clone)]
@@ -479,7 +441,16 @@ fn next_generation(
         state.binding.role.as_str()
     );
     let now = corral_core::clock::now();
-    let n = state.generations.iter().map(|g| g.n).max().unwrap_or(0) + 1;
+    // Never reuse a retired generation's number.
+    let floor = state.retired.as_ref().map_or(0, |r| r.floor);
+    let n = state
+        .generations
+        .iter()
+        .map(|g| g.n)
+        .max()
+        .unwrap_or(0)
+        .max(floor.saturating_sub(1))
+        + 1;
     let role = state.binding.role;
     let transition = state
         .generations
@@ -531,19 +502,6 @@ fn binding(role: AgentRole, store: &str, project: &str, callback: Option<String>
 /// commit. Dispatch, review-run, pm open and resume call this before writing the bootstrap.
 pub fn open_generation(store: &Store, target: &BindTarget, pane: &str) -> Result<GenerationGrant> {
     open_generation_with(store, target, pane, false, None)
-}
-
-impl BindTarget {
-    pub fn role(&self) -> AgentRole {
-        match self {
-            BindTarget::Worker { .. } => AgentRole::Worker,
-            BindTarget::Reviewer { .. } => AgentRole::Reviewer,
-            BindTarget::Planner { .. } => AgentRole::Planner,
-            BindTarget::PlanReviewer { .. } => AgentRole::PlanReviewer,
-            BindTarget::Pm { .. } => AgentRole::Pm,
-            BindTarget::Assistant { .. } => AgentRole::Assistant,
-        }
-    }
 }
 
 /// `open_generation`; with `adopt`, a PM's new pane is recorded as the owner's pane adopted by
@@ -633,9 +591,12 @@ pub(crate) fn open_generation_bound(
     let store_id = paths::store_id(store);
     let container = target.container();
     let generation = match (target, container.task()) {
-        (BindTarget::Pm { project }, _) => pm_state::update_selected(
+        // Retention runs first in the same transaction, so a container whose ended
+        // generations can be retired never refuses the launch.
+        (BindTarget::Pm { project }, _) => pm_state::update_retained(
             store,
             &pm_state::Selection::default().family("generations"),
+            &pm_state::RetentionLimits::PM,
             |pm| {
                 let pm = pm.get_or_insert_with(|| {
                     let state =

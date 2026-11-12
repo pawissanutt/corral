@@ -21,6 +21,7 @@ pub mod effects;
 #[cfg(all(test, unix))]
 mod omo_fixture;
 pub(crate) mod owner;
+mod refused;
 #[cfg(test)]
 mod tests;
 
@@ -162,6 +163,17 @@ pub fn deliver_at(
         }
     };
     let caps = selected.capabilities();
+    // A session that refused the open envelope before admission never gets it again; only its
+    // replacement settles it, by returning its members to pending for a fresh envelope.
+    if let Some(envelope) = &open
+        && let Some(refusal) = inbox.refusal(envelope)?
+    {
+        let status = refused::settle(ctx, &inbox, selected, recipient, envelope, &refusal)?;
+        if let Some(status) = status {
+            return Ok(status);
+        }
+        open = None;
+    }
     if let Some(envelope) = &open
         && let Some(SendOutcome::Rejected { reason, .. }) = &envelope.outcome
     {
@@ -276,7 +288,10 @@ pub fn deliver_at(
     inbox.finish_attempt(&mut envelope, outcome.clone())?;
     match outcome {
         SendOutcome::Admitted { detail } => admitted(&inbox, &envelope, detail, now)?,
-        SendOutcome::Rejected { reason, .. } => fail(&inbox, &envelope, &reason)?,
+        SendOutcome::Rejected { reason, .. } => match inbox.refusal(&envelope)? {
+            Some(refusal) => return refused::hold(&inbox, &refusal),
+            None => fail(&inbox, &envelope, &reason)?,
+        },
         SendOutcome::Uncertain { reason } => alert_once(
             &inbox,
             "delivery_uncertain",

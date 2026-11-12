@@ -194,7 +194,7 @@ impl RequestLedger {
         action.check_plan(current.as_deref())?;
         let plans = self.plans.max(u64::from(todo.is_some()));
         let TodoAction::Init { .. } = action else {
-            let mut progress = action.step(todo, spec, 0)?;
+            let mut progress = action.step(todo, spec, 0, Some(now))?;
             progress.plan = current;
             self.plans = plans;
             return Ok(progress);
@@ -216,7 +216,7 @@ impl RequestLedger {
             self.history.drain(..excess);
             floor = previous.revision;
         }
-        let mut progress = action.step(None, spec, floor)?;
+        let mut progress = action.step(None, spec, floor, Some(now))?;
         self.plans = plans + 1;
         progress.plan = Some(plan_id(self.plans));
         Ok(progress)
