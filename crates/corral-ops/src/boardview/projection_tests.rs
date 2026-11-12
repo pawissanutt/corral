@@ -23,6 +23,22 @@ fn run(n: usize) -> Run {
     .unwrap()
 }
 
+fn native_questions(task: &str, run: &str) -> Box<corral_core::agent::AgentRunState> {
+    let mut host =
+        crate::agent::native_test_support::host(corral_core::agent::AgentRole::Worker, 0);
+    host.questions.push(
+        serde_json::from_value(json!({
+            "version": 1, "key": format!("{task}/{run}/Q1"), "revision": 1,
+            "asked": { "request_id": "ask", "payload_sha256": "00", "session_id": "fixed-session",
+                "generation": 999, "at": "2026-11-01T00:00:00Z" },
+            "kind": "clarification", "blocking": false, "text": "question",
+            "state": "open", "wake": { "route": "none", "key": "wake", "state": "pending" }
+        }))
+        .unwrap(),
+    );
+    Box::new(host)
+}
+
 #[test]
 fn row_computation_does_not_read_more_as_run_history_grows() {
     let mut measured = Vec::new();
@@ -37,16 +53,22 @@ fn row_computation_does_not_read_more_as_run_history_grows() {
         task.status = Status::Running;
         for n in 1..=history {
             let mut old = run(n);
-            old.outcome = Some(corral_core::RunOutcome::Done);
+            old.outcome = Some(corral_core::RunOutcome::Superseded);
             old.ended = Some("2026-11-01T00:00:01Z".parse().unwrap());
+            // Its inbox is unsettled and its question remains recorded-pending even
+            // though supersession makes the container semantically closed.
+            old.agent_host = Some(native_questions(&task.id, &old.id));
             task.runs.push(old);
         }
-        task.runs.push(run(history + 1));
+        let mut current = run(history + 1);
+        current.agent_host = Some(native_questions(&task.id, &current.id));
+        task.runs.push(current);
         ctx.store.fixture_put_task(&task).unwrap();
         let _hot = HotScope::enter();
         let before = work::snapshot();
         let row = compute_row(&ctx, &task.id).unwrap().unwrap();
         assert_eq!(row.group, corral_protocol::board::BoardGroup::Producing);
+        assert_eq!(row.questions, 1);
         let after = work::snapshot();
         assert_eq!(
             after.total(Counter::HistoryRowDecodes) - before.total(Counter::HistoryRowDecodes),

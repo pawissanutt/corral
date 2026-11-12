@@ -4,6 +4,10 @@ use corral_core::backend::StoredEvent;
 use corral_protocol::board::BoardGroup;
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+#[path = "changes_tests.rs"]
+mod tests;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChangeClass {
@@ -54,7 +58,7 @@ pub const EVENT_MAPPINGS: &[EventMapping] = &[
     EventMapping {
         kind: "approved",
         class: ChangeClass::Land,
-        template: "{task} · landed",
+        template: "{task} · {approval}",
         group: Some(BoardGroup::Verifying),
     },
     EventMapping {
@@ -182,6 +186,12 @@ pub fn change_line(event: &StoredEvent) -> ChangeLine {
         .get("verdict")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("updated");
+    let approval =
+        if detail.get("strategy").and_then(serde_json::Value::as_str) == Some("keep_branch") {
+            "branch kept (not merged)"
+        } else {
+            "landed"
+        };
     // Substitute tokens from the template once: event text cannot inject another token.
     let mut text = String::new();
     for (i, token) in template.split('{').enumerate() {
@@ -195,6 +205,7 @@ pub fn change_line(event: &StoredEvent) -> ChangeLine {
                 "kind" => &event.event.kind,
                 "result" => result,
                 "verdict" => verdict,
+                "approval" => approval,
                 _ => name,
             });
             text.push_str(rest);

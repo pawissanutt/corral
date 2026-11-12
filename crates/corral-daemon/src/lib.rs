@@ -1,5 +1,6 @@
 //! The workspace's single synchronization loop owner.
 mod health;
+mod projector;
 #[cfg(unix)]
 mod server;
 mod state;
@@ -43,9 +44,18 @@ pub fn run(start: &Path, options: RunOptions) -> Result<Exit> {
 }
 
 fn run_with_pass(
+    ctx: Ctx,
+    options: RunOptions,
+    execute: impl FnMut(&mut Ctx, bool) -> Option<String>,
+) -> Result<Exit> {
+    run_with_state(ctx, options, execute, Arc::new(Shared::new()))
+}
+
+fn run_with_state(
     mut ctx: Ctx,
     options: RunOptions,
     mut execute: impl FnMut(&mut Ctx, bool) -> Option<String>,
+    shared: Arc<Shared>,
 ) -> Result<Exit> {
     if !ctx.store.own_loop().context("claiming daemon loop lease")? {
         if options.once {
@@ -53,11 +63,11 @@ fn run_with_pass(
         }
         return Ok(Exit::AlreadyRunning);
     }
-    let shared = Arc::new(Shared::new());
     let mut cleanup = Cleanup {
         store: ctx.store.clone(),
         socket: None,
         shared: Arc::clone(&shared),
+        projector: None,
     };
     ctx.store
         .set_attribution(Actor::System, "daemon")
@@ -67,6 +77,12 @@ fn run_with_pass(
         shared.begin();
         let (cpu, error) = measured_pass(&mut ctx, false, &mut execute);
         shared.finish(cpu, error);
+        if ctx.store.runtime_latched() {
+            return Ok(Exit::Upgrade);
+        }
+        if let Some(error) = &shared.lock().last_error {
+            bail!("daemon one-shot pass failed: {error}");
+        }
         return Ok(Exit::Stopped);
     }
     #[cfg(not(unix))]
@@ -85,6 +101,7 @@ fn run_with_pass(
         cleanup.socket = Some(socket.clone());
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))
             .context("securing daemon socket")?;
+        cleanup.projector = Some(projector::start(&ctx, &shared)?);
         server::start(listener, Arc::clone(&shared), ctx.store.dir())?;
         let transitions = Arc::new(Mutex::new(health::Transitions::new()));
         transitions
@@ -222,12 +239,20 @@ struct Cleanup {
     store: Store,
     socket: Option<PathBuf>,
     shared: Arc<Shared>,
+    projector: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Drop for Cleanup {
     fn drop(&mut self) {
         let upgrading = self.shared.lock().upgrading;
         self.shared.stop(upgrading);
+        self.shared.close();
+        if let Some(projector) = self.projector.take()
+            && projector.join().is_err()
+        {
+            eprintln!("corrald projector thread failed");
+        }
+        self.shared.wait_workers(Duration::from_secs(2));
         if let Some(socket) = &self.socket
             && let Err(error) = std::fs::remove_file(socket)
             && error.kind() != std::io::ErrorKind::NotFound
@@ -235,7 +260,6 @@ impl Drop for Cleanup {
             eprintln!("corrald removing socket: {error:#}");
         }
         self.store.release_loop();
-        self.shared.close();
     }
 }
 

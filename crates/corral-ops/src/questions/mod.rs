@@ -319,6 +319,66 @@ pub(crate) fn recorded_pending_views_ref<T: TaskRef + ?Sized>(
     Ok(out)
 }
 
+/// Board-only pending questions: discover at most the four current head containers,
+/// then apply semantic closure before reading question rows. Retired native owners
+/// may still owe inbox work, but their questions cannot be pending on the board.
+pub(crate) fn current_pending_views_head(
+    task: &corral_core::TaskHead,
+) -> Result<Vec<QuestionView>> {
+    let mut containers = Vec::with_capacity(4);
+    if let Some(run) = task
+        .last_plan_run
+        .as_deref()
+        .filter(|run| run.agent_host.is_some())
+    {
+        containers.push(ContainerRef::Planner {
+            task: task.id.clone(),
+            run: run.id.clone(),
+        });
+    }
+    if let Some(plan) = task.last_plan.as_deref()
+        && let Some(review) = plan
+            .current_review
+            .as_ref()
+            .filter(|review| review.agent_host.is_some())
+    {
+        containers.push(ContainerRef::PlanReviewer {
+            task: task.id.clone(),
+            plan: plan.id.clone(),
+            review: review.id.clone(),
+        });
+    }
+    if let Some(run) = task.current_run.as_deref() {
+        if run.agent_host.is_some() {
+            containers.push(ContainerRef::Worker {
+                task: task.id.clone(),
+                run: run.id.clone(),
+            });
+        }
+        if let Some(review) = run
+            .current_child
+            .as_deref()
+            .filter(|review| review.agent_host.is_some())
+        {
+            containers.push(ContainerRef::Reviewer {
+                task: task.id.clone(),
+                run: run.id.clone(),
+                review: review.id.clone(),
+            });
+        }
+    }
+    let mut out = Vec::new();
+    for container in containers {
+        if agent::container_closure_ref(task, &container)?.is_some() {
+            continue;
+        }
+        for question in task.pending_agent_questions(&container)? {
+            out.push(question_view(&task.id, &container, None, question));
+        }
+    }
+    Ok(out)
+}
+
 pub fn views(task: &Task) -> Vec<QuestionView> {
     let mut out = Vec::new();
     for container in containers(task) {

@@ -1,15 +1,20 @@
 //! Blocking, bounded local RPC. Store-writing commands remain usable without a daemon.
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 #[cfg(unix)]
 use anyhow::Context;
 use anyhow::{Result, bail};
 use corral_core::Store;
+use corral_protocol::board::BoardRow;
+#[cfg(unix)]
+use corral_protocol::subscription::{SubAck, SubClose, SubDelta, SubOpen, SubReset, Topic};
 #[cfg(unix)]
 use corral_protocol::{
     ClientInfo, Hello, Nudge, PROTO_MAJOR, PROTO_MINOR, Proto, Stop, Welcome,
-    frame::{Frame, FrameKind, read_frame, write_frame},
+    frame::{Frame, FrameKind, read_frame_until, write_frame_until},
     rpc::{JSONRPC, Request, Response, ResponseOutcome},
 };
 use corral_protocol::{Health, NudgeAck};
@@ -61,7 +66,8 @@ impl Client {
 
     #[cfg(unix)]
     pub fn connect_at(socket: &Path) -> Result<Option<Self>> {
-        let stream = match UnixStream::connect(socket) {
+        let stream = connect_socket(socket, Instant::now() + IO_TIMEOUT);
+        let stream = match stream {
             Ok(stream) => stream,
             Err(error)
                 if matches!(
@@ -90,7 +96,7 @@ impl Client {
                     major: PROTO_MAJOR,
                     minor: PROTO_MINOR,
                 },
-                caps: Vec::new(),
+                caps: vec![corral_protocol::BOARD_V1.into()],
                 client: ClientInfo {
                     kind: "cli".into(),
                     version: env!("CARGO_PKG_VERSION").into(),
@@ -120,27 +126,14 @@ impl Client {
             })
             .transpose()?;
         let timeout = IO_TIMEOUT + Duration::from_millis(u64::from(wait_ms.unwrap_or(0)));
-        self.stream
-            .set_read_timeout(Some(timeout))
-            .context("setting daemon nudge timeout")?;
-        let result = self.request(
+        self.request_with_timeout(
             corral_protocol::NUDGE,
             Nudge {
                 source: source.to_owned(),
                 wait_ms,
             },
-        );
-        let reset = self
-            .stream
-            .set_read_timeout(Some(IO_TIMEOUT))
-            .context("restoring daemon read timeout");
-        match result {
-            Ok(ack) => {
-                reset?;
-                Ok(ack)
-            }
-            Err(error) => Err(error),
-        }
+            timeout,
+        )
     }
 
     #[cfg(not(unix))]
@@ -165,22 +158,9 @@ impl Client {
         } else {
             IO_TIMEOUT
         };
-        self.stream
-            .set_read_timeout(Some(timeout))
-            .context("setting daemon stop timeout")?;
-        let result: Result<serde_json::Value> =
-            self.request(corral_protocol::DAEMON_STOP, Stop { drain });
-        let reset = self
-            .stream
-            .set_read_timeout(Some(IO_TIMEOUT))
-            .context("restoring daemon read timeout");
-        match result {
-            Ok(_) => {
-                reset?;
-                Ok(())
-            }
-            Err(error) => Err(error),
-        }
+        let _: serde_json::Value =
+            self.request_with_timeout(corral_protocol::DAEMON_STOP, Stop { drain }, timeout)?;
+        Ok(())
     }
 
     #[cfg(not(unix))]
@@ -188,8 +168,105 @@ impl Client {
         bail!("daemon sockets are unavailable on this platform")
     }
 
+    /// Read the daemon's current board, acknowledging each bounded page.
+    #[cfg(unix)]
+    pub fn board(&mut self) -> Result<Vec<BoardRow>> {
+        let mut rows = std::collections::BTreeMap::new();
+        let mut resets = 0;
+        let mut epoch = None;
+        self.open_board()?;
+        loop {
+            let frame = read_frame_until(&mut self.stream, Instant::now() + IO_TIMEOUT)
+                .context("reading board subscription")?
+                .context("daemon closed board subscription")?;
+            if frame.kind != FrameKind::Control || frame.stream != 0 {
+                bail!("daemon returned a non-control board frame");
+            }
+            let notification: corral_protocol::rpc::Notification =
+                serde_json::from_slice(&frame.payload).context("decoding board notification")?;
+            if notification.jsonrpc != JSONRPC {
+                bail!("invalid board notification version");
+            }
+            match notification.method.as_str() {
+                corral_protocol::SUB_RESET => {
+                    let reset: SubReset = serde_json::from_value(notification.params)
+                        .context("decoding board reset")?;
+                    if reset.topic != Topic::Board || resets != 0 {
+                        bail!("board projection reset repeatedly or returned the wrong topic");
+                    }
+                    resets += 1;
+                    rows.clear();
+                    epoch = None;
+                    self.open_board()?;
+                }
+                corral_protocol::SUB_DELTA => {
+                    let delta: SubDelta = serde_json::from_value(notification.params)
+                        .context("decoding board delta")?;
+                    let SubDelta::Board { delta } = delta else {
+                        bail!("daemon returned the wrong subscription topic");
+                    };
+                    if epoch.is_some_and(|epoch| epoch != delta.epoch) {
+                        bail!("board epoch changed without sub.reset");
+                    }
+                    epoch = Some(delta.epoch);
+                    for row in delta.rows {
+                        rows.insert(row.id.clone(), row);
+                    }
+                    for id in delta.left {
+                        rows.remove(&id);
+                    }
+                    if !delta.more {
+                        let _: serde_json::Value = self.request(
+                            corral_protocol::SUB_CLOSE,
+                            SubClose {
+                                topic: Topic::Board,
+                            },
+                        )?;
+                        return Ok(rows.into_values().collect());
+                    }
+                    let _: serde_json::Value = self.request(
+                        corral_protocol::SUB_ACK,
+                        SubAck {
+                            topic: Topic::Board,
+                            cursor: delta.cursor,
+                        },
+                    )?;
+                }
+                _ => bail!("daemon closed or failed the board subscription"),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn open_board(&mut self) -> Result<()> {
+        let _: serde_json::Value = self.request(
+            corral_protocol::SUB_OPEN,
+            SubOpen {
+                topic: Topic::Board,
+                since: None,
+            },
+        )?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    pub fn board(&mut self) -> Result<Vec<BoardRow>> {
+        bail!("daemon sockets are unavailable on this platform")
+    }
+
     #[cfg(unix)]
     fn request<P: Serialize, T: DeserializeOwned>(&mut self, method: &str, params: P) -> Result<T> {
+        self.request_with_timeout(method, params, IO_TIMEOUT)
+    }
+
+    #[cfg(unix)]
+    fn request_with_timeout<P: Serialize, T: DeserializeOwned>(
+        &mut self,
+        method: &str,
+        params: P,
+        timeout: Duration,
+    ) -> Result<T> {
+        let deadline = Instant::now() + timeout;
         self.next_id = self
             .next_id
             .checked_add(1)
@@ -202,16 +279,17 @@ impl Client {
             params,
         };
         let payload = serde_json::to_vec(&request).context("encoding daemon request")?;
-        write_frame(
+        write_frame_until(
             &mut self.stream,
             &Frame {
                 kind: FrameKind::Control,
                 stream: 0,
                 payload,
             },
+            Instant::now() + IO_TIMEOUT,
         )
         .context("sending daemon request")?;
-        let frame = read_frame(&mut self.stream)
+        let frame = read_frame_until(&mut self.stream, deadline)
             .context("reading daemon response")?
             .context("daemon closed before responding")?;
         if frame.kind != FrameKind::Control || frame.stream != 0 {
@@ -227,6 +305,57 @@ impl Client {
             ResponseOutcome::Error { error } => bail!("daemon {:?}: {}", error.code, error.message),
         }
     }
+}
+
+#[cfg(unix)]
+fn connect_socket(socket: &Path, deadline: Instant) -> std::io::Result<UnixStream> {
+    use rustix::net::{AddressFamily, SocketAddrUnix, SocketFlags, SocketType};
+    let fd = rustix::net::socket_with(
+        AddressFamily::UNIX,
+        SocketType::STREAM,
+        SocketFlags::NONBLOCK | SocketFlags::CLOEXEC,
+        None,
+    )?;
+    let address = SocketAddrUnix::new(socket)?;
+    match rustix::net::connect(&fd, &address) {
+        Ok(()) => {}
+        Err(rustix::io::Errno::INPROGRESS) => loop {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "daemon connect deadline expired",
+                    )
+                })?;
+            let timeout = rustix::event::Timespec::try_from(remaining)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+            match rustix::event::poll(
+                &mut [rustix::event::PollFd::new(
+                    &fd,
+                    rustix::event::PollFlags::OUT,
+                )],
+                Some(&timeout),
+            ) {
+                Ok(0) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "daemon connect deadline expired",
+                    ));
+                }
+                Ok(_) => {
+                    rustix::net::sockopt::socket_error(&fd)??;
+                    break;
+                }
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(error) => return Err(error.into()),
+            }
+        },
+        Err(error) => return Err(error.into()),
+    }
+    let stream = UnixStream::from(fd);
+    stream.set_nonblocking(false)?;
+    Ok(stream)
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]

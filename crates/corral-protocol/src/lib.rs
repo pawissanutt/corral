@@ -3,6 +3,9 @@ pub mod board;
 pub mod frame;
 pub mod health;
 pub mod rpc;
+#[cfg(test)]
+mod schema;
+pub mod subscription;
 
 pub use health::{DaemonState, Health, LoopFacts, PmState, RuntimeHealth, RuntimeState};
 use serde::{Deserialize, Serialize};
@@ -16,34 +19,40 @@ pub const BYE: &str = "bye";
 pub const NUDGE: &str = "nudge";
 pub const HEALTH_GET: &str = "health.get";
 pub const DAEMON_STOP: &str = "daemon.stop";
+pub const SUB_OPEN: &str = "sub.open";
+pub const SUB_DELTA: &str = "sub.delta";
+pub const SUB_RESET: &str = "sub.reset";
+pub const SUB_ACK: &str = "sub.ack";
+pub const SUB_CLOSE: &str = "sub.close";
+pub const BOARD_V1: &str = "board.v1";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Proto {
     pub major: u32,
     pub minor: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ClientInfo {
     pub kind: String,
     pub version: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Hello {
     pub proto: Proto,
     pub caps: Vec<String>,
     pub client: ClientInfo,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DaemonInfo {
     pub version: String,
     pub store: String,
     pub epoch: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Welcome {
     pub proto: Proto,
     pub caps: Vec<String>,
@@ -51,25 +60,25 @@ pub struct Welcome {
     pub health: Health,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Ping {}
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Pong {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Bye {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Nudge {
     pub source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait_ms: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct NudgeAck {
     pub pass_seq: u64,
     /// True only after a full pass that started after receipt of this nudge completed
@@ -77,13 +86,13 @@ pub struct NudgeAck {
     pub completed: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct HealthGet {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Stop {
     pub drain: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Stopped {}

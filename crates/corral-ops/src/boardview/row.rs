@@ -51,7 +51,7 @@ pub(super) fn compute(store: &Store, head: &TaskHead) -> Result<Computed> {
         .take(4)
         .map(|(key, _)| key.0.clone())
         .collect();
-    let questions = crate::questions::recorded_pending_views_ref(head)
+    let questions = crate::questions::current_pending_views_head(head)
         .with_context(|| format!("reading pending questions for {}", head.id))?;
     let owner_since = outstanding
         .filter(|(_, record)| record.responsible == corral_core::attention::Responsible::Owner)

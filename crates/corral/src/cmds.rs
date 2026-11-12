@@ -462,6 +462,9 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             )
         }
         Cmd::List {
+            view: true, json, ..
+        } => task_output::list_view(&start_dir(&root)?, json),
+        Cmd::List {
             done: true,
             project,
             since,

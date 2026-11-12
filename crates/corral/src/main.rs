@@ -300,6 +300,9 @@ pub enum Cmd {
     },
     /// List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
     List {
+        /// Read the daemon's projected board, grouped by who acts next
+        #[arg(long, conflicts_with_all = ["query", "status", "project", "all", "done", "since", "columns"])]
+        view: bool,
         /// Search all statuses in relevance order; explicit filters still apply
         #[arg(long)]
         query: Option<String>,

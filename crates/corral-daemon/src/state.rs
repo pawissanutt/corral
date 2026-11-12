@@ -1,6 +1,9 @@
 //! In-memory coordination: no store or socket I/O while the state mutex is held.
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
+
+use corral_ops::boardview::Projection;
 
 use corral_protocol::{
     DaemonState, Health, LoopFacts, NudgeAck, PmState, RuntimeHealth, RuntimeState,
@@ -9,6 +12,9 @@ use corral_protocol::{
 pub(crate) struct Shared {
     pub state: Mutex<State>,
     pub changed: Condvar,
+    pub projection: Mutex<Option<Projection>>,
+    pub board_subscribers: AtomicUsize,
+    pub health_topic: Mutex<(u64, Health)>,
 }
 
 pub(crate) struct State {
@@ -17,7 +23,9 @@ pub(crate) struct State {
     pub upgrading: bool,
     pub pending: bool,
     pub started_seq: u64,
+    pub projection_wake: u64,
     pub completed_seq: u64,
+    pub workers: usize,
     pub started: Option<Instant>,
     pub started_at: Option<String>,
     pub finished: Option<Instant>,
@@ -38,6 +46,9 @@ pub(crate) struct State {
 impl Shared {
     pub fn new() -> Self {
         Self {
+            projection: Mutex::new(None),
+            board_subscribers: AtomicUsize::new(0),
+            health_topic: Mutex::new((0, Health::down())),
             state: Mutex::new(State {
                 stop: false,
                 closed: false,
@@ -45,6 +56,8 @@ impl Shared {
                 pending: false,
                 started_seq: 0,
                 completed_seq: 0,
+                projection_wake: 0,
+                workers: 0,
                 started: None,
                 started_at: None,
                 finished: None,
@@ -69,6 +82,25 @@ impl Shared {
         self.state.lock().unwrap_or_else(|error| error.into_inner())
     }
 
+    pub fn projection(&self) -> MutexGuard<'_, Option<Projection>> {
+        self.projection
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    pub fn epoch(&self) -> u64 {
+        self.projection()
+            .as_ref()
+            .map_or(0, |projection| projection.epoch)
+    }
+
+    pub fn wait_workers(&self, timeout: Duration) {
+        drop(
+            self.changed
+                .wait_timeout_while(self.lock(), timeout, |state| state.workers != 0)
+                .unwrap_or_else(|error| error.into_inner()),
+        );
+    }
     pub fn begin(&self) -> bool {
         let mut state = self.lock();
         if state.stop {
@@ -98,6 +130,7 @@ impl Shared {
             state.last_success = Instant::now();
         }
         state.last_error = error;
+        state.projection_wake = state.projection_wake.wrapping_add(1);
         self.changed.notify_all();
     }
 
@@ -106,6 +139,7 @@ impl Shared {
         let target = state.started_seq.saturating_add(1);
         if !state.stop {
             state.pending = true;
+            state.projection_wake = state.projection_wake.wrapping_add(1);
         }
         self.changed.notify_all();
         target

@@ -318,7 +318,8 @@ corral artifact list [filters]
 corral artifact serve [ref | --task T-042] [--no-open] [--stop]   # loopback live server (HTML/MD, index)
 corral approve T-042 [--merge ff|rebase|keep] [--keep-worktree] [--keep-branch]
 corral retry T-042 [--agent omp]
-corral sync [--watch]                     # reconcile with herdr, advance the review autopilot
+corral sync                               # reconcile once, or nudge the owning daemon
+corral daemon run                         # always-on reconciliation and review autopilot
 corral wait [--for done,needs_me,stuck,blocked,escalated] [--task T-042] [--project app] [--timeout 30m] [--since <ts> | --after <seq>] [--json] [--print-cursor]
 corral mode [status|assist|autopilot|pause|resume]   # one workspace operating policy (see automation guide)
 corral autopilot [on|off|status]          # compatibility alias: status, workspace pause, activation guidance

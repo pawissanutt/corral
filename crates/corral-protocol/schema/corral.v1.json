@@ -1,0 +1,1281 @@
+{
+  "components": {
+    "schemas": {
+      "BoardAgent": {
+        "properties": {
+          "machine": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          },
+          "runtime": {
+            "description": "RuntimeRef and machine identity do not exist on legacy run bindings.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "type": "object"
+      },
+      "BoardCursor": {
+        "description": "`after = Some(id)` resumes within `rev`; None has consumed that whole revision.\nThe empty starting cursor is `{ rev: 0, after: None }`.",
+        "properties": {
+          "after": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rev": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rev"
+        ],
+        "type": "object"
+      },
+      "BoardGroup": {
+        "enum": [
+          "needs_you",
+          "verifying",
+          "producing",
+          "queued",
+          "held",
+          "parked",
+          "other"
+        ],
+        "type": "string"
+      },
+      "BoardNow": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "since": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "At most 60 Unicode scalar values in projector output.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "text"
+        ],
+        "type": "object"
+      },
+      "BoardRow": {
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BoardAgent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attention": {
+            "description": "At most four unresolved attention ledger keys.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cost_basis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CostBasis"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost_usd": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "goal": {
+            "description": "At most 80 Unicode scalar values in projector output.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "group": {
+            "$ref": "#/components/schemas/BoardGroup"
+          },
+          "held_reason": {
+            "description": "Unknown for a legacy bare dispatch-hold flag.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_event": {
+            "description": "Unknown until the store maintains a newest-owner-visible-event fact.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "now": {
+            "$ref": "#/components/schemas/BoardNow"
+          },
+          "plan": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "questions": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "rail": {
+            "description": "Run, gate, review, land, in that order.",
+            "items": {
+              "$ref": "#/components/schemas/RailStep"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "rev": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "group",
+          "rail",
+          "now",
+          "questions",
+          "attention",
+          "rev"
+        ],
+        "type": "object"
+      },
+      "Bye": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "ClientInfo": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "version"
+        ],
+        "type": "object"
+      },
+      "CostBasis": {
+        "enum": [
+          "reported",
+          "estimated",
+          "mixed",
+          "other"
+        ],
+        "type": "string"
+      },
+      "DaemonInfo": {
+        "properties": {
+          "epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "store": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "store",
+          "epoch"
+        ],
+        "type": "object"
+      },
+      "DaemonState": {
+        "enum": [
+          "healthy",
+          "degraded",
+          "down",
+          "other"
+        ],
+        "type": "string"
+      },
+      "Error": {
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "data": true,
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "ErrorCode": {
+        "enum": [
+          "unauthenticated",
+          "revoked",
+          "unsupported_version",
+          "method_not_found",
+          "invalid_params",
+          "too_large",
+          "not_found",
+          "conflict",
+          "refused",
+          "confirm_required",
+          "busy",
+          "unavailable",
+          "expired",
+          "internal",
+          "other"
+        ],
+        "type": "string"
+      },
+      "Frame": {
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/FrameKind"
+          },
+          "payload": {
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "stream": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "stream",
+          "payload"
+        ],
+        "type": "object"
+      },
+      "FrameKind": {
+        "enum": [
+          "Control",
+          "Data",
+          "Credit"
+        ],
+        "type": "string"
+      },
+      "Health": {
+        "properties": {
+          "daemon": {
+            "$ref": "#/components/schemas/DaemonState"
+          },
+          "loop": {
+            "$ref": "#/components/schemas/LoopFacts"
+          },
+          "pid": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pm": {
+            "$ref": "#/components/schemas/PmState"
+          },
+          "reasons": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "runtimes": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/RuntimeHealth"
+            },
+            "type": "array"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "daemon",
+          "pm",
+          "loop",
+          "pid",
+          "version"
+        ],
+        "type": "object"
+      },
+      "HealthGet": {
+        "type": "object"
+      },
+      "Hello": {
+        "properties": {
+          "caps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "client": {
+            "$ref": "#/components/schemas/ClientInfo"
+          },
+          "proto": {
+            "$ref": "#/components/schemas/Proto"
+          }
+        },
+        "required": [
+          "proto",
+          "caps",
+          "client"
+        ],
+        "type": "object"
+      },
+      "LoopFacts": {
+        "properties": {
+          "age_secs": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "last_pass_at": {
+            "description": "RFC 3339 timestamp, absent before the first completed pass.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_pass_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "pass_seq": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pass_seq"
+        ],
+        "type": "object"
+      },
+      "Notification": {
+        "properties": {
+          "jsonrpc": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "params": true
+        },
+        "required": [
+          "jsonrpc",
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      "Nudge": {
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "wait_ms": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "type": "object"
+      },
+      "NudgeAck": {
+        "properties": {
+          "completed": {
+            "description": "True only after a full pass that started after receipt of this nudge completed\nwithin the requested wait. Finishing an already-running pass does not qualify.",
+            "type": "boolean"
+          },
+          "pass_seq": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pass_seq",
+          "completed"
+        ],
+        "type": "object"
+      },
+      "Ping": {
+        "type": "object"
+      },
+      "PmState": {
+        "enum": [
+          "live",
+          "relaunching",
+          "absent",
+          "other"
+        ],
+        "type": "string"
+      },
+      "Pong": {
+        "type": "object"
+      },
+      "Proto": {
+        "properties": {
+          "major": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "minor": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "major",
+          "minor"
+        ],
+        "type": "object"
+      },
+      "RailGlyph": {
+        "enum": [
+          "pass",
+          "active",
+          "fail",
+          "stale",
+          "pending",
+          "unavailable",
+          "other"
+        ],
+        "type": "string"
+      },
+      "RailStep": {
+        "properties": {
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "glyph": {
+            "$ref": "#/components/schemas/RailGlyph"
+          },
+          "sha7": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "glyph"
+        ],
+        "type": "object"
+      },
+      "Request": {
+        "properties": {
+          "id": true,
+          "jsonrpc": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "params": true
+        },
+        "required": [
+          "jsonrpc",
+          "id",
+          "method",
+          "params"
+        ],
+        "type": "object"
+      },
+      "Response": {
+        "anyOf": [
+          {
+            "properties": {
+              "result": true
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "error": {
+                "$ref": "#/components/schemas/Error"
+              }
+            },
+            "required": [
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "A response has exactly one result or error. A successful null result is preserved.",
+        "properties": {
+          "id": true,
+          "jsonrpc": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "jsonrpc",
+          "id"
+        ],
+        "type": "object"
+      },
+      "RuntimeHealth": {
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RuntimeState"
+          }
+        },
+        "required": [
+          "kind",
+          "state"
+        ],
+        "type": "object"
+      },
+      "RuntimeState": {
+        "enum": [
+          "ok",
+          "unreachable",
+          "other"
+        ],
+        "type": "string"
+      },
+      "Stop": {
+        "properties": {
+          "drain": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "drain"
+        ],
+        "type": "object"
+      },
+      "Stopped": {
+        "type": "object"
+      },
+      "SubAck": {
+        "properties": {
+          "cursor": {
+            "$ref": "#/components/schemas/BoardCursor"
+          },
+          "topic": {
+            "$ref": "#/components/schemas/Topic"
+          }
+        },
+        "required": [
+          "topic",
+          "cursor"
+        ],
+        "type": "object"
+      },
+      "SubClose": {
+        "properties": {
+          "topic": {
+            "$ref": "#/components/schemas/Topic"
+          }
+        },
+        "required": [
+          "topic"
+        ],
+        "type": "object"
+      },
+      "SubDelta": {
+        "oneOf": [
+          {
+            "properties": {
+              "cursor": {
+                "$ref": "#/components/schemas/BoardCursor"
+              },
+              "epoch": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "left": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "more": {
+                "type": "boolean"
+              },
+              "rows": {
+                "items": {
+                  "$ref": "#/components/schemas/BoardRow"
+                },
+                "type": "array"
+              },
+              "topic": {
+                "const": "board",
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "epoch",
+              "rows",
+              "left",
+              "cursor",
+              "more"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "cursor": {
+                "$ref": "#/components/schemas/BoardCursor"
+              },
+              "epoch": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "left": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "more": {
+                "type": "boolean"
+              },
+              "rows": {
+                "description": "A health page contains the single current snapshot.",
+                "items": {
+                  "$ref": "#/components/schemas/Health"
+                },
+                "type": "array"
+              },
+              "topic": {
+                "const": "health",
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "epoch",
+              "rows",
+              "left",
+              "cursor",
+              "more"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "topic": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "SubOpen": {
+        "properties": {
+          "since": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SubSince"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "topic": {
+            "$ref": "#/components/schemas/Topic"
+          }
+        },
+        "required": [
+          "topic"
+        ],
+        "type": "object"
+      },
+      "SubReset": {
+        "properties": {
+          "epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "topic": {
+            "$ref": "#/components/schemas/Topic"
+          }
+        },
+        "required": [
+          "topic",
+          "epoch"
+        ],
+        "type": "object"
+      },
+      "SubSince": {
+        "properties": {
+          "cursor": {
+            "$ref": "#/components/schemas/BoardCursor"
+          },
+          "epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epoch",
+          "cursor"
+        ],
+        "type": "object"
+      },
+      "Topic": {
+        "enum": [
+          "health",
+          "board",
+          "other"
+        ],
+        "type": "string"
+      },
+      "Welcome": {
+        "properties": {
+          "caps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "daemon": {
+            "$ref": "#/components/schemas/DaemonInfo"
+          },
+          "health": {
+            "$ref": "#/components/schemas/Health"
+          },
+          "proto": {
+            "$ref": "#/components/schemas/Proto"
+          }
+        },
+        "required": [
+          "proto",
+          "caps",
+          "daemon",
+          "health"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Corral daemon protocol",
+    "version": "1.0"
+  },
+  "methods": [
+    {
+      "errors": [
+        {
+          "code": "unsupported_version",
+          "message": "unsupported_version"
+        },
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        }
+      ],
+      "name": "hello",
+      "params": [
+        {
+          "name": "caps",
+          "required": true,
+          "schema": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        {
+          "name": "client",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ClientInfo"
+          }
+        },
+        {
+          "name": "proto",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Proto"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/Welcome"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/Hello"
+      }
+    },
+    {
+      "errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ],
+      "name": "ping",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/Pong"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/Ping"
+      }
+    },
+    {
+      "errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ],
+      "name": "bye",
+      "params": [
+        {
+          "name": "reason",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/Bye"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/Bye"
+      }
+    },
+    {
+      "errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ],
+      "name": "nudge",
+      "params": [
+        {
+          "name": "source",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "wait_ms",
+          "required": false,
+          "schema": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/NudgeAck"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/Nudge"
+      }
+    },
+    {
+      "errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ],
+      "name": "health.get",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/Health"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/HealthGet"
+      }
+    },
+    {
+      "errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ],
+      "name": "daemon.stop",
+      "params": [
+        {
+          "name": "drain",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/Stopped"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/Stop"
+      }
+    },
+    {
+      "errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ],
+      "name": "sub.open",
+      "params": [
+        {
+          "name": "since",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SubSince"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        {
+          "name": "topic",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Topic"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SubOpen"
+      }
+    },
+    {
+      "errors": [],
+      "name": "sub.delta",
+      "params": [],
+      "x-notification": true,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SubDelta"
+      }
+    },
+    {
+      "errors": [],
+      "name": "sub.reset",
+      "params": [
+        {
+          "name": "epoch",
+          "required": true,
+          "schema": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        {
+          "name": "topic",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Topic"
+          }
+        }
+      ],
+      "x-notification": true,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SubReset"
+      }
+    },
+    {
+      "errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ],
+      "name": "sub.ack",
+      "params": [
+        {
+          "name": "cursor",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/BoardCursor"
+          }
+        },
+        {
+          "name": "topic",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Topic"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SubAck"
+      }
+    },
+    {
+      "errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ],
+      "name": "sub.close",
+      "params": [
+        {
+          "name": "topic",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Topic"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SubClose"
+      }
+    }
+  ],
+  "openrpc": "1.3.2",
+  "x-error-code-schema": {
+    "$ref": "#/components/schemas/ErrorCode"
+  },
+  "x-framing": {
+    "control_max": 61440,
+    "data_max": 32768
+  }
+}

@@ -25,7 +25,7 @@ use crate::Ctx;
 pub const CACHE_FILE: &str = "boardview-v1.bin";
 
 /// A snapshot and its durable change-feed checkpoint. Do not retain a store view here.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Projection {
     pub epoch: u64,
     pub folded_through: ChangeSeq,

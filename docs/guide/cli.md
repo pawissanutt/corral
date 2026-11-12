@@ -3480,8 +3480,9 @@ List tasks (done/dropped hidden unless --all; --done lists finished tasks, newes
 Usage: corral list [OPTIONS]
 
 Options:
-      --query <QUERY>      Search all statuses in relevance order; explicit filters still apply
       --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --view               Read the daemon's projected board, grouped by who acts next
+      --query <QUERY>      Search all statuses in relevance order; explicit filters still apply
       --status <STATUS>
       --project <PROJECT>
       --all
