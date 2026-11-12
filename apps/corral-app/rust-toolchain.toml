@@ -1,0 +1,4 @@
+# NSH 0.5.0 crates require rustc 1.97; corral itself stays on 1.94.
+[toolchain]
+channel = "1.97.1"
+targets = ["wasm32-unknown-unknown"]

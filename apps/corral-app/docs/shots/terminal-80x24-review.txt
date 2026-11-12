@@ -1,0 +1,24 @@
+ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live          fixture
+╭─ corral ─────────────╮╭──────────────────────────────────────────────────────╮
+│ Autopilot            ││ T-868 · R1 · candidate 85b45e1e                      ┃
+│ independent work     ││ base main · 5 files · +334 −28                       ┃
+│ continues            ││ host-queue-ledger                                    ┃
+├──────────────────────┤├───────────────────────────────────────────────────── ┃
+│  Inbox         5   i ││ VERDICTS · BOUND TO CANDIDATE SHA ─────────────────  ┃
+│  Now               n ││ ◌ gate   f34f3df6  04:45 f stale · older candidate ix│
+│  Changes      12   . ││ ✓ gate   85b45e1e  08:26 pass · quick tier ·…        │
+│  Plans         6   p ││ ✓ review 85b45e1e  22:40 approve · R1-review2 ·…     │
+│  Agents        7   a ││ ○ you    85b45e1e        your verdict                │
+│▌ Review        3   r │├───────────────────────────────────────────────────── │
+│  Timeline          t ││ Diff · 5 files  Report  Screenshot  Gate log         │
+│  Usage             u │├───────────────────────────────────────────────────── │
+│  Settings          , ││                                                      │
+├──────────────────────┤│ packages/c… lines illustrative Ask about this hunk   │
+│  Ask               / ││ @@ -212,9 +212,9 @@ describe("cross-lane paging")    │
+│  Go to            ^K ││  212  212     const lane = await privateHerdr({      │
+│                      ││  213      -   const inputs = 256;                    │
+│                      │├──────────────────────────────────────────────────────┤
+│                      ││  Approve 85b45e1e    Request changes                 │
+│                      ││    Verdicts apply to 85b45e1e only; a new candidate… │
+╰─ pawis-desktop ──────╯╰──────────────────────────────────────────────────────╯
+  s  split │  i  Inbox  n  Now  .   p   a   r   t   u   ,  │  /  Ask  ^K  Go to

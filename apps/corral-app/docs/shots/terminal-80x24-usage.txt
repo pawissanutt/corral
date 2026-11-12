@@ -1,0 +1,24 @@
+ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live          fixture
+╭─ corral ─────────────╮╭──────────────────────────────────────────────────────╮
+│ Autopilot            ││ Usage  cost and quota per… Today   7 days   30 days  │
+│ independent work     │├──────────────────────────────────────────────────────┤
+│ continues            ││                                                      ┃
+├──────────────────────┤│ OpenAI · subscription  78% ███████▓░▒  22% headroom  ┃
+│  Inbox         5   i ││  5 h rolling  resets in 1h 46m                       ┃
+│  Now               n ││  today $61 · 7 days $318 · weekly cap 61%            ┃
+│  Changes      12   . ││ Anthropic ·…           34% ███····░░▒  66% headroom  ┃
+│  Plans         6   p ││  5 h rolling  resets in 3h 02m                       ┃
+│  Agents        7   a ││  today $23 · 7 days $141 · weekly cap 48%            ┃
+│  Review        3   r ││ OpenAI · API (metered) 21% ██·····░░▒  79% headroom  ┃
+│  Timeline          t ││  allowance $40 / day  resets at 01:48                │
+│▌ Usage             u ││  today $8.40 · 7 days $30                            │
+│  Settings          , ││                                                      │
+├──────────────────────┤│ BY PROFILE · CURRENT WINDOW ───────────────────────  │
+│  Ask               / ││  PROFILE                 WINDOW  TODAY    HEADROOM   │
+│  Go to            ^K ││ ───────────────────────────────────────────────────  │
+│                      ││  OpenAI · subscription                         22%   │
+│                      ││    pi-sol xhigh             69%      $54             │
+│                      ││    pi-terra high             7%    $6.40             │
+│                      ││    assistant · quick…        2%    $1.10             │
+╰─ pawis-desktop ──────╯╰──────────────────────────────────────────────────────╯
+  i  Inbox  n  Now  .   p   a   r   t   u   ,  Settings │  /  Ask  ^K  Go to

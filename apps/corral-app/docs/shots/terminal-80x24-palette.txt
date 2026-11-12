@@ -1,0 +1,24 @@
+ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live          fixture
+╭─ corral ─────────────╮╭──────────────────────────────────────────────────────╮
+│ Autopilot            ││ Commands          ↑↓  move   Enter  run   Esc  close │
+│ independent work     ││ › Go to, open a task id, answer, accept…             │
+│ continues            │├──────────────────────────────────────────────────────┤
+├──────────────────────┤│ Needs you                                            ┃
+│  Inbox         5   i ││ Answer T-868/R1/Q1 · restore policy                  ┃
+│▌ Now               n ││ Review plan T-885 P2 · accept or request changes     │
+│  Changes      12   . ││ Go to                                                │
+│  Plans         6   p ││ Inbox                                             i  │
+│  Agents        7   a ││ Now                                               n  │
+│  Review        3   r ││ Changes                                           .  │
+│  Timeline          t ││ Plans                                             p  │
+│  Usage             u ││ Agents                                            a  │
+│  Settings          , ││ Review                                            r  │
+├──────────────────────┤│ Timeline                                          t  │
+│  Ask               / ││ Usage                                             u  │
+│▌ Go to            ^K ││ Settings                                          ,  │
+│                      ││ Open                                                 │
+│                      ││ T-890 pm-bounded-read-contract                       │
+│                      ││ T-894 api-connections                                │
+│                      ││ T-871 annotation-service · session                   │
+╰─ pawis-desktop ──────╯╰──────────────────────────────────────────────────────╯
+  j…  move  En… open  Tab  tab │  i   n   .   p   a   r   t   u   ,  │  /   ^K

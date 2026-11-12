@@ -1,0 +1,36 @@
+ ◉ Corral │ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live    22:12  fixture · snapshot 2026-11-07 22:12
+╭─ corral ─────────────────────╮╭───────────────────────────────────────────┬──────────────────────────────────────────╮
+│ Autopilot                    ││ Who acts next                             │ Quick thread · A-7            Esc  Close │
+│ independent work continues   │├───────────────────────────────────────────┼──────────────────────────────────────────┤
+├──────────────────────────────┤│   id     task               r g v l  cost┃│   │                receipt names      │  │
+│  Inbox                 5   i ││Needs you 3 ──────────────────────────────┃│   │                every reused       │  │
+│▌ Now                       n ││  ▲ ● T-868  host-queue-led… ◐ ○ ○ ○      ┃│   │                receipt id.        │  │
+│  Changes              12   . ││  ▲ ● T-885  plan P2 ·…      plan         ┃│   │ Duplicates  checked: T-852 shares │  │
+│  Plans                 6   p ││   ● Q7     T-852 repair…    PM ask       ┃│   │             the trigger, not the  │  │
+│  Agents                7   a ││Corral is verifying 3  gating · reviewing…┃│   │             fix                   │  │
+│  Review                3   r ││▌ ▲ ◐ T-890  pm-bounded-rea… ✓ ◐ ○ ○ $3.90┃│   │  Edit    Merge into T-…           │  │
+│  Timeline                  t ││  ▲ ◐ T-894  api-connections ✓ ◐ ○ ○   $18┃│   │  Discard                          │  │
+│  Usage                     u ││  ▲ ◐ T-867  queue-contract… ✓ ◌ ○ ○ $1.83││   │ Discard asks on this device       │  │
+│  Settings                  , ││Workers producing 2 ──────────────────────┤│   ╰───────────────────────────────────╯  │
+├──────────────────────────────┤│  ▲ ◐ T-871  annotation-ser… ◐ ○ ○ ○ $3.29││   Rests on corral show T-867 ·           │
+│▌ Ask                       / ││  ▲ ◐ T-854  Co-work C3:…    ◐ ○ ○ ○ $7.56││   run R1 of T-867 ·                      │
+│  Go to                    ^K ││Queued 23 ────────────────────────────────┤│   corral plan progress T-870 ·           │
+│                              ││   ○ T-891  pm-obligation-r… ○ ○ ○ ○      ││   corral question show T-868/R1/Q1 ·     │
+│                              │├───────────────────────────────────────────┤   corral list --search receipt           │
+│                              ││ Story  Evidence  Session                  │   this ask $0.04 · 7.3k tokens           │
+│                              │├───────────────────────────────────────────┤   wording illustrative; facts from the   │
+│                              ││ T-890 · plan T-893                       ┃│   22:12 snapshot                         │
+│                              ││  ▲ changed since 18:40                   ┃│                                          ┃
+│                              ││ pm-bounded-read-contract                 ┃├──────────────────────────────────────────┤
+│                              ││ pi-sol xhigh · on workstation machine    ┃│                                          │
+│                              ││ name illustrative · started 19:31        ┃│  Assistant   PM ● live   pi-sol xhigh ▾  │
+│                              ││ RUN        GATE      REVIEW    LAND      ┃│     ↵  send  ⇧ ↵  new line  Ctrl ⇧ P  PM │
+│                              ││ ✓ done     ◐ now     ○ next    ○ next    ┃│                          Ctrl ⇧ M  model │
+│                              ││ R1 ·…      1751bd2   after…    main      ││                                          │
+│                              ││ PROGRESS ─────────────────────────── 3/4 ││  Ask a question, drop an idea, or give   │
+│                              ││ ✓ Read plan, inspect scope/read          ││                                          │
+│                              ││   contracts                              ││                                          │
+│                              ││ ✓ Shared bounded projection + CLI/native ││ Screenshot  Link  File             Send  │
+│                              ││   adapters                               ││                                          │
+╰─ This device pawis-desktop ──╯╰───────────────────────────────────────────┴──────────────────────────────────────────╯
+  j k  move  Enter  open  Tab  tab │  i  Inbox  n  Now  .   p   a  Agents  r   t   u   ,  Settings │  /  Ask  ^K  Go to

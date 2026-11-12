@@ -1,0 +1,36 @@
+ ◉ Corral │ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live    22:12  fixture · snapshot 2026-11-07 22:12
+╭─ corral ─────────────────────╮╭──────────────────────────────────────────────────────────────────────────────────────╮
+│ Autopilot                    ││  Inbox   1 of 5 needing you                     Ask about this    Next · T-885 plan  │
+│ independent work continues   │├─────────────────────────────────────────────────────────┬────────────────────────────┤
+├──────────────────────────────┤│  needs you   owner only   blocking                     ┃│ B BACKGROUND · PLACET-870  ┃
+│▌ Inbox                 5   i ││ T-868/R1/Q1 · rev 2                                    ┃│ T-868 host-queue-ledger ·  ┃
+│  Now                       n ││ from worker T-868 R1 · escalated by the PM · 3h ago    ┃│ Give queued Pi-native      ┃
+│  Changes              12   . ││ Restore policy: pane-origin input only, or all         ┃│ input stable item          ┃
+│  Plans                 6   p ││ origins?                                               ┃│ identities and a durable   ┃
+│  Agents                7   a │├───┬────────────────────────────────────────────────────┃│ lifecycle that keeps       ┃
+│  Review                3   r ││ S │ SITUATION                                          ┃│ delivery acknowledgement   ┃
+│  Timeline                  t ││   │ T-701@P2 leaves one restore-policy decision open   ┃│ (admitted, observed)       ┃
+│  Usage                     u ││   │ for T-868: on stock/plain paths where Esc/dequeue  ┃│ distinct from execution    ┃
+│  Settings                  , ││   │ restoration is enabled, should restoration remove  ││ (queued, started, then     ┃
+├──────────────────────────────┤│   │ only pane-origin queued input, or restore all      ││ turn completion), and let  ┃
+│  Ask                       / ││   │ origins? Rich mode will remain                     ││ authorized callers         │
+│  Go to                    ^K ││   │ read-only/count-only with no restoration either    ││ inspect, withdraw and      │
+│                              ││   │ way.                                               ││ edit queued items with     │
+│                              ││   │                                                    ││ defined races against      │
+│                              ││   │ WAITING ON THIS ANSWER ─────────────────────────── ││ consumption.               │
+│                              ││   │ ● T-868  Blocked until you answer                  ││ Plan T-870 Pi input:       │
+│                              ││   │ ○ T-870  plan member 2 of 3 · final accept needs   ││ stable queue item          │
+│                              ││   │          it                                        ││ lifecycle · governed by    │
+│                              ││   │ · T-869  independent · after T-867, not this       ││ T-701@P2 · run R1 on       │
+│                              ││   │          answer                                    ││ pi-sol xhigh, step 3 of 5  │
+│                              │├───┼────────────────────────────────────────────────────┤│                            │
+│                              ││ A │ ASSESSMENT                                         ││ T-701  plan P2 ✓           │
+│                              ││   │ ▸Diff hunk  File excerpt  Gate log tail            ││ T-867  gate ◌ stale        │
+│                              ││   │ Screenshot                                         ││ T-868  needs you           │
+│                              ││   │ packages/corral-pi/patches/@earendil-works%2Fpi-c… ││ T-869  after T-867         │
+│                              ││   │ @@ -1959,13 +1990,16 @@ class AgentSession         ││ T-870 · layer 1 of 2 ·…    │
+│                              ││   │  1990 1990        * @returns Object with steering… ││                            │
+│                              │├───┴─────────────────────────────────────────────────────┤ T THREAD WITH THE ASKER 2  │
+│                              ││  Answer · option 1   Ask the worker   Discuss with PM   │ you 21:58                  │
+╰─ This device pawis-desktop ──╯╰─────────────────────────────────────────────────────────┴────────────────────────────╯
+  1 2  choose  e  evidence │  i  Inbox  n  Now  .  Changes  p   a  Agents  r   t   u   ,  Settings │  /  Ask  ^K  Go to

@@ -1,0 +1,36 @@
+ ◉ Corral │ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live    22:12  fixture · snapshot 2026-11-07 22:12
+╭─ corral ─────────────────────╮╭──────────────────────────────────────────────────────────────────────────────────────╮
+│ Autopilot                    ││ Usage  cost and quota per provider and profile ·…          Today   7 days   30 days  │
+│ independent work continues   │├──────────────────────────────────────────────────────────────────────────────────────┤
+├──────────────────────────────┤│                                                                                      ┃
+│  Inbox                 5   i ││ OpenAI · subscription    78% ████████████████████████████▓▓▓░░░░░▒▒▒▒  22% headroom  ┃
+│  Now                       n ││  5 h rolling  resets in 1h 46m  today $61 · 7 days $318 · weekly cap 61%             ┃
+│  Changes              12   . ││ Anthropic · subscription 34% ██████████████··············░░░░░░░░▒▒▒▒  66% headroom  ┃
+│  Plans                 6   p ││  5 h rolling  resets in 3h 02m  today $23 · 7 days $141 · weekly cap 48%             ┃
+│  Agents                7   a ││ OpenAI · API (metered)   21% ████████····················░░░░░░░░▒▒▒▒  79% headroom  ┃
+│  Review                3   r ││  allowance $40 / day  resets at 01:48  today $8.40 · 7 days $30                      ┃
+│  Timeline                  t ││                                                                                      ┃
+│▌ Usage                     u ││ BY PROFILE · CURRENT WINDOW ───────────────────────────────────────────────────────  ┃
+│  Settings                  , ││  PROFILE                             WINDOW  SHARE · 80% MARKER  TODAY    HEADROOM   ┃
+├──────────────────────────────┤│ ───────────────────────────────────────────────────────────────────────────────────  ┃
+│  Ask                       / ││  OpenAI · subscription                                                         22%   ┃
+│  Go to                    ^K ││    pi-sol xhigh                         69%  ▓▓▓▓▓▓▓▓··┊·            $54             ┃
+│                              ││    pi-terra high                         7%  ▓·········┊·          $6.40             ┃
+│                              ││    assistant · quick thread A-7          2%  ··········┊·          $1.10             ┃
+│                              ││  Anthropic · subscription                                                      66%   ┃
+│                              ││    omo opus                             29%  ███·······┊·            $19             ┃
+│                              ││    claude sonnet review                  5%  █·········┊·          $3.60             ┃
+│                              ││  OpenAI · API (metered)                                                        79%   ┃
+│                              ││    fallback · pi-sol                    21%  ███·······┊·          $8.40             ┃
+│                              ││                                                                                      ┃
+│                              ││ COST PER DAY · 7 DAYS ─────────────────────────────────────────────────────────────  ┃
+│                              ││ Thu  ███████████████████▒▒▒▒▒▒▒▒▒▒▒▓                       $61                       ┃
+│                              ││ Fri  ██████████████████████████▒▒▒▒▒▒▒▒▒▓▓                 $74                       ┃
+│                              ││ Sat  ██████▒▒▒▒▒                                           $21                       ┃
+│                              ││ Sun  ██████████████████████▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓▓                $75                       ┃
+│                              ││ Mon  █████████████████████████████▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓▓       $93                       │
+│                              ││ Tue  ███████████████████████████▒▒▒▒▒▒▒▓▓                  $72                       │
+│                              ││ Wed  ███████████████████████████████▒▒▒▒▒▒▒▒▒▒▒▓▓▓▓        $92                       │
+│                              ││                                                                                      │
+╰─ This device pawis-desktop ──╯╰──────────────────────────────────────────────────────────────────────────────────────╯
+  i  Inbox  n  Now  .  Changes  p  Plans  a  Agents  r  Review  t  Timeline  u  Usage  ,  Settings │  /  Ask  ^K  Go to

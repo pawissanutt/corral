@@ -1,0 +1,24 @@
+ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live          fixture
+╭─ corral ─────────────╮╭──────────────────────────────────────────────────────╮
+│ Autopilot            ││ Changes  since this device's last visit…  Mark seen  │
+│ independent work     │├──────────────────────────────────────────────────────┤
+│ continues            ││  All   Needs you   Verdicts   Runs                   │
+├──────────────────────┤├──────────────────────────────────────────────────────┤
+│  Inbox         5   i ││ 22:06 ◐ T-894 gate started on 6b36916                ┃
+│  Now               n ││ 22:05 ◌ T-867 gate went stale on 5949a4b (base…      ┃
+│▌ Changes      12   . ││ 22:03 ◐ T-890 quick gate started on 1751bd2          ┃
+│  Plans         6   p ││ 22:03 ◌ T-852 gate went stale on af7a6dc             ┃
+│  Agents        7   a ││ 21:59 ● T-868 worker replied in thread on…           ┃
+│  Review        3   r ││ 21:17 ▶ T-871 worker started · pi-sol xhigh          ┃
+│  Timeline          t ││ 21:11 · T-890 checkpoint 3 captured                  ┃
+│  Usage             u ││ 20:40 ▶ T-867 worker started · pi-sol xhigh          ┃
+│  Settings          , ││ 20:32 · T-890 checkpoint 2 captured                  ┃
+├──────────────────────┤│ 19:33 ▶ T-894 worker started · pi-sol xhigh          ┃
+│  Ask               / ││ 19:31 ▶ T-890 worker started · pi-sol xhigh          ┃
+│  Go to            ^K ││ 19:12 ✓ T-893 you accepted plan T-885 P2 → 3…        ┃
+│                      │├───── your last visit · 18:40 · seen-cursor for… ──── ┃
+│                      ││ 18:12 · T-885 review P2 approve · pi-sol             ┃
+│                      ││ 17:40 · T-854 checkpoint 2 captured                  │
+│                      ││ 16:40 · T-852 held · external op started             │
+╰─ pawis-desktop ──────╯╰──────────────────────────────────────────────────────╯
+  i  Inbox  n  Now  .   p   a   r   t   u   ,  Settings │  /  Ask  ^K  Go to

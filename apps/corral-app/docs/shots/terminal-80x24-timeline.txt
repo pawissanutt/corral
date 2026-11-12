@@ -1,0 +1,24 @@
+ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live          fixture
+╭─ corral ─────────────╮╭──────────────────────────────────────────────────────╮
+│ Autopilot            ││ Timeline       Today   7 days    By task   By agent  │
+│ independent work     │├──────────────────────────────────────────────────────┤
+│ continues            ││ who worked when · run, gate, review, land · idle     ┃
+├──────────────────────┤│ and stalls                                           ┃
+│  Inbox         5   i ││                                                      ┃
+│  Now               n ││ ━━ run   ══ gate   ╍╍ review   ■■ land               ┃
+│  Changes      12   . ││ ╱╱ waiting on you   ╌╌ idle   ░░ stale verdict       ┃
+│  Plans         6   p ││ ╳╳ stall                                             ┃
+│  Agents        7   a ││                                                      ┃
+│  Review        3   r ││        09    11 12 13  14 15 16  17 18 19  20 21 22  │
+│▌ Timeline          t ││ You         ●     ●                    ┊ ●        ●  │
+│  Usage             u ││ PM     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
+│  Settings          , ││                         relaunching                  │
+├──────────────────────┤│                    stall 16:40–19:28 · nobody moved  │
+│  Ask               / ││ T-852    ━━━━━━━━══╍╍╍━━━━━━━━══╳╳╳╳╳╳╳╳╳══╌╌╌╌╌╌╌░  │
+│  Go to            ^K ││ T-854  ━━━━━━━━╌╌╌╌╌━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  │
+│                      ││                  waiting on you · 7h02               │
+│                      ││ T-885     ╍╍━━━━╍╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱            │
+│                      ││                                        needs you 3h  │
+│                      ││                                          ╱╱╱╱╱╱╱╱╱╱  │
+╰─ pawis-desktop ──────╯╰──────────────────────────────────────────────────────╯
+  i  Inbox  n  Now  .   p   a   r   t   u   ,  Settings │  /  Ask  ^K  Go to

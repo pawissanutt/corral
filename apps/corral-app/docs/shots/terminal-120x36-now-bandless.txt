@@ -1,0 +1,36 @@
+ ◉ Corral │ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live    22:12  fixture · snapshot 2026-11-07 22:12
+╭─ corral ─────────────────────╮╭───────────────────────────────────────────┬──────────────────────────────────────────╮
+│ Autopilot                    ││ Who acts next  Goals                      │ Story  Evidence  Session                 │
+│ independent work continues   │├───────────────────────────────────────────┼──────────────────────────────────────────┤
+├──────────────────────────────┤│   id     task            r g v l age  cost│ T-890 · plan T-893                       │
+│  Inbox                 5   i ││Needs you 3 ───────────────────────────────┤  ▲ changed since 18:40                   │
+│▌ Now                       n ││  ▲ ● T-868  host-queue-… ◐ ○ ○ ○  3h      │ pm-bounded-read-contract                 │
+│  Changes              12   . ││  ▲ ● T-885  plan P2 ·…   plan    10h      │ pi-sol xhigh · on workstation machine    │
+│  Plans                 6   p ││   ● Q7     T-852 repair… PM ask  12m      │ name illustrative · started 19:31        │
+│  Agents                7   a ││Corral is verifying 3  gating · reviewing …│ RUN        GATE      REVIEW    LAND      │
+│  Review                3   r ││▌ ▲ ◐ T-890  pm-bounded-… ✓ ◐ ○ ○  9m $3.90│ ✓ done     ◐ now     ○ next    ○ next    │
+│  Timeline                  t ││  ▲ ◐ T-894  api-connect… ✓ ◐ ○ ○  6m   $18│ R1 ·…      1751bd2   after…    main      │
+│  Usage                     u ││  ▲ ◐ T-867  queue-contr… ✓ ◌ ○ ○  7m $1.83│ PROGRESS ─────────────────────────── 3/4 │
+│  Settings                  , ││Workers producing 2 ───────────────────────┤ ✓ Read plan, inspect scope/read          │
+├──────────────────────────────┤│  ▲ ◐ T-871  annotation-… ◐ ○ ○ ○ 55m $3.29│   contracts                              │
+│  Ask                       / ││  ▲ ◐ T-854  Co-work C3:… ◐ ○ ○ ○  1h $7.56│ ✓ Shared bounded projection + CLI/native │
+│  Go to                    ^K ││Queued 23 ─────────────────────────────────┤   adapters                               │
+│                              ││   ○ T-891  pm-obligation… ○ ○ ○ ○         │ ✓ Verify live paging, byte caps,         │
+│                              │├───────────────────────────────────────────┼──────────────────────────────────────────┤
+│                              ││ Since your last visit · 18:40  Parked 32  │ Live  Plan graph                         │
+│                              │├───────────────────────────────────────────┼──────────────────────────────────────────┤
+│                              ││ 22:06 ◐ T-894 gate started on 6b36916     │ w12C:p4 herdr-core  live   tail          │
+│                              ││ 22:05 ◌ T-867 gate went stale on 5949a4b… │                            illustrative  │
+│                              ││ 22:03 ◐ T-890 quick gate started on…      │ $ scripts/gate.sh --tier quick           │
+│                              ││ 22:03 ◌ T-852 gate went stale on af7a6dc  │   build     corral-ops corral-tui  …     │
+│                              ││ 21:59 ● T-868 worker replied in thread o… │   nextest   corral-ops  412/980          │
+│                              ││ 21:17 ▶ T-871 worker started · pi-sol…    │     PASS  pm_workset::bounded_page       │
+│                              ││ 21:11 · T-890 checkpoint 3 captured       │     PASS  pm_workset::byte_cap_trims     │
+│                              ││ 20:40 ▶ T-867 worker started · pi-sol…    │     PASS  pm_next::keyset_live_update    │
+│                              ││ 20:32 · T-890 checkpoint 2 captured       │     ....  read_view::scope_paging        │
+│                              ││ 19:33 ▶ T-894 worker started · pi-sol…    │                                          │
+│                              ││ 19:31 ▶ T-890 worker started · pi-sol…    │  live  PM                             PM │
+│                              ││ 19:12 ✓ T-893 you accepted plan T-885 P2… │ supervisor · generation 14               │
+│                              ││                                           │ waiting · next wake on T-894 gate        │
+╰─ This device pawis-desktop ──╯╰───────────────────────────────────────────┴──────────────────────────────────────────╯
+  j k  move  Enter  open  Tab  tab │  i  Inbox  n  Now  .   p   a  Agents  r   t   u   ,  Settings │  /  Ask  ^K  Go to

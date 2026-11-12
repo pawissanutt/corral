@@ -1,0 +1,36 @@
+ ◉ Corral │ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live    22:12  fixture · snapshot 2026-11-07 22:12
+╭─ corral ─────────────────────╮╭────────────────────────────────┬─────────────────────────────────────────────────────╮
+│ Autopilot                    ││ Awaiting your acceptance 1 ─── │  executing  T-870                                   ┃
+│ independent work continues   ││  ● T-885 P2 PM supervisor…     │ accepted earlier · delivers to main                 ┃
+├──────────────────────────────┤│ Executing 4 ────────────────── │ Pi input: stable queue item        Ask about this   ┃
+│  Inbox                 5   i ││▌ ◐ T-870    Pi input:…  ◐●□ 0/3│ lifecycle, editing, cancellation                    ┃
+│  Now                       n ││  ◐ T-893    PM…         ◐□□ 0/3├──────────────────────────────────────────────────── ┃
+│  Changes              12   . ││  ◐ T-898    Anthropic… ◐□□□ 0/4│ ✓ Design › ◐ Members 0/3 landed ›                   ┃
+│▌ Plans                 6   p ││  ◐ T-874    Pi review…  ◐□□ 0/3│ ○ Aggregate verify › ○ Final accept                 ┃
+│  Agents                7   a ││ Approved · not started 1 ───── │ ◌ 15 of 15 acceptance scenarios are not mapped to   ┃
+│  Review                3   r ││  ○ T-385 P5 Design: reliable…  │   any member · final verify has no owner            ┃
+│  Timeline                  t ││ Scale test 1 ───────────────── │                                                     ┃
+│  Usage                     u ││  ○ S-900    64-membe… synthetic│ MEMBERS · LIVE STATE ─────────────────────────────  ┃
+│  Settings                  , ││                                │  LAYER 0 · CAN START NOW                            ┃
+├──────────────────────────────┤│                                │   ◐ T-867  queue-contract-core             ✓ ◌ ○ ○  ┃
+│  Ask                       / ││                                │  LAYER 1 · AFTER LAYER 0                            ┃
+│  Go to                    ^K ││                                │ ▌ ● T-868  host-queue-ledger               ◐ ○ ○ ○  ┃
+│                              ││                                │   ○ T-869  inbox-queue-ops                 ○ ○ ○ ○  ┃
+│                              ││                                │ BLOCKING FINAL ACCEPTANCE ────────────────────── 3  ┃
+│                              ││                                │ · T-867 required work is Running                    ┃
+│                              ││                                │ ◐ T-868 waits on your answer                        ┃
+│                              ││                                │ · T-869 required work is Ready                      ┃
+│                              ││                                ├──────────────────────────────────────────────────── ┃
+│                              ││                                │T-868 · plan T-870  ▲ changed since 18:40            ┃
+│                              ││                                │host-queue-ledger                                    ┃
+│                              ││                                │pi-sol xhigh · on workstation machine name           │
+│                              ││                                │illustrative · started 18:58                         │
+│                              ││                                │RUN     ◐ waits on you  R1 · pi-sol xhigh            │
+│                              ││                                │GATE    ○ next  after run                            │
+│                              ││                                │REVIEW  ○ next  after gate                           │
+│                              ││                                │LAND    ○ next  main                                 │
+│                              ││                                │                                                     │
+│                              ││                                │PROGRESS ─────────────────────────────────────── 2/5 │
+│                              ││                                │✓ Verify Pi 1.5.0 metadata, refresh frozen deps      │
+╰─ This device pawis-desktop ──╯╰────────────────────────────────┴─────────────────────────────────────────────────────╯
+  j k  plan  J K  member  x  scale │  i  Inbox  n  Now  .   p   a  Agents  r   t   u   ,  Settings │  /  Ask  ^K  Go to

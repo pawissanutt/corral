@@ -1,0 +1,24 @@
+ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live          fixture
+╭─ corral ─────────────╮╭───────────────────────────┬──────────────────────────╮
+│ Autopilot            ││ Who acts next             │ Story  Evidence  Session │
+│ independent work     │├───────────────────────────┼──────────────────────────┤
+│ continues            ││   id     task     r g v l┃│ T-890 · plan T-893       ┃
+├──────────────────────┤│Needs you 3 ──────────────┃│  ▲ changed since 18:40   ┃
+│  Inbox         5   i ││  ▲ ● T-868  host… ◐ ○ ○ ○┃│ pm-bounded-read-contrac  ┃
+│▌ Now               n ││  ▲ ● T-885  plan… plan   ┃│ t                        ┃
+│  Changes      12   . ││   ● Q7     T-852… PM ask ┃│ pi-sol xhigh · on        ┃
+│  Plans         6   p ││Corral is…         3  gat…┃│ workstation machine      ┃
+│  Agents        7   a ││▌ ▲ ◐ T-890  pm-b… ✓ ◐ ○ ○┃│ name illustrative ·      ┃
+│  Review        3   r ││  ▲ ◐ T-894  api-… ✓ ◐ ○ ○┃│ started 19:31            ┃
+│  Timeline          t ││  ▲ ◐ T-867  queu… ✓ ◌ ○ ○┃│ RUN   GATE  REVI… LAND   ┃
+│  Usage             u ││Workers producing 2 ──────┃│ ✓ do… ◐ now ○ ne… ○ ne…  │
+│  Settings          , ││  ▲ ◐ T-871  anno… ◐ ○ ○ ○┃│ R1 ·… 1751… afte… main   │
+├──────────────────────┤│  ▲ ◐ T-854  Co-w… ◐ ○ ○ ○┃│ PROGRESS ────────── 3/4  │
+│  Ask               / ││Queued 23 ────────────────┤│ ✓ Read plan, inspect     │
+│  Go to            ^K ││   ○ T-891  pm-ob… ○ ○ ○ ○││   scope/read contracts   │
+│                      ││   ○ T-892  pm-re… ○ ○ ○ ○││ ✓ Shared bounded         │
+│                      ││   ○ T-895  failu… ○ ○ ○ ○││   projection +           │
+│                      ││   ○ T-896  meter… ○ ○ ○ ○││   CLI/native adapters    │
+│                      ││   ○ T-897  role-… ○ ○ ○ ○││ ✓ Verify live paging,    │
+╰─ pawis-desktop ──────╯╰───────────────────────────┴──────────────────────────╯
+  j…  move  En… open  Tab  tab │  i   n   .   p   a   r   t   u   ,  │  /   ^K
