@@ -12,10 +12,10 @@ index 704476d..0f9acad 100644
  export declare const streamSimple: StreamFunction<"openai-codex-responses", SimpleStreamOptions>;
  export interface OpenAICodexWebSocketDebugStats {
 diff --git a/dist/api/openai-codex-responses.js b/dist/api/openai-codex-responses.js
-index 427df0a..b35cf59 100644
+index e64cc02..f9dd1e6 100644
 --- a/dist/api/openai-codex-responses.js
 +++ b/dist/api/openai-codex-responses.js
-@@ -356,6 +356,7 @@ export const streamSimple = (model, context, options) => {
+@@ -360,6 +360,7 @@ export const streamSimple = (model, context, options) => {
      }
      const base = {
          ...buildBaseOptions(model, context, options, apiKey),
@@ -23,7 +23,7 @@ index 427df0a..b35cf59 100644
          toolChoice: options?.toolChoice,
      };
      const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
-@@ -431,7 +432,7 @@ function buildRequestBody(model, context, options, cacheSessionId, grammarToolIn
+@@ -435,7 +436,7 @@ function buildRequestBody(model, context, options, cacheSessionId, grammarToolIn
      }
      return body;
  }
@@ -33,10 +33,10 @@ index 427df0a..b35cf59 100644
          case "flex":
              return 0.5;
 diff --git a/dist/types.d.ts b/dist/types.d.ts
-index 2d650ea..162624f 100644
+index b410a7b..2cf4d88 100644
 --- a/dist/types.d.ts
 +++ b/dist/types.d.ts
-@@ -231,6 +231,8 @@ export interface ImagesOptions extends ProviderRequestOptions<ImageModel<ImageAp
+@@ -238,6 +238,8 @@ export interface ImagesOptions extends ProviderRequestOptions<ImageModel<ImageAp
  }
  export type ProviderImagesOptions = ImagesOptions & Record<string, unknown>;
  export interface SimpleStreamOptions extends StreamOptions {

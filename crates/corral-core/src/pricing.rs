@@ -10,8 +10,8 @@ use crate::Config;
 /// Verification date of the built-in API-equivalent rates.
 pub const CATALOG_DATE: &str = "2026-10-15";
 pub const CATALOG_SOURCE: &str = "catalog@2026-10-15";
-/// Provenance of the frozen Amazon Bedrock rates, generated from pi-ai 1.5.0.
-pub const CATALOG_BEDROCK_SOURCE: &str = "catalog-bedrock@pi-ai-1.5.0";
+/// Provenance of the frozen Amazon Bedrock rates, generated from pi-ai 1.5.2.
+pub const CATALOG_BEDROCK_SOURCE: &str = "catalog-bedrock@pi-ai-1.5.2";
 
 /// Frozen catalog, independent of the editable configuration and installed harnesses.
 pub fn catalog_prices() -> &'static BTreeMap<String, Price> {

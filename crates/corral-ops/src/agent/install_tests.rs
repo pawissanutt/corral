@@ -138,7 +138,7 @@ fn install_ships_only_host_files_and_dispatch_refuses_until_each_role_lands() {
     assert!(!recorded.contains(checkout.to_str().unwrap()), "{recorded}");
     assert_eq!(
         (record.bun.as_str(), record.pi.as_str()),
-        ("1.4.2", "1.5.0")
+        ("1.4.2", "1.5.2")
     );
 
     // And dispatch resolves all three landed production roles:
