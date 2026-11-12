@@ -95,6 +95,11 @@ pub struct ImportResult {
 /// Returns an error for malformed input, invalid metadata/dependencies, an open
 /// tracker with the same source digest, or failed atomic batch publication.
 pub fn import_plan(ctx: &Ctx, path: &Path, dry_run: bool, origin: Origin) -> Result<ImportResult> {
+    let _output_consumer = if dry_run {
+        None
+    } else {
+        crate::storage_gc::outputs::protect_artifact_source(ctx, path)?
+    };
     let bytes = crate::plan::read_plan(ctx, path)?;
     let text = std::str::from_utf8(&bytes).context("import plan must be UTF-8")?;
     let (document, body) = parse::<Document>(text)?;

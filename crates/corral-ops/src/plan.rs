@@ -93,6 +93,7 @@ fn plan_submit_inner(
     require_submission(ctx, &source, &domain)?;
     check(&source)?;
     crate::tracker::check_action(&ctx.store.get(id)?, "submit tracker to the plan pipeline")?;
+    let _output_consumer = crate::storage_gc::outputs::protect_artifact_source(ctx, path)?;
     let bytes = read_plan(ctx, path)?;
     PlanDocument::parse(std::str::from_utf8(&bytes).context("plan must be UTF-8")?)?;
     let mut artifact = add_artifact(

@@ -275,6 +275,40 @@ fn shared_policy_reclaims_both_types_without_touching_unfinished_work_or_lineage
 }
 
 #[test]
+fn verdict_evidence_capture_retains_generated_source_after_publication() {
+    let fx = Fx::new();
+    let source = fx.worktree.join("web/dist/app.js");
+    std::fs::write(&source, b"web").unwrap();
+    assert_eq!(fx.assess("web").disposition, Disposition::Reclaimable);
+
+    let evidence = crate::reviewer::Evidence::check(
+        &fx.ctx,
+        std::slice::from_ref(&source),
+        &[fx.worktree.as_path()],
+    )
+    .unwrap();
+    let lease = protection::lease_name(&fx.owner("web").path);
+    let capture_excludes_cleanup = fx.ctx.store.try_lock(&lease).unwrap().is_none();
+    let staged = evidence.stage(&fx.ctx, &fx.task).unwrap();
+    fx.ctx
+        .store
+        .update(&fx.task, |task| staged.attach(&fx.ctx, task, "R1"))
+        .unwrap();
+    let publication_excludes_cleanup = fx.ctx.store.try_lock(&lease).unwrap().is_none();
+    drop(staged);
+    drop(evidence);
+
+    let artifact = fx.ctx.store.get(&fx.task).unwrap().artifacts.pop().unwrap();
+    assert_eq!(Path::new(&artifact.source), source);
+    // Collection must retain the raw source even after capture/publication consumers exit.
+    assert_eq!(fx.reclaim("web").disposition, Disposition::Retained);
+    assert_eq!(std::fs::read(&source).unwrap(), b"web");
+    assert!(capture_excludes_cleanup);
+    assert!(publication_excludes_cleanup);
+    assert!(fx.ctx.store.try_lock(&lease).unwrap().is_some());
+}
+
+#[test]
 fn preservation_and_unknown_ownership_refusals_share_one_contract() {
     let fx = Fx::new();
     fx.build();
