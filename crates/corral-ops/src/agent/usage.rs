@@ -6,10 +6,10 @@
 //! function of those files: collecting twice, or after a resume that rebinds or copies the same
 //! session, yields the same `Usage`. `openai-codex/<model>` is priced as `<model>` through corral
 //! pricing; the API-equivalent figure is `estimated_usd` and Pi's own reported cost stays in
-//! `reported_usd`. PM sessions are bound to the `AgentPm` record, never to a run, so they are
-//! attributed to no implementation task and are excluded from the corral-pi vs OmO comparison.
-//! The shared container readback also covers PM/planning, plus durable auxiliary references;
-//! references never authorize another host or replace a bound transcript.
+//! `reported_usd`. PM sessions are bound to the `AgentPm` record, never to a run, so they
+//! remain excluded from implementation-run comparisons. PM cost reports separately join
+//! responses to durable `corral_cost_turn` transcript boundaries, never timestamp proximity.
+//! Auxiliary references never authorize another host or replace a bound transcript.
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, ErrorKind, Read};
@@ -85,6 +85,26 @@ fn collect_state_inner(
     store: &Store,
     complete: bool,
 ) -> Result<Usage> {
+    Ok(Usage::from_entries(
+        collect_entries(state, model, store, complete)?
+            .into_iter()
+            .map(|entry| entry.usage)
+            .collect(),
+    ))
+}
+
+/// Response evidence with a structural turn identity, absent in legacy/auxiliary transcripts.
+pub(crate) struct CostUsageEntry {
+    pub usage: UsageEntry,
+    pub turn: Option<(u32, u64)>,
+}
+
+pub(crate) fn collect_entries(
+    state: &AgentRunState,
+    model: Option<&str>,
+    store: &Store,
+    complete: bool,
+) -> Result<Vec<CostUsageEntry>> {
     // Generations that resumed the same file are read once; copies are deduplicated by key.
     // Retired PM generations keep their transcripts in the archive; both are read in
     // generation order, so retirement never changes which binding claims a file first.
@@ -146,17 +166,17 @@ fn collect_state_inner(
     }
     let mut entries = BTreeMap::new();
     for (path, (session_id, model)) in files {
-        read_session(path, session_id, model, &mut entries, complete, &bindings)?;
+        read_session_with_turns(path, session_id, model, &mut entries, complete, &bindings)?;
     }
     if entries.is_empty() {
         bail!("no assistant usage found in the bound Pi sessions");
     }
-    let mut entries: Vec<UsageEntry> = entries.into_values().collect();
-    entries.sort_by_key(|entry| entry.at);
+    let mut entries: Vec<_> = entries.into_values().collect();
     for entry in &mut entries {
-        entry.reprice(&store.config);
+        entry.usage.reprice(&store.config);
     }
-    Ok(Usage::from_entries(entries))
+    entries.sort_by_key(|entry| entry.usage.at);
+    Ok(entries)
 }
 
 #[derive(Deserialize)]
@@ -204,11 +224,33 @@ struct WireCost {
 
 /// Adds the file's assistant responses to `entries`, keyed by (session ID, response ID). A file a
 /// bound generation has not written yet (Pi writes on the first response) contributes nothing.
+#[cfg(test)]
 fn read_session(
     path: &Path,
     bound_session: &str,
     run_model: Option<&str>,
     entries: &mut BTreeMap<(String, String), UsageEntry>,
+    complete: bool,
+    bindings: &BTreeMap<u32, corral_core::connection::ConnectionBinding>,
+) -> Result<()> {
+    let mut detailed = BTreeMap::new();
+    let result = read_session_with_turns(
+        path,
+        bound_session,
+        run_model,
+        &mut detailed,
+        complete,
+        bindings,
+    );
+    entries.extend(detailed.into_iter().map(|(key, entry)| (key, entry.usage)));
+    result
+}
+
+fn read_session_with_turns(
+    path: &Path,
+    bound_session: &str,
+    run_model: Option<&str>,
+    entries: &mut BTreeMap<(String, String), CostUsageEntry>,
     complete: bool,
     bindings: &BTreeMap<u32, corral_core::connection::ConnectionBinding>,
 ) -> Result<()> {
@@ -233,6 +275,7 @@ fn read_session(
     let mut model = run_model.map(str::to_owned);
     let mut provider = None;
     let mut binding = None;
+    let mut cost_turn = None;
     let mut previous_at = None;
     let mut read = 0u64;
     let mut line = Vec::new();
@@ -264,7 +307,20 @@ fn read_session(
             .with_context(|| format!("unrecognized Pi session line {number} in {display}"))?;
         let preceding_at = std::mem::replace(&mut previous_at, entry.timestamp);
         match entry.kind.as_str() {
+            "custom" if entry.custom_type.as_deref() == Some("corral_cost_turn") => {
+                cost_turn = entry.data.as_ref().and_then(|data| {
+                    if data["phase"].as_str() != Some("start") {
+                        return None;
+                    }
+                    Some((
+                        u32::try_from(data["generation"].as_u64()?).ok()?,
+                        data["turn"].as_u64()?,
+                    ))
+                });
+                continue;
+            }
             "custom" if entry.custom_type.as_deref() == Some("corral_host_bound") => {
+                cost_turn = None;
                 binding = entry
                     .data
                     .as_ref()
@@ -274,6 +330,7 @@ fn read_session(
                 continue;
             }
             "session" => {
+                cost_turn = None;
                 if let Some(id) = entry.id {
                     session_id = id;
                 }
@@ -347,12 +404,14 @@ fn read_session(
             reported_usd,
             ..UsageEntry::default()
         };
-        entries
-            .entry((
-                session_id.clone(),
-                format!("{}:{response}", connection.map_or("legacy", |c| c.id())),
-            ))
-            .or_insert(evidence);
+        let key = (
+            session_id.clone(),
+            format!("{}:{response}", connection.map_or("legacy", |c| c.id())),
+        );
+        entries.entry(key).or_insert(CostUsageEntry {
+            usage: evidence,
+            turn: cost_turn,
+        });
     }
     Ok(())
 }

@@ -14,6 +14,8 @@ pub use crate::dispatch_config::{DispatchCfg, DispatchOverride, DispatchPolicy, 
 pub mod agent_capabilities;
 pub use agent_capabilities::{AgentCfg, AgentUi};
 mod attention;
+mod pm;
+pub use pm::{PmCfg, PmGuardCfg};
 
 fn review_is_empty(review: &ReviewOverride) -> bool {
     review.is_empty() && review.infra_wait_secs.is_none()
@@ -380,27 +382,6 @@ impl HerdrKeys {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PmCfg {
-    /// Profile key used for the workspace PM pane. Default "omo".
-    pub agent: String,
-    /// Opt in to actionable event delivery to the live workspace PM pane.
-    #[serde(default)]
-    pub push_events: bool,
-    /// Allow the watch driver to relaunch the corral-pi PM.
-    #[serde(default)]
-    pub supervise: bool,
-    /// Actionable event kinds delivered to the PM when push is enabled.
-    #[serde(default = "default_push_kinds")]
-    pub push_kinds: Vec<String>,
-    #[serde(default = "attention::seconds")]
-    pub attention_secs: u64,
-    #[serde(default = "attention::owner_seconds")]
-    pub attention_owner_secs: u64,
-    #[serde(default = "yes")]
-    pub attention_notify: bool,
-}
-
 /// The one list of PM-actionable event kinds, after `actionable_kind` normalization. It is what
 /// `pm.push_kinds` accepts, what `actionable_kind` returns and what `corral wait --for` accepts.
 /// Routine lifecycle kinds stay available explicitly; defaults use `PM_DEFAULT_KINDS`.
@@ -449,27 +430,6 @@ pub const PM_DEFAULT_KINDS: &[&str] = &[
     "plan_awaiting_owner",
     "install_due",
 ];
-
-fn default_push_kinds() -> Vec<String> {
-    PM_DEFAULT_KINDS
-        .iter()
-        .map(|kind| (*kind).to_string())
-        .collect()
-}
-
-impl Default for PmCfg {
-    fn default() -> Self {
-        PmCfg {
-            agent: "omo".into(),
-            push_events: false,
-            supervise: false,
-            push_kinds: default_push_kinds(),
-            attention_secs: attention::seconds(),
-            attention_owner_secs: attention::owner_seconds(),
-            attention_notify: true,
-        }
-    }
-}
 
 /// `[sync]`: how sync reads agent activity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -751,6 +711,7 @@ impl Config {
     pub(crate) fn problems(&self, root: &Path, inputs: &SemanticInputs) -> Vec<String> {
         let mut out = self.board.card.problems();
         out.extend(attention::problems(&self.pm));
+        out.extend(self.pm.guard.problems());
         if let Some(policy) = &self.routing.repair
             && let Err(error) = policy.validate()
         {
@@ -934,3 +895,7 @@ impl Config {
         out
     }
 }
+
+#[cfg(test)]
+#[path = "config_pm_guard_tests.rs"]
+mod pm_guard_tests;

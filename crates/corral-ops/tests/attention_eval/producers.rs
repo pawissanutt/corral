@@ -375,7 +375,7 @@ fn invoke(fx: &Fx, id: &str, producer: &str) -> Result<()> {
             )?;
         }
         "autopilot_escalate" | "landing_blocked" => {
-            crate::autopilot::advance_all(&ctx, at(1000))?;
+            crate::autopilot::advance_all(&ctx, at(1000), &crate::sync::SyncScope::All)?;
         }
         "legacy_review_fallback" => {
             if task.status == Status::Review {

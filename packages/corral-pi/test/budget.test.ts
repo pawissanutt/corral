@@ -149,3 +149,43 @@ test("a priority request exceeding the USD cap is refused before transport", asy
   expect(reserved).toBe(2_000_000_000); expect(launched).toBe(false);
   expect(result.errorMessage).toContain("budget_exhausted");
 });
+
+test("cache guard refusal preserves the session and retries admission after owner resume", async () => {
+  let paused = true; let launched = 0; let cancelled = 0; let stopped = 0;
+  const records: Record<string, unknown>[] = [];
+  const budget = new RunBudget({
+    cancel: () => { cancelled++; }, onStop: () => { stopped++; },
+    record: async payload => {
+      records.push(payload);
+      if (payload.action === "reserve" && paused) {
+        return { admitted: false, reason: "cache_guard_paused", guard_paused: true, exhausted: false };
+      }
+      return { admitted: true, exhausted: false };
+    },
+  });
+  const source: StreamFunction = () => {
+    launched++;
+    const stream = createAssistantMessageEventStream();
+    const result = message("guard-resumed");
+    result.usage = { ...result.usage, input: 3, cacheRead: 7, cacheWrite: 2, output: 1, totalTokens: 13 };
+    stream.push({ type: "done", reason: "stop", message: result }); stream.end(result); return stream;
+  };
+  const wrapped = budget.wrap(source);
+  const denied = await wrapped(model, context).result();
+  expect(denied.errorMessage).toContain("cache_guard_paused");
+  expect(denied.errorMessage).not.toContain("budget_exhausted");
+  expect(launched).toBe(0);
+  expect(cancelled).toBe(0);
+  expect(stopped).toBe(0);
+  expect(budget.state().stopped).toBeFalse();
+  paused = false; // Authoritative owner command clears the server record, not a host latch.
+  expect((await wrapped(model, context).result()).stopReason).toBe("stop");
+  expect(launched).toBe(1);
+  const settle = records.find(record => record.action === "settle");
+  expect(settle?.usage).toEqual({ input: 3, cache_read: 7, cache_write: 2, output: 1 });
+  expect(settle?.tokens).toBe(13);
+  expect(settle?.model).toBe(model.id);
+  expect(settle?.provider).toBe(model.provider);
+  expect(settle?.request).toBe(records[1]?.request);
+  expect(budget.state().active).toBe(0);
+});

@@ -265,6 +265,42 @@ the detail view). Worker-launch resume computes the identity once, rejects candi
 on metadata, checks registration by key and emits at most two payloads plus the source run's
 obligations.
 
+### PM per-item cost evidence
+
+PM cost attribution is reporting evidence, never a budget, limit, or authorization. It lives
+outside the PM generation journal: `agent-pm-cost/current` indexes at most 256
+`agent-pm-cost-pending` rows and 4,096 `agent-pm-cost-bound` rows, oldest first, plus a
+cumulative `dropped` counter. Eviction deletes the oldest row and increments that counter.
+Generation retirement does not delete bound cost records.
+
+A pending row is `{ envelope_key, cause }`. The key uses the bridge's `:env` spelling;
+the cause has `{ class, project, task, item_key, kinds }`. Before bridge submission, the
+PM adapter derives it from frozen member kinds and typed subjects, never message bodies.
+Question wakes resolve their question's task; inbox wakes resolve item references; event
+wakes resolve their cause keys; wait wakes retain their project and plan/step key.
+Multi-task envelopes are `shared`, retaining a project only when every cause agrees.
+Unrecognized message kinds are `overhead`. Failure to record evidence is diagnosed but
+does not block delivery.
+
+At `turn_started`, a matching bridge origin moves the pending row into a bound attribution:
+`{ generation, turn, envelope_key, class, project, task, item_key, kinds }`. Classes are
+`item`, `shared`, `overhead`, and `unallocated`; kinds are deduplicated and capped at four.
+Binding is replay-idempotent. A continuation inherits only when the canonical request ledger
+links its continuation key to the granting turn; missing causes remain `unallocated`.
+
+PM session transcripts record `corral_cost_turn` custom entries containing
+`{ generation, turn, phase: "start" | "end" }` (start also carries the origin `key`).
+The shared usage collector deduplicates by session/connection/response identity, then links
+each response structurally between start and end markers, or the next start marker.
+There is no timestamp-proximity join. Legacy PM entries and auxiliary sessions without
+these markers lack a response-to-turn identity and remain explicitly unallocated.
+
+The per-item report always includes overhead and unallocated rows, token categories,
+request counts, and API-equivalent estimated USD, reconciling with the same PM container
+usage collector. Coverage reports attributed and total requests, marker-less (`legacy`)
+requests, and dropped records. A time window is inclusive at `since`, exclusive at `until`;
+undated entries are included only in an unbounded report.
+
 ### History-cost classes and counters
 
 Every read on a measured path belongs to one class:

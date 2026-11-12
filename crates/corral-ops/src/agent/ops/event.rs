@@ -242,6 +242,7 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 if let Some(origin) = origin {
                     started.origin = origin;
                 }
+                crate::agent::cost_records::bind_turn(ctx, state, &started)?;
                 state.turns.push(started);
             }
             (EventKind::TurnEnded, Some(i))

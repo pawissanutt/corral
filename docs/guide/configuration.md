@@ -1149,6 +1149,46 @@ do not form a backlog. The first enabled sync with a live PM and no saved cursor
 run one sync with push disabled first to skip it. Position persists in the store's `pm-events` record.
 See [board events](events.md) for delivery, wait filters, cursors and harness-specific wake guidance.
 
+### pm.guard
+
+PM-container request cache health is observed by code, independently of cost accounting.
+Workers and reviewers are not guarded. Defaults:
+
+```toml
+[pm.guard]
+large_context_tokens = 260000
+min_cache_read_ratio = 0.5
+consecutive_misses = 2
+price_tier_input_tokens = 272000
+pause = true
+```
+
+| Key | Valid values | Effect |
+|---|---|---|
+| `large_context_tokens` | `1..=9007199254740991` | Minimum total input at which a low cache-read ratio counts as a miss. |
+| `min_cache_read_ratio` | finite `0..=1` | Ratios strictly below this value count as misses; equality is a hit. |
+| `consecutive_misses` | `1..=4294967295` | Consecutive large-context misses before reporting and optionally pausing. A hit or small context resets the counter. |
+| `price_tier_input_tokens` | `1..=9007199254740991` | Report each transition from below this input threshold to at or above it; never pause for price alone. |
+| `pause` | boolean | `false` reports cache-miss episodes without pausing; not a spend limit. |
+
+The provider-normalized usage fields match the transcript reader's `WireUsage`:
+`total_input = input + cacheRead + cacheWrite`, and
+`cache_read_ratio = cacheRead / total_input` (zero for zero input).
+These are separate uncached, cached-read and cache-write input buckets; output tokens
+are not context input and are excluded from the denominator. The terminal settle event
+carries the same buckets, model and provider; request and generation come from its
+authenticated budget envelope. Older hosts without usage telemetry do not manufacture misses.
+
+The bounded `pm-usage-guard` record retains the last eight observations. A miss episode
+emits one `pm_cache_miss_guard`; upward tier crossings emit `pm_price_tier_crossed`.
+`corral pm brief` health shows the current state, pause timestamp and last ratio.
+A paused PM's next request reservation returns `admitted = false` with typed reason
+`cache_guard_paused`, not budget exhaustion. The host keeps the conversation and does not
+start that provider request. Owner `corral pm guard-resume` clears the hold and miss
+counter; the next normal input can continue in the same session. A new PM generation
+also resets cache state. The supervisor never relaunches a guard-paused PM just because
+it has unobserved work: that would pay for the uncached prefix again.
+
 ## agent.capabilities
 
 Optional corral-pi features per role; only corral-pi runs read them.

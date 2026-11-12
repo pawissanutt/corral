@@ -101,6 +101,7 @@ pub struct PmWorkset {
 }
 
 mod options;
+mod project_executor;
 mod scope;
 pub(crate) use options::authority;
 use options::{option_authority, option_target};
@@ -571,6 +572,7 @@ fn project_snapshot(
             ));
         }
     }
+    crate::pm_next::digest_question_next(&decisions, &mut next, ctx.store.now())?;
     let workset = PmWorkset {
         policy_revision: policy.revision.clone(),
         mode: policy.mode,
@@ -605,8 +607,9 @@ pub struct PmActionResult {
     pub diagnosis: Option<corral_core::RepairLedger>,
 }
 
-/// Recompute a revision-bound action, then use the existing authorized sync executors.
-/// Arbitrary card command text is never executed and owner operations are unreachable.
+/// Recompute a revision-bound action, then use the existing authorized sync executors, scoped
+/// to the action's project. Arbitrary card command text is never executed and owner operations
+/// are unreachable.
 pub fn pm_act(ctx: &Ctx, id: &str) -> Result<PmActionResult> {
     let current = pm_workset(ctx)?;
     let Some(selected) = current.actions.iter().find(|action| action.id == id) else {
@@ -629,18 +632,7 @@ pub fn pm_act(ctx: &Ctx, id: &str) -> Result<PmActionResult> {
             diagnosis: Some(diagnosis),
         });
     }
-    let before = task_identity(&ctx.store.get(task)?)?;
-    crate::sync(ctx)?;
-    let after = task_identity(&ctx.store.get(task)?)?;
-    Ok(PmActionResult {
-        outcome: if before == after {
-            PmActionOutcome::Waiting
-        } else {
-            PmActionOutcome::Progressed
-        },
-        workset: pm_workset(ctx)?,
-        diagnosis: None,
-    })
+    project_executor::execute(ctx, task)
 }
 
 #[cfg(test)]

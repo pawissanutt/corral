@@ -266,6 +266,11 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
         },
         Cmd::Pm { cmd } => match cmd {
             Some(PmCmd::Bench { .. } | PmCmd::Next { .. } | PmCmd::Brief { .. }) => Read,
+            Some(PmCmd::Notes { cmd }) => match cmd {
+                crate::pm_notes_cmd::PmNotesCmd::List { .. } => Read,
+                _ => Refused,
+            },
+            Some(PmCmd::GuardResume { .. }) => Refused,
             // Posting and withdrawing (the store checks authorship) route work to the PM;
             // claiming and resolving are the PM's own.
             Some(PmCmd::Inbox { cmd }) => match cmd {

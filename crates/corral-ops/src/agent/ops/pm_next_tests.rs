@@ -305,3 +305,135 @@ fn argumentless_cards_bound_evidence_and_pending_questions_without_changing_iden
         assert_eq!(result["next"][field], cli[field], "{field}");
     }
 }
+
+#[test]
+fn pending_owner_question_does_not_hide_unrelated_pm_next_action() {
+    let (mut fx, _) = fixture();
+    fx.ctx.resource_probe = crate::resources::FixedResourceProbe::arc();
+    let asking = ts::worker_task(&fx, "worker");
+    let worker = ts::bind(
+        &fx,
+        &BindTarget::Worker {
+            task: asking.clone(),
+            run: "R1".into(),
+        },
+        "worker",
+        "worker-session",
+    );
+    ts::committed(&ts::hello(&fx, &worker));
+    ts::committed(&send(
+        &fx,
+        &worker,
+        "ask",
+        "unrelated-question",
+        json!({"kind":"clarification","text":"Which route?","blocking":false}),
+    ));
+    let question = crate::questions::list(&fx.ctx, Some(&asking), false)
+        .unwrap()
+        .remove(0)
+        .question;
+    crate::questions::escalate(
+        &fx.ctx,
+        &question.key,
+        question.revision,
+        crate::questions::Actor::Pm(None),
+        None,
+        None,
+    )
+    .unwrap();
+    let unrelated = fx
+        .ctx
+        .store
+        .create("Unrelated ready work", Some("corral"), Status::Ready, "")
+        .unwrap();
+    let preview = fx
+        .ctx
+        .store
+        .preview_operating_policy(&corral_core::OperatingSelection {
+            tasks: [asking, unrelated.id.clone()].into(),
+            authority: corral_core::OperatingAuthority {
+                dispatch: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    fx.ctx.store.config = fx
+        .ctx
+        .store
+        .confirm_operating_policy(&preview, "fixture owner", Timestamp::now())
+        .unwrap();
+    let next = crate::pm_next(&fx.ctx).unwrap();
+    assert_eq!(next.kind, crate::PmActionKind::Dispatch);
+    assert_eq!(next.task.as_deref(), Some(unrelated.id.as_str()));
+    assert!(next.command.contains(" pm act "));
+}
+
+#[test]
+fn native_question_digest_drops_choices_then_old_rows_with_exact_omission_counts() {
+    let questions: Vec<_> = (0..8)
+        .map(|index| {
+            json!({
+                "key": format!("T-001/R1/Q{index}"), "revision": 3, "task": "T-001",
+                "question_kind": "clarification", "text": "\\\"\n".repeat(80),
+                "text_bytes_omitted": 0, "project": "corral", "blocking": index == 0,
+                "asked_at": format!("2026-11-11T00:00:{index:02}Z"),
+                "needed_by": null, "age_seconds": 60 - index, "requires_owner": true,
+                "options": (0..6).map(|_| json!({
+                    "label": "\\\"\n".repeat(40), "value": "\\\"\n".repeat(170),
+                    "label_bytes_omitted": 390
+                })).collect::<Vec<_>>(),
+                "options_omitted": 0, "recommendation": "\\\"\n".repeat(80),
+                "recommendation_bytes_omitted": 0,
+                "actions": [{
+                    "id": "owner_answer", "label": "Owner answers at this revision",
+                    "command": format!("corral question answer T-001/R1/Q{index} --rev 3 --owner --text <answer>"),
+                    "requires_owner": true
+                }],
+                "decision_id": format!("decision-{index}")
+            })
+        })
+        .collect();
+    let action: crate::PmAction = serde_json::from_value(json!({
+        "kind": "owner_question", "task": null, "why": "Pending questions",
+        "command": "", "verify": "Recommendations are context, not authority.",
+        "evidence": [], "options": [], "recommended": "", "requires_owner": true,
+        "question_digest": {"questions": questions, "questions_omitted": 0}
+    }))
+    .unwrap();
+    let original = serde_json::to_value(&action).unwrap();
+    let budget = corral_core::agent::RESULT_MAX_BYTES;
+    let bound = super::super::super::pm_bound::bounded_next(&action, budget).unwrap();
+    assert!(serde_json::to_vec(&bound).unwrap().len() <= budget);
+    let kept = bound["question_digest"]["questions"].as_array().unwrap();
+    assert!(!kept.is_empty());
+    assert!(kept.iter().any(|item| item["options_omitted"] == 6));
+    if bound["question_digest"]["questions_omitted"] != 0 {
+        assert!(
+            kept.iter()
+                .all(|item| item["options"].as_array().unwrap().is_empty())
+        );
+    }
+    let smaller = super::super::super::pm_bound::bounded_next(&action, 2048).unwrap();
+    let digest = &smaller["question_digest"];
+    let kept = digest["questions"].as_array().unwrap();
+    assert!(serde_json::to_vec(&smaller).unwrap().len() <= 2048);
+    assert_eq!(
+        kept.len() + digest["questions_omitted"].as_u64().unwrap() as usize,
+        8
+    );
+    assert!(
+        kept.iter()
+            .all(|item| item["options"].as_array().unwrap().is_empty())
+    );
+    assert!(digest["questions_omitted"].as_u64().unwrap() > 0);
+    assert_eq!(kept.first().unwrap()["key"], "T-001/R1/Q0");
+    let brief = super::super::super::pm_bound::bounded_brief(
+        &action,
+        json!({"questions": [{"text": "x".repeat(budget)}]}),
+        budget,
+    )
+    .unwrap();
+    assert!(serde_json::to_vec(&brief).unwrap().len() <= budget);
+    assert_eq!(serde_json::to_value(&action).unwrap(), original);
+}

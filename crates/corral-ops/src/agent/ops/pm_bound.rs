@@ -57,6 +57,14 @@ fn project(action: &PmAction, limit: usize, items: usize, shortlist: usize) -> R
 }
 
 pub(super) fn bounded_next(action: &PmAction, budget: usize) -> Result<Value> {
+    let mut digest_action;
+    let action = if action.question_digest.is_some() {
+        digest_action = action.clone();
+        crate::pm_next::fit_digest(&mut digest_action, budget)?;
+        &digest_action
+    } else {
+        action
+    };
     let original = serde_json::to_value(action)?;
     if size(&original)? <= budget {
         return Ok(original);
@@ -93,8 +101,14 @@ pub(super) fn bounded_brief(action: &PmAction, mut brief: Value, budget: usize) 
     if size(&brief)? <= budget {
         return Ok(brief);
     }
-    // Reserve the smallest valid card before selecting a prefix of questions.
-    let minimal = project(action, 32, 0, 0)?;
+    // Reserve a genuinely minimal digest, not its full presentation, before selecting
+    // a prefix of the brief's other questions.
+    let mut minimal = project(action, 32, 0, 0)?;
+    if let Some(digest) = &action.question_digest {
+        minimal["question_digest"]["questions"] = json!([]);
+        minimal["question_digest"]["questions_omitted"] =
+            json!(digest.questions_omitted + digest.questions.len());
+    }
     let reserve = size(&minimal)?.min(size(&original)?);
     brief["next"] = Value::Null;
     let questions = brief["questions"]

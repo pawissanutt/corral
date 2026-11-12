@@ -104,5 +104,6 @@ pub(crate) fn card(item: &PmInboxItem, bin: &str) -> PmAction {
         requires_owner: false,
         options: vec![first, show],
         shortlist: vec![],
+        question_digest: None,
     }
 }

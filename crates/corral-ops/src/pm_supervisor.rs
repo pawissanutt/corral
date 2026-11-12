@@ -70,6 +70,8 @@ struct Heartbeat {
     watched: Vec<u64>,
     #[serde(default)]
     oldest_wake: Option<u64>,
+    #[serde(default)]
+    usage_guard: Value,
 }
 
 impl Heartbeat {
@@ -88,6 +90,7 @@ impl Heartbeat {
             pending_after: None,
             watched: Vec::new(),
             oldest_wake: None,
+            usage_guard: Value::Null,
         }
     }
 }
@@ -159,6 +162,7 @@ pub(crate) fn health(ctx: &Ctx) -> Result<Value> {
         .max(0);
     let mut value = serde_json::to_value(heartbeat)?;
     value["age_secs"] = json!(age);
+    value["usage_guard"] = crate::pm_usage_guard::health(ctx)?;
     Ok(value)
 }
 
@@ -181,6 +185,7 @@ pub fn supervise(ctx: &Ctx) -> Result<()> {
     let ownership = crate::session_scope::owns_inventory(ctx);
     heartbeat.owned = ownership.as_ref().copied().unwrap_or(false);
     heartbeat.herdr_available = ctx.herdr.available();
+    heartbeat.usage_guard = crate::pm_usage_guard::health(ctx)?;
     heartbeat.status = if !heartbeat.owned {
         "unowned"
     } else if !heartbeat.herdr_available {
@@ -277,6 +282,12 @@ fn supervise_pm(ctx: &Ctx, heartbeat: &mut Heartbeat, now: i64) -> Result<bool> 
         heartbeat.pending_after = None;
         heartbeat.watched.clear();
         heartbeat.oldest_wake = None;
+    }
+    if heartbeat.usage_guard["status"]["state"] == "paused" {
+        // A cache hold is intentional owner review, not an unresponsive host.
+        // Relaunching would discard its warm cache and repeat the expensive read.
+        heartbeat.status = "cache_guard_paused".into();
+        return Ok(false);
     }
     let marker = INPUT_LIMIT.load(&ctx.store, "input_limit")?;
     if marker.is_some_and(|old| generation > old) {

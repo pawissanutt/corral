@@ -64,7 +64,12 @@ enum GateNow {
 /// Advances every Review task as far as it can go now (called by `sync`). Re-reads corral.toml first, so
 /// `corral autopilot off` also stops long-running syncs (the board, `sync --watch`); with the kill switch off
 /// nothing auto-advances. Transient failures use the diagnostic sink and retry on the next sync.
-pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
+/// A project scope advances only that project's tasks and leaves workspace deliveries to the next sync.
+pub(crate) fn advance_all(
+    ctx: &Ctx,
+    now: Timestamp,
+    scope: &crate::sync::SyncScope,
+) -> Result<Vec<Change>> {
     let _attribution = ctx.store.attribute(corral_core::Actor::Autopilot);
     let mut store = ctx.store.clone();
     store.reload_config_if_changed()?;
@@ -75,6 +80,9 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     let mut changes = Vec::new();
     for task in output::review_tasks(&ctx)? {
         let task = ctx.store.head(&task.id)?;
+        if !scope.includes(task.project.as_deref()) {
+            continue;
+        }
         if crate::plan_pilot::handles_ref(&task)? {
             continue;
         }
@@ -100,8 +108,11 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
             }
         }
     }
-    cowork::deliver_pending(&ctx);
-    crate::plan_acceptance::checkpoint::start_due(&ctx);
+    // Cowork deliveries and due plan checkpoints span every project.
+    if *scope == crate::sync::SyncScope::All {
+        cowork::deliver_pending(&ctx);
+        crate::plan_acceptance::checkpoint::start_due(&ctx);
+    }
     Ok(changes)
 }
 

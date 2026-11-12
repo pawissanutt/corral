@@ -253,6 +253,18 @@ impl CorralPiAdapter {
             idempotency_key: key.clone(),
             origin: ORIGIN.into(),
         };
+        // Attribution is best-effort evidence, never a delivery admission gate. The record
+        // must be durable before submit can start billable work for this envelope key.
+        if let Err(error) = crate::agent::cost_records::prepare_envelope(ctx, envelope) {
+            crate::messages::report(
+                None,
+                "PM cost",
+                format!(
+                    "{}: recording pending cause: {error:#}",
+                    envelope.idempotency_key
+                ),
+            );
+        }
         let reply = BridgeClient::connect_dir(dir, generation)
             .and_then(|mut client| client.submit_input(&input));
         let reply = match reply {

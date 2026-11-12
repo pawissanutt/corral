@@ -320,7 +320,9 @@ fn automatic_backlog_admission_preserves_pending_task_and_reports_reason() {
         .unwrap();
     grant(&mut ctx, &before);
     // When the full automatic admission pass considers the task.
-    let changes = crate::dispatch_policy::advance(&ctx, Timestamp::UNIX_EPOCH).unwrap();
+    let changes =
+        crate::dispatch_policy::advance(&ctx, Timestamp::UNIX_EPOCH, &crate::sync::SyncScope::All)
+            .unwrap();
     // Then it skips without moving to Ready or launching, and records why.
     assert!(changes.is_empty());
     assert_eq!(ctx.store.get(&task.id).unwrap(), before);

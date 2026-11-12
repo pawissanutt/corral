@@ -5,6 +5,16 @@ use std::path::{Path, PathBuf};
 
 #[derive(Subcommand)]
 pub enum PmCmd {
+    /// Manage durable PM context as the owner
+    Notes {
+        #[command(subcommand)]
+        cmd: crate::pm_notes_cmd::PmNotesCmd,
+    },
+    /// Resume a PM paused by the cache usage guard
+    GuardResume {
+        #[arg(long)]
+        json: bool,
+    },
     /// Recover the recorded corral-pi PM in the same conversation, without taking focus
     Relaunch {
         #[arg(long)]
@@ -173,6 +183,17 @@ fn print_action(action: &PmAction) {
 
 pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Result<()> {
     match cmd {
+        Some(PmCmd::Notes { cmd }) => crate::pm_notes_cmd::run(start, cmd, entry)?,
+        Some(PmCmd::GuardResume { json }) => {
+            let resumed = corral_ops::pm_guard_resume(&entry.open(start)?)?;
+            if json {
+                println!("{}", serde_json::to_string(&resumed)?);
+            } else if resumed {
+                println!("PM usage guard resumed");
+            } else {
+                println!("PM usage guard was not paused");
+            }
+        }
         None => println!("PM pane {}", corral_ops::open_pm(&entry.open(start)?)?),
         Some(PmCmd::Relaunch {
             replace,

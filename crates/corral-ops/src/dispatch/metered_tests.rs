@@ -145,7 +145,7 @@ fn incompatible_host_queue_child() {
     let baseline = crate::slot_usage(&fx.ctx).unwrap().total();
     let now = jiff::Timestamp::now();
     for _ in 0..3 {
-        crate::queue_drain::start_queued(&fx.ctx, now).unwrap();
+        crate::queue_drain::start_queued(&fx.ctx, now, &crate::sync::SyncScope::All).unwrap();
         let current = fx.ctx.store.get(&task.id).unwrap();
         assert!(current.runs.is_empty());
         assert!(current.launch.is_none());
@@ -163,7 +163,7 @@ fn incompatible_host_queue_child() {
     }
     assert_eq!(fx.events("dispatch_failed").len(), 1);
     write(&compat, &repaired);
-    crate::queue_drain::start_queued(&fx.ctx, now).unwrap();
+    crate::queue_drain::start_queued(&fx.ctx, now, &crate::sync::SyncScope::All).unwrap();
     let current = fx.ctx.store.get(&task.id).unwrap();
     assert_eq!(current.status, Status::Running);
     assert_eq!(current.runs.len(), 1);

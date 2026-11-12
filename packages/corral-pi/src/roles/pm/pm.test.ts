@@ -25,6 +25,7 @@ const identity = { store: "st-0123456789abcdef", project: "demo", role: "pm" as 
 const context = { identity, cwd: "/tmp", model: "m" };
 const cases = [
   { name: "receipt_lookup", op: "receipt_lookup", payload: { request_id: `rq-${"a".repeat(32)}`, task: "T-007" } },
+  { name: "notes", op: "notes", payload: { op: "list" } },
   { name: "brief", op: "read_brief", payload: {} },
   { name: "next", op: "read_next", payload: {} },
   { name: "show", op: "read_show", payload: { task: "T-007" } },
