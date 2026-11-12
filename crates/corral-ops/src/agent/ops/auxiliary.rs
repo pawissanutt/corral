@@ -144,10 +144,15 @@ pub(super) fn auxiliary(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> 
         {
             "shadow"
         }
+        Some(UsageSessionKind::Expert)
+            if envelope.identity.role == corral_core::agent::AgentRole::Pm =>
+        {
+            "expert"
+        }
         Some(UsageSessionKind::WebSearch) => "web.enabled",
         _ => {
             return Err(bad(
-                "auxiliary supports only explore, oracle, PM shadow and web_search",
+                "auxiliary supports only explore, oracle, PM shadow/expert and web_search",
             ));
         }
     };
@@ -277,3 +282,7 @@ pub(super) fn auxiliary(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> 
 #[cfg(test)]
 #[path = "auxiliary_shadow_tests.rs"]
 mod shadow_tests;
+
+#[cfg(test)]
+#[path = "auxiliary_expert_tests.rs"]
+mod expert_tests;

@@ -91,9 +91,9 @@ export class OwnerQuestionUi {
     pi.on("context", event => {
       if (this.claudeRoute()) return;
       // Automatic post-compaction continuations do not emit before_agent_start.
-      // Project into this request without appending stale snapshots to the journal.
+      // Append after reusable history with stable metadata; repeated projections stay byte-identical.
       const message = questionStateMessage(this.questions, event.messages);
-      if (message) return { messages: [...event.messages, { role: "custom" as const, ...message, timestamp: Date.now() }] };
+      if (message) return { messages: [...event.messages, { role: "custom" as const, ...message, timestamp: 0 }] };
     });
     pi.on("session_shutdown", event => { this.close(event.reason !== "reload" && event.reason !== "quit"); });
   }

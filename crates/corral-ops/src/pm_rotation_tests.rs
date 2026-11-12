@@ -1,7 +1,9 @@
 use super::*;
+use std::path::Path;
+
 use corral_core::agent::{AgentRunState, ContainerRef, paths};
 use corral_core::inbox::{MAX_PAYLOAD, MessageBinding, Post, Urgency};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::agent::BindTarget;
 use crate::agent::bridge::fixture::{self as f, Fx, HostProc, SESSION};
@@ -26,10 +28,32 @@ fn usage_session(id: &str, response: &str, input: u64) -> String {
 }
 
 fn dialog(id: &str, session: &str, status: &str, expires: i64, message: Option<&str>) -> Value {
-    json!({"type": "custom", "customType": DIALOG_ENTRY, "data": {
+    json!({"type": "custom", "customType": "corral_owner_question", "data": {
         "version": 1, "id": id, "session": session, "generation": 1, "key": id,
         "questions": [], "expires": expires, "status": status, "message": message,
     }})
+}
+
+/// A `host/queue.ts` record of a pane input.
+fn queue(item: &str, generation: u32, event: &str, key: Option<&str>) -> Value {
+    json!({"type": "custom", "customType": "corral_queue", "data": {
+        "version": 1, "session_id": SESSION, "bind": "fixture-bind", "generation": generation,
+        "item": item, "event": event, "origin": "pane", "mode": "follow_up",
+        "text_sha256": "fixture", "text_bytes": 1, "idempotency_key": key,
+    }})
+}
+
+/// A `delivery/index.ts` record of an accepted bridge input.
+fn delivery(key: &str, session: &str, text: &str) -> Value {
+    json!({"type": "custom", "customType": "corral_delivery", "data": {
+        "version": 1, "idempotency_key": key, "request_id": "fixture", "origin": "corral-inbox",
+        "busy_policy": "follow_up", "text_sha256": paths::sha256_hex(text.as_bytes()),
+        "text_bytes": text.len(), "generation": 1, "session_id": session,
+    }})
+}
+
+fn user(text: &str) -> Value {
+    json!({"type": "message", "id": "u-fixture", "message": {"role": "user", "content": text}})
 }
 
 /// A bound PM whose live host wrote one response to its session.
@@ -103,13 +127,31 @@ fn plan_step(fx: &Fx) {
     edit_pm(fx, |state| state.todo = Some(todo));
 }
 
-fn owner_dialog(fx: &Fx) {
-    let mut text = std::fs::read_to_string(session_path(fx)).unwrap();
-    text.push_str(&lines(&[dialog("d1", SESSION, "pending", i64::MAX, None)]));
-    std::fs::write(session_path(fx), text).unwrap();
+fn append(path: &Path, values: &[Value]) {
+    let mut text = std::fs::read_to_string(path).unwrap();
+    text.push_str(&lines(values));
+    std::fs::write(path, text).unwrap();
 }
 
-fn dialog_journal_unreadable(fx: &Fx) {
+fn owner_dialog(fx: &Fx) {
+    append(
+        &session_path(fx),
+        &[dialog("d1", SESSION, "pending", i64::MAX, None)],
+    );
+}
+
+fn queued_input(fx: &Fx) {
+    append(&session_path(fx), &[queue("q1", 1, "queued", None)]);
+}
+
+fn unconsumed_delivery(fx: &Fx) {
+    append(
+        &session_path(fx),
+        &[delivery("pm-env-1", SESSION, "[corral envelope pm@env1]")],
+    );
+}
+
+fn journal_unreadable(fx: &Fx) {
     let path = session_path(fx);
     std::fs::remove_file(&path).unwrap();
     std::fs::create_dir(&path).unwrap();
@@ -120,13 +162,15 @@ type Case = (&'static str, fn(&Fx));
 
 #[test]
 fn each_open_obligation_blocks_rotation_and_changes_nothing() {
-    let cases: [Case; 6] = [
+    let cases: [Case; 8] = [
         ("inbox_message", inbox_message),
         ("board_question", board_question),
         ("job", job),
         ("plan_step", plan_step),
         ("owner_dialog", owner_dialog),
-        ("dialog_journal_unreadable", dialog_journal_unreadable),
+        ("queued_input", queued_input),
+        ("unconsumed_delivery", unconsumed_delivery),
+        ("journal_unreadable", journal_unreadable),
     ];
     for (name, setup) in cases {
         let (fx, _bound, mut host) = bound_pm();
@@ -284,7 +328,7 @@ fn owner_dialogs_block_while_pending_or_answered_and_undelivered() {
     ]) + "not json\n";
     std::fs::write(&file, text).unwrap();
 
-    let owed = open_dialogs(&file, SESSION, now).unwrap();
+    let owed = journal::owed(&file, SESSION, 1, now).unwrap();
 
     let owner = |id: &str, state| Blocker::OwnerDialog {
         id: id.into(),
@@ -301,9 +345,126 @@ fn owner_dialogs_block_while_pending_or_answered_and_undelivered() {
 }
 
 #[test]
-fn a_missing_journal_owes_no_dialog_and_an_unreadable_one_is_an_error() {
+fn queued_input_and_deliveries_are_owed_until_a_turn_consumes_them() {
     let dir = tempfile::tempdir().unwrap();
-    let missing = open_dialogs(&dir.path().join("absent.jsonl"), SESSION, 0).unwrap();
+    let file = dir.path().join("session.jsonl");
+    let text = lines(&[
+        queue("q-started", 1, "queued", Some("k-started")),
+        delivery("k-started", SESSION, "started text"),
+        queue("q-started", 1, "started", Some("k-started")),
+        delivery("k-user", SESSION, "consumed text"),
+        user("consumed text"),
+        queue("q-waiting", 1, "queued", None),
+        queue("q-earlier", 0, "queued", None),
+        delivery("k-waiting", SESSION, "never consumed"),
+        delivery("k-other", "another-session", "elsewhere"),
+    ]);
+    std::fs::write(&file, text).unwrap();
+
+    let owed = journal::owed(&file, SESSION, 1, 0).unwrap();
+
+    assert_eq!(
+        owed,
+        vec![
+            Blocker::QueuedInput {
+                item: "q-waiting".into(),
+                origin: "pane".into(),
+                mode: "follow_up".into(),
+            },
+            Blocker::UnconsumedDelivery {
+                key: "k-waiting".into(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_missing_journal_owes_nothing_and_an_unreadable_one_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = journal::owed(&dir.path().join("absent.jsonl"), SESSION, 1, 0).unwrap();
     assert_eq!(missing, Vec::<Blocker>::new());
-    assert!(open_dialogs(dir.path(), SESSION, 0).is_err());
+    assert!(journal::owed(dir.path(), SESSION, 1, 0).is_err());
+}
+
+/// Input that arrives between the pre-check and the freeze.
+fn opens_a_turn(root: &Path) {
+    let turn = serde_json::from_value(json!({
+        "generation": 1, "seq": 7, "origin": {"kind": "owner_terminal"},
+        "started": jiff::Timestamp::now(),
+    }))
+    .unwrap();
+    pm_state::update(&f::ctx_at(root).store, |pm| {
+        pm.as_mut().unwrap().state.turns.push(turn);
+        Ok(((), true))
+    })
+    .unwrap();
+}
+
+fn queues_input(root: &Path) {
+    let path = paths::container_sessions_dir(&f::ctx_at(root).store, &ContainerRef::Pm)
+        .join(format!("{SESSION}.jsonl"));
+    append(&path, &[queue("q-late", 1, "queued", None)]);
+}
+
+/// A blocker's reason tag and the input that opens it inside the pre-check-to-freeze window.
+type Arrival = (&'static str, fn(&Path));
+
+#[test]
+fn input_arriving_before_the_freeze_continues_the_conversation_instead() {
+    let cases: [Arrival; 2] = [("open_turn", opens_a_turn), ("queued_input", queues_input)];
+    for (name, arrive) in cases {
+        let (fx, bound, _host) = bound_pm();
+        let root = fx.root().to_path_buf();
+        let hook: Box<dyn FnOnce()> = Box::new(move || arrive(&root));
+        BEFORE_FREEZE.with(|slot| *slot.borrow_mut() = Some(hook));
+
+        let outcome = rotate(&fx.ctx, "context_growth", false).unwrap();
+
+        let RotateOutcome::RelaunchedInstead {
+            pane,
+            generation,
+            fenced,
+            reasons,
+        } = outcome
+        else {
+            panic!("{name}: rotated past input that arrived before the freeze");
+        };
+        assert_eq!(
+            (pane.as_str(), generation, fenced),
+            ("pm-pane", 2, 1),
+            "{name}"
+        );
+        let named: Vec<Value> = reasons
+            .iter()
+            .map(|reason| serde_json::to_value(reason).unwrap()["reason"].clone())
+            .collect();
+        assert_eq!(named, vec![json!(name)], "{name}");
+        let dir = generation_dir(&fx.ctx.store, &Recipient::Pm, 2).unwrap();
+        let bootstrap: Value =
+            serde_json::from_slice(&std::fs::read(dir.join(BOOTSTRAP_FILE)).unwrap()).unwrap();
+        assert_eq!(bootstrap["fresh_session"], false, "{name}");
+        assert_eq!(
+            bootstrap["resume_session"],
+            json!(f::session_file(&bound)),
+            "{name}"
+        );
+        let sessions = paths::container_sessions_dir(&fx.ctx.store, &ContainerRef::Pm);
+        let files = std::fs::read_dir(&sessions)
+            .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().path().is_file())
+            .count();
+        assert_eq!(files, 1, "{name}: a second session file was created");
+        let notice = Inbox::new(&fx.ctx.store, Recipient::Pm)
+            .unwrap()
+            .pending_messages()
+            .unwrap()
+            .into_iter()
+            .find(|message| message.kind == "recovery_notice")
+            .unwrap();
+        assert!(notice.body.contains("resumed this host"), "{name}");
+        assert!(notice.subject.unwrap().get("rotation").is_none(), "{name}");
+        assert_eq!(fx.events("pm_rotation_deferred").len(), 1, "{name}");
+        assert_eq!(fx.events("pm_relaunched").len(), 1, "{name}");
+        assert!(fx.events("pm_rotated").is_empty(), "{name}");
+    }
 }

@@ -34,6 +34,24 @@ fn read_snapshot(ctx: &crate::Ctx) -> (Vec<u8>, Value) {
 }
 
 #[test]
+fn launch_snapshot_freezes_the_validated_cache_key_setting() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = crate::Ctx::from_store(Store::init(root.path()).unwrap());
+    let (_, context) = read_snapshot(&ctx);
+    assert_eq!(context["cache_key"], json!({"mode": "session"}));
+    let layers = ctx.store.config_layers().unwrap();
+    let path = layers.path(corral_core::ConfigLayer::Workspace).unwrap();
+    std::fs::write(
+        path,
+        "[pm]\nagent = \"omo\"\n[pm.cache_key]\nmode = \"stable\"\n",
+    )
+    .unwrap();
+    let (_, stable) = read_snapshot(&ctx);
+    assert_eq!(stable["cache_key"], json!({"mode": "stable"}));
+    assert_eq!(context["cache_key"], json!({"mode": "session"}));
+}
+
+#[test]
 fn launch_notes_include_only_live_entries_in_priority_order_at_current_revision() {
     let root = tempfile::tempdir().unwrap();
     let ctx = crate::Ctx::from_store(Store::init(root.path()).unwrap());

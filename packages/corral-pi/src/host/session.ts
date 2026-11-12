@@ -77,7 +77,7 @@ import { JobSettingsSchema } from "../extensions/jobs/settings.ts";
 import { toolRequestId } from "../tools/corral.ts";
 import { AuxiliaryRuntime, ShadowDispatcher } from "../extensions/subagent/runtime.ts";
 import { auxiliarySettings } from "../extensions/subagent/settings.ts";
-import { exploreTool } from "../extensions/subagent/index.ts";
+import { expertTool, exploreTool } from "../extensions/subagent/index.ts";
 import { oracleTool } from "../extensions/oracle/index.ts";
 import { runAuxiliarySession } from "../extensions/subagent/session.ts";
 import { executionRefusal, exploreLoadout, nestedCorralRead } from "../roles/common/execution.ts";
@@ -94,6 +94,8 @@ import { type ConnectionBinding, admitConnection, parseBinding } from "./connect
 import { CONNECTIONS, type ConnectionId, resolveConnection } from "../auth/connections.ts";
 import { failureClass, messageFailure, withProviderFailures } from "./provider-failure.ts";
 import { HostQueue } from "./queue.ts";
+import { pmCacheKeyMode } from "../roles/pm/context.ts";
+import { pmCacheKeyStream } from "./pm-cache-key.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -546,7 +548,7 @@ export class HostSession {
     const auxiliary = { ...auxiliarySettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings),
       ...(subscriptionSearch ? { web_search: { model: null, timeout_secs: (options.capabilities?.web?.timeout_ms ?? 15000) / 1000 } } : {}),
     };
-    if (auxiliary.explore || auxiliary.oracle || auxiliary.web_search || auxiliary.shadow) {
+    if (auxiliary.explore || auxiliary.oracle || auxiliary.web_search || auxiliary.shadow || auxiliary.expert) {
       this.auxiliary = new AuxiliaryRuntime({
         settings: auxiliary, generation: options.identity.generation, provider: this.provider, model: options.model,
         changed: () => this.panels?.refresh(),
@@ -668,6 +670,7 @@ export class HostSession {
       ...(this.jobs ? jobTools(this.jobs, true, this.commands).filter(tool => tool.name !== "bash" || role.upstreamTools.includes("bash")) : []),
       ...(this.auxiliary && auxiliary.explore ? [exploreTool(this.auxiliary)] : []),
       ...(this.auxiliary && auxiliary.oracle ? [oracleTool(this.auxiliary)] : []),
+      ...(this.auxiliary && auxiliary.expert ? [expertTool(this.auxiliary)] : []),
       ...(browser ? browserTools(browser, { cwd: options.cwd, registerCapability }) : [])];
     const local = this.localTools.map((tool) => tool.name);
     const mcp = options.capabilities?.enabled.includes("mcp.enabled") === true;
@@ -946,6 +949,11 @@ export class HostSession {
     const modelId = options.model.startsWith(`${route.id}/`) ? options.model.slice(route.id.length + 1) : options.model;
     const model = localModels?.model ?? models.getModel(route.id, modelId);
     if (!model) throw new Error(`model_unavailable: ${route.id}/${modelId}`);
+    const cacheMode = options.identity.role === "pm" ? pmCacheKeyMode(options.promptFile) : "session";
+    if (cacheMode === "stable" && model.api !== "openai-codex-responses") {
+      console.warn(`pm_cache_key_unsupported: ${model.provider}/${model.id}; keeping provider cache defaults`);
+    }
+    const cacheKey = { mode: cacheMode, identity: options.identity, sessionId: () => host.sessionId() };
     for (const id of subscriptions.providers) {
       if (!localModels) {
         const fetch = PROVIDERS[id].auth === "oauth"
@@ -956,11 +964,14 @@ export class HostSession {
       }
       const restricted = models.getProvider(id);
       if (!restricted) throw new Error("budget: approved provider is unavailable");
-      if ((options.capabilities?.catalog ?? 0) >= 7) {
+      const budgeted = (options.capabilities?.catalog ?? 0) >= 7;
+      if (budgeted || cacheMode === "stable") {
         const unbounded = PROVIDERS[id].lane !== undefined;
+        const stream = pmCacheKeyStream(restricted.stream.bind(restricted), cacheKey);
+        const streamSimple = pmCacheKeyStream(restricted.streamSimple.bind(restricted), cacheKey);
         models.registerNativeProvider({ ...restricted,
-          stream: host.budget.wrap(restricted.stream.bind(restricted), unbounded),
-          streamSimple: host.budget.wrap(restricted.streamSimple.bind(restricted), unbounded),
+          stream: budgeted ? host.budget.wrap(stream, unbounded) : stream,
+          streamSimple: budgeted ? host.budget.wrap(streamSimple, unbounded) : streamSimple,
         });
       }
     }

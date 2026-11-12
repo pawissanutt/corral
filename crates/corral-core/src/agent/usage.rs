@@ -10,6 +10,7 @@ pub enum UsageSessionKind {
     Explore,
     Oracle,
     Shadow,
+    Expert,
     WebSearch,
     Summary,
 }

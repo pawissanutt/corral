@@ -1,7 +1,8 @@
 # PM runtime redesign: event-driven, cache-aware, later tiered
 
-Draft 3 of November 12, 2026. Status: proposed for owner discussion; not implemented, not
-approved, and not a task contract. This document grants no authority.
+Draft 3 of November 12, 2026, with build status added. Implemented on branches, not merged
+to main, installed or enabled; the live cost-setting edit is noted below. This is not an
+approved task contract and grants no authority.
 
 Owner direction of November 12:
 
@@ -12,11 +13,13 @@ Owner direction of November 12:
 Drafts 1 and 2 were each reviewed independently (`gpt-6-astra`, reviewer role, read-only)
 and both verdicts were "needs rework". The second review's main advice was to cut the
 first delivery to what halves cost and removes the stall, and defer the rest. Draft 3
-does that:
+originally made that split:
 
-- **Part 1** is the plan to build now: four steps, each with its own check.
-- **Part 2** is deferred design: direction only, not scheduled, with the problems the
-  reviews found left visible.
+- **Part 1** was the four-step plan to build first; its code and review fixes now exist.
+- **Part 2** was deferred design; much of it is now built, but not the whole design.
+
+The build status below supersedes the original delivery labels. The evidence, design
+reasoning and review history remain for reference.
 
 ## Goals
 
@@ -30,6 +33,185 @@ does that:
 Non-goals: a second scheduler, weaker gates or reviews, PM-authorized recovery
 exceptions, automatic acceptance of owner-reserved paths, a headless PM, or a hosted
 service.
+
+# Build status
+
+- `pm-part1` at `f48ba5a0` contains Part 1 and its review fixes.
+- `pm-runtime` contains everything: Part 1, those fixes and all built Part 2 work, including
+  the expert consult, the stable cache key and the fixes from the last review. Its head is
+  the commit that adds this section; `git log pm-runtime` lists the steps.
+- Nothing from these branches is merged to main, installed or enabled in the running PM.
+- Turning it on needs an owner-approved merge, installation of the matching binary and Pi
+  host files, and a PM relaunch; recovery and optional experiments need separate switches.
+
+The chronological source is `.evidence/pm-runtime-handoff.md` in the `pm-runtime` worktree.
+Live-machine changes below are reported by that handoff, not checked against the live
+machine here. Table defaults describe the new code after installation, not what the running
+PM currently has.
+
+Compaction replaces older conversation with a summary. Sync is the board's reconciliation
+pass. A full gate is the repository's complete verification script, not just a test suite.
+
+## Part 1
+
+| Step | What it does | Default state | Build status |
+|---|---|---|---|
+| 1. Cost settings | Selects Sol and compacts its conversation at about 260k tokens, below the 272k price boundary. | Not a shipped default; the live file reportedly sets `pm.agent = "pi-sol"` and `agent.capabilities.pm.compaction.reserve_tokens = 240000`. | Applied to live configuration only; awaiting PM relaunch; savings not measured. |
+| 2. Bounded reads | Keeps native brief and next replies within 8 KiB, with explicit omissions and follow-up reads. | On for native Pi reads; no switch. | Built, independently reviewed and fixed in `f48ba5a0`; not installed or smoke-checked on the live board. |
+| 3a. Wakes and wait deadlines | Delivers board events through the Pi inbox and wakes the PM when a todo wait needs review. | On for a recorded Pi PM during sync; `pm.push_kinds` selects events, independently of `pm.push_events`. | Built, independently reviewed and fixed in `f48ba5a0`; live wake latency not measured. |
+| 3b. Supervisor | Watches sync health and can recover a dead or unresponsive Pi PM. | Recovery off behind `pm.supervise = false`; heartbeat and lock diagnostics run in `corral sync --watch`. | Built, independently reviewed and fixed in `f48ba5a0`; service not installed or enabled. |
+| 3c. Relaunch | Recovers the saved conversation in a corral-owned pane without taking focus. | Manual `corral pm relaunch --replace`; automatic use is off behind `pm.supervise`. | Built, independently reviewed and fixed in `f48ba5a0`; live recovery latency not measured. |
+| 4. Retention and redelivery | Reclaims safe old receipts and generations, preserves usage evidence and requeues definitely refused PM input after replacement. | Retention on with no switch; `input_limit` input is held until manual or supervised relaunch. | Built, independently reviewed and fixed in `f48ba5a0`, including receipt-cap startup regressions. |
+
+Wait deadlines request review; they do not clear a wait or authorize an action. Ordinary
+event waits default to two hours and owner waits to 24 hours. Legacy waits without a side
+record are due immediately, once.
+
+## Part 2
+
+These are built features, not approval to use new authority. A generation means one launch
+of the PM host. Settings captured at launch need a new generation.
+
+| Item | What it does | How to use or enable it | Default state |
+|---|---|---|---|
+| Notes | Stores bounded, revisioned instructions, deferrals, hypotheses and commitments as context, never authority. | `corral pm notes list`; `corral pm notes add --kind instruction --text "..." --provenance "..."`; PM tool `corral_notes`. | Available; no enable switch. |
+| Notes in launch context | Carries a bounded snapshot of live notes into PM launch, resume and relaunch. | Launch or resume the Pi PM; reread newer notes with `corral_notes`. | On; reload and compaction keep the captured snapshot. |
+| Typed wait conditions | Checks named conditions and posts a review wake when all are met. | PM tool `corral_todo`, `wait` with `when`, such as `["landed:T-123"]`; optional `deadline`. | Available with todo, on in standard/full presets and off in strict. |
+| Typed PM actions | Uses structured requests instead of shell commands for authorized board actions, parks and attention handling. | PM tool `corral_action` with `act`, `park` or `attend`; read a fresh action ID first. | Available to the Pi PM; existing policy still decides permission. |
+| Question digest | Groups up to eight pending owner questions without stopping unrelated work. | `corral pm next --json` or `corral pm brief --json`; text output also renders it. | On; no switch. |
+| Prompt layering | Keeps changing owner-question state out of the reusable system-prompt prefix and restores it after compaction. | Automatic in the Pi host. | On; no switch. |
+| Usage guard | Reports price-tier crossings and pauses repeated large-context cache misses, where input is not being reused. | Configure `[pm.guard]`; clear a pause with `corral pm guard-resume`. | On, with `pause = true`; price alone never pauses. |
+| Cost attribution and report | Associates usage with work items where evidence exists and exposes shared, overhead and unallocated usage. | `corral report --by-item`, optionally `--project <key>`, `--since 30d` or `--json`. | Recording on; reporting is manual, not a spending limit. |
+| Project-scoped `pm act` | Restricts task-changing execution to the action's project instead of advancing other projects. | `corral pm act <action-id> --json`. | On for this command; ordinary sync remains workspace-wide. |
+| Rotation | Starts a fresh conversation only after checking what the old one still owes. | Owner runs `corral pm rotate --json`; it never runs automatically. | Manual only; blocked while work would be lost. |
+| Shadow dispatcher | Runs a separate, tool-free model choice for comparison without affecting the real PM. | Set `agent.capabilities.pm.shadow.enabled = true` and `.model`; inspect `corral pm shadow list` or `corral pm shadow export`. | Off in every preset. |
+| Expert consult | Gives the PM a separately charged, read-only helper for technical advice, with file search and available local language-server tools. | Set `agent.capabilities.pm.expert.enabled = true` and `.model`; PM uses `corral_expert`. | Off in every preset; explicit model required. |
+| Stable cache key | Tries to reuse provider cache across PM conversations without sharing their session identity. | Set `pm.cache_key.mode = "stable"` and start a new generation. | Off; `"session"` is the default; experiment applies only to the Codex PM conversation route. |
+
+Rotation now has the final review's "freeze, then decide" code in the working tree:
+pre-check, stop and fence the old host, drain and reconcile it, then recheck the frozen
+records and journal. That check includes Pi's queued input. If work appeared in the gap,
+it continues the same conversation and returns `relaunched_instead`, rather than starting
+fresh. Owner-only `--force` can override soft blockers, but not an open turn, open envelope
+or successor still starting.
+
+Shadow's recording operation now checks the generation's enabled capability. It records
+comparisons only; it cannot execute its choice. The owner-question fallback now appends
+constant-timestamp context, so unchanged state has unchanged bytes. These three fixes are
+visible in code, but their final integrated checks and follow-up commit are not yet
+recorded in the handoff.
+
+## Not built, and why
+
+- Separate project PM containers, leases (exclusive handling rights) and per-scope event
+  cursors (positions in the event log) wait for owner approval of the
+  [team-of-PMs design](team-of-pms-design.md); the builder's survey reports 23 files assume
+  one PM, so inert pieces of that design were deliberately not added.
+- A specialist that runs commands needs an owner decision on autonomy and allowed effects.
+- Contract-amendment globs need owner-approved path rules and candidate-identity changes.
+- Landing without the owner needs an explicit authority decision.
+- Extra repair rounds need authority and a design that preserves the previous repair record.
+- Lessons that lower escalation need reviewed, versioned rules; notes do not supply them.
+- Removing the PM's shell is not part of this cutover; the current role keeps `bash`.
+- Expert access to corral records is not built because helper sessions have no authenticated
+  corral client.
+
+## How it was checked
+
+The builder recorded these checks; this documentation update did not rerun them. The normal
+per-commit checks were Rust formatting, the 800-line Rust-file limit, clippy (the Rust
+warning checker) with warnings as errors, the `corral-core`, `corral-ops --lib` and `corral`
+Rust suites, and Pi TypeScript typechecking and tests. Exceptions and results matter:
+
+| Commit | Recorded checks and exceptions |
+|---|---|
+| `5854479c`, Part 1 | Formatting, line limit, clippy and all three Rust suites passed; 1,898 ops tests and 109 Pi role tests passed; a full Pi typecheck/test pass was recorded with the fixes below. |
+| `f48ba5a0`, Part 1 fixes | Formatting, line limit, clippy, all three Rust suites and Pi typecheck passed; 1,906 ops tests and 913 Pi tests passed; four live host-resume tests failed. |
+| `3060b5ab`, Part 2 wave 1 | Normal checks passed; 1,918 ops tests and 921 Pi tests passed; live host-resume tests were not run. |
+| `f530176f`, Part 1 integration | Formatting, line limit and clippy passed; merged Rust suites were checked with wave 2, not at this merge. |
+| `a0684a10`, Part 2 wave 2 | Normal checks passed; 1,939 ops tests and 929 Pi tests passed; live host-resume tests were not run. |
+| `47f2289c`, Part 2 wave 3 and review fixes | Formatting, line limit, clippy, core, corral and TypeScript typecheck passed; 937 Pi tests and 316 changed-area tests passed in separate runs; ops had 1,952 passes and 10 usage-cache failures. |
+
+Five independent code-review reports now exist: two for Part 1, two for Part 2 waves 1–2,
+and a later one for rotation and shadow. The Part 1 reviewers and the Part 2 authority
+reviewer said "merge after blockers"; the cost reviewer said "do not merge"; the final
+rotation/shadow reviewer said "merge after blockers". The first four reports' blockers and
+requested fixes were addressed by `f48ba5a0` and `47f2289c`. The final review's rotation
+blockers and its shadow/question-context findings have working-tree fixes described above;
+they are not a new green gate or a final reviewer sign-off.
+
+The Part 1 full gate at `f48ba5a0` passed every step it reached except the Pi test lane:
+formatting, line limit, both Apple cross-compilation checks, clippy, 5,571 workspace tests,
+55 slow-lane tests, doctests and three work-budget tests passed. The log is
+`.worktrees/pm-part1/.evidence/part1-gate.log`. It exited 1 on four live host-resume tests
+under `packages/corral-pi/`:
+
+- `src/host/lifecycle.cross-lane.test.ts`
+- `src/host/recovery-tools.cross-lane.test.ts`
+- `test/hooks-recovery.cross-lane.test.ts`
+- `test/lsp-resume.cross-lane.test.ts`
+
+The baseline evidence is the handoff's "Part 1 fixes committed" section: the builder ran
+the same four on unmodified main `1bc3f01c`, in detached `pm-runtime-gate` with the isolated
+test herdr server, and recorded 0 passes and the same four failures. This supports treating
+them as pre-existing in this environment, not new regressions. A pane-readiness race after
+host shutdown is a diagnosis, not a confirmed cause. Gate steps after the failing Pi lane
+did not run.
+
+The handoff attributes the 10 usage-cache failures at `47f2289c` to cross-test interference
+and reports that they passed alone. A per-store cache-isolation fix is written, but its
+integrated result is not yet recorded
+in the handoff. Neither a final full gate on `pm-runtime` nor completed final-wave checks
+are recorded there at this snapshot: see the handoff file for the last state. No coherent
+install, live-board native-read smoke, production recovery exercise or measured cost/cache
+comparison has been recorded for this build.
+
+## Known limits and risks
+
+- Notes CLI caller identity rests on unauthenticated environment markers (process labels)
+  and run location, the same strength as owner parks, so clearing markers can evade attribution.
+- Rotation cannot see unsent text in the pane or processes that were never recorded.
+- A project-scoped `pm act` leaves unfilterable phases to the next ordinary sync.
+- The first generation retirement is a one-way storage change that older binaries refuse.
+- Usage before the turn markers is unallocated, rather than guessed onto a task.
+- Cost-cause recording is best-effort, and missing or evicted evidence can leave usage
+  unallocated.
+- Shadow's hourly attempt cap resets with each host generation.
+- Cross-session cache benefit and the real compaction savings are still unmeasured.
+- A usage-guard pause needs `corral pm guard-resume`, or a new generation, to clear it.
+- Retention still refuses a store whose full receipt family is entirely current or pinned;
+  it cannot safely delete those receipts to make space.
+- The supervisor cannot break a hung sync call; its lock diagnostics run after sync returns.
+- A bounded brief can show less card evidence than next, and both require follow-up reads.
+
+## What the owner has to decide or do
+
+1. **Merge to main.** Decide whether to accept Part 1's red gate: only the four
+   pre-existing live tests failed among reached steps, and later steps were not run;
+   the complete `pm-runtime` branch still needs its final gate result.
+2. **Install.** Give an explicit go to install the matching binary and Pi host files
+   together; this restarts the board and needs brief/next checks against the live candidate.
+3. **Relaunch the PM.** After installation, run `corral pm relaunch --replace` so the Sol
+   profile and compaction reserve take effect; the handoff says the live PM was not
+   relaunched when its configuration changed.
+4. **Choose `pm.push_events` on or off.** It defaults off and reportedly failed again
+   when re-enabled live; Pi's new inbox event route does not depend on it.
+5. **Choose background recovery.** Set `pm.supervise = true` only if wanted, then install
+   and configure the user unit as in [supervisor](../guide/supervisor.md), select the
+   existing store-owned herdr server, and run
+   `systemctl --user enable --now corral-sync.service`; nothing does this automatically.
+6. **Choose the three experiments separately.** Shadow, expert and the stable cache key
+   are each off; enabling shadow or expert also needs an explicit model, while the stable
+   key needs `pm.cache_key.mode = "stable"` and a new generation.
+7. **Resolve question-deadline behavior.** An expired owner-set board-question deadline
+   currently answers with the owner's pre-set instruction; choose whether to retain that
+   behavior or change it to the design's "a timeout parks and never acts".
+8. **Approve or reject the team-of-PMs design.** Containers, leases and per-scope cursors
+   remain unbuilt; approval also needs a choice of projects and their standing grants.
+9. **Set specialist autonomy.** Decide which commands and effects a future specialist
+   may perform before that tier is built.
+10. **Decide later authority extensions separately.** Landing without the owner,
+    contract-amendment globs and extra repair rounds remain unapproved and unbuilt.
 
 ## Evidence
 
@@ -52,7 +234,7 @@ question classification.
 | Last 17 push attempts (Nov 5) | all failed: `pasted text never appeared in pane input` |
 | Deliveries that were the PM's own job or code-cell completions | 423 of 575 |
 
-Causes, each confirmed in code:
+Causes at measurement time, confirmed in the pre-build code:
 
 - Board events and the `attention_due` re-wake reach a PM only through
   `pm_events::push_events`, which pastes text into the pane with `herdr agent prompt`.
@@ -99,7 +281,7 @@ authority.
 
 ### Limits that end a long-lived PM
 
-| Family | Cap | Eviction today | Source |
+| Family | Cap | Eviction before this build | Source at measurement time |
 |---|---|---|---|
 | Receipts | 16,384 per container | Settled receipts of ended generations, only once the family is full | `records.rs:12`, `pm_records.rs:365` |
 | Generations | 64 per container | None; the PM is at 24 after 12 days | `records.rs:13`, `admission.rs:476` |
@@ -148,8 +330,8 @@ The previous file is `.corral/corral.toml.bak-pm-sol-compaction-20261111`.
 
 **The setting is per role, not per model.** A value sized for Opus makes the threshold
 negative on Sol. It must be recomputed whenever the PM model changes. Both settings are
-read when a generation starts, so they apply from the next PM launch; the running PM is
-still on Opus with the default trigger until then.
+read when a generation starts, so they apply from the next PM launch; the handoff records
+no relaunch after the configuration edit.
 
 **Expected effect.** Replaying the 6,808 requests outside Nov 6 with each Sol request's
 context clipped to a cap, at lower-tier prices:
@@ -179,9 +361,9 @@ context averages below the trigger. If one day's data shows less than half, lowe
 trigger toward 200k (reserve 300,000).
 
 **Risk.** Each compaction drops conversational detail: conditional owner instructions,
-the reasons work was deferred, the state of holds and grants. Until PM notes exist
-(Part 2), the hand-kept `.corral/pm/PM-BRIEF.md` is what carries these across one, and
-the PM should update it when the owner gives a standing instruction.
+the reasons work was deferred, the state of holds and grants. PM notes now exist on the
+branch (Part 2) to carry bounded context across launches; they are not installed yet.
+The old hand-kept `.corral/pm/PM-BRIEF.md` is not loaded by the new notes code.
 
 **Check after one day:** median context per request, compactions per day, spend per
 request and per day, and whether the PM lost an instruction. Roll back by removing the
@@ -189,15 +371,15 @@ setting.
 
 ## Step 2: make deployment possible
 
-The installed runtime is `8d42d1d1`. The last cutover (`b1089947`) was rolled back
-because native `brief` and `next` exceeded their 8 KiB wire cap; T-946 (Backlog) owns
-that fix. Nothing built on current main can be installed until it is fixed, so it is
-done here, off the board, keeping the cap.
+The handoff records the installed runtime as `8d42d1d1`. The last cutover (`b1089947`)
+was rolled back because native `brief` and `next` exceeded their 8 KiB wire cap. That
+T-946 fix is built here and reviewed on the branch, not yet landed or installed; the
+cap is kept. Live-board smoke checks remain part of installation.
 
-The second review found no other demonstrated cutover blocker on main since `8d42d1d1`.
-One conditional boundary: T-931 writes version-2 repair ledgers on renewal, which older
-readers refuse. The live store has none, so a rollback is still possible today; it stops
-being possible after the first renewal on the new build.
+The second design review found no other demonstrated cutover blocker on main since
+`8d42d1d1`. One conditional boundary remains: T-931 writes version-2 repair ledgers on
+renewal, which older readers refuse. The original inspection found none in the live store;
+that was not rechecked for this status update.
 
 **Check:** native `brief` and `next` answer within 8 KiB on the live board, recorded
 with the candidate identity, before and after the coherent install.
@@ -272,16 +454,15 @@ coexist with that driver under the store locks.
 
 ### 3c. One relaunch entry point
 
-Neither existing path does what the service needs:
+At design time, neither existing path did what the service needed:
 
 | Path | Drains and reconciles the old host | Destination pane | Conversation | Focus |
 |---|---|---|---|---|
 | `corral pm` (`pm.rs::open_pm_with`) | No | New corral-owned pane | Fresh | Always takes focus |
 | `corral agent resume --pm` (`recovery.rs::recover_with`) | Yes: stop, fence, drain, reconcile, classify lost calls, recovery notice | Same pane, which must still exist | Continued | n/a |
 
-`recover_with` can already take a destination pane and a continue-or-fresh flag, but
-only as part of adopting the owner's pane. The new entry point passes them without
-adoption:
+At design time, destination-pane and continue-or-fresh selection were available only
+through owner-pane adoption. The new entry point now passes them without adoption:
 
 - it creates a corral-owned pane when the old one is gone, without taking focus;
 - it runs the full recovery sequence;
@@ -324,10 +505,10 @@ must hold before it has run long.
 
 ### 4a. One retention operation
 
-Today receipts are reclaimed only when the receipt family is full. With few receipts
-per generation, 64 short generations would all stay pinned and the 65th launch would be
-refused. So one transactional operation runs when **either** receipts or generations
-near their cap:
+Before this build, receipts were reclaimed only when the receipt family was full. With
+few receipts per generation, 64 short generations could stay pinned and the 65th launch
+would be refused. One transactional operation now runs when **either** receipts or
+generations near their cap:
 
 1. evict settled receipts of ended generations, oldest first;
 2. retire ended generations that then hold no receipts, no pending effects and no usage
@@ -379,10 +560,10 @@ to context growth, but "the host is idle" is not a safe point for it:
 - a graceful close shuts down jobs, monitors and children;
 - inbox messages observed but not yet processed are marked unknown, not replayed.
 
-So rotation waits for a barrier: no pending dialog, no undelivered answer, no queued
-input, no running job, monitor or child. It also needs PM notes (Part 2, section A), or
-standing owner instructions are lost. Until both exist, compaction from step 1 controls
-context, and relaunches continue the conversation.
+Rotation now has a barrier covering pending dialogs, undelivered answers, queued input,
+jobs, monitors and children, and carries PM notes (Part 2, section A). The final review's
+freeze-and-recheck fix is written but awaits integrated verification. Rotation is manual;
+compaction still controls ordinary context growth and relaunch continues the conversation.
 
 ### Step 4 checks
 
@@ -440,13 +621,13 @@ its wake route and its store bounds are what is being changed.
   T-890) are checked for conflicts before each step, from the board at that time.
 - **Record.** At the end one placeholder task is filed and closed, linking this
   document, the commits and the check output. It is not dispatched.
-- **Rollback.** Steps 1 to 3 are reversible by setting. Step 4b is one-way from its
-  first retirement.
+- **Rollback.** The cost settings and supervisor can be disabled; the wait side records
+  preserve the older ledger format. Step 4b is one-way from its first retirement.
 
 # Part 2: deferred design
 
-Direction only. None of this is needed to halve cost or remove the stall, none is
-scheduled, and each section lists what the reviews found unresolved.
+Originally deferred direction. The built subset and remaining decisions are listed in
+Build status; the design reasoning and original review concerns below are retained.
 
 ## A. PM notes and full work items
 
@@ -489,8 +670,8 @@ scheduled, and each section lists what the reviews found unresolved.
 - **Learning.** A resolution may become a versioned, scoped lesson with evidence, which
   must be reviewed before it lowers an escalation requirement.
 
-Unresolved: cheap-model decision quality is unmeasured; the typed action set is not
-designed.
+Still unmeasured: cheap-model decision quality. A typed action set is now built for
+authorized action IDs, parks and attention handling; it does not remove the PM's shell.
 
 ## C. Standing policy and the owner queue
 
@@ -504,13 +685,15 @@ designed.
 | Landing | `accept = "owner"` on `corral` | Owner decision |
 
 An ask never blocks unrelated items. Questions are batched into a digest with options
-and a recommendation. A timeout parks the item; it never takes an effect.
+and a recommendation. The proposed rule is that a timeout parks and never takes an effect;
+existing owner-set board-question deadlines instead answer with the pre-set instruction.
+That conflict remains an owner decision.
 
 ## D. Cache and prompt layout
 
 - **Layers, most stable first:** tool schemas; role contract; policy snapshot; project
   guidance and lessons; session envelope; item packets and tool results. Nothing
-  volatile above the envelope. Today's mutable `owner_questions` system section moves
+  volatile above the envelope. The mutable `owner_questions` system section has moved
   into the message stream, as the Claude route already did.
 - **When to rotate.** Rotating costs about one uncached read of the prefix P; staying
   costs the cached re-read of everything beyond it on each later request. With uncached
@@ -518,10 +701,9 @@ and a recommendation. A timeout parks the item; it never takes an effect.
   `requests remaining × (context − P) × r > P × u`. At Sol's rates that is
   `requests × excess > 20 × P`: with a 30k prefix, just past six requests at 100k of
   excess context.
-- **Cross-session sharing is unmeasured.** On the Codex route the provider cache key
-  defaults to the session ID. The provider exposes a payload hook, so the host could
-  try a stable key without changing session identity; whether that yields hits must be
-  measured per provider and model.
+- **Cross-session sharing is unmeasured.** The provider cache key defaults to the session
+  ID. The branch now has an opt-in stable key through the Codex payload hook, without
+  changing session identity; whether it yields hits remains to be measured.
 - **Fewer requests per item:** code builds the evidence packet, one typed action
   replaces a shell sequence, and no request is spent waiting.
 - **Guards, run by code:** a falling cache-read ratio on a large context pauses the
@@ -535,39 +717,52 @@ cannot do per-item budgets: it is cumulative per container, reserves the full co
 window per request, stops the whole host on exhaustion, and refuses hard caps on the
 Claude SDK lane.
 
-Unresolved: usage is not attributed to a work item today. Attribution needs the item,
-turn and request association persisted before billable work starts, with explicit rules
-for shared overhead, multi-item digests and child requests.
+Usage attribution and `corral report --by-item` are now built on the branch. They retain
+explicit shared, overhead and unallocated categories rather than inventing associations;
+usage before the host's turn markers remains unallocated.
 
 ## F. Project dispatchers
 
-Three prerequisites that do not exist: a PM container per scope; leases and scoped
-cursors as in the [team of PMs](team-of-pms-design.md) design; and a scoped executor,
-because `pm act` validates one action and then runs a full workspace sync
-(`pm_workset.rs:633`). Acceptance: acting in project A cannot launch, repair or land
-anything in project B.
+Two prerequisites remain unbuilt: a PM container per scope, and leases with scoped cursors
+as in the [team of PMs](team-of-pms-design.md) design. The third prerequisite, a scoped
+executor, is now built: `pm act` no longer advances other projects' tasks. Some shared
+cleanup still runs workspace-wide; unfilterable phases wait for ordinary sync.
 
 # Owner decisions
 
-For Part 1:
+Answered:
 
-1. **Compaction trigger.** Answered Nov 11: about 272k, the Sol price boundary. Applied
-   as a 260k trigger.
-2. **PM model.** Answered Nov 11: Sol, and the design must make Sol work. Applied.
-3. **Working arrangement.** Answered Nov 11: a git worktree, merged per step. Created
-   as `.worktrees/pm-runtime` on branch `pm-runtime`.
-4. **Background service.** Open; needed only for step 3b. Today nothing restarts the
-   board loop or the PM: someone has to open them, and after a reboot or a crash they
-   stay down until someone does. The proposal
-   is to let the operating system keep one small corral process running in the
-   background, started at login and restarted if it dies. It would run the same sync
-   the board runs, and reopen the PM in its own pane when the PM is gone. The
-   alternative is to keep relying on an open board, which means a reboot or a closed
-   terminal still stops everything until someone notices.
+1. **Cost objective.** Halve cost first, with records and reports rather than a hard
+   ceiling; no dollars-versus-quota ceiling was selected.
+2. **Compaction trigger.** Answered Nov 11: about 272k, the Sol price boundary; the
+   handoff reports a 260k trigger configured, awaiting PM relaunch.
+3. **PM model.** Answered Nov 11: Sol, and the design must make Sol work; the handoff
+   reports `pi-sol` configured, not yet active in the running PM.
+4. **Working arrangement.** Answered Nov 11: work in a git worktree, merge per step;
+   the branches exist, but the red gate has left the merge to the owner.
+5. **Build both parts outside the board.** Answered in the build direction; this did not
+   approve new PM authority or the separate team-of-PMs design.
 
-Only when Part 2 is taken up: landing without the owner; which projects get a standing
-grant; amendment globs; whether the binding constraint is dollars or quota; specialist
-autonomy.
+Still open, including decisions discovered during the build:
+
+1. **Merge despite the four baseline failures**, and review the final `pm-runtime` gate
+   when available.
+2. **Install and relaunch timing**: installation restarts the board; relaunch activates
+   Sol and the compaction setting.
+3. **Event paste push**: leave `pm.push_events` on or turn it off; native Pi wakes do not
+   need it.
+4. **Background service**: enable `pm.supervise` and the systemd user unit, or keep
+   recovery manual.
+5. **Shadow, expert and stable cache key**: three separate opt-ins, with explicit model
+   choices for the first two.
+6. **Question-deadline expiry**: retain the owner's pre-set answer, or implement the
+   proposed park-without-action rule.
+7. **Team of PMs**: approve the separate design and choose projects and standing grants.
+8. **Specialist autonomy**: decide the allowed commands and effects.
+9. **Later authority changes**: landing without the owner, amendment globs and extra
+   repair rounds remain unapproved.
+
+The commands, default states and consequences are in Build status's owner checklist.
 
 # Review history
 
@@ -575,6 +770,11 @@ autonomy.
 |---|---|---|
 | 1, of draft 1 | Needs rework | Draft 2: replay protection kept; four lifetime caps named; no headless PM; rotation as a new generation; budgets recognized as new; stable keys; scoped executor; PM notes; cache sharing made conditional; migration added; policy rows tightened |
 | 2, of draft 2 | Needs rework; cut scope | Draft 3: Part 1 and Part 2 split; one retention operation triggered by either cap; budget records stay receipts; usage archive before generation retirement, marked one-way; one relaunch entry point specified from the two existing paths; relaunch continues the conversation; rotation moved last behind a barrier; cause, options and publication identities separated; extra-round authority withdrawn; cost enforcement removed; off-board checks use the isolated herdr server |
+| Code: Part 1 store and delivery (`ReviewStoreDelivery`, `5854479c`) | Merge after blockers | `f48ba5a0`: retired usage archive moved out of the hot head, no-progress retention scans bounded, held refused input explained |
+| Code: Part 1 wakes and supervisor (`ReviewWakesSupervisor`, `5854479c`) | Merge after blockers | `f48ba5a0`: durable frozen wake batches, dead-host publication, keyed deduplication, rollback-safe wait records, shared recovery lease and demonstrated-recovery circuit reset |
+| Code: Part 2 authority (`ReviewAuthoritySurface`, `a0684a10`) | Merge after blockers | `47f2289c`: caller-attributed notes, scope checks inside park/attend writes, bounded park results, scoped hold reconciliation, matching wait predicates and text question-digest rendering |
+| Code: Part 2 cost (`ReviewCostSurface`, `a0684a10`) | Do not merge | `47f2289c`: queued-input cost spans, restored question context, summary-aware cache guard and retained unpriced tokens; usage-cache interference fix is written after that commit |
+| Code: rotation and shadow (`ReviewRotationShadow`, `a0684a10..47f2289c`) | Merge after blockers | Working-tree follow-up: freeze-and-recheck rotation, queued-input barrier, shadow capability enforcement and byte-stable question fallback; final integrated checks and commit not yet recorded |
 
 Resolved by review 2's own assessment: scoped executor, judgment context, cache-sharing
 claims. Still unmeasured: the real effect of the compaction setting, cross-session cache

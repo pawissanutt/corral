@@ -348,7 +348,7 @@ impl TryFrom<RawCapabilities> for AgentCapabilities {
                         role.as_str()
                     ));
                 }
-                if key == "shadow"
+                if def.omitted_when_disabled()
                     && settings.get(key) == Some(true)
                     && settings
                         .settings(key)
@@ -356,9 +356,9 @@ impl TryFrom<RawCapabilities> for AgentCapabilities {
                         .and_then(serde_json::Value::as_str)
                         .is_none()
                 {
-                    return Err(
-                        "[agent.capabilities.pm.shadow] model is required when enabled".into(),
-                    );
+                    return Err(format!(
+                        "[agent.capabilities.pm.{key}] model is required when enabled"
+                    ));
                 }
                 let Some(RoleSetting::Table(table)) = setting else {
                     continue;
@@ -494,9 +494,9 @@ impl AgentCapabilities {
                     }
                     None => (defaults[self.0.preset.index()], CapabilitySource::Preset),
                 };
-                // An absent shadow entry means disabled. Preserve pre-shadow canonical
-                // snapshots/digests unless this generation explicitly requests observation.
-                if def.key == "shadow" && !wanted {
+                // Absent opt-in PM helpers mean disabled. Keep pre-helper canonical
+                // snapshots/digests unless this generation explicitly requests one.
+                if def.omitted_when_disabled() && !wanted {
                     return None;
                 }
                 let lacking = def.host && supported.is_some_and(|keys| !keys.contains(def.key));
@@ -888,3 +888,7 @@ mod codemode_config_tests {
         assert!(config.resolve(AgentRole::Pm, None).enabled("codemode"));
     }
 }
+
+#[cfg(test)]
+#[path = "agent_capabilities_expert_tests.rs"]
+mod expert_tests;

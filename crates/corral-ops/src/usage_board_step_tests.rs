@@ -241,7 +241,7 @@ fn world(n: usize, earlier: usize, terminal: usize, events: usize) -> World {
 
 fn tick(w: &World) {
     refresh_active_usage(&w.ours);
-    transcript_cache::refresh(|| reference_tick(&w.reference)).unwrap();
+    transcript_cache::refresh(w.reference.root(), || reference_tick(&w.reference)).unwrap();
     assert_eq!(current_runs(&w.ours), current_runs(&w.reference));
 }
 
@@ -313,7 +313,7 @@ fn every_tick_stores_what_the_reference_refresh_stores() {
 fn measure(w: &World, cold: bool) -> WorkSnapshot {
     refresh_active_usage(&w.ours);
     if cold {
-        transcript_cache::clear();
+        transcript_cache::clear(w.ours.root());
     }
     let _hot = HotScope::enter();
     let before = work::snapshot();

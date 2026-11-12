@@ -22,7 +22,25 @@ fn fixture() -> (ts::Fx, ts::Host, String) {
         "pm",
     );
     committed(&hello(&fx, &host));
+    set_shadow(&fx, &host, true);
     (fx, host, task)
+}
+
+fn set_shadow(fx: &ts::Fx, host: &ts::Host, enabled: bool) {
+    let capabilities: corral_core::agent_capabilities::AgentCapabilities =
+        serde_json::from_value(json!({"pm":{"shadow":{"enabled":enabled,"model":"cheap"}}}))
+            .unwrap();
+    let snapshot = capabilities.resolve(AgentRole::Pm, None);
+    corral_core::agent::pm_state::update(&fx.ctx.store, |pm| {
+        pm.as_mut()
+            .unwrap()
+            .state
+            .generation_mut(host.identity.generation)
+            .unwrap()
+            .capabilities = Some(snapshot);
+        Ok(((), true))
+    })
+    .unwrap();
 }
 
 fn current(fx: &ts::Fx, host: &ts::Host) -> (String, String) {
@@ -73,6 +91,7 @@ fn current_shadow_commits_once_without_changing_tasks_or_events() {
         first.result["agrees"],
         first.result["code_recommendation"] == choice
     );
+    set_shadow(&fx, &host, false);
     assert_eq!(send(&fx, &input, "pm_shadow").receipt(), Some(&first));
     let shadow = pm_shadow::load(&fx.ctx.store).unwrap();
     assert_eq!(shadow.counters.total, 1);
@@ -185,4 +204,27 @@ fn brief_digest_preserves_cards_and_omits_at_wire_cap() {
     let observed = with_brief_digest(capped.clone(), &card).unwrap();
     assert!(observed.get("shadow_digest").is_none());
     assert_eq!(observed, capped);
+}
+
+#[test]
+fn disabled_shadow_capability_refuses_without_recording() {
+    let (fx, host, _) = fixture();
+    let (digest, choice) = current(&fx, &host);
+    set_shadow(&fx, &host, false);
+    let before = pm_shadow::load(&fx.ctx.store).unwrap();
+    let response = send(&fx, &input(&host, &digest, &choice), "pm_shadow");
+    assert_eq!(ts::code(&response), Some("op_not_allowed"));
+    let after = pm_shadow::load(&fx.ctx.store).unwrap();
+    assert_eq!(
+        serde_json::to_value(&before).unwrap(),
+        serde_json::to_value(&after).unwrap()
+    );
+    let pm = corral_core::agent::pm_state::load(&fx.ctx.store)
+        .unwrap()
+        .unwrap();
+    assert!(
+        pm.state
+            .receipt(&tool_request_id(&host.identity.session_id, "shadow"))
+            .is_none()
+    );
 }

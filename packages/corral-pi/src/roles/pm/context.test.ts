@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CONTEXT_MAX_BYTES, operationalContext } from "./context.ts";
+import { CONTEXT_MAX_BYTES, operationalContext, pmCacheKeyMode } from "./context.ts";
 import pm from "./index.ts";
 
 export const snapshot = { version: 1, workspace: "/workspace", projects: { demo: "/workspace/demo" },
@@ -93,4 +93,24 @@ test("malformed launch notes are absent with one diagnostic instead of crashing 
       expect(diagnostics.length).toBe(1);
     }
   } finally { console.warn = warn; rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("cache-key launch setting is strict, optional, and excluded from model instructions", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pm-cache-context-"));
+  const path = join(dir, "input.json");
+  try {
+    expect(pmCacheKeyMode(undefined)).toBe("session");
+    writeFileSync(path, JSON.stringify(snapshot));
+    const contract = operationalContext(path);
+    expect(pmCacheKeyMode(path)).toBe("session");
+    for (const mode of ["session", "stable"]) {
+      writeFileSync(path, JSON.stringify({ ...snapshot, cache_key: { mode } }));
+      expect(pmCacheKeyMode(path)).toBe(mode);
+      expect(operationalContext(path)).toBe(contract);
+    }
+    for (const cache_key of [{ mode: "automatic" }, { mode: "stable", secret: "no" }, "stable", null, {}]) {
+      writeFileSync(path, JSON.stringify({ ...snapshot, cache_key }));
+      expect(() => pmCacheKeyMode(path)).toThrow();
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

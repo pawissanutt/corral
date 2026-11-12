@@ -21,7 +21,7 @@ fn inactive_transcript_is_evicted_after_the_next_board_refresh() {
     task.runs.push(snapshot);
     store.save(&task).unwrap();
     refresh_active_usage(&store);
-    assert!(transcript_cache::contains(&transcript));
+    assert!(transcript_cache::contains(store.root(), &transcript));
     store
         .update(&task.id, |task| {
             task.status = Status::Done;
@@ -31,5 +31,5 @@ fn inactive_transcript_is_evicted_after_the_next_board_refresh() {
     // When the next refresh no longer references that transcript.
     refresh_active_usage(&store);
     // Then the old parsed entries are released rather than retained forever.
-    assert!(!transcript_cache::contains(&transcript));
+    assert!(!transcript_cache::contains(store.root(), &transcript));
 }

@@ -15,6 +15,11 @@ const ANCHOR_LEN: u64 = 64;
 
 #[derive(Default)]
 struct Cache {
+    scopes: HashMap<PathBuf, ScopedCache>,
+}
+
+#[derive(Default)]
+struct ScopedCache {
     generation: u64,
     transcripts: HashMap<PathBuf, Transcript>,
 }
@@ -133,19 +138,34 @@ fn cache() -> Result<MutexGuard<'static, Cache>> {
         .map_err(|_| anyhow!("transcript cache lock poisoned"))
 }
 
-/// A board refresh retains only transcripts used during its generation.
-pub(super) fn refresh(collect: impl FnOnce()) -> Result<()> {
+/// Store roots namespace both transcript identities and refresh generations. An unrelated
+/// store's board pass must not evict another store's warmed transcripts.
+fn scoped<'a>(cache: &'a mut Cache, root: &Path) -> Result<&'a mut ScopedCache> {
+    if !cache.scopes.contains_key(root) {
+        cache
+            .scopes
+            .insert(root.to_path_buf(), ScopedCache::default());
+    }
+    cache
+        .scopes
+        .get_mut(root)
+        .context("missing transcript cache scope")
+}
+
+/// A board refresh retains only this store's transcripts used during its generation.
+pub(super) fn refresh(root: &Path, collect: impl FnOnce()) -> Result<()> {
     let generation = {
         let mut cache = cache()?;
-        cache.generation = cache.generation.wrapping_add(1);
-        cache.generation
+        let scope = scoped(&mut cache, root)?;
+        scope.generation = scope.generation.wrapping_add(1);
+        scope.generation
     };
     collect();
     let mut cache = cache()?;
-    // A newer concurrent refresh owns pruning; an older finisher must not
-    // evict transcripts that were just used by that newer generation.
-    if cache.generation == generation {
-        cache
+    let scope = scoped(&mut cache, root)?;
+    // A newer concurrent refresh of this store owns pruning, as before.
+    if scope.generation == generation {
+        scope
             .transcripts
             .retain(|_, transcript| transcript.generation == generation);
     }
@@ -153,20 +173,21 @@ pub(super) fn refresh(collect: impl FnOnce()) -> Result<()> {
 }
 
 pub(super) fn with_lines<T>(
+    root: &Path,
     path: &Path,
     aggregate: impl FnOnce(&[SessionLine]) -> Result<T>,
 ) -> Result<T> {
     let mut cache = cache()?;
-    let generation = cache.generation;
-    let transcript = cache.transcripts.entry(path.to_path_buf()).or_default();
-    transcript.generation = generation;
+    let scope = scoped(&mut cache, root)?;
+    let transcript = scope.transcripts.entry(path.to_path_buf()).or_default();
+    transcript.generation = scope.generation;
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     if let Err(error) = transcript
         .refresh(file)
         .with_context(|| format!("parsing {}", path.display()))
     {
         // Do not reuse a partially updated checkpoint after a failed read.
-        cache.transcripts.remove(path);
+        scope.transcripts.remove(path);
         return Err(error);
     }
     corral_core::work::counted(
@@ -177,9 +198,9 @@ pub(super) fn with_lines<T>(
 }
 
 #[cfg(test)]
-pub(super) fn counts(path: &Path) -> (usize, usize, u64) {
+pub(super) fn counts(root: &Path, path: &Path) -> (usize, usize, u64) {
     let cache = cache().unwrap();
-    let transcript = &cache.transcripts[path];
+    let transcript = &cache.scopes[root].transcripts[path];
     (
         transcript.reads,
         transcript.decoded,
@@ -187,13 +208,17 @@ pub(super) fn counts(path: &Path) -> (usize, usize, u64) {
     )
 }
 
-/// Forgets every cached transcript, as a fresh process starts.
+/// Forgets only the named store's cache, without invalidating concurrent fixtures.
 #[cfg(test)]
-pub(super) fn clear() {
-    cache().unwrap().transcripts.clear();
+pub(super) fn clear(root: &Path) {
+    cache().unwrap().scopes.remove(root);
 }
 
 #[cfg(test)]
-pub(super) fn contains(path: &Path) -> bool {
-    cache().unwrap().transcripts.contains_key(path)
+pub(super) fn contains(root: &Path, path: &Path) -> bool {
+    cache()
+        .unwrap()
+        .scopes
+        .get(root)
+        .is_some_and(|scope| scope.transcripts.contains_key(path))
 }

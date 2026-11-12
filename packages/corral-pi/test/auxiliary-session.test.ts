@@ -22,7 +22,8 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
     writeFileSync(join(cwd, "source.txt"), "fixture source");
     const settings = { explore: { max_parallel: 3, model: null, max_turns: 12, timeout_secs: 30 },
       oracle: { model: "openai-codex/gpt-6.1-sol", timeout_secs: 30 },
-      shadow: { model: "openai-codex/gpt-6-luna", timeout_secs: 60, max_per_hour: 30 } };
+      shadow: { model: "openai-codex/gpt-6-luna", timeout_secs: 60, max_per_hour: 30 },
+      expert: { model: "openai-codex/gpt-6.1-sol", max_turns: 3, timeout_secs: 600, max_parallel: 1 } };
     const refs: Record<string, unknown>[] = [];
     const runtime = new AuxiliaryRuntime({ settings, generation: 4, provider: "openai-codex", model: "gpt-6.1-sol",
       sessionId: () => "parent",
@@ -119,6 +120,22 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
     const shadowTranscript = readFileSync(join(cwd, `${shadow.request}.jsonl`), "utf8").split("\n").filter(Boolean).map(s => JSON.parse(s));
     expect(shadowTranscript.flatMap(entry => entry.message?.toolsAdded ?? [])).toHaveLength(0);
     expect(refs.filter(event => event.usage_kind === "shadow" && event.action === "finish").map(event => event.outcome)).toEqual(["completed"]);
+    transport.script([
+      { toolCalls: [
+        { callId: "expert-read", name: "read", arguments: { path: "source.txt" } },
+        { callId: "expert-write", name: "write", arguments: { path: "expert-bad.txt", content: "bad" } },
+        { callId: "expert-shell", name: "bash", arguments: { command: "touch expert-bad.txt" } },
+        { callId: "expert-recurse", name: "corral_expert", arguments: { question: "delegate" } },
+      ] },
+      { text: "source.txt:1 supports this advice." },
+    ]);
+    const expert = await runtime.run("expert", "consult", "Investigate source.txt");
+    expect(expert).toMatchObject({ model: "openai-codex/gpt-6.1-sol", turns: 2, outcome: "completed" });
+    const expertTranscript = readFileSync(join(cwd, `${expert.request}.jsonl`), "utf8").split("\n").filter(Boolean).map(s => JSON.parse(s));
+    expect(expertTranscript.flatMap(entry => entry.message?.toolsAdded ?? []).map(tool => tool.name).sort()).toEqual(["find", "grep", "ls", "read"]);
+    expect(expertTranscript.filter(entry => entry.message?.role === "toolResult").map(entry => [entry.message.toolName, entry.message.isError]))
+      .toEqual([["read", false], ["write", true], ["bash", true], ["corral_expert", true]]);
+    expect(existsSync(join(cwd, "expert-bad.txt"))).toBeFalse();
     await runtime.close();
     console.log("real SDK: allowed read succeeded; write/recursive spawn failed; oracle declared zero tools; cancellation saved once");
   } finally { globalThis.fetch = originalFetch; rmSync(cwd, { recursive: true, force: true }); }
