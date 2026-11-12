@@ -83,7 +83,7 @@ for (const role of ["assistant", "pm"] as const) {
       await live.drained();
       const answer = "Which?: Two\nExtra detail";
       const tagged = role === "assistant" ? `${answer}\n\n[owner input A-1/g1/i1]` : answer;
-      expect(seen).toEqual([["Which?", ["One", "Two"]]]);
+      expect(seen).toEqual([["Which?", ["One", "Two", "Other (type an answer)"]]]);
       expect(userText()).toContain(tagged);
       expect(JSON.stringify(live.session.sessionManager.getEntries())).toContain(tagged.replaceAll("\n", "\\n"));
       expect(journal()).toEqual(role === "assistant" ? [{ id: "A-1/g1/i1", kind: "owner_input", source: "dialog",
