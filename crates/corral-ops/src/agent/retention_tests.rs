@@ -6,6 +6,7 @@ use corral_core::agent::{
     RequestReceipt, UsageSession, UsageSessionKind, paths, pm_state,
 };
 use corral_core::connection::{ConnectionBinding, ConnectionId};
+use corral_core::work::{self, Counter, HotScope};
 use serde_json::{Value, json};
 
 use super::{PM_CAPACITY, PmCapacity};
@@ -45,6 +46,28 @@ fn budget_event(host: &Host, action: &str, tokens: u64) -> Vec<u8> {
     }
     let request = event_request_id(host.identity.generation, 1);
     envelope(host, "event", &request, payload, false)
+}
+
+fn state_event(host: &Host, seq: u64) -> Vec<u8> {
+    let payload = json!({"kind": "budget", "action": "state", "request": "next"});
+    let request = event_request_id(host.identity.generation, seq);
+    envelope(host, "event", &request, payload, false)
+}
+
+/// One retention pass at `limits` in its own PM transaction, and the records it decoded.
+fn retention_decodes(fx: &Fx, limits: &pm_state::RetentionLimits) -> (pm_state::Retention, u64) {
+    let store = &fx.ctx.store;
+    let before = work::snapshot();
+    let hot = HotScope::enter();
+    let result = pm_state::update_selected(store, &pm_state::Selection::default(), |_| {
+        Ok((pm_state::retain(store, limits)?, false))
+    })
+    .unwrap();
+    drop(hot);
+    let decodes = work::snapshot()
+        .since(&before)
+        .total(Counter::RecordDecodes);
+    (result, decodes)
 }
 
 /// A small PM receipt cap on this test thread, restored on drop.
@@ -163,6 +186,41 @@ fn a_retired_generation_is_fenced_and_the_current_generation_still_replays() {
         } => assert_eq!(receipt, first),
         other => panic!("expected the stored receipt, got {other:?}"),
     }
+}
+
+#[test]
+fn a_fruitless_retention_scan_is_not_repeated_until_the_generation_changes() {
+    // Receipt pressure from 2 receipts, with the cap far away.
+    let limits = pm_state::RetentionLimits {
+        receipts_high_water: 2,
+        receipts_retained: 1,
+        ..pm_state::RetentionLimits::PM
+    };
+    let _cap = SmallCap::set(PmCapacity { cap: 64, limits });
+    let unpressured = pm_state::RetentionLimits {
+        receipts_high_water: u64::MAX,
+        generations_high_water: u64::MAX,
+        ..limits
+    };
+    let fx = fx();
+    let host = bind(&fx, &pm_target(), "pm-pane", "s-pm");
+    committed(&hello(&fx, &host));
+    // Every receipt belongs to the current generation: the third commit's scan reclaims
+    // nothing, and the fourth commit follows it.
+    for seq in 1..=3 {
+        committed(&send(&fx, &state_event(&host, seq), "event"));
+    }
+    let (_, baseline) = retention_decodes(&fx, &unpressured);
+    let (skipped, decodes) = retention_decodes(&fx, &limits);
+    assert_eq!(skipped.receipts, 0);
+    assert_eq!(skipped.receipt_count, 4);
+    assert_eq!(decodes, baseline);
+
+    // A new generation ends the old one, whose receipts the next pass reclaims.
+    bind(&fx, &pm_target(), "pm-pane", "s-pm-2");
+    let (rescanned, decodes) = retention_decodes(&fx, &limits);
+    assert!(rescanned.receipts > 0, "{rescanned:?}");
+    assert!(decodes > baseline, "{decodes} <= {baseline}");
 }
 
 fn write_lines(path: &std::path::Path, lines: &[Value]) {

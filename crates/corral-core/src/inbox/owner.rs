@@ -108,6 +108,7 @@ impl Inbox<'_> {
             "owner_header_index_pending" => {
                 format!("corral inbox index-owner {} --limit 64", self.key())
             }
+            "held_for_replacement" => PM_REPLACE.into(),
             "evidence_incomplete" => format!(
                 "Owner: inspect and repair the exact recipient {} evidence; no retry is authorized",
                 self.key()
@@ -458,6 +459,27 @@ impl Inbox<'_> {
             });
             return Ok(Some(format!(
                 "evidence_incomplete: {id} retains an unresolved attempt fence; {inspect}"
+            )));
+        }
+        if terminal.is_none()
+            && let Some(number) = self.record::<u64>("message-envelope", &format!("{seq:020}"))?
+            && let Some(hold) = self.hold_of(&self.envelope(number)?)?
+        {
+            let by = hold
+                .generation
+                .map(|n| format!("PM generation {n}'s host"))
+                .unwrap_or_else(|| "the PM host".into());
+            let release = if hold.supervised {
+                format!(
+                    "pm.supervise is on, so `corral sync --watch` runs `{}`",
+                    hold.release
+                )
+            } else {
+                format!("pm.supervise is off, so run `{}`", hold.release)
+            };
+            return Ok(Some(format!(
+                "held_for_replacement: {by} refused {id} before admission ({}); it is delivered once the PM is replaced: {release}",
+                hold.code
             )));
         }
         let Some(terminal) = terminal else {

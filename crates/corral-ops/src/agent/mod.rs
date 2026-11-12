@@ -47,6 +47,7 @@ pub mod pi;
 pub(crate) mod pm_event_wake;
 pub(crate) mod pm_wait_wake;
 pub mod pm_wake;
+pub(crate) mod pm_wake_keys;
 mod receipts;
 #[cfg(test)]
 pub(crate) use receipts::FAILPOINT;

@@ -122,18 +122,6 @@ pub fn adopt(ctx: &Ctx, pane: &str, overrides: &Overrides) -> Result<Prepared> {
     crate::pm::adopt_pm(ctx, pane, &resolved, || {
         let bound =
             pm_state::load_current(&ctx.store)?.filter(|pm| pm.state.binding.generation > 0);
-        if let Some(pm) = &bound
-            && host_alive(&pm.state)?
-        {
-            return Err(refuse(
-                "pm_alive",
-                format!(
-                    "a live corral-pi PM (generation {}) is bound to pane {}; `corral agent \
-                     resume --pm --replace` replaces it",
-                    pm.state.binding.generation, pm.pane
-                ),
-            ));
-        }
         // The adoption is recorded only with the generation move, so a refusal changes nothing.
         match bound {
             // A dead PM is taken over with resume's fencing, drain and notice.

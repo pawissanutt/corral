@@ -30,10 +30,22 @@ For a store-owned, available herdr server and a recorded corral-pi PM, recovery:
 
 Relaunch continues the saved conversation through the normal recovery entry point,
 without taking focus. Attempts are recorded before recovery starts and spaced at
-least five minutes apart. Three consecutive failures open the circuit and emit one
-`pm_relaunch_failed` event. A successful observation of watched inbox work or an
-external PM generation change resets the failure circuit. A successful relaunch
-retains its five-minute cooldown.
+least five minutes apart. Launch-command acceptance is not recovery: the heartbeat
+retains the source generation, successor generation, attempt time and consecutive
+undemonstrated-attempt count. A successor that has not demonstrated recovery by the
+end of the cooldown counts toward the three-attempt circuit, even when launching
+its command returned success. Three such attempts emit one `pm_relaunch_failed`
+event and stop automatic relaunches.
+
+The counter resets only when the expected successor has completed hello, its bound
+host is live, and watched inbox work has an Observed receipt bound to that
+successor's endpoint; observations from the continued conversation's old generation
+do not qualify. Alternatively, a generation change outside the supervisor's recorded
+successor resets the counter once that generation's bound host is verified live.
+Merely changing to an unbound or dead generation does not reset it. The expected
+successor is recorded before launch, so a driver restart during launch does not
+mistake that successor for an external recovery. Every reset retains the last
+attempt's five-minute cooldown.
 
 The supervisor never starts a herdr server, kills unrelated panes or processes, or
 removes lock files. Only normal verified PM replacement may stop the old PM host.

@@ -15,7 +15,7 @@ use crate::Ctx;
 const HEARTBEAT: RecordArea<Heartbeat> = RecordArea::new("pm-supervisor");
 const INPUT_LIMIT: RecordArea<u32> = RecordArea::new("pm-supervisor");
 const INTERVAL: i64 = 10;
-const BACKOFF: i64 = 300;
+pub(crate) const BACKOFF: i64 = 300;
 const LOCKS: [&str; 4] = [
     "artifact-storage",
     "pm-question-wake-outbox",
@@ -29,6 +29,52 @@ struct Attempts {
     last_at: Option<i64>,
     failures: u8,
     reported: bool,
+    from_generation: Option<u32>,
+    successor_generation: Option<u32>,
+    external_generation: Option<u32>,
+}
+
+impl Attempts {
+    fn start(&mut self, generation: u32, now: i64) {
+        self.last_at = Some(now);
+        self.failures = self.failures.saturating_add(1);
+        self.from_generation = Some(generation);
+        // Save the expected successor before launch, including a driver crash mid-effect.
+        self.successor_generation = generation.checked_add(1);
+        self.external_generation = None;
+    }
+
+    fn observe(
+        &mut self,
+        previous: Option<u32>,
+        generation: u32,
+        host_alive: bool,
+        hello_complete: bool,
+        observed: bool,
+    ) -> bool {
+        if previous.is_some_and(|old| old != generation)
+            && self.successor_generation != Some(generation)
+        {
+            self.external_generation = Some(generation);
+        }
+        let successor_recovered =
+            self.successor_generation == Some(generation) && hello_complete && observed;
+        if host_alive && (successor_recovered || self.external_generation == Some(generation)) {
+            let reset = self.failures > 0 || self.reported;
+            *self = Self {
+                last_at: self.last_at,
+                ..Self::default()
+            };
+            return reset;
+        }
+        false
+    }
+
+    fn launched_generation(&mut self, generation: u32) {
+        if self.from_generation.is_some_and(|from| generation > from) {
+            self.successor_generation = Some(generation);
+        }
+    }
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -103,6 +149,7 @@ struct Snapshot {
     wake_age: Option<u64>,
     attention_secs: u64,
     input_limit: bool,
+    usage_guard_paused: bool,
     attempts: Attempts,
     now: i64,
 }
@@ -115,7 +162,13 @@ enum Action {
 }
 
 fn decide(s: &Snapshot) -> Action {
-    if !s.owned || !s.supervise {
+    if !s.owned || !s.supervise || s.usage_guard_paused {
+        return Action::None;
+    }
+    if s.attempts
+        .last_at
+        .is_some_and(|at| s.now.saturating_sub(at) < BACKOFF)
+    {
         return Action::None;
     }
     if s.attempts.failures >= 3 {
@@ -124,12 +177,6 @@ fn decide(s: &Snapshot) -> Action {
         } else {
             Action::Failed
         };
-    }
-    if s.attempts
-        .last_at
-        .is_some_and(|at| s.now.saturating_sub(at) < BACKOFF)
-    {
-        return Action::None;
     }
     if !s.host_alive && s.pending {
         Action::Relaunch {
@@ -275,36 +322,29 @@ fn supervise_pm(ctx: &Ctx, heartbeat: &mut Heartbeat, now: i64) -> Result<bool> 
     };
     let generation = pm.state.binding.generation;
     let mut force = false;
-    if heartbeat.generation != Some(generation) {
-        heartbeat.generation = Some(generation);
-        heartbeat.attempts.failures = 0;
-        heartbeat.attempts.reported = false;
-        heartbeat.pending_after = None;
-        heartbeat.watched.clear();
-        heartbeat.oldest_wake = None;
-    }
-    if heartbeat.usage_guard["status"]["state"] == "paused" {
-        // A cache hold is intentional owner review, not an unresponsive host.
-        // Relaunching would discard its warm cache and repeat the expensive read.
-        heartbeat.status = "cache_guard_paused".into();
-        return Ok(false);
-    }
+    let previous = heartbeat.generation;
+    heartbeat.generation = Some(generation);
+    let host_alive = crate::agent::pi::host_alive(&pm.state)?;
+    let hello_complete = pm
+        .state
+        .current_generation()
+        .is_some_and(|current| current.bound.is_some());
+    let usage_guard_paused = heartbeat.usage_guard["status"]["state"] == "paused";
     let marker = INPUT_LIMIT.load(&ctx.store, "input_limit")?;
     if marker.is_some_and(|old| generation > old) {
         INPUT_LIMIT.delete(&ctx.store, "input_limit")?;
     }
     let inbox = Inbox::new(&ctx.store, Recipient::Pm)?;
-    let (pending, wake_age, observed) = inbox_snapshot(&inbox, heartbeat, now)?;
-    if observed {
-        heartbeat.attempts.failures = 0;
-        heartbeat.attempts.reported = false;
+    let endpoint = crate::agent::launch::generation_dir(&ctx.store, &Recipient::Pm, generation)?
+        .join(crate::agent::launch::SOCKET_FILE);
+    let (pending, wake_age, observed) = inbox_snapshot(&inbox, heartbeat, now, &endpoint)?;
+    if heartbeat
+        .attempts
+        .observe(previous, generation, host_alive, hello_complete, observed)
+    {
+        heartbeat.last_error = None;
+        force = true;
     }
-    if heartbeat.attempts.failures >= 3 {
-        heartbeat.status = "relaunch_failed".into();
-        report_relaunch_failure(ctx, heartbeat)?;
-        return Ok(force);
-    }
-    let host_alive = crate::agent::pi::host_alive(&pm.state)?;
     let action = decide(&Snapshot {
         owned: heartbeat.owned,
         supervise: ctx.store.config.pm.supervise,
@@ -313,35 +353,52 @@ fn supervise_pm(ctx: &Ctx, heartbeat: &mut Heartbeat, now: i64) -> Result<bool> 
         wake_age,
         attention_secs: ctx.store.config.pm.attention_secs,
         input_limit: marker == Some(generation),
+        usage_guard_paused,
         attempts: heartbeat.attempts.clone(),
         now,
     });
     match action {
-        Action::None => {}
+        Action::None => {
+            if usage_guard_paused {
+                // A cache hold is intentional owner review, not an unresponsive host.
+                // Relaunching would discard its warm cache and repeat the expensive read.
+                heartbeat.status = "cache_guard_paused".into();
+            } else if heartbeat.attempts.reported {
+                heartbeat.status = "relaunch_failed".into();
+            }
+        }
         Action::Failed => {
+            heartbeat.status = "relaunch_failed".into();
+            if heartbeat.last_error.is_none() {
+                heartbeat.last_error = Some("replacement did not complete hello and observe watched inbox work within the recovery cooldown".into());
+            }
             report_relaunch_failure(ctx, heartbeat)?;
             force = true;
         }
         Action::Relaunch { reason, replace } => {
-            heartbeat.attempts.last_at = Some(now);
+            heartbeat.attempts.start(generation, now);
             heartbeat.last_action = Some(reason.into());
             // Persist before the potentially slow effect, including an interrupted attempt.
-            heartbeat.attempts.failures = heartbeat.attempts.failures.saturating_add(1);
             heartbeat.at = Timestamp::now();
             HEARTBEAT.save(&ctx.store, "heartbeat", heartbeat)?;
             match crate::pm::relaunch(ctx, reason, replace) {
                 Ok(_) => {
-                    heartbeat.attempts.failures = 0;
                     heartbeat.last_error = None;
-                    // Keep the cooldown across the generation this relaunch just created.
-                    heartbeat.generation =
-                        pm_state::load_current(&ctx.store)?.map(|pm| pm.state.binding.generation);
+                    // Launch acceptance is not recovery; keep the attempt until hello + observation.
+                    if let Some(pm) = pm_state::load_current(&ctx.store)? {
+                        let generation = pm.state.binding.generation;
+                        heartbeat.attempts.launched_generation(generation);
+                        heartbeat.generation = Some(generation);
+                    }
                 }
                 Err(error) => {
                     heartbeat.last_error = Some(format!("{error:#}"));
                     // Recovery may have advanced the generation before startup failed.
                     // That is still this attempt, not an external reset of the circuit.
                     if let Ok(Some(pm)) = pm_state::load_current(&ctx.store) {
+                        heartbeat
+                            .attempts
+                            .launched_generation(pm.state.binding.generation);
                         heartbeat.generation = Some(pm.state.binding.generation);
                     }
                     if heartbeat.attempts.failures >= 3 {
@@ -387,16 +444,17 @@ fn inbox_snapshot(
     inbox: &Inbox<'_>,
     heartbeat: &mut Heartbeat,
     now: i64,
+    endpoint: &std::path::Path,
 ) -> Result<(bool, Option<u64>, bool)> {
     let mut observed = false;
     for seq in &heartbeat.watched {
-        observed |= inbox.receipt(*seq, ReceiptLevel::Observed)?.is_some();
+        observed |= observed_at_endpoint(inbox, *seq, endpoint)?;
     }
     let mut oldest = heartbeat
         .oldest_wake
         .map(|seq| -> Result<_> {
             let seen = inbox.receipt(seq, ReceiptLevel::Observed)?.is_some();
-            observed |= seen;
+            observed |= seen && observed_at_endpoint(inbox, seq, endpoint)?;
             if seen || inbox.terminal(seq)?.is_some() {
                 return Ok(None);
             }
@@ -451,6 +509,18 @@ fn inbox_snapshot(
     heartbeat.oldest_wake = oldest.as_ref().map(|message| message.seq);
     let age = oldest.map(|message| now.saturating_sub(message.created.as_second()).max(0) as u64);
     Ok((pending, age, observed))
+}
+
+fn observed_at_endpoint(inbox: &Inbox<'_>, seq: u64, endpoint: &std::path::Path) -> Result<bool> {
+    Ok(inbox
+        .receipt(seq, ReceiptLevel::Observed)?
+        .is_some_and(|receipt| {
+            receipt
+                .binding
+                .as_ref()
+                .and_then(|binding| binding.endpoint.as_deref())
+                == Some(endpoint)
+        }))
 }
 
 #[cfg(target_os = "linux")]

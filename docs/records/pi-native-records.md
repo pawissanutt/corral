@@ -98,9 +98,9 @@ containers too.
 |---|---|---|---|
 | `version` | u32 | 1 | request-receipts |
 | `binding` | AgentBinding | one | request-receipts (`open_generation`) |
-| `generations` | AgentGeneration[] | ≤ 64 (`GENERATIONS_MAX`). The PM container retains at 56 (`GENERATIONS_HIGH_WATER`): ended generations with no receipts left are retired, oldest first, into `retired` | request-receipts |
+| `generations` | AgentGeneration[] | ≤ 64 (`GENERATIONS_MAX`). The PM container retains at 56 (`GENERATIONS_HIGH_WATER`): ended generations with no receipts left are retired, oldest first, each into one `RetiredGeneration` history record (area `agent-pm-retired-generations`, read only by usage collection) | request-receipts |
 | `receipts` | RequestReceipt[] | ≤ 16384 (`RECEIPTS_MAX`); a full task-owned container refuses `receipt_limit`. The PM container, which outlives its generations, retains at 15360 receipts (`RECEIPTS_HIGH_WATER`) or 56 generations: it evicts its oldest settled receipts of ended generations down to half; only when none qualify does it refuse. Current-generation receipts are never evicted | request-receipts, op-receipts, question-lifecycle |
-| `retired` | RetiredGenerations? | PM container only: the floor every retired generation number is below, plus each retired generation's transcript, session, connection binding and pre-budget flag. Its first write moves the PM head to layout 3, which older binaries refuse (see [storage](../guide/storage.md)) | request-receipts |
+| `retired` | RetiredGenerations? | PM container only, fixed size: the floor every retired generation number is below and the carried `legacy_usage_gap`. Its first write moves the PM head to layout 3, which older binaries refuse (see [storage](../guide/storage.md)) | request-receipts |
 | `questions` | AgentQuestion[] | ≤ 8 pending, ≤ 1 blocking per container | question-lifecycle |
 | `turns` | AgentTurn[] | ≤ 512 (`TURNS_MAX`); the oldest ended turns are evicted first, open turns never | request-receipts (facts), worker-role and reviewer-role (`class`) |
 | `wakes` | WakeSubscription[] | ≤ 256 (`WAKES_MAX`) | op-receipts, worker-role |

@@ -16,7 +16,7 @@ use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use corral_core::agent::{self, AgentRunState, ContainerRef, pm_state};
+use corral_core::agent::{self, AgentRole, AgentRunState, ContainerRef, pm_state};
 use corral_core::{Run, Store, Usage, UsageEntry};
 use jiff::Timestamp;
 use serde::Deserialize;
@@ -106,9 +106,13 @@ pub(crate) fn collect_entries(
     complete: bool,
 ) -> Result<Vec<CostUsageEntry>> {
     // Generations that resumed the same file are read once; copies are deduplicated by key.
-    // Retired PM generations keep their transcripts in the archive; both are read in
-    // generation order, so retirement never changes which binding claims a file first.
-    let retired = state.retired.as_ref();
+    // Retired PM generations keep their attribution in history records, read only here; both
+    // are read in generation order, so retirement never changes which binding claims a file.
+    // The state was read first and history records are only added, so none is missed.
+    let retired = match &state.retired {
+        Some(_) if state.binding.role == AgentRole::Pm => pm_state::retired_generations(store)?,
+        _ => Vec::new(),
+    };
     let mut bound: Vec<(u32, &Path, &str)> = state
         .generations
         .iter()
@@ -116,15 +120,11 @@ pub(crate) fn collect_entries(
             let b = g.bound.as_ref()?;
             Some((g.n, b.session_file.as_path(), b.session_id.as_str()))
         })
-        .chain(retired.into_iter().flat_map(|r| {
-            r.transcripts.iter().map(|t| {
-                (
-                    t.generation,
-                    t.session_file.as_path(),
-                    t.session_id.as_str(),
-                )
-            })
-        }))
+        .chain(
+            retired
+                .iter()
+                .filter_map(|r| Some((r.n, r.session_file.as_deref()?, r.session_id.as_deref()?))),
+        )
         .collect();
     bound.sort_by_key(|(n, ..)| *n);
     let mut files: BTreeMap<&Path, (&str, Option<&str>)> = BTreeMap::new();
@@ -148,12 +148,8 @@ pub(crate) fn collect_entries(
         bail!("no bound Pi session");
     }
     let bindings: BTreeMap<_, _> = retired
-        .into_iter()
-        .flat_map(|r| {
-            r.connections
-                .iter()
-                .flat_map(|c| c.generations.iter().map(move |n| (*n, c.binding.clone())))
-        })
+        .iter()
+        .filter_map(|r| r.connection.clone().map(|b| (r.n, b)))
         .chain(
             state
                 .generations

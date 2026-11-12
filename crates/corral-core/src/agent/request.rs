@@ -13,6 +13,19 @@ pub const PLAN_HISTORY_MAX: usize = 16;
 /// Automatic continuations of one plan in a row; a turn the owner or corral starts resets it.
 pub const CONTINUATIONS_MAX: u32 = 8;
 
+/// Shared lease for session-ledger deadline mutations and PM wait publication.
+pub const WAIT_PUBLICATION_LOCK: &str = "pm-wait-wake-outbox";
+
+/// Hold the wait-publication lease through the caller's existing container transaction.
+/// Acquire it before entering that transaction, preserving the lease-before-dispatch order.
+pub fn with_wait_publication_lock<T>(
+    store: &crate::Store,
+    apply: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let _lease = store.lock(WAIT_PUBLICATION_LOCK)?;
+    apply()
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestLedger {
     /// Plans opened in this container; the current plan is `P<plans>`.
