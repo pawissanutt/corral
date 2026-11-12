@@ -131,14 +131,14 @@ Rust suites, and Pi TypeScript typechecking and tests. Exceptions and results ma
 | `f530176f`, Part 1 integration | Formatting, line limit and clippy passed; merged Rust suites were checked with wave 2, not at this merge. |
 | `a0684a10`, Part 2 wave 2 | Normal checks passed; 1,939 ops tests and 929 Pi tests passed; live host-resume tests were not run. |
 | `47f2289c`, Part 2 wave 3 and review fixes | Formatting, line limit, clippy, core, corral and TypeScript typecheck passed; 937 Pi tests and 316 changed-area tests passed in separate runs; ops had 1,952 passes and 10 usage-cache failures. |
+| `fbaa5c2b`, Part 2 wave 4, wave-3 review fixes, cache isolation | Formatting, line limit, clippy, core, corral, TypeScript typecheck and 421 changed-area Pi tests passed; ops had 1,967 passes and 1 failure in an untouched content-index test that passed alone three times. Full gate below. |
 
-Five independent code-review reports now exist: two for Part 1, two for Part 2 waves 1–2,
-and a later one for rotation and shadow. The Part 1 reviewers and the Part 2 authority
-reviewer said "merge after blockers"; the cost reviewer said "do not merge"; the final
-rotation/shadow reviewer said "merge after blockers". The first four reports' blockers and
-requested fixes were addressed by `f48ba5a0` and `47f2289c`. The final review's rotation
-blockers and its shadow/question-context findings have working-tree fixes described above;
-they are not a new green gate or a final reviewer sign-off.
+Five independent code-review reports exist: two for Part 1, two for Part 2 waves 1–2, and
+one for rotation and shadow. The Part 1 reviewers, the Part 2 authority reviewer and the
+rotation/shadow reviewer said "merge after blockers"; the cost reviewer said "do not merge".
+Every blocker and requested fix was addressed: the first four reports by `f48ba5a0` and
+`47f2289c`, the last by `fbaa5c2b`. The fixes for the last review were verified by the
+checks and gate below; no reviewer re-read them afterwards.
 
 The Part 1 full gate at `f48ba5a0` passed every step it reached except the Pi test lane:
 formatting, line limit, both Apple cross-compilation checks, clippy, 5,571 workspace tests,
@@ -158,13 +158,18 @@ them as pre-existing in this environment, not new regressions. A pane-readiness 
 host shutdown is a diagnosis, not a confirmed cause. Gate steps after the failing Pi lane
 did not run.
 
-The handoff attributes the 10 usage-cache failures at `47f2289c` to cross-test interference
-and reports that they passed alone. A per-store cache-isolation fix is written, but its
-integrated result is not yet recorded
-in the handoff. Neither a final full gate on `pm-runtime` nor completed final-wave checks
-are recorded there at this snapshot: see the handoff file for the last state. No coherent
-install, live-board native-read smoke, production recovery exercise or measured cost/cache
-comparison has been recorded for this build.
+The 10 usage-cache failures at `47f2289c` were cross-test interference: the transcript cache
+was process-wide and one test store's refresh pruned another's entries. `fbaa5c2b`
+namespaces the cache by store root; the tests then passed in three consecutive full runs.
+
+The final full gate ran on `pm-runtime` at `fbaa5c2b` (log
+`.worktrees/pm-runtime/.evidence/final-gate.log`). Formatting, line limit, both Apple
+cross-compilation checks, clippy, 5,656 workspace tests, 55 slow-lane tests, doctests and
+three work-budget tests passed. The Pi lane ran 942 tests: 938 passed and the same four live
+host-resume tests listed above failed, so the gate exited 1 and its later steps did not run.
+
+No coherent install, live-board native-read smoke, production recovery exercise or measured
+cost/cache comparison has been done for this build.
 
 ## Known limits and risks
 
