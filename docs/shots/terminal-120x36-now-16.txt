@@ -1,0 +1,36 @@
+ ◉ Corral │ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live    22:12  fixture · snapshot 2026-11-07 22:12
+╭─ corral ─────────────────────╮╭───────────────────────────────────────────┬──────────────────────────────────────────╮
+│ Autopilot                    ││ Who acts next  Goals                      │ Story  Evidence  Session                 │
+│ independent work continues   │├───────────────────────────────────────────┼──────────────────────────────────────────┤
+├──────────────────────────────┤│                                           │                                          │
+│  Inbox                 5   i ││ Not built yet. This build is the app      │ Not built yet. This build is the app     │
+│▌ Now                       n ││ shell.                                    │ shell.                                   │
+│  Changes              12   . ││                                           │                                          │
+│  Plans                 6   p ││                                           │                                          │
+│  Agents                7   a ││                                           │                                          │
+│  Review                3   r ││                                           │                                          │
+│  Timeline                  t ││                                           │                                          │
+│  Usage                     u ││                                           │                                          │
+│  Settings                  , ││                                           │                                          │
+├──────────────────────────────┤│                                           │                                          │
+│  Ask                       / ││                                           │                                          │
+│  Go to                    ^K ││                                           │                                          │
+│                              ││                                           │                                          │
+│                              │├───────────────────────────────────────────┼──────────────────────────────────────────┤
+│                              ││ Since your last visit  Parked             │ Live  Plan graph                         │
+│                              │├───────────────────────────────────────────┼──────────────────────────────────────────┤
+│                              ││                                           │                                          │
+│                              ││ Not built yet. This build is the app      │ Not built yet. This build is the app     │
+│                              ││ shell.                                    │ shell.                                   │
+│                              ││                                           │                                          │
+│                              ││                                           │                                          │
+│                              ││                                           │                                          │
+│                              ││                                           │                                          │
+│                              ││                                           │                                          │
+│                              ││                                           │                                          │
+│                              ││                                           │                                          │
+│                              ││                                           │                                          │
+│                              ││                                           │                                          │
+│                              ││                                           │                                          │
+╰─ This device pawis-desktop ──╯╰───────────────────────────────────────────┴──────────────────────────────────────────╯
+  i  Inbox  n  Now  .  Changes  p  Plans  a  Agents  r  Review  t  Timeline  u  Usage  ,  Settings │  /  Ask  ^K  Go to

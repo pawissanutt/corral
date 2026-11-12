@@ -1,0 +1,24 @@
+ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live          fixture
+╭─ corral ─────────────╮╭──────────────────────────────────────────────────────╮
+│ Autopilot            ││ Ask                                       Esc  Close │
+│ independent work     │├──────────────────────────────────────────────────────┤
+│ continues            ││                                                      │
+├──────────────────────┤│                                                      │
+│  Inbox         5   i ││                                                      │
+│▌ Now               n ││                                                      │
+│  Changes      12   . ││                                                      │
+│  Plans         6   p ││                                                      │
+│  Agents        7   a ││                                                      │
+│  Review        3   r ││                                                      │
+│  Timeline          t ││                                                      │
+│  Usage             u │├──────────────────────────────────────────────────────┤
+│  Settings          , ││ Assistant  PM                                        │
+├──────────────────────┤│                                                      │
+│▌ Ask               / ││ Ask a question, drop an idea,                        │
+│  Go to            ^K ││ or give an instruction…                              │
+│                      ││                                                      │
+│                      ││ Not connected to corrald. Nothing can be sent        │
+│                      ││ from this build.                               Send  │
+│                      ││                                                      │
+╰─ pawis-desktop ──────╯╰──────────────────────────────────────────────────────╯
+  i  Inbox  n  Now  .   p   a   r   t   u   ,  Settings │  /  Ask  ^K  Go to

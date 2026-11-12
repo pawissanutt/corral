@@ -1,0 +1,36 @@
+ ◉ Corral │ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live    22:12  fixture · snapshot 2026-11-07 22:12
+╭─ corral ─────────────────────╮╭──────────────────────────────────────────────────────────────────────────────────────╮
+│ Autopilot                    ││ Commands                                          ↑↓  move   Enter  run   Esc  close │
+│ independent work continues   ││ › Type a command, or a question to ask                                               │
+├──────────────────────────────┤├──────────────────────────────────────────────────────────────────────────────────────┤
+│  Inbox                 5   i ││ Go to                                                                                │
+│▌ Now                       n ││ Go to Inbox                                                                        i │
+│  Changes              12   . ││ Go to Now                                                                  current n │
+│  Plans                 6   p ││ Go to Changes                                                                      . │
+│  Agents                7   a ││ Go to Plans                                                                        p │
+│  Review                3   r ││ Go to Agents                                                                       a │
+│  Timeline                  t ││ Go to Review                                                                       r │
+│  Usage                     u ││ Go to Timeline                                                                     t │
+│  Settings                  , ││ Go to Usage                                                                        u │
+├──────────────────────────────┤│ Go to Settings                                                                     , │
+│  Ask                       / ││ Settings                                                                             │
+│▌ Go to                    ^K ││ Settings: Devices                                                                    │
+│                              ││ Settings: Machines                                                                   │
+│                              ││ Settings: Connection                                                                 │
+│                              ││ Settings: Notifications                                                              │
+│                              ││ Settings: Assistant                                                                  │
+│                              ││ Settings: Autopilot & grants                                                         │
+│                              ││ Settings: General                                                                    │
+│                              ││ Ask                                                                                  │
+│                              ││ Ask                                                                                / │
+│                              ││ Appearance                                                                           │
+│                              ││ Theme: system                                                                current │
+│                              ││ Theme: light                                                                         │
+│                              ││ Theme: dark                                                                          │
+│                              ││ Data                                                                                 │
+│                              ││ Data: fixture                                                                current │
+│                              ││ Data: disconnected                                                                   │
+│                              ││ Now                                                                                  │
+│                              ││ Reset Now layout                                                                     │
+╰─ This device pawis-desktop ──╯╰──────────────────────────────────────────────────────────────────────────────────────╯
+  i  Inbox  n  Now  .  Changes  p  Plans  a  Agents  r  Review  t  Timeline  u  Usage  ,  Settings │  /  Ask  ^K  Go to

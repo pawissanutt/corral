@@ -1,0 +1,24 @@
+ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live          fixture
+╭─ corral ─────────────╮╭──────────────────────────────────────────────────────╮
+│ Autopilot            ││ Commands          ↑↓  move   Enter  run   Esc  close │
+│ independent work     ││ › Type a command, or a question to ask               │
+│ continues            │├──────────────────────────────────────────────────────┤
+├──────────────────────┤│ Go to                                                ┃
+│  Inbox         5   i ││ Go to Inbox                                       i  ┃
+│▌ Now               n ││ Go to Now                                 current n  ┃
+│  Changes      12   . ││ Go to Changes                                     .  ┃
+│  Plans         6   p ││ Go to Plans                                       p  ┃
+│  Agents        7   a ││ Go to Agents                                      a  ┃
+│  Review        3   r ││ Go to Review                                      r  ┃
+│  Timeline          t ││ Go to Timeline                                    t  ┃
+│  Usage             u ││ Go to Usage                                       u  ┃
+│  Settings          , ││ Go to Settings                                    ,  ┃
+├──────────────────────┤│ Settings                                             │
+│  Ask               / ││ Settings: Devices                                    │
+│▌ Go to            ^K ││ Settings: Machines                                   │
+│                      ││ Settings: Connection                                 │
+│                      ││ Settings: Notifications                              │
+│                      ││ Settings: Assistant                                  │
+│                      ││ Settings: Autopilot & grants                         │
+╰─ pawis-desktop ──────╯╰──────────────────────────────────────────────────────╯
+  i  Inbox  n  Now  .   p   a   r   t   u   ,  Settings │  /  Ask  ^K  Go to

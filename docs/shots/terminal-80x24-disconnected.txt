@@ -1,0 +1,24 @@
+ ◉ Corral │ ✗ corrald not connected
+╭──────────────────────╮╭───────────────────────────┬──────────────────────────╮
+│  Inbox             i ││ Who acts next             │ Story                    │
+│▌ Now               n │├───────────────────────────┼──────────────────────────┤
+│  Changes           . ││                           │                          │
+│  Plans             p ││ No connection to corrald. │ No connection to         │
+│  Agents            a ││                           │ corrald.                 │
+│  Review            r ││                           │                          │
+│  Timeline          t ││                           │                          │
+│  Usage             u ││                           │                          │
+│  Settings          , ││                           │                          │
+├──────────────────────┤│                           │                          │
+│  Ask               / ││                           │                          │
+│  Go to            ^K ││                           │                          │
+│                      ││                           │                          │
+│                      ││                           │                          │
+│                      ││                           │                          │
+│                      ││                           │                          │
+│                      ││                           │                          │
+│                      ││                           │                          │
+│                      ││                           │                          │
+│                      ││                           │                          │
+╰──────────────────────╯╰───────────────────────────┴──────────────────────────╯
+  i  Inbox  n  Now  .   p   a   r   t   u   ,  Settings │  /  Ask  ^K  Go to

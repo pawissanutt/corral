@@ -1,0 +1,24 @@
+ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live          fixture
+╭─ corral ─────────────╮╭───────────────────────────┬──────────────────────────╮
+│ Autopilot            ││ Who acts next             │ Story                    │
+│ independent work     │├───────────────────────────┼──────────────────────────┤
+│ continues            ││                           │                          │
+├──────────────────────┤│ Not built yet. This build │ Not built yet. This      │
+│  Inbox         5   i ││ is the app shell.         │ build is the app shell.  │
+│▌ Now               n ││                           │                          │
+│  Changes      12   . ││                           │                          │
+│  Plans         6   p ││                           │                          │
+│  Agents        7   a ││                           │                          │
+│  Review        3   r ││                           │                          │
+│  Timeline          t ││                           │                          │
+│  Usage             u ││                           │                          │
+│  Settings          , ││                           │                          │
+├──────────────────────┤│                           │                          │
+│  Ask               / ││                           │                          │
+│  Go to            ^K ││                           │                          │
+│                      ││                           │                          │
+│                      ││                           │                          │
+│                      ││                           │                          │
+│                      ││                           │                          │
+╰─ pawis-desktop ──────╯╰───────────────────────────┴──────────────────────────╯
+  i  Inbox  n  Now  .   p   a   r   t   u   ,  Settings │  /  Ask  ^K  Go to
