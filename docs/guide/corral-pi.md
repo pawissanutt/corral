@@ -95,6 +95,28 @@ explicitly select registered projects. Project reads respect project-text trust.
 Reusable evidence-backed project rules remain lessons, and unfinished work remains in
 inbox/tasks; link those records rather than copying mutable operational history.
 
+### Durable PM notes
+
+`corral_notes` keeps revisioned workspace PM context across compaction, resume and relaunch:
+owner instructions with provenance, deferrals with reason and resume condition, commitments
+and hypotheses. These records are context, never authority; current policy still governs
+every action. Record new instructions, deferrals and commitments when they arise, and read
+the current record with `{"op":"list"}` after compaction.
+
+Each PM launch/resume/relaunch writes live (not superseded) notes into `pm-pi.json` as
+`notes: {revision, entries, omitted}`. Entries contain `id`, `kind`, `text`, `provenance`,
+`reason`, `resume_when`, `author` and `created_at`. Owner instructions precede PM instructions,
+then deferrals, commitments and hypotheses, newest first in each group. The block is at most
+24 KiB inside the 64 KiB launch snapshot; lowest-priority tail entries are omitted with a
+count. A notes load failure logs a diagnostic and supplies `notes: null` without blocking
+launch. Malformed launch notes are ignored with one host diagnostic.
+
+The host captures the role contract once at startup. Reload rebuilds resources using that
+same captured contract, and compaction keeps it; neither rereads or rewrites the notes
+snapshot. Notes tool writes affect only the live record, not the session's cached prompt
+prefix. Explicit resume or relaunch captures a new snapshot. Older snapshots without notes
+render no notes section.
+
 ### Owner choice questions
 
 Only assistant and PM loadouts with `ask_user` enabled expose owner choices. Their contracts
@@ -809,6 +831,12 @@ after a PM deadline passes, corral posts one keyed `pm_wait_wake` per step and p
 revision, even if its host is dead; delivery waits for a healthy host. Legacy waits
 without a side deadline are due immediately, once. A wake is a pointer, not authority:
 the PM must review the condition and clear or renew its wait; corral does not change it.
+
+A `wait` also accepts optional `when` with 1–8 conditions in the attention-park grammar:
+`status:task=status`, `landed:task`, `answered:key@revision`, `decision:value` or
+`hold-lifted:value`. Once all of them are satisfied corral posts one condition-met review
+wake. Free-text `on` and review deadlines are unchanged; an unmet overdue wait still
+receives its deadline wake. Neither wake clears the wait or authorizes an action.
 
 The host restores the ledger at startup and resume and gives every model request a bounded
 summary of the current plan (identity, revision, outstanding steps, waits and the next

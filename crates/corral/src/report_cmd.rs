@@ -1,11 +1,20 @@
 use anyhow::{Context, Result};
 use corral_ops::Ctx;
 
+#[path = "report_items.rs"]
+mod items;
+
 #[derive(clap::Args)]
 pub struct ReportArgs {
     /// Include dispatches started in the last N hours, days or weeks
     #[arg(long, default_value = "30d")]
     pub since: String,
+    /// Exclusive RFC 3339 end timestamp (requires --by-item)
+    #[arg(long, requires = "by_item")]
+    pub until: Option<jiff::Timestamp>,
+    /// Report per-item API-equivalent cost estimates for reporting, not limits
+    #[arg(long, conflicts_with_all = ["open", "out"])]
+    pub by_item: bool,
     /// Only this project's tasks
     #[arg(long)]
     pub project: Option<String>,
@@ -21,6 +30,9 @@ pub struct ReportArgs {
 }
 
 pub fn run(ctx: &Ctx, args: ReportArgs) -> Result<()> {
+    if args.by_item {
+        return items::run(ctx, &args);
+    }
     if let Some(path) = &args.out {
         let (model, page) = corral_ops::render_report_at(
             ctx,

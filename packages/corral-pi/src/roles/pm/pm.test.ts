@@ -26,6 +26,7 @@ const context = { identity, cwd: "/tmp", model: "m" };
 const cases = [
   { name: "receipt_lookup", op: "receipt_lookup", payload: { request_id: `rq-${"a".repeat(32)}`, task: "T-007" } },
   { name: "notes", op: "notes", payload: { op: "list" } },
+  { name: "action", op: "pm_action", payload: { action: "act", id: "a".repeat(64) } },
   { name: "brief", op: "read_brief", payload: {} },
   { name: "next", op: "read_next", payload: {} },
   { name: "show", op: "read_show", payload: { task: "T-007" } },
@@ -341,7 +342,8 @@ for (const stage of ["startup", "reload", "refused replacement"]) test(
     const modelCalls = host.session.messages.flatMap((message) =>
       message.role === "assistant" ? message.content.filter((part) => part.type === "toolCall") : []);
     for (const call of calls) {
-      const modelCall = modelCalls.find((item) => item.name === `corral_${call.op.replace(/^read_/, "")}`
+      const tool = cases.find(({ op }) => op === call.op)?.name;
+      const modelCall = modelCalls.find((item) => item.name === `corral_${tool}`
         && toolRequestId(host.sessionId(), item.id) === call.request_id);
       expect(modelCall).toBeDefined();
       expect(call.payload_sha256).toBe(sha256Hex(canonicalJson(call.payload)));

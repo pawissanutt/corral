@@ -494,6 +494,44 @@ pub(super) fn attend_authorized(
     request: &str,
     now: Timestamp,
 ) -> Result<AttentionHandling> {
+    let by = if std::env::var("CORRAL_PM").as_deref() == Ok("1") {
+        Responsible::Pm
+    } else {
+        Responsible::Owner
+    };
+    attend_as(ctx, key, note, next_check_secs, request, now, by)
+}
+
+/// Handling by the authenticated native PM (`pm_action`), whose identity replaces the CLI's
+/// environment and context guard; the item is reread and validated exactly as for the CLI.
+pub(crate) fn attend_by_pm(
+    ctx: &Ctx,
+    key: &str,
+    note: &str,
+    next_check_secs: u64,
+    request: &str,
+    now: Timestamp,
+) -> Result<AttentionHandling> {
+    attend_as(
+        ctx,
+        key,
+        note,
+        next_check_secs,
+        request,
+        now,
+        Responsible::Pm,
+    )
+}
+
+fn attend_as(
+    ctx: &Ctx,
+    key: &str,
+    note: &str,
+    next_check_secs: u64,
+    request: &str,
+    now: Timestamp,
+    by: Responsible,
+) -> Result<AttentionHandling> {
     ensure!(
         !note.trim().is_empty() && note.len() <= MAX_ATTENTION_NOTE_BYTES,
         "note must contain 1..1024 bytes"
@@ -663,11 +701,7 @@ pub(super) fn attend_authorized(
             at: now,
             next_check: now
                 .checked_add(SignedDuration::from_secs(i64::try_from(next_check_secs)?))?,
-            by: if std::env::var("CORRAL_PM").as_deref() == Ok("1") {
-                Responsible::Pm
-            } else {
-                Responsible::Owner
-            },
+            by,
         };
         record.first_handled_at.get_or_insert(now);
         record.handling = Some(handling.clone());

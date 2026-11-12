@@ -37,6 +37,28 @@ pub fn park(
     )
 }
 
+/// A park by the authenticated native PM (`pm_action`), whose identity replaces the CLI's
+/// environment and context guard. The same validation applies; it never replaces an owner park.
+pub(crate) fn park_by_pm(
+    ctx: &Ctx,
+    id: &str,
+    reason: &str,
+    resume_when: &[ResumeCheck],
+    resume_action: &str,
+    review_by_secs: u64,
+    now: Timestamp,
+) -> Result<Park> {
+    park_as(
+        ctx,
+        id,
+        reason,
+        resume_when,
+        resume_action,
+        review_by_secs,
+        (now, Responsible::Pm),
+    )
+}
+
 fn park_as(
     ctx: &Ctx,
     id: &str,

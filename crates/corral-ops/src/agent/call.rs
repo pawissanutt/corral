@@ -33,6 +33,7 @@ pub enum AgentOp {
     Progress,
     Todo,
     Notes,
+    PmAction,
     Checkpoint,
     Evidence,
     Artifact,
@@ -98,7 +99,7 @@ const ASSISTANT: &[AgentRole] = &[AgentRole::Assistant];
 const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm, AgentRole::Assistant];
 
 impl AgentOp {
-    pub const ALL: [AgentOp; 47] = [
+    pub const ALL: [AgentOp; 48] = [
         AgentOp::Hello,
         AgentOp::Event,
         AgentOp::ReceiptLookup,
@@ -108,6 +109,7 @@ impl AgentOp {
         AgentOp::Progress,
         AgentOp::Todo,
         AgentOp::Notes,
+        AgentOp::PmAction,
         AgentOp::Checkpoint,
         AgentOp::Evidence,
         AgentOp::Artifact,
@@ -195,7 +197,7 @@ impl AgentOp {
     /// The role module that handles the op; `None` for the ops `call` handles itself.
     fn route(self, role: AgentRole) -> Option<Route> {
         match self {
-            AgentOp::Notes => None,
+            AgentOp::Notes | AgentOp::PmAction => None,
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup | AgentOp::ReadAnnotations => {
                 None
             }
@@ -536,6 +538,7 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
             AgentOp::ReadAnnotations => super::ops::annotations::read(ctx, &envelope),
             AgentOp::Todo => super::ops::todo::call(ctx, &envelope),
             AgentOp::Notes => super::ops::notes::call(ctx, &envelope),
+            AgentOp::PmAction => super::ops::pm_actions::call(ctx, &envelope),
             AgentOp::MemoryList
             | AgentOp::MemoryRead
             | AgentOp::MemoryPut

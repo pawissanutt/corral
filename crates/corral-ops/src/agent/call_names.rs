@@ -13,6 +13,7 @@ impl AgentOp {
             AgentOp::Progress => "progress",
             AgentOp::Todo => "todo",
             AgentOp::Notes => "notes",
+            AgentOp::PmAction => "pm_action",
             AgentOp::Checkpoint => "checkpoint",
             AgentOp::Evidence => "evidence",
             AgentOp::Artifact => "artifact",

@@ -42,7 +42,7 @@ use recipients::recipients;
 mod snapshot_heads;
 mod stopping;
 pub use handling::{attend, guard};
-pub(crate) use handling::{reconcile, reconcile_projected, reconcile_sampled};
+pub(crate) use handling::{attend_by_pm, reconcile, reconcile_projected, reconcile_sampled};
 #[cfg(test)]
 pub(crate) mod handling_tests;
 

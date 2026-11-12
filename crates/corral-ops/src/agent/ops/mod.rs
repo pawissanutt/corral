@@ -16,6 +16,7 @@ pub(crate) mod owner_action;
 mod owner_input;
 pub(crate) mod planning;
 pub(crate) mod pm;
+pub(crate) mod pm_actions;
 mod pm_bound;
 mod pm_inbox;
 pub(crate) mod reviewer;

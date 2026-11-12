@@ -19,6 +19,7 @@ export function pmRole(root: string): RoleModule {
     upstreamTools: ["read", "edit", "write", "grep", "find", "ls", "bash"],
     corralOps: OPS,
     tools: (context) => context.todo === true ? [...tools, sessionTodoTool] : tools,
+    // HostSession captures this once per launch; reload/compaction reuse the same contract.
     contract: (context) => `${renderContract(readAsset(root, CONTEXT_ASSET), context.identity)}\n\n`
       + requestContract(root, context.todo) + "\n\n" + askUserContract(context) + operationalContext(context.promptFile),
     extend(pi) {

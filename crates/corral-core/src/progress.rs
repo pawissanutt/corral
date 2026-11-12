@@ -119,6 +119,9 @@ pub struct StepWait {
     /// In-memory review deadline; persisted separately to preserve the strict legacy shape.
     #[serde(default, skip_serializing)]
     pub deadline: Option<Timestamp>,
+    /// In-memory predicates; persisted with the deadline, never in the legacy ledger.
+    #[serde(default, skip_serializing)]
+    pub checks: Vec<crate::ResumeCheck>,
 }
 
 impl RunProgress {
