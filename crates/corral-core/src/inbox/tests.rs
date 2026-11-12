@@ -406,3 +406,53 @@ fn a_head_reservation_reserves_and_publishes_as_the_full_one_does() {
     assert_eq!(observed[0], observed[1]);
     assert_eq!(observed[1].5, 2);
 }
+
+#[test]
+fn a_refused_envelope_reads_back_held_not_failed_until_requeued() {
+    // Given a PM wake whose envelope the bound host refused before admission:
+    let (_root, store) = fixture();
+    let inbox = Inbox::new(&store, Recipient::Pm).unwrap();
+    let message = inbox.post(post("wake", Urgency::Wake)).unwrap();
+    let mut envelope = publish(&inbox, "g7", false).unwrap();
+    inbox
+        .begin_attempt(&mut envelope, Timestamp::now())
+        .unwrap();
+    let refusal = Refusal {
+        attempt: 1,
+        code: "input_limit".into(),
+        generation: Some(7),
+    };
+    inbox.record_refusal(envelope.number, &refusal).unwrap();
+    inbox
+        .finish_attempt(
+            &mut envelope,
+            SendOutcome::Rejected {
+                reason: "input_limit".into(),
+                retryable_after_fix: true,
+            },
+        )
+        .unwrap();
+
+    // Then its readback reports the hold, not a terminal state:
+    let entry = inbox.entry(message.seq).unwrap();
+    assert_eq!(entry.terminal, None);
+    let hold = InboxHold {
+        envelope: 1,
+        code: "input_limit".into(),
+        generation: Some(7),
+        supervised: false,
+        release: PM_REPLACE.into(),
+    };
+    assert_eq!(entry.hold, Some(hold));
+    // And retry inspection names the replacement that releases it:
+    let inspection = inbox.inspect_retry(message.seq).unwrap();
+    assert_eq!(inspection.reason_code, "held_for_replacement");
+    assert_eq!(inspection.next_action, PM_REPLACE);
+
+    // Once requeued for the replacement, it is no longer held:
+    {
+        let _deliver = inbox.delivery_lock().unwrap();
+        inbox.requeue_refused(&envelope, &refusal).unwrap();
+    }
+    assert_eq!(inbox.entry(message.seq).unwrap().hold, None);
+}

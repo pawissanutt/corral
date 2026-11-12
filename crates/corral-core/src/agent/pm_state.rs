@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 pub use super::pm_records::{Retention, RetentionLimits, Selection};
-use super::{AGENT_RECORD_VERSION, AgentRunState};
+use super::{AGENT_RECORD_VERSION, AgentRunState, RetiredGeneration};
 use crate::Store;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -98,6 +98,15 @@ pub fn child_count(store: &Store, kind: &str) -> Result<u64> {
 /// either family nears its cap. Call under the same transaction as the limit check it precedes.
 pub fn retain(store: &Store, limits: &RetentionLimits) -> Result<Retention> {
     super::pm_records::retain(store, limits)
+}
+
+/// The usage attribution of every retired PM generation, oldest first. History for usage
+/// reporting only; read it after the PM state it completes, since records are only added.
+pub fn retired_generations(store: &Store) -> Result<Vec<RetiredGeneration>> {
+    if store.has_record_unit() {
+        return super::pm_records::retired(store);
+    }
+    super::pm_records::retired(&store.read_only_snapshot()?)
 }
 
 /// The binding and current host generation, independent of retained history.

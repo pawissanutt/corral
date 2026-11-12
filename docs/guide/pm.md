@@ -176,8 +176,10 @@ binding and target scope when it commits.
 
 `brief` and `next` return bounded cards: only evidence previews (and, as a last
 resort, the idea shortlist) are shortened, never action identity or authority.
-Read full evidence with `read_show` using `overview` and `automation`; briefs
-also report how many pending questions were omitted when the list cannot fit.
+Task cards supply separate `read_show` follow-ups with `{task, section:"overview"}`
+and `{task, section:"automation"}` payloads; taskless cards supply `read_brief` with
+an empty payload to refresh context. Omitted evidence totals remain explicit, and
+briefs also report how many pending questions were omitted when the list cannot fit.
 
 `read_show` is bounded because this role has no raw filesystem tool. Its
 payload is `{task, section?, offset?, limit?}`: `section` is `overview`

@@ -387,6 +387,23 @@ pub struct Refusal {
     pub generation: Option<u32>,
 }
 
+/// The owner command that replaces the PM, releasing an envelope its host refused.
+pub const PM_REPLACE: &str = "corral pm relaunch --replace --reason input_limit";
+
+/// A message whose open envelope its bound session refused before admission ([`Refusal`]):
+/// not failed, held without another send until the session is replaced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InboxHold {
+    pub envelope: u64,
+    pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u32>,
+    /// `pm.supervise`: `corral sync --watch` replaces the PM by itself.
+    pub supervised: bool,
+    /// The owner command that replaces the PM and so releases the hold.
+    pub release: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope {
     pub number: u64,
@@ -433,4 +450,7 @@ pub struct InboxEntry {
     pub terminal: Option<TerminalState>,
     pub effect: Option<Effect>,
     pub envelope: Option<Envelope>,
+    /// Set while the envelope waits for its refusing session's replacement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<InboxHold>,
 }

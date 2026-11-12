@@ -43,10 +43,14 @@ fn project(action: &PmAction, limit: usize, items: usize, shortlist: usize) -> R
     if !action.shortlist.is_empty() {
         value["shortlist"] = serde_json::to_value(&action.shortlist[..shortlist])?;
     }
-    let mut follow_up = json!({"op":"read_show","sections":["overview","automation"]});
-    if let Some(task) = &action.task {
-        follow_up["task"] = json!(task);
-    }
+    let follow_up = if let Some(task) = &action.task {
+        json!([
+            {"op":"read_show","payload":{"task":task,"section":"overview"}},
+            {"op":"read_show","payload":{"task":task,"section":"automation"}},
+        ])
+    } else {
+        json!([{"op":"read_brief","payload":{}}])
+    };
     value["bounded"] = json!({
         "evidence_chars_omitted": omitted,
         "evidence_items_dropped": action.evidence.len() - items,

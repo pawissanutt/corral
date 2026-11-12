@@ -239,12 +239,12 @@ fn relaunch(ctx: &Ctx, container: &ContainerRef, state: &AgentRunState) -> Resul
 }
 
 pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> Result<Value> {
-    Ok(recover(ctx, container, replace, None)?.0)
+    launch::resume_container(ctx, container, replace)
 }
 
 #[path = "recovery_launch.rs"]
 mod launch;
-pub(crate) use launch::RecoveryLaunch;
+pub(crate) use launch::{PmRecoveryLease, RecoveryLaunch};
 
 /// Resume, or with `adopt` (`corral pi` taking over a dead PM) the same fencing, drain and
 /// notice with generation n+1 opened in the adopting pane and launched in-process from the
@@ -261,6 +261,7 @@ pub(crate) fn recover(
 
 /// `recover` with a rewind's restore stages run after the fence, the drain and the
 /// classification of the lost generation's calls, before the next generation opens (T-575).
+/// PM callers hold `PmRecoveryLease` through startup submission; rewind is worker-only.
 pub(crate) fn recover_with(
     ctx: &Ctx,
     container: &ContainerRef,

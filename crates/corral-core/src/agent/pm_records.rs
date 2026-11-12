@@ -6,15 +6,21 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{AgentPm, NativeRecord, paths};
+use super::{AgentPm, NativeRecord, RetiredGeneration, paths};
 use crate::Store;
 
 const ENDED: &str = "agent-pm-ended-turns";
+/// One `RetiredGeneration` per retired generation, keyed by its zero-padded number. History
+/// only: no PM head read or update loads it.
+const RETIRED: &str = "agent-pm-retired-generations";
 /// The normalized head layout.
 const LAYOUT: u32 = 2;
-/// Layout 2 plus the retired-generation archive. Binaries that know only layout 2 refuse it
-/// rather than drop the archive and resurrect retired generations: retirement is one-way.
+/// Layout 2 plus retired generations (the head's floor and the history records). Binaries that
+/// know only layout 2 refuse it rather than resurrect retired generations: retirement is
+/// one-way.
 const LAYOUT_RETIRED: u32 = 3;
+/// Families whose changes can make a previously fruitless retention pass reclaim something.
+const RETENTION_PINS: [&str; 5] = ["generations", "receipts", "questions", "jobs", "wakes"];
 
 #[path = "pm_retention.rs"]
 mod retention;
@@ -23,6 +29,15 @@ pub use retention::{Retention, RetentionLimits};
 
 fn supported(layout: u32) -> bool {
     matches!(layout, LAYOUT | LAYOUT_RETIRED)
+}
+
+/// The usage attribution of every retired generation, oldest first.
+pub(super) fn retired(store: &Store) -> Result<Vec<RetiredGeneration>> {
+    store
+        .record_rows(RETIRED)?
+        .into_iter()
+        .map(|row| serde_json::from_value(row.doc).context("decoding a retired PM generation"))
+        .collect()
 }
 
 pub(super) const KINDS: [&str; 10] = [
@@ -88,6 +103,9 @@ pub(super) struct Head {
     next: BTreeMap<String, u64>,
     #[serde(with = "fixed_counts")]
     counts: BTreeMap<String, u64>,
+    /// The last retention pass reclaimed nothing; cleared by any change that could let it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    idle: Option<retention::Idle>,
     pm: AgentPm,
 }
 
@@ -225,6 +243,7 @@ fn head(pm: AgentPm, rows: &Children) -> Head {
         layout: LAYOUT,
         next: counts.clone(),
         counts,
+        idle: None,
         pm,
     }
 }
@@ -236,8 +255,9 @@ pub(super) fn save(store: &Store, old: Option<&(Head, AgentPm)>, pm: &AgentPm) -
         .map(|(_, pm)| split(pm).map(|(_, rows)| rows))
         .transpose()?
         .unwrap_or_default();
-    // Counters and the retired-generation archive come from the stored head: retention may
-    // have rewritten them earlier in this same transaction, after `old` was read.
+    // Counters, the retention watermark and the retired-generation floor come from the stored
+    // head: retention may have rewritten them earlier in this same transaction, after `old`
+    // was read.
     let stored = store.record::<Value>("agent-pm", "current")?;
     let legacy = stored.as_ref().is_some_and(|d| d.get("layout").is_none());
     let mut head = match stored.filter(|_| !legacy && old.is_some()) {
@@ -253,6 +273,12 @@ pub(super) fn save(store: &Store, old: Option<&(Head, AgentPm)>, pm: &AgentPm) -
         head.layout = LAYOUT_RETIRED;
     }
     let floor = head.pm.state.retired.as_ref().map_or(0, |r| r.floor);
+    let current = u64::from(head.pm.state.binding.generation);
+    // What can make a fruitless retention pass reclaim something clears its watermark: any
+    // removal from a pinning family, any generation write, a write to a receipt of another
+    // generation, and a changed question, job or wake. Writing a current-generation receipt
+    // (never evictable) or adding a question, job or wake (only more pins) cannot.
+    let mut pins_changed = false;
     if legacy {
         head.next.clear();
         head.counts.clear();
@@ -265,6 +291,7 @@ pub(super) fn save(store: &Store, old: Option<&(Head, AgentPm)>, pm: &AgentPm) -
                 store.delete_record(ENDED, &format!("{:020}", child.ordinal))?;
             }
             store.delete_record(&area(kind), key)?;
+            pins_changed |= RETENTION_PINS.contains(&kind.as_str());
             store.delete_record(&work_area(kind), key)?;
             let count = head.counts.entry(kind.clone()).or_default();
             *count = count.saturating_sub(1);
@@ -286,6 +313,12 @@ pub(super) fn save(store: &Store, old: Option<&(Head, AgentPm)>, pm: &AgentPm) -
             None
         } else {
             store.record(&area(kind), key)?
+        };
+        pins_changed |= match kind.as_str() {
+            "generations" => true,
+            "receipts" => child.record["identity"]["generation"].as_u64() != Some(current),
+            "questions" | "jobs" | "wakes" => existing.is_some(),
+            _ => false,
         };
         child.ordinal = if let Some(old) = existing {
             old.ordinal
@@ -315,6 +348,9 @@ pub(super) fn save(store: &Store, old: Option<&(Head, AgentPm)>, pm: &AgentPm) -
         } else {
             store.delete_record(&work_area(kind), key)?;
         }
+    }
+    if pins_changed {
+        head.idle = None;
     }
     // Match event retention: evict oldest ended turns only; open turns are never lost.
     while head.counts.get("turns").copied().unwrap_or(0) > super::TURNS_MAX as u64 {
@@ -387,8 +423,10 @@ pub(super) fn delete(store: &Store) -> Result<()> {
             }
         }
     }
-    for row in store.record_rows(ENDED)? {
-        store.delete_record(ENDED, &row.key)?;
+    for index in [ENDED, RETIRED] {
+        for row in store.record_rows(index)? {
+            store.delete_record(index, &row.key)?;
+        }
     }
     store.delete_record("agent-pm", "current")
 }
