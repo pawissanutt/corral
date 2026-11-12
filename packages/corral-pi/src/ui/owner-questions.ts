@@ -2,6 +2,7 @@
 // Asking never opens UI. Only the owner's command, shortcut or click opens the answer dialog.
 import type { ExtensionAPI, ExtensionContext, ExtensionUIContext, SessionProjection } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { askDialog, sequential } from "../host/ask-user.ts";
 import type { ChoiceAnswer, PendingQuestion, PendingQuestions } from "../host/pending-questions.ts";
 
 export const QUESTIONS_COMMAND = "questions";
@@ -171,14 +172,21 @@ export class OwnerQuestionUi {
     }
   }
 
+  /** One dialog for the batch; only a deliberate Submit with every question answered is an answer. */
   private async collect(ui: ExtensionUIContext, q: PendingQuestion, signal: AbortSignal): Promise<ChoiceAnswer[] | undefined> {
+    const questions = q.questions.map(choice => ({ question: choice.question, options: choice.options.map(label => ({ label })),
+      ...(choice.freeText === undefined ? {} : { freeText: choice.freeText }) }));
+    const shown = await askDialog(ui, questions, signal, { escape: "Esc keeps it pending", complete: true });
+    if (signal.aborted) return undefined;
+    if (shown && !shown.submitted) return undefined;
+    const raw = shown?.answers ?? await sequential(ui, questions, signal);
+    if (signal.aborted) return undefined;
     const answers: ChoiceAnswer[] = [];
-    for (const choice of q.questions) {
-      const option = await ui.select(choice.question, choice.options, { signal, timeout: 300_000 });
-      if (signal.aborted || option === undefined || !choice.options.includes(option)) return undefined;
-      const text = choice.freeText ? await ui.input("Optional additional text (leave empty to skip)", "", { signal, timeout: 300_000 }) : "";
-      if (signal.aborted || text === undefined) return undefined;
-      answers.push({ option, ...(text ? { text } : {}) });
+    for (const a of raw) {
+      if (!a) return undefined;
+      const text = a.text.trim();
+      if (a.selected.length === 0) { if (!text) return undefined; answers.push({ text }); }
+      else answers.push({ option: a.selected[0]!, ...(text ? { text } : {}) });
     }
     return answers;
   }

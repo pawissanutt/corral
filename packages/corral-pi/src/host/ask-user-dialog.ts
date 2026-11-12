@@ -1,12 +1,16 @@
 // The owner's question dialog: every question of one ask_user call in one component, one tab per
 // question plus Submit. Questions are answered in any order and revisable until Submit; Escape (or
 // the caller's timeout) ends the dialog keeping whatever was answered, so a partial batch survives.
+// Unless freeText is false, an Other row takes the owner's own typed answer instead of an option;
+// with freeText true that row is a note on the chosen option. Drafts stay per question.
 import { decodeKittyPrintable, matchesKey, truncateToWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 
 export type Choice = { label: string; description?: string };
 export type DialogQuestion = { question: string; header?: string; options: Choice[]; multiSelect?: boolean; freeText?: boolean };
+/** `selected` is empty for the owner's own typed answer, which is then the nonempty `text`. */
 export type DialogAnswer = { selected: string[]; text: string };
 export type DialogResult = { submitted: boolean; answers: (DialogAnswer | undefined)[] };
+export type DialogOptions = { escape?: string; complete?: boolean };
 
 const PASTE_START = "\x1b[200~";
 const PASTE_END = "\x1b[201~";
@@ -32,8 +36,9 @@ export class AskDialog implements Component {
   private readonly notes: string[];
   private finished = false;
 
+  /** `complete` keeps Submit until every question is answered; `escape` names what Esc does. */
   constructor(private readonly questions: DialogQuestion[], private readonly done: (result: DialogResult) => void,
-    private readonly changed: () => void = () => {}) {
+    private readonly changed: () => void = () => {}, private readonly options: DialogOptions = {}) {
     this.answers = questions.map(() => undefined);
     this.picks = questions.map(() => new Set());
     this.notes = questions.map(() => "");
@@ -47,7 +52,15 @@ export class AskDialog implements Component {
   }
 
   private get onSubmit(): boolean { return this.tab === this.questions.length; }
-  private rows(q: DialogQuestion): number { return q.options.length + (q.freeText ? 1 : 0); }
+  private rows(q: DialogQuestion): number { return q.options.length + (q.freeText === false ? 0 : 1); }
+  private picked(i: number): string[] {
+    return this.questions[i]!.options.map((o) => o.label).filter((l) => this.picks[i]!.has(l));
+  }
+  /** The text row annotates a chosen option only for freeText questions; otherwise it is Other. */
+  private noting(i: number): boolean {
+    const q = this.questions[i]!;
+    return q.freeText === true && (!!this.answers[i]?.selected.length || (!!q.multiSelect && this.picks[i]!.size > 0));
+  }
 
   private go(tab: number): void {
     this.tab = Math.max(0, Math.min(this.questions.length, tab));
@@ -63,7 +76,7 @@ export class AskDialog implements Component {
 
   private confirm(i: number, selected: string[]): void {
     if (selected.length === 0) return;
-    this.answers[i] = { selected, text: this.notes[i] ?? "" };
+    this.answers[i] = { selected, text: this.questions[i]!.freeText === true ? this.notes[i] ?? "" : "" };
     this.advance();
   }
 
@@ -78,8 +91,10 @@ export class AskDialog implements Component {
     if (matchesKey(data, "tab") || matchesKey(data, "right")) return this.go(this.tab + 1);
     if (matchesKey(data, "shift+tab") || matchesKey(data, "left")) return this.go(this.tab - 1);
     if (this.onSubmit) {
-      if (matchesKey(data, "enter")) this.finish(true);
-      return;
+      if (!matchesKey(data, "enter")) return;
+      const missing = this.answers.findIndex((a) => a === undefined);
+      if (this.options.complete && missing >= 0) return this.go(missing);
+      return this.finish(true);
     }
     const i = this.tab;
     const q = this.questions[i]!;
@@ -87,28 +102,40 @@ export class AskDialog implements Component {
     if (matchesKey(data, "down")) { this.cursor = Math.min(this.rows(q) - 1, this.cursor + 1); return; }
     const option = q.options[this.cursor];
     if (option === undefined) {
-      // The note row of a free-text question: typing edits it, Enter confirms the question.
+      // The text row: typing edits the draft; Enter saves a note, or uses the text as the answer.
       const answer = this.answers[i];
       const typed = noteText(data);
       if (typed !== undefined) this.notes[i] = (this.notes[i] ?? "") + typed;
       else if (matchesKey(data, "backspace")) this.notes[i] = (this.notes[i] ?? "").slice(0, -1);
       else if (matchesKey(data, "enter")) {
-        if (answer) this.advance();
-        else if (!q.multiSelect) this.cursor = 0;
-        else this.confirm(i, q.options.map((o) => o.label).filter((l) => this.picks[i]!.has(l)));
+        const own = (this.notes[i] ?? "").trim();
+        const picked = answer?.selected.length ? answer.selected : q.multiSelect ? this.picked(i) : [];
+        if (this.noting(i)) return this.confirm(i, picked);
+        if (own) {
+          this.picks[i]!.clear();
+          this.answers[i] = { selected: [], text: own };
+          return this.advance();
+        }
+        if (answer) return this.advance();
+        if (picked.length) return this.confirm(i, picked);
+        this.cursor = 0;
         return;
       }
-      if (answer) answer.text = this.notes[i] ?? "";
+      if (!answer) return;
+      if (answer.selected.length === 0) {
+        const own = (this.notes[i] ?? "").trim();
+        this.answers[i] = own ? { selected: [], text: own } : undefined;
+      } else if (q.freeText === true) answer.text = this.notes[i] ?? "";
       return;
     }
     if (q.multiSelect) {
       const picks = this.picks[i]!;
       if (matchesKey(data, "space")) {
         if (picks.has(option.label)) picks.delete(option.label); else picks.add(option.label);
-        if (this.answers[i]) this.answers[i] = picks.size ? { selected: q.options.map((o) => o.label).filter((l) => picks.has(l)), text: this.notes[i] ?? "" } : undefined;
+        if (this.answers[i]) this.answers[i] = picks.size ? { selected: this.picked(i), text: q.freeText === true ? this.notes[i] ?? "" : "" } : undefined;
       } else if (matchesKey(data, "enter")) {
         if (picks.size === 0) picks.add(option.label);
-        this.confirm(i, q.options.map((o) => o.label).filter((l) => picks.has(l)));
+        this.confirm(i, this.picked(i));
       }
       return;
     }
@@ -118,15 +145,17 @@ export class AskDialog implements Component {
   render(width: number): string[] {
     const fit = (line: string) => truncateToWidth(line, Math.max(1, width));
     const label = (q: DialogQuestion, i: number) => q.header ?? `Q${i + 1}`;
+    const escape = this.options.escape ?? "Esc send answered only";
     const tabs = this.questions.map((q, i) => `${this.answers[i] ? "✓" : "○"} ${label(q, i)}`).concat("Submit")
       .map((t, i) => (i === this.tab ? `[${t}]` : ` ${t} `)).join(" ");
     const out = [fit(tabs), ""];
     if (this.onSubmit) {
       this.questions.forEach((q, i) => {
         const a = this.answers[i];
-        out.push(fit(`${label(q, i)}: ${a ? a.selected.join(", ") + (a.text ? ` (${a.text})` : "") : "unanswered"}`));
+        const shown = !a ? "unanswered" : a.selected.length ? a.selected.join(", ") + (a.text ? ` (${a.text})` : "") : `Other: ${a.text}`;
+        out.push(fit(`${label(q, i)}: ${shown}`));
       });
-      out.push("", fit("Enter submit · ←/→ revise · Esc send answered only"));
+      out.push("", fit(`Enter submit · ←/→ revise · ${escape}`));
       return out;
     }
     const q = this.questions[this.tab]!;
@@ -138,8 +167,17 @@ export class AskDialog implements Component {
       out.push(fit(`${row === this.cursor ? ">" : " "} ${box} ${o.label}`));
       if (o.description) out.push(...wrapTextWithAnsi(o.description, Math.max(10, width - 8)).map((l) => fit(`        ${l}`)));
     });
-    if (q.freeText) out.push(fit(`${this.cursor === q.options.length ? ">" : " "} Note: ${this.notes[this.tab] ?? ""}_`));
-    out.push("", fit(`↑/↓ move · ${q.multiSelect ? "Space toggle · Enter confirm" : "Enter choose"} · ←/→ questions · Esc send answered only`));
+    const onText = this.cursor === q.options.length;
+    const noting = this.noting(this.tab);
+    if (q.freeText !== false) {
+      const draft = this.notes[this.tab] ?? "";
+      const box = noting ? "   " : answer && answer.selected.length === 0 ? "(•)" : "( )";
+      const shown = draft || (onText ? "" : noting ? "add a note" : "type your own answer");
+      out.push(fit(`${onText ? ">" : " "} ${box} ${noting ? "Note" : "Other"}: ${shown}${onText ? "_" : ""}`));
+    }
+    const keys = onText ? `Enter ${noting ? "save note" : "use answer"}`
+      : q.multiSelect ? "Space toggle · Enter confirm" : "Enter choose";
+    out.push("", fit(`↑/↓ move · ${keys} · ←/→ questions · ${escape}`));
     return out;
   }
 

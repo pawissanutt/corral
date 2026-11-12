@@ -60,7 +60,7 @@ test("dialog presents options and returns and records the owner's choice and tex
     input: async () => "Extra detail",
   } } as unknown as ExtensionToolContext;
   const result = await askUserTool(async (answer) => { recorded.push(answer); return answer; }).execute("id", params, undefined, undefined, ctx);
-  expect(seen).toEqual(["Which?", ["One", "Two"]]);
+  expect(seen).toEqual(["Which?", ["One", "Two", "Other (type an answer)"]]);
   expect(result.content).toEqual([{ type: "text", text: "Which?: Two\nExtra detail" }]);
   expect(recorded).toEqual(["Which?: Two\nExtra detail"]);
 });
