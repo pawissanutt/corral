@@ -141,6 +141,28 @@ the loop lease and fence, the supervisor inside the daemon loop, the BoardView p
 `corral list --view`, and the wire schema. See [the daemon guide](../guide/daemon.md). The
 "Supervisor" and "Step 3b" parts of this record describe the watch driver it replaces.
 
+It went live on the owner's machine on November 12 at about 16:20 UTC, on the owner's
+instruction: main was fast-forwarded to the merged branch, the `corral` binary replaced,
+`corral-sync.service` stopped and removed, `corrald@st-102a13cc075bda04.service` installed
+and enabled, and the board restarted as a viewer. The Pi host and its assets were not
+touched. The "Supervisor" row of "Live rollout" below describes the state before this.
+
+| Check on the live machine | Result |
+|---|---|
+| Health after start | `daemon healthy · herdr-tui ok · PM live` |
+| First pass | About 70 s under host load; later passes about 10 s |
+| Upgrade path | Replacing the binary made the daemon finish its pass and exit 75; systemd restarted it on the new binary two seconds later |
+| PM | Told through its inbox (PMI-63); it verified the health line and updated its brief |
+| Found live | The board nudged the daemon on every periodic tick, so the daemon ran at 31% of a core. Fixed in `55c6601f`: periodic ticks only read back. Afterwards, with one gate and two agents running: daemon 15%, board 14% |
+| Not exercised | PM recovery by the daemon, a reboot |
+
+Checks before the merge: three independent reviews (16 findings, all fixed; the fixes for
+the third were not re-read), a full gate on `0a5293dd` that passed everything except the
+same four live host-resume tests in the Pi lane, and on the merge with main (`e7271091`)
+formatting, the size limit, clippy and 5,739 workspace tests. The two small commits after
+that (`daf59e96`, `55c6601f`) were checked with clippy and the tests of the crates they
+touch.
+
 ## Live rollout, November 12
 
 Done on the owner's instruction, outside the board. Install evidence (hashes, logs, the
