@@ -167,6 +167,7 @@ fn busy_wait(count: i32) -> bool {
     if u128::from(waited + delay) > BUSY_TIMEOUT.as_millis() {
         return false;
     }
+    let _wait = crate::timing::SQLITE_BUSY.start();
     std::thread::sleep(Duration::from_millis(delay));
     true
 }
@@ -467,6 +468,7 @@ impl StoreBackend for SqliteBackend {
     }
 
     fn apply(&self, op: Operation) -> Result<Committed, ApplyError> {
+        let _apply = crate::timing::SQLITE_APPLY.start();
         let hooks = Hooks {
             faults: Arc::clone(&self.options.faults),
             barrier: self.options.barrier.clone(),

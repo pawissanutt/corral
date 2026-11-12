@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use crate::Ctx;
 
 pub fn pm_health(ctx: &Ctx) -> Result<Value> {
+    let _span = corral_core::timing::span("pm.health");
     let mut unfinished = Vec::new();
     // This historical owner readback intentionally includes Done tasks (FU-2).
     // Keep its historical diagnostics, without hydrating unrelated task families.
@@ -13,22 +14,28 @@ pub fn pm_health(ctx: &Ctx) -> Result<Value> {
         status: "done".into(),
     })?;
     heads.sort_by_key(|head| head.num);
-    for head in heads {
-        let runs =
-            crate::pm_next::heads::rows(ctx, &head, &RowQuery::part(TaskPart::Run).newest_first())?;
-        let children = crate::pm_next::heads::rows(
-            ctx,
-            &head,
-            &RowQuery::part(TaskPart::ReviewRun).newest_first(),
-        )?;
-        for run in runs {
-            for row in std::iter::once(&run).chain(
-                children
-                    .iter()
-                    .filter(|child| child.key.starts_with(&format!("{}/", run.key))),
-            ) {
-                if row.doc["ended"].is_null() || row.doc["outcome"].is_null() {
-                    unfinished.push(json!({"task":head.id,"run":row.doc["id"]}));
+    {
+        let _span = corral_core::timing::span("pm.health.done_runs");
+        for head in heads {
+            let runs = crate::pm_next::heads::rows(
+                ctx,
+                &head,
+                &RowQuery::part(TaskPart::Run).newest_first(),
+            )?;
+            let children = crate::pm_next::heads::rows(
+                ctx,
+                &head,
+                &RowQuery::part(TaskPart::ReviewRun).newest_first(),
+            )?;
+            for run in runs {
+                for row in std::iter::once(&run).chain(
+                    children
+                        .iter()
+                        .filter(|child| child.key.starts_with(&format!("{}/", run.key))),
+                ) {
+                    if row.doc["ended"].is_null() || row.doc["outcome"].is_null() {
+                        unfinished.push(json!({"task":head.id,"run":row.doc["id"]}));
+                    }
                 }
             }
         }
@@ -38,7 +45,10 @@ pub fn pm_health(ctx: &Ctx) -> Result<Value> {
         "selected_socket":ctx.herdr.socket_path()?,
         "done_unfinished_runs":unfinished,
         "last_version_skew":ctx.store.events_of(None, &["version_skew"])?.last(),
-        "policy_delivery":crate::pm_policy::pm_policy_health(ctx)?,
+        "policy_delivery":({
+            let _span = corral_core::timing::span("pm.health.policy");
+            crate::pm_policy::pm_policy_health(ctx)?
+        }),
         "supervisor":crate::pm_supervisor::health(ctx)?,
         "usage_guard":crate::pm_usage_guard::health(ctx)?,
     }))

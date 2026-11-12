@@ -149,8 +149,11 @@ impl Store {
             .truncate(false)
             .open(&path)
             .with_context(|| format!("opening {}", path.display()))?;
-        f.lock()
-            .with_context(|| format!("locking {}", path.display()))?;
+        {
+            let _wait = crate::timing::LOCK_WAIT.start();
+            f.lock()
+                .with_context(|| format!("locking {}", path.display()))?;
+        }
         let guard = StoreLock::new(f);
         if self.submission_barrier.is_some() {
             self.submission_barrier(&format!("lock:{name}"));
@@ -178,11 +181,13 @@ impl Store {
             .truncate(false)
             .open(&path)
             .with_context(|| format!("opening {}", path.display()))?;
-        match if shared {
+        let result = if shared {
             f.try_lock_shared()
         } else {
             f.try_lock()
-        } {
+        };
+        crate::timing::record_lock_try(result.is_err());
+        match result {
             Ok(()) => Ok(Some(StoreLock::new(f))),
             Err(fs::TryLockError::WouldBlock) => Ok(None),
             Err(fs::TryLockError::Error(e)) => {
@@ -345,6 +350,7 @@ impl Store {
             .canonicalize()
             .with_context(|| format!("resolving {}", root.display()))?;
         let dir = root.join(".corral");
+        crate::timing::register_store(&dir);
         let db = db::open(&dir)?;
         let mut store = Store {
             root: root.to_path_buf(),

@@ -70,6 +70,7 @@ pub fn stream_blob(
 ) -> Result<()> {
     oid(blob)?;
     super::work::record();
+    let timer = super::work::timed();
     let mut command = Command::new("git");
     super::scrub_env(&mut command, std::env::vars_os().map(|(n, _)| n));
     let mut child = command
@@ -97,6 +98,7 @@ pub fn stream_blob(
         let _ = child.kill();
     }
     let status = child.wait().context("waiting for git cat-file blob")?;
+    drop(timer);
     result?;
     ensure!(status.success(), "git cat-file blob failed: {status}");
     Ok(())

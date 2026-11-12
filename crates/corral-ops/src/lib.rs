@@ -160,6 +160,7 @@ mod tasks;
 pub mod throughput;
 mod thumbnails;
 pub mod timeline;
+pub mod timing;
 mod tracker;
 pub use plan_recovery::{PlanRecovery, RecoveryResource, plan_recovery_inventory};
 mod transcripts;

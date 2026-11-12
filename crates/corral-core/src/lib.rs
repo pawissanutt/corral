@@ -102,6 +102,7 @@ pub mod sqlite;
 pub mod storage_roots;
 pub mod store;
 pub mod task_ref;
+pub mod timing;
 mod ui;
 mod usage;
 mod verification;

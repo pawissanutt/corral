@@ -620,6 +620,7 @@ impl Herdr {
     fn raw(&self, args: &[&str]) -> Result<String> {
         work::record();
         let label = args.join(" ");
+        let timer = work::timed();
         let out = Command::new(&self.bin)
             .args(self.full_args(args))
             .stdin(Stdio::null())
@@ -631,6 +632,7 @@ impl Herdr {
                     anyhow::Error::new(error).context(format!("running herdr {label}"))
                 }
             })?;
+        drop(timer);
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
         let err = find_error(&stdout).or_else(|| find_error(&stderr));
