@@ -27,6 +27,18 @@ pub enum StorageCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Inspect or reclaim only explicitly declared private rebuildable outputs of inactive tasks
+    Outputs {
+        #[arg(long, conflicts_with_all = ["yes", "due"], required_unless_present_any = ["yes", "due"])]
+        dry_run: bool,
+        #[arg(long, conflicts_with = "due")]
+        yes: bool,
+        #[arg(long)]
+        json: bool,
+        /// Internal bounded asynchronous lifecycle worker
+        #[arg(long, hide = true)]
+        due: bool,
+    },
     /// Copy the database and every live blob into DIR/.corral under a storage lease, each blob
     /// verified against its hash; the copy opens with `corral --root DIR`
     Backup {
@@ -69,6 +81,33 @@ pub fn run(ctx: &Ctx, cmd: StorageCmd) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 print_report(&report);
+            }
+            Ok(())
+        }
+        StorageCmd::Outputs { yes, json, due, .. } => {
+            if due {
+                return corral_ops::storage_gc::outputs::output_pass(ctx, ctx.store.now());
+            }
+            let entries = corral_ops::storage_gc::outputs::output_gc(ctx, yes)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&entries)?);
+            } else {
+                for entry in entries {
+                    println!(
+                        "{}:{} [{}] {} bytes={} reclaimed={} {:?}: {}",
+                        entry.task,
+                        entry.run.as_deref().unwrap_or("unknown"),
+                        entry.output_class,
+                        entry.path.display(),
+                        entry
+                            .measured_bytes
+                            .map(|b| b.to_string())
+                            .unwrap_or_else(|| "unknown".into()),
+                        entry.reclaimed_bytes,
+                        entry.disposition,
+                        entry.reason
+                    );
+                }
             }
             Ok(())
         }

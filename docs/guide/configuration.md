@@ -1112,6 +1112,7 @@ Database, blob, scratch and retention settings. Defaults come from `StorageCfg`
 | `review_scratch_warn` | `"2GiB"` | Per-attempt scratch size that emits one `storage_scratch_warning` and one steering message. Nothing is deleted. |
 | `review_evidence_max` | `"64MiB"` | Cap on files promoted by `--evidence PATH` on `verdict`, `plan verdict` and `plan aggregate-verdict`. |
 | `blob_grace_hours` | `24` | How long an unreferenced blob survives before blob GC may delete it. Must be above 0. |
+| `outputs.<project>.<class>` | absent (disabled) | Opt-in private rebuildable output ownership (`kind`, relative `path`, `rebuildable = true`, `exclusive = true`, `grace_hours = 24`, and generated-file `extensions`). Registration never adopts nonempty directories. See [inactive outputs](storage.md#private-rebuildable-outputs-of-inactive-tasks). |
 | `view_max_age` | `30` | Seconds a read view stays valid before reads fail with `Expired`. Must be above 0. Expired idle views release their WAL snapshot during board maintenance, even if their owner retains the view. Larger overrides can delay WAL reset; keep interactive views short. |
 
 `<workspace-id>` is the first 16 hex digits of the SHA-256 of the canonical workspace root;

@@ -178,6 +178,7 @@ fn add_artifact_inner(
     if !matches!(target, Target::Promotion) {
         crate::assistant_artifacts::check_owner(None)?;
     }
+    let _output_consumer = crate::storage_gc::outputs::protect_artifact_source(ctx, path)?;
     let meta = std::fs::metadata(path)
         .with_context(|| format!("artifact {} not found", path.display()))?;
     if !meta.is_file() {

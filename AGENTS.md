@@ -96,6 +96,18 @@ not a workspace member, and not built or tested by `scripts/gate.sh`. It depends
   intercepted; use `bash scripts/cargo.sh <args>` to share artifacts. See
   [build cache](docs/guide/build-cache.md) for settings, policy capture and rollback.
 
+### Private generated outputs
+
+`storage.outputs.<project>.<class>` is an opt-in exclusive/rebuildable ownership contract, not
+permission to scan arbitrary target/build/dist directories. Keep source, evidence, credentials,
+dependencies and caches outside declared outputs. Only empty private Git-ignored directories
+are registered before managed submission; existing unregistered contents are never adopted.
+Do not share generated executables across task outputs. Reclamation shares the task lock with
+state writers and authorized launch submission, requires absent panes/non-live hosts and complete
+consumer visibility, and fails closed on unsupported platforms. Sync only schedules the bounded
+output worker; never put byte/process walks in rendering or hot scheduling. See
+[storage](docs/guide/storage.md#private-rebuildable-outputs-of-inactive-tasks).
+
 ### Load testing: container only
 
 Never generate intentional CPU/memory load on the shared host: no host burners,

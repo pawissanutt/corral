@@ -55,7 +55,8 @@ pub(crate) fn policy_digest(ctx: &Ctx) -> Result<String> {
         .map(|name| (name, config.review_policy(Some(name), None).remove_worktree))
         .collect();
     let policy = serde_json::json!({
-        "version": 1,
+        "version": 2,
+        "outputs": config.storage.outputs,
         "remove_worktree": config.review_policy(None, None).remove_worktree,
         "projects": projects,
     });
@@ -88,11 +89,19 @@ pub fn lifecycle_pass(ctx: &Ctx, now: Timestamp) -> Result<()> {
         CURSOR.save(&ctx.store, "board", &cursor)?;
     }
     for row in ctx.store.lifecycle_due(now, BATCH)? {
+        if row.target != TARGET {
+            super::outputs::retire_disabled(ctx, &row, &digest, now)?;
+            continue;
+        }
         if let Err(error) = settle(ctx, &row.task, Some(&row), &digest, now) {
             report(&row.task, &error);
         }
     }
     for row in ctx.store.lifecycle_policy_other_than(&digest, BATCH)? {
+        if row.target != TARGET {
+            super::outputs::retire_disabled(ctx, &row, &digest, now)?;
+            continue;
+        }
         if let Err(error) = settle(ctx, &row.task, Some(&row), &digest, now) {
             report(&row.task, &error);
         }
@@ -360,7 +369,7 @@ pub(crate) fn record(
 }
 
 /// The next check of a deferred row: one minute, doubling up to an hour.
-fn next_check(stored: Option<&LifecycleRow>, now: Timestamp) -> Result<Timestamp> {
+pub(super) fn next_check(stored: Option<&LifecycleRow>, now: Timestamp) -> Result<Timestamp> {
     let delay = match stored {
         Some(row) if row.outcome == LifecycleOutcome::Deferred => row
             .next_check_at

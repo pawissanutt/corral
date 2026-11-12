@@ -417,6 +417,109 @@ no callback. The callback's effect is the path's own:
 Every path has the `send_returned` kill barrier after the callback, plus barriers around its own
 effect. `cargo test -p corral-ops submission_paths` covers every call site.
 
+## Private rebuildable outputs of inactive tasks
+
+This is a separate **output-only class**, not permission to collect unfinished worktrees.
+It is disabled by default. Declare ownership per project and output class before launching
+consumers; an arbitrary `target`, `build` or `dist` directory is never adopted.
+
+```toml
+[storage.outputs.app.cargo]
+kind = "cargo_target"
+path = "target"
+rebuildable = true
+exclusive = true
+grace_hours = 24
+
+[storage.outputs.app.web]
+kind = "generated"
+path = "web/dist"
+rebuildable = true
+exclusive = true
+extensions = ["js", "css", "map", "html"]
+grace_hours = 24
+```
+
+The declaration is an ownership contract: only this task's generated, rebuildable files may
+be placed there, and all consumers must belong to its managed launch/session tree. It is not
+safe to declare a shared executable directory, dependencies, caches, source, or user data.
+Additional toolchains use the same `generated` contract with at most 16 explicit extensions,
+not executable cleanup plugins. There are at most eight non-overlapping classes per project.
+Protected source/evidence extensions and cache/configuration components cannot be declared.
+
+Before an authorized worker/gate/reviewer/repair submission, the service registers an empty,
+Git-ignored directory under that task's real project worktree. It records the project, task,
+run, output epoch, declaration, canonical path, worktree/output device and inode, creation
+time and retention. Newly created roots are private (0700). Nonempty unregistered directories
+are refused, not grandfathered. A registration refusal is recorded for readback, not turned
+into a worker/gate/reviewer launch refusal; unsupported shared/Plan-target worktrees keep
+working without output reclamation. Existing active runs therefore need a subsequent managed
+launch with an empty output before automatic collection can apply. Configuring a class does
+not authorize deleting any pre-existing bytes.
+
+```sh
+corral storage outputs --dry-run --json
+corral storage outputs --yes --json
+```
+
+Readback includes task/run/epoch, class, path and validation status, rebuildability, grace,
+consumer observation, eligibility, the concrete deferral reason and next check. Unmeasured
+bytes are `null`, not a made-up zero. Successful effects report actual regular-file bytes
+returned by the no-follow deleter (logical regular-file lengths, not a physical-block estimate);
+an interrupted deletion's unconfirmed bytes are not claimed. Repeated collection of a settled
+epoch reports its cached result without claiming those bytes again.
+The regular `storage gc` report also includes this class.
+
+Sync coalesces lifecycle processing into a bounded asynchronous child, at most once a minute.
+Its change-feed cursor and pending set survive restart; it processes at most 16 new decisions,
+16 due deferrals and 16 policy changes per pass. Unchanged settled/not-due decisions do no
+Git, byte or process walks. Deferrals use the existing one-minute exponential backoff, capped
+at one hour. A hold, park or Blocked timestamp is only a candidate signal: the default 24-hour
+grace (minimum one hour) starts no earlier than registration. A short question does not churn
+outputs, and a still-present worker pane/host continues to protect them after grace.
+
+Every effect holds the **existing task lock**, also held by state writers and the authorized
+submission protocol through `pane_run`/delivery. Under it, the service rereads the current run,
+epoch, inactive state, policy and pending worker/gate/reviewer state. It requires the managed
+worker/reviewer panes to be absent and the hosts not to be capable of launching more work.
+A per-output exclusive lease also excludes registration and artifact-source consumers.
+Task and assistant artifact capture (including automatic scans) take its shared side and commit
+a durable retention intent before reading a registered output source. This protects an
+arbitrarily named evidence file even when attached to another task/session. Protection carries
+across run transfers of that directory; it is not reset by a new producer run. These output
+incarnations remain retained rather than deleting their raw evidence. Source lookup uses an
+provisional root reservations, atomic ownership publication and at most eight declaration-depth probes per managed worktree,
+never a scan of artifact history.
+
+Linux `/proc` observation checks cwd, executable, descriptors, mappings, command line and
+inherited task ownership, including detached builds and language servers. Cargo locks are an
+additional check, never authorization. Unreadable processes, namespaces, missing ownership,
+or unsupported platforms defer. Restricted `/proc` visibility, including unreadable foreign
+processes, can therefore keep all outputs deferred; enabling a declaration does not grant
+inspection privileges. Only the recognized initial Linux PID namespace is supported by the
+current observer; other namespace identities defer. No process is killed to obtain eligibility. Recovery of an
+existing host requires its pane; a pane already present protects the output, and a new
+managed launch is excluded by the task lock. External/uncoordinated consumers are unsupported.
+
+Validation refuses symlinks, aliases, tracked files, shared permissions/hardlinks/mounts,
+special files, protected source/evidence/report/credential names or extensions and artifact
+policy matches. A bounded walk (20,000 entries per output) runs only in the deferred worker
+or explicit storage command, never rendering or scheduling. Large or unfamiliar outputs
+simply defer. Cargo requires its cache tag and the private default worktree `target`; output
+routing environment/configuration overrides (including config includes) are refused, not
+guessed. Cargo build-script generated source is accepted only under an `out` directory whose
+regular `root-output` marker names that exact directory; source elsewhere still defers. Generated outputs must be routed explicitly to their declared directory; output
+overrides elsewhere confer no ownership and are never scanned or deleted. Filesystem effects
+reuse `DirHandle` no-follow containment and identity checks, with fresh eligibility confirmation
+immediately before removal.
+
+A durable lifecycle intent precedes deletion. Replay revalidates ownership and consumers;
+partial or already-absent output is handled idempotently without invented byte savings.
+The next managed launch recreates absent outputs with a fresh epoch, so builds proceed
+normally. Reclamation changes no task outcome, branch, source, evidence, gate/review/repair
+lineage, capacity marker or unfinished position. Nothing enables this feature in the owner's
+live configuration automatically.
+
 ## Events
 
 Legacy events are imported verbatim with a `seq` in file order. New events keep the `Event` shape

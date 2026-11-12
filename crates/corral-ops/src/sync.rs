@@ -275,6 +275,7 @@ fn sync_scoped(
         scope.workspace_only(|| crate::hooks::reconcile_post_land(ctx))?;
         crate::gate::collect_finished(ctx, now)?;
         crate::storage_gc::lifecycle_pass(ctx, now)?;
+        crate::storage_gc::outputs::schedule(ctx, now)?;
         let search_stamp = crate::content_refresh::task_stamp(ctx)?;
         for head in scope.heads(open_heads(ctx)?) {
             crate::obligations_sync::reconcile_head(ctx, &ctx.store.head(&head.id)?, now, None)?;
@@ -328,6 +329,7 @@ fn sync_scoped(
     crate::gate::collect_finished(ctx, now)?;
     crate::scratch_reclaim::reclaim_scratch_pass(ctx, now)?;
     crate::storage_gc::lifecycle_pass(ctx, now)?;
+    crate::storage_gc::outputs::schedule(ctx, now)?;
     let panes: HashMap<String, PaneInfo> = inventory
         .panes
         .iter()

@@ -54,6 +54,9 @@ pub struct StorageCfg {
     pub review_evidence_max: String,
     pub blob_grace_hours: u64,
     pub view_max_age: u64,
+    /// Explicit per-project output classes; empty means no unfinished-output reclamation.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub outputs: crate::output::ProjectOutputs,
 }
 
 impl Default for StorageCfg {
@@ -66,6 +69,7 @@ impl Default for StorageCfg {
             review_evidence_max: "64MiB".into(),
             blob_grace_hours: 24,
             view_max_age: 30,
+            outputs: BTreeMap::new(),
         }
     }
 }
@@ -104,7 +108,7 @@ impl StorageCfg {
         workspace: &Path,
         projects: &BTreeMap<String, Project>,
     ) -> Vec<String> {
-        let mut out = Vec::new();
+        let mut out = crate::output::problems(&self.outputs, projects);
         for (key, value) in [
             ("review_scratch_warn", &self.review_scratch_warn),
             ("review_evidence_max", &self.review_evidence_max),
