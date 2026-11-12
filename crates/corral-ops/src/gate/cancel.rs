@@ -45,6 +45,7 @@ pub(crate) fn cancel(ctx: &Ctx, id: &str, reason: &str) -> Result<bool> {
         gate.process_lost = false;
         gate.failed_cmd = None;
         gate.at = ctx.store.now();
+        crate::gate_triage::observe(&ctx.store, id, gate)?;
         if let Some(staged) = &staged { staged.stage(&ctx.store, (GateResult::Cancelled, None))?; }
         ctx.store.log_event(Some(id), "gate_cancelled", json!({"run":run.id,"attempt":gate.identity.as_ref().map(|i| &i.attempt),"result":"cancelled","reason":reason}))?;
         crate::agent::gate_queue::requeue_cancelled(ctx, task)?;

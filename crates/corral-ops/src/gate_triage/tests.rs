@@ -59,24 +59,26 @@ fn unexplained_red_survives_green_run_and_driver_changes_with_one_diagnostic_att
 
 #[test]
 fn stale_diagnostic_releases_only_its_own_retry() {
-    let root = tempfile::tempdir().unwrap();
-    let store = Store::init(root.path()).unwrap();
-    let failed = gate("fail", "candidate", "first");
-    observe(&store, "T-001", &failed).unwrap();
-    admit(&store, "T-001", Some(&failed), "candidate", "diagnostic").unwrap();
-    observe(&store, "T-001", &gate("stale", "candidate", "other")).unwrap();
-    assert!(check_retry(&store, "T-001", None, "rebased", Some("retry")).is_err());
-    let stale = gate("stale", "candidate", "diagnostic");
-    let state = observe(&store, "T-001", &stale).unwrap();
-    assert!(state.diagnostic_attempt.is_none());
-    assert!(state.retry_requested);
-    assert_eq!(state.diagnostic_history, ["diagnostic"]);
-    admit(&store, "T-001", Some(&stale), "rebased", "retry").unwrap();
-    // Replaying the old stale receipt cannot release the replacement attempt.
-    observe(&store, "T-001", &stale).unwrap();
-    let retry = gate("fail", "rebased", "retry");
-    observe(&store, "T-001", &retry).unwrap();
-    assert!(check_retry(&store, "T-001", Some(&retry), "rebased", Some("third")).is_err());
+    for outcome in ["stale", "cancelled"] {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::init(root.path()).unwrap();
+        let failed = gate("fail", "candidate", "first");
+        observe(&store, "T-001", &failed).unwrap();
+        admit(&store, "T-001", Some(&failed), "candidate", "diagnostic").unwrap();
+        observe(&store, "T-001", &gate(outcome, "candidate", "other")).unwrap();
+        assert!(check_retry(&store, "T-001", None, "rebased", Some("retry")).is_err());
+        let stale = gate(outcome, "candidate", "diagnostic");
+        let state = observe(&store, "T-001", &stale).unwrap();
+        assert!(state.diagnostic_attempt.is_none());
+        assert!(state.retry_requested);
+        assert_eq!(state.diagnostic_history, ["diagnostic"]);
+        admit(&store, "T-001", Some(&stale), "rebased", "retry").unwrap();
+        // Replaying the old stale receipt cannot release the replacement attempt.
+        observe(&store, "T-001", &stale).unwrap();
+        let retry = gate("fail", "rebased", "retry");
+        observe(&store, "T-001", &retry).unwrap();
+        assert!(check_retry(&store, "T-001", Some(&retry), "rebased", Some("third")).is_err());
+    }
 }
 
 #[test]
