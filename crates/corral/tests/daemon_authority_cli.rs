@@ -65,3 +65,27 @@ fn pm_and_agent_markers_cannot_start_stop_or_install_but_can_read_health_and_nud
     }
     assert_eq!(store.events().unwrap().len(), before);
 }
+
+#[test]
+fn socket_discovery_matches_listener_path_without_a_running_daemon() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = corral_core::Store::init(dir.path()).unwrap();
+    let expected = corral_ops::daemon_client::socket_path(&store);
+    assert!(expected.is_absolute());
+    assert!(!expected.exists());
+    let output = Command::new(env!("CARGO_BIN_EXE_corral"))
+        .env("CORRAL_PM", "1")
+        .arg("daemon")
+        .arg("--root")
+        .arg(dir.path())
+        .arg("socket")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("{}\n", expected.display())
+    );
+    assert!(!expected.exists());
+}

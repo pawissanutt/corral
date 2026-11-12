@@ -15,13 +15,17 @@ no lock-file deletion is needed or safe.
   A second daemon prints that it is already running and exits successfully.
   One-shot pass failures return an error; a runtime upgrade latch exits 75.
 - `corral daemon status [--json]`: read health; exit 0 healthy, 1 degraded, 2 down.
+- `corral daemon socket`: print the absolute socket path, even when no daemon is running.
 - `corral daemon nudge`: request a pass; exit 2 if no daemon answers.
 - `corral daemon stop [--drain]`: stop after the running pass; exit 2 if absent.
 - `corral daemon install [--print] [--force]`: render or write the workspace service.
   It never starts or enables services. A different existing file needs `--force`.
 
 `run`, `stop` and `install` require the owner, not a PM or agent shell. Anyone may
-read `status`; the PM may `nudge` and should report a down daemon to the owner.
+read `status` and `socket`; the PM may `nudge` and should report a down daemon to the owner.
+
+Clients that cannot discover the store themselves, such as the Corral app, take the
+socket path from this command: `CORRAL_SOCKET="$(corral daemon socket)"`.
 
 With a daemon owning the loop, `corral sync` requests a pass, waits at most 20 seconds
 and reports whether it completed. It exits successfully even if that wait expires.
@@ -61,6 +65,7 @@ when the daemon is absent (exit 2; inspect `corral daemon status`).
 Socket topics `board` and `health` push bounded CONTROL pages with one page in flight
 until `sub.ack`. Slow subscribers retain only a cursor, never a backlog of rows.
 `welcome.caps` negotiates `board.v1`; `welcome.daemon.epoch` identifies the projection.
+`welcome.daemon.store` is the store directory path (the workspace root's `.corral`).
 Health deltas reflect condition or completed-pass changes, not elapsed-age ticks.
 
 
