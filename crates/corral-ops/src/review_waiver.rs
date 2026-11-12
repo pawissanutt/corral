@@ -71,8 +71,7 @@ pub(crate) fn apply(store: &Store, id: &str, reason: &str) -> Result<()> {
     );
     let config = store.reopen()?.config;
     let at = store.now();
-    let mut waived = String::new();
-    store.update(id, |task| {
+    store.dispatch_update(id, |store, task| {
         eligible(task)?;
         ensure!(
             !config.task_review_policy(&*task).gate.is_empty(),
@@ -91,7 +90,7 @@ pub(crate) fn apply(store: &Store, id: &str, reason: &str) -> Result<()> {
         {
             state.stage = AutoStage::Gating;
         }
-        waived = run.id.clone();
+        let waived = run.id.clone();
         task.cowork
             .as_mut()
             .context("waive_review: no co-work")?
@@ -100,11 +99,11 @@ pub(crate) fn apply(store: &Store, id: &str, reason: &str) -> Result<()> {
             reason: reason.into(),
             at,
         });
-        Ok(())
+        store.log_event(
+            Some(id),
+            "review_waived",
+            json!({"actor": "owner", "run": waived, "reason": reason}),
+        )
     })?;
-    store.log_event(
-        Some(id),
-        "review_waived",
-        json!({"actor": "owner", "run": waived, "reason": reason}),
-    )
+    Ok(())
 }
