@@ -74,3 +74,14 @@ test("shutdown during recording fences late delivery and resume preserves the ac
   expect(sent).toBe(0);
   expect(q.get(id)?.answers).toEqual(answer);
 });
+
+test("a typed answer needs nonempty text and respects an explicit freeText prohibition", async () => {
+  const f = fixture(), q = f.create(); q.restore();
+  const open = q.ask("open", [{ question: "Which?", options: ["A", "B"] }]).id;
+  const closed = q.ask("closed", [{ question: "Which?", options: ["A", "B"], freeText: false }]).id;
+  await expect(q.answer(open, [{ text: "  " }])).rejects.toThrow("invalid_question_answer");
+  await expect(q.answer(open, [{ option: "A", text: "note" }])).rejects.toThrow("invalid_question_answer");
+  await expect(q.answer(closed, [{ text: "mine" }])).rejects.toThrow("invalid_question_answer");
+  expect(await q.answer(open, [{ text: "neither" }])).toBe("answered");
+  expect(f.records).toEqual([`[ask_user answer ${open}]\nWhich?: neither`]);
+});

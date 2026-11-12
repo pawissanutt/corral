@@ -11,8 +11,14 @@ export const QUESTION_TTL = 24 * 60 * 60 * 1000;
 export const Choice = z.object({ question: z.string().min(1).max(1000),
   options: z.array(z.string().min(1).max(300)).min(2).max(4), freeText: z.boolean().optional() });
 export type ChoiceQuestion = z.infer<typeof Choice>;
-const Answer = z.object({ option: z.string(), text: z.string().optional() });
+// An answer is a listed option (with an optional freeText note) or, unless freeText is false, the
+// owner's own typed text in place of an option.
+const Answer = z.object({ option: z.string().optional(), text: z.string().optional() });
 export type ChoiceAnswer = z.infer<typeof Answer>;
+export function validAnswer(q: ChoiceQuestion, a: ChoiceAnswer): boolean {
+  if (a.option === undefined) return q.freeText !== false && !!a.text?.trim();
+  return q.options.includes(a.option) && (!a.text || q.freeText === true);
+}
 const Record = z.object({ version: z.literal(1), id: z.string(), session: z.string(), generation: z.number(),
   key: z.string(), supersedes: z.string().optional(), questions: z.array(Choice).min(1).max(4), expires: z.number(),
   status: z.enum(["pending", "answered", "cancelled", "expired", "withdrawn", "ended"]),
@@ -37,7 +43,8 @@ export const answerMarker = (id: string) => `[ask_user answer ${id}]`;
 export function answerText(q: PendingQuestion): string {
   return q.questions.map((question, i) => {
     const a = q.answers?.[i];
-    return `${question.question}: ${a?.option ?? ""}${a?.text ? `\n${a.text}` : ""}`;
+    if (a?.option === undefined) return `${question.question}: ${a?.text ?? ""}`;
+    return `${question.question}: ${a.option}${a.text ? `\n${a.text}` : ""}`;
   }).join("\n");
 }
 
@@ -131,8 +138,9 @@ export class PendingQuestions {
     if (this.closed) return "session_closed";
     const q = this.get(id);
     if (!q || q.status !== "pending") return q?.status ?? "missing";
-    if (answers.length !== q.questions.length || answers.some((a, i) => !q.questions[i]!.options.includes(a.option)
-      || (a.text && !q.questions[i]!.freeText))) throw new Error("invalid_question_answer");
+    if (answers.length !== q.questions.length || answers.some((a, i) => !validAnswer(q.questions[i]!, a))) {
+      throw new Error("invalid_question_answer");
+    }
     const answered = { ...q, status: "answered" as const, answers };
     if (Buffer.byteLength(answerText(answered)) > OWNER_INPUT_TEXT_MAX - 160) throw new Error("question_answer_too_large");
     this.save(answered); // The actual UI answer survives a crash before journal/delivery.

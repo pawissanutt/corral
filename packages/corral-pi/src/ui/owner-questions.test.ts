@@ -120,3 +120,55 @@ test("owner question changes stay in host messages without changing the default 
   expect(routed.message).toBeUndefined();
   expect(routed.options.sections.owner_questions).toBe(renderOwnerQuestionState(questions));
 });
+
+test("/questions takes the owner's own typed answer, keeps drafts across questions and Escape sends nothing", async () => {
+  const entries: QuestionEntry[] = [];
+  const records: string[] = [];
+  const q = new PendingQuestions({ session: () => "owned", generation: 1, entries: () => entries,
+    append: data => { entries.push({ type: "custom", customType: QUESTION_ENTRY, data }); }, changed() {},
+    record: async text => { records.push(text); return text; }, deliver: async () => true });
+  const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+  let command!: (args: string, ctx: ExtensionContext) => Promise<void>;
+  const api = {
+    on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => { handlers.set(name, handler); },
+    registerCommand: (_name: string, spec: { handler: typeof command }) => { command = spec.handler; },
+    registerShortcut() {},
+  } as unknown as ExtensionAPI;
+  let keys: string[] = [];
+  let screen = "";
+  const screens: string[] = [];
+  const ctx = { mode: "tui", hasUI: true, ui: { setWidget() {}, setStatus() {}, notify() {},
+    select: async () => { throw new Error("select fallback used"); },
+    custom: async (factory: (...args: unknown[]) => { handleInput(data: string): void; render(width: number): string[] }) => {
+      let result: unknown;
+      const dialog = factory({ requestRender() {} }, {}, {}, (r: unknown) => { result = r; });
+      for (const key of keys) {
+        dialog.handleInput(key); if (result) break;
+        screen = dialog.render(72).join("\n"); screens.push(screen);
+      }
+      return result;
+    },
+  } } as unknown as ExtensionContext;
+  new OwnerQuestionUi(q, () => true, () => {}).install(api);
+  await handlers.get("session_start")?.({}, ctx);
+  const id = q.ask("Q", [{ question: "Which release?", options: ["One", "Two"] },
+    { question: "Notify?", options: ["Yes", "No"], freeText: false }]).id;
+  const down = "\x1b[B", right = "\x1b[C", left = "\x1b[D";
+  // Typing on Other, moving to Q2 and back keeps the draft; Escape leaves the question pending.
+  keys = [down, down, "ship 1.4", right, left, "\x1b"];
+  await command(id, ctx);
+  expect(screen).toContain("Other: ship 1.4");
+  expect(q.get(id)?.status).toBe("pending"); expect(records).toEqual([]);
+  // A typed answer not among the options; Q2 forbids free text, so it has no Other row.
+  keys = [down, down, "ship 1.4 only after QA", "\r", down, down, "x", "\r", "\r"];
+  screens.length = 0;
+  await command(id, ctx);
+  const q2 = screens.filter(s => s.includes("Notify?"));
+  expect(q2.length).toBeGreaterThan(0);
+  for (const s of q2) expect(s).not.toContain("Other:");
+  expect(screen).toContain("Q1: Other: ship 1.4 only after QA");
+  expect(q.get(id)?.answers).toEqual([{ text: "ship 1.4 only after QA" }, { option: "No" }]);
+  expect(records).toEqual([`[ask_user answer ${id}]\nWhich release?: ship 1.4 only after QA\nNotify?: No`]);
+  expect(await q.answer(id, [{ text: "again" }, { option: "No" }])).not.toBe("pending");
+  expect(records).toHaveLength(1);
+});

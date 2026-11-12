@@ -2,7 +2,7 @@ import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-co
 import { Type } from "typebox";
 import { OWNER_INPUT_TEXT_MAX } from "../roles/assistant/owner-action.ts";
 import { ASK_USER_GUIDELINES } from "../roles/common/ask-user.ts";
-import { AskDialog, type Choice, type DialogAnswer, type DialogQuestion } from "./ask-user-dialog.ts";
+import { AskDialog, type Choice, type DialogAnswer, type DialogOptions, type DialogQuestion, type DialogResult } from "./ask-user-dialog.ts";
 import type { ChoiceQuestion, PendingQuestions } from "./pending-questions.ts";
 
 const choice = Type.Union([
@@ -18,7 +18,7 @@ const question = Type.Object({
   header: Type.Optional(Type.String({ minLength: 1, maxLength: 24, description: "Short tab label, for example \"Scope\"" })),
   options: Type.Array(choice, { minItems: 2, maxItems: 4 }),
   multiSelect: Type.Optional(Type.Boolean({ description: "Allow choosing several options" })),
-  freeText: Type.Optional(Type.Boolean({ description: "Offer an optional text field after the choice" })),
+  freeText: Type.Optional(Type.Boolean({ description: "Owners can always type an Other answer unless false; true also allows a note on the chosen option" })),
 });
 
 const deferredQuestion = Type.Object({
@@ -28,7 +28,7 @@ const deferredQuestion = Type.Object({
 }, { additionalProperties: false });
 
 type Question = { question: string; header?: string; options: (string | Choice)[]; multiSelect?: boolean; freeText?: boolean };
-type Answer = { question: string; option: string; options?: string[]; text?: string };
+type Answer = { question: string; option?: string; options?: string[]; text?: string };
 
 const TIMEOUT_MS = 300_000;
 
@@ -42,21 +42,26 @@ function normalize(q: Question): DialogQuestion {
   return { ...q, options };
 }
 
+type DialogUi = Pick<ExtensionToolContext["ui"], "custom" | "select" | "input">;
+
 /** One dialog for the whole batch; Escape, abort or timeout keeps what was answered. Undefined when the
  * host shows no custom component (a select-only or no-op UI context, or RPC mode). */
-async function dialog(ctx: ExtensionToolContext, questions: DialogQuestion[], signal?: AbortSignal) {
+export async function askDialog(ui: DialogUi, questions: DialogQuestion[], signal?: AbortSignal,
+  options?: DialogOptions): Promise<DialogResult | undefined> {
+  if (typeof ui.custom !== "function") return undefined;
   let current: AskDialog | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stop = () => current?.finish(false);
   signal?.addEventListener("abort", stop, { once: true });
   try {
-    const result = await ctx.ui.custom<{ submitted: boolean; answers: (DialogAnswer | undefined)[] } | undefined>((tui, _theme, _keys, done) => {
+    const result = await ui.custom<DialogResult | undefined>((tui, _theme, _keys, done) => {
       const arm = () => { clearTimeout(timer); timer = setTimeout(stop, TIMEOUT_MS); };
-      current = new AskDialog(questions, done, () => { arm(); tui.requestRender(); });
+      current = new AskDialog(questions, done, () => { arm(); tui.requestRender(); }, options);
       arm();
+      if (signal?.aborted) stop();
       return current;
     }, { blocked: { kind: "question", message: "Waiting for your answers" } });
-    return result?.answers;
+    return result ?? { submitted: false, answers: questions.map(() => undefined) };
   } catch (error) {
     // The host wraps every UI context with a `custom` that forwards to the context's own; one without
     // a component throws here before showing anything, so the caller falls back to plain selects.
@@ -68,16 +73,27 @@ async function dialog(ctx: ExtensionToolContext, questions: DialogQuestion[], si
   }
 }
 
-/** Hosts without a custom component ask one question after another; a cancel keeps earlier answers. */
-async function sequential(ctx: ExtensionToolContext, questions: DialogQuestion[], signal?: AbortSignal) {
+const OTHER = "Other (type an answer)";
+
+/** Hosts without a custom component ask one question after another; a cancel keeps earlier answers.
+ * Unless freeText is false, an Other choice asks for the owner's own answer instead of an option. */
+export async function sequential(ui: DialogUi, questions: DialogQuestion[], signal?: AbortSignal) {
   const answers: (DialogAnswer | undefined)[] = questions.map(() => undefined);
   for (const [i, q] of questions.entries()) {
     const labels = q.options.map((o) => o.label);
-    const option = await ctx.ui.select(q.question, labels, { signal, timeout: TIMEOUT_MS });
-    if (option === undefined || !labels.includes(option) || signal?.aborted) break;
+    const other = q.freeText !== false && !labels.includes(OTHER);
+    const option = await ui.select(q.question, other ? [...labels, OTHER] : labels, { signal, timeout: TIMEOUT_MS });
+    if (option === undefined || signal?.aborted) break;
+    if (other && option === OTHER) {
+      const own = (await ui.input("Your answer", "", { signal, timeout: TIMEOUT_MS }))?.trim();
+      if (!own || signal?.aborted) break;
+      answers[i] = { selected: [], text: own };
+      continue;
+    }
+    if (!labels.includes(option)) break;
     let text = "";
     if (q.freeText) {
-      const typed = await ctx.ui.input("Optional additional text (leave empty to skip)", "", { signal, timeout: TIMEOUT_MS });
+      const typed = await ui.input("Optional additional text (leave empty to skip)", "", { signal, timeout: TIMEOUT_MS });
       if (typed === undefined || signal?.aborted) break;
       text = typed;
     }
@@ -136,21 +152,24 @@ export function askUserTool(record: (answer: string) => Promise<string>, pending
       }
       if (dialogBusy()) return { ...noAnswer(), details: { status: "no answer", reason: "another owner/permission dialog is open" } };
       const questions = params.questions.map(normalize);
-      const shown = typeof ctx.ui.custom === "function" ? await dialog(ctx, questions, signal) : undefined;
+      const shown = (await askDialog(ctx.ui, questions, signal))?.answers;
       if (signal?.aborted && shown === undefined) return noAnswer();
-      const raw = shown ?? await sequential(ctx, questions, signal);
+      const raw = shown ?? await sequential(ctx.ui, questions, signal);
       const answers: Answer[] = [];
       const unanswered: string[] = [];
       raw.forEach((a, i) => {
         const q = questions[i]!;
-        if (!a || a.selected.length === 0) { unanswered.push(q.question); return; }
+        if (!a || (a.selected.length === 0 && !a.text.trim())) { unanswered.push(q.question); return; }
+        // The owner's own typed answer carries no option: nothing is invented in its place.
+        if (a.selected.length === 0) { answers.push({ question: q.question, text: a.text }); return; }
         answers.push({
           question: q.question, option: a.selected.join(", "),
           ...(q.multiSelect ? { options: a.selected } : {}), ...(a.text ? { text: a.text } : {}),
         });
       });
       if (answers.length === 0) return noAnswer();
-      const lines = answers.map((a) => `${a.question}: ${a.option}${a.text ? `\n${a.text}` : ""}`);
+      const lines = answers.map((a) => a.option === undefined ? `${a.question}: ${a.text ?? ""}`
+        : `${a.question}: ${a.option}${a.text ? `\n${a.text}` : ""}`);
       if (unanswered.length) lines.push(`Unanswered (no consent): ${unanswered.join(" | ")}`);
       const answer = lines.join("\n");
       // The cited owner instruction must be stored in full, not as a truncated prefix.
