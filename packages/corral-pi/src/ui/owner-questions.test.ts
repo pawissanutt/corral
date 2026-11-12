@@ -23,7 +23,7 @@ test("owner UI dismisses without consent, preserves permission dialogs and fence
   const ctx = { mode: "tui", hasUI: true, ui: { setWidget() {}, setStatus() {}, notify() {},
     select: async () => { selects++; return select(); },
   } } as unknown as ExtensionContext;
-  const ui = new OwnerQuestionUi(q, () => true); ui.install(api);
+  const ui = new OwnerQuestionUi(q, () => true, () => {}); ui.install(api);
   await handlers.get("session_start")?.({}, ctx);
   const id = q.ask("Q", [{ question: "Which?", options: ["One", "Two"] }]).id;
   expect(shortcuts).toContain(QUESTIONS_SHORTCUT);
@@ -53,7 +53,7 @@ test("owner question changes stay in host messages without changing the default 
   const sessionManager = SessionManager.inMemory("/project");
   const ctx = { sessionManager, hasUI: false } as unknown as ExtensionContext;
   let before!: (event: BeforeAgentStartEvent, ctx: ExtensionContext) => BeforeAgentStartEventResult | void;
-  let context!: (event: ContextEvent) => ContextEventResult | void;
+  let context!: (event: ContextEvent, ctx: ExtensionContext) => ContextEventResult | void;
   const handlers = new Map<string, unknown>();
   const api = {
     on: (name: string, handler: unknown) => {
@@ -64,7 +64,10 @@ test("owner question changes stay in host messages without changing the default 
     registerCommand() {}, registerShortcut() {},
   } as unknown as ExtensionAPI;
   let claude = false;
-  new OwnerQuestionUi(questions, () => false, () => claude).install(api);
+  const journal = (message: { customType: string; content: string; display: boolean }) => {
+    sessionManager.appendCustomMessageEntry(message.customType, message.content, message.display, undefined);
+  };
+  new OwnerQuestionUi(questions, () => false, journal, () => claude).install(api);
   const start = () => {
     const options = normalizeBuildSystemPromptOptions({ cwd: "/project", appendSystemPrompt: "Stable role contract" });
     const event = { type: "before_agent_start", messageType: "user", prompt: "continue",
@@ -84,25 +87,23 @@ test("owner question changes stay in host messages without changing the default 
   expect(pending.message?.content).toContain(renderOwnerQuestionState(questions));
   expect(start().message).toBeUndefined();
   // Reload/resume must inspect retained context rather than reset an in-memory flag.
-  new OwnerQuestionUi(questions, () => false, () => claude).install(api);
+  new OwnerQuestionUi(questions, () => false, journal, () => claude).install(api);
   await (handlers.get("session_start") as (event: unknown, ctx: ExtensionContext) => unknown)({}, ctx);
   expect(start().message).toBeUndefined();
   const kept = sessionManager.appendMessage({ role: "user", content: "continue", timestamp: 0 });
   sessionManager.appendCompaction("Summary without authoritative host state", kept, 1);
   const compacted = sessionManager.buildSessionProjection().messages;
   expect(compacted.some(message => message.role === "custom" && message.customType === OWNER_QUESTION_STATE)).toBeFalse();
-  // Automatic continuations skip before_agent_start: restore state in the first request.
-  const restored = context({ type: "context", messages: compacted })?.messages;
-  const repeated = context({ type: "context", messages: compacted })?.messages;
-  expect(JSON.stringify(repeated)).toBe(JSON.stringify(restored));
-  expect(restored?.length).toBe(compacted.length + 1);
+  // Automatic continuations skip before_agent_start: the first request restores state and journals it.
+  const restored = context({ type: "context", messages: compacted }, ctx)?.messages;
   expect(restored?.slice(0, -1)).toEqual(compacted);
-  expect(restored?.filter(message => message.role === "custom" && message.customType === OWNER_QUESTION_STATE)).toHaveLength(1);
   const restoredState = restored?.at(-1);
   expect(restoredState?.role === "custom" && restoredState.content).toContain(renderOwnerQuestionState(questions));
-  expect(context({ type: "context", messages: restored! })).toBeUndefined();
-  // The next submitted run journals one fresh snapshot; subsequent starts retain it.
-  expect(start().message?.content).toBe(pending.message?.content);
+  // The journal holds that message, so the next request repeats it in place and adds none. A
+  // request-only copy moved on every request and stopped the provider cache from growing.
+  const next = sessionManager.buildSessionProjection().messages;
+  expect(next.filter(message => message.role === "custom" && message.customType === OWNER_QUESTION_STATE)).toHaveLength(1);
+  expect(context({ type: "context", messages: next }, ctx)).toBeUndefined();
   expect(start().message).toBeUndefined();
   await questions.answer(id, [{ option: "One" }]);
   expect(questions.status(id)).toBe("answered");
