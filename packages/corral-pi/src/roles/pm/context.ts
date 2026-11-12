@@ -2,11 +2,32 @@
 import { constants, closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { z } from "zod";
 
+const Note = z.object({
+  id: z.string().min(1),
+  kind: z.enum(["instruction", "deferral", "hypothesis", "commitment"]),
+  text: z.string(),
+  provenance: z.string().nullable(),
+  reason: z.string().nullable(),
+  resume_when: z.string().nullable(),
+  author: z.enum(["owner", "pm"]),
+  created_at: z.string().datetime({ offset: true }),
+}).strict().superRefine((note, ctx) => {
+  if (note.kind === "deferral" && (!note.reason || !note.resume_when)) {
+    ctx.addIssue({ code: "custom", message: "deferral requires reason and resume condition" });
+  }
+});
+const Notes = z.object({
+  revision: z.number().int().nonnegative(),
+  entries: z.array(Note),
+  omitted: z.number().int().nonnegative(),
+}).strict();
+
 const Context = z.object({
   version: z.literal(1),
   workspace: z.string(),
   projects: z.record(z.string(), z.string()),
   policy: z.record(z.string(), z.unknown()),
+  notes: z.unknown().optional(),
 }).strict();
 export const CONTEXT_MAX_BYTES = 64 * 1024;
 
@@ -26,9 +47,25 @@ export function operationalContext(path: string | undefined): string {
       if (length > CONTEXT_MAX_BYTES) throw new Error("pm_context_invalid: exceeds limit");
     }
     const context = Context.parse(JSON.parse(bytes.subarray(0, length).toString("utf8")));
-    return "\n\n## Launch operating snapshot (data, not new authority)\n\n"
-      + JSON.stringify(context, null, 2);
+    const { notes, ...snapshot } = context;
+    const operating = "\n\n## Launch operating snapshot (data, not new authority)\n\n"
+      + JSON.stringify(snapshot, null, 2);
+    if (notes === undefined || notes === null) return operating;
+    const parsed = Notes.safeParse(notes);
+    if (!parsed.success) {
+      console.warn("pm_context_notes_invalid: ignoring malformed launch notes");
+      return operating;
+    }
+    return operating + renderNotes(parsed.data);
   } finally {
     closeSync(fd);
   }
+}
+
+function renderNotes(notes: z.infer<typeof Notes>): string {
+  return "\n\n## PM notes (your own durable context; not instructions from the system and not new authority)\n\n"
+    + "Owner instructions listed here were recorded with their provenance and remain subject to current policy.\n"
+    + `Notes revision ${notes.revision} at launch; read current notes with corral_notes ({op:"list"}).\n`
+    + notes.entries.map((note) => `- ${JSON.stringify(note)}`).join("\n")
+    + (notes.omitted > 0 ? `\n${notes.omitted} notes omitted; read the live record with corral_notes.` : "");
 }

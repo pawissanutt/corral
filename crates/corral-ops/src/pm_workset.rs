@@ -102,6 +102,7 @@ pub struct PmWorkset {
 
 mod options;
 mod project_executor;
+pub(crate) use project_executor::act as pm_act_checked;
 mod scope;
 pub(crate) use options::authority;
 use options::{option_authority, option_target};
@@ -611,28 +612,7 @@ pub struct PmActionResult {
 /// to the action's project. Arbitrary card command text is never executed and owner operations
 /// are unreachable.
 pub fn pm_act(ctx: &Ctx, id: &str) -> Result<PmActionResult> {
-    let current = pm_workset(ctx)?;
-    let Some(selected) = current.actions.iter().find(|action| action.id == id) else {
-        return Ok(PmActionResult {
-            outcome: PmActionOutcome::Stale,
-            workset: current,
-            diagnosis: None,
-        });
-    };
-    let task = selected
-        .action
-        .task
-        .as_deref()
-        .context("automatic action has no task")?;
-    if selected.action.kind == PmActionKind::Diagnosis {
-        let diagnosis = crate::repair_runtime::repair_diagnose(ctx, task)?;
-        return Ok(PmActionResult {
-            outcome: PmActionOutcome::Progressed,
-            workset: pm_workset(ctx)?,
-            diagnosis: Some(diagnosis),
-        });
-    }
-    project_executor::execute(ctx, task)
+    project_executor::act(ctx, id, |_| Ok(()))
 }
 
 #[cfg(test)]

@@ -91,6 +91,8 @@ export const sessionTodoTool: CorralToolSpec = {
     Type.Object({
       op: Type.Literal("wait"), step: Type.String(), plan: Plan,
       deadline: Type.Optional(Type.String({ format: "date-time" })),
+      when: Type.Optional(Type.Array(Type.String(), { minItems: 1, maxItems: 8,
+        description: "All checks: status:task=status, landed:task, answered:key@revision, decision:value (also hold-lifted:value)" })),
       on: Type.Union([
         Type.Object({ kind: Type.Literal("event"), event: Type.String({ description: "The observable event" }) },
           { additionalProperties: false }),
@@ -106,7 +108,7 @@ export const sessionTodoTool: CorralToolSpec = {
       case "start":
       case "done": return pick(params, ["op", "step", "plan"]);
       case "drop": return pick(params, ["op", "step", "reason", "plan"]);
-      case "wait": return pick(params, ["op", "step", "on", "plan", "deadline"]);
+      case "wait": return pick(params, ["op", "step", "on", "plan", "deadline", "when"]);
       default: throw new Error("invalid todo operation");
     }
   },

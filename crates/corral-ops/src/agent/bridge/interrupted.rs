@@ -24,13 +24,14 @@ pub const CODE_CALL_ENTRY: &str = "corral_code_call";
 const HOOK_PHASES: [&str; 3] = ["pre_tool", "post_tool", "turn_end"];
 const DETAIL_MAX_BYTES: usize = 512;
 /// Two-phase operations: without a reservation nothing ran.
-const TWO_PHASE: [&str; 6] = [
+const TWO_PHASE: [&str; 7] = [
     "gate",
     "capture",
     "reply",
     "plan_submit",
     "plan_verdict",
     "owner_action",
+    "pm_action",
 ];
 // Public fetch is GET-only; web_read, tool_search and job_output read local caches.
 // Search may spend subscription quota, so a missing result is not proof of no effect.

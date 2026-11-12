@@ -70,6 +70,8 @@ pub enum TodoAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         deadline: Option<Timestamp>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        when: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         plan: Option<String>,
     },
 }
@@ -210,7 +212,11 @@ impl TodoAction {
                 )?;
             }
             Self::Wait {
-                step, on, deadline, ..
+                step,
+                on,
+                deadline,
+                when,
+                ..
             } => {
                 let text = wait_text(on);
                 ensure!(
@@ -233,12 +239,25 @@ impl TodoAction {
                     deadline >= now && deadline.duration_since(now) <= WAIT_DEADLINE_MAX,
                     "todo_wait_deadline_range"
                 );
+                let checks = match when {
+                    Some(when) => {
+                        ensure!(
+                            (1..=8).contains(&when.len()),
+                            "todo_wait_requires_1_to_8_checks"
+                        );
+                        when.iter()
+                            .map(|value| crate::parse_park_check(value))
+                            .collect::<Result<Vec<_>>>()?
+                    }
+                    None => Vec::new(),
+                };
                 open_step(&mut progress, step)?;
                 progress.waits.retain(|wait| wait.step != *step);
                 progress.waits.push(StepWait {
                     step: step.clone(),
                     on: on.clone(),
                     deadline: Some(deadline),
+                    checks,
                 });
             }
         }
@@ -302,7 +321,10 @@ mod tests {
                 OWNER_WAIT_DEADLINE,
             ),
         ] {
-            let mut payload = json!({"op": "wait", "step": "check", "on": on});
+            let mut payload = json!({
+                "op": "wait", "step": "check", "on": on,
+                "when": ["status:T-001=done", "answered:T-002/R1/Q1@1"]
+            });
             let action: TodoAction = serde_json::from_value(payload.clone()).unwrap();
             let progress = requests
                 .apply(&action, Some(&base), "pm:corral", now)
@@ -311,6 +333,8 @@ mod tests {
                 progress.waits[0].deadline,
                 Some(now.checked_add(duration).unwrap())
             );
+            assert_eq!(progress.waits[0].checks.len(), 2);
+            assert_eq!(progress.waits[0].checks[0].kind, "status");
 
             // A rollback's strict parser must accept the entire stored wait unchanged.
             #[derive(Deserialize)]
@@ -325,6 +349,7 @@ mod tests {
             assert_eq!(old.on, progress.waits[0].on);
             let legacy: RunProgress = serde_json::from_value(stored).unwrap();
             assert_eq!(legacy.waits[0].deadline, None);
+            assert!(legacy.waits[0].checks.is_empty());
 
             for offset in [
                 SignedDuration::from_nanos(-1),
@@ -349,6 +374,25 @@ mod tests {
                     .unwrap();
                 assert_eq!(explicit.waits[0].deadline, Some(deadline));
             }
+        }
+
+        for when in [
+            json!([]),
+            json!(["status:T-001=unknown"]),
+            json!(["answered:T-001/R1/Q1@0"]),
+            json!(["manual:anything"]),
+            json!(vec!["landed:T-001"; 9]),
+        ] {
+            let action: TodoAction = serde_json::from_value(json!({
+                "op": "wait", "step": "check",
+                "on": {"kind": "event", "event": "task finishes"}, "when": when
+            }))
+            .unwrap();
+            assert!(
+                requests
+                    .apply(&action, Some(&base), "pm:corral", now)
+                    .is_err()
+            );
         }
     }
 }

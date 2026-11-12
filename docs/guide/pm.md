@@ -38,14 +38,35 @@ than a new polling loop. Quiet progress does not require repeated owner summarie
 ### Exact authority difference from the generic PM
 
 Pi's typed tools cover scoped reads, question answer/escalate/cancel, inbox claim/resolve,
-reply/comment and backlog/idea capture. Everything else the owner can run (dispatch, queue,
-gate and review starts, approve and land, `--owner` plan verdicts and acceptance, forced
-moves, config, `pm act`, sync) the Pi PM runs through `bash` and the corral CLI when an
-explicit owner instruction or a standing owner rule covers it, and reports afterwards. It
-prefers the board's own executor and acts directly when that executor stalls or Corral's
-machinery blocks approved work. It asks the owner only for decisions that are truly theirs
-(undecided scope or priority, paid spend, credentials, privacy, destructive actions on
-unfinished work). Handoffs and board reads never confer fresh owner authority.
+reply/comment, backlog/idea capture and board actions. Prefer `corral_action` over `bash`
+for the routine board path:
+
+- `act` takes the action ID from an executable `corral_next`/`corral_brief` card command
+  (`... pm act <id> --json`) and runs it exactly as `corral pm act` does: the ID is
+  recomputed against fresh policy, scope, hold and task identity, then executed by the
+  project-scoped executor. It covers every option the effective policy already makes
+  executable: dispatch and idea promotion, gate and re-gate, review start, repair diagnosis
+  and send-back, plan review, and accept, land or plan acceptance only where an owner
+  grant covers them.
+  Owner-required options never receive an ID. The result is `progressed` or `waiting` with
+  the task's status; a stale or no-longer-authorized ID is a stored `stale_revision`
+  refusal, final for that ID: re-read `corral_next`.
+- `park` is the PM-authored `corral attention park`: reason, machine-checkable
+  `resume_when` checks, optional resume action and a 1h-7d review interval (default 24h).
+  It never replaces an owner park.
+- `attend` records handling of one current attention key (`corral attention attend`, 30m
+  next check); a stale key is refused.
+
+Each action is refused before any effect when its task lies outside the PM's approved
+projects, and is receipt-backed: replaying a request returns the stored result and runs
+nothing. Everything else the owner can run (queueing, `--owner` plan verdicts and
+acceptance, forced moves, config, sync) the Pi PM still runs through `bash` and the
+corral CLI when an explicit owner instruction or a standing owner rule covers it, and
+reports afterwards. It prefers the board's own executor and acts directly when that
+executor stalls or Corral's machinery blocks approved work. It asks the owner only for
+decisions that are truly theirs (undecided scope or priority, paid spend, credentials,
+privacy, destructive actions on unfinished work). Handoffs and board reads never confer
+fresh owner authority.
 
 ## Running corral with a cheap PM
 
@@ -137,6 +158,17 @@ support `--json`. The Pi PM writes the same record through its `corral_notes` to
 instructions require provenance; deferrals require a reason and a resume condition. The PM
 cannot replace or remove owner-authored notes. Bounds: 64 live notes, 1 KiB of text each,
 32 KiB for the record.
+
+### Cost by item
+
+Use `corral report --by-item` to inspect per-item API-equivalent cost estimates for
+reporting, not limits. `--since 30d` uses the existing hours/days/weeks syntax;
+`--until 2026-11-11T00:00:00Z` supplies an exclusive endpoint and requires `--by-item`. Add
+`--json` for structured output or `--project <key>` to restrict rows, totals and request
+coverage. Project-filtered reports exclude projectless usage; dropped attribution records
+remain a globally labelled retention counter. Without a project filter, explicit overhead
+and unallocated rows reconcile with total PM usage. Requests made before the host wrote
+turn markers are reported as legacy and stay unallocated.
 
 ### Usage guard
 
