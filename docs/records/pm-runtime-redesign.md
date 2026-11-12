@@ -128,7 +128,9 @@ store backup and the previous binaries) is in `.evidence/install-5ada0531/` in t
 | Push | `pm.push_events = false`. Twelve queued wakes and the smoke request reached the PM as inbox messages. |
 | Native reads | First try: `brief` and `next` both hit the host's 60-second call limit, in the minute the watch service first started. Retried one at a time: `brief` 8.0 s and `next` 7.8 s, bounded, no refusal. |
 | Supervisor | `pm.supervise = true`; user unit `corral-sync.service` enabled with `--interval 60`. Heartbeat healthy, store-owned server found. Automatic recovery has not been exercised live. |
-| Not enabled | Shadow, expert, stable cache key. |
+| Shadow | Enabled later the same day with `gpt-6-luna` (30 an hour); the PM relaunched as generation 26 and the first observation was recorded. No agreement data yet. |
+| Board | On the owner's choices: T-950 triage corrected, T-951 started, grant `963af783…` confirmed, "admit nothing" lifted. T-946 and the record task closed; the old PM-read wave (T-890 to T-893, T-948) dropped. |
+| Not enabled | Expert, stable cache key. Rotation has not been used. PM notes are empty: nothing from `PM-BRIEF.md` was moved into them. |
 
 Found during rollout:
 
@@ -225,9 +227,9 @@ cost/cache comparison has been done for this build.
 
 1. **Merge, install, PM relaunch, push events and background recovery are done:** see
    "Live rollout". Main is not pushed to the remote.
-2. **Choose the three experiments separately.** Shadow, expert and the stable cache key
-   are each off; enabling shadow or expert also needs an explicit model, while the stable
-   key needs `pm.cache_key.mode = "stable"` and a new generation.
+2. **Choose the remaining experiments separately.** Shadow is on. Expert and the stable
+   cache key are off; expert needs an explicit model, and the stable key needs
+   `pm.cache_key.mode = "stable"` and a new generation.
 3. **Resolve question-deadline behavior.** An expired owner-set board-question deadline
    currently answers with the owner's pre-set instruction; choose whether to retain that
    behavior or change it to the design's "a timeout parks and never acts".
