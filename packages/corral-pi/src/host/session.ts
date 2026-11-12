@@ -1067,6 +1067,7 @@ export class HostSession {
     });
     if (this.ownerQuestions) {
       this.questionUi = new OwnerQuestionUi(this.ownerQuestions, () => this.bound && !this.closing,
+        message => { this.session.sessionManager.appendCustomMessageEntry(message.customType, message.content, message.display, undefined); },
         () => this.session.model?.api === CLAUDE_SDK_API);
       this.questionUi.install(pi);
     }

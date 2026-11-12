@@ -34,6 +34,7 @@ export class OwnerQuestionUi {
   private epoch = 0;
   busy = false;
   constructor(private readonly questions: PendingQuestions, private readonly eligible: () => boolean,
+    private readonly persist: (message: { customType: string; content: string; display: boolean }) => void,
     private readonly claudeRoute: () => boolean = () => false) {}
 
   install(pi: ExtensionAPI): void {
@@ -88,12 +89,17 @@ export class OwnerQuestionUi {
       // A handler message joins the existing run; it does not submit a user turn.
       if (message) return { message };
     });
-    pi.on("context", event => {
+    pi.on("context", (event, ctx) => {
       if (this.claudeRoute()) return;
-      // Automatic post-compaction continuations do not emit before_agent_start.
-      // Append after reusable history with stable metadata; repeated projections stay byte-identical.
+      // State can change inside a run (a question asked or answered), and automatic
+      // post-compaction continuations do not emit before_agent_start. Journal the message before
+      // sending it: one that exists only in this request sits at a different position in every
+      // later request, and the provider cache then stops growing past the last journaled message.
       const message = questionStateMessage(this.questions, event.messages);
-      if (message) return { messages: [...event.messages, { role: "custom" as const, ...message, timestamp: 0 }] };
+      if (!message) return;
+      try { this.persist(message); }
+      catch (error) { ctx.abort(); throw error; }
+      return { messages: [...event.messages, { role: "custom" as const, ...message, timestamp: Date.now() }] };
     });
     pi.on("session_shutdown", event => { this.close(event.reason !== "reload" && event.reason !== "quit"); });
   }
