@@ -17,23 +17,23 @@
   },
   "pi": {
     "package": "@earendil-works/pi-coding-agent",
-    "version": "1.5.0",
-    "integrity": "sha512-xNDZ5kqowO6Z03FS2gwAkPEGk1ssxVcYKQ6qZId84mFEvwACvvyc2l0vAMOS+c5zvxLRMLBE9r4y44IGYkMJaQ==",
-    "upstreamCommit": "f9a26365568127461c47a07a37dcb42c140a3ac5",
+    "version": "1.5.2",
+    "integrity": "sha512-mUWI04rqF1Vd/m1q+Ps1XeWsTXEVvRUnsmRa83I3Dzua0Tx5bYS93imeqtIfrXf7PkkaR6ERz+AuQhIJlom5yA==",
+    "upstreamCommit": "b4afdddf44e059c67ccf5097e5317d913521b470",
     "packages": {
-      "@earendil-works/pi-agent-core": "1.5.0",
-      "@earendil-works/pi-ai": "1.5.0",
-      "@earendil-works/pi-codemode": "1.5.0",
-      "@earendil-works/pi-coding-agent": "1.5.0",
-      "@earendil-works/pi-mcp": "1.5.0",
-      "@earendil-works/pi-schema": "1.5.0",
-      "@earendil-works/pi-telemetry": "1.5.0",
-      "@earendil-works/pi-tui": "1.5.0"
+      "@earendil-works/pi-agent-core": "1.5.2",
+      "@earendil-works/pi-ai": "1.5.2",
+      "@earendil-works/pi-codemode": "1.5.2",
+      "@earendil-works/pi-coding-agent": "1.5.2",
+      "@earendil-works/pi-mcp": "1.5.2",
+      "@earendil-works/pi-schema": "1.5.2",
+      "@earendil-works/pi-telemetry": "1.5.2",
+      "@earendil-works/pi-tui": "1.5.2"
     }
   },
   "lock": {
     "file": "bun.lock",
-    "sha256": "cc91375d1ecc06cedf65fb37a07cac3d2067d3e002f7361221179a085871160b"
+    "sha256": "74311168e365bfb330ad9738852cfc1213919f19e233373b6fd528249ad148c8"
   },
   "claude": {
     "task": "T-493",

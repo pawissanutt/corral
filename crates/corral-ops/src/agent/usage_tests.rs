@@ -568,7 +568,7 @@ fn bedrock_models_price_from_the_bedrock_catalog_with_provenance() {
     let usage = collect(&run, &fx.ctx.store).unwrap();
     // Then every response is priced at the Bedrock catalog rates, with Bedrock provenance.
     let (price, source) = fx.ctx.store.config.price_with_source(model).unwrap();
-    assert_eq!(source, "catalog-bedrock@pi-ai-1.5.0");
+    assert_eq!(source, "catalog-bedrock@pi-ai-1.5.2");
     let [input, output, cache_read, cache_write] = totals().map(|n| n as f64);
     let api = (input * price.input
         + output * price.output
@@ -626,7 +626,7 @@ fn bedrock_million_token_session_prices_at_catalog_input_plus_output() {
     for entry in &usage.entries {
         assert_eq!(
             entry.price_source.as_deref(),
-            Some("catalog-bedrock@pi-ai-1.5.0")
+            Some("catalog-bedrock@pi-ai-1.5.2")
         );
     }
 }

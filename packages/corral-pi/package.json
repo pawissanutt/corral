@@ -9,7 +9,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.306",
     "@aws-sdk/nested-clients": "3.997.48",
-    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@earendil-works/pi-coding-agent": "1.5.2",
     "@mozilla/readability": "0.6.0",
     "@smithy/core": "3.36.0",
     "@smithy/fetch-http-handler": "5.8.0",
@@ -26,9 +26,9 @@
   },
   "trustedDependencies": [],
   "patchedDependencies": {
-    "@earendil-works/pi-ai@1.5.0": "patches/@earendil-works%2Fpi-ai@1.5.0.patch",
-    "@earendil-works/pi-coding-agent@1.5.0": "patches/@earendil-works%2Fpi-coding-agent@1.5.0.patch",
-    "@earendil-works/pi-tui@1.5.0": "patches/@earendil-works%2Fpi-tui@1.5.0.patch",
-    "@earendil-works/pi-agent-core@1.5.0": "patches/@earendil-works%2Fpi-agent-core@1.5.0.patch"
+    "@earendil-works/pi-ai@1.5.2": "patches/@earendil-works%2Fpi-ai@1.5.2.patch",
+    "@earendil-works/pi-coding-agent@1.5.2": "patches/@earendil-works%2Fpi-coding-agent@1.5.2.patch",
+    "@earendil-works/pi-tui@1.5.2": "patches/@earendil-works%2Fpi-tui@1.5.2.patch",
+    "@earendil-works/pi-agent-core@1.5.2": "patches/@earendil-works%2Fpi-agent-core@1.5.2.patch"
   }
 }
