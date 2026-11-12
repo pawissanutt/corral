@@ -93,10 +93,17 @@ fn collect_state_inner(
     ))
 }
 
-/// Response evidence with a structural turn identity, absent in legacy/auxiliary transcripts.
+/// One structural input span. Queued inputs may replace the span without starting a new turn.
+pub(crate) struct CostSpan {
+    pub turn: (u32, u64),
+    pub key: Option<String>,
+    pub queued: bool,
+}
+
+/// Responses share their span's key without copying it for every provider request.
 pub(crate) struct CostUsageEntry {
     pub usage: UsageEntry,
-    pub turn: Option<(u32, u64)>,
+    pub span: Option<std::sync::Arc<CostSpan>>,
 }
 
 pub(crate) fn collect_entries(
@@ -308,10 +315,14 @@ fn read_session_with_turns(
                     if data["phase"].as_str() != Some("start") {
                         return None;
                     }
-                    Some((
-                        u32::try_from(data["generation"].as_u64()?).ok()?,
-                        data["turn"].as_u64()?,
-                    ))
+                    Some(std::sync::Arc::new(CostSpan {
+                        turn: (
+                            u32::try_from(data["generation"].as_u64()?).ok()?,
+                            data["turn"].as_u64()?,
+                        ),
+                        key: data["key"].as_str().map(str::to_owned),
+                        queued: data["queued"].as_bool().unwrap_or(false),
+                    }))
                 });
                 continue;
             }
@@ -404,9 +415,9 @@ fn read_session_with_turns(
             session_id.clone(),
             format!("{}:{response}", connection.map_or("legacy", |c| c.id())),
         );
-        entries.entry(key).or_insert(CostUsageEntry {
+        entries.entry(key).or_insert_with(|| CostUsageEntry {
             usage: evidence,
-            turn: cost_turn,
+            span: cost_turn.clone(),
         });
     }
     Ok(())

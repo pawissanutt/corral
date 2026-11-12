@@ -77,7 +77,7 @@ fn focus_reconciles_new_tasks_projects_clear_and_terminal_release() {
             },
         )
         .unwrap();
-    reconcile_focus(&ctx).unwrap();
+    reconcile_focus(&ctx, &crate::sync::SyncScope::All).unwrap();
     assert_eq!(
         ctx.store
             .head(&peer.id)
@@ -104,7 +104,7 @@ fn focus_reconciles_new_tasks_projects_clear_and_terminal_release() {
         .is_err(),
         "new lower-priority work is fenced before the hold latch"
     );
-    reconcile_focus(&ctx).unwrap();
+    reconcile_focus(&ctx, &crate::sync::SyncScope::All).unwrap();
     assert!(ctx.store.head(&new.id).unwrap().hold.is_some());
     ctx.store
         .update(&urgent.id, |t| {
@@ -112,7 +112,7 @@ fn focus_reconciles_new_tasks_projects_clear_and_terminal_release() {
             Ok(())
         })
         .unwrap();
-    reconcile_focus(&ctx).unwrap();
+    reconcile_focus(&ctx, &crate::sync::SyncScope::All).unwrap();
     assert!(ctx.store.head(&peer.id).unwrap().hold.is_none());
     assert_eq!(
         ctx.store
@@ -145,7 +145,7 @@ fn focus_reconciles_new_tasks_projects_clear_and_terminal_release() {
             },
         )
         .unwrap();
-    reconcile_focus(&ctx).unwrap();
+    reconcile_focus(&ctx, &crate::sync::SyncScope::All).unwrap();
     assert!(ctx.store.head(&foreign.id).unwrap().hold.is_some());
     clear_focus(&ctx).unwrap();
     assert!(ctx.store.head(&foreign.id).unwrap().hold.is_none());

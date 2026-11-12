@@ -9,18 +9,23 @@ export const ExploreSettingsSchema = z.object({
   service_tier: z.enum(["default", "priority"]).optional(),
 }).strict();
 export const OracleSettingsSchema = z.object({ model, timeout_secs }).strict();
+export const ShadowSettingsSchema = z.object({
+  model: z.string().min(1).max(256), timeout_secs, max_per_hour: z.number().int().min(1).max(600),
+}).strict();
+export type ShadowSettings = z.infer<typeof ShadowSettingsSchema>;
 export type ExploreSettings = z.infer<typeof ExploreSettingsSchema>;
 export type OracleSettings = z.infer<typeof OracleSettingsSchema>;
 export interface AuxiliarySettings {
   readonly explore?: ExploreSettings;
   readonly oracle?: OracleSettings;
   readonly web_search?: { readonly model: null; readonly timeout_secs: number };
+  readonly shadow?: ShadowSettings;
 }
 
 export function auxiliarySettings(role: Role, enabled: readonly string[], settings?: Readonly<Record<string, unknown>>): AuxiliarySettings {
-  void role;
   return {
     ...(enabled.includes("subagents") ? { explore: ExploreSettingsSchema.parse(settings?.subagents) } : {}),
     ...(enabled.includes("oracle") ? { oracle: OracleSettingsSchema.parse(settings?.oracle) } : {}),
+    ...(role === "pm" && enabled.includes("shadow") ? { shadow: ShadowSettingsSchema.parse(settings?.shadow) } : {}),
   };
 }

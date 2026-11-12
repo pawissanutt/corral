@@ -17,6 +17,7 @@ pub mod paths;
 pub mod pm_cost;
 pub mod pm_notes;
 mod pm_records;
+pub mod pm_shadow;
 pub mod pm_state;
 mod question;
 mod records;

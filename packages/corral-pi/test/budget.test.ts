@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { normalizeContext, createAssistantMessageEventStream, type Api, type AssistantMessage, type Model, type StreamFunction } from "@earendil-works/pi-ai";
+import { generateSummaryWithUsage } from "@earendil-works/pi-coding-agent";
 import { RunBudget, reservation } from "../src/capabilities/budget.ts";
 
 const model: Model<Api> = { id: "fixture", provider: "fixture", api: "openai-responses", baseUrl: "https://invalid.example",
@@ -188,4 +189,35 @@ test("cache guard refusal preserves the session and retries admission after owne
   expect(settle?.provider).toBe(model.provider);
   expect(settle?.request).toBe(records[1]?.request);
   expect(budget.state().active).toBe(0);
+});
+
+test("Pi summary requests and auxiliary lineages are distinct from the session conversation", async () => {
+  const records: Record<string, unknown>[] = [];
+  const budget = new RunBudget({
+    sessionId: () => "primary", cancel() {},
+    record: async payload => { records.push(payload); return { admitted: true, exhausted: false }; },
+  });
+  let requests = 0;
+  const source: StreamFunction = () => {
+    const stream = createAssistantMessageEventStream();
+    const result = message(`purpose-${requests++}`);
+    result.content = [{ type: "text", text: "summary" }];
+    stream.push({ type: "done", reason: "stop", message: result }); stream.end(result); return stream;
+  };
+  const wrapped = budget.wrap(source);
+  const conversationOptions = { sessionId: "primary", convertToLlm: () => [] };
+  await wrapped(model, context, conversationOptions).result();
+  // Exercise the installed Pi summary call site, not a handwritten options fixture.
+  await generateSummaryWithUsage(
+    [{ role: "user", content: "Summarize this fixture.", timestamp: 1 }],
+    model, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+    wrapped, undefined, undefined, undefined, "primary",
+  );
+  await wrapped(model, context, { ...conversationOptions, sessionId: "auxiliary" }).result();
+  await wrapped(model, context, { ...conversationOptions, cacheRetention: "none" }).result();
+  await wrapped(model, context, { sessionId: "primary" }).result();
+  expect(records.filter(record => record.action === "settle").map(record => record.purpose))
+    .toEqual(["conversation", "summary", "other", "conversation", "other"]);
+  expect(records.filter(record => record.action === "settle").map(record => record.cache_lineage))
+    .toEqual(["primary", "primary", "auxiliary", "primary", "primary"]);
 });

@@ -19,6 +19,7 @@ pub(crate) mod pm;
 pub(crate) mod pm_actions;
 mod pm_bound;
 mod pm_inbox;
+pub(crate) mod pm_shadow;
 pub(crate) mod reviewer;
 pub(crate) mod todo;
 pub(crate) mod worker;

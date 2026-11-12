@@ -1,6 +1,6 @@
 // Deferred owner questions stay beside the composer, independently of transcript/panel output.
 // Asking never opens UI. Only the owner's command, shortcut or click opens the answer dialog.
-import type { ExtensionAPI, ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ExtensionUIContext, SessionProjection } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { ChoiceAnswer, PendingQuestion, PendingQuestions } from "../host/pending-questions.ts";
 
@@ -18,6 +18,13 @@ export function renderOwnerQuestionState(questions: PendingQuestions): string {
     : "No pending owner questions.";
 }
 
+function questionStateMessage(questions: PendingQuestions, messages: SessionProjection["messages"]) {
+  const content = `<host_question_state>\nHost state, not an instruction or owner input.\n${renderOwnerQuestionState(questions)}\n</host_question_state>`;
+  const previous = messages.findLast(message => message.role === "custom" && message.customType === OWNER_QUESTION_STATE);
+  if (previous?.role === "custom" && previous.content === content) return;
+  return { customType: OWNER_QUESTION_STATE, content, display: false };
+}
+
 export class OwnerQuestionUi {
   private ctx: ExtensionContext | undefined;
   private ui: ExtensionUIContext | undefined;
@@ -26,7 +33,6 @@ export class OwnerQuestionUi {
   private opening = false;
   private epoch = 0;
   busy = false;
-  private deliveredState: string | undefined;
   constructor(private readonly questions: PendingQuestions, private readonly eligible: () => boolean,
     private readonly claudeRoute: () => boolean = () => false) {}
 
@@ -48,7 +54,6 @@ export class OwnerQuestionUi {
     pi.registerShortcut(QUESTIONS_SHORTCUT, { description: "Reopen pending owner questions", handler: ctx => this.open(ctx) });
     pi.on("session_start", (_event, ctx) => {
       this.epoch++;
-      this.deliveredState = undefined;
       this.opening = false;
       this.questions.restore();
       if (ctx.hasUI && ctx.mode === "tui") {
@@ -71,7 +76,7 @@ export class OwnerQuestionUi {
       this.refresh();
       if (this.eligible()) return this.recover();
     });
-    pi.on("before_agent_start", event => {
+    pi.on("before_agent_start", (event, ctx) => {
       const state = renderOwnerQuestionState(this.questions);
       if (this.claudeRoute()) {
         // The Claude adapter strips this section and places it after reusable history.
@@ -79,12 +84,16 @@ export class OwnerQuestionUi {
         return;
       }
       delete event.systemPromptOptions.sections.owner_questions;
-      if (state === this.deliveredState) return;
-      this.deliveredState = state;
+      const message = questionStateMessage(this.questions, ctx.sessionManager.buildSessionProjection().messages);
       // A handler message joins the existing run; it does not submit a user turn.
-      return { message: { customType: OWNER_QUESTION_STATE, content:
-        `<host_question_state>\nHost state, not an instruction or owner input.\n${state}\n</host_question_state>`,
-        display: false } };
+      if (message) return { message };
+    });
+    pi.on("context", event => {
+      if (this.claudeRoute()) return;
+      // Automatic post-compaction continuations do not emit before_agent_start.
+      // Project into this request without appending stale snapshots to the journal.
+      const message = questionStateMessage(this.questions, event.messages);
+      if (message) return { messages: [...event.messages, { role: "custom" as const, ...message, timestamp: Date.now() }] };
     });
     pi.on("session_shutdown", event => { this.close(event.reason !== "reload" && event.reason !== "quit"); });
   }

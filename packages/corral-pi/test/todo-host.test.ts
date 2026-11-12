@@ -105,12 +105,23 @@ for (const launch of cases) {
         host.session.setActiveToolsByName([...host.loadout, "corral_todo"]);
       }
       // When the model calls the top-level tool:
-      fixtureTransport().script([
+      const queuedAttribution = launch.role === "pm" && launch.todo === true;
+      const provider = fixtureTransport();
+      const held = queuedAttribution ? provider.whenHeld() : undefined;
+      if (queuedAttribution) provider.holdNext();
+      provider.script([
         { toolCalls: [{ callId: "todo-call", name: "corral_todo", arguments: { op: "start", step: "implement" } }] },
         { text: "Finished" },
+        ...(queuedAttribution ? [{ text: "Follow-up response" }] : []),
       ]);
       const ended = nextEvent(events, (event) => event.kind === "turn_ended");
       await host.submit({ text: "Update progress", busyPolicy: "prompt", idempotencyKey: "todo-input", origin: "test" }, "rq-todo");
+      if (held) {
+        await held;
+        expect(await host.submit({ text: "Handle another item", busyPolicy: "follow_up",
+          idempotencyKey: "todo-follow-up", origin: "test" }, "rq-follow-up")).toEqual({ disposition: "queued" });
+        provider.release();
+      }
       await ended;
       await host.drained();
       if (launch.role === "pm" && launch.todo === true) {
@@ -123,12 +134,17 @@ for (const launch of cases) {
         const markers = journal.filter(entry => entry.type === "custom" && entry.customType === "corral_cost_turn");
         expect(markers.map(entry => entry.data)).toEqual([
           { generation: started?.identity.generation, turn: started?.payload.turn, phase: "start", key: "todo-input" },
+          { generation: started?.identity.generation, turn: started?.payload.turn, phase: "start", key: "todo-follow-up", queued: true },
           { generation: started?.identity.generation, turn: started?.payload.turn, phase: "end" },
         ]);
         const response = journal.findIndex(entry => entry.type === "message" && entry.message.role === "assistant");
         const lastResponse = journal.findLastIndex(entry => entry.type === "message" && entry.message.role === "assistant");
         expect(response).toBeGreaterThan(journal.indexOf(markers[0]));
-        expect(journal.indexOf(markers[1])).toBeGreaterThan(lastResponse);
+        const followed = journal.findIndex(entry => entry.type === "message" && entry.message.role === "assistant"
+          && entry.message.content.some((part: { type: string; text?: string }) => part.type === "text" && part.text === "Follow-up response"));
+        expect(followed).toBeGreaterThan(journal.indexOf(markers[1]));
+        expect(journal.indexOf(markers[1])).toBeGreaterThan(response);
+        expect(journal.indexOf(markers[2])).toBeGreaterThan(lastResponse);
       }
       // Then only enabled roles send the receipted operation, with bound identity and request ID.
       const calls = corral.calls().map((call) => call.envelope).filter((call) => call.op === "todo");

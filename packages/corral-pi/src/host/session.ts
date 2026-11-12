@@ -75,7 +75,7 @@ import { COMMAND_ENTRY, Commands, type CommandFact } from "../extensions/jobs/co
 import { MONITOR_ENTRY, type MonitorFact } from "../extensions/jobs/monitors.ts";
 import { JobSettingsSchema } from "../extensions/jobs/settings.ts";
 import { toolRequestId } from "../tools/corral.ts";
-import { AuxiliaryRuntime } from "../extensions/subagent/runtime.ts";
+import { AuxiliaryRuntime, ShadowDispatcher } from "../extensions/subagent/runtime.ts";
 import { auxiliarySettings } from "../extensions/subagent/settings.ts";
 import { exploreTool } from "../extensions/subagent/index.ts";
 import { oracleTool } from "../extensions/oracle/index.ts";
@@ -340,6 +340,8 @@ export class HostSession {
   private readonly permissions: BashPermissions | undefined;
   private readonly checkpoints: Checkpoints | undefined;
   private readonly auxiliary: AuxiliaryRuntime | undefined;
+  private readonly shadow: ShadowDispatcher | undefined;
+  private nextTurnInbox = false;
   private readonly planReviews: PlanReviews | undefined;
   private auxiliaryModels: Models | undefined;
   private searchModels: Models | undefined;
@@ -445,6 +447,7 @@ export class HostSession {
     }) : undefined;
     this.budget = new RunBudget({
       unbounded: PROVIDERS[this.provider].lane !== undefined,
+      sessionId: () => this.sessionId(),
       record: async (payload) => {
         if (!this.bound) throw new Error("host_not_bound");
         await this.drained();
@@ -543,7 +546,7 @@ export class HostSession {
     const auxiliary = { ...auxiliarySettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings),
       ...(subscriptionSearch ? { web_search: { model: null, timeout_secs: (options.capabilities?.web?.timeout_ms ?? 15000) / 1000 } } : {}),
     };
-    if (auxiliary.explore || auxiliary.oracle || auxiliary.web_search) {
+    if (auxiliary.explore || auxiliary.oracle || auxiliary.web_search || auxiliary.shadow) {
       this.auxiliary = new AuxiliaryRuntime({
         settings: auxiliary, generation: options.identity.generation, provider: this.provider, model: options.model,
         changed: () => this.panels?.refresh(),
@@ -575,6 +578,26 @@ export class HostSession {
             parentLoadout: this.loadout.filter(name => this.planning?.visible(name) !== false),
             localTools: this.localTools.map(tool => this.planningTool(tool)) }, invocation, signal);
         },
+      });
+    }
+    if (auxiliary.shadow && this.auxiliary) {
+      const configured = auxiliary.shadow.model;
+      const prefix = `${this.provider}/`;
+      this.shadow = new ShadowDispatcher({
+        runtime: this.auxiliary, maxPerHour: auxiliary.shadow.max_per_hour,
+        model: configured.startsWith(prefix) ? configured : prefix + configured,
+        call: async (op, payload) => {
+          if (this.closing || !this.bound) throw new Error("shadow host is closed/unbound");
+          // Do not enqueue on the PM's report chain or expose the receipt to the PM.
+          await this.drained();
+          const receipt = await options.client.call(op, {
+            requestId: toolRequestId(this.sessionId(), `shadow:${op}:${crypto.randomUUID()}`),
+            payload, turn: this.currentTurn(),
+          });
+          if (receipt.state !== "committed") throw new Error(`shadow ${op} refused: ${JSON.stringify(receipt.result)}`);
+          return receipt.result;
+        },
+        diagnostic: error => { options.events.emit("shadow_failed", { error: String(error).slice(0, 500) }); },
       });
     }
     this.planReviews = options.identity.role === "assistant" ? new PlanReviews({
@@ -1230,6 +1253,7 @@ export class HostSession {
     // a home or repository skill can never replace the role's packaged one (corral-worker).
     pi.on("resources_discover", () => ({ skillPaths: [...this.guidance.skillPaths] }));
     pi.on("session_shutdown", async (event) => {
+      this.shadow?.cancel();
       // InteractiveMode exits the process after runtime disposal; main's finally never runs.
       // Await the release here, but keep reporting through extension reloads.
       if (event.reason === "quit") await this.options.herdr?.close();
@@ -1282,7 +1306,18 @@ export class HostSession {
 
   private watch(session: AgentSession): void {
     this.unsubscribe?.();
-    session.setQueueObserver(this.queue.observer);
+    session.setQueueObserver({
+      ...this.queue.observer,
+      queue: change => {
+        this.queue.observer.queue(change);
+        if (change.action !== "drain" || change.nextRun || !this.open) return;
+        for (const { tag } of change.entries) {
+          if (typeof tag === "object" && tag !== null && "idempotency_key" in tag && typeof tag.idempotency_key === "string") {
+            this.costTurn({ phase: "start", key: tag.idempotency_key, queued: true });
+          }
+        }
+      },
+    });
     this.terminalInputSequence = 0;
     this.terminalInput = undefined;
     observeTerminalInput(session, this.options.events);
@@ -1332,6 +1367,9 @@ export class HostSession {
     this.report("turn_started", { origin, provider: this.session.model?.provider, model: this.session.model?.id });
     if (this.budget.state().stopped) this.report("budget_exhausted", { budget: this.budget.state() });
     this.options.herdr?.turnStarted();
+    const inbox = this.nextTurnInbox;
+    this.nextTurnInbox = false;
+    this.shadow?.start(inbox && origin.kind === "bridge" ? "inbox" : origin.kind === "continuation" ? "continuation" : "other");
   }
 
   /** Only corral's receipts open or settle a question in the herdr projection. */
@@ -1371,7 +1409,7 @@ export class HostSession {
     this.commands?.flush();
   }
 
-  private costTurn(marker: { phase: "start"; key: string | null } | { phase: "end" }): void {
+  private costTurn(marker: { phase: "start"; key: string | null; queued?: true } | { phase: "end" }): void {
     if (this.options.identity.role !== "pm") return;
     try {
       this.session.sessionManager.appendCustomEntry("corral_cost_turn", {
@@ -1512,6 +1550,7 @@ export class HostSession {
 
   close(): Promise<void> {
     this.closing = true;
+    this.shadow?.cancel();
     // Close both resource admission barriers synchronously, even if another cleanup fails.
     const resources = this.stopManagedResources();
     void resources.catch(() => {}); // observed below, without an early unhandled rejection
@@ -1659,6 +1698,7 @@ export class HostSession {
             return;
           }
           this.nextTurnOrigin = { kind: "bridge", idempotency_key: input.idempotencyKey };
+          this.nextTurnInbox = input.origin === "corral-inbox";
           settle({ disposition, turn: this.turn + 1 });
         },
       }).catch((error: unknown) => {

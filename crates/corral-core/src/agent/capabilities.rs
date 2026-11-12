@@ -223,6 +223,13 @@ pub const CATALOG: &[CapabilityDef] = &[
         settings: Some(super::auxiliary::oracle_settings),
     },
     CapabilityDef {
+        key: "shadow",
+        summary: "host-only tool-free PM decision observation",
+        defaults: |role| (role == AgentRole::Pm).then_some([false; 3]),
+        host: true,
+        settings: Some(super::auxiliary::shadow_settings),
+    },
+    CapabilityDef {
         key: "checkpoints",
         summary: "worker turn checkpoints for owner rewinds",
         // Assistant checkpoints are scratch-worktree only (scratch-worktrees member).
@@ -592,6 +599,7 @@ impl CapabilitySnapshot {
     pub fn legacy(role: AgentRole, todo: bool) -> Self {
         let features = CATALOG
             .iter()
+            .filter(|def| def.key != "shadow")
             .filter_map(|def| Some((def, (def.defaults)(role)?)))
             .map(|(def, defaults)| {
                 let state = CapabilityState {
@@ -841,12 +849,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pm_catalog_matches_assistant_except_write_permissions() {
+    fn pm_catalog_matches_assistant_except_pm_specific_capabilities() {
         for def in CATALOG {
             assert_eq!(
                 (def.defaults)(AgentRole::Pm),
                 match def.key {
                     "write_permissions" => None,
+                    "shadow" => Some([false; 3]),
                     _ => (def.defaults)(AgentRole::Assistant),
                 },
                 "{}",

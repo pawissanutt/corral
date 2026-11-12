@@ -115,7 +115,8 @@ fn project_state(ctx: &Ctx, ids: &[&str]) -> Vec<u8> {
 
 #[test]
 fn acting_in_one_project_leaves_another_projects_tasks_queue_and_runs_unchanged() {
-    // Given Ready work awaiting dispatch in alpha and beta, plus an owner-queued beta task.
+    // Given Ready work awaiting dispatch in alpha and beta, plus an owner-queued beta task,
+    // a workspace focus and a lower-priority beta task filed after it that sync would hold.
     let (_tmp, mut ctx) = fixture();
     let create = |title: &str, project: &str| {
         ctx.store
@@ -130,6 +131,7 @@ fn acting_in_one_project_leaves_another_projects_tasks_queue_and_runs_unchanged(
     let alpha = create("Alpha work", "alpha");
     let beta = create("Beta work", "beta");
     let queued = create("Beta queued", "beta");
+    let target = create("Focus target", "alpha");
     let preview = ctx
         .store
         .preview_operating_policy(&OperatingSelection {
@@ -146,6 +148,17 @@ fn acting_in_one_project_leaves_another_projects_tasks_queue_and_runs_unchanged(
         .confirm_operating_policy(&preview, "fixture owner", jiff::Timestamp::now())
         .unwrap();
     crate::queue::enqueue(&fresh(&ctx), &queued.id, &DispatchOpts::default()).unwrap();
+    crate::hold::focus(&fresh(&ctx), Some(&target.id), true).unwrap();
+    let low = ctx
+        .store
+        .create("Beta later", Some("beta"), Status::Backlog, "")
+        .unwrap();
+    ctx.store
+        .update(&low.id, |task| {
+            task.priority = "P9".into();
+            Ok(())
+        })
+        .unwrap();
     let workset = crate::pm_workset(&fresh(&ctx)).unwrap();
     let action = workset
         .actions
@@ -158,7 +171,7 @@ fn acting_in_one_project_leaves_another_projects_tasks_queue_and_runs_unchanged(
             .iter()
             .any(|action| action.action.task.as_deref() == Some(beta.id.as_str()))
     );
-    let beta_ids = [beta.id.as_str(), queued.id.as_str()];
+    let beta_ids = [beta.id.as_str(), queued.id.as_str(), low.id.as_str()];
     let before = project_state(&ctx, &beta_ids);
 
     // When the PM acts on alpha's action.
@@ -171,7 +184,8 @@ fn acting_in_one_project_leaves_another_projects_tasks_queue_and_runs_unchanged(
 
     // And an ordinary workspace sync does act on beta, so beta was actionable all along.
     crate::sync(&fresh(&ctx)).unwrap();
-    for id in beta_ids {
+    for id in [&beta.id, &queued.id] {
         assert_eq!(ctx.store.get(id).unwrap().status, Status::Running, "{id}");
     }
+    assert!(ctx.store.get(&low.id).unwrap().hold.is_some());
 }

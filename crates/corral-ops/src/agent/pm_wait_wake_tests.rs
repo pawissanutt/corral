@@ -47,6 +47,44 @@ fn install_wait(fx: &ts::Fx, when: &[String], deadline: Timestamp) -> RunProgres
 }
 
 #[test]
+fn numeric_project_hold_does_not_resolve_to_an_unheld_task_alias() {
+    let mut fx = ts::fx();
+    host(&fx);
+    fx.ctx.store.config.projects.insert(
+        "42".into(),
+        serde_json::from_value(json!({"path": fx.ctx.store.root()})).unwrap(),
+    );
+    fx.ctx.store.config.dispatch.paused = true;
+    let mut task = fx
+        .ctx
+        .store
+        .create("Unheld task", None, Status::Ready, "")
+        .unwrap();
+    task.id = "T-042".into();
+    task.dispatch_hold = false;
+    fx.ctx.store.fixture_put_task(&task).unwrap();
+    let deadline = corral_core::clock::now()
+        .checked_add(SignedDuration::from_hours(1))
+        .unwrap();
+    install_wait(&fx, &["hold-lifted:42".into()], deadline);
+
+    assert_eq!(sweep(&fx.ctx).unwrap(), 0);
+    assert!(!super::super::pm_wake_keys::contains(&fx.ctx, "wait", "wait:P1:gate:3:met").unwrap());
+    fx.ctx.store.config.dispatch.paused = false;
+    assert_eq!(sweep(&fx.ctx).unwrap(), 1);
+    assert_eq!(sweep(&fx.ctx).unwrap(), 0);
+    let messages = Inbox::new(&fx.ctx.store, Recipient::Pm)
+        .unwrap()
+        .messages()
+        .unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(
+        messages[0].subject.as_ref().unwrap()["key"],
+        "wait:P1:gate:3:met"
+    );
+}
+
+#[test]
 fn typed_wait_posts_once_after_status_is_met_without_mutating_the_ledger() {
     let fx = ts::fx();
     host(&fx);

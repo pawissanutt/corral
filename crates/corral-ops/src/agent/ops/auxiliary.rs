@@ -139,10 +139,15 @@ pub(super) fn auxiliary(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> 
     let feature = match payload.usage_kind {
         Some(UsageSessionKind::Explore) => "subagents",
         Some(UsageSessionKind::Oracle) => "oracle",
+        Some(UsageSessionKind::Shadow)
+            if envelope.identity.role == corral_core::agent::AgentRole::Pm =>
+        {
+            "shadow"
+        }
         Some(UsageSessionKind::WebSearch) => "web.enabled",
         _ => {
             return Err(bad(
-                "auxiliary supports only explore, oracle and web_search",
+                "auxiliary supports only explore, oracle, PM shadow and web_search",
             ));
         }
     };
@@ -268,3 +273,7 @@ pub(super) fn auxiliary(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> 
         },
     )
 }
+
+#[cfg(test)]
+#[path = "auxiliary_shadow_tests.rs"]
+mod shadow_tests;

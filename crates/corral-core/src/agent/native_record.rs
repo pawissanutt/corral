@@ -48,6 +48,7 @@ impl NativeRecord {
                 let kind = match s.kind {
                     UsageSessionKind::Explore => "explore",
                     UsageSessionKind::Oracle => "oracle",
+                    UsageSessionKind::Shadow => "shadow",
                     UsageSessionKind::Summary => "summary",
                     UsageSessionKind::WebSearch => "web_search",
                 };

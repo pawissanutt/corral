@@ -39,6 +39,13 @@ pub struct Unconfirmed {
     pub observed: bool,
 }
 
+/// A PM rotation's notice context: the successor starts a fresh conversation (Part 2 D).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rotation<'a> {
+    /// The retired conversation's Pi session ID, when a generation bound one.
+    pub previous_session: Option<&'a str>,
+}
+
 /// Bind recovery messages to the exact child, never a parent run for a reviewer.
 pub(crate) fn binding(container: &ContainerRef) -> MessageBinding {
     let run = match container {
@@ -182,12 +189,26 @@ struct Parts {
     foot: &'static str,
 }
 
-fn parts(lost: u32, next: u32, scan: &Interrupted, unconfirmed: &[Unconfirmed]) -> Parts {
+fn parts(
+    (lost, next): (u32, u32),
+    scan: &Interrupted,
+    unconfirmed: &[Unconfirmed],
+    rotation: Option<Rotation<'_>>,
+) -> Parts {
     let calls = &scan.calls;
-    let mut head = format!(
-        "corral resumed this host as generation {next} after generation {lost} was lost. \
-         Nothing was replayed. "
-    );
+    let mut head = match rotation {
+        None => format!(
+            "corral resumed this host as generation {next} after generation {lost} was lost. \
+             Nothing was replayed. "
+        ),
+        Some(rotation) => format!(
+            "corral rotated this PM to generation {next} with a fresh conversation: generation \
+             {lost} (Pi session {}) was stopped and its conversation is not carried over. \
+             Durable context is in corral_notes and corral_todo; read both before acting. \
+             Nothing was replayed. ",
+            rotation.previous_session.unwrap_or("none bound")
+        ),
+    };
     if scan.scan_limits.is_empty() {
         head.push_str(match calls.is_empty() {
             true => "No tool call was left without a result.\n",
@@ -260,16 +281,17 @@ fn framed_len(body: &str) -> usize {
 }
 
 /// The notice body for `key`'s inbox. A body over the budget keeps as many leading lines as
-/// fit and names the evidence file `keep` wrote with the complete notice.
+/// fit and names the evidence file `keep` wrote with the complete notice. A `rotation` names
+/// the fresh conversation in its head instead of a lost host.
 pub fn body(
     key: &str,
-    lost: u32,
-    next: u32,
+    (lost, next): (u32, u32),
     scan: &Interrupted,
     unconfirmed: &[Unconfirmed],
+    rotation: Option<Rotation<'_>>,
     keep: impl FnOnce(&str) -> Result<String>,
 ) -> Result<String> {
-    let parts = parts(lost, next, scan, unconfirmed);
+    let parts = parts((lost, next), scan, unconfirmed, rotation);
     let full = render(&parts, parts.lines.len(), None);
     let budget = budget(key);
     if framed_len(&full) <= budget {

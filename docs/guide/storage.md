@@ -290,10 +290,17 @@ links its continuation key to the granting turn; missing causes remain `unalloca
 
 PM session transcripts record `corral_cost_turn` custom entries containing
 `{ generation, turn, phase: "start" | "end" }` (start also carries the origin `key`).
-The shared usage collector deduplicates by session/connection/response identity, then links
-each response structurally between start and end markers, or the next start marker.
-There is no timestamp-proximity join. Legacy PM entries and auxiliary sessions without
-these markers lack a response-to-turn identity and remain explicitly unallocated.
+A queued input consumed during a running turn emits another start with its envelope key
+and `queued: true`, even when its generation and turn are unchanged. Every start closes
+the preceding input span; an end closes the current span. The shared collector deduplicates
+by session/connection/response identity and retains each response's span key and queued flag.
+An ordinary span uses the turn's bound attribution. A queued span instead resolves its own
+envelope key, first against bound attributions, then against pending causes; it never borrows
+the preceding span's task. Reporting is read-only: queued causes without a canonical binding
+remain subject to the 256-pending-cause cap. Once evicted, their usage is unallocated and the
+dropped counter exposes incomplete coverage. There is no timestamp-proximity join. Legacy
+and auxiliary entries without markers or a queued span without a recorded cause remain
+explicitly unallocated.
 
 The per-item report always includes overhead and unallocated rows, token categories,
 request counts, and API-equivalent estimated USD, reconciling with the same PM container

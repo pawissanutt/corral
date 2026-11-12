@@ -83,6 +83,7 @@
     "subagents",
     "oracle",
     "headless",
-    "queue_control"
+    "queue_control",
+    "shadow"
   ]
 }

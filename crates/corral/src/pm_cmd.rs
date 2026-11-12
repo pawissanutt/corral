@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::Subcommand;
 use corral_ops::PmAction;
 use std::path::{Path, PathBuf};
@@ -23,6 +23,23 @@ pub enum PmCmd {
         reason: String,
         #[arg(long)]
         json: bool,
+    },
+    /// Start a fresh PM conversation in a new generation once nothing in the old one would be
+    /// lost; prints the blocking reasons otherwise
+    Rotate {
+        #[arg(long, default_value = "owner_request")]
+        reason: String,
+        /// Rotate despite blockers, except an open turn, an open delivery envelope or a
+        /// starting successor
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Shadow dispatcher observations (no effect)
+    Shadow {
+        #[command(subcommand)]
+        cmd: crate::pm_shadow_cmd::PmShadowCmd,
     },
     /// Replay frozen events and score code policy or imported model decisions, offline
     Bench {
@@ -76,9 +93,10 @@ pub enum PmCmd {
 }
 
 impl PmCmd {
-    /// Inbox posts and withdrawals act as their caller, not as the PM.
+    /// Notes, inbox posts and withdrawals act as their caller, not as the PM.
     pub fn acts_as_caller(&self) -> bool {
-        matches!(self, Self::Inbox { cmd } if cmd.acts_as_caller())
+        matches!(self, Self::Notes { .. })
+            || matches!(self, Self::Inbox { cmd } if cmd.acts_as_caller())
     }
 }
 
@@ -162,6 +180,13 @@ fn print_action(action: &PmAction) {
     for evidence in &action.evidence {
         println!("Evidence: {evidence}");
     }
+    if let Some(digest) = &action.question_digest {
+        for line in corral_ops::question_digest_lines(digest) {
+            println!("{line}");
+        }
+        println!("Verify: {}", action.verify);
+        return;
+    }
     println!(
         "Recommended: {}{}",
         action.recommended,
@@ -178,6 +203,43 @@ fn print_action(action: &PmAction) {
             "Option {}: {} -> {}",
             option.id, option.label, option.command
         );
+    }
+}
+
+/// Prints the new generation's pane or every blocking reason; a refusal exits non-zero.
+fn rotate(ctx: &corral_ops::Ctx, reason: &str, force: bool, json: bool) -> Result<()> {
+    let outcome = corral_ops::rotate_pm(ctx, reason, force)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&outcome)?);
+    }
+    match outcome {
+        corral_ops::RotateOutcome::Rotated {
+            pane,
+            generation,
+            fenced,
+            overridden,
+            ..
+        } => {
+            if !json {
+                println!(
+                    "PM rotated: generation {generation} in pane {pane} starts a fresh \
+                     conversation (generation {fenced} fenced)"
+                );
+                for reason in overridden {
+                    println!("Overridden: {}", reason.sentence);
+                }
+            }
+            Ok(())
+        }
+        corral_ops::RotateOutcome::Blocked { reasons, .. } => {
+            if !json {
+                println!("PM rotation blocked; nothing changed:");
+                for reason in &reasons {
+                    println!("- {}", reason.sentence);
+                }
+            }
+            bail!("PM rotation blocked by {} reason(s)", reasons.len())
+        }
     }
 }
 
@@ -210,6 +272,12 @@ pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Res
                 println!("{pane}");
             }
         }
+        Some(PmCmd::Rotate {
+            reason,
+            force,
+            json,
+        }) => rotate(&entry.open(start)?, &reason, force, json)?,
+        Some(PmCmd::Shadow { cmd }) => crate::pm_shadow_cmd::run(start, cmd, entry)?,
         Some(PmCmd::Bench {
             events,
             cases,

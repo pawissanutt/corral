@@ -44,6 +44,23 @@ impl Default for OracleSettings {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ShadowSettings {
+    model: Option<String>,
+    timeout_secs: u32,
+    max_per_hour: u32,
+}
+impl Default for ShadowSettings {
+    fn default() -> Self {
+        Self {
+            model: None,
+            timeout_secs: 60,
+            max_per_hour: 30,
+        }
+    }
+}
 fn model_ok(model: Option<&str>) -> Result<(), String> {
     if model
         .is_some_and(|s| s.trim().is_empty() || s.len() > 256 || s.chars().any(char::is_control))
@@ -73,6 +90,17 @@ pub(crate) fn oracle_settings(config: &CapabilitySettings) -> Result<CapabilityS
         serde_json::from_value(serde_json::json!(config)).map_err(|e| e.to_string())?;
     model_ok(settings.model.as_deref())?;
     timeout_ok(settings.timeout_secs)?;
+    serde_json::from_value(serde_json::json!(settings)).map_err(|e| e.to_string())
+}
+
+pub(crate) fn shadow_settings(config: &CapabilitySettings) -> Result<CapabilitySettings, String> {
+    let settings: ShadowSettings =
+        serde_json::from_value(serde_json::json!(config)).map_err(|e| e.to_string())?;
+    model_ok(settings.model.as_deref())?;
+    timeout_ok(settings.timeout_secs)?;
+    if !(1..=600).contains(&settings.max_per_hour) {
+        return Err("shadow max_per_hour must be 1-600".into());
+    }
     serde_json::from_value(serde_json::json!(settings)).map_err(|e| e.to_string())
 }
 

@@ -246,7 +246,7 @@ fn sync_scoped(
         return Ok(Vec::new());
     }
     ctx.store.check_runtime()?;
-    crate::hold::reconcile(ctx)?;
+    crate::hold::reconcile(ctx, scope)?;
     crate::desktop_notifications::reconcile(ctx)?;
     crate::report::scheduled_digest_and_report_at(ctx, now)?;
     // Status moves on any project's legacy queue entries and trackers: workspace sync only.
@@ -431,7 +431,7 @@ fn sync_scoped(
     crate::plan_pilot::advance_all(ctx, now, scope)?;
     changes.extend(scope.workspace_only(|| crate::availability::advance_all(ctx, now))?);
     changes.extend(crate::autopilot::advance_all(ctx, now, scope)?);
-    crate::hold::reconcile(ctx)?;
+    crate::hold::reconcile(ctx, scope)?;
     scope.workspace_only(|| crate::movement::reconcile(ctx, now, true))?;
     changes.extend(scope.workspace_only(|| crate::dashboard::advance(ctx, now))?);
     changes.extend(crate::parked::reacquire_woken(

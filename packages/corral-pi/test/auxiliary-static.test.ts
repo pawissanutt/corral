@@ -28,7 +28,8 @@ test("auxiliary static deltas record actual host prompts and tool schemas for al
       async function profile(enabled: string[]) {
         const host = await HostSession.create({ sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol", modules,
           network, events: new EventLog(1), capabilities: { catalog: 6, digest: "a".repeat(64), preset: "full", enabled },
-          guidance: { projectText: false, settings: { subagents: { max_parallel: 3, model: null, max_turns: 12, timeout_secs: 120 }, oracle: { model: null, timeout_secs: 120 } } },
+          guidance: { projectText: false, settings: { subagents: { max_parallel: 3, model: null, max_turns: 12, timeout_secs: 120 }, oracle: { model: null, timeout_secs: 120 },
+            shadow: { model: "gpt-6-luna", timeout_secs: 60, max_per_hour: 30 } } },
           client: new CorralClient({ corral: "/unused", root: cwd, identity, hostCap: "h".repeat(64), sessionId: () => "" }),
           sessionManager: sdk.SessionManager.inMemory(cwd),
         });
@@ -40,6 +41,11 @@ test("auxiliary static deltas record actual host prompts and tool schemas for al
         } finally { await host.close(); }
       }
       const base = await profile([]);
+      if (role === "pm") {
+        const shadow = await profile(["shadow"]);
+        expect(shadow.prompt).toBe(base.prompt);
+        expect(shadow.tools).toEqual(base.tools);
+      }
       for (const preset of ["strict", "standard", "full"]) {
         const explore = role !== "pm" && (preset === "full" || (preset === "standard" && role !== "reviewer"));
         const enabled = [...(explore ? ["subagents"] : []), ...(preset === "full" ? ["oracle"] : [])];

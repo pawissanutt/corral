@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::Ctx;
+use crate::sync::SyncScope;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Focus {
@@ -52,7 +53,7 @@ pub(crate) fn require_clear<T: corral_core::TaskFieldsRef + ?Sized>(
 pub fn hold(ctx: &Ctx, id: &str, reason: Option<&str>) -> Result<()> {
     let id = ctx.store.head(id)?.id.clone();
     set(ctx, &id, reason.unwrap_or("paused"), None)?;
-    cancel_held(ctx)
+    cancel_held(ctx, &SyncScope::All)
 }
 
 fn set(ctx: &Ctx, id: &str, reason: &str, focus: Option<&str>) -> Result<()> {
@@ -174,9 +175,9 @@ pub fn focus(ctx: &Ctx, id: Option<&str>, all: bool) -> Result<()> {
             },
         )?;
         release_from(ctx, &task.id, None)?;
-        reconcile_focus(ctx)?;
+        reconcile_focus(ctx, &SyncScope::All)?;
     }
-    cancel_held(ctx)
+    cancel_held(ctx, &SyncScope::All)
 }
 
 fn clear_focus(ctx: &Ctx) -> Result<()> {
@@ -189,18 +190,29 @@ fn clear_focus(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-fn reconcile_focus(ctx: &Ctx) -> Result<()> {
+/// The focus record is read workspace-wide; holds are set and released only on `scope`'s tasks.
+fn reconcile_focus(ctx: &Ctx, scope: &SyncScope) -> Result<()> {
     let Some(focus) = ctx.store.record::<Focus>("task-focus", "current")? else {
         return Ok(());
     };
     let target = ctx.store.head(&focus.task)?;
     if matches!(target.status, Status::Done | Status::Dropped) {
-        return clear_focus(ctx);
+        if *scope == SyncScope::All {
+            return clear_focus(ctx);
+        }
+        // Release only this scope's focus holds; the record and the other projects' holds
+        // are cleared by the next workspace sync.
+        for id in &focus.held {
+            if scope.includes(ctx.store.head(id)?.project.as_deref()) {
+                release_from(ctx, id, Some(&focus.task))?;
+            }
+        }
+        return Ok(());
     }
-    for task in ctx
-        .store
-        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
-    {
+    for task in scope.heads(
+        ctx.store
+            .heads(&corral_core::backend::HeadQuery::Open { project: None })?,
+    ) {
         if task.priority > target.priority && (focus.all || task.project == target.project) {
             set(
                 ctx,
@@ -215,23 +227,23 @@ fn reconcile_focus(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn reconcile(ctx: &Ctx) -> Result<()> {
+pub(crate) fn reconcile(ctx: &Ctx, scope: &SyncScope) -> Result<()> {
     if let Some(_lock) = ctx.store.try_lock("task-focus")? {
-        reconcile_focus(ctx)?;
+        reconcile_focus(ctx, scope)?;
     }
-    cancel_held(ctx)
+    cancel_held(ctx, scope)
 }
 
-fn cancel_held(ctx: &Ctx) -> Result<()> {
+fn cancel_held(ctx: &Ctx, scope: &SyncScope) -> Result<()> {
     // A launch already submitting finishes its atomic send, then the next pass cancels it.
     // A launch still preparing is fenced by the durable hold at submission.
     let Some(_budget) = ctx.store.try_lock("review-budget")? else {
         return Ok(());
     };
-    for task in ctx
-        .store
-        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
-    {
+    for task in scope.heads(
+        ctx.store
+            .heads(&corral_core::backend::HeadQuery::Open { project: None })?,
+    ) {
         if task.hold.is_some() {
             crate::review_budget::cancel_task(ctx, &task.id, "held")?;
         }

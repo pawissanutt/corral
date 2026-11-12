@@ -490,6 +490,10 @@ const ROWS: &[(&str, &[&str], Class)] = &[
     ("pm present", &["d-1", "--delivery", "pane"], Refused),
     ("pm resolve", &["d-1", "--answer", "yes"], Refused),
     ("pm relaunch", &[], Refused),
+    ("pm rotate", &[], Refused),
+    ("pm rotate", &["--force", "--json"], Refused),
+    ("pm shadow list", &[], Refused),
+    ("pm shadow export", &[], Refused),
     ("pm guard-resume", &[], Refused),
     ("pm notes list", &[], Read),
     (

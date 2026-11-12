@@ -214,7 +214,12 @@ fn pm_budget_settles_guard_only_pm_and_owner_resume_reopens_admission() {
     };
     let before = guard();
     assert_eq!(before["value"]["observations"].as_array().unwrap().len(), 1);
-    assert_eq!(before["value"]["consecutive_misses"], 1);
+    assert_eq!(before["value"]["consecutive_misses"], 0);
+    // Legacy hosts omit purpose: intake defaults to the conversation lineage.
+    assert_eq!(
+        before["value"]["observations"][0]["purpose"],
+        "conversation"
+    );
     let worker_task = worker_task(&fx, "p1");
     let worker = bind(
         &fx,
@@ -233,6 +238,9 @@ fn pm_budget_settles_guard_only_pm_and_owner_resume_reopens_admission() {
     settle(&fx, &reviewer, 1, "reviewer");
     assert_eq!(guard(), before);
     settle(&fx, &pm, 3, "pm-second");
+    assert_eq!(guard()["value"]["consecutive_misses"], 1);
+    assert_eq!(events(&fx, "pm_cache_miss_guard"), 0);
+    settle(&fx, &pm, 5, "pm-third");
     assert_eq!(events(&fx, "pm_cache_miss_guard"), 1);
     let paused = crate::pm_usage_guard::health(&fx.ctx).unwrap();
     assert_eq!(paused["status"]["state"], "paused");
@@ -240,7 +248,7 @@ fn pm_budget_settles_guard_only_pm_and_owner_resume_reopens_admission() {
     let denied = event(
         &fx,
         &pm,
-        5,
+        7,
         json!({
             "kind":"budget", "action":"reserve", "request":"denied", "tokens":1,
         }),
@@ -248,13 +256,13 @@ fn pm_budget_settles_guard_only_pm_and_owner_resume_reopens_admission() {
     assert_eq!(denied.result["admitted"], false);
     assert_eq!(denied.result["reason"], "cache_guard_paused");
     assert_eq!(denied.result["exhausted"], false);
-    assert_eq!(state(&fx, &ContainerRef::Pm).budget.requests.len(), 2);
+    assert_eq!(state(&fx, &ContainerRef::Pm).budget.requests.len(), 3);
     assert!(crate::pm_usage_guard::resume(&fx.ctx).unwrap());
     assert!(!crate::pm_usage_guard::resume(&fx.ctx).unwrap());
     let resumed = event(
         &fx,
         &pm,
-        6,
+        8,
         json!({
             "kind":"budget", "action":"reserve", "request":"resumed", "tokens":1, "priced":true,
         }),

@@ -4,7 +4,7 @@ pub(crate) mod inbox;
 pub(crate) mod observe;
 mod plan;
 mod questions;
-pub use questions::{QuestionDetails, QuestionDigest};
+pub use questions::{QuestionDetails, QuestionDigest, question_digest_lines};
 pub(crate) use questions::{digest_question_next, fit_digest};
 
 use anyhow::Result;

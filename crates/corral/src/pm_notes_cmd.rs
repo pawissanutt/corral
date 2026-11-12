@@ -1,7 +1,7 @@
-//! Owner-authored PM context notes.
+//! Caller-attributed PM context notes.
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
-use corral_core::agent::pm_notes::{self, NoteAuthor, NoteKind, NoteMutation};
+use corral_core::agent::pm_notes::{self, NoteAuthor, NoteKind, NoteMutation, PmNotes};
 use std::path::Path;
 
 #[derive(Args)]
@@ -26,7 +26,7 @@ pub enum PmNotesCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Add owner context (not an authorization)
+    /// Add caller-attributed context (not an authorization)
     Add {
         #[arg(long)]
         kind: String,
@@ -48,6 +48,24 @@ pub enum PmNotesCmd {
         json: bool,
     },
 }
+
+fn mutate(
+    ctx: &corral_ops::Ctx,
+    entry: &crate::entry::Entry,
+    expected_revision: Option<u64>,
+    mutation: NoteMutation,
+) -> Result<PmNotes> {
+    // Match owner parks: environment markers and run cwd are attribution, not
+    // authenticated identity. A caller that clears its markers can evade this guard.
+    corral_ops::attention::guard(ctx)?;
+    let author = match entry.decision_author(&ctx.store)? {
+        "owner" => NoteAuthor::Owner,
+        "pm" | "agent" | "assistant" | "reviewer" => NoteAuthor::Pm,
+        _ => anyhow::bail!("unidentified caller: PM notes mutation refused"),
+    };
+    pm_notes::apply(&ctx.store, "workspace", expected_revision, author, mutation)
+}
+
 pub fn run(start: &Path, cmd: PmNotesCmd, entry: &crate::entry::Entry) -> Result<()> {
     let ctx = entry.open(start)?;
     let (notes, json) = match cmd {
@@ -63,13 +81,7 @@ pub fn run(start: &Path, cmd: PmNotesCmd, entry: &crate::entry::Entry) -> Result
                 resume_when: fields.resume_when,
             };
             (
-                pm_notes::apply(
-                    &ctx.store,
-                    "workspace",
-                    fields.expect_revision,
-                    NoteAuthor::Owner,
-                    mutation,
-                )?,
+                mutate(&ctx, entry, fields.expect_revision, mutation)?,
                 fields.json,
             )
         }
@@ -82,13 +94,7 @@ pub fn run(start: &Path, cmd: PmNotesCmd, entry: &crate::entry::Entry) -> Result
                 resume_when: fields.resume_when,
             };
             (
-                pm_notes::apply(
-                    &ctx.store,
-                    "workspace",
-                    fields.expect_revision,
-                    NoteAuthor::Owner,
-                    mutation,
-                )?,
+                mutate(&ctx, entry, fields.expect_revision, mutation)?,
                 fields.json,
             )
         }
@@ -97,13 +103,7 @@ pub fn run(start: &Path, cmd: PmNotesCmd, entry: &crate::entry::Entry) -> Result
             expect_revision,
             json,
         } => (
-            pm_notes::apply(
-                &ctx.store,
-                "workspace",
-                expect_revision,
-                NoteAuthor::Owner,
-                NoteMutation::Remove { id },
-            )?,
+            mutate(&ctx, entry, expect_revision, NoteMutation::Remove { id })?,
             json,
         ),
     };

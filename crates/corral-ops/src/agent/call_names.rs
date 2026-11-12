@@ -14,6 +14,7 @@ impl AgentOp {
             AgentOp::Todo => "todo",
             AgentOp::Notes => "notes",
             AgentOp::PmAction => "pm_action",
+            AgentOp::PmShadow => "pm_shadow",
             AgentOp::Checkpoint => "checkpoint",
             AgentOp::Evidence => "evidence",
             AgentOp::Artifact => "artifact",

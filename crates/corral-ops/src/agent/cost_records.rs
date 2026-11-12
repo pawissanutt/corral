@@ -34,6 +34,8 @@ pub struct CostRow {
     pub cache_read: u64,
     pub cache_write: u64,
     pub output: u64,
+    /// Tokens from requests without an API-equivalent price, independent of partial USD.
+    pub unpriced_tokens: u64,
     /// API-equivalent estimate, matching the container's estimated_usd; None if unpriced.
     pub usd: Option<f64>,
 }
@@ -260,6 +262,28 @@ pub fn by_item(ctx: &Ctx, window: CostWindow) -> Result<CostReport> {
         .into_iter()
         .map(|record| ((record.generation, record.turn), record))
         .collect();
+    let envelopes: BTreeMap<_, _> = attributions
+        .values()
+        .filter_map(|record| Some((record.envelope_key.as_deref()?, record)))
+        .collect();
+    let pending: BTreeMap<_, _> = records
+        .pending
+        .into_iter()
+        .map(|pending| {
+            let cause = pending.cause;
+            (
+                pending.envelope_key,
+                CostAttribution {
+                    class: cause.class,
+                    project: cause.project,
+                    task: cause.task,
+                    item_key: cause.item_key,
+                    kinds: cause.kinds,
+                    ..CostAttribution::default()
+                },
+            )
+        })
+        .collect();
     let entries = super::usage::collect_entries(&pm.state, None, &ctx.store, false)?;
     let mut report = CostReport {
         coverage: CostCoverage {
@@ -291,10 +315,19 @@ pub fn by_item(ctx: &Ctx, window: CostWindow) -> Result<CostReport> {
             continue;
         }
         report.coverage.total_requests += 1;
-        if entry.turn.is_none() {
+        if entry.span.is_none() {
             report.coverage.legacy += 1;
         }
-        let cause = entry.turn.and_then(|turn| attributions.get(&turn));
+        let cause = entry.span.as_ref().and_then(|span| {
+            if span.queued {
+                // A queued input owns a new span, not the attribution of the running turn.
+                span.key
+                    .as_deref()
+                    .and_then(|key| envelopes.get(key).copied().or_else(|| pending.get(key)))
+            } else {
+                attributions.get(&span.turn)
+            }
+        });
         let missing = CostAttribution::default();
         let cause = cause.unwrap_or(&missing);
         if cause.class != CostClass::Unallocated {
@@ -318,6 +351,9 @@ pub fn by_item(ctx: &Ctx, window: CostWindow) -> Result<CostReport> {
         row.cache_read = row.cache_read.saturating_add(entry.usage.cache_read);
         row.cache_write = row.cache_write.saturating_add(entry.usage.cache_write);
         row.output = row.output.saturating_add(entry.usage.output);
+        row.unpriced_tokens = row
+            .unpriced_tokens
+            .saturating_add(entry.usage.unpriced_tokens);
         if let Some(usd) = entry.usage.estimated_usd {
             *row.usd.get_or_insert(0.0) += usd;
         }
