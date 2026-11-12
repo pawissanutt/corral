@@ -21,6 +21,7 @@ struct File {
     source: PathBuf,
     sha256: String,
     bytes: Vec<u8>,
+    _output_consumer: Option<corral_core::StoreLock>,
 }
 
 #[derive(Debug, Default)]
@@ -38,8 +39,8 @@ fn beneath(path: &Path, real: &Path, root: &Path) -> bool {
 }
 
 impl Evidence {
-    /// Checks `paths` against the allowed `roots` and the configured budget, reading each file
-    /// once; nothing is stored.
+    /// Checks `paths` against the allowed `roots` and budget, protecting each source before
+    /// reading it. Retention intents persist; consumer leases live through staged publication.
     pub(crate) fn check(ctx: &Ctx, paths: &[PathBuf], roots: &[&Path]) -> Result<Self> {
         let budget = ctx.store.config.storage.review_evidence_max_bytes()?;
         let mut files: Vec<File> = Vec::new();
@@ -78,6 +79,7 @@ impl Evidence {
                 "evidence set exceeds review_evidence_max ({}): {total} bytes or more",
                 ctx.store.config.storage.review_evidence_max
             );
+            let output_consumer = crate::storage_gc::outputs::protect_artifact_source(ctx, &real)?;
             let bytes = std::fs::read(&real)
                 .with_context(|| format!("reading evidence {}", given.display()))?;
             ensure!(
@@ -97,6 +99,7 @@ impl Evidence {
                 sha256: format!("{:x}", Sha256::digest(&bytes)),
                 source: real,
                 bytes,
+                _output_consumer: output_consumer,
             });
         }
         Ok(Self { files })
