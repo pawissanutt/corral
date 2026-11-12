@@ -19,6 +19,11 @@ const HIDDEN: [&str; 1] = ["runtime-probe"];
 /// One row per command path, plus one per argument that changes the class.
 const ROWS: &[(&str, &[&str], Class)] = &[
     ("", &[], Refused),
+    ("daemon run", &[], Refused),
+    ("daemon status", &["--json"], Read),
+    ("daemon nudge", &[], Refused),
+    ("daemon stop", &[], Refused),
+    ("daemon install", &["--print"], Refused),
     ("export tasks", &["out"], Refused),
     ("export events", &["--json"], Read),
     ("storage check", &[], Read),
@@ -724,6 +729,14 @@ fn every_command_variant_has_an_explicit_class() {
         args.extend_from_slice(extra);
         let out = fx.run(Some("A-1"), &args);
         let stderr = String::from_utf8_lossy(&out.stderr);
+        if *path == "daemon status" {
+            // A missing daemon is a successful read of down health, with exit status 2.
+            assert_eq!(out.status.code(), Some(2), "{stderr}");
+            let health: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            assert_eq!(health["daemon"], "down");
+            assert!(!stderr.contains("assistant_refused"));
+            continue;
+        }
         assert!(
             out.status.code() != Some(2) && !stderr.contains("assistant_refused"),
             "{args:?} is {class:?}: {stderr}"

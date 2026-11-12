@@ -87,7 +87,7 @@ fn definition(
             ));
         }
         Ok(format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>dev.corral.corrald.{}</string>\n<key>ProgramArguments</key><array><string>{}</string><string>--root</string><string>{}</string><string>daemon</string><string>run</string></array>\n<key>EnvironmentVariables</key><dict>{environment}</dict>\n<key>KeepAlive</key><true/>\n<key>RunAtLoad</key><true/>\n</dict></plist>\n",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n<key>Label</key><string>dev.corral.corrald.{}</string>\n<key>ProgramArguments</key><array><string>{}</string><string>--root</string><string>{}</string><string>daemon</string><string>run</string></array>\n<key>EnvironmentVariables</key><dict>{environment}</dict>\n<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n<key>RunAtLoad</key><true/>\n</dict></plist>\n",
             xml(id),
             xml(exe),
             xml(root)
@@ -100,10 +100,10 @@ fn definition(
                 unit_quote(&format!("HERDR_SOCKET_PATH={socket}"))
             ));
         }
-        // ExecStart is not a shell: quote arguments for systemd, and escape its $ expansion.
+        // systemd expands $ in arguments, not in the executable path.
         Ok(format!(
-            "[Unit]\nDescription=Corral workspace daemon\n\n[Service]\nExecStart={} --root {} daemon run\n{environment}Restart=always\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
-            unit_quote(exe).replace('$', "$$"),
+            "[Unit]\nDescription=Corral workspace daemon\n\n[Service]\nExecStart={} --root {} daemon run\n{environment}Restart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
+            unit_quote(exe),
             unit_quote(root).replace('$', "$$")
         ))
     }
@@ -182,9 +182,9 @@ mod tests {
         .unwrap();
         let cleaned = clean_path(&path).unwrap();
         assert_eq!(cleaned, bin.to_str().unwrap());
-        let root = dir.path().join("root with space");
+        let root = dir.path().join("root with $space");
         let unit = definition(
-            Path::new("/opt/corral"),
+            Path::new("/opt/corral$build/corral"),
             &root,
             "st-test",
             Some(Path::new("/tmp/herdr.sock")),
@@ -193,13 +193,26 @@ mod tests {
         )
         .unwrap();
         assert!(unit.contains(&format!(
-            "--root {} daemon run",
-            unit_quote(root.to_str().unwrap())
+            "ExecStart=\"/opt/corral$build/corral\" --root {} daemon run",
+            unit_quote(root.to_str().unwrap()).replace('$', "$$")
         )));
         assert!(unit.contains(&format!(
             "Environment={}",
             unit_quote(&format!("PATH={cleaned}"))
         )));
         assert!(unit.contains("HERDR_SOCKET_PATH=/tmp/herdr.sock"));
+        assert!(unit.contains("Restart=on-failure\n"));
+        let plist = definition(
+            Path::new("/opt/corral$build/corral"),
+            &root,
+            "st-test",
+            None,
+            &cleaned,
+            true,
+        )
+        .unwrap();
+        assert!(
+            plist.contains("<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>")
+        );
     }
 }

@@ -135,9 +135,9 @@ fn sync_passes(
     // Latch replacement/schema skew before any preparation reopens a snapshot and
     // reports only a generic incompatible-schema error (T-587).
     ctx.store.check_runtime()?;
-    if ctx.store.loop_owned_elsewhere()? {
+    let Some(_loop_pass) = ctx.store.loop_pass()? else {
         return Ok(Vec::new());
-    }
+    };
     if !crate::session_scope::owns_inventory(ctx)? {
         return Ok(Vec::new());
     }

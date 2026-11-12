@@ -1,4 +1,4 @@
-//! Exercise the real watch loop across an atomic executable replacement.
+//! Exercise the real daemon loop across an atomic executable replacement.
 #![cfg(unix)]
 
 use std::io::{BufRead, BufReader, Read};
@@ -20,7 +20,7 @@ impl Drop for Watch {
 }
 
 #[test]
-fn watch_refuses_next_tick_after_its_executable_is_replaced() {
+fn daemon_exits_for_upgrade_after_its_executable_is_replaced() {
     // Given: a copied real binary and a separate fake terminal, never the live store.
     let tmp = tempfile::tempdir().unwrap();
     let store = corral_core::Store::init(tmp.path()).unwrap();
@@ -50,7 +50,7 @@ fn watch_refuses_next_tick_after_its_executable_is_replaced() {
     });
     let mut watch = Watch(
         command(&binary, tmp.path())
-            .args(["--root", tmp.path().to_str().unwrap(), "sync", "--watch"])
+            .args(["--root", tmp.path().to_str().unwrap(), "daemon", "run"])
             .current_dir(tmp.path())
             .env("HERDR_BIN_PATH", &engine)
             .env("CORRAL_HERDR_SESSION", "corral-test")
@@ -64,11 +64,12 @@ fn watch_refuses_next_tick_after_its_executable_is_replaced() {
     let stderr = watch.0.stderr.take().unwrap();
     let (updated_tx, updated_rx) = mpsc::channel();
     std::thread::spawn(move || {
+        let mut reported = false;
         for line in BufReader::new(stderr).lines() {
             let line = line.unwrap();
-            if line.contains(corral_core::UPDATE_NOTICE) {
+            if !reported && line.contains(corral_core::UPDATE_NOTICE) {
                 updated_tx.send(line).unwrap();
-                return;
+                reported = true;
             }
         }
     });
@@ -76,13 +77,14 @@ fn watch_refuses_next_tick_after_its_executable_is_replaced() {
         .recv_timeout(Duration::from_secs(120))
         .unwrap()
         .unwrap();
-    // When: install a new inode while the watch process holds the old executable.
+    // When: install a new inode while the daemon process holds the old executable.
     let replacement = tmp.path().join("replacement");
     std::fs::copy(env!("CARGO_BIN_EXE_corral"), &replacement).unwrap();
     std::fs::rename(replacement, &binary).unwrap();
-    // Then: the actual next tick reports skew and persists the event.
+    // Then: the next pass reports skew, persists its event and exits for upgrade.
     let notice = updated_rx.recv_timeout(Duration::from_secs(120)).unwrap();
     println!("{notice}");
+    assert_eq!(watch.0.wait().unwrap().code(), Some(75));
     let events = store.events().unwrap();
     assert_eq!(
         events.iter().filter(|e| e.kind == "version_skew").count(),
@@ -96,11 +98,12 @@ fn watch_refuses_next_tick_after_its_executable_is_replaced() {
 
 #[cfg(all(feature = "test-skew-barrier", debug_assertions))]
 #[test]
-fn watch_persists_skew_detected_by_read_only_snapshot() {
+fn daemon_persists_snapshot_skew_before_exiting_for_upgrade() {
     use std::io::Write;
 
-    // Match the original empty default store and fake herdr. The barrier proves the
-    // replacement happens at a reachable snapshot runtime check, after herdr readiness.
+    // A one-pass daemon isolates the sync snapshot rendezvous from background health
+    // and projection readers, preserving the original read-only snapshot regression.
+    // Replacement occurs after fake herdr readiness, before that snapshot checks runtime.
     let tmp = tempfile::tempdir().unwrap();
     let store = corral_core::Store::init(tmp.path()).unwrap();
     let binary = tmp.path().join("corral");
@@ -138,7 +141,13 @@ fn watch_persists_skew_detected_by_read_only_snapshot() {
     });
     let mut watch = Watch(
         command(&binary, tmp.path())
-            .args(["--root", tmp.path().to_str().unwrap(), "sync", "--watch"])
+            .args([
+                "--root",
+                tmp.path().to_str().unwrap(),
+                "daemon",
+                "run",
+                "--once",
+            ])
             .current_dir(tmp.path())
             .env("HERDR_BIN_PATH", &engine)
             .env("CORRAL_HERDR_SESSION", "corral-test")
@@ -153,11 +162,12 @@ fn watch_persists_skew_detected_by_read_only_snapshot() {
     let stderr = watch.0.stderr.take().unwrap();
     let (notice_tx, notice_rx) = mpsc::channel();
     std::thread::spawn(move || {
+        let mut reported = false;
         for line in BufReader::new(stderr).lines() {
             let line = line.unwrap();
-            if line.contains(corral_core::UPDATE_NOTICE) {
+            if !reported && line.contains(corral_core::UPDATE_NOTICE) {
                 notice_tx.send(line).unwrap();
-                return;
+                reported = true;
             }
         }
     });
@@ -175,6 +185,7 @@ fn watch_persists_skew_detected_by_read_only_snapshot() {
         "{}",
         notice_rx.recv_timeout(Duration::from_secs(120)).unwrap()
     );
+    assert_eq!(watch.0.wait().unwrap().code(), Some(75));
     let events = store.events().unwrap();
     assert_eq!(
         events.iter().filter(|e| e.kind == "version_skew").count(),
@@ -266,6 +277,10 @@ fn command(binary: impl AsRef<std::ffi::OsStr>, root: &std::path::Path) -> Comma
         "HERDR_PANE_ID",
         "HERDR_WORKSPACE_ID",
         "HERDR_TAB_ID",
+        "CORRAL_PM",
+        "AI_AGENT",
+        "PI_CODING_AGENT",
+        "CORRAL_ASSISTANT",
     ] {
         command.env_remove(name);
     }

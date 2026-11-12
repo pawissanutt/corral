@@ -1,12 +1,12 @@
 //! Bounded, per-connection RPC workers; the loop never writes to a client socket.
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
 use corral_protocol::{
     self as wire,
-    frame::{Frame, FrameKind, read_frame, write_frame},
+    frame::{Frame, FrameKind, read_frame_until, write_frame_until},
     rpc,
 };
 use serde::Serialize;
@@ -16,6 +16,21 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use crate::state::Shared;
 
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_CONNECTIONS: usize = 64;
+const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[path = "topics.rs"]
+mod topics;
+
+struct WorkerPermit(Arc<Shared>);
+
+impl Drop for WorkerPermit {
+    fn drop(&mut self) {
+        let mut state = self.0.lock();
+        state.workers -= 1;
+        self.0.changed.notify_all();
+    }
+}
 
 pub(crate) fn start(listener: UnixListener, shared: Arc<Shared>, store: &Path) -> Result<()> {
     listener
@@ -50,11 +65,20 @@ pub(crate) fn start(listener: UnixListener, shared: Arc<Shared>, store: &Path) -
                 }
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        {
+                            let mut state = shared.lock();
+                            if state.stop || state.workers >= MAX_CONNECTIONS {
+                                continue;
+                            }
+                            state.workers += 1;
+                        }
+                        let permit = WorkerPermit(Arc::clone(&shared));
                         let shared = Arc::clone(&shared);
                         let store = store.clone();
                         if let Err(error) = std::thread::Builder::new()
                             .name("corrald-client".into())
                             .spawn(move || {
+                                let _permit = permit;
                                 if let Err(error) = serve(stream, shared, &store) {
                                     eprintln!("corrald client: {error:#}");
                                 }
@@ -84,9 +108,17 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) -> Result<()>
         .set_write_timeout(Some(IO_TIMEOUT))
         .context("setting client write timeout")?;
     let mut welcomed = false;
+    let hello_deadline = Instant::now() + HELLO_TIMEOUT;
+    let mut topics = topics::Topics::new(&shared);
     loop {
         if shared.lock().closed {
             return bye(&mut stream, &shared);
+        }
+        if !welcomed && Instant::now() >= hello_deadline {
+            return Ok(());
+        }
+        if welcomed {
+            topics.flush(&mut stream)?;
         }
         // Poll before reading so idle clients survive between requests, while a partial
         // frame still has a bounded read deadline. Shutdown never waits for the peer.
@@ -104,7 +136,12 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) -> Result<()>
         if ready == 0 {
             continue;
         }
-        let frame = match read_frame(&mut stream) {
+        let deadline = if welcomed {
+            Instant::now() + IO_TIMEOUT
+        } else {
+            hello_deadline.min(Instant::now() + IO_TIMEOUT)
+        };
+        let frame = match read_frame_until(&mut stream, deadline) {
             Ok(Some(frame)) => frame,
             Ok(None) => return Ok(()),
             Err(error) => {
@@ -151,11 +188,15 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) -> Result<()>
                                 major: wire::PROTO_MAJOR,
                                 minor: wire::PROTO_MINOR,
                             },
-                            caps: Vec::new(),
+                            caps: hello
+                                .caps
+                                .into_iter()
+                                .filter(|cap| cap == wire::BOARD_V1)
+                                .collect(),
                             daemon: wire::DaemonInfo {
                                 version: env!("CARGO_PKG_VERSION").into(),
                                 store: store.into(),
-                                epoch: 0,
+                                epoch: shared.epoch(),
                             },
                             health: shared.health(),
                         },
@@ -202,6 +243,53 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) -> Result<()>
                 )?,
             },
             wire::HEALTH_GET => reply(&mut stream, id, shared.health())?,
+            wire::SUB_OPEN => match serde_json::from_value::<wire::subscription::SubOpen>(params) {
+                Ok(open) => match topics.open(open) {
+                    Ok(()) => reply(&mut stream, id, ())?,
+                    Err(problem) => error(
+                        &mut stream,
+                        id,
+                        rpc::ErrorCode::InvalidParams,
+                        &problem.to_string(),
+                    )?,
+                },
+                Err(_) => error(
+                    &mut stream,
+                    id,
+                    rpc::ErrorCode::InvalidParams,
+                    "invalid sub.open",
+                )?,
+            },
+            wire::SUB_ACK => match serde_json::from_value::<wire::subscription::SubAck>(params) {
+                Ok(ack) => match topics.ack(ack) {
+                    Ok(()) => reply(&mut stream, id, ())?,
+                    Err(problem) => error(
+                        &mut stream,
+                        id,
+                        rpc::ErrorCode::InvalidParams,
+                        &problem.to_string(),
+                    )?,
+                },
+                Err(_) => error(
+                    &mut stream,
+                    id,
+                    rpc::ErrorCode::InvalidParams,
+                    "invalid sub.ack",
+                )?,
+            },
+            wire::SUB_CLOSE => match serde_json::from_value::<wire::subscription::SubClose>(params)
+            {
+                Ok(close) => {
+                    topics.close(close);
+                    reply(&mut stream, id, ())?;
+                }
+                Err(_) => error(
+                    &mut stream,
+                    id,
+                    rpc::ErrorCode::InvalidParams,
+                    "invalid sub.close",
+                )?,
+            },
             wire::DAEMON_STOP => match serde_json::from_value::<wire::Stop>(params) {
                 Ok(stop) => {
                     // Both stop modes finish any already-running pass, never interrupt effects.
@@ -233,13 +321,14 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) -> Result<()>
 
 fn send(stream: &mut UnixStream, value: &impl Serialize) -> Result<()> {
     let payload = serde_json::to_vec(value).context("encoding daemon response")?;
-    write_frame(
+    write_frame_until(
         stream,
         &Frame {
             kind: FrameKind::Control,
             stream: 0,
             payload,
         },
+        Instant::now() + IO_TIMEOUT,
     )
     .context("writing daemon response")
 }

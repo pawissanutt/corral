@@ -41,6 +41,7 @@ pub enum DaemonCmd {
 pub fn run(start: &Path, cmd: DaemonCmd, entry: &crate::entry::Entry) -> Result<()> {
     match cmd {
         DaemonCmd::Run { once } => {
+            drop(owner_store(start, entry)?);
             let exit = corral_daemon::run(start, corral_daemon::RunOptions { once })?;
             if matches!(exit, corral_daemon::Exit::AlreadyRunning) {
                 println!("corrald is already running for this workspace");
@@ -77,7 +78,7 @@ pub fn run(start: &Path, cmd: DaemonCmd, entry: &crate::entry::Entry) -> Result<
             Ok(())
         }
         DaemonCmd::Stop { drain } => {
-            let store = entry.open(start)?.store;
+            let store = owner_store(start, entry)?;
             let Some(mut client) = daemon_client::Client::connect(&store)? else {
                 println!("corrald is not running");
                 std::process::exit(2);
@@ -87,10 +88,18 @@ pub fn run(start: &Path, cmd: DaemonCmd, entry: &crate::entry::Entry) -> Result<
             Ok(())
         }
         DaemonCmd::Install { print, force } => {
-            let store = entry.open(start)?.store;
+            let store = owner_store(start, entry)?;
             crate::daemon_unit::install(&store, print, force)
         }
     }
+}
+
+fn owner_store(start: &Path, entry: &crate::entry::Entry) -> Result<Store> {
+    // Check authority before observing config edits or running store migrations.
+    let store = Store::open_unobserved(&Store::find_root(start)?)?;
+    corral_ops::require_automation_owner(&store)?;
+    entry.apply(&store)?;
+    Ok(store)
 }
 
 fn health_code(health: &corral_protocol::Health) -> i32 {

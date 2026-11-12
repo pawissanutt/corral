@@ -5,7 +5,7 @@ pub const CONTROL_MAX: usize = 60 * 1024;
 pub const DATA_MAX: usize = 32 * 1024;
 const HEADER_LEN: usize = 5;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, schemars::JsonSchema)]
 #[repr(u8)]
 pub enum FrameKind {
     Control = 0,
@@ -13,7 +13,7 @@ pub enum FrameKind {
     Credit = 2,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, schemars::JsonSchema)]
 pub struct Frame {
     pub kind: FrameKind,
     pub stream: u32,
@@ -87,6 +87,61 @@ pub fn read_frame(r: &mut impl Read) -> io::Result<Option<Frame>> {
         stream,
         payload,
     }))
+}
+
+/// Read one frame with a single elapsed-time budget, including partial reads.
+#[cfg(unix)]
+pub fn read_frame_until(
+    stream: &mut std::os::unix::net::UnixStream,
+    deadline: std::time::Instant,
+) -> io::Result<Option<Frame>> {
+    read_frame(&mut DeadlineSocket { stream, deadline })
+}
+
+/// Write one frame with a single elapsed-time budget, including partial writes.
+#[cfg(unix)]
+pub fn write_frame_until(
+    stream: &mut std::os::unix::net::UnixStream,
+    frame: &Frame,
+    deadline: std::time::Instant,
+) -> io::Result<()> {
+    write_frame(&mut DeadlineSocket { stream, deadline }, frame)
+}
+
+#[cfg(unix)]
+struct DeadlineSocket<'a> {
+    stream: &'a mut std::os::unix::net::UnixStream,
+    deadline: std::time::Instant,
+}
+
+#[cfg(unix)]
+impl DeadlineSocket<'_> {
+    fn remaining(&self) -> io::Result<std::time::Duration> {
+        self.deadline
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "frame deadline expired"))
+    }
+}
+
+#[cfg(unix)]
+impl Read for DeadlineSocket<'_> {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        self.stream.set_read_timeout(Some(self.remaining()?))?;
+        self.stream.read(bytes)
+    }
+}
+
+#[cfg(unix)]
+impl Write for DeadlineSocket<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.stream.set_write_timeout(Some(self.remaining()?))?;
+        self.stream.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
+    }
 }
 
 #[cfg(test)]

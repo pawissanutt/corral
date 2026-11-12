@@ -1,7 +1,7 @@
 //! History-independent board wire model. Timestamps are RFC 3339 strings.
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BoardRow {
     pub id: String,
     pub title: String,
@@ -26,7 +26,7 @@ pub struct BoardRow {
     pub rev: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BoardGroup {
     NeedsYou,
@@ -39,14 +39,14 @@ pub enum BoardGroup {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct RailStep {
     pub glyph: RailGlyph,
     pub sha7: Option<String>,
     pub at: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RailGlyph {
     Pass,
@@ -72,7 +72,7 @@ impl RailGlyph {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BoardNow {
     pub code: String,
     /// At most 60 Unicode scalar values in projector output.
@@ -80,7 +80,7 @@ pub struct BoardNow {
     pub since: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BoardAgent {
     pub session: Option<String>,
     pub role: String,
@@ -90,7 +90,7 @@ pub struct BoardAgent {
     pub machine: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum CostBasis {
     Reported,
@@ -102,13 +102,13 @@ pub enum CostBasis {
 
 /// `after = Some(id)` resumes within `rev`; None has consumed that whole revision.
 /// The empty starting cursor is `{ rev: 0, after: None }`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BoardCursor {
     pub rev: u64,
     pub after: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BoardDelta {
     pub epoch: u64,
     pub rows: Vec<BoardRow>,

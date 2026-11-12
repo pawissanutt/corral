@@ -13,11 +13,15 @@ no lock-file deletion is needed or safe.
 
 - `corral daemon run [--once]`: run in the foreground, or complete one pass and exit.
   A second daemon prints that it is already running and exits successfully.
+  One-shot pass failures return an error; a runtime upgrade latch exits 75.
 - `corral daemon status [--json]`: read health; exit 0 healthy, 1 degraded, 2 down.
 - `corral daemon nudge`: request a pass; exit 2 if no daemon answers.
 - `corral daemon stop [--drain]`: stop after the running pass; exit 2 if absent.
 - `corral daemon install [--print] [--force]`: render or write the workspace service.
   It never starts or enables services. A different existing file needs `--force`.
+
+`run`, `stop` and `install` require the owner, not a PM or agent shell. Anyone may
+read `status`; the PM may `nudge` and should report a down daemon to the owner.
 
 With a daemon owning the loop, `corral sync` requests a pass, waits at most 20 seconds
 and reports whether it completed. It exits successfully even if that wait expires.
@@ -30,6 +34,32 @@ retains its periodic sync and maintenance. Read-only PM commands never drive syn
 The daemon keeps the board's pacing rule: wait 19 times the CPU time used by a
 pass, clamped between 2 and 60 seconds. A nudge starts the next pass at once.
 PM, runtime and store gauges are sampled about every 15 seconds.
+Connections are capped at 64, require hello within five seconds, and have absolute
+per-frame I/O deadlines. Client connect is nonblocking and deadline-bounded.
+Orderly shutdown allows at most two seconds for outstanding connection writers
+after closing the loop, so a draining stop's reply is written before process exit.
+
+## Projected board
+
+The daemon folds the store change feed into a rebuildable in-memory board on a
+separate thread. Pass completion and nudges wake it; sequence polling also catches
+direct CLI writes, every 500 ms with board subscribers and every two seconds otherwise.
+The cache (`boardview-v1.bin` under the workspace cache root) is saved at most once
+every ten seconds while running and again on orderly shutdown. A missing or invalid
+cache rebuilds with a new epoch; subscribers then resubscribe from the start.
+
+`corral list --view` reads this projection over the daemon socket without running a
+pass. It groups tasks by who acts next and prints the run/gate/review/land rail,
+current activity and title. `corral list --view --json` returns the board rows.
+The view conflicts with classic listing's `--query`, `--status`, `--project`,
+`--all`, `--done`, `--since` and `--columns`; it does not fall back to store reads
+when the daemon is absent (exit 2; inspect `corral daemon status`).
+
+Socket topics `board` and `health` push bounded CONTROL pages with one page in flight
+until `sub.ack`. Slow subscribers retain only a cursor, never a backlog of rows.
+`welcome.caps` negotiates `board.v1`; `welcome.daemon.epoch` identifies the projection.
+Health deltas reflect condition or completed-pass changes, not elapsed-age ticks.
+
 
 ## Install and enable
 
@@ -49,11 +79,16 @@ systemctl --user enable --now corrald@<store-id>.service
 journalctl --user -u corrald@<store-id>.service -f
 ```
 
-The unit restarts an exited daemon after two seconds. Starting before interactive
-login requires the separate operator decision `loginctl enable-linger <user>`.
+The systemd unit uses `Restart=on-failure` and `RestartSec=2`: crashes and upgrade
+exit 75 restart after two seconds; a clean stop or already-running exit (both 0)
+stays stopped. After a deliberate stop, run
+`systemctl --user start corrald@<store-id>.service` to start it again. Starting before
+interactive login requires the separate decision `loginctl enable-linger <user>`.
 On macOS the installer writes
-`~/Library/LaunchAgents/dev.corral.corrald.<store-id>.plist` with `KeepAlive` and
-`RunAtLoad`, and prints the `launchctl bootstrap` command. It does not execute it.
+`~/Library/LaunchAgents/dev.corral.corrald.<store-id>.plist` with `RunAtLoad` and a
+`KeepAlive` dictionary whose `SuccessfulExit` is false: failures restart, clean
+stops do not. It prints the `launchctl bootstrap` command without executing it.
+After a deliberate stop, use `launchctl kickstart gui/$(id -u)/dev.corral.corrald.<store-id>`.
 Without a supported service manager, run `corral daemon run` in the foreground.
 The daemon never starts the herdr server: start the store-owned server yourself.
 
@@ -81,7 +116,8 @@ Health reasons identify the next investigation, not permission to break locks:
 Replacing the `corral` binary makes the daemon finish its pass and exit 75; the
 service manager restarts the installed binary. An open classic board still needs
 `q` and a restart. For a coordinated upgrade, stop with `corral daemon stop --drain`,
-install, then start the service again. For rollback, disable the service (`systemctl --user
+install, then start the service with `systemctl --user start corrald@<store-id>.service`
+(or the launchd kickstart command above). For rollback, disable the service (`systemctl --user
 disable --now corrald@<store-id>.service`, or unload the launch agent); once the
 lease is released, the board drives sync again.
 

@@ -210,6 +210,55 @@ fn show_session(run: &corral_core::Run, role: &str) {
     }
 }
 
+pub(super) fn list_view(start: &std::path::Path, json: bool) -> Result<()> {
+    use corral_protocol::board::BoardGroup;
+    let root = corral_core::Store::find_root(start)?;
+    let socket = corral_ops::daemon_client::socket_path_of(&root.join(".corral"));
+    let unavailable = |reason: &str| -> ! {
+        eprintln!("board view unavailable ({reason}); run `corral daemon status`");
+        std::process::exit(2);
+    };
+    let mut client = match corral_ops::daemon_client::Client::connect_at(&socket) {
+        Ok(Some(client)) => client,
+        Ok(None) => unavailable("daemon is not running"),
+        Err(error) => unavailable(&error.to_string().replace(['\n', '\r'], " ")),
+    };
+    let rows = client.board()?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
+    }
+    for (group, heading) in [
+        (BoardGroup::NeedsYou, "Needs you"),
+        (BoardGroup::Verifying, "Corral is verifying"),
+        (BoardGroup::Producing, "Workers producing"),
+        (BoardGroup::Queued, "Queued"),
+        (BoardGroup::Held, "Held"),
+        (BoardGroup::Parked, "Parked"),
+        (BoardGroup::Other, "Other"),
+    ] {
+        let mut grouped = rows.iter().filter(|row| row.group == group).peekable();
+        if grouped.peek().is_none() {
+            continue;
+        }
+        println!("{heading}");
+        for row in grouped {
+            // Spaces, not `·`: that character is itself the "not applicable" glyph.
+            println!(
+                "{}  {} {} {} {}  {}  {}",
+                row.id,
+                row.rail[0].glyph.glyph(),
+                row.rail[1].glyph.glyph(),
+                row.rail[2].glyph.glyph(),
+                row.rail[3].glyph.glyph(),
+                row.now.text,
+                row.title,
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn list(
     ctx: &Ctx,
     status: Option<&str>,

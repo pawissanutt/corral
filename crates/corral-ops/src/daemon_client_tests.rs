@@ -4,6 +4,7 @@ use std::os::unix::net::UnixListener;
 
 use super::*;
 use corral_protocol::DaemonInfo;
+use corral_protocol::frame::{read_frame, write_frame};
 use serde_json::json;
 
 fn request(stream: &mut UnixStream) -> Request {
@@ -91,4 +92,49 @@ fn waited_nudge_preserves_ack_and_rejects_incompatible_welcome() {
         }
         server.join().unwrap();
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn full_accept_backlog_cannot_block_best_effort_connect() {
+    use rustix::net::{AddressFamily, SocketAddrUnix, SocketFlags, SocketType};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("full.sock");
+    let listener = rustix::net::socket_with(
+        AddressFamily::UNIX,
+        SocketType::STREAM,
+        SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap();
+    rustix::net::bind(&listener, &SocketAddrUnix::new(&path).unwrap()).unwrap();
+    rustix::net::listen(&listener, 1).unwrap();
+    let mut pending = Vec::new();
+    // Every successful nonblocking connect occupies a backlog slot; stop only
+    // when the kernel itself reports saturation, never after a guessed count.
+    loop {
+        let fd = rustix::net::socket_with(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::NONBLOCK | SocketFlags::CLOEXEC,
+            None,
+        )
+        .unwrap();
+        match rustix::net::connect(&fd, &SocketAddrUnix::new(&path).unwrap()) {
+            Ok(()) => pending.push(fd),
+            Err(rustix::io::Errno::AGAIN) => break,
+            Err(error) => panic!("unexpected backlog fill error: {error}"),
+        }
+    }
+    let (finished, receive) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        finished.send(Client::connect_at(&path).is_err()).unwrap();
+    });
+    assert!(
+        receive
+            .recv_timeout(IO_TIMEOUT + Duration::from_millis(500))
+            .unwrap()
+    );
+    worker.join().unwrap();
+    drop(pending);
 }

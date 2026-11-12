@@ -4,7 +4,7 @@ use serde_json::Value;
 
 pub const JSONRPC: &str = "2.0";
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Request<P = Value> {
     pub jsonrpc: String,
     pub id: Value,
@@ -12,14 +12,14 @@ pub struct Request<P = Value> {
     pub params: P,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Notification<P = Value> {
     pub jsonrpc: String,
     pub method: String,
     pub params: P,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Response<T = Value> {
     pub jsonrpc: String,
     pub id: Value,
@@ -28,14 +28,14 @@ pub struct Response<T = Value> {
 }
 
 /// A response has exactly one result or error. A successful null result is preserved.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum ResponseOutcome<T = Value> {
     Result { result: T },
     Error { error: Error },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Error {
     pub code: ErrorCode,
     pub message: String,
@@ -43,7 +43,7 @@ pub struct Error {
     pub data: Option<Value>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     Unauthenticated,

@@ -109,6 +109,8 @@ esac
         before
     );
     owner.release_loop();
+    let legacy_pass = owner.loop_pass().unwrap().unwrap();
+    assert!(!ctx.store.loop_owned_elsewhere().unwrap());
     let (changes, _) = sync_with_attention(&ctx).unwrap();
     assert!(
         changes
@@ -116,4 +118,6 @@ esac
             .any(|change| change.task == task.id && change.to == Status::Running)
     );
     assert_eq!(ctx.store.get(&task.id).unwrap().status, Status::Running);
+    drop(legacy_pass);
+    assert!(owner.own_loop().unwrap());
 }

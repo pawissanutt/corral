@@ -80,18 +80,9 @@ impl Transitions {
         let keys: Vec<_> = health
             .reasons
             .iter()
-            .map(|reason| {
-                if reason.starts_with("sync stalled ") {
-                    "sync stalled".into()
-                } else if let Some((name, held)) = reason.split_once(" held ") {
-                    format!(
-                        "{name} by {}",
-                        held.split_once(" by ")
-                            .map_or("unknown", |(_, holder)| holder)
-                    )
-                } else {
-                    reason.clone()
-                }
+            .map(|reason| match reason_key(reason) {
+                (name, Some(holder)) => format!("{name} by {holder}"),
+                (reason, None) => reason.to_owned(),
             })
             .collect();
         if self.previous.as_ref() == Some(&keys) {
@@ -109,6 +100,23 @@ impl Transitions {
     pub fn stopped(&mut self, store: &Store, health: &Health) -> Result<()> {
         self.stopped = true;
         self.save(store, "stopped", health, None)
+    }
+}
+
+/// Compare conditions without treating elapsed ages as new state.
+pub(crate) fn reason_key(reason: &str) -> (&str, Option<&str>) {
+    if reason.starts_with("sync stalled ") {
+        ("sync stalled", None)
+    } else if let Some((name, held)) = reason.split_once(" held ") {
+        (
+            name,
+            Some(
+                held.split_once(" by ")
+                    .map_or("unknown", |(_, holder)| holder),
+            ),
+        )
+    } else {
+        (reason, None)
     }
 }
 

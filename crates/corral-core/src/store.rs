@@ -48,7 +48,7 @@ mod head_turn_retention;
 mod head_wait;
 mod heads;
 mod lock_guard;
-mod loop_owner;
+pub mod loop_owner;
 mod member_gate;
 pub(crate) mod migrate_rows;
 mod native_counts;
