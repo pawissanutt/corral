@@ -53,6 +53,7 @@ pub(crate) fn badges(records: &[RecoveryRecord]) -> Vec<&'static str> {
 pub(crate) fn summary_badges(s: &corral_core::RecoverySummary) -> Vec<&'static str> {
     let mut out = Vec::new();
     for (n, label) in [
+        (s.external_forced, "external/forced delivery"),
         (s.applied, OWNER_RECOVERY),
         (s.review_waived, REVIEW_WAIVED),
         (s.check_overridden, CHECK_OVERRIDDEN),
@@ -100,6 +101,11 @@ pub(crate) fn check_line(c: &RecoveryCheckRecord) -> String {
 
 pub(crate) fn identity(i: &RecoveryIdentity) -> String {
     match i {
+        RecoveryIdentity::External { run, destination } => format!(
+            "external/forced run {run} on {} @{}",
+            destination.branch,
+            short(&destination.head)
+        ),
         RecoveryIdentity::Plan {
             plan,
             artifact_sha256,
@@ -118,6 +124,16 @@ pub(crate) fn identity(i: &RecoveryIdentity) -> String {
 
 pub(crate) fn effect(e: &RecoveryEffect) -> String {
     match e {
+        RecoveryEffect::ExternalCompletion {
+            delivery,
+            destination,
+            ..
+        } => format!(
+            "external/forced completion @{} tree {} on {}; native receipts and resources retained; no merge or process drain claimed",
+            short(&delivery.commit),
+            short(&delivery.tree),
+            destination.branch
+        ),
         RecoveryEffect::ReviewAttempt {
             stage,
             attempt,
@@ -200,6 +216,37 @@ pub(crate) fn history_lines(records: &[RecoveryRecord]) -> Vec<Line<'static>> {
             format!("    effect: {}", effect(&r.preview.proposed_effect)),
             theme::dim(),
         ));
+        if let RecoveryEffect::ExternalCompletion {
+            delivery,
+            destination,
+            ..
+        } = &r.preview.proposed_effect
+        {
+            out.push(Line::styled(
+                format!("    delivered: {} tree {}", delivery.commit, delivery.tree),
+                theme::dim(),
+            ));
+            out.push(Line::styled(
+                format!(
+                    "    destination: {} @{} tree {}",
+                    destination.branch, destination.head, destination.tree
+                ),
+                theme::dim(),
+            ));
+            for (kind, proof) in [
+                ("gate", &delivery.gate),
+                ("review", &delivery.review),
+                ("landing", &delivery.landing),
+            ] {
+                out.push(Line::styled(
+                    format!(
+                        "    external {kind}: {} sha256 {}",
+                        proof.reference, proof.sha256
+                    ),
+                    theme::dim(),
+                ));
+            }
+        }
         for c in &r.preview.checks {
             let style = if excepted(c) {
                 Style::new().fg(YELLOW)

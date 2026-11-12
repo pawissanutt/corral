@@ -21,6 +21,7 @@ fn after(ctx: &Ctx, record: &RecoveryRecord) -> Result<RecoveryTarget> {
     let task = ctx.store.get(&record.preview.request.target.task)?;
     let mut identity = record.preview.request.target.identity.clone();
     match &mut identity {
+        RecoveryIdentity::External { .. } => {} // Retain the exact verified external destination.
         RecoveryIdentity::Plan {
             plan,
             artifact_sha256,

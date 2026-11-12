@@ -220,6 +220,16 @@ impl Store {
     }
 
     fn save_over(&self, stored: &Stored, task: &Task, scope_write: ScopeWrite) -> Result<Task> {
+        self.save_over_with_recoveries(stored, task, scope_write, stored.record.recoveries.clone())
+    }
+
+    fn save_over_with_recoveries(
+        &self,
+        stored: &Stored,
+        task: &Task,
+        scope_write: ScopeWrite,
+        recoveries: Vec<RecoveryRecord>,
+    ) -> Result<Task> {
         let _unit = self.event_unit();
         if self.frozen.is_some() {
             bail!("a read-only task snapshot cannot save {}", task.id);
@@ -244,7 +254,7 @@ impl Store {
         t.updated = if t == before { before.updated } else { now };
         let record = TaskRecord {
             task: t.clone(),
-            recoveries: stored.record.recoveries.clone(),
+            recoveries,
         };
         self.log_status_unpark(&before, &t)?;
         for decision in decision {
@@ -480,6 +490,44 @@ impl Store {
             .read_stored(&id)?
             .with_context(|| format!("task {id} not found"))?
             .record)
+    }
+
+    /// Commit one new recovery outcome together with its task transition, using the ordinary
+    /// normalization, owner-change guards, status bookkeeping and event unit. The callback
+    /// may read/validate and buffer events, but must not acquire another writing lock.
+    pub fn dispatch_update_recovery<R>(
+        &self,
+        task: &str,
+        recovery: &RecoveryRecord,
+        f: impl FnOnce(&Store, &mut Task) -> Result<R>,
+    ) -> Result<(Task, R)> {
+        let _board = self.lock("dispatch")?;
+        let id = Store::normalize_id(task)?;
+        let _task = self.lock(&id)?;
+        let mut fresh = self.clone();
+        fresh.reload_config_if_changed()?;
+        let stored = fresh
+            .read_stored(&id)?
+            .with_context(|| format!("task {id} not found"))?;
+        recovery.validate()?;
+        ensure!(
+            recovery.preview.request.target.store == fresh.root()
+                && recovery.preview.request.target.task == id,
+            "recovery target does not match canonical task/store"
+        );
+        let mut recoveries = stored.record.recoveries.clone();
+        ensure!(
+            !recoveries.iter().any(|r| r.id == recovery.id),
+            "recovery already committed"
+        );
+        recoveries.push(recovery.clone());
+        let mut task = stored.record.task.clone();
+        let _unit = fresh.event_unit();
+        let result = f(&fresh, &mut task)?;
+        Ok((
+            fresh.save_over_with_recoveries(&stored, &task, ScopeWrite::Preserve, recoveries)?,
+            result,
+        ))
     }
 
     /// Durably persists intent/outcomes without evaluating, authorizing or executing recovery.

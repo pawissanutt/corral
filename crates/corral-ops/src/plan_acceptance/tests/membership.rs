@@ -95,6 +95,7 @@ fn live_or_landed_history_refuses_without_writes() {
                     "queued" => task.queued = true,
                     "landed" => {
                         task.landed = Some(corral_core::LandingReceipt {
+                            external: None,
                             run: "R1".into(),
                             sha: "sha".into(),
                         })

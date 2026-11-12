@@ -226,7 +226,7 @@ pub(super) fn reconcile(ctx: &Ctx, record: &RecoveryRecord) -> Result<bool> {
             let RecoveryIdentity::Code { gate_attempt, review_attempt, .. } = &record.preview.request.target.identity else { anyhow::bail!("code identity missing") };
             ensure!(run.gate.as_ref().and_then(|gate| gate.identity.as_ref().map(|identity| &identity.attempt)) == gate_attempt.as_ref()
                 && run.review.as_ref().and_then(crate::reviewer::review_callback_token).as_ref() == review_attempt.as_ref(), "landing checks replaced");
-            head.landed = Some(corral_core::LandingReceipt { run: run.id.clone(), sha: candidate.head.clone() });
+            head.landed = Some(corral_core::LandingReceipt { external: None, run: run.id.clone(), sha: candidate.head.clone() });
             crate::reviewer::supersede_review_head(head, corral_core::clock::now())?;
             let current = head.current_run_mut().context("landing run disappeared")?;
             current.ended.get_or_insert(corral_core::clock::now());

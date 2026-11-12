@@ -137,6 +137,7 @@ fn landing_lease_orders_takeback_and_the_recorded_outcome_never_claims_rollback(
             task.runs.push(run);
             task.status = corral_core::Status::Done;
             task.landed = Some(corral_core::LandingReceipt {
+                external: None,
                 run: "R1".into(),
                 sha: sha.into(),
             });

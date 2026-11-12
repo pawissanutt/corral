@@ -20,6 +20,8 @@ pub enum RecoveryCheck {
     GateOutcome,
     ReviewOutcome,
     ResourcePressure,
+    NativeCandidate,
+    RequiredEvidence,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,11 +112,43 @@ pub enum RecoveryAction {
     AcceptCode {
         merge: RecoveryMerge,
     },
+    ReconcileExternal {
+        delivery: ExternalDelivery,
+    },
     ForceAdmission {
         stage: RecoveryAdmissionStage,
         pressure_episode: String,
         thresholds_digest: String,
     },
+}
+
+/// Owner-supplied external evidence, never a native gate or review receipt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalEvidence {
+    pub reference: String,
+    pub sha256: String,
+}
+
+/// The manifest explicitly binds all three external observations to one delivered object.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalDelivery {
+    pub commit: String,
+    pub tree: String,
+    pub gate: ExternalEvidence,
+    pub review: ExternalEvidence,
+    pub landing: ExternalEvidence,
+}
+
+/// Destination sampled independently of the obsolete native candidate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalDestination {
+    pub repo: PathBuf,
+    pub branch: String,
+    pub head: String,
+    pub tree: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +162,10 @@ pub enum RecoveryMerge {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RecoveryIdentity {
+    External {
+        run: String,
+        destination: ExternalDestination,
+    },
     Plan {
         plan: String,
         artifact_sha256: String,
@@ -188,6 +226,11 @@ pub struct RecoveryPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RecoveryEffect {
+    ExternalCompletion {
+        run: String,
+        delivery: ExternalDelivery,
+        destination: ExternalDestination,
+    },
     ReviewAttempt {
         stage: RecoveryReviewStage,
         attempt: String,

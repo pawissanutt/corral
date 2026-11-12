@@ -1974,7 +1974,7 @@ Arguments:
   <ID>
 
 Options:
-      --action <ACTION>          Exact proposed operation; without --apply this only previews [possible values: use-reviewer, accept-plan, accept-code, force-admission]
+      --action <ACTION>          Exact proposed operation; without --apply this only previews [possible values: use-reviewer, accept-plan, accept-code, reconcile-external, force-admission]
       --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
       --stage <STAGE>            One named launch stage (use-reviewer or force-admission only) [possible values: dispatch, plan-dispatch, gate, code-review, plan-review]
       --plan <PLAN>              Refuse unless this is still the current plan revision
@@ -1983,6 +1983,7 @@ Options:
       --merge <MERGE>            Code acceptance strategy (accept-code requires an explicit choice) [possible values: keep, rebase, ff]
       --waive <EXCEPTIONS>       Name every exact overridden/waived check; repeatable, no wildcard
       --notes-file <NOTES_FILE>  Plan acceptance resolutions; binds the actual file bytes into the preview
+      --external-file <EXTERNAL_FILE>  ExternalDelivery JSON: full commit/tree and exact gate/review/landing artifact paths + hashes
       --history                  Read durable operations, not preview proposals
       --apply <APPLY>            Exact current preview digest; not permission and never a yes/force flag
       --reason <REASON>          Nonblank owner-written reason; application still requires local terminal confirmation

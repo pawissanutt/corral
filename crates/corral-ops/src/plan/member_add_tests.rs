@@ -131,6 +131,7 @@ fn a_started_unlanded_member_joins_and_its_next_run_starts_from_the_plan_base() 
         .update(&landed, |task| {
             task.runs.push(run.clone());
             task.landed = Some(corral_core::LandingReceipt {
+                external: None,
                 run: "R1".into(),
                 sha: main.clone(),
             });
