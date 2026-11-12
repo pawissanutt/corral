@@ -218,10 +218,13 @@ pub struct DaemonHealth {
     pub owned: bool,
     pub pm: corral_protocol::PmState,
     pub stores_percent: u64,
+    pub stores_pressed: bool,
 }
 
 pub fn daemon_health(ctx: &Ctx) -> Result<DaemonHealth> {
-    use corral_core::agent::{GENERATIONS_MAX, RECEIPTS_MAX};
+    use corral_core::agent::{
+        GENERATIONS_HIGH_WATER, GENERATIONS_MAX, RECEIPTS_HIGH_WATER, RECEIPTS_MAX,
+    };
     use corral_protocol::PmState;
 
     let heartbeat = HEARTBEAT
@@ -257,6 +260,8 @@ pub fn daemon_health(ctx: &Ctx) -> Result<DaemonHealth> {
         pm,
         stores_percent: (receipts.saturating_mul(100) / RECEIPTS_MAX as u64)
             .max(generations.saturating_mul(100) / GENERATIONS_MAX as u64),
+        stores_pressed: receipts >= RECEIPTS_HIGH_WATER as u64
+            || generations >= GENERATIONS_HIGH_WATER as u64,
     })
 }
 

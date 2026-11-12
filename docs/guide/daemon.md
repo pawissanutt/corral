@@ -111,7 +111,7 @@ Health reasons identify the next investigation, not permission to break locks:
 | `sync stalled <age>` | No pass completed recently; inspect the service journal and runtime. |
 | `lock <name> held <age> by pid <n>` | A lock is continuously unavailable; inspect its holder, never remove its file. |
 | `foreign runtime` | Selected runtime is not store-owned; fix the socket selection/binding. |
-| `pm stores <pct>` | PM storage is approaching a bounded record limit; inspect PM health and generation recovery. |
+| `pm stores <pct>` | A PM record family remains at its retention high-water mark: 15,360 of 16,384 receipts (93.75%) or 56 of 64 generations (87.5%). Retention could not reclaim enough; inspect which current generation or pending record pins the receipts or generations. |
 | `restarting for upgrade` | The running executable was replaced; the daemon is finishing its pass. |
 | `unsupervised` | No service manager is supervising this foreground process. |
 

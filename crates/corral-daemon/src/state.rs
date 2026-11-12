@@ -38,6 +38,7 @@ pub(crate) struct State {
     pub last_success: Instant,
     pub foreign: bool,
     pub stores_percent: u64,
+    pub stores_pressed: bool,
     pub locks: Vec<String>,
     pub runtime: RuntimeState,
     pub pm: PmState,
@@ -71,6 +72,7 @@ impl Shared {
                 last_success: Instant::now(),
                 foreign: false,
                 stores_percent: 0,
+                stores_pressed: false,
                 locks: Vec::new(),
                 runtime: RuntimeState::Unreachable,
                 pm: PmState::Absent,
@@ -217,7 +219,7 @@ impl Shared {
         if state.foreign {
             reasons.push("foreign runtime".into());
         }
-        if state.stores_percent >= 75 {
+        if state.stores_pressed {
             reasons.push(format!("pm stores {}%", state.stores_percent));
         }
         let age = state.started.map(|start| start.elapsed());
