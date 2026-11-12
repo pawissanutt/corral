@@ -42,15 +42,19 @@ accounting and T-931 lineage are unchanged. Artifact entry-point changes only ad
 - Core declaration/Cargo configuration tests: **2 passed**, 0.00 seconds.
 - `cargo test -p corral-ops --lib storage_gc::outputs:: -- --nocapture`: **7 passed**, 0.40 seconds.
 - `cargo test -p corral-ops --lib artifacts::scan::tests -- --nocapture`: **1 existing regression passed**, 0.10 seconds.
+- `cargo test -p corral --test assistant_entry_cli every_command_variant_has_an_explicit_class -- --nocapture`: **1 existing command-boundary test passed**, 4.00 seconds, including all three new output-command variants.
 - Fresh changed-file LSP diagnostics were requested. Indexing sometimes timed out or retained
   stale dependent-module signatures; targeted compiler/test checks are the fallback authority.
-- The run's assigned **quick** gate is receipted and attached separately by Corral after commit
-  and final rebase. No other gate tier or manual gate script was run.
+- The first receipted **quick** gate stopped at CLI compilation: the new storage variant needed
+  an explicit assistant-command class. `storage outputs --dry-run` is now classified Read;
+  `--yes` and internal `--due` are Refused for assistant shells, with variants added to the
+  existing command-boundary table. Gate receipts are attached separately after each committed,
+  rebased candidate. No other gate tier or manual gate script was run.
 
 The fixtures caught and corrected a TOML document-parser misuse, missing work-counter scope,
 and a provisional-record/publication CAS conflict. Assertions were not weakened. Nine new
 unit/contract cases use tiny files; added targeted suite time was **0.40 seconds** (plus 0.00
-seconds for the two core cases), separately from compilation. The gate reports its own costs. No new end-to-end journey or slow matrix was added.
+seconds for the two core cases), separately from compilation. The gate reports its own costs. No new end-to-end journey or slow matrix was added; three argument variants extend the existing CLI boundary table.
 
 ## Conservative boundaries
 

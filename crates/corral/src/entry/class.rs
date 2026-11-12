@@ -88,6 +88,7 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
         Cmd::Storage { cmd } => match cmd {
             StorageCmd::Check { .. } => Read,
             StorageCmd::Gc { yes, .. } => read_unless(*yes),
+            StorageCmd::Outputs { yes, due, .. } => read_unless(*yes || *due),
             StorageCmd::Backup { .. } => Refused,
         },
         Cmd::Assistant(args) => match &args.cmd {
