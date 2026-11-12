@@ -18,9 +18,7 @@ pub(crate) fn push_events(ctx: &Ctx, herdr_available: bool) -> Result<()> {
     let Some(_lock) = ctx.store.try_lock("pm-events")? else {
         return Ok(());
     };
-    if let Some(pm) = corral_core::agent::pm_state::load_current(&ctx.store)?
-        .filter(crate::agent::pm_wake::healthy)
-    {
+    if let Some(pm) = corral_core::agent::pm_state::load_current(&ctx.store)? {
         return crate::agent::pm_event_wake::push(ctx, pm);
     }
     crate::agent::pm_event_wake::checkpoint(ctx)?;

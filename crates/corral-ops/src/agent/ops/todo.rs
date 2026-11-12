@@ -75,29 +75,43 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             run.checkpoint_required = true;
             Ok(commit)
         }),
-        AgentRole::Pm | AgentRole::Assistant => receipts::commit(ctx, &admitted, |state, _| {
-            // The ledger is the container's own: the PM's project or the assistant session.
-            let spec = match container.assistant() {
-                Some(session) => format!("assistant:{session}"),
-                None => format!("pm:{}", state.binding.project),
-            };
-            let mut requests = state.todo_requests.clone().unwrap_or_default();
-            let progress = requests
-                .apply(&action, state.todo.as_ref(), &spec, jiff::Timestamp::now())
-                .map_err(bad)?;
-            if progress.steps().any(|step| !step.criteria.is_empty()) {
-                return Err(bad(
-                    "a PM or assistant todo cannot link task acceptance criteria",
-                ));
-            }
-            let mut commit = committed(&progress);
-            commit.result["plan"] = json!(progress.plan);
-            commit.result["disposition"] = json!(request::disposition(Some(&progress)));
-            commit.result["closed_plans"] = json!(requests.history.len());
-            state.todo = Some(progress);
-            state.todo_requests = Some(requests);
-            Ok(commit)
-        }),
+        AgentRole::Pm | AgentRole::Assistant => {
+            request::with_wait_publication_lock(&ctx.store, || {
+                receipts::commit(ctx, &admitted, |state, _| {
+                    // The ledger is the container's own: the PM's project or the assistant session.
+                    let spec = match container.assistant() {
+                        Some(session) => format!("assistant:{session}"),
+                        None => format!("pm:{}", state.binding.project),
+                    };
+                    let mut requests = state.todo_requests.clone().unwrap_or_default();
+                    let mut previous = state.todo.clone();
+                    if let Some(previous) = &mut previous {
+                        super::super::pm_wait_wake::hydrate(ctx, &container, previous)?;
+                    }
+                    let progress = requests
+                        .apply(&action, previous.as_ref(), &spec, corral_core::clock::now())
+                        .map_err(bad)?;
+                    if progress.steps().any(|step| !step.criteria.is_empty()) {
+                        return Err(bad(
+                            "a PM or assistant todo cannot link task acceptance criteria",
+                        ));
+                    }
+                    let mut commit = committed(&progress);
+                    commit.result["plan"] = json!(progress.plan);
+                    commit.result["disposition"] = json!(request::disposition(Some(&progress)));
+                    commit.result["closed_plans"] = json!(requests.history.len());
+                    super::super::pm_wait_wake::save_deadlines(
+                        ctx,
+                        &container,
+                        previous.as_ref(),
+                        &progress,
+                    )?;
+                    state.todo = Some(progress);
+                    state.todo_requests = Some(requests);
+                    Ok(commit)
+                })
+            })
+        }
         AgentRole::Reviewer | AgentRole::Planner | AgentRole::PlanReviewer => Err(Rejection::new(
             RejectCode::OpNotAllowed,
             "todo belongs to worker, PM and assistant",

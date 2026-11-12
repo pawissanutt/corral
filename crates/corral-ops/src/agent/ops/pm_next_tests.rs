@@ -437,3 +437,37 @@ fn native_question_digest_drops_choices_then_old_rows_with_exact_omission_counts
     assert!(serde_json::to_vec(&brief).unwrap().len() <= budget);
     assert_eq!(serde_json::to_value(&action).unwrap(), original);
 }
+
+#[test]
+fn bounded_card_follow_ups_deserialize_as_native_read_payloads() {
+    let budget = corral_core::agent::RESULT_MAX_BYTES;
+    for task in [Some("T-1"), None] {
+        let action: crate::pm_next::PmAction = serde_json::from_value(json!({
+            "kind":"wait", "task":task, "why":"waiting", "command":"corral pm next",
+            "verify":"read current state", "evidence":["x".repeat(budget)],
+            "options":[], "recommended":"wait", "requires_owner":false,
+        }))
+        .unwrap();
+        let bounded = super::super::super::pm_bound::bounded_next(&action, budget).unwrap();
+        let follow_ups = bounded["bounded"]["follow_up"].as_array().unwrap();
+        assert_eq!(follow_ups.len(), if task.is_some() { 2 } else { 1 });
+        for follow_up in follow_ups {
+            let payload = follow_up["payload"].clone();
+            match follow_up["op"].as_str().unwrap() {
+                "read_show" => {
+                    let request: super::super::Show = serde_json::from_value(payload).unwrap();
+                    assert_eq!(Some(request.task.as_str()), task);
+                    assert!(matches!(
+                        request.section,
+                        super::super::Section::Overview | super::super::Section::Automation
+                    ));
+                }
+                "read_brief" => {
+                    let _: super::super::Empty = serde_json::from_value(payload).unwrap();
+                    assert!(task.is_none());
+                }
+                op => panic!("unexpected follow-up op {op}"),
+            }
+        }
+    }
+}

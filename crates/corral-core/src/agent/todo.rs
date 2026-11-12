@@ -312,18 +312,19 @@ mod tests {
                 Some(now.checked_add(duration).unwrap())
             );
 
-            let mut stored = serde_json::to_value(&progress).unwrap();
-            stored["waits"][0]
-                .as_object_mut()
-                .unwrap()
-                .remove("deadline");
+            // A rollback's strict parser must accept the entire stored wait unchanged.
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct OldStepWait {
+                step: String,
+                on: WaitOn,
+            }
+            let stored = serde_json::to_value(&progress).unwrap();
+            let old: OldStepWait = serde_json::from_value(stored["waits"][0].clone()).unwrap();
+            assert_eq!(old.step, progress.waits[0].step);
+            assert_eq!(old.on, progress.waits[0].on);
             let legacy: RunProgress = serde_json::from_value(stored).unwrap();
             assert_eq!(legacy.waits[0].deadline, None);
-            assert!(
-                serde_json::to_value(&legacy).unwrap()["waits"][0]
-                    .get("deadline")
-                    .is_none()
-            );
 
             for offset in [
                 SignedDuration::from_nanos(-1),

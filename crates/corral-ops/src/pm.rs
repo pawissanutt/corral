@@ -102,10 +102,13 @@ fn open_pm_with(
 ) -> Result<String> {
     // Validate a corral-pi PM before any policy delivery, workspace or pane.
     crate::agent::hooks::pm::preflight(ctx, bootstrap.as_ref().map(|(_, r)| r))?;
-    let _delivery = ctx
-        .store
-        .try_lock("pm-policy")?
-        .context("PM policy delivery is in progress; retry opening the PM")?;
+    let recovery = crate::agent::recovery::PmRecoveryLease::acquire(ctx)?;
+    if recovery.pending(ctx)
+        && let Some(pm) = &recovery.current
+    {
+        ctx.herdr.pane_focus(&pm.pane)?;
+        return Ok(pm.pane.clone());
+    }
     let _board = ctx
         .store
         .try_lock("dispatch")?
@@ -197,24 +200,22 @@ fn open_pm_with(
 
 /// Recover the recorded corral-pi PM without taking focus or starting a new conversation.
 pub(crate) fn relaunch(ctx: &Ctx, reason: &str, replace: bool) -> Result<String> {
-    use crate::agent::recovery::{RecoveryLaunch, recover_with};
-    use corral_core::agent::{ContainerRef, pm_state};
+    use crate::agent::recovery::{PmRecoveryLease, RecoveryLaunch, recover_with};
+    use corral_core::agent::ContainerRef;
 
-    let _delivery = ctx
-        .store
-        .try_lock("pm-policy")?
-        .context("PM policy delivery is in progress; retry relaunching the PM")?;
-    let pm = pm_state::load_current(&ctx.store)?
+    let recovery = PmRecoveryLease::acquire(ctx)?;
+    let pm = recovery
+        .current
+        .as_ref()
         .filter(|pm| pm.state.binding.generation > 0)
         .context("there is no corral-pi PM to relaunch")?;
-    let alive = crate::agent::pi::host_alive(&pm.state)?;
-    if alive && !replace {
-        return Ok(pm.pane);
+    if recovery.keep_current(ctx, replace)? {
+        return Ok(pm.pane.clone());
     }
     // Validate the replacement before creating a pane or touching the predecessor.
     let resolved = crate::agent::hooks::pm::profile(ctx)?;
     let adopted = pm.adopted();
-    let previous_pane = pm.pane;
+    let previous_pane = pm.pane.clone();
     // Even a live adopted host becomes the owner's shell once replacement stops it.
     // Never send a launch command to that shell.
     let pane = if !adopted && ctx.herdr.pane_get(&previous_pane)?.is_some() {
@@ -324,10 +325,7 @@ pub(crate) fn adopt_pm<T>(
     resolved: &ResolvedProfile,
     start: impl FnOnce() -> Result<T>,
 ) -> Result<T> {
-    let _delivery = ctx
-        .store
-        .try_lock("pm-policy")?
-        .context("PM policy delivery is in progress; retry `corral pi`")?;
+    let recovery = crate::agent::recovery::PmRecoveryLease::acquire(ctx)?;
     let board = || -> Result<_> {
         ctx.store
             .try_lock("dispatch")?
@@ -345,6 +343,30 @@ pub(crate) fn adopt_pm<T>(
             format!(
                 "a non-corral-pi PM session is open in pane {}; close it before `corral pi`",
                 state.pane_id
+            ),
+        ));
+    }
+    // Preserve bound mode's live-host refusal; a live PM is not an adoption no-op.
+    if let Some(pm) = &recovery.current
+        && crate::agent::pi::host_alive(&pm.state)?
+    {
+        return Err(crate::agent::pi::refuse(
+            "pm_alive",
+            format!(
+                "a live corral-pi PM (generation {}) is bound to pane {}; `corral agent \
+                 resume --pm --replace` replaces it",
+                pm.state.binding.generation, pm.pane
+            ),
+        ));
+    }
+    if recovery.pending(ctx)
+        && let Some(pm) = &recovery.current
+    {
+        return Err(crate::agent::pi::refuse(
+            "pm_alive",
+            format!(
+                "the corral-pi PM (generation {}) is starting in pane {}; retry after startup",
+                pm.state.binding.generation, pm.pane
             ),
         ));
     }

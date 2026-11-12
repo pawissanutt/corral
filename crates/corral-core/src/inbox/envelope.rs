@@ -416,6 +416,21 @@ impl Inbox<'_> {
             .filter(|refusal| latest > 0 && refusal.attempt == latest))
     }
 
+    /// The hold on an unsettled member of `envelope` (neither observed nor terminal): its latest
+    /// attempt was refused before admission and the envelope was not yet requeued.
+    pub(super) fn hold_of(&self, envelope: &Envelope) -> Result<Option<InboxHold>> {
+        if self.owner_settled(envelope.number)? {
+            return Ok(None);
+        }
+        Ok(self.refusal(envelope)?.map(|refusal| InboxHold {
+            envelope: envelope.number,
+            code: refusal.code,
+            generation: refusal.generation,
+            supervised: self.store.config.pm.supervise,
+            release: PM_REPLACE.into(),
+        }))
+    }
+
     /// Settles a refused envelope (see [`Refusal`]) without a terminal state: each member that
     /// is neither observed nor terminal returns to pending, so the next publication carries it
     /// in a fresh envelope with a new idempotency key. Caller holds the deliver lock.

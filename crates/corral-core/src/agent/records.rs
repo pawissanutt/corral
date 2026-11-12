@@ -167,8 +167,9 @@ impl AgentRunState {
     }
 }
 
-/// The usage attribution of PM generations that retention retired: enough for the usage
-/// collector and the budget gap to answer exactly as they did while the records were retained.
+/// What the PM head keeps of the generations retention retired: fixed size, so retirement
+/// never grows the head that every PM read decodes. Their usage attribution is kept in one
+/// `RetiredGeneration` history record each, read only by usage reporting.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetiredGenerations {
     /// Every retired generation number is below it; it never decreases.
@@ -176,59 +177,38 @@ pub struct RetiredGenerations {
     /// A retired bound generation predates budget accounting.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub legacy_usage_gap: bool,
-    /// One entry per bound transcript file, from the oldest generation that bound it.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub transcripts: Vec<RetiredTranscript>,
-    /// One entry per distinct connection binding, with the generations that ran under it.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub connections: Vec<RetiredConnection>,
 }
 
+/// The usage attribution of one retired PM generation: what the usage collector read from its
+/// generation record while it was retained.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RetiredTranscript {
-    pub generation: u32,
-    pub session_id: String,
-    pub session_file: PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RetiredConnection {
-    pub generations: Vec<u32>,
-    pub binding: crate::connection::ConnectionBinding,
+pub struct RetiredGeneration {
+    pub n: u32,
+    /// The bound transcript; absent when the generation never completed hello.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_file: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<crate::connection::ConnectionBinding>,
+    /// It was bound before its capability catalog recorded budget accounting.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub legacy_usage_gap: bool,
 }
 
 impl RetiredGenerations {
-    /// Keeps `generation`'s usage attribution and raises the floor past it.
-    pub fn archive(&mut self, generation: &AgentGeneration) {
+    /// Raises the floor past `generation` and carries its budget gap; returns the history
+    /// record that keeps its usage attribution.
+    pub fn retire(&mut self, generation: &AgentGeneration) -> RetiredGeneration {
+        let legacy_usage_gap = generation.predates_budget_accounting();
         self.floor = self.floor.max(generation.n.saturating_add(1));
-        self.legacy_usage_gap |= generation.predates_budget_accounting();
-        if let Some(bound) = &generation.bound {
-            let file = &bound.session_file;
-            match self
-                .transcripts
-                .iter_mut()
-                .find(|t| t.session_file == *file)
-            {
-                Some(kept) if kept.generation < generation.n => {}
-                Some(kept) => {
-                    kept.generation = generation.n;
-                    kept.session_id = bound.session_id.clone();
-                }
-                None => self.transcripts.push(RetiredTranscript {
-                    generation: generation.n,
-                    session_id: bound.session_id.clone(),
-                    session_file: file.clone(),
-                }),
-            }
-        }
-        if let Some(binding) = &generation.connection {
-            match self.connections.iter_mut().find(|c| c.binding == *binding) {
-                Some(kept) => kept.generations.push(generation.n),
-                None => self.connections.push(RetiredConnection {
-                    generations: vec![generation.n],
-                    binding: binding.clone(),
-                }),
-            }
+        self.legacy_usage_gap |= legacy_usage_gap;
+        RetiredGeneration {
+            n: generation.n,
+            session_id: generation.bound.as_ref().map(|b| b.session_id.clone()),
+            session_file: generation.bound.as_ref().map(|b| b.session_file.clone()),
+            connection: generation.connection.clone(),
+            legacy_usage_gap,
         }
     }
 }

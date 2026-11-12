@@ -666,25 +666,36 @@ it. It reclaims each family down to half.
 
 - **Evicted:** settled receipts of ended (fenced) generations, oldest first. Under generation
   pressure the pass also empties the oldest ended generations that nothing pins.
-- **Retired:** ended generations that then hold no receipts. Their usage attribution (bound
-  transcript, session ID, connection binding, and whether they predate budget accounting) is
-  first copied into an archive on the PM head, so usage totals and the budget
-  `legacy_usage_gap` are the same before and after.
+- **Retired:** ended generations that then hold no receipts. Each one's usage attribution (bound
+  transcript, session ID, connection binding, and whether it predates budget accounting) is
+  first written, in the same transaction, as one record in the `agent-pm-retired-generations`
+  history area, so usage totals and the budget `legacy_usage_gap` are the same before and
+  after. Only usage collection reads that area; the PM head keeps just the floor and the
+  carried `legacy_usage_gap`, so it stays the same size however many generations retire.
 - **Never evicted or retired:** the current generation and its receipts; the newest bound
   generation, whose transcript a relaunch continues; a receipt owing a settlement or a
   post-commit effect, or watched by an active wake, and its generation; a generation with a
   pending question or a job that still needs reaping; budget request rows. A fenced
   generation's open turns can never be settled, so they do not pin it.
 - **Generation floor:** every retired generation number is below the floor recorded in the
-  archive. The generation counter never resets or reuses a number, and a request naming a
+  PM head. The generation counter never resets or reuses a number, and a request naming a
   retired generation is refused `agent_fenced`, like any fenced generation.
 
 Only a full receipt family whose receipts all belong to the current generation or are pinned
 still refuses `receipt_limit`; a launch refuses only when no generation could be retired.
 
+A pass that reclaims nothing records a watermark in the PM head, and later passes skip the
+scan while it holds: it holds only while the current generation is unchanged, no new kind of
+pressure appears, and no write could have released a pin. Any removal from the generation,
+receipt, question, job or wake families, any generation write, a write to a receipt of
+another generation, or a changed question, job or wake clears it. Appending to or settling a
+current-generation receipt does not.
+
 The first retirement writes PM head layout 3. Binaries that know only layout 2 refuse that
 head (`unsupported PM record layout`) instead of misreading it, so retirement is one-way: the
-rollback point for an older binary is before the first retirement.
+rollback point for an older binary is before the first retirement. Earlier builds of layout 3
+kept the archive inside the head; none was installed, so no store holds that shape and there
+is no migration from it.
 
 ### Artifact commands
 

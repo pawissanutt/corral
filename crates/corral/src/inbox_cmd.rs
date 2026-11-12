@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::str::FromStr;
 
 use anyhow::{Context, Result, ensure};
@@ -147,18 +148,28 @@ fn caller(store: &Store) -> Result<Caller> {
     Ok(Caller::Owner)
 }
 
-fn status(entry: &InboxEntry) -> &'static str {
+fn status(entry: &InboxEntry) -> Cow<'static, str> {
     if entry.observed.is_some() {
-        "observed"
+        "observed".into()
     } else if let Some(terminal) = entry.terminal {
-        terminal.suffix()
+        terminal.suffix().into()
+    } else if let Some(hold) = &entry.hold {
+        let generation = hold
+            .generation
+            .map(|n| format!(", generation {n}"))
+            .unwrap_or_default();
+        format!(
+            "held: PM host refused input ({}{generation}); awaiting PM replacement",
+            hold.code
+        )
+        .into()
     } else if matches!(
         entry.envelope.as_ref().and_then(|e| e.outcome.as_ref()),
         Some(SendOutcome::Uncertain { .. } | SendOutcome::Conflicted { .. })
     ) {
-        "uncertain"
+        "uncertain".into()
     } else if entry.admitted.is_some() {
-        "admitted"
+        "admitted".into()
     } else {
         match entry.envelope.as_ref().and_then(|e| e.outcome.as_ref()) {
             Some(SendOutcome::Admitted { .. }) => "admitted",
@@ -168,6 +179,7 @@ fn status(entry: &InboxEntry) -> &'static str {
             Some(SendOutcome::Uncertain { .. } | SendOutcome::Conflicted { .. }) => "uncertain",
             None => "pending",
         }
+        .into()
     }
 }
 
@@ -222,6 +234,14 @@ pub fn run(store: &Store, args: InboxArgs) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&value)?);
             } else {
                 print_entry(&entry);
+                if let Some(hold) = entry.hold.as_ref().filter(|hold| hold.supervised) {
+                    println!(
+                        "Next: `corral sync --watch` runs `{}` (pm.supervise = true)",
+                        hold.release
+                    );
+                } else if let Some(hold) = &entry.hold {
+                    println!("Next: `{}` (pm.supervise = false)", hold.release);
+                }
                 println!("\n{}", entry.message.body);
                 println!(
                     "\nReceipts and effect:\n{}",
