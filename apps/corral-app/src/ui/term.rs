@@ -260,14 +260,14 @@ const SEPARATOR: usize = 3;
 /// What the top bar shows at its width. Nothing is ever cut: the path gives way first, then
 /// reach, attention and the clock, then the brand; the source label never goes, shortened to
 /// its first word at the last, so fixture data never passes for live.
-struct Bar {
+struct Bar<'a> {
     brand: bool,
-    path: Option<&'static str>,
-    reach: Option<&'static str>,
-    attention: Option<&'static str>,
-    clock: Option<&'static str>,
+    path: Option<&'a str>,
+    reach: Option<&'a str>,
+    attention: Option<&'a str>,
+    clock: Option<&'a str>,
     /// What shows of the source label, and the label itself.
-    source: Option<(&'static str, &'static str)>,
+    source: Option<(&'a str, &'a str)>,
 }
 
 fn width(content: &str) -> usize {
@@ -275,7 +275,7 @@ fn width(content: &str) -> usize {
 }
 
 fn segment_width(segment: &Segment) -> usize {
-    width(mark(segment.tone)) + 1 + width(segment.name) + 1 + width(segment.value)
+    width(mark(segment.tone)) + 1 + width(&segment.name) + 1 + width(&segment.value)
 }
 
 /// Items `GAP` apart; zero for none.
@@ -285,25 +285,26 @@ fn group(items: impl Iterator<Item = usize>) -> Option<usize> {
     })
 }
 
-impl Bar {
-    fn of(snapshot: &Snapshot) -> Bar {
+impl<'a> Bar<'a> {
+    fn of(snapshot: &'a Snapshot) -> Bar<'a> {
         let health = &snapshot.health;
         // Disconnected, only the segments show: nothing else may pass for a healthy reading.
         let connected = snapshot.connected();
         Bar {
             brand: true,
-            path: snapshot.workspace.as_ref().map(|ws| ws.path),
-            reach: health.reach.filter(|_| connected),
-            attention: health.attention.filter(|_| connected),
-            clock: health.clock.filter(|_| connected),
+            path: snapshot.workspace.as_ref().map(|ws| ws.path.as_ref()),
+            reach: health.reach.as_deref().filter(|_| connected),
+            attention: health.attention.as_deref().filter(|_| connected),
+            clock: health.clock.as_deref().filter(|_| connected),
             source: health
                 .source
+                .as_deref()
                 .filter(|_| connected)
                 .map(|source| (source, source)),
         }
     }
 
-    fn meta(&self) -> impl Iterator<Item = &'static str> {
+    fn meta(&self) -> impl Iterator<Item = &'a str> {
         [self.reach, self.attention, self.clock]
             .into_iter()
             .flatten()
@@ -323,8 +324,8 @@ impl Bar {
         2 + left + segments + SEPARATOR + meta + source
     }
 
-    fn fit(mut self, segments: usize, room: usize) -> Bar {
-        let steps: [fn(&mut Bar); 6] = [
+    fn fit(mut self, segments: usize, room: usize) -> Bar<'a> {
+        let steps: [fn(&mut Bar<'a>); 6] = [
             |bar| bar.path = None,
             |bar| bar.reach = None,
             |bar| bar.attention = None,
@@ -388,7 +389,7 @@ fn bar(snapshot: &Snapshot, room: usize) -> Vec<AnyElement> {
         );
         if let Some(path) = fitted.path {
             band.push(space(GAP as f32));
-            band.push(quiet(path).into_element());
+            band.push(quiet(path.to_owned()).into_element());
         }
         band.push(
             view()
@@ -426,9 +427,11 @@ fn bar(snapshot: &Snapshot, room: usize) -> Vec<AnyElement> {
             band.push(space(GAP as f32));
         }
         band.push(if plain {
-            quiet(part).text_color(color(Token::Ink)).into_element()
+            quiet(part.to_owned())
+                .text_color(color(Token::Ink))
+                .into_element()
         } else {
-            quiet(part).into_element()
+            quiet(part.to_owned()).into_element()
         });
     }
     let fill = if snapshot.connected() {
@@ -454,9 +457,9 @@ fn bar(snapshot: &Snapshot, room: usize) -> Vec<AnyElement> {
             .flex_shrink_0()
             .px(cells(1.0))
             .child(
-                text(shown)
+                text(shown.to_owned())
                     .test_id("health-source")
-                    .label(full)
+                    .label(full.to_owned())
                     .number_of_lines(1u32)
                     .text_color(tone(Tone::Warn)),
             )

@@ -1,10 +1,12 @@
 //! The lower panels of the dock: what changed since this device's last visit, the owner's holds,
 //! the selected task's live terminal tail with the running agents' tiles, and the plan graph.
 //! Also the terminal tail itself (`.term`), which the Session inspector and the phone's task page
-//! show too.
+//! show too. In the Daemon state the panels the daemon does not serve say so, and the holds are
+//! the board's held tasks.
 
 use nsh_core::prelude::*;
 
+use crate::model::daemon::Link;
 use crate::model::work::{self, LiveTile, Tail, TailTone};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
@@ -15,7 +17,7 @@ use crate::ui::term::{blank, cells};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::feed;
-use super::parts::{act, action_id};
+use super::parts::{act, action_id, by_data, quiet};
 
 const RING: f32 = 2.0;
 const CURSOR_BLINK_MS: f32 = 1100.0;
@@ -138,6 +140,14 @@ pub(super) fn tail(app: AppState, tail: &Tail, test_id: Option<String>) -> AnyEl
 /// The Live panel: the selected task's tail, then a tile for each running agent (PM, workers,
 /// gates), each opening its session.
 pub(super) fn live(app: AppState) -> AnyElement {
+    by_data(
+        app,
+        move || fixture_live(app),
+        move || quiet(app, work::NOT_SERVED),
+    )
+}
+
+fn fixture_live(app: AppState) -> AnyElement {
     let live = computed(move || {
         let env = app.env();
         app.work.with(|state| work::live(state, env))
@@ -299,6 +309,14 @@ fn tile_view(app: AppState, tile: &LiveTile) -> AnyElement {
 /// "Since your last visit": the feed up to the last-visit marker, newest first; each event opens
 /// its task.
 pub(super) fn since(app: AppState) -> AnyElement {
+    by_data(
+        app,
+        move || fixture_since(app),
+        move || quiet(app, work::NOT_SERVED),
+    )
+}
+
+fn fixture_since(app: AppState) -> AnyElement {
     let rows = computed(move || {
         let env = app.env();
         app.work.with(|state| work::feed(state, env))
@@ -318,29 +336,67 @@ pub(super) fn since(app: AppState) -> AnyElement {
     })
 }
 
-/// "Parked": the owner's dispatch holds.
+/// "Parked": the owner's dispatch holds; in the Daemon state the board's held tasks.
 pub(super) fn parked(app: AppState) -> AnyElement {
-    let rows = computed(move || {
-        let env = app.env();
-        app.work.with(|state| work::holds(state, env))
-    });
-    dynamic(move || {
-        rows.with(|rows| {
-            view()
-                .py(px(if app.form == Form::Terminal { 0.0 } else { 4.0 }))
-                .children(
-                    rows.iter()
-                        .map(|row| feed::hold(app, row))
-                        .collect::<Vec<_>>(),
-                )
-                .into_element()
-        })
-    })
+    by_data(
+        app,
+        move || {
+            holds(
+                app,
+                computed(move || {
+                    let env = app.env();
+                    app.work.with(|state| work::holds(state, env))
+                }),
+            )
+        },
+        move || {
+            dynamic(move || {
+                app.feed.with(|feed| {
+                    if !feed.board.complete {
+                        // Nothing to say until the first board arrives or the link fails.
+                        return if feed.link == Link::Down {
+                            quiet(app, work::NO_BOARD)
+                        } else {
+                            view().into_element()
+                        };
+                    }
+                    let rows = work::daemon_holds(feed);
+                    if rows.is_empty() {
+                        return quiet(app, work::NOTHING_HELD);
+                    }
+                    rows_view(app, &rows)
+                })
+            })
+        },
+    )
+}
+
+fn holds(app: AppState, rows: Memo<Vec<work::HoldRow>>) -> AnyElement {
+    dynamic(move || rows.with(|rows| rows_view(app, rows)))
+}
+
+fn rows_view(app: AppState, rows: &[work::HoldRow]) -> AnyElement {
+    view()
+        .py(px(if app.form == Form::Terminal { 0.0 } else { 4.0 }))
+        .children(
+            rows.iter()
+                .map(|row| feed::hold(app, row))
+                .collect::<Vec<_>>(),
+        )
+        .into_element()
 }
 
 /// The plan graph: the selected task's plan with the task highlighted, from the Plans screen;
 /// its heading opens the plan. A task in no plan says so.
 pub(super) fn graph(app: AppState) -> AnyElement {
+    by_data(
+        app,
+        move || fixture_graph(app),
+        move || quiet(app, work::NOT_SERVED),
+    )
+}
+
+fn fixture_graph(app: AppState) -> AnyElement {
     let context = computed(move || {
         let env = app.env();
         app.work.with(|state| work::plan_context(state, env))

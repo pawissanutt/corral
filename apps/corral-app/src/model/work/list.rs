@@ -1,23 +1,21 @@
 //! Typed who-acts-next rows, including the phone-specific collapsed projection.
 
-use crate::model::board::{money, task};
+use crate::model::board::{TaskLine, task};
 use crate::model::effect::{DataMode, Env};
 use crate::model::hue::Hue;
 use crate::model::nav::Form;
 
 use super::{Action, Button, ButtonKind, Extra, ExtraKind, GROUPS, GroupKey, ParkedSummary, State};
 
-/// A board task row; all common one-line/two-line facts come from `board::task(id)`.
+/// A board task row: the facts it draws, and how it reacts to selection and presses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskRow {
-    /// The shared board record containing title, actor, delta, rail, now, age and cost.
-    pub id: &'static str,
+    /// Id, title, actor, delta, rail, now, age and cost, resolved for the row.
+    pub line: TaskLine,
     /// Whether the desktop list exposes this as its selected option.
     pub selected: bool,
     /// Select on desktop, push a task or question on phone.
     pub action: Action,
-    /// The phone's right-aligned second-line age/cost, with separators resolved.
-    pub phone_meta: String,
 }
 
 /// A complete non-task row accompanying T-868.
@@ -93,8 +91,37 @@ pub struct GroupedList {
     pub rail_title: &'static str,
     /// Placeholder row count; a nonzero count replaces all groups.
     pub loading_rows: usize,
+    /// One quiet line instead of the groups: no board yet, or nothing on it.
+    pub notice: Option<&'static str>,
     /// The six source groups, except the desktop Empty projection omits Needs you.
     pub groups: Vec<GroupView>,
+}
+
+impl GroupedList {
+    /// The list's frame for a form, with no rows yet.
+    pub(super) fn new(form: Form) -> GroupedList {
+        let phone = form == Form::Phone;
+        GroupedList {
+            label: "Who acts next",
+            columns: if phone {
+                &[]
+            } else {
+                &["id", "task", "r g v l", "now", "age", "cost"]
+            },
+            rail_title: "run · gate · review · land",
+            loading_rows: 0,
+            notice: None,
+            groups: Vec::new(),
+        }
+    }
+
+    /// Placeholder rows while the list's detail loads.
+    pub(super) fn loading(form: Form) -> GroupedList {
+        GroupedList {
+            loading_rows: if form == Form::Phone { 6 } else { 12 },
+            ..GroupedList::new(form)
+        }
+    }
 }
 
 /// Whether the question is open according to the available environment projection.
@@ -141,24 +168,10 @@ pub fn grouped_list(state: &State, env: Env) -> GroupedList {
 /// as the source does. Desktop hides T-868 when the question is no longer open.
 pub fn grouped_list_with_question(state: &State, env: Env, question_is_open: bool) -> GroupedList {
     let phone = env.form == Form::Phone;
-    let mut view = GroupedList {
-        label: "Who acts next",
-        columns: if phone {
-            &[]
-        } else {
-            &["id", "task", "r g v l", "now", "age", "cost"]
-        },
-        rail_title: "run · gate · review · land",
-        loading_rows: if env.mode == DataMode::Loading {
-            if phone { 6 } else { 12 }
-        } else {
-            0
-        },
-        groups: Vec::new(),
-    };
-    if view.loading_rows != 0 {
-        return view;
+    if env.mode == DataMode::Loading {
+        return GroupedList::loading(env.form);
     }
+    let mut view = GroupedList::new(env.form);
     for group in GROUPS {
         if !phone && env.mode == DataMode::Empty && group.key == GroupKey::You {
             continue;
@@ -262,19 +275,8 @@ pub fn grouped_list_with_question(state: &State, env: Env, question_is_open: boo
 }
 
 fn task_row(id: &'static str, state: &State, phone: bool, question: bool) -> TaskRow {
-    let task = task(id);
-    let phone_meta = if !phone {
-        String::new()
-    } else {
-        let cost = money(task.cost);
-        match (task.age, cost.is_empty()) {
-            (Some(age), false) => format!("{age} · {cost}"),
-            (Some(age), true) => age.into(),
-            (None, _) => cost,
-        }
-    };
     TaskRow {
-        id,
+        line: TaskLine::fixture(&task(id)),
         selected: !phone && state.sel == id,
         action: if phone && question {
             Action::OpenQuestion
@@ -283,7 +285,6 @@ fn task_row(id: &'static str, state: &State, phone: bool, question: bool) -> Tas
         } else {
             Action::Select(id)
         },
-        phone_meta,
     }
 }
 
@@ -305,8 +306,8 @@ pub struct PhoneNow {
     pub title: &'static str,
     /// Summary chips in their source order.
     pub chips: &'static [SummaryChip],
-    /// Pressing anywhere in the summary opens Changes.
-    pub summary_action: Action,
+    /// Pressing anywhere in the summary runs this; absent where the summary opens nothing.
+    pub summary_action: Option<Action>,
     /// Groups with phone-specific omissions and +19 queued summary.
     pub list: GroupedList,
     /// Connection/stale projection shared with the workspace.
@@ -340,7 +341,7 @@ pub fn phone_now(state: &State, mut env: Env) -> PhoneNow {
                 count: 23,
             },
         ],
-        summary_action: Action::Go(crate::model::nav::Destination::Changes),
+        summary_action: Some(Action::Go(crate::model::nav::Destination::Changes)),
         list: grouped_list(state, env),
         status: super::status(env),
     }

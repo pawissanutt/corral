@@ -276,12 +276,25 @@ pub fn root(app: AppState) -> AnyElement {
         .enumerate()
         .map(|(index, row)| {
             let action = row.action.clone();
+            let section = row.section;
             let subtitle = move || {
+                if app.daemon() {
+                    return if section == crate::model::SettingsSection::Connection {
+                        app.snapshot()
+                            .health
+                            .reach
+                            .map(|reach| reach.into_owned())
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                }
                 read(app, |state, env| {
                     settings::phone_root(state, env)
                         .rows
                         .get(index)
                         .map_or("", |row| row.subtitle)
+                        .to_owned()
                 })
             };
             let words = view()

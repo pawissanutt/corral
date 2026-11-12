@@ -1,25 +1,25 @@
 //! The phone's Now: the tab's root (the changes summary over the grouped two-line rows) and the
-//! task page pushed from a row (its story, actions, live tail and plan).
+//! task page pushed from a row (its story, actions, live tail and plan). In the Daemon state the
+//! root lists the daemon's board without the fixture's summary chips, and the task page shows
+//! the daemon's facts about the task.
 
 use nsh_core::prelude::*;
 
-use crate::model::Hue;
-use crate::model::work::{self, Action, GroupedList};
+use crate::model::work::{self, Action, GroupedList, NowTab};
+use crate::model::{Form, Hue};
 use crate::screens::PhonePage;
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::page::{head, pane, search};
-use crate::ui::kit::rows::group_header;
+use crate::ui::kit::rows::{group_header, task_columns};
 use crate::ui::kit::text::dim;
 use crate::ui::tokens::{Token, color};
 
 use super::context::tail;
-use super::inspector::story;
+use super::inspector::{content, story};
 use super::list::rows;
 use super::parts::{act, action_id, dim_when, model_button, stale};
-use crate::model::Form;
-use crate::ui::kit::rows::task_columns;
 
 const RING: f32 = 2.0;
 
@@ -27,6 +27,11 @@ const RING: f32 = 2.0;
 /// Changes; a stale board adds its `as of` chip) and the grouped list.
 pub(super) fn root(app: AppState) -> AnyElement {
     let now = computed(move || {
+        if app.daemon() {
+            return app
+                .feed
+                .with(|feed| app.work.with(|state| work::daemon_phone_now(state, feed)));
+        }
         let env = app.env();
         app.work.with(|state| work::phone_now(state, env))
     });
@@ -34,38 +39,49 @@ pub(super) fn root(app: AppState) -> AnyElement {
     let list: Memo<GroupedList> = computed(move || now.with(|now| now.list.clone()));
     let summary = dynamic(move || {
         now.with(|now| {
-            let action = now.summary_action;
+            if now.chips.is_empty() && now.status.as_of.is_none() {
+                return None;
+            }
             let label = now
                 .chips
                 .iter()
                 .map(|chip| chip.label)
                 .collect::<Vec<_>>()
                 .join(", ");
-            view()
+            let strip = view()
                 .flex_row()
                 .flex_wrap()
                 .gap(px(6.0))
                 .px(px(18.0))
                 .pt(px(4.0))
                 .pb(px(10.0))
-                .cursor_pointer()
-                .role(AccessibilityRole::Button)
-                .label(label)
-                .test_id(&action_id(action))
-                .on_press(move || act(app, action))
-                .focus_visible(|s| {
-                    s.outline(px(RING))
-                        .outline_color(color(Token::Focus))
-                        .outline_offset(px(-RING))
-                })
                 .children(
                     now.chips
                         .iter()
                         .map(|summary| chip(app, summary.label, summary.hue))
                         .collect::<Vec<_>>(),
                 )
-                .children(now.status.as_of.map(|stamp| chip(app, stamp, Hue::Held)))
-                .into_element()
+                .children(
+                    now.status
+                        .as_of
+                        .clone()
+                        .map(|stamp| chip(app, stamp, Hue::Held)),
+                );
+            let strip = match now.summary_action {
+                Some(action) => strip
+                    .cursor_pointer()
+                    .role(AccessibilityRole::Button)
+                    .label(label)
+                    .test_id(&action_id(action))
+                    .on_press(move || act(app, action))
+                    .focus_visible(|s| {
+                        s.outline(px(RING))
+                            .outline_color(color(Token::Focus))
+                            .outline_offset(px(-RING))
+                    }),
+                None => strip,
+            };
+            Some(strip.into_element())
         })
     });
     let content = dim_when(view(), stale(app))
@@ -82,8 +98,12 @@ pub(super) fn root(app: AppState) -> AnyElement {
 
 /// The task page pushed from a Now row (`Page::Task`): titled with the task id, back to Now, the
 /// header's trailing control asks about the task. Its body is the story, the Session, Ask and
-/// Review buttons, the live tail and the plan graph; the shell scrolls it.
+/// Review buttons, the live tail and the plan graph; the shell scrolls it. In the Daemon state
+/// its body is the daemon's facts about the task, as the inspector shows them.
 pub fn task_phone(app: AppState) -> PhonePage {
+    if untracked(|| app.daemon()) {
+        return daemon_task_phone(app);
+    }
     let page = computed(move || {
         let env = app.env();
         app.work.with(|state| work::task_page(state, env))
@@ -130,6 +150,31 @@ pub fn task_phone(app: AppState) -> PhonePage {
         back,
         body,
         trailing,
+        bar: None,
+        ask: true,
+        scroll: true,
+    }
+}
+
+fn daemon_task_phone(app: AppState) -> PhonePage {
+    let form = app.form;
+    let inspector = computed(move || {
+        let mut state = app.work.get();
+        state.now_tab = NowTab::Story;
+        app.feed
+            .with(|feed| work::daemon_inspector(&state, feed, form))
+    });
+    let title = untracked(|| app.work.with(|state| state.sel.to_owned()));
+    let body = dim_when(view(), stale(app))
+        .child(dynamic(move || {
+            inspector.with(|inspector| content(app, inspector))
+        }))
+        .into_element();
+    PhonePage {
+        title,
+        back: "Now",
+        body,
+        trailing: None,
         bar: None,
         ask: true,
         scroll: true,

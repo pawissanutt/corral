@@ -11,8 +11,8 @@ use nsh_core::storage::Storage;
 use crate::model::commands::Action;
 use crate::model::{
     AskTarget, Conn, DataMode, DataState, Destination, Effect, Env, Form, NavState, Overlay, Page,
-    Risk, SettingsSection, Snapshot, ThemeChoice, agents, assistant, commands, inbox, plans,
-    review, settings, timeline, usage, work,
+    Risk, SettingsSection, Snapshot, ThemeChoice, agents, assistant, commands, daemon, inbox,
+    plans, review, settings, timeline, usage, work,
 };
 
 const DESTINATION_KEY: &str = "corral.destination";
@@ -29,6 +29,7 @@ pub struct AppState {
     pub form: Form,
     pub nav: Signal<NavState>,
     pub data: Signal<DataState>,
+    pub feed: Signal<daemon::Feed>,
     pub theme: Signal<ThemeChoice>,
     pub ask_target: Signal<AskTarget>,
     pub ask_draft: Signal<String>,
@@ -71,10 +72,19 @@ impl AppState {
         if let Some(section) = preference(SETTINGS_KEY, SettingsSection::from_slug) {
             nav.settings = section;
         }
+        let configured = crate::client::configured();
+        let data = if configured {
+            DataState::Daemon
+        } else {
+            preference(DATA_KEY, DataState::from_slug)
+                .filter(|data| *data != DataState::Daemon)
+                .unwrap_or(DataState::Fixture)
+        };
         let app = AppState {
             form,
             nav: signal(nav),
-            data: signal(preference(DATA_KEY, DataState::from_slug).unwrap_or(DataState::Fixture)),
+            data: signal(data),
+            feed: signal(daemon::Feed::default()),
             theme: signal(
                 preference(THEME_KEY, ThemeChoice::from_slug).unwrap_or(ThemeChoice::System),
             ),
@@ -99,6 +109,9 @@ impl AppState {
             share: signal(false),
             lock: signal(false),
         };
+        if configured {
+            crate::client::start(app.feed);
+        }
         app.persist();
         app.install_toast_timer();
         if form != Form::Phone {
@@ -109,15 +122,34 @@ impl AppState {
 
     /// Tracked environment for any domain's reducer or view builder.
     pub fn env(&self) -> Env {
-        Env {
-            conn: self.conn.get(),
-            mode: self.mode.get(),
-            form: self.form,
+        if self.daemon() {
+            self.feed
+                .with(|feed| crate::model::health::daemon_env(feed, self.form))
+        } else {
+            Env {
+                conn: self.conn.get(),
+                mode: self.mode.get(),
+                form: self.form,
+            }
         }
+    }
+
+    /// Tracked: the current source is the daemon rather than the mockup.
+    pub fn daemon(&self) -> bool {
+        self.data.get() == DataState::Daemon
+    }
+
+    fn env_untracked(&self) -> Env {
+        untracked(|| self.env())
     }
 
     /// Tracked shell snapshot, with the current Inbox reducer's needs-you count.
     pub fn snapshot(&self) -> Snapshot {
+        if self.daemon() {
+            return self
+                .feed
+                .with(|feed| crate::model::health::daemon_snapshot(feed, self.form));
+        }
         let env = self.env();
         let mut snapshot = crate::model::snapshot(self.data.get(), env.conn, self.form);
         if snapshot.connected() {
@@ -178,6 +210,10 @@ impl AppState {
 
     /// Opens Ask and requests composer focus without discarding its current context.
     pub fn open_ask(&self) {
+        if untracked(|| self.daemon()) {
+            self.toast("corrald does not serve Ask yet");
+            return;
+        }
         self.change(|nav| nav.open(Overlay::Ask));
         self.focus_ask();
     }
@@ -230,8 +266,15 @@ impl AppState {
         self.theme.set(choice);
     }
 
-    /// Changes the existing fixture transport switch.
+    /// Changes the source without carrying fixture dialogs into a live session.
     pub fn set_data(&self, state: DataState) {
+        if state == DataState::Daemon {
+            self.close(Overlay::Ask);
+            self.confirm.set(None);
+            self.hotkey.set(false);
+            self.share.set(false);
+            self.lock.set(false);
+        }
         self.data.set(state);
     }
 
@@ -248,7 +291,11 @@ impl AppState {
 
     /// Opens fresh confirmation, refusing risky commands while the daemon is unreachable.
     pub fn confirm(&self, risk: Risk, name: Option<String>) {
-        if self.conn.get_untracked().refuses() {
+        if untracked(|| self.daemon()) {
+            self.toast("The app sends corrald no commands yet");
+            return;
+        }
+        if self.env_untracked().conn.refuses() {
             self.toast("Refused: needs a live connection. Nothing was queued.");
             return;
         }
@@ -257,6 +304,11 @@ impl AppState {
 
     /// Closes confirmation and shows its named, device-attributed success receipt.
     pub fn confirm_yes(&self) {
+        if untracked(|| self.daemon()) {
+            self.confirm.set(None);
+            self.toast("The app sends corrald no commands yet");
+            return;
+        }
         let Some((risk, name)) = self.confirm.get_untracked() else {
             return;
         };
@@ -307,11 +359,7 @@ impl AppState {
         state: Signal<S>,
         reduce: impl FnOnce(&mut S, Env) -> Vec<Effect>,
     ) {
-        let env = Env {
-            conn: self.conn.get_untracked(),
-            mode: self.mode.get_untracked(),
-            form: self.form,
-        };
+        let env = self.env_untracked();
         let mut effects = Vec::new();
         state.update(|state| effects = reduce(state, env));
         self.run(effects);
@@ -457,17 +505,23 @@ impl AppState {
         let page = self.page();
         let env = self.env();
         let mut effects = None;
+        let daemon = self.data.get_untracked() == DataState::Daemon;
         match (self.destination(), page) {
-            (Destination::Inbox, None | Some(Page::Question)) => self
+            (Destination::Now, _) if daemon => self.feed.with_untracked(|feed| {
+                self.work.update(|state| {
+                    effects = state.key_daemon(key, page, &feed.board, self.form);
+                });
+            }),
+            (Destination::Inbox, None | Some(Page::Question)) if !daemon => self
                 .inbox
                 .update(|state| effects = state.key(key, page, env)),
             (Destination::Now, _) => self
                 .work
                 .update(|state| effects = state.key(key, page, env)),
-            (Destination::Plans, _) => self
+            (Destination::Plans, _) if !daemon => self
                 .plans
                 .update(|state| effects = state.key(key, page, env)),
-            (Destination::Review, _) => self
+            (Destination::Review, _) if !daemon => self
                 .review
                 .update(|state| effects = state.key(key, page, env)),
             _ => {}

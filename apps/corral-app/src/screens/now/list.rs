@@ -1,7 +1,8 @@
-//! "Who acts next": the grouped list of the model (`work::GroupedList`) in each form's rows. On
-//! desktop and phone a task row is the kit's; the plan and PM-ask rows, the collapsed queued line
-//! and the parked block are this list's own, laid in the same columns. The list measures its width
-//! once, and its own head and rows give way as the kit's task rows do (`rows::task_columns`).
+//! "Who acts next": the grouped list of the model (`work::GroupedList`) in each form's rows, built
+//! from the fixtures or, in the Daemon state, from the daemon's board. On desktop and phone a
+//! task row is the kit's; the plan and PM-ask rows, the collapsed queued line and the parked
+//! block are this list's own, laid in the same columns. The list measures its width once, and its
+//! own head and rows give way as the kit's task rows do (`rows::task_columns`).
 
 use nsh_core::prelude::*;
 
@@ -17,19 +18,31 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 
 use super::cells;
-use super::parts::{act, action_id, model_button, question_open};
+use super::parts::{act, action_id, by_data, model_button, question_open, quiet};
 
 const RING: f32 = 2.0;
 
 /// The desktop and terminal list: the stale board's `as of` chip, the column head, the groups.
 pub(super) fn list(app: AppState) -> AnyElement {
+    let form = app.form;
     let source = computed(move || {
+        if app.daemon() {
+            return app
+                .feed
+                .with(|feed| app.work.with(|state| work::daemon_list(state, feed, form)));
+        }
         let env = app.env();
         let open = question_open(app, env);
         app.work
             .with(|state| work::grouped_list_with_question(state, env, open))
     });
-    let as_of = computed(move || work::status(app.env()).as_of);
+    let as_of = computed(move || {
+        if app.daemon() {
+            app.feed.with(|feed| work::daemon_status(feed).as_of)
+        } else {
+            work::status(app.env()).as_of
+        }
+    });
     let label = untracked(|| source.with(|list| list.label));
     let (width, columns) = cells::measured(app.form);
     view()
@@ -56,26 +69,33 @@ pub(super) fn list(app: AppState) -> AnyElement {
         .into_element()
 }
 
-/// The Goals panel: the model's Goals control (its press explains the filter).
+/// The Goals panel: the model's Goals control (its press explains the filter). The daemon serves
+/// no goals.
 pub(super) fn goals(app: AppState) -> AnyElement {
-    let goals = untracked(|| {
-        let env = app.env();
-        app.work.with(|state| work::workspace(state, env).goals)
-    });
-    view()
-        .flex_row()
-        .px(px(if app.form == Form::Terminal {
-            8.0
-        } else {
-            16.0
-        }))
-        .py(px(if app.form == Form::Terminal {
-            0.0
-        } else {
-            14.0
-        }))
-        .child(model_button(app, &goals, "btn-goals".into(), false))
-        .into_element()
+    by_data(
+        app,
+        move || {
+            let goals = untracked(|| {
+                let env = app.env();
+                app.work.with(|state| work::workspace(state, env).goals)
+            });
+            view()
+                .flex_row()
+                .px(px(if app.form == Form::Terminal {
+                    8.0
+                } else {
+                    16.0
+                }))
+                .py(px(if app.form == Form::Terminal {
+                    0.0
+                } else {
+                    14.0
+                }))
+                .child(model_button(app, &goals, "btn-goals".into(), false))
+                .into_element()
+        },
+        move || quiet(app, work::NOT_SERVED),
+    )
 }
 
 /// The list's rows for `source`, built again only when its shape changes: selecting another task
@@ -110,7 +130,7 @@ fn is_selected(source: Memo<GroupedList>, id: &'static str) -> bool {
         list.groups
             .iter()
             .flat_map(|group| group.rows.iter())
-            .any(|row| matches!(row, Row::Task(task) if task.id == id && task.selected))
+            .any(|row| matches!(row, Row::Task(task) if task.line.id == id && task.selected))
     })
 }
 
@@ -122,6 +142,9 @@ fn groups(
 ) -> AnyElement {
     if list.loading_rows != 0 {
         return loading(app, list.loading_rows);
+    }
+    if let Some(notice) = list.notice {
+        return quiet(app, notice);
     }
     let mut out: Vec<AnyElement> = Vec::new();
     if app.form == Form::Terminal {
@@ -140,10 +163,10 @@ fn groups(
         for row in &group.rows {
             out.push(match row {
                 Row::Task(task) => {
-                    let (id, action) = (task.id, task.action);
+                    let (id, action) = (task.line.id, task.action);
                     task_row(
                         app,
-                        id,
+                        task.line.clone(),
                         move || is_selected(source, id),
                         move || act(app, action),
                         format!("task-{id}"),

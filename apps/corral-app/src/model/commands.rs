@@ -149,7 +149,7 @@ fn row(
 }
 
 /// All palette commands, including an always-visible Ask row for non-navigation free text.
-pub fn commands(query: &str) -> Vec<Command> {
+pub fn commands(query: &str, socket_configured: bool, data: DataState) -> Vec<Command> {
     let query = query.trim();
     let folded = query.to_lowercase();
     let mut rows = Vec::new();
@@ -268,17 +268,22 @@ pub fn commands(query: &str) -> Vec<Command> {
             }),
     );
     rows.extend(
-        [DataState::Fixture, DataState::Disconnected]
-            .into_iter()
-            .map(|data| {
-                row(
-                    format!("data:{}", data.slug()),
-                    "Data",
-                    format!("Data: {}", data.slug()),
-                    None,
-                    Action::Data(data),
-                )
-            }),
+        [
+            DataState::Fixture,
+            DataState::Daemon,
+            DataState::Disconnected,
+        ]
+        .into_iter()
+        .filter(|state| *state != DataState::Daemon || socket_configured)
+        .map(|data| {
+            row(
+                format!("data:{}", data.slug()),
+                "Data",
+                format!("Data: {}", data.slug()),
+                None,
+                Action::Data(data),
+            )
+        }),
     );
     rows.push(row(
         "reset-now",
@@ -358,13 +363,29 @@ pub fn commands(query: &str) -> Vec<Command> {
             Action::Lock,
         ),
     ]);
+    if data == DataState::Daemon {
+        rows.retain(|row| {
+            !matches!(
+                row.action,
+                Action::Connection(_)
+                    | Action::Ask(_)
+                    | Action::Mode(_)
+                    | Action::Open(_)
+                    | Action::ToggleSession
+                    | Action::Assistant(_)
+                    | Action::Hotkey
+                    | Action::Share
+                    | Action::Lock
+            )
+        });
+    }
     rows
 }
 
 /// Commands matching group plus label, case-insensitively; the Ask row always survives.
-pub fn filtered(query: &str) -> Vec<Command> {
+pub fn filtered(query: &str, socket_configured: bool, data: DataState) -> Vec<Command> {
     let folded = query.trim().to_lowercase();
-    commands(query)
+    commands(query, socket_configured, data)
         .into_iter()
         .filter(|command| {
             command.always
@@ -377,8 +398,8 @@ pub fn filtered(query: &str) -> Vec<Command> {
 }
 
 /// Resolves a selected command without interpreting arbitrary ids as executable commands.
-pub fn run(id: &str, query: &str) -> Option<Action> {
-    commands(query)
+pub fn run(id: &str, query: &str, socket_configured: bool, data: DataState) -> Option<Action> {
+    commands(query, socket_configured, data)
         .into_iter()
         .find(|command| command.id == id)
         .map(|command| command.action)
@@ -502,20 +523,24 @@ mod tests {
 
     #[test]
     fn free_text_ask_survives_even_when_a_command_matches() {
-        let rows = filtered("plan");
+        let rows = filtered("plan", false, DataState::Fixture);
         assert!(
             rows.iter()
                 .any(|row| row.always && matches!(row.action, Action::Ask(Some(_))))
         );
         assert!(rows.iter().any(|row| !row.always));
         for query in ["t-894", "go now", "open task"] {
-            assert!(!filtered(query).iter().any(|row| row.always));
+            assert!(
+                !filtered(query, false, DataState::Fixture)
+                    .iter()
+                    .any(|row| row.always)
+            );
         }
     }
 
     #[test]
     fn task_id_search_does_not_turn_navigation_into_a_question() {
-        let rows = filtered("t-894");
+        let rows = filtered("t-894", false, DataState::Fixture);
         assert!(
             rows.iter()
                 .any(|row| row.action == Action::Open(Page::Task("T-894")))

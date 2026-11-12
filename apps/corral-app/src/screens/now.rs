@@ -117,11 +117,23 @@ fn titles(app: AppState) -> Titles {
     Rc::new(titles)
 }
 
-fn title(titles: &Titles, key: &str) -> SharedString {
-    titles
+/// The title of panel `key`, tracked: in the Daemon state the lower tabs carry the board's count
+/// instead of the fixture's clock and count.
+fn title(app: AppState, titles: &Titles, key: &str) -> impl Fn() -> SharedString + use<> {
+    let fixed = titles
         .iter()
         .find(|(panel, _)| *panel == key)
-        .map_or_else(|| SharedString::from(""), |(_, title)| title.clone())
+        .map_or_else(|| SharedString::from(""), |(_, title)| title.clone());
+    let lower = work::LowTab::ALL
+        .into_iter()
+        .find(|tab| layout::lower_panel(*tab) == key);
+    move || match lower {
+        Some(tab) if app.daemon() => SharedString::from(
+            app.feed
+                .with(|feed| work::daemon_lower_label(tab, &feed.board)),
+        ),
+        _ => fixed.clone(),
+    }
 }
 
 /// The dock workspace. Wide enough (measured, not guessed): a DockArea, 2x2, tab groups
@@ -285,7 +297,7 @@ fn dock(
         })
         .render_tab(move |tab: &DockTab| {
             let key = tab.panel.as_str();
-            tab_label(app, title(&titles, key), tab.active, key)
+            tab_label(app, title(app, &titles, key), tab.active, key)
         })
         .render_panel(move |panel: &DockPanel| frame(app, panel.id.as_str()))
         .into_element()
@@ -302,7 +314,7 @@ fn panes(app: AppState, axis: Axis, titles: &Titles) -> AnyElement {
     let list_tab = tab(view(), form)
         .child(tab_label(
             app,
-            title(titles, layout::WHO),
+            title(app, titles, layout::WHO),
             true,
             layout::WHO,
         ))
@@ -391,7 +403,12 @@ fn tab<S: Styled>(s: S, form: Form) -> S {
     }
 }
 
-fn tab_label(app: AppState, title: SharedString, active: bool, key: &str) -> AnyElement {
+fn tab_label(
+    app: AppState,
+    title: impl Fn() -> SharedString + 'static,
+    active: bool,
+    key: &str,
+) -> AnyElement {
     let label = text(title)
         .text_size(px(text_size(app.form) * TAB_SCALE))
         .font_weight(if active {

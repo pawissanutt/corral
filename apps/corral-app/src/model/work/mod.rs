@@ -1,19 +1,25 @@
 //! Pure content for Now, its task page, Changes and the phone More list.
 //!
 //! Render [`workspace`] as the desktop/terminal dock contents, [`phone_now`] as the phone
-//! tab, and [`task_page`] as its pushed task page. Rows retain task ids so the renderer can
-//! read `board::task` for the common rail anatomy. Pass button actions to [`State::act`].
-//! The mockup's Split, Zoom and Changes filter controls have no handlers; their descriptors
-//! intentionally carry no action. Graph references contain ids only, for the Plans renderer.
+//! tab, and [`task_page`] as its pushed task page. Rows carry their resolved facts
+//! ([`TaskLine`](crate::model::board::TaskLine)) so the renderer reads no store. Pass button
+//! actions to [`State::act`]. The mockup's Split, Zoom and Changes filter controls have no
+//! handlers; their descriptors intentionally carry no action. Graph references contain ids
+//! only, for the Plans renderer. In the Daemon data state, [`daemon_list`] and its siblings
+//! build Now from the daemon's board instead of the fixtures.
 
 mod data;
 mod inspector;
 mod list;
+mod served;
+mod served_facts;
 mod views;
 
 pub use data::*;
 pub use inspector::*;
 pub use list::*;
+pub use served::*;
+pub use served_facts::*;
 pub use views::*;
 
 use std::borrow::Cow;
@@ -93,7 +99,8 @@ impl LowTab {
     }
 }
 
-/// Selection and dock tabs, initially focused on T-890's story.
+/// Selection, dock tabs and the daemon list's expanded groups, initially focused on T-890's
+/// story.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct State {
     /// Task id selected in the list and all inspector/context content.
@@ -104,6 +111,12 @@ pub struct State {
     pub ctx_tab: CtxTab,
     /// Selected lower-left dock tab.
     pub low_tab: LowTab,
+    /// The daemon list shows every queued task, not only the first few.
+    pub all_queued: bool,
+    /// The daemon list shows every parked task, not only the first few.
+    pub all_parked: bool,
+    /// The daemon list shows every held task, not only the first few.
+    pub all_held: bool,
 }
 
 impl Default for State {
@@ -113,6 +126,9 @@ impl Default for State {
             now_tab: NowTab::Story,
             ctx_tab: CtxTab::Live,
             low_tab: LowTab::Since,
+            all_queued: false,
+            all_parked: false,
+            all_held: false,
         }
     }
 }
@@ -156,6 +172,8 @@ pub enum Action {
     Connection,
     /// Show the mockup's service-manager restart notice.
     RestartDaemon,
+    /// Show every row of a collapsed daemon group (Queued, Held or Parked).
+    ShowAll(GroupKey),
 }
 
 /// A button's emphasis, without any layout or colour prescription.
@@ -265,8 +283,20 @@ impl State {
                         .into(),
                 )];
             }
+            Action::ShowAll(GroupKey::Parked) => self.all_parked = true,
+            Action::ShowAll(GroupKey::Held) => self.all_held = true,
+            Action::ShowAll(_) => self.all_queued = true,
         }
         Vec::new()
+    }
+
+    /// Moves the inspector to its next tab, wrapping from Session back to Story.
+    pub(super) fn cycle_tab(&mut self) {
+        self.now_tab = match self.now_tab {
+            NowTab::Story => NowTab::Evidence,
+            NowTab::Evidence => NowTab::Session,
+            NowTab::Session => NowTab::Story,
+        };
     }
 
     /// Port Now's j/k, arrows, Enter and cycling Tab handler.
@@ -317,11 +347,7 @@ impl State {
                 Page::Session(self.sel)
             })]),
             "tab" | "Tab" => {
-                self.now_tab = match self.now_tab {
-                    NowTab::Story => NowTab::Evidence,
-                    NowTab::Evidence => NowTab::Session,
-                    NowTab::Session => NowTab::Story,
-                };
+                self.cycle_tab();
                 Some(Vec::new())
             }
             _ => None,

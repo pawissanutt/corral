@@ -13,19 +13,21 @@ pub fn snapshot(state: DataState, conn: Conn, form: Form) -> Snapshot {
             state,
             health(conn, form),
             Some(Workspace {
-                name: "corral",
-                path: "~/miti-workspace/corral",
+                name: "corral".into(),
+                path: "~/miti-workspace/corral".into(),
                 autopilot: "Autopilot · independent work continues",
-                device: if form == Form::Phone {
+                device: (if form == Form::Phone {
                     "pawis-iphone"
                 } else {
                     "pawis-desktop"
-                },
-                via: if form == Form::Phone {
+                })
+                .into(),
+                via: (if form == Form::Phone {
                     "via=app:pawis-iphone"
                 } else {
                     "via=app:pawis-desktop"
-                },
+                })
+                .into(),
             }),
             vec![
                 (
@@ -45,12 +47,15 @@ pub fn snapshot(state: DataState, conn: Conn, form: Form) -> Snapshot {
                 (Destination::Review, 3),
             ],
         ),
+        DataState::Daemon => {
+            crate::model::health::daemon_snapshot(&crate::model::daemon::Feed::default(), form)
+        }
         DataState::Disconnected => Snapshot::new(
             state,
             Health {
                 segments: vec![Segment {
-                    name: "corrald",
-                    value: "not connected",
+                    name: "corrald".into(),
+                    value: "not connected".into(),
                     tone: Tone::Fail,
                 }],
                 reach: None,
@@ -102,36 +107,39 @@ pub fn health(conn: Conn, form: Form) -> Health {
     Health {
         segments: vec![
             Segment {
-                name: "corrald",
-                value: daemon,
+                name: "corrald".into(),
+                value: daemon.into(),
                 tone: daemon_tone,
             },
             Segment {
-                name: "herdr-core",
-                value: runtime,
+                name: "herdr-core".into(),
+                value: runtime.into(),
                 tone: runtime_tone,
             },
             Segment {
-                name: "herdr-tui",
-                value: runtime,
+                name: "herdr-tui".into(),
+                value: runtime.into(),
                 tone: runtime_tone,
             },
             Segment {
-                name: "PM",
-                value: pm,
+                name: "PM".into(),
+                value: pm.into(),
                 tone: pm_tone,
             },
         ],
-        reach: Some(match conn {
-            Conn::Relay => "relay · e2e",
-            Conn::Offline => "offline · last sync 22:08",
-            _ if form == Form::Phone => "direct · tailscale",
-            _ => "direct · loopback",
-        }),
+        reach: Some(
+            (match conn {
+                Conn::Relay => "relay · e2e",
+                Conn::Offline => "offline · last sync 22:08",
+                _ if form == Form::Phone => "direct · tailscale",
+                _ => "direct · loopback",
+            })
+            .into(),
+        ),
         e2e: conn == Conn::Relay,
-        attention: Some("12 since 18:40"),
-        clock: Some("22:12"),
-        source: Some("fixture · snapshot 2026-11-07 22:12"),
+        attention: Some("12 since 18:40".into()),
+        clock: Some("22:12".into()),
+        source: Some("fixture · snapshot 2026-11-07 22:12".into()),
     }
 }
 

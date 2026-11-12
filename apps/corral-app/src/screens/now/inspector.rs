@@ -1,12 +1,13 @@
 //! The inspector for the selected task (`.insp`): its Story (goal, the run, gate, review, land
 //! stepper, steps, who moves next, needs and unblocks with their marks, cost, actions), the
-//! illustrative Evidence list, and the Session hand-off with its terminal tail.
+//! illustrative Evidence list, and the Session hand-off with its terminal tail. In the Daemon
+//! state: the daemon's facts about the task in the same header, stepper and key/value parts.
 
 use nsh_core::prelude::*;
 
 use crate::model::board::Mark;
 use crate::model::text::span;
-use crate::model::work::{self, Dependency, Inspector, NowTab, OwnerNext, Stage, Story};
+use crate::model::work::{self, Dependency, Inspector, NowTab, OwnerNext, Stage, Story, TaskFacts};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::chip::{chip, illus};
@@ -17,23 +18,27 @@ use crate::ui::kit::text::{dim, h3, mono, plain, rich, rich_small};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::context::tail;
-use super::parts::{act, action_id, model_button};
+use super::parts::{act, action_id, model_button, quiet};
 
 /// The panel key of the inspector that follows the model's selected tab (the two-pane fallback).
 pub(super) const FOLLOW: &str = "inspector";
 
 /// The inspector for `tab`, or for the model's selected tab when `None`. The model decides what
-/// shows: the loading placeholders, or the tab's content for the selected task.
+/// shows: the loading placeholders, or the tab's content for the selected task, from the
+/// fixtures or the daemon's board.
 pub(super) fn panel(app: AppState, tab: Option<NowTab>) -> AnyElement {
+    let form = app.form;
     let inspector = computed(move || {
-        let env = app.env();
-        app.work.with(|state| {
-            let mut state = state.clone();
-            if let Some(tab) = tab {
-                state.now_tab = tab;
-            }
-            work::inspector(&state, env)
-        })
+        let mut state = app.work.get();
+        if let Some(tab) = tab {
+            state.now_tab = tab;
+        }
+        if app.daemon() {
+            return app
+                .feed
+                .with(|feed| work::daemon_inspector(&state, feed, form));
+        }
+        work::inspector(&state, app.env())
     });
     dynamic(move || inspector.with(|inspector| content(app, inspector)))
 }
@@ -50,9 +55,13 @@ fn padded(app: AppState, child: AnyElement) -> AnyElement {
     .into_element()
 }
 
-fn content(app: AppState, inspector: &Inspector) -> AnyElement {
+/// The inspector's body for `inspector`, padded as `.insp` is; the phone's task page shows it
+/// too in the Daemon state.
+pub(super) fn content(app: AppState, inspector: &Inspector) -> AnyElement {
     let body = match inspector {
         Inspector::Loading => skeleton(app, &[(0.3, 10.0), (0.6, 18.0), (1.0, 60.0)]),
+        Inspector::Quiet(words) => return quiet(app, *words),
+        Inspector::Facts(facts) => self::facts_view(app, facts),
         Inspector::Story(story) => self::story(app, story),
         Inspector::Evidence(evidence) => view()
             .child(h3(app, evidence.title.clone(), None))
@@ -161,6 +170,29 @@ pub(super) fn story(app: AppState, story: &Story) -> AnyElement {
     view().children(out).into_element()
 }
 
+/// The daemon's facts about the selected task: the id with who acts next, the title, the rail's
+/// stages, then the facts as label and value rows.
+fn facts_view(app: AppState, facts: &TaskFacts) -> AnyElement {
+    let head = view()
+        .flex_row()
+        .items_center()
+        .flex_wrap()
+        .gap(px(8.0))
+        .child(mono(app, facts.id).text_color(color(Token::Ink3)))
+        .child(chip(app, facts.who, facts.who_hue));
+    let rows = facts
+        .facts
+        .iter()
+        .map(|(label, value)| ((*label).to_owned(), rich(app, value)))
+        .collect();
+    view()
+        .child(head)
+        .child(title(app, facts.title.clone()))
+        .child(stepper(app, &facts.stages))
+        .child(kv(app, rows))
+        .into_element()
+}
+
 /// The id, the plan it belongs to (a press opens the plan), and the changed-since chip.
 fn head(app: AppState, story: &Story) -> AnyElement {
     let form = app.form;
@@ -202,8 +234,8 @@ fn head(app: AppState, story: &Story) -> AnyElement {
 }
 
 /// The task's title (`.insp h2`): 16 pt bold on desktop, 18 pt on the phone, bold in a terminal.
-fn title(app: AppState, title: &'static str) -> AnyElement {
-    let words = text(title)
+fn title(app: AppState, title: impl Into<SharedString>) -> AnyElement {
+    let words = text(title.into())
         .role(AccessibilityRole::Header)
         .font_weight(FontWeight::BOLD)
         .text_color(color(Token::Ink));

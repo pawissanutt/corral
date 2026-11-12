@@ -201,9 +201,14 @@ fn health(app: AppState) -> AnyElement {
     })
 }
 
-fn segment_view(ruled: bool, name: &'static str, value: &'static str, segment: Tone) -> AnyElement {
-    let words = |content: &'static str, ink: Token| {
-        text(content)
+fn segment_view(
+    ruled: bool,
+    name: std::borrow::Cow<'static, str>,
+    value: std::borrow::Cow<'static, str>,
+    segment: Tone,
+) -> AnyElement {
+    let words = |content: std::borrow::Cow<'static, str>, ink: Token| {
+        text(content.into_owned())
             .number_of_lines(1u32)
             .font_family(FONT_TEXT)
             .text_size(px(11.0))

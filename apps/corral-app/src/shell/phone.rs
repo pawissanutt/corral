@@ -133,6 +133,7 @@ pub fn shell(app: AppState) -> AnyElement {
                 .relative()
                 .child(dynamic(move || {
                     let tab = nav.tab.get();
+                    let _data = app.data.get();
                     // Rebuilt when the tab changes, not when what a page reads does.
                     untracked(move || tab_stack(nav, tab))
                 })),
@@ -448,6 +449,28 @@ fn root(nav: Nav, tab: PhoneTab) -> Screen {
 
 /// The page an entry shows.
 fn page_of(app: AppState, entry: Entry) -> PhonePage {
+    if untracked(|| app.daemon()) {
+        let destination = match entry {
+            Entry::Page(page) if !matches!(page, Page::Task(_)) => Some(page.owner()),
+            Entry::Destination(destination)
+                if !matches!(destination, Destination::Now | Destination::Settings) =>
+            {
+                Some(destination)
+            }
+            _ => None,
+        };
+        if let Some(destination) = destination {
+            return PhonePage {
+                title: destination.label().to_owned(),
+                back: PhoneTab::More.label(),
+                body: screens::destination(app, destination),
+                trailing: None,
+                bar: None,
+                ask: true,
+                scroll: false,
+            };
+        }
+    }
     match entry {
         Entry::Page(Page::Question) => inbox::question_phone(app),
         Entry::Page(Page::Task(_)) => now::task_phone(app),
@@ -600,7 +623,11 @@ fn more_row(nav: Nav, row: MoreRow) -> AnyElement {
     let app = nav.app;
     list_row(
         app,
-        format!("{}, {}", row.label, row.subtitle),
+        if app.daemon() {
+            row.label.to_owned()
+        } else {
+            format!("{}, {}", row.label, row.subtitle)
+        },
         format!("nav-{}", row.destination.slug()),
         || false,
         move || nav.open_more(row),
@@ -619,7 +646,9 @@ fn more_row(nav: Nav, row: MoreRow) -> AnyElement {
                 .min_w(px(0.0))
                 .gap(px(2.0))
                 .child(plain(app, row.label).truncate())
-                .child(dim(app, row.subtitle).truncate())
+                .when(!app.daemon(), |v| {
+                    v.child(dim(app, row.subtitle).truncate())
+                })
                 .into_element(),
             icon(Icon::Chevron, 16.0, color(Token::Ink3)),
         ],

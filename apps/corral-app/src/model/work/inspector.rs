@@ -1,6 +1,6 @@
 //! Inspector, selected live tail and phone task story content.
 
-use crate::model::board::{Actor, Mark, STAGES, find, money, task};
+use crate::model::board::{Actor, Mark, STAGES, find, money, stage_word, task};
 use crate::model::effect::Env;
 use crate::model::hue::Hue;
 use crate::model::nav::{Destination, Form};
@@ -151,14 +151,7 @@ pub fn story(state: &State, env: Env) -> Story {
             let word = if is_you && index == 0 {
                 "waits on you"
             } else {
-                match mark {
-                    Mark::Done => "done",
-                    Mark::Active => "now",
-                    Mark::Fail => "failed",
-                    Mark::Stale => "stale",
-                    Mark::Next => "next",
-                    Mark::Na => "n/a",
-                }
+                stage_word(mark)
             };
             Stage {
                 label: STAGES[index],
@@ -479,6 +472,10 @@ pub enum Inspector {
     Evidence(Evidence),
     /// Session handoff.
     Session(Session),
+    /// The daemon's facts about the selected task.
+    Facts(super::TaskFacts),
+    /// One quiet line in place of content the daemon does not provide.
+    Quiet(&'static str),
 }
 
 /// Resolve the selected inspector tab and its loading branch.
