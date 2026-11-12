@@ -319,6 +319,7 @@ pub(crate) fn submit<R>(
     prepare: impl FnOnce(&Store, &mut Task) -> Result<()>,
     send: impl FnOnce() -> Result<R>,
 ) -> Result<R> {
+    let mut output_leases = Vec::new();
     match ctx.store.submit_operating_action(
         authorization,
         &authorization.action,
@@ -339,7 +340,17 @@ pub(crate) fn submit<R>(
                 }
                 require(store, task, authorization.action.kind)?;
             }
-            prepare(store, task)
+            prepare(store, task)?;
+            if matches!(
+                authorization.action.kind,
+                OperatingActionKind::Dispatch
+                    | OperatingActionKind::Gate
+                    | OperatingActionKind::Review
+                    | OperatingActionKind::Repair
+            ) {
+                output_leases.extend(crate::storage_gc::outputs::prepare(store, task)?);
+            }
+            Ok(())
         },
         send,
     )? {
@@ -355,6 +366,7 @@ pub(crate) fn submit_head<R>(
     prepare: impl FnOnce(&Store, &mut TaskHeadMut) -> Result<()>,
     send: impl FnOnce() -> Result<R>,
 ) -> Result<R> {
+    let mut output_leases = Vec::new();
     match ctx.store.submit_operating_action_head(
         authorization,
         &authorization.action,
@@ -375,7 +387,17 @@ pub(crate) fn submit_head<R>(
                 }
                 require(store, &*head, authorization.action.kind)?;
             }
-            prepare(store, head)
+            prepare(store, head)?;
+            if matches!(
+                authorization.action.kind,
+                OperatingActionKind::Dispatch
+                    | OperatingActionKind::Gate
+                    | OperatingActionKind::Review
+                    | OperatingActionKind::Repair
+            ) {
+                output_leases.extend(crate::storage_gc::outputs::prepare(store, &*head)?);
+            }
+            Ok(())
         },
         send,
     )? {

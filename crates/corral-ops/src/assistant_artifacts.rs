@@ -35,6 +35,7 @@ pub fn add_session_artifact(
     check_owner(Some(session))?;
     corral_core::assistant::validate_id(session)?;
     let current = ctx.store.get_assistant(session)?;
+    let _output_consumer = crate::storage_gc::outputs::protect_artifact_source(ctx, path)?;
     let meta = std::fs::metadata(path).context("inspecting session artifact")?;
     if !meta.is_file() || meta.len() > ctx.store.config.artifacts.max_bytes {
         bail!("artifact must be a regular file within artifacts.max_bytes");

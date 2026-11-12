@@ -51,6 +51,7 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
             Ok(m) if m.is_file() && m.len() <= cfg.max_bytes => {}
             _ => continue,
         }
+        let _output_consumer = crate::storage_gc::outputs::protect_artifact_source(ctx, &full)?;
         let bytes = std::fs::read(&full).with_context(|| format!("reading {}", full.display()))?;
         anyhow::ensure!(
             bytes.len() as u64 <= cfg.max_bytes,

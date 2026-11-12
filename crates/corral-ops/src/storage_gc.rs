@@ -16,6 +16,7 @@ use crate::Ctx;
 mod backup;
 mod classes;
 mod lifecycle;
+pub mod outputs;
 mod worktrees;
 
 pub use backup::{BackupReport, StorageCheck, backup_storage, check_storage};
@@ -90,6 +91,50 @@ impl GcReport {
         }
     }
 
+    fn push_output(&mut self, output: outputs::OutputEntry) {
+        // The worktree collector already measured the containing directory. Classify
+        // measured output bytes once, rather than counting them in both buckets.
+        if let Some(measured) = output.measured_bytes
+            && let Some(worktree) = self
+                .entries
+                .iter_mut()
+                .find(|e| e.class == "worktree" && e.task.as_deref() == Some(output.task.as_str()))
+        {
+            worktree.bytes = worktree.bytes.saturating_sub(measured);
+        }
+        let bytes = if output.disposition == Disposition::Reclaimed {
+            output.reclaimed_bytes
+        } else {
+            output.measured_bytes.unwrap_or(0)
+        };
+        let mut line = entry(
+            "output",
+            output.path.display().to_string(),
+            bytes,
+            output.disposition,
+            Some(format!(
+                "{}:{} [{}]: {}{}",
+                output.task,
+                output.run.as_deref().unwrap_or("unknown"),
+                output.output_class,
+                output.reason,
+                if output.measured_bytes.is_none() {
+                    "; current bytes unknown"
+                } else {
+                    ""
+                }
+            )),
+        );
+        line.task = Some(output.task);
+        if matches!(
+            line.disposition,
+            Disposition::Reclaimable | Disposition::Reclaimed
+        ) {
+            line.bucket = Bucket::Reclaimed;
+        }
+        self.push(line);
+    }
+
     fn total(&mut self) {
         self.totals.clear();
         for entry in &self.entries {
@@ -140,6 +185,9 @@ pub fn storage_gc(ctx: &Ctx, apply: bool) -> Result<GcReport> {
         totals: BTreeMap::new(),
     };
     classes::worktrees(ctx, now, &mut report)?;
+    for output in outputs::output_gc(ctx, apply)? {
+        report.push_output(output);
+    }
     classes::scratch(ctx, now, &mut report)?;
     classes::agent_sessions(ctx, &mut report)?;
     classes::legacy(ctx, &mut report)?;
