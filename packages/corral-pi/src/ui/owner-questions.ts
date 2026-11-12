@@ -2,6 +2,7 @@
 // Asking never opens UI. Only the owner's command, shortcut or click opens the answer dialog.
 import type { ExtensionAPI, ExtensionContext, ExtensionUIContext, SessionProjection } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { askDialog, sequential } from "../host/ask-user.ts";
 import type { ChoiceAnswer, PendingQuestion, PendingQuestions } from "../host/pending-questions.ts";
 
 export const QUESTIONS_COMMAND = "questions";
@@ -32,6 +33,8 @@ export class OwnerQuestionUi {
   private active: { id: string; abort: AbortController } | undefined;
   private opening = false;
   private epoch = 0;
+  // Typed drafts survive Escape and reopening for this session; an answered question drops its own.
+  private readonly drafts = new Map<string, string[]>();
   busy = false;
   constructor(private readonly questions: PendingQuestions, private readonly eligible: () => boolean,
     private readonly persist: (message: { customType: string; content: string; display: boolean }) => void,
@@ -163,6 +166,7 @@ export class OwnerQuestionUi {
         ctx.ui.notify(`${id}: no answer sent. Reopen with /questions if still pending.`, "info"); return;
       }
       const status = await this.questions.answer(id, answers);
+      this.drafts.delete(id);
       if (this.epoch === epoch) ctx.ui.notify(`${id}: ${status}`, "info");
     } catch (error) {
       if (this.epoch === epoch) ctx.ui.notify(`Owner answer unresolved: ${String(error)}. Inspect /questions before retrying; no missing answer is consent.`, "error");
@@ -171,14 +175,23 @@ export class OwnerQuestionUi {
     }
   }
 
+  /** One dialog for the batch; only a deliberate Submit with every question answered is an answer. */
   private async collect(ui: ExtensionUIContext, q: PendingQuestion, signal: AbortSignal): Promise<ChoiceAnswer[] | undefined> {
+    const questions = q.questions.map(choice => ({ question: choice.question, options: choice.options.map(label => ({ label })),
+      ...(choice.freeText === undefined ? {} : { freeText: choice.freeText }) }));
+    const drafts = this.drafts.get(q.id) ?? [];
+    this.drafts.set(q.id, drafts);
+    const shown = await askDialog(ui, questions, signal, { escape: "Esc keeps it pending", complete: true, drafts });
+    if (signal.aborted) return undefined;
+    if (shown && !shown.submitted) return undefined;
+    const raw = shown?.answers ?? await sequential(ui, questions, signal);
+    if (signal.aborted) return undefined;
     const answers: ChoiceAnswer[] = [];
-    for (const choice of q.questions) {
-      const option = await ui.select(choice.question, choice.options, { signal, timeout: 300_000 });
-      if (signal.aborted || option === undefined || !choice.options.includes(option)) return undefined;
-      const text = choice.freeText ? await ui.input("Optional additional text (leave empty to skip)", "", { signal, timeout: 300_000 }) : "";
-      if (signal.aborted || text === undefined) return undefined;
-      answers.push({ option, ...(text ? { text } : {}) });
+    for (const a of raw) {
+      if (!a) return undefined;
+      const text = a.text.trim();
+      if (a.selected.length === 0) { if (!text) return undefined; answers.push({ text }); }
+      else answers.push({ option: a.selected[0]!, ...(text ? { text } : {}) });
     }
     return answers;
   }
@@ -186,7 +199,7 @@ export class OwnerQuestionUi {
   close(ended = false): void {
     this.epoch++;
     this.active?.abort.abort();
-    this.active = undefined; this.opening = false;
+    this.active = undefined; this.opening = false; this.drafts.clear();
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined; this.ctx = undefined; this.ui = undefined; this.busy = false;
     this.questions.close(ended);
