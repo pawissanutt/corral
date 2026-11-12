@@ -1,13 +1,18 @@
 //! The desktop and web shell: a top bar across the window, the sidebar of
-//! destinations, and the content container that holds the current page with
-//! the Ask drawer and the palette over it.
+//! destinations, and the content container that holds the connection banner and the current
+//! page, with the Ask drawer, the palette, the confirmation and the toast over it.
 
 use nsh_core::element::StyleRefinement;
 use nsh_core::prelude::*;
 
+use crate::model::nav::{
+    ASK_HINT, ASK_KEY, ASK_LABEL, PALETTE_HINT, PALETTE_KEY, SIGNS_AS, THIS_DEVICE,
+};
 use crate::model::{Destination, SettingsSection, Workspace};
 use crate::screens;
+use crate::shell::{banner, confirmation, stale, toast};
 use crate::state::AppState;
+use crate::ui::ask;
 use crate::ui::atoms::{HealthLayout, count, health_line, key_hint, nav_row, nav_row_icon};
 use crate::ui::composer::ask_surface;
 use crate::ui::icons::{Icon, icon};
@@ -26,10 +31,13 @@ const SECTION_INDENT: f32 = 26.0;
 const PATH_SHRINK: f32 = 1000.0;
 /// Narrower than this the path shows a few characters and an ellipsis, which says nothing.
 const PATH_MIN_WIDTH: f32 = 56.0;
+/// The board shown while corrald is down or this device offline is the last known one: it
+/// recedes (the mock's `.is-stale .stalefx`, whose desaturation NSH has no filter for).
+const STALE_OPACITY: f32 = 0.78;
 
 pub fn shell(app: AppState) -> AnyElement {
     // Memos so a change elsewhere in the snapshot or the nav state (an overlay
-    // opening) does not rebuild the page or the workspace blocks.
+    // opening) does not rebuild the sidebar rows or the workspace blocks.
     let destination = computed(move || app.destination());
     let workspace = computed(move || app.snapshot().workspace);
     view()
@@ -43,8 +51,9 @@ pub fn shell(app: AppState) -> AnyElement {
                 .flex_row()
                 .min_h(px(0.0))
                 .child(sidebar(app, destination, workspace))
-                .child(content(app, destination)),
+                .child(content(app)),
         )
+        .child(ask::hotkey(app))
         .into_element()
 }
 
@@ -183,12 +192,12 @@ fn ask_button(app: AppState) -> AnyElement {
         .active(move |s| s.bg(ink.opacity(0.2)))
         .focus_visible(focus_ring)
         .role(AccessibilityRole::Button)
-        .label("Ask")
+        .label(ASK_LABEL)
         .test_id("ask-open")
         .on_press(move || app.open_ask())
         .child(icon(Icon::Ask, 16.0, ink))
         .child(
-            text("Ask…")
+            text(ASK_HINT)
                 .flex_1()
                 .min_w(px(0.0))
                 .truncate()
@@ -196,7 +205,7 @@ fn ask_button(app: AppState) -> AnyElement {
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(ink),
         )
-        .child(key_hint("/"))
+        .child(key_hint(ASK_KEY))
         .into_element()
 }
 
@@ -221,19 +230,19 @@ fn palette_opener(app: AppState) -> AnyElement {
         .active(move |s| s.bg(ink.opacity(0.1)))
         .focus_visible(focus_ring)
         .role(AccessibilityRole::Button)
-        .label("Go to, answer, open")
+        .label(PALETTE_HINT)
         .test_id("palette-open")
         .on_press(move || app.open_palette())
         .child(icon(Icon::Search, 16.0, quiet))
         .child(
-            text("Go to, answer, …")
+            text(PALETTE_HINT)
                 .flex_1()
                 .min_w(px(0.0))
                 .truncate()
                 .text_size(px(text_size(app.form)))
                 .text_color(quiet),
         )
-        .child(key_hint("Ctrl K"))
+        .child(key_hint(PALETTE_KEY))
         .into_element()
 }
 
@@ -296,7 +305,7 @@ fn device_footer(app: AppState, ws: Workspace) -> AnyElement {
         .border_t(px(1.0))
         .border_t_color(color(Token::ShellInk).opacity(0.12))
         .child(
-            text("This device ")
+            text(format!("{THIS_DEVICE} "))
                 .text_size(px(small))
                 .text_color(color(Token::ShellInk2))
                 .child(
@@ -306,7 +315,7 @@ fn device_footer(app: AppState, ws: Workspace) -> AnyElement {
                 ),
         )
         .child(
-            text("Actions sign as ")
+            text(format!("{SIGNS_AS} "))
                 .text_size(px(small))
                 .text_color(color(Token::ShellInk2))
                 .child(text(ws.via).font_family(FONT_MONO)),
@@ -314,9 +323,10 @@ fn device_footer(app: AppState, ws: Workspace) -> AnyElement {
         .into_element()
 }
 
-/// The page, then the Ask drawer and the palette, which the contract wants
-/// as the container's last two children so they cover the page and nothing else.
-fn content(app: AppState, destination: Memo<Destination>) -> AnyElement {
+/// The connection banner over the page, then the page, dimmed while the board is stale; over
+/// them the Ask drawer, the palette, the confirmation and the toast, which the contract wants
+/// as the container's last children so they cover the page and nothing else.
+fn content(app: AppState) -> AnyElement {
     view()
         .flex_1()
         .relative()
@@ -324,19 +334,19 @@ fn content(app: AppState, destination: Memo<Destination>) -> AnyElement {
         .min_h(px(0.0))
         .overflow_hidden()
         .bg(color(Token::Bg))
+        .child(banner(app))
         .child(
             view()
                 .flex_1()
                 .min_w(px(0.0))
                 .min_h(px(0.0))
-                .child(dynamic(move || {
-                    let d = destination.get();
-                    // The page's own reads must not rebuild it from here.
-                    untracked(move || screens::destination(app, d))
-                })),
+                .style_when(move || stale(app), |s| s.opacity(STALE_OPACITY))
+                .child(screens::content(app)),
         )
         .child(ask_surface(app))
         .child(palette(app))
+        .child(confirmation(app))
+        .child(toast(app))
         .into_element()
 }
 

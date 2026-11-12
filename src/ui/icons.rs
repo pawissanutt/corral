@@ -24,7 +24,17 @@ const BACK: ImageAsset = asset!("icons/back.svg");
 const CHEVRON: ImageAsset = asset!("icons/chev.svg");
 const CLOSE: ImageAsset = asset!("icons/close.svg");
 const BRAND: ImageAsset = asset!("icons/brand.svg");
+const ZOOM: ImageAsset = asset!("icons/zoom.svg");
+const SPLIT: ImageAsset = asset!("icons/split.svg");
+const TERM: ImageAsset = asset!("icons/term.svg");
+const SEND: ImageAsset = asset!("icons/send.svg");
+const LOCK: ImageAsset = asset!("icons/lock.svg");
+const PHONE: ImageAsset = asset!("icons/phone.svg");
+const QR: ImageAsset = asset!("icons/qr.svg");
+const SIGNAL: ImageAsset = asset!("icons/signal.svg");
+const BATTERY: ImageAsset = asset!("icons/batt.svg");
 
+/// The mock's sprite (`ui.js`, `i-*`). `Ask` is the sprite's `i-chat` speech bubble.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Icon {
     Inbox,
@@ -43,6 +53,24 @@ pub enum Icon {
     Chevron,
     Close,
     Brand,
+    /// A dock pane's maximise control.
+    Zoom,
+    /// A dock pane's split control.
+    Split,
+    /// A terminal view (Session's Terminal toggle).
+    Term,
+    /// The composer's Send arrow.
+    Send,
+    /// A device confirmation (Face ID or PIN).
+    Lock,
+    /// A paired phone.
+    Phone,
+    /// The pairing QR code.
+    Qr,
+    /// Signal bars of a drawn phone status bar; filled, not stroked.
+    Signal,
+    /// The battery of a drawn phone status bar, 2:1 wide; drawn square it sits centred.
+    Battery,
 }
 
 impl Icon {
@@ -90,6 +118,15 @@ impl Icon {
             Icon::Chevron => CHEVRON,
             Icon::Close => CLOSE,
             Icon::Brand => BRAND,
+            Icon::Zoom => ZOOM,
+            Icon::Split => SPLIT,
+            Icon::Term => TERM,
+            Icon::Send => SEND,
+            Icon::Lock => LOCK,
+            Icon::Phone => PHONE,
+            Icon::Qr => QR,
+            Icon::Signal => SIGNAL,
+            Icon::Battery => BATTERY,
         }
     }
 }

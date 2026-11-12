@@ -1,25 +1,33 @@
 //! The terminal shell: the top bar on the first row, the sidebar and the content as two framed
-//! regions under it, and the key line on the last row. Everything is sized in whole Cells (8 x 16
-//! points by default) and drawn in the terminal's own font and colours; colour means state, and
-//! the structure is lines and weight (`ui::term`).
+//! regions under it, the toast's row while one shows, and the key line on the last row.
+//! Everything is sized in whole Cells (8 x 16 points by default) and drawn in the terminal's own
+//! font and colours; colour means state, and the structure is lines and weight (`ui::term`).
 
 use nsh_core::prelude::*;
 
 use crate::{
-    model::{Destination, Overlay, SettingsSection, Workspace},
+    model::{
+        Destination, Overlay, Page, SettingsSection, Workspace,
+        commands::key_legend,
+        nav::{ASK_KEY, ASK_LABEL, PALETTE_LABEL, THIS_DEVICE},
+    },
     screens,
+    shell::{banner, confirmation, toast},
     state::AppState,
     ui::{
-        atoms, composer, palette,
+        ask, atoms, composer, palette,
         term::{self, cells},
         tokens::{Token, color},
     },
 };
 
+/// The palette's key as the terminal spells a control chord.
+const PALETTE_CHORD: &str = "^K";
+
 /// The terminal shell for `Form::Terminal`.
 pub fn shell(app: AppState) -> AnyElement {
-    // Overlays opening and closing change the nav state too; the page must only be made
-    // again when the destination itself changes, or the Now layout would be lost.
+    // Overlays opening and closing change the nav state too; the sidebar rows follow the
+    // destination alone.
     let destination = computed(move || app.destination());
     let workspace = computed(move || app.snapshot().workspace);
     view()
@@ -32,41 +40,50 @@ pub fn shell(app: AppState) -> AnyElement {
                 .min_h(px(0.0))
                 .flex_row()
                 .child(sidebar(app, destination, workspace))
-                .child(content(app, destination)),
+                .child(content(app)),
         )
-        .child(key_line())
+        .child(toast(app))
+        .child(key_line(app))
+        .child(ask::hotkey(app))
         .into_element()
 }
 
-/// The page with Ask beside it, in one frame. The palette is a dialog over the whole grid. On a
-/// narrow grid Ask takes the whole frame and the page steps out while it is open: covering it
-/// would leave the page's bands showing under Ask's rows (an opaque fill clears what was drawn
-/// beneath it, not its colours).
-fn content(app: AppState, destination: Memo<Destination>) -> AnyElement {
+/// The connection banner in the content frame's first rows, its rule joined to the frame; under
+/// it the page with Ask beside it. The palette and the confirmation are dialogs standing on the
+/// content frame's lines. On a narrow grid Ask takes the whole frame and the page steps out
+/// while it is open: covering it would leave the page's bands showing under Ask's rows (an
+/// opaque fill clears what was drawn beneath it, not its colours).
+fn content(app: AppState) -> AnyElement {
     term::framed(
         view()
             .flex_1()
-            .flex_row()
-            .relative()
+            .flex_col()
             .min_w(px(0.0))
             .min_h(px(0.0))
+            .child(banner(app))
             .child(
                 view()
                     .flex_1()
+                    .flex_row()
+                    .relative()
                     .min_w(px(0.0))
                     .min_h(px(0.0))
-                    .overflow_hidden()
-                    .style_when(
-                        move || app.is_open(Overlay::Ask) && !term::wide(),
-                        |s| s.hidden(),
+                    .child(
+                        view()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .min_h(px(0.0))
+                            .overflow_hidden()
+                            .style_when(
+                                move || app.is_open(Overlay::Ask) && !term::wide(),
+                                |s| s.hidden(),
+                            )
+                            .child(screens::content(app)),
                     )
-                    .child(dynamic(move || {
-                        let current = destination.get();
-                        untracked(move || screens::destination(app, current))
-                    })),
+                    .child(composer::ask_surface(app)),
             )
-            .child(composer::ask_surface(app))
-            .child(palette::palette(app)),
+            .child(palette::palette(app))
+            .child(confirmation(app)),
     )
     .flex_1()
     .into_element()
@@ -116,18 +133,18 @@ fn sidebar(
                     .child(term::hrule())
                     .child(atoms::nav_row(
                         app,
-                        "Ask",
+                        ASK_LABEL,
                         String::from("ask-open"),
                         move || app.is_open(Overlay::Ask),
-                        Some(trailing(None, String::from("/"))),
+                        Some(trailing(None, String::from(ASK_KEY))),
                         move || app.open_ask(),
                     ))
                     .child(atoms::nav_row(
                         app,
-                        "Go to",
+                        PALETTE_LABEL,
                         String::from("palette-open"),
                         move || app.is_open(Overlay::Palette),
-                        Some(trailing(None, String::from("^K"))),
+                        Some(trailing(None, String::from(PALETTE_CHORD))),
                         move || app.open_palette(),
                     )),
             ),
@@ -177,7 +194,9 @@ fn device(ws: Workspace) -> AnyElement {
             .font_weight(FontWeight::BOLD)
             .text_color(color(Token::Ink));
         if term::wide() {
-            term::quiet("This device ").child(name).into_element()
+            term::quiet(format!("{THIS_DEVICE} "))
+                .child(name)
+                .into_element()
         } else {
             name.number_of_lines(1u32).into_element()
         }
@@ -244,9 +263,19 @@ struct Entry {
 impl Entry {
     /// The cap (the keys and a Cell each side), then the name a Cell after it.
     fn cells(&self, named: bool) -> usize {
-        self.keys.chars().count() + 2 + if named { 1 + self.name.len() } else { 0 }
+        self.keys.chars().count()
+            + 2
+            + if named {
+                1 + self.name.chars().count()
+            } else {
+                0
+            }
     }
 }
+
+/// The page's own keys keep their names longest: they are the ones the page in view answers
+/// to, and no other line of the screen lists them.
+const KEEP_PAGE: u8 = 11;
 
 /// How long each destination's name stays when the key line is short: the daily ones and
 /// Settings (whose key, `,`, says nothing by itself) last.
@@ -264,8 +293,17 @@ fn keep(destination: Destination) -> u8 {
     }
 }
 
-/// The destinations, then Ask and Go to after a line.
-fn entries() -> (Vec<Entry>, [Entry; 2]) {
+/// The key line's groups in order, a line between each two: the keys of the page in view (when
+/// the model gives it any), the destinations, then Ask and Go to.
+fn groups(destination: Destination, page: Option<Page>) -> Vec<Vec<Entry>> {
+    let own: Vec<Entry> = key_legend(destination, page)
+        .into_iter()
+        .map(|(keys, name)| Entry {
+            keys: String::from(keys),
+            name,
+            keep: KEEP_PAGE,
+        })
+        .collect();
     let destinations = Destination::ALL
         .into_iter()
         .map(|destination| Entry {
@@ -274,46 +312,51 @@ fn entries() -> (Vec<Entry>, [Entry; 2]) {
             keep: keep(destination),
         })
         .collect();
-    let actions = [
+    let actions = vec![
         Entry {
-            keys: String::from("/"),
-            name: "Ask",
+            keys: String::from(ASK_KEY),
+            name: ASK_LABEL,
             keep: 10,
         },
         Entry {
-            keys: String::from("^K"),
-            name: "Go to",
+            keys: String::from(PALETTE_CHORD),
+            name: PALETTE_LABEL,
             keep: 9,
         },
     ];
-    (destinations, actions)
+    let mut groups = Vec::with_capacity(3);
+    if !own.is_empty() {
+        groups.push(own);
+    }
+    groups.push(destinations);
+    groups.push(actions);
+    groups
 }
 
 /// The Cells the key line takes with names from `keep` on: its margins, each entry a Cell
-/// apart, and the line between the destinations and the actions.
-fn line_cells(destinations: &[Entry], actions: &[Entry], keep: u8) -> usize {
-    let all = destinations.iter().chain(actions);
-    2 + all.clone().map(|e| e.cells(e.keep >= keep)).sum::<usize>()
-        + all.count().saturating_sub(1)
-        + 2
+/// apart, and a line with a Cell each side between two groups.
+fn line_cells(groups: &[Vec<Entry>], keep: u8) -> usize {
+    let entries = groups.iter().flatten();
+    2 + entries
+        .clone()
+        .map(|e| e.cells(e.keep >= keep))
+        .sum::<usize>()
+        + entries.count().saturating_sub(1)
+        + 2 * groups.len().saturating_sub(1)
 }
 
-/// The last row, a legend: each key as a cap and the name it goes to. When the grid is short of
-/// room the names give way one by one, the least used first, never all of them.
-fn key_line() -> AnyElement {
+/// The last row, a legend: each key as a cap and the name it goes to, the page's own keys first.
+/// When the grid is short of room the names give way one by one, the least used first; the
+/// page's keep theirs.
+fn key_line(app: AppState) -> AnyElement {
+    let route = computed(move || (app.destination(), app.page()));
     dynamic(move || {
         let room = term::columns();
-        let (destinations, actions) = entries();
-        let keep = (0..=10)
-            .find(|&keep| line_cells(&destinations, &actions, keep) <= room)
-            .unwrap_or(10);
-        let entry = move |entry: Entry| {
-            if entry.keep >= keep {
-                term::legend(entry.keys, entry.name)
-            } else {
-                term::key_cap(entry.keys)
-            }
-        };
+        let (destination, page) = route.get();
+        let groups = groups(destination, page);
+        let keep = (0..=KEEP_PAGE)
+            .find(|&keep| line_cells(&groups, keep) <= room)
+            .unwrap_or(KEEP_PAGE);
         let mut row = view()
             .h(term::rows(1.0))
             .flex_shrink_0()
@@ -321,21 +364,23 @@ fn key_line() -> AnyElement {
             .items_center()
             .px(cells(1.0))
             .overflow_hidden();
-        for (at, destination) in destinations.into_iter().enumerate() {
+        for (at, group) in groups.into_iter().enumerate() {
             if at > 0 {
-                row = row.child(term::space(1.0));
+                row = row
+                    .child(term::space(1.0))
+                    .child(term::quiet("│"))
+                    .child(term::space(1.0));
             }
-            row = row.child(entry(destination));
-        }
-        row = row
-            .child(term::space(1.0))
-            .child(term::quiet("│"))
-            .child(term::space(1.0));
-        for (at, action) in actions.into_iter().enumerate() {
-            if at > 0 {
-                row = row.child(term::space(1.0));
+            for (index, entry) in group.into_iter().enumerate() {
+                if index > 0 {
+                    row = row.child(term::space(1.0));
+                }
+                row = row.child(if entry.keep >= keep {
+                    term::legend(entry.keys, entry.name)
+                } else {
+                    term::key_cap(entry.keys)
+                });
             }
-            row = row.child(entry(action));
         }
         row.into_element()
     })

@@ -1,13 +1,19 @@
-//! The command palette: every destination, every Settings section, Ask, the theme, the data state
-//! and the Now layout behind one search field. Text that names no command becomes a question for
-//! Ask, so the field never dead-ends.
+//! The command palette: a dialog over the window on desktop, a sheet on the phone, the content
+//! pane turned into it in a terminal. It renders the model's rows in their groups and delegates
+//! selection to AppState; filtering, wording and actions live in `model::commands`.
 
 use nsh_base::{CommandEntry, CommandGroup, CommandItem, SheetEvent, command, dialog, sheet};
 use nsh_core::prelude::*;
 
-use crate::model::{DataState, Destination, Form, Overlay, SettingsSection, ThemeChoice};
+use crate::model::commands::{
+    self as palette_model, Action, PALETTE_FOOTER, PALETTE_HINTS, PALETTE_PLACEHOLDER,
+    palette_empty,
+};
+use crate::model::{Destination, Form, Overlay};
 use crate::state::AppState;
 use crate::ui::atoms::key_hint;
+use crate::ui::icons::{Icon, icon};
+use crate::ui::kit::text::{rich, rich_small};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
 
@@ -15,21 +21,8 @@ use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
 /// the frame's two lines, the palette's head, its search field and the line under it.
 const OUTSIDE_LIST_ROWS: usize = 7;
 
-const ASK: &str = "ask";
-const ASK_WITH: &str = "ask-with";
-const RESET_NOW: &str = "reset-now";
-const THEMES: [ThemeChoice; 3] = [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark];
-const DATA_STATES: [DataState; 2] = [DataState::Fixture, DataState::Disconnected];
-
-/// Every printable ASCII character in order from `!`: `key_hint` takes a `&'static str`, and a
-/// destination's key is a `char`, so a key's cap is its one-character slice of this.
-const PRINTABLE: &str = r##"!"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~"##;
-
-/// The command palette, shown while Overlay::Palette is open: nsh_base Command in a Dialog
-/// (Desktop, Terminal) or a Sheet (Phone). Commands: "Go to <destination>" for all nine, "Settings:
-/// <section>" for all seven, "Ask", "Theme: system | light | dark", "Data: fixture | disconnected",
-/// "Reset Now layout". Text that matches no command offers one row "Ask: <text>" which calls
-/// app.open_ask_with(text). Running a command closes the palette.
+/// The model's command palette in the existing Dialog (Desktop, Terminal) or Sheet (Phone).
+/// Running a row closes the palette before applying its model action.
 pub fn palette(app: AppState) -> AnyElement {
     match app.form {
         Form::Phone => sheet()
@@ -75,7 +68,7 @@ fn dialog_panel(app: AppState) -> AnyElement {
     } else {
         panel
             .w(px(600.0))
-            .mt(px(96.0))
+            .mt(px(110.0))
             .rounded(px(12.0))
             .overflow_hidden()
             .shadow_2xl()
@@ -143,8 +136,10 @@ fn phone_panel(app: AppState) -> AnyElement {
         .into_element()
 }
 
-/// The `Command` itself, with the app's look on every part. The query is held here so the item
-/// list can offer "Ask: <text>" for text that names no command.
+/// The `Command` itself, with the app's look on every part: the search field after a search
+/// icon, the rows under their group captions, the model's message when nothing matches, the
+/// keys under the list on desktop and in the head in a terminal. The query is held here so the
+/// item list can offer the free-text Ask row for text that names no command.
 fn command_list(app: AppState) -> AnyElement {
     let form = app.form;
     let query = signal(String::new());
@@ -166,7 +161,7 @@ fn command_list(app: AppState) -> AnyElement {
         .on_select(move |id: &SharedString| run(app, id, &query.get_untracked()))
         .on_cancel(move || app.close(Overlay::Palette))
         .auto_focus(true)
-        .placeholder("Type a command, or a question to ask")
+        .placeholder(PALETTE_PLACEHOLDER)
         .accessibility_label("Commands")
         .search_accessibility_label("Search commands")
         .separator(false)
@@ -176,6 +171,7 @@ fn command_list(app: AppState) -> AnyElement {
                 s.px(px(8.0))
             } else {
                 s.px(px(14.0))
+                    .gap(px(10.0))
                     .border_b(px(1.0))
                     .border_color(color(Token::Rule))
             }
@@ -197,6 +193,10 @@ fn command_list(app: AppState) -> AnyElement {
         })
         .render_item(move |entry: &CommandEntry| row(app, entry, highlighted))
         .render_group(move |group: &CommandGroup| group_header(form, group))
+        .empty(dynamic(move || empty(app, &query.get())))
+        .when(form != Form::Terminal, |c| {
+            c.search_prefix(icon(Icon::Search, 16.0, color(Token::Ink3)))
+        })
         .when(form == Form::Desktop, |c| c.footer(footer()))
         .when(form == Form::Terminal, |c| {
             c.header(terminal_header()).search_prefix(
@@ -211,7 +211,8 @@ fn command_list(app: AppState) -> AnyElement {
     view().test_id("palette-input").child(list).into_element()
 }
 
-/// One command's row: its label, "current" when it is the one in effect, its key where it has one.
+/// One command's row: its label, its key at the trailing edge where it has one. The one in effect
+/// is `checked` for screen readers only, as the mock marks none.
 fn row(
     app: AppState,
     entry: &CommandEntry,
@@ -239,14 +240,6 @@ fn row(
                 .text_size(px(size))
                 .text_color(color(Token::Ink)),
         )
-        .when(entry.checked, |v| {
-            v.child(
-                text("current")
-                    .font_family(FONT_TEXT)
-                    .text_size(px(size - 1.0))
-                    .text_color(color(Token::Ink3)),
-            )
-        })
         .when_some(key_of(&entry.id), |v, keys| {
             v.child(match form {
                 // Plain and bold: a cap on every row would stack into a column of fills that
@@ -277,22 +270,43 @@ fn row(
 }
 
 fn group_header(form: Form, group: &CommandGroup) -> AnyElement {
-    let heading = text(group.heading.clone())
-        .font_family(FONT_TEXT)
-        .text_size(px(if form == Form::Terminal {
-            text_size(form)
-        } else {
-            11.0
-        }))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(color(Token::Ink3));
-    match form {
-        Form::Terminal => view().px(px(8.0)).child(heading).into_element(),
+    if form == Form::Terminal {
+        return view()
+            .px(px(8.0))
+            .child(
+                text(group.heading.clone())
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(color(Token::Ink3)),
+            )
+            .into_element();
+    }
+    // `.pg`: spaced capitals in the faintest ink, so the captions sit behind the rows.
+    view()
+        .px(px(10.0))
+        .pt(px(8.0))
+        .pb(px(4.0))
+        .child(
+            text(group.heading.clone())
+                .uppercase()
+                .number_of_lines(1u32)
+                .font_family(FONT_TEXT)
+                .text_size(px(10.5))
+                .letter_spacing(px(10.5 * 0.08))
+                .text_color(color(Token::Ink4)),
+        )
+        .into_element()
+}
+
+/// The model's message while no row matches the query.
+fn empty(app: AppState, query: &str) -> AnyElement {
+    let message = palette_empty(query);
+    match app.form {
+        Form::Terminal => view().px(px(8.0)).child(rich(app, &message)).into_element(),
         Form::Desktop | Form::Phone => view()
-            .px(px(10.0))
-            .pt(px(10.0))
-            .pb(px(4.0))
-            .child(heading)
+            .px(px(14.0))
+            .py(px(20.0))
+            .max_w(px(420.0))
+            .child(rich_small(app, &message))
             .into_element(),
     }
 }
@@ -312,15 +326,17 @@ fn terminal_header() -> AnyElement {
                 .font_weight(FontWeight::BOLD)
                 .text_color(color(Token::Ink)),
         )
-        .child(term::legend("↑↓", "move"))
-        .child(term::space(2.0))
-        .child(term::legend("Enter", "run"))
-        .child(term::space(2.0))
-        .child(term::legend("Esc", "close"))
+        .children(PALETTE_HINTS.into_iter().map(|(keys, words)| {
+            view()
+                .flex_row()
+                .child(term::space(2.0))
+                .child(term::legend(keys, words))
+        }))
         .into_element()
 }
 
-/// The palette's own keys, under the list on desktop.
+/// The palette's own keys under the list on desktop, the model's attribution at the trailing
+/// edge.
 fn footer() -> AnyElement {
     let hint = |keys: &'static str, words: &'static str| {
         view()
@@ -343,117 +359,56 @@ fn footer() -> AnyElement {
         .py(px(8.0))
         .border_t(px(1.0))
         .border_color(color(Token::Rule))
-        .child(hint("↑ ↓", "move"))
-        .child(hint("Enter", "run"))
-        .child(hint("Esc", "close"))
+        .children(PALETTE_HINTS.map(|(keys, words)| hint(keys, words)))
+        .child(view().flex_1().min_w(px(0.0)))
+        .child(
+            text(PALETTE_FOOTER)
+                .flex_shrink_0()
+                .number_of_lines(1u32)
+                .font_family(FONT_TEXT)
+                .text_size(px(11.0))
+                .text_color(color(Token::Ink3)),
+        )
         .into_element()
 }
 
-/// The commands for the state now, and "Ask: <text>" when `query` names none of them.
+/// Converts already-filtered model rows to the native command widget's input vocabulary.
 fn commands(app: AppState, query: &str) -> Vec<CommandItem> {
     let here = app.destination();
     let section = app.nav.with(|nav| nav.settings);
     let theme = app.theme.get();
     let data = app.data.get();
-    let mut items: Vec<CommandItem> = Destination::ALL
+    let conn = app.conn.get();
+    let mode = app.mode.get();
+    palette_model::filtered(query)
         .into_iter()
-        .map(|d| {
-            CommandItem::new(format!("go:{}", d.slug()), format!("Go to {}", d.label()))
-                .group("Go to")
-                .checked(d == here)
+        .map(|command| {
+            let checked = match command.action {
+                Action::Go(destination) => destination == here,
+                Action::Settings(item) => here == Destination::Settings && item == section,
+                Action::Theme(item) => item == theme,
+                Action::Data(item) => item == data,
+                Action::Connection(item) => item == conn,
+                Action::Mode(item) => item == mode,
+                _ => false,
+            };
+            // Keep group matches and always-Ask rows through Command's second, label-only filter.
+            CommandItem::new(command.id, command.label)
+                .group(command.group)
+                .checked(checked)
+                .keywords([query.to_owned()])
         })
-        .collect();
-    items.extend(SettingsSection::ALL.into_iter().map(|s| {
-        CommandItem::new(
-            format!("settings:{}", s.slug()),
-            format!("Settings: {}", s.label()),
-        )
-        .group("Settings")
-        .checked(here == Destination::Settings && s == section)
-    }));
-    items.push(CommandItem::new(ASK, "Ask").group("Ask").keywords([
-        "question",
-        "idea",
-        "instruction",
-    ]));
-    items.extend(THEMES.into_iter().map(|t| {
-        CommandItem::new(
-            format!("theme:{}", t.slug()),
-            format!("Theme: {}", t.slug()),
-        )
-        .group("Appearance")
-        .checked(t == theme)
-    }));
-    items.extend(DATA_STATES.into_iter().map(|s| {
-        CommandItem::new(format!("data:{}", s.slug()), format!("Data: {}", s.slug()))
-            .group("Data")
-            .checked(s == data)
-    }));
-    items.push(CommandItem::new(RESET_NOW, "Reset Now layout").group("Now"));
-    let wanted = query.trim();
-    let folded = wanted.to_lowercase();
-    if !wanted.is_empty() && !items.iter().any(|item| matches(item, &folded)) {
-        // Its keyword is the query itself, so `Command`'s own filter always keeps it.
-        items.push(
-            CommandItem::new(ASK_WITH, format!("Ask: {wanted}"))
-                .group("Ask")
-                .keywords([wanted.to_owned()]),
-        );
-    }
-    items
+        .collect()
 }
 
-/// `Command`'s own rule: the label or a keyword holds the query, ignoring case.
-fn matches(item: &CommandItem, folded: &str) -> bool {
-    item.label.to_lowercase().contains(folded)
-        || item
-            .keywords
-            .iter()
-            .any(|k| k.to_lowercase().contains(folded))
-}
-
-/// Closes the palette, then does what the command of `id` says.
+/// Resolves selection through the same pure command table that produced the displayed row.
 fn run(app: AppState, id: &str, query: &str) {
-    app.close(Overlay::Palette);
-    match id.split_once(':') {
-        Some(("go", slug)) => {
-            if let Some(destination) = Destination::from_slug(slug) {
-                app.go(destination);
-            }
-        }
-        Some(("settings", slug)) => {
-            if let Some(section) = SettingsSection::from_slug(slug) {
-                app.go_settings(section);
-            }
-        }
-        Some(("theme", slug)) => {
-            if let Some(choice) = ThemeChoice::from_slug(slug) {
-                app.set_theme(choice);
-            }
-        }
-        Some(("data", slug)) => {
-            if let Some(state) = DataState::from_slug(slug) {
-                app.set_data(state);
-            }
-        }
-        _ => match id {
-            ASK => app.open_ask(),
-            ASK_WITH => app.open_ask_with(query.trim()),
-            RESET_NOW => app.reset_now_layout(),
-            _ => {}
-        },
+    if let Some(action) = palette_model::run(id, query) {
+        app.run_command(action);
     }
 }
 
-/// The key cap of the command of `id`: a destination's key, `/` for Ask.
+/// The key cap of the model row, without duplicating shortcut decisions in the renderer.
 fn key_of(id: &str) -> Option<&'static str> {
-    if id == ASK {
-        return Some("/");
-    }
-    let key = id
-        .strip_prefix("go:")
-        .and_then(Destination::from_slug)?
-        .key();
-    let at = (key as usize).checked_sub('!' as usize)?;
-    PRINTABLE.get(at..at + 1)
+    palette_model::shortcut(id)
 }

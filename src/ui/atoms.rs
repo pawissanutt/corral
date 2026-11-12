@@ -8,10 +8,13 @@
 //!
 //! The health line never cuts a segment or the source label. When a line runs out of room, reach
 //! gives way first, then attention, then the clock, decided from the line's own measured width.
+//! A warning segment is outlined and a failing one filled, so either reads without its colour;
+//! the daemon's segment and the reach press through to Settings › Connection, and so does the
+//! whole phone strip.
 
 use nsh_core::prelude::*;
 
-use crate::model::{Destination, Form, Segment, Snapshot, Tone};
+use crate::model::{Destination, Form, Segment, SettingsSection, Snapshot, Tone};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::term::cells;
@@ -30,6 +33,10 @@ const BAR_GAP: f32 = 12.0;
 const STRIP_GAP: f32 = 10.0;
 /// Rounding in measured widths: a line within this many points of its room fits.
 const SLACK: f32 = 0.5;
+/// The rounding of an outlined or filled segment and of the reach button (`.hseg`, `.reach`).
+const SEGMENT_RADIUS: f32 = 5.0;
+/// Room between two framed segments side by side (`.hseg.bad + .hseg.bad`).
+const FRAMED_GAP: f32 = 3.0;
 
 /// The parts after the segments, by index: what [`Extras::parts`] lists and [`Fit`] measures.
 const REACH: usize = 0;
@@ -50,15 +57,29 @@ pub enum HealthLayout {
     Strip,
 }
 
-/// The health line for the current snapshot: segments (tone dot, name, value), then reach, attention,
-/// clock, and the source label. test_id "health" on the container, "health-source" on the source label.
+/// The health line for the current snapshot: segments (tone dot, name, value), then reach (a
+/// lock before it on an end-to-end path), attention, clock, and the source label. test_id
+/// "health" on the container, "health-source" on the source label. In the desktop bar the
+/// daemon's segment ("btn-connection") and the reach ("btn-reach") open Settings › Connection;
+/// the phone strip is one button that does.
 pub fn health_line(app: AppState, layout: HealthLayout) -> AnyElement {
-    let root = view().test_id("health").role(AccessibilityRole::Summary);
     match layout {
-        HealthLayout::Bar => bar_line(app, root),
-        HealthLayout::Strip => root
+        HealthLayout::Bar => bar_line(
+            app,
+            view().test_id("health").role(AccessibilityRole::Summary),
+        ),
+        HealthLayout::Strip => view()
+            .test_id("health")
+            .role(AccessibilityRole::Button)
+            .cursor_pointer()
+            .focus_visible(|s| {
+                s.outline(px(FOCUS_RING))
+                    .outline_color(on_shell(Token::Focus))
+                    .outline_offset(px(-FOCUS_RING))
+            })
+            .on_press(move || app.go_settings(SettingsSection::Connection))
             .gap(px(2.0))
-            .child(dynamic(move || strip(&app.snapshot())))
+            .child(dynamic(move || strip(app, &app.snapshot())))
             .into_element(),
     }
 }
@@ -279,19 +300,10 @@ fn on_shell(token: Token) -> AdaptiveColor {
     AdaptiveColor { light: dark, dark }
 }
 
-/// A tone's colour on the shell.
-fn shell_tone(segment_tone: Tone) -> AdaptiveColor {
-    match segment_tone {
-        Tone::Ok => on_shell(Token::Ok),
-        Tone::Warn => on_shell(Token::Held),
-        Tone::Fail => on_shell(Token::Fail),
-        Tone::Muted => color(Token::ShellInk2),
-    }
-}
-
-/// A count in a pill of its own fill. The Inbox count (what needs you) is a solid needs-you pill in
-/// bold; the others are quiet. A terminal's counts are figures in a column instead: a column of
-/// small fills reads as one band there.
+/// A count. On the phone a pill of its own fill: the Inbox count (what needs you) a solid
+/// needs-you pill in bold, the others quiet. The desktop sidebar's counts are figures on the
+/// shell, as the mock's; a terminal's are figures in a column: a column of small fills reads as
+/// one band there.
 fn count_chip(form: Form, n: u32, needs_you: bool, test_id: &str) -> AnyElement {
     let label = if needs_you {
         format!("{n} need you")
@@ -307,15 +319,29 @@ fn count_chip(form: Form, n: u32, needs_you: bool, test_id: &str) -> AnyElement 
             .when(needs_you, |t| t.font_weight(FontWeight::BOLD))
             .into_element();
     }
+    if form == Form::Desktop {
+        // The sidebar's `.nav .n`: a figure on the shell, the needs-you one bold in its colour.
+        return text(n.to_string())
+            .test_id(test_id)
+            .label(label)
+            .flex_shrink_0()
+            .font_family(FONT_MONO)
+            .tabular_nums()
+            .text_size(px(11.0))
+            .text_color(if needs_you {
+                on_shell(Token::You)
+            } else {
+                color(Token::ShellInk2)
+            })
+            .when(needs_you, |t| t.font_weight(FontWeight::BOLD))
+            .into_element();
+    }
     let (fill, ink, weight) = if needs_you {
         (Token::You, Token::BtnInk, FontWeight::BOLD)
     } else {
         (Token::Surface2, Token::Ink2, FontWeight::MEDIUM)
     };
-    let (size, height, pad) = match form {
-        Form::Desktop => (11.0, 16.0, 5.0),
-        Form::Phone | Form::Terminal => (13.0, 22.0, 7.0),
-    };
+    let (size, height, pad) = (13.0, 22.0, 7.0);
     view()
         .flex_row()
         .items_center()
@@ -343,6 +369,8 @@ fn count_chip(form: Form, n: u32, needs_you: bool, test_id: &str) -> AnyElement 
 /// pass for a healthy reading.
 struct Extras {
     reach: Option<&'static str>,
+    /// The reach path is end-to-end encrypted: a lock leads it.
+    e2e: bool,
     attention: Option<&'static str>,
     clock: Option<&'static str>,
     source: Option<&'static str>,
@@ -353,6 +381,7 @@ impl Extras {
         let health = &snapshot.health;
         snapshot.connected().then_some(Extras {
             reach: health.reach,
+            e2e: health.e2e,
             attention: health.attention,
             clock: health.clock,
             source: health.source,
@@ -474,11 +503,11 @@ fn bar_line(app: AppState, root: View) -> AnyElement {
             None => s.min_w(px(0.0)),
         })
         .on_layout(move |frame: &Bounds<Points>| fit.room.set(Some(frame.size.width.0)))
-        .child(dynamic(move || bar(&app.snapshot(), fit)))
+        .child(dynamic(move || bar(app, &app.snapshot(), fit)))
         .into_element()
 }
 
-fn bar(snapshot: &Snapshot, fit: Fit) -> Vec<AnyElement> {
+fn bar(app: AppState, snapshot: &Snapshot, fit: Fit) -> Vec<AnyElement> {
     let segments = view()
         .flex_row()
         .items_center()
@@ -490,11 +519,19 @@ fn bar(snapshot: &Snapshot, fit: Fit) -> Vec<AnyElement> {
                 .segments
                 .iter()
                 .enumerate()
-                .map(|(at, segment)| shell_segment(segment, false, at == 0)),
+                .map(|(at, segment)| {
+                    let face = shell_segment(segment, false, at == 0);
+                    if at == 0 {
+                        to_connection(app, face, "btn-connection", segment_text(segment))
+                    } else {
+                        face.into_element()
+                    }
+                }),
         )
         .into_element();
     let mut parts = vec![segments];
     if let Some(extras) = Extras::of(snapshot) {
+        let e2e = extras.e2e;
         let present = Extras::presence(snapshot);
         let cut = computed(move || {
             let widths = fit.widths.get();
@@ -512,7 +549,7 @@ fn bar(snapshot: &Snapshot, fit: Fit) -> Vec<AnyElement> {
                             fit,
                             part,
                             move || cut.get() > part,
-                            shell_part(part, content, CAPTION),
+                            shell_part(app, part, content, e2e, CAPTION),
                         )
                         .ml(px(BAR_GAP))
                         .into_element()
@@ -525,7 +562,7 @@ fn bar(snapshot: &Snapshot, fit: Fit) -> Vec<AnyElement> {
 
 /// Row 1: the four segments, wrapping whole segments if a phone is too narrow for them. Row 2:
 /// reach, attention and clock on the left, the source label at the trailing edge.
-fn strip(snapshot: &Snapshot) -> Vec<AnyElement> {
+fn strip(app: AppState, snapshot: &Snapshot) -> Vec<AnyElement> {
     let segments = view()
         .flex_row()
         .flex_wrap()
@@ -542,20 +579,21 @@ fn strip(snapshot: &Snapshot) -> Vec<AnyElement> {
         .into_element();
     let mut rows = vec![segments];
     rows.extend(
-        Extras::of(snapshot).map(|extras| strip_extras(&extras, Extras::presence(snapshot))),
+        Extras::of(snapshot).map(|extras| strip_extras(app, &extras, Extras::presence(snapshot))),
     );
     rows
 }
 
 /// The strip's second row. The source label wins the room: reach gives way first, then
 /// attention, then the clock.
-fn strip_extras(extras: &Extras, present: [bool; 4]) -> AnyElement {
+fn strip_extras(app: AppState, extras: &Extras, present: [bool; 4]) -> AnyElement {
     let fit = Fit::new();
     let cut = computed(move || {
         let widths = fit.widths.get();
         fit.give_way(|from| strip_needed(present, widths, from))
     });
     let parts = extras.parts();
+    let e2e = extras.e2e;
     let left = parts[..SOURCE]
         .iter()
         .enumerate()
@@ -565,7 +603,7 @@ fn strip_extras(extras: &Extras, present: [bool; 4]) -> AnyElement {
                     fit,
                     part,
                     move || cut.get() > part,
-                    shell_part(part, content, STRIP_CAPTION),
+                    shell_part(app, part, content, e2e, STRIP_CAPTION),
                 )
                 .mr(px(STRIP_GAP))
                 .into_element()
@@ -591,13 +629,31 @@ fn segment_text(segment: &Segment) -> String {
     format!("{} {}", segment.name, segment.value)
 }
 
-/// One segment on the shell: tone dot and `<name> <value>`. A failing segment is framed and bold
-/// so it reads as a failure without its colour. The compact form is the phone strip's.
-fn shell_segment(segment: &Segment, compact: bool, first: bool) -> AnyElement {
-    let fail = segment.tone == Tone::Fail;
-    let ink = match segment.tone {
-        Tone::Ok | Tone::Muted => color(Token::ShellInk),
-        Tone::Warn | Tone::Fail => shell_tone(segment.tone),
+/// One segment on the shell: tone dot, the name in the quieter shell ink, the value. A warning
+/// is outlined in the held tone and worded in it; a failure is filled in the failure tone, its
+/// words bold, so each reads as what it is without its colour. The compact form is the phone
+/// strip's.
+fn shell_segment(segment: &Segment, compact: bool, first: bool) -> View {
+    let tone = segment.tone;
+    let framed = matches!(tone, Tone::Warn | Tone::Fail);
+    let held = on_shell(Token::Held);
+    let (name_ink, value_ink, dot) = match tone {
+        Tone::Ok => (
+            color(Token::ShellInk2),
+            color(Token::ShellInk),
+            on_shell(Token::Ok),
+        ),
+        Tone::Muted => (
+            color(Token::ShellInk2),
+            color(Token::ShellInk),
+            color(Token::ShellInk2),
+        ),
+        Tone::Warn => (held, held, held),
+        Tone::Fail => (
+            color(Token::ShellInk).opacity(0.8),
+            color(Token::ShellInk),
+            color(Token::ShellInk),
+        ),
     };
     let (height, pad, gap, size) = if compact {
         (STRIP_ROW, 5.0, 4.0, STRIP_CAPTION)
@@ -611,25 +667,47 @@ fn shell_segment(segment: &Segment, compact: bool, first: bool) -> AnyElement {
         .gap(px(gap))
         .h(px(height))
         .px(px(pad))
-        .when(compact && first && !fail, |v| v.pl(px(0.0)))
-        .when(!first && !fail, |v| {
+        .when(compact && first && !framed, |v| v.pl(px(0.0)))
+        .when(!first && !framed, |v| {
             v.border_l_1()
                 .border_l_color(color(Token::ShellInk).opacity(0.16))
         })
-        .when(fail, |v| {
-            v.rounded(px(4.0))
-                .border_1()
-                .border_color(on_shell(Token::Fail).opacity(0.6))
-                .bg(on_shell(Token::FailBg))
+        .when(framed && !first, |v| v.ml(px(FRAMED_GAP)))
+        .when(framed, |v| v.rounded(px(SEGMENT_RADIUS)))
+        .when(tone == Tone::Warn, |v| {
+            v.border_1().border_color(held.opacity(0.55))
         })
-        .child(tone_dot(shell_tone(segment.tone)))
+        .when(tone == Tone::Fail, |v| v.bg(on_shell(Token::Fail)))
+        .child(tone_dot(dot))
         .child(
-            text(segment_text(segment))
+            text(segment.name)
                 .number_of_lines(1u32)
                 .text_size(px(size))
-                .text_color(ink)
-                .when(fail, |t| t.font_weight(FontWeight::SEMIBOLD)),
+                .text_color(name_ink),
         )
+        .child(
+            text(segment.value)
+                .number_of_lines(1u32)
+                .text_size(px(size))
+                .text_color(value_ink)
+                .when(tone == Tone::Fail, |t| t.font_weight(FontWeight::SEMIBOLD)),
+        )
+}
+
+/// A shell control that opens Settings › Connection: the daemon's segment, the reach.
+fn to_connection(app: AppState, face: View, test_id: &str, label: String) -> AnyElement {
+    face.role(AccessibilityRole::Button)
+        .label(label)
+        .test_id(test_id)
+        .cursor_pointer()
+        .rounded(px(SEGMENT_RADIUS))
+        .hover(|s| s.bg(color(Token::ShellSel)))
+        .focus_visible(|s| {
+            s.outline(px(FOCUS_RING))
+                .outline_color(on_shell(Token::Focus))
+                .outline_offset(px(-FOCUS_RING))
+        })
+        .on_press(move || app.go_settings(SettingsSection::Connection))
         .into_element()
 }
 
@@ -643,11 +721,49 @@ fn tone_dot(fill: AdaptiveColor) -> AnyElement {
         .into_element()
 }
 
-/// Reach, attention, clock or source on the shell, as [`Extras::parts`] numbers them.
-fn shell_part(part: usize, content: &'static str, size: f32) -> AnyElement {
+/// Reach, attention, clock or source on the shell, as [`Extras::parts`] numbers them. The
+/// desktop's reach is a button to Settings › Connection (the phone strip is one already), a
+/// lock before it on an end-to-end path; attention leads with the changed-since mark.
+fn shell_part(
+    app: AppState,
+    part: usize,
+    content: &'static str,
+    e2e: bool,
+    size: f32,
+) -> AnyElement {
     match part {
-        REACH => shell_caption(content, Token::ShellInk, size),
-        ATTENTION => shell_caption(content, Token::ShellInk2, size),
+        REACH => {
+            let reach = view()
+                .flex_row()
+                .items_center()
+                .gap(px(if app.form == Form::Phone { 4.0 } else { 6.0 }))
+                .when(e2e, |v| {
+                    v.child(icon(Icon::Lock, size, color(Token::ShellInk)))
+                })
+                .child(shell_caption(content, Token::ShellInk, size));
+            if app.form == Form::Desktop {
+                to_connection(
+                    app,
+                    reach.px(px(8.0)).py(px(2.0)),
+                    "btn-reach",
+                    content.to_owned(),
+                )
+            } else {
+                reach.into_element()
+            }
+        }
+        ATTENTION => view()
+            .flex_row()
+            .items_center()
+            .gap(px(3.0))
+            .child(
+                text("▲")
+                    .text_size(px(size - 2.0))
+                    .text_color(color(Token::ShellInk2))
+                    .accessibility_elements_hidden(true),
+            )
+            .child(shell_caption(content, Token::ShellInk2, size))
+            .into_element(),
         CLOCK => shell_clock(content, size),
         _ => shell_source(content),
     }

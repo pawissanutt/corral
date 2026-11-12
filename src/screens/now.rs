@@ -1,26 +1,41 @@
-//! The Now workspace: a dock of tab groups the user arranges, whose layout is app data kept in Storage.
-//! Too small for its 2x2 grid, it shows the list and the inspector as two panes instead.
+//! The Now destination. Desktop and terminal: a dock of tab groups the user arranges (who acts
+//! next, the inspector, what changed, live context), whose layout is app data kept in Storage;
+//! too small for its 2x2 grid it shows the list and the inspector as two panes. Phone: the tab's
+//! grouped list, and the task page pushed from it.
+//!
+//! Every panel renders the work model; the displayed tabs follow the model's `now_tab`,
+//! `low_tab` and `ctx_tab`, and the user's tab choices go back to it.
+
+mod cells;
+mod context;
+pub(crate) mod feed;
+mod inspector;
+mod layout;
+mod list;
+pub(crate) mod parts;
+mod phone;
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nsh_base::dock::{
-    DockAreaLayout, DockLayout, DockNode, DockPanel, DockPanelOptions, DockRegion, DockTab,
-};
+use nsh_base::dock::{DockAreaLayout, DockPanel, DockPanelOptions, DockTab};
 use nsh_base::dock_area;
-use nsh_core::JsonValue;
-use nsh_core::element::{cell_size, from_json};
+use nsh_core::element::cell_size;
 use nsh_core::geometry::Axis;
 use nsh_core::prelude::*;
-use nsh_core::storage::Storage;
 
 use crate::model::Form;
+use crate::model::work::{self, NowTab};
 use crate::state::AppState;
+use crate::ui::kit::button::tab_strip;
 use crate::ui::term;
 use crate::ui::tokens::{Token, color, row_height, text_size};
 
-const LAYOUT_KEY: &str = "corral.now.layout";
+pub use phone::task_phone;
+
+use parts::{act, dim_when, stale};
+
 /// Every resize and tab selection reports a layout; Storage hears the one the user settles on.
 const SAVE_DELAY: Duration = Duration::from_millis(400);
 /// The smallest a quarter of the grid may be on a screen and still read as a panel.
@@ -33,22 +48,6 @@ const QUARTER_HEAD_ROWS: f32 = 2.0;
 const QUARTER_CONTENT_ROWS: f32 = 6.0;
 /// Tab labels sit a step below the body text, as in the mock (11.5 against 13).
 const TAB_SCALE: f32 = 11.5 / 13.0;
-
-/// Each panel's stable key, as the layout and Storage name it, and its tab title.
-const PANELS: [(&str, &str); 9] = [
-    ("who", "Who acts next"),
-    ("goals", "Goals"),
-    ("story", "Story"),
-    ("evidence", "Evidence"),
-    ("session", "Session"),
-    ("since", "Since your last visit"),
-    ("parked", "Parked"),
-    ("live", "Live"),
-    ("graph", "Plan graph"),
-];
-/// The two panes shown when the grid does not fit.
-const LIST: &str = "who";
-const INSPECTOR: &str = "story";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Arrangement {
@@ -79,14 +78,59 @@ fn arrangement(width: f32, height: f32, (min_width, min_height): (f32, f32)) -> 
     }
 }
 
-/// The Now workspace. Wide enough (measure, do not guess): a DockArea, 2x2, tab groups
-/// "Who acts next" + "Goals"; "Story" + "Evidence" + "Session"; "Since your last visit" + "Parked";
-/// "Live" + "Plan graph"; each panel shows the body line. The layout is app data: stored under
-/// Storage key "corral.now.layout" once changes settle, restored on start, and reset to the default
-/// when app.now_reset changes. Too small for 2x2 (terminal grids, narrow windows): the same panels as
-/// two panes, list and inspector.
-pub fn workspace(app: AppState) -> AnyElement {
-    let layout = signal(stored_layout().unwrap_or_else(default_layout));
+/// The Now destination on every form: the dock workspace on desktop and terminal, the grouped
+/// list as the phone tab's root (it scrolls itself under its large title).
+pub fn screen(app: AppState) -> AnyElement {
+    match app.form {
+        Form::Phone => phone::root(app),
+        Form::Desktop | Form::Terminal => workspace(app),
+    }
+}
+
+/// The tab titles, from the model: the list's label, the Goals control's, and each tab enum's.
+type Titles = Rc<Vec<(&'static str, SharedString)>>;
+
+fn titles(app: AppState) -> Titles {
+    let view = untracked(|| {
+        let env = app.env();
+        app.work.with(|state| work::workspace(state, env))
+    });
+    let mut titles: Vec<(&'static str, SharedString)> = vec![
+        (layout::WHO, view.list.label.into()),
+        (layout::GOALS, view.goals.label.to_string().into()),
+    ];
+    titles.extend(
+        NowTab::ALL
+            .iter()
+            .map(|&tab| (layout::inspector_panel(tab), tab.label().into())),
+    );
+    titles.extend(
+        work::LowTab::ALL
+            .iter()
+            .map(|&tab| (layout::lower_panel(tab), tab.label().into())),
+    );
+    titles.extend(
+        work::CtxTab::ALL
+            .iter()
+            .map(|&tab| (layout::context_panel(tab), tab.label().into())),
+    );
+    Rc::new(titles)
+}
+
+fn title(titles: &Titles, key: &str) -> SharedString {
+    titles
+        .iter()
+        .find(|(panel, _)| *panel == key)
+        .map_or_else(|| SharedString::from(""), |(_, title)| title.clone())
+}
+
+/// The dock workspace. Wide enough (measured, not guessed): a DockArea, 2x2, tab groups
+/// "Who acts next" + "Goals"; "Story" + "Evidence" + "Session"; "Since your last visit" +
+/// "Parked"; "Live" + "Plan graph". The layout is stored under "corral.now.layout" once changes
+/// settle, restored on start, and reset to the default when `app.now_reset` changes. Too small
+/// for 2x2 (terminal grids, narrow windows): the list and the inspector as two panes.
+fn workspace(app: AppState) -> AnyElement {
+    let layout = signal(layout::stored_layout().unwrap_or_else(layout::default_layout));
     // Plain Rust rather than a signal: the cleanup below must still read it while the page goes.
     let unsaved: Rc<RefCell<Option<DockAreaLayout>>> = Rc::default();
     let pending = stored(None::<Spawned<()>>);
@@ -96,6 +140,7 @@ pub fn workspace(app: AppState) -> AnyElement {
         size.get()
             .map(|(width, height)| arrangement(width, height, minimum))
     });
+    let titles = titles(app);
 
     let seen_reset = stored(app.now_reset.get_untracked());
     {
@@ -107,30 +152,49 @@ pub fn workspace(app: AppState) -> AnyElement {
                 if let Some(task) = pending.replace(None) {
                     task.cancel();
                 }
-                layout.set(default_layout());
+                layout.set(layout::default_layout());
+                follow_model(app, layout);
             }
         });
     }
+    // The model's tab state shows its panels: Tab cycling the inspector, a reset, a restored
+    // layout that displayed other tabs.
+    effect(move || follow_model(app, layout));
     {
         // Leaving Now ends the save timer with the page; what it would have written goes now.
         let unsaved = unsaved.clone();
         cleanup(move || {
             if let Some(last) = unsaved.borrow_mut().take() {
-                save(&last);
+                layout::save(&last);
             }
         });
     }
     let on_change = move |next: &DockAreaLayout| {
+        let before = layout.get_untracked();
+        let shown: Vec<&'static str> = {
+            let was = layout::displayed(&before);
+            layout::displayed(next)
+                .into_iter()
+                .filter(|key| !was.contains(key))
+                .filter_map(|key| layout::PANELS.iter().copied().find(|panel| *panel == key))
+                .collect()
+        };
         layout.set(next.clone());
         *unsaved.borrow_mut() = Some(next.clone());
         let unsaved = unsaved.clone();
         let task = set_timeout(SAVE_DELAY, move || {
             if let Some(last) = unsaved.borrow_mut().take() {
-                save(&last);
+                layout::save(&last);
             }
         });
         if let Some(old) = pending.replace(Some(task)) {
             old.cancel();
+        }
+        // A tab the user brought forward is the model's tab now.
+        for key in shown {
+            if let Some(action) = layout::panel_action(key) {
+                act(app, action);
+            }
         }
     };
 
@@ -147,22 +211,38 @@ pub fn workspace(app: AppState) -> AnyElement {
         })
         .child(dynamic(move || {
             shape.get().map(|shape| match shape {
-                Arrangement::Grid => dock(app, layout, on_change.clone()),
-                Arrangement::Panes(axis) => panes(app, axis),
+                Arrangement::Grid => dock(app, layout, titles.clone(), on_change.clone()),
+                Arrangement::Panes(axis) => panes(app, axis, &titles),
             })
         }))
         .into_element()
 }
 
+/// Displays the panels of the model's tabs where the layout shows another tab of their group.
+fn follow_model(app: AppState, layout: Signal<DockAreaLayout>) {
+    let wanted = app.work.with(layout::wanted);
+    let mut next: Option<DockAreaLayout> = None;
+    for key in wanted {
+        let shown = next.clone().unwrap_or_else(|| layout.get_untracked());
+        if let Some(changed) = layout::show(&shown, key) {
+            next = Some(changed);
+        }
+    }
+    if let Some(next) = next {
+        layout.set(next);
+    }
+}
+
 fn dock(
     app: AppState,
     layout: Signal<DockAreaLayout>,
+    titles: Titles,
     on_change: impl Fn(&DockAreaLayout) + 'static,
 ) -> AnyElement {
     let form = app.form;
-    let options: Vec<DockPanelOptions> = PANELS
+    let options: Vec<DockPanelOptions> = layout::PANELS
         .iter()
-        .map(|&(key, _)| {
+        .map(|&key| {
             let mut option = DockPanelOptions::new(key);
             option.closable = Some(false);
             option
@@ -187,7 +267,7 @@ fn dock(
             if form == Form::Terminal {
                 s
             } else {
-                s.selected(|s| s.bg(color(Token::Surface)))
+                s.selected(|s| s.bg(color(Token::Bg)))
             }
         })
         .content_style(|s| s.bg(color(Token::Bg)))
@@ -203,30 +283,49 @@ fn dock(
                 .border_color(color(Token::Rule2))
                 .rounded_md()
         })
-        .render_tab(move |tab: &DockTab| tab_label(app, title(tab.panel.as_ref()), tab.active))
-        .render_panel(move |_: &DockPanel| body(app))
+        .render_tab(move |tab: &DockTab| {
+            let key = tab.panel.as_str();
+            tab_label(app, title(&titles, key), tab.active, key)
+        })
+        .render_panel(move |panel: &DockPanel| frame(app, panel.id.as_str()))
         .into_element()
 }
 
-/// The fallback for a small area: the list and the inspector, each under a bar of one selected tab.
-/// A terminal splits them with a line of its own, which joins the frame around Now and the lines
-/// under the tabs (`┬`, `┼`, `┴`); a border there would stop short of them.
-fn panes(app: AppState, axis: Axis) -> AnyElement {
+/// The fallback for a small area: the list and the inspector, each under its bar: the list's one
+/// tab, the inspector's Story, Evidence and Session. A terminal splits them with a line of its
+/// own, which joins the frame around Now and the lines under the tabs (`┬`, `┼`, `┴`); a border
+/// there would stop short of them.
+fn panes(app: AppState, axis: Axis, titles: &Titles) -> AnyElement {
     let form = app.form;
     let terminal = form == Form::Terminal;
     let side_by_side = axis == Axis::Horizontal;
-    let make_pane = |key: &'static str, first: bool| {
-        let selected_tab = tab(view(), form).child(tab_label(app, title(key), true));
-        let selected_tab = if terminal {
-            selected_tab
-                .role(AccessibilityRole::Tab)
-                .accessibility_state(AccessibilityState {
-                    selected: true,
-                    ..AccessibilityState::default()
-                })
-        } else {
-            selected_tab.bg(color(Token::Surface))
-        };
+    let list_tab = tab(view(), form)
+        .child(tab_label(
+            app,
+            title(titles, layout::WHO),
+            true,
+            layout::WHO,
+        ))
+        .role(AccessibilityRole::Tab)
+        .accessibility_state(AccessibilityState {
+            selected: true,
+            ..AccessibilityState::default()
+        })
+        .when(!terminal, |t| t.bg(color(Token::Bg)));
+    let options: Vec<(NowTab, &'static str)> =
+        NowTab::ALL.iter().map(|&tab| (tab, tab.label())).collect();
+    let inspector_tabs = view()
+        .flex_row()
+        .items_center()
+        .px(px(8.0))
+        .child(tab_strip(
+            app,
+            &options,
+            move || app.work.with(|state| state.now_tab),
+            move |tab| act(app, work::Action::NowTab(tab)),
+            "seg-inspector",
+        ));
+    let make_pane = |bar: AnyElement, key: &'static str, first: bool| {
         view()
             .flex_1()
             .flex_col()
@@ -237,8 +336,8 @@ fn panes(app: AppState, axis: Axis) -> AnyElement {
                 pane.border_b_1()
             })
             .border_color(color(Token::Rule))
-            .child(tab_bar(view(), form).child(selected_tab))
-            .child(view().flex_1().min_h(px(0.0)).child(body(app)))
+            .child(tab_bar(view(), form).child(bar))
+            .child(view().flex_1().min_h(px(0.0)).child(frame(app, key)))
     };
     let divider = match (terminal, side_by_side) {
         (true, true) => Some(term::vrule()),
@@ -255,14 +354,18 @@ fn panes(app: AppState, axis: Axis) -> AnyElement {
                 root.flex_col()
             }
         })
-        .child(make_pane(LIST, true))
+        .child(make_pane(list_tab.into_element(), layout::WHO, true))
         .children(divider)
-        .child(make_pane(INSPECTOR, false))
+        .child(make_pane(
+            inspector_tabs.into_element(),
+            inspector::FOLLOW,
+            false,
+        ))
         .into_element()
 }
 
-/// The strip of tabs on the sunk ground. A terminal draws a border as a whole row of cells, so there
-/// the strip is the tabs alone, and the panel under it starts with a line.
+/// The strip of tabs on the sunk ground (`.dockbar`). A terminal draws a border as a whole row of
+/// cells, so there the strip is the tabs alone, and the panel under it starts with a line.
 fn tab_bar<S: Styled>(s: S, form: Form) -> S {
     let s = s
         .flex_row()
@@ -278,6 +381,7 @@ fn tab_bar<S: Styled>(s: S, form: Form) -> S {
     }
 }
 
+/// One tab (`.dockbar .dt`): 10 pt in, a rule after it; the selected one on the page's ground.
 fn tab<S: Styled>(s: S, form: Form) -> S {
     let s = s.flex_row().items_center().gap(px(6.0));
     if form == Form::Terminal {
@@ -287,7 +391,7 @@ fn tab<S: Styled>(s: S, form: Form) -> S {
     }
 }
 
-fn tab_label(app: AppState, title: &'static str, active: bool) -> AnyElement {
+fn tab_label(app: AppState, title: SharedString, active: bool, key: &str) -> AnyElement {
     let label = text(title)
         .text_size(px(text_size(app.form) * TAB_SCALE))
         .font_weight(if active {
@@ -296,11 +400,13 @@ fn tab_label(app: AppState, title: &'static str, active: bool) -> AnyElement {
             FontWeight::NORMAL
         })
         .text_color(color(if active { Token::Ink } else { Token::Ink3 }))
-        .number_of_lines(1);
+        .number_of_lines(1u32);
+    let test_id = format!("seg-now-{key}");
     if app.form == Form::Terminal {
-        return label.into_element();
+        return view().test_id(&test_id).child(label).into_element();
     }
     view()
+        .test_id(&test_id)
         .flex_row()
         .items_center()
         .gap(px(6.0))
@@ -324,165 +430,36 @@ fn grip(active: bool) -> AnyElement {
         .into_element()
 }
 
-/// The panel's content. In a terminal it starts with the line under its tabs, which reaches the
-/// lines on either side of the panel and joins them, then a blank row.
-fn body(app: AppState) -> AnyElement {
-    let form = app.form;
-    let terminal = form == Form::Terminal;
-    let (pad_x, pad_y) = if terminal { (8.0, 0.0) } else { (16.0, 14.0) };
+/// A panel: its content scrolling on the page's ground, dimmed while the board is stale. In a
+/// terminal it starts with the line under its tabs, which reaches the lines on either side of the
+/// panel and joins them.
+fn frame(app: AppState, key: &str) -> AnyElement {
+    let terminal = app.form == Form::Terminal;
+    let stale = stale(app);
+    let content = match key {
+        layout::WHO => list::list(app),
+        layout::GOALS => list::goals(app),
+        layout::STORY => inspector::panel(app, Some(NowTab::Story)),
+        layout::EVIDENCE => inspector::panel(app, Some(NowTab::Evidence)),
+        layout::SESSION => inspector::panel(app, Some(NowTab::Session)),
+        inspector::FOLLOW => inspector::panel(app, None),
+        layout::SINCE => context::since(app),
+        layout::PARKED => context::parked(app),
+        layout::LIVE => context::live(app),
+        layout::GRAPH => context::graph(app),
+        _ => view().into_element(),
+    };
     view()
         .size_full()
+        .flex_col()
         .bg(color(Token::Bg))
-        .when(terminal, |panel| {
-            panel.child(term::hrule()).child(term::blank())
-        })
+        .when(terminal, |panel| panel.child(term::hrule()))
         .child(
-            view().px(px(pad_x)).pt(px(pad_y)).child(
-                text(move || app.snapshot().body_line())
-                    .text_size(px(text_size(form)))
-                    .text_color(color(Token::Ink3)),
-            ),
+            scroll()
+                .test_id(&format!("now-{key}"))
+                .flex_1()
+                .min_h(px(0.0))
+                .child(dim_when(view(), stale).child(content)),
         )
         .into_element()
-}
-
-fn title(key: &str) -> &'static str {
-    PANELS
-        .iter()
-        .find(|&&(panel, _)| panel == key)
-        .map_or("", |&(_, title)| title)
-}
-
-fn tabs(keys: &[&'static str]) -> DockLayout {
-    keys.iter()
-        .fold(DockLayout::tabs(), |group, key| group.panel(*key))
-}
-
-fn default_layout() -> DockAreaLayout {
-    DockAreaLayout::new(
-        DockLayout::h_split()
-            .child(
-                DockLayout::v_split()
-                    .child(tabs(&["who", "goals"]), None)
-                    .child(tabs(&["since", "parked"]), None),
-                None,
-            )
-            .child(
-                DockLayout::v_split()
-                    .child(tabs(&["story", "evidence", "session"]), None)
-                    .child(tabs(&["live", "graph"]), None),
-                None,
-            ),
-    )
-}
-
-/// The stored layout, when it parses and holds exactly the workspace's panels; a layout from another
-/// version of the panel set would hide a panel for good.
-fn stored_layout() -> Option<DockAreaLayout> {
-    let json: JsonValue = Storage::get_item(LAYOUT_KEY)?.parse().ok()?;
-    let layout: DockAreaLayout = from_json(&json).ok()?;
-    holds_every_panel(&layout).then_some(layout)
-}
-
-fn holds_every_panel(layout: &DockAreaLayout) -> bool {
-    let mut held = Vec::new();
-    collect_panels(&layout.center, &mut held);
-    for region in [&layout.left, &layout.right, &layout.bottom]
-        .into_iter()
-        .flatten()
-    {
-        collect_panels(&region.layout, &mut held);
-    }
-    held.sort_unstable();
-    let mut known: Vec<&str> = PANELS.iter().map(|&(key, _)| key).collect();
-    known.sort_unstable();
-    held == known
-}
-
-fn collect_panels<'a>(node: &'a DockNode, out: &mut Vec<&'a str>) {
-    match node {
-        DockNode::Split { children, .. } => {
-            for child in children {
-                collect_panels(child, out);
-            }
-        }
-        DockNode::Tabs { panels, .. } => out.extend(panels.iter().map(|panel| panel.as_ref())),
-    }
-}
-
-fn save(layout: &DockAreaLayout) {
-    // A full Storage keeps the last layout that fit; the workspace itself is unaffected.
-    let _ = Storage::set_item(LAYOUT_KEY, layout_json(layout).to_string());
-}
-
-/// The layout as the JSON `DockArea` takes from JS, which `from_json` reads back. Node ids are left
-/// out: they are this process's, and the area assigns fresh ones when it installs the layout. (The
-/// crate's persisted format, `DockAreaState`, is serde-only and the app has no JSON serializer.)
-fn layout_json(layout: &DockAreaLayout) -> JsonValue {
-    let mut fields = vec![("center", node_json(&layout.center))];
-    for (name, region) in [
-        ("left", &layout.left),
-        ("right", &layout.right),
-        ("bottom", &layout.bottom),
-    ] {
-        if let Some(region) = region {
-            fields.push((name, region_json(region)));
-        }
-    }
-    fields.into_iter().collect()
-}
-
-fn region_json(region: &DockRegion) -> JsonValue {
-    let mut fields = vec![("layout", node_json(&region.layout))];
-    if let Some(size) = region.size {
-        fields.push(("size", JsonValue::from(size.0)));
-    }
-    if let Some(open) = region.open {
-        fields.push(("open", JsonValue::from(open)));
-    }
-    if let Some(collapsible) = region.collapsible {
-        fields.push(("collapsible", JsonValue::from(collapsible)));
-    }
-    fields.into_iter().collect()
-}
-
-fn node_json(node: &DockNode) -> JsonValue {
-    match node {
-        DockNode::Split {
-            axis,
-            children,
-            sizes,
-            ..
-        } => [
-            ("type", JsonValue::from("split")),
-            (
-                "axis",
-                JsonValue::from(match axis {
-                    Axis::Horizontal => "horizontal",
-                    Axis::Vertical => "vertical",
-                }),
-            ),
-            ("children", children.iter().map(node_json).collect()),
-            (
-                "sizes",
-                sizes.iter().map(|size| size.map(|size| size.0)).collect(),
-            ),
-        ]
-        .into_iter()
-        .collect(),
-        DockNode::Tabs {
-            panels,
-            active_index,
-            ..
-        } => [
-            ("type", JsonValue::from("tabs")),
-            (
-                "panels",
-                panels.iter().map(|panel| panel.to_string()).collect(),
-            ),
-            ("activeIndex", JsonValue::from(*active_index)),
-        ]
-        .into_iter()
-        .collect(),
-    }
 }

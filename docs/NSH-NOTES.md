@@ -1,6 +1,6 @@
 # NSH 0.5.0 notes
 
-What building the shell taught us about NSH that the docs do not say plainly. Each entry names where it
+What building the shell and content taught us about NSH that the docs do not say plainly. Each entry names where it
 was checked. "Observed" means seen in a build or a run on this host; "read" means found in the sources
 and not yet exercised.
 
@@ -30,6 +30,8 @@ that has the same names fails with E0659. Import app items by name (`use crate::
 | With the default `When::Auto`, a binding does not fire while a text field has the focus if the field would use the key. `Keystroke::edits_text` counts every non-character key as editing, `escape` included, so a global Esc needs `When::Always`. Letter keys use `When::NotEditing`. | read, `keymap.rs`; behaviour covered by `tests/shell.rs::typing_in_ask_does_not_navigate` |
 | When several bindings match, the newest wins (`element/keys.rs:30`). A `Dialog` or `Command` opened later takes Esc before the app's global binding. | read |
 | `on_key` fires on desktop platforms only; on phones the bindings are kept but no key reaches them. | read, `element/ambient.rs:1520` |
+| A shifted character is named by its unshifted key: `on_key("?")` panics, so the app binds `shift+/`. The web key mapper uses `code: "Slash"` and the shift modifier for a real `key: "?"` event. | read, `nsh-core/src/keymap.rs`, `nsh-platform-web/web/nsh.js` `keyCode`, `src/state.rs` |
+| For headless browser key tests, send the real key and code, such as `key: "?"`, `code: "Slash"`, `shiftKey: true`. The web mapper uses the code for shifted keys, so a claim that `key: "/"` alone prevents a match is not established when the same code is supplied. | read, `nsh-platform-web/web/nsh.js` `keyCode` |
 
 ## Components
 
@@ -41,11 +43,21 @@ that has the same names fails with E0659. Import app items by name (`use crate::
 | `DockAreaLayout` has no public JSON form. `to_state`/`from_state` give `DockAreaState`, which needs `serde_json` to become text. The stored layout is the dock's JavaScript JSON shape built from `nsh_core::JsonValue` and read back with `nsh_core::element::from_json`. | read, `nsh-base/src/dock/` |
 | `DockArea` switches to its one-group presentation below 600 pt of its own width. An app that chooses the arrangement itself passes `compact(Some(false))`. | read, `elements/dock` |
 | No icon set ships with NSH. The app mark, chevrons and grips are drawn from views and borders. | read |
-| Text colour does not pass from a view to the texts inside it; every text sets its own colour. | read; not found in the docs |
-| `flex_shrink` defaults to 0, unlike CSS. Anything that must give way needs `min_w(0)` and an explicit shrink or `flex_1`. | read, `element/style.rs` |
+| Text size and colour do not pass from a view to the texts inside it. Set each text's style explicitly; `kit::text::rich_small` and `rich_at` set their paragraph style. | read, `src/ui/kit/text.rs`; view inheritance not found in the docs |
+| `flex_shrink` defaults to 0, unlike CSS. A plain view in a row that must give way needs `flex_shrink(1.0)` and `min_w(0)` or `flex_1`. [INFERENCE] A fixed-width part can blank a narrow pane. | read, `element/style.rs`, `src/ui/kit/page.rs` |
 | Input placeholder, caret and selection colours take one colour, not a light and dark pair. Shadow layers take a plain colour too. | read |
 | An `effect` runs once while the component is being built, before its elements are mounted, and an `ElementRef` command sent then reaches nothing. To focus a field that was just made, defer with `after_answer`, which also runs after a closing `Dialog` has handed the focus back. `auto_focus` fires once per element and on the web waits for a timer. | read, `element_ref.rs`, `nsh-base/src/popup.rs`; observed (the field was not focused before the change) |
 | `flex_1()` is `flex: 1 1 0`: it ignores the element's own size. A box that should start from its content's width and then give way uses `flex_auto()`. | read, `element/style.rs`; observed (clipped top bar at 900 pt) |
+| A one-line text clamp wraps at word boundaries before cutting, so it cannot clip a code line mid-word at the cell edge. Review lays the line out wider than the cell with `EllipsizeMode::Clip` inside an `overflow_hidden` view. | read, `src/screens/review/diff.rs` `clip` |
+| A phone sheet's content can be built before it opens. The pairing sheet builds content for its own sheet kind rather than relying on which sheet is open at construction time. | read, `src/screens/settings/devices.rs` `sheet_host`, `sheet_content` |
+| [INFERENCE] NSH has no blur or animated gradient. The decide bar uses the plain page colour and the loading skeleton pulses opacity instead. | read, `src/ui/kit/page.rs` `bar`, `src/ui/kit/notice.rs` `skeleton`; absence of APIs not established |
+| Canvas drawings can take stroke and fill colours from the canvas view. Usage sets adaptive colours on its canvas layers so the chart follows light and dark appearance. | read, `src/screens/usage/chart.rs` `layers` |
+
+## Storage
+
+| Finding | Checked |
+|---|---|
+| Web Storage uses `localStorage`, with keys prefixed `nsh:<app id>:`. This app's destination key is `nsh:com.example.corral:corral.destination`. | read, `nsh-platform-web/src/storage.rs`, `nsh-engine/src/local_storage.rs`, `nsh.json`, `src/state.rs` |
 
 ## Terminal
 

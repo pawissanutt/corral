@@ -1,0 +1,36 @@
+ ◉ Corral │ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live    22:12  fixture · snapshot 2026-11-07 22:12
+╭─ corral ─────────────────────╮╭──────────────────────────────────────────────────────────────────────────────────────╮
+│ Autopilot                    ││ Timeline                                       Today   7 days    By task   By agent  │
+│ independent work continues   │├──────────────────────────────────────────────────────────────────────────────────────┤
+├──────────────────────────────┤│ who worked when · run, gate, review, land · idle and stalls                          ┃
+│  Inbox                 5   i ││                                                                                      ┃
+│  Now                       n ││ ━━ run   ══ gate   ╍╍ review   ■■ land   ╱╱ waiting on you   ╌╌ idle                 ┃
+│  Changes              12   . ││ ░░ stale verdict   ╳╳ stall                                                          ┃
+│  Plans                 6   p ││                                                                                      ┃
+│  Agents                7   a ││                         09 10   11  12   13  14   15  16   17  18   19  20   21  22  ┃
+│  Review                3   r ││ You    owner actions           ●      ●                            ┊  ●           ●  ┃
+│▌ Timeline                  t ││ PM     supervisor       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ┃
+│  Usage                     u ││                                                relaunching                           ┃
+│  Settings                  , ││                                                    stall 16:40–19:28 · nobody moved  ┃
+├──────────────────────────────┤│ T-852  Co-work C1          ━━━━━━━━━━━═══╍╍╍━━━━━━━━━━━═══╳╳╳╳╳╳╳╳╳╳╳╳══╌╌╌╌╌╌╌╌╌╌░  ┃
+│  Ask                       / ││ T-854  Co-work C3       ━━━━━━━━━━━╌╌╌╌╌╌╌━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ┃
+│  Go to                    ^K ││                                       waiting on you · 7h02                          ┃
+│                              ││ T-885  plan P2              ╍╍╍━━━━━━╍╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱               ┃
+│                              ││                                                                      needs you 3h    ┃
+│                              ││                                                                      ╱╱╱╱╱╱╱╱╱╱╱╱╱╱  ┃
+│                              ││ T-868  host-queue-ledg…                                            ┊━━━━━━━━━━━━╌╌╌  ┃
+│                              ││ T-890  pm-bounded-read                                             ┊   ━━━━━━━━━━━═  ┃
+│                              ││ T-894  api-connections                                             ┊   ━━━━━━━━━━━═  ┃
+│                              ││ T-867  queue-contract-…                                            ┊        ━━━━━═░  ┃
+│                              ││ T-871  annotation-serv…                                            ┊          ━━━━━  ┃
+│                              ││                                               your last visit 18:40             now  ┃
+│                              ││                                                                                      ┃
+│                              ││ GAPS WORTH A LOOK TODAY ───────────────────────────────────────────────────────────  │
+│                              ││ 16:40–19:28  T-852  held · external op; no sync tick moved it for 2h48. Today the    │
+│                              ││                     daemon would have re-checked on its own loop.                    │
+│                              ││ 12:10–19:12  T-885  plan P2 waited 7h02 for your acceptance; a push would have       │
+│                              ││                     reached the phone at 12:10.                                      │
+│                              ││ 19:12–now    T-868  question open 3h; the worker kept producing until 21:40, then    │
+│                              ││                     idled.                                                           │
+╰─ This device pawis-desktop ──╯╰──────────────────────────────────────────────────────────────────────────────────────╯
+  i  Inbox  n  Now  .  Changes  p  Plans  a  Agents  r  Review  t  Timeline  u  Usage  ,  Settings │  /  Ask  ^K  Go to

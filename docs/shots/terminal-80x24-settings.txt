@@ -1,24 +1,24 @@
  ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live          fixture
 ╭─ corral ─────────────╮╭──────────────────────────────────────────────────────╮
-│ Autopilot            ││ Settings › Devices                                   │
-│ independent work     │├──────────────────────────────────────────────────────┤
-│ continues            ││                                                      │
-├──────────────────────┤│ Not built yet. This build is the app shell.          │
-│  Inbox        5   i  ┃│                                                      │
-│  Now              n  ┃│                                                      │
-│  Changes     12   .  ┃│                                                      │
-│  Plans        6   p  ┃│                                                      │
-│  Agents       7   a  ┃│                                                      │
-│  Review       3   r  ┃│                                                      │
-│  Timeline         t  ┃│                                                      │
-│  Usage            u  ┃│                                                      │
-│▌ Settings         ,  ┃│                                                      │
-│  ▌ Devices           ┃│                                                      │
-│    Machines          ┃│                                                      │
-│    Connection        ┃│                                                      │
-│    Notifications     ┃│                                                      │
-│    Assistant         ││                                                      │
-│    Autopilot &…      ││                                                      │
-│    General           ││                                                      │
+│ Autopilot            ││ ╭─ Devices ───────────────────────────────────────╮  ┃
+│ independent work     ││ │ One owner, many devices. Each device signs its  │  ┃
+│ continues            ││ │ actions; revoking one ends its sessions at      │  ┃
+├──────────────────────┤│ │ once.                                           │  ┃
+│  Inbox        5   i  ┃│ │                                                 │  ┃
+│  Now              n  ┃│ │ ╭─────────────────────────────────────────────╮ │  ┃
+│  Changes     12   .  ┃│ │ │ QR: open Devices in the desktop or phone    │ │  ┃
+│  Plans        6   p  ┃│ │ │ app to show it                              │ │  │
+│  Agents       7   a  ┃│ │ │                                             │ │  │
+│  Review       3   r  ┃│ │ │ ✓ Show the QR on a trusted surface          │ │  │
+│  Timeline         t  ┃│ │ │   Here, or run corral device pair in a      │ │  │
+│  Usage            u  ┃│ │ │   terminal on the daemon host.              │ │  │
+│▌ Settings         ,  ┃│ │ │ ✓ Scan it on the new device                 │ │  │
+│  ▌ Devices           ┃│ │ │   The QR carries the daemon public key,     │ │  │
+│    Machines          ┃│ │ │   reach hints and a one-time token (expires │ │  │
+│    Connection        ┃│ │ │   in 5 min).                                │ │  │
+│    Notifications     ┃│ │ │ 3 Compare the code on both screens          │ │  │
+│    Assistant         ││ │ │   Both sides derive it from the key         │ │  │
+│    Autopilot &…      ││ │ │   exchange; a mismatch means someone is in  │ │  │
+│    General           ││ │ │   the middle.                               │ │  │
 ╰─ pawis-desktop ──────╯╰──────────────────────────────────────────────────────╯
   i  Inbox  n  Now  .   p   a   r   t   u   ,  Settings │  /  Ask  ^K  Go to

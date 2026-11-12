@@ -1,0 +1,24 @@
+ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live          fixture
+╭─ corral ─────────────╮╭──────────────────────────────────────────────────────╮
+│ Autopilot            ││  Inbox   1 of 5 needing you       Next · T-885 plan  │
+│ independent work     │├──────────────────────────────────────────────────────┤
+│ continues            ││  needs you   owner only   blocking                   ┃
+├──────────────────────┤│ T-868/R1/Q1 · rev 2                                  ┃
+│▌ Inbox         5   i ││ from worker T-868 R1 · escalated by the PM · 3h ago  │
+│  Now               n ││ Restore policy: pane-origin input only, or all       │
+│  Changes      12   . ││ origins?                                             │
+│  Plans         6   p │├───┬───────────────────────────────────────────────── │
+│  Agents        7   a ││ S │ SITUATION                                        │
+│  Review        3   r ││   │ T-701@P2 leaves one restore-policy decision      │
+│  Timeline          t ││   │ open for T-868: on stock/plain paths where       │
+│  Usage             u ││   │ Esc/dequeue restoration is enabled, should       │
+│  Settings          , ││   │ restoration remove only pane-origin queued       │
+├──────────────────────┤│   │ input, or restore all origins? Rich mode will    │
+│  Ask               / ││   │ remain read-only/count-only with no restoration  │
+│  Go to            ^K ││   │ either way.                                      │
+│                      ││   │                                                  │
+│                      │├───┴──────────────────────────────────────────────────┤
+│                      ││  Answer · option 1   Ask the worker                  │
+│                      ││  Discuss with PM                                     │
+╰─ pawis-desktop ──────╯╰──────────────────────────────────────────────────────╯
+  1 2  choose  e  evidence │  i   n   .   p   a   r   t   u   ,  │  /  Ask  ^K

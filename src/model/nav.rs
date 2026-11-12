@@ -1,3 +1,64 @@
+//! Destinations, pages and overlays shared by every shell.
+
+use crate::model::effect::Page;
+
+/// Desktop sidebar prompt for the Ask composer.
+pub const ASK_HINT: &str = "Ask…";
+/// Phone floating action label for the Ask composer.
+pub const ASK_LABEL: &str = "Ask";
+/// Desktop sidebar prompt for the command palette.
+pub const PALETTE_HINT: &str = "Go to, answer, open…";
+/// Compact terminal palette launcher label.
+pub const PALETTE_LABEL: &str = "Go to";
+/// Global Ask shortcut displayed by shell chrome.
+pub const ASK_KEY: &str = "/";
+/// Global palette shortcut displayed by shell chrome.
+pub const PALETTE_KEY: &str = "Ctrl K";
+/// Device identity prefix in the desktop sidebar footer.
+pub const THIS_DEVICE: &str = "This device";
+/// Command attribution prefix in the desktop sidebar footer.
+pub const SIGNS_AS: &str = "Actions sign as";
+
+/// Label of the phone's floating Ask button.
+pub const ASK_BUTTON: &str = "Ask";
+/// Accessible action name of the phone's floating Ask button.
+pub const ASK_BUTTON_LABEL: &str = "Ask (opens the composer)";
+/// Accessible label of the phone large-title palette search button.
+pub const SEARCH_LABEL: &str = "Search";
+
+/// The lock-screen push demo the phone shows while `AppState::lock` is set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LockScreen {
+    /// Calendar line above the lock-screen clock.
+    pub date: &'static str,
+    /// Lock-screen clock.
+    pub time: &'static str,
+    /// Notification's uppercase app identity.
+    pub app: &'static str,
+    /// Notification recency label.
+    pub when: &'static str,
+    /// Bold needs-you notification title.
+    pub title: &'static str,
+    /// The worker's question and recommendation.
+    pub body: &'static str,
+    /// Privacy explanation below the notification.
+    pub footnote: &'static str,
+    /// Page opened by pressing the notification.
+    pub opens: Page,
+}
+
+/// The encrypted question push demonstrated on the phone lock screen.
+pub const LOCK_SCREEN: LockScreen = LockScreen {
+    date: "Saturday 7 November",
+    time: "22:12",
+    app: "CORRAL",
+    when: "now",
+    title: "Needs you · T-868 host-queue-ledger",
+    body: "Restore policy: pane-origin input only, or all origins? Worker recommends option 1.",
+    footnote: "Push text is generated on this phone from an encrypted payload; the relay only sends a wake.",
+    opens: Page::Question,
+};
+
 /// A top-level destination in the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Destination {
@@ -328,8 +389,15 @@ pub struct NavState {
     pub destination: Destination,
     /// The current settings section.
     pub settings: SettingsSection,
+    /// Counts explicit section-opening intents, including a repeated opening of the same section.
+    pub section_opens: u32,
+    /// Grows by one (wrapping) on every `go`, `go_settings` included, so a shell can tell a
+    /// navigation to the destination it already shows from no change.
+    pub goes: u32,
     /// Open overlays in oldest-first order.
     pub overlays: Vec<Overlay>,
+    /// Open pages in oldest-first order; task and plan pages are phone-only.
+    pub pages: Vec<Page>,
 }
 impl NavState {
     /// Creates navigation state at the form's home destination.
@@ -337,18 +405,50 @@ impl NavState {
         NavState {
             destination: form.home(),
             settings: SettingsSection::Devices,
+            section_opens: 0,
+            goes: 0,
             overlays: Vec::new(),
+            pages: Vec::new(),
         }
     }
     /// Navigates to a destination and closes the palette.
     pub fn go(&mut self, destination: Destination) {
+        self.goes = self.goes.wrapping_add(1);
         self.destination = destination;
+        self.pages.clear();
         self.close(Overlay::Palette);
     }
     /// Navigates to a settings section and closes the palette.
     pub fn go_settings(&mut self, section: SettingsSection) {
         self.settings = section;
+        self.section_opens = self.section_opens.wrapping_add(1);
         self.go(Destination::Settings);
+    }
+    /// Opens a page under its owner without duplicating the top page; tasks and plans select in place off phone.
+    pub fn open_page(&mut self, page: Page, form: Form) {
+        self.destination = page.owner();
+        self.close(Overlay::Palette);
+        if form == Form::Phone
+            || matches!(page, Page::Question | Page::Session(_) | Page::Thread(_))
+        {
+            if self.page() != Some(page) {
+                self.pages.push(page);
+            }
+        } else {
+            self.pages.clear();
+        }
+    }
+    /// Pops the top page; its owner remains selected when the stack becomes empty.
+    pub fn back(&mut self) -> bool {
+        let Some(page) = self.pages.pop() else {
+            return false;
+        };
+        self.destination = self.page().unwrap_or(page).owner();
+        true
+    }
+    /// The page currently above the destination.
+    pub fn page(&self) -> Option<Page> {
+        self.pages.last().copied()
     }
     /// Opens an overlay or moves it to the newest position.
     pub fn open(&mut self, overlay: Overlay) {
@@ -416,5 +516,95 @@ mod tests {
         assert_eq!(nav.close_newest(), Some(Overlay::Ask));
         assert_eq!(nav.close_newest(), Some(Overlay::Palette));
         assert_eq!(nav.close_newest(), None);
+    }
+    #[test]
+    fn task_and_plan_pages_only_stack_on_phone() {
+        for form in [Form::Desktop, Form::Terminal, Form::Phone] {
+            let mut nav = NavState::new(form);
+            nav.open_page(Page::Task("T-890"), form);
+            assert_eq!(nav.destination, Destination::Now);
+            assert_eq!(
+                nav.page(),
+                (form == Form::Phone).then_some(Page::Task("T-890"))
+            );
+            nav.open_page(Page::Plan("T-870"), form);
+            assert_eq!(nav.destination, Destination::Plans);
+            assert_eq!(nav.pages.len(), if form == Form::Phone { 2 } else { 0 });
+            if form == Form::Phone {
+                assert!(nav.back());
+                assert_eq!(nav.page(), Some(Page::Task("T-890")));
+                assert_eq!(nav.destination, Destination::Now);
+            }
+            nav.go(Destination::Inbox);
+            assert!(nav.pages.is_empty());
+            assert!(!nav.back());
+        }
+    }
+    #[test]
+    fn focus_pages_stack_and_return_to_their_owner_on_every_form() {
+        for form in [Form::Desktop, Form::Terminal, Form::Phone] {
+            for page in [Page::Question, Page::Session("T-868"), Page::Thread("A-7")] {
+                let mut nav = NavState::new(form);
+                nav.open_page(page, form);
+                let above = if page == Page::Question {
+                    Page::Session("T-868")
+                } else {
+                    Page::Question
+                };
+                nav.open_page(above, form);
+                assert_eq!(nav.pages, [page, above]);
+                assert!(nav.back());
+                assert_eq!(nav.page(), Some(page));
+                assert!(nav.back());
+                assert_eq!(nav.page(), None);
+                assert_eq!(nav.destination, page.owner());
+            }
+        }
+    }
+
+    #[test]
+    fn sending_from_phone_thread_does_not_duplicate_its_page() {
+        let mut nav = NavState::new(Form::Phone);
+        let session = Page::Session("T-868");
+        let thread = Page::Thread("A-7");
+        nav.open_page(session, Form::Phone);
+        nav.open_page(thread, Form::Phone);
+        nav.destination = Destination::Inbox;
+        nav.open_page(thread, Form::Phone);
+        assert_eq!(nav.pages, [session, thread]);
+        assert_eq!(nav.destination, Destination::Agents);
+        assert!(nav.back());
+        assert_eq!(nav.page(), Some(session));
+    }
+
+    #[test]
+    fn repeated_settings_section_opens_remain_observable() {
+        let mut nav = NavState::new(Form::Phone);
+        nav.go_settings(SettingsSection::Devices);
+        let first = nav.clone();
+        nav.go_settings(SettingsSection::Devices);
+        assert_ne!(nav, first);
+        assert_eq!(nav.section_opens, first.section_opens.wrapping_add(1));
+        let opens = nav.section_opens;
+        nav.go(Destination::Settings);
+        assert_eq!(nav.section_opens, opens);
+        nav.section_opens = u32::MAX;
+        nav.go_settings(SettingsSection::Devices);
+        assert_eq!(nav.section_opens, 0);
+    }
+
+    #[test]
+    fn navigating_to_the_current_destination_remains_observable() {
+        let mut nav = NavState::new(Form::Phone);
+        let first = nav.clone();
+        nav.go(nav.destination);
+        assert_ne!(nav, first);
+        assert_eq!(nav.goes, first.goes.wrapping_add(1));
+        let goes = nav.goes;
+        nav.go_settings(SettingsSection::Devices);
+        assert_eq!(nav.goes, goes.wrapping_add(1));
+        nav.goes = u32::MAX;
+        nav.go(nav.destination);
+        assert_eq!(nav.goes, 0);
     }
 }

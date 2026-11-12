@@ -1,8 +1,20 @@
 # Corral app
 
-This is the shell-only Corral app, written in Rust on [NSH 0.5.0](https://nsh.dev). The crate is `nsh-app-corral` and its root component is `App`. It provides the navigation frame for desktop, web, phone and terminal.
+Corral is a Rust app built on [NSH 0.5.0](https://nsh.dev), with desktop, web, phone and terminal forms. The crate is `nsh-app-corral` and its root component is `App`. It presents the interactive mockup's content using fixtures in `src/model/`. There is no daemon, protocol or network connection; actions change local state only.
 
-The two data states are `fixture`, clearly labelled as fixture data, and `disconnected`. There is no daemon, protocol, client core or destination content in this build. The composer's Send button is disabled.
+The app includes:
+
+- **Inbox**: items needing attention and a question handover with evidence and answers.
+- **Now**: the workspace, task details and plan graph. **Changes** shows changes since the last visit.
+- **Plans**: plan lists, details, review and graphs.
+- **Agents**: the agent wall, sessions, quick thread and filed chat records.
+- **Review**: a candidate replay, verdicts, evidence and diff.
+- **Timeline**: the activity timeline and range selection.
+- **Usage**: illustrative provider costs, quotas and profiles.
+- **Settings**: device pairing, notifications, profiles and other preferences.
+- **Ask**: a composer for questions, ideas and instructions, plus assistant threads. Replies to newly typed messages are not simulated, as in the mockup.
+
+The command palette's **Demo** group changes Connection, Data and Assistant states and opens the hotkey window, share sheet and lock-screen push demos. Open the palette with `Ctrl K`.
 
 This is a sibling of `/home/pawis/miti-workspace/corral`, not part of that repository or its Cargo workspace. Design sources are `/home/pawis/corral-app-design/REQUIREMENTS.md`, `ARCHITECTURE.md` and `mockup/`.
 
@@ -25,13 +37,15 @@ Run one cargo or NSH build at a time on this shared host.
 | Command | Purpose |
 |---|---|
 | `nsh check` | Check the app |
-| `cargo test` | Run model unit tests and headless shell tests |
+| `cargo test` | Run unit tests and headless shell tests |
 | `nsh test --target tui` | Run TypeScript test files on the terminal target; none at present |
 | `nsh test --target web` | Run TypeScript test files on the web target; none at present |
 | `nsh package --target web` | Write a static site to `.nsh/out/Corral/`; a cold build takes about 2m 40s |
 | `python3 -m http.server --bind 127.0.0.1 --directory .nsh/out/Corral 4173` | Serve the packaged site on loopback |
 | `nsh run --target web` | Run the web development server |
 | `nsh run --target tui` | Run in the current terminal |
+
+There are 33 unit tests in `src/model/` and `src/ui/kit/rows.rs`, and 13 headless shell tests in `tests/shell.rs`.
 
 ## Keys
 
@@ -40,18 +54,27 @@ Destination keys are `i` Inbox, `n` Now, `.` Changes, `p` Plans, `a` Agents, `r`
 ## Structure
 
 - `src/lib.rs`: root `App`.
-- `src/model/`: pure Rust model, with no `nsh_*` imports; seed of the future sans-IO `corral-client` crate. Includes `mod.rs`, `nav.rs`, `health.rs` and `fixture.rs`.
-- `src/state.rs`: app state and persistence.
-- `src/ui/`: shared UI, including `tokens.rs`, `atoms.rs`, `composer.rs` and `palette.rs`, and `term.rs`, the terminal's own pieces (joined lines, framed regions, key caps, the top bar) used by the terminal shell and the shared UI's terminal branches.
-- `src/shell/`: `desktop.rs`, `phone.rs` and `terminal.rs`, the shells; the shared UI branches on the form.
-- `src/screens/`: destination frames and `now.rs`.
+- `src/model/`: pure Rust data, wording, state, reducers and view builders, with no `nsh_*` imports or I/O. Shared types and fixtures sit alongside `board/` and the destination domain directories; `work/` covers Now and Changes.
+- `src/state.rs`: app signals, effect dispatch and persistence.
+- `src/ui/kit/`: shared pieces used to build screens, including rows, page scaffolds, buttons, notices, tables and overlays.
+- `src/ui/`: shared UI, Ask and composer surfaces, palette, tokens, icons and terminal-specific pieces in `term.rs`.
+- `src/shell/`: desktop, phone and terminal shells.
+- `src/screens/`: destination screen modules, their subdirectories and page routing.
 - `tests/shell.rs`: headless shell tests.
 - `theme.json` and `nsh.json`: theme and app configuration.
 - `assets/fonts/` (one static face per weight) and `assets/icons/` (the mock's glyphs as SVG).
 - `docs/NSH-NOTES.md`: what NSH 0.5.0 does differently from what its docs suggest, with sources.
-- `docs/shots/`: the shell as it ran on 2026-11-12: web desktop and phone browser in both themes, and the terminal at 120x36 and 80x24 as PNG with its text grid beside each (`terminal-<size>-<state>[-light|-bandless|-16|-mono]`).
+- `docs/shots/`: renders of the content build; see Screenshots below.
 
-NSH Storage holds preferences under `corral.destination`, `corral.settings`, `corral.theme`, `corral.data` and `corral.now.layout`.
+NSH Storage persists only `corral.destination`, `corral.settings`, `corral.theme`, `corral.data`, `corral.conn`, `corral.mode` and `corral.now.layout`.
+
+## Screenshots
+
+`docs/shots/` contains desktop and phone web renders in dark and light themes, and terminal renders at 120x36 and 80x24 with a `.txt` capture beside each PNG. Web renders are 1440x900 for desktop and 390x844 for phone, with two desktop renders at 900x600.
+
+Start with `desktop-dark-now.png`, `desktop-dark-question.png`, `phone-dark-inbox.png`, `phone-dark-question.png` and `terminal-120x36-now.png`.
+
+The build's scripts rendered the packaged web build in headless Chromium with a desktop pointer and phone emulation, and rendered the terminal target to PNG in a private tmux. These are not captures from a real phone or the owner's terminal.
 
 ## Toolchain on this host
 
@@ -63,4 +86,4 @@ Native desktop backends are behind the off-by-default `desktop` Cargo feature be
 
 ## Not built
 
-Destination content, transport, sending, native window chrome, tray, global hotkey window, share sheet, push, biometric confirm and packaging are not built. The web package command produces a static site, not an installer.
+Daemon transport, native window chrome, tray, system-level global hotkey, share and push integration, biometric confirmation and installer packaging are not built. The hotkey window, share sheet and lock-screen push are local demos. The web package command produces a static site, not an installer.

@@ -1,36 +1,36 @@
  ◉ Corral │ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live    22:12  fixture · snapshot 2026-11-07 22:12
-╭─ corral ─────────────────────╮╭──────────────────────────────────────────────────────────────────────────────────────╮
-│ Autopilot                    ││ Inbox 5                                                                              │
-│ independent work continues   │├──────────────────────────────────────────────────────────────────────────────────────┤
-├──────────────────────────────┤│                                                                                      │
-│▌ Inbox                 5   i ││ Not built yet. This build is the app shell.                                          │
-│  Now                       n ││                                                                                      │
-│  Changes              12   . ││                                                                                      │
-│  Plans                 6   p ││                                                                                      │
-│  Agents                7   a ││                                                                                      │
-│  Review                3   r ││                                                                                      │
-│  Timeline                  t ││                                                                                      │
-│  Usage                     u ││                                                                                      │
-│  Settings                  , ││                                                                                      │
-├──────────────────────────────┤│                                                                                      │
-│  Ask                       / ││                                                                                      │
-│  Go to                    ^K ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-│                              ││                                                                                      │
-╰─ This device pawis-desktop ──╯╰──────────────────────────────────────────────────────────────────────────────────────╯
-  i  Inbox  n  Now  .  Changes  p  Plans  a  Agents  r  Review  t  Timeline  u  Usage  ,  Settings │  /  Ask  ^K  Go to
+╭─ corral ─────────────────────╮╭─────────────────────────────────┬────────────────────────────────────────────────────╮
+│ Autopilot                    ││ Needs you 5 ─────────────────── │  needs you   owner only   blocking                 ┃
+│ independent work continues   ││▌  Worker asks · T-868/R1/Q1     │ T-868/R1/Q1 · rev 2                                ┃
+├──────────────────────────────┤│▌● Restore policy: pane-origi… 3h│ from worker T-868 R1 · escalated by the PM · 3h    ┃
+│▌ Inbox                 5   i ││   Plan awaits acceptance · T-88…│ ago                                                ┃
+│  Now                       n ││ ● PM supervisor evolution:…  10h│ Restore policy: pane-origin input only, or all     ┃
+│  Changes              12   . ││   PM asks · PM/Q7 · sample      │ origins?                                           ┃
+│  Plans                 6   p ││ ● T-852 repair budget:…      12m├───┬─────────────────────────────────────────────── │
+│  Agents                7   a ││   Assistant A-7 asks · write…   │ S │ SITUATION                                      │
+│  Review                3   r ││ ● Write…                      7m│   │ T-701@P2 leaves one restore-policy decision    │
+│  Timeline                  t ││   Assistant A-7 waits · corral… │   │ open for T-868: on stock/plain paths where     │
+│  Usage                     u ││ ● Confirm on this device:…   10m│   │ Esc/dequeue restoration is enabled, should     │
+│  Settings                  , ││ Since your last visit 18:40 ─── │   │ restoration remove only pane-origin queued     │
+├──────────────────────────────┤│  22:06 ◐ T-894 gate started on… │   │ input, or restore all origins? Rich mode will  │
+│  Ask                       / ││  22:05 ◌ T-867 gate went stale… │   │ remain read-only/count-only with no            │
+│  Go to                    ^K ││  22:03 ◐ T-890 quick gate…      │   │ restoration either way.                        │
+│                              ││  22:03 ◌ T-852 gate went stale… │   │                                                │
+│                              ││  21:59 ● T-868 worker replied i…│   │ WAITING ON THIS ANSWER ──────────────────────  │
+│                              ││  21:17 ▶ T-871 worker started ·…│   │ ● T-868  Blocked until you answer              │
+│                              ││  21:11 · T-890 checkpoint 3…    │   │ ○ T-870  plan member 2 of 3 · final accept     │
+│                              ││  20:40 ▶ T-867 worker started ·…│   │          needs it                              │
+│                              ││  All 12 changes                 │   │ · T-869  independent · after T-867, not this   │
+│                              ││                                 │   │          answer                                │
+│                              ││                                 ├───┼─────────────────────────────────────────────── │
+│                              ││                                 │ B │ BACKGROUND                                     │
+│                              ││                                 │   │ T-868 host-queue-ledger · Give queued          │
+│                              ││                                 │   │ Pi-native input stable item identities and a   │
+│                              ││                                 │   │ durable lifecycle that keeps delivery          │
+│                              ││                                 │   │ acknowledgement (admitted, observed) distinct  │
+│                              ││                                 │   │ from execution (queued, started, then turn     │
+│                              ││                                 ├───┴────────────────────────────────────────────────┤
+│                              ││                                 │  Answer · option 1   Ask the worker                │
+│                              ││                                 │  Discuss with PM                                   │
+╰─ This device pawis-desktop ──╯╰─────────────────────────────────┴────────────────────────────────────────────────────╯
+  j k  move  Enter  open  f  focus  1 2  choose │  i  Inbox  n  Now  .   p   a   r   t   u   ,  │  /  Ask  ^K  Go to

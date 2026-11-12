@@ -1,0 +1,36 @@
+ ◉ Corral │ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live    22:12  fixture · snapshot 2026-11-07 22:12
+╭─ corral ─────────────────────╮╭──────────────────────────────────────────────────────────────────────────────────────╮
+│ Autopilot                    ││ ‹ Agents  T-868 host-queue-ledger                 `  switch   Transcript   Terminal  │
+│ independent work continues   │├──────────────────────────────────────────────────────────────┬───────────────────────┤
+├──────────────────────────────┤│ C Corral · 18:58                                            ┃│ RUN ───────────────── │
+│  Inbox                 5   i ││  Run R1 admitted on pi-sol xhigh · governed by T-701@P2 ·   ┃│ Task        T-868     │
+│  Now                       n ││  write scope 20 paths · herdr-core pane w12C:p2             ┃│             host-queu │
+│  Changes              12   . ││                                                             ┃│             e-ledger  │
+│  Plans                 6   p ││ W worker T-868 · 18:59                                      ┃│ Rail        ◐ ○ ○ ○   │
+│▌ Agents                7   a ││  Verifying installed Pi package metadata is 1.5.0 and       ┃│ Agent       pi-sol    │
+│  Review                3   r ││  refreshing its frozen dependencies in this worktree.       ┃│             xhigh     │
+│  Timeline                  t ││  ✓ Bash bun install --frozen-lockfile               ok 6.2s ┃│ Runtime     herdr-cor │
+│  Usage                     u ││  ✓ Read packages/corral-pi/patches/@earendil-wor… 612 lines ┃│             e ·       │
+│  Settings                  , ││                                                             ┃│             w12C:p2   │
+├──────────────────────────────┤│ W worker T-868 · 19:08                                      ┃│ Machine     workstati │
+│  Ask                       / ││  Stable identities are in:                                  ┃│             on        │
+│  Go to                    ^K ││  q-g<generation>-<bind>-<counter>. Lifecycle entries        ┃│ Started     18:58     │
+│                              ││  persist before any queue mutation.                         ┃│                       │
+│                              ││  ✓ Edit packages/corral-pi/src/host/queue.ts         +41 −6 ┃│ STEPS ─────────────── │
+│                              ││  ✓ Bash bun test test/queue-host.test.ts            16 pass ┃│ ✓ Verify Pi 1.5.0     │
+│                              ││   $ bun test test/queue-host.test.ts                        ││   metadata, refresh   │
+│                              ││    ✓ withdraw targets one identity                          ││   frozen deps         │
+│                              ││    ✓ start race: started persists before drain              ││ ✓ Stable queue        │
+│                              ││    ✓ replay returns stored outcome                          ││   identities +        │
+│                              ││    16 pass · 0 fail · 1.64s                                 ││   lifecycle journal   │
+│                              ││                                                             ││ ◐ Restore policy on   │
+│                              ││ W worker T-868 asked you · 19:12 · escalated by the PM      ││   stock/plain paths   │
+│                              ││   19:14                                                     ││ ○ Bridge queue_state  │
+│                              ││  ╭────────────────────────────────────────────────────────╮ ││   / queue_withdraw    │
+│                              ││  │ T-868/R1/Q1 · owner only · blocking                    │ ││ ○ Rebase, quick gate, │
+│                              ││  │ Restore policy: pane-origin input only, or all         │ ││   attach proof        │
+│                              │├──────────────────────────────────────────────────────────────┤                       │
+│                              ││ Message worker T-868…                                  Send  │                       │
+│                              ││ Sends with corral send T-868 · arrives as owner input        │                       │
+╰─ This device pawis-desktop ──╯╰──────────────────────────────────────────────────────────────┴───────────────────────╯
+  i  Inbox  n  Now  .  Changes  p  Plans  a  Agents  r  Review  t  Timeline  u  Usage  ,  Settings │  /  Ask  ^K  Go to
