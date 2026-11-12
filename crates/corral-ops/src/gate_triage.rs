@@ -89,6 +89,17 @@ pub fn status(ctx: &Ctx, id: &str) -> Result<GateTriage> {
 pub(crate) fn observe(store: &Store, id: &str, gate: &GateRecord) -> Result<GateTriage> {
     let mut state: GateTriage = store.record(AREA, id)?.unwrap_or_default();
     let mut changed = false;
+    // A stale receipt has no verdict. Release only the matching launch, including when
+    // observing a receipt retained by an older version; replay cannot release its successor.
+    if gate.result == GateResult::Stale
+        && gate.identity.as_ref().is_some_and(|identity| {
+            state.diagnostic_attempt.as_deref() == Some(identity.attempt.as_str())
+        })
+    {
+        state.diagnostic_attempt = None;
+        state.retry_requested = true;
+        changed = true;
+    }
     if gate.result == GateResult::Fail && !state.failures.iter().any(|e| e.gate == *gate) {
         state.failures.push(FailureEpisode {
             gate: gate.clone(),
