@@ -1,0 +1,24 @@
+ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live          fixture
+╭─ corral ─────────────╮╭──────────────────────────────────────────────────────╮
+│ Autopilot            ││ Quick thread · A-7   waiting on you       Esc  Close │
+│ independent work     │├──────────────────────────────────────────────────────┤
+│ continues            ││   corral plan progress T-870 ·                       │
+├──────────────────────┤│   corral question show T-868/R1/Q1 ·                 │
+│  Inbox         5   i ││   corral list --search receipt                       │
+│▌ Now               n ││   this ask $0.04 · 7.3k tokens                       │
+│  Changes      12   . ││   wording illustrative; facts from the 22:12         │
+│  Plans         6   p ││   snapshot                                           │
+│  Agents        7   a ││                                                      ┃
+│  Review        3   r │├──────────────────────────────────────────────────────┤
+│  Timeline          t ││                                                      │
+│  Usage             u ││  Assistant   PM ● live   pi-sol xhigh ▾              │
+│  Settings          , ││                 ↵  send  ⇧ ↵  new line  Ctrl ⇧ P  PM │
+├──────────────────────┤│                                      Ctrl ⇧ M  model │
+│▌ Ask               / ││                                                      │
+│  Go to            ^K ││  Ask a question, drop an idea, or give an instruct   │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││ Screenshot  Link  File                         Send  │
+│                      ││                                                      │
+╰─ pawis-desktop ──────╯╰──────────────────────────────────────────────────────╯
+  j…  move  En… open  Tab  tab │  i   n   .   p   a   r   t   u   ,  │  /   ^K

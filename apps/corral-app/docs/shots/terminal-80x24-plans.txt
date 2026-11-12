@@ -1,0 +1,24 @@
+ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live          fixture
+╭─ corral ─────────────╮╭──────────────────────────────────────────────────────╮
+│ Autopilot            ││  executing  T-870                                    ┃
+│ independent work     ││ accepted earlier · delivers to main                  ┃
+│ continues            ││ Pi input: stable queue item         Ask about this   ┃
+├──────────────────────┤│ lifecycle, editing, cancellation                     ┃
+│  Inbox         5   i │├───────────────────────────────────────────────────── ┃
+│  Now               n ││ ✓ Design › ◐ Members 0/3 landed ›                    ┃
+│  Changes      12   . ││ ○ Aggregate verify › ○ Final accept                  ┃
+│▌ Plans         6   p ││ ◌ 15 of 15 acceptance scenarios are not mapped to    ┃
+│  Agents        7   a ││   any member · final verify has no owner             ┃
+│  Review        3   r ││                                                      │
+│  Timeline          t ││ MEMBERS · LIVE STATE ──────────────────────────────  │
+│  Usage             u ││  LAYER 0 · CAN START NOW                             │
+│  Settings          , ││   ◐ T-867  queue-contract-core              ✓ ◌ ○ ○  │
+├──────────────────────┤│  LAYER 1 · AFTER LAYER 0                             │
+│  Ask               / ││ ▌ ● T-868  host-queue-ledger                ◐ ○ ○ ○  │
+│  Go to            ^K ││   ○ T-869  inbox-queue-ops                  ○ ○ ○ ○  │
+│                      ││ BLOCKING FINAL ACCEPTANCE ─────────────────────── 3  │
+│                      ││ · T-867 required work is Running                     │
+│                      ││ ◐ T-868 waits on your answer                         │
+│                      ││ · T-869 required work is Ready                       │
+╰─ pawis-desktop ──────╯╰──────────────────────────────────────────────────────╯
+  j…  plan  … member  x  scale │  i   n   .   p   a   r   t   u   ,  │  /   ^K

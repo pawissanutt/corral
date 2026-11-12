@@ -1,0 +1,36 @@
+ ◉ Corral │ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live    22:12  fixture · snapshot 2026-11-07 22:12
+╭─ corral ─────────────────────╮╭──────────────────────────────────────────────────────────────────────────────────────╮
+│ Autopilot                    ││ Agents                                                                  Wall   List  │
+│ independent work continues   │├──────────────────────────────────────────────────────────────────────────────────────┤
+├──────────────────────────────┤│ workstation  daemon host · herdr-core 0.1 · 6 agents ·…    machine name illustrative │
+│  Inbox                 5   i ││                                                                                      │
+│  Now                       n ││   ◐ A-7 Quick thread  waiting on you  Your caching idea is filed as T-903. I… pinned │
+│  Changes              12   . ││ ──────────────────────────────────────────────────────────────────────────────────── │
+│  Plans                 6   p ││    live       PM          supervisor · generation 14 waiting · next… live      21:40 │
+│▌ Agents                7   a ││    working    T-871       annotation-service         Edit…           live      21:17 │
+│  Review                3   r ││    working    T-854       Co-work C3: save, take…    cargo test -p…  snapshot  01:10 │
+│  Timeline                  t ││    needs you  T-868       host-queue-ledger          waiting on you… live      19:12 │
+│  Usage                     u ││    gating     gate-T-890  quick gate 1751bd2         nextest…        live      22:03 │
+│  Settings                  , ││    gating     gate-T-894  gate 6b36916               Compiling…      live      22:06 │
+├──────────────────────────────┤│    idle       T-867       queue-contract-core        idle ·…         live      22:05 │
+│  Ask                       / ││ ──────────────────────────────────────────────────────────────────────────────────── │
+│  Go to                    ^K ││  Assistant sessions 5 · daemon and pane ───────────────────────────────────────────  │
+│                              ││   ◐ A-15  T-854 co-work check         live · since 21:02  pane w15C:p2 · corral pi…  │
+│                              ││   ○ A-17  Board TUI mockup: async loading…   open  pane w9A:p1 · corral pi · focus … │
+│                              ││   ○ A-12  Co-work C2 follow-ups        open · task done  pane w9A:p2 · corral pi…    │
+│                              ││   ○ A-11  PM read contract questions         ended  − · focus T-890 · $0.52 ·…       │
+│                              ││   ◐ A-18  Changes review notes        live · since 20:31  runs: daemon · focus − ·…  │
+│                              ││   + New session   sessions illustrative                                              │
+│                              ││                                                                                      │
+│                              ││  Filed from chat 4 ───────────────────────────────────────── filed ids illustrative  │
+│                              ││   T-903 Gate: reuse receipts for…        filed by assistant A-7 · quick thread 22:11 │
+│                              ││   T-902 Board: PM inbox count in the…    filed by assistant A-7 · quick thread 22:10 │
+│                              ││   T-874 merged · comment on Pi review…   filed by assistant A-7 · quick thread 22:04 │
+│                              ││   T-899 PM read view…    filed by assistant A-17 · pane w9A:p1 (corral pi) yesterday │
+│                              ││                                                                                      │
+│                              ││ Tails are illustrative; agents, panes, profiles and states follow the 22:12          │
+│                              ││ snapshot.                                                                            │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+╰─ This device pawis-desktop ──╯╰──────────────────────────────────────────────────────────────────────────────────────╯
+  i  Inbox  n  Now  .  Changes  p  Plans  a  Agents  r  Review  t  Timeline  u  Usage  ,  Settings │  /  Ask  ^K  Go to

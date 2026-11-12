@@ -1,0 +1,36 @@
+ ◉ Corral │ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live    22:12  fixture · snapshot 2026-11-07 22:12
+╭─ corral ─────────────────────╮╭────────────────────────────────┬─────────────────────────────────────────────────────╮
+│ Autopilot                    ││ Awaiting your acceptance 1 ─── │  needs you   reviewed · approve P2  T-885 P2        ┃
+│ independent work continues   ││▌ ● T-885 P2 PM supervisor…     │ replay of 12:10–19:12  timing replay                ┃
+├──────────────────────────────┤│ Executing 4 ────────────────── │ PM supervisor evolution: bounded reads,             ┃
+│  Inbox                 5   i ││  ◐ T-870    Pi input:…  ◐●□ 0/3│ warm-context episodes                               ┃
+│  Now                       n ││  ◐ T-893    PM…         ◐□□ 0/3├──────────────────────────────────────────────────── ┃
+│  Changes              12   . ││  ◐ T-898    Anthropic… ◐□□□ 0/4│ ◐ Design · awaiting you › ○ Members 0/3 ›           ┃
+│▌ Plans                 6   p ││  ◐ T-874    Pi review…  ◐□□ 0/3│ ○ Aggregate verify › ○ Final accept                 ┃
+│  Agents                7   a ││ Approved · not started 1 ───── │                                                     ┃
+│  Review                3   r ││  ○ T-385 P5 Design: reliable…  │ PROBLEM                                             ┃
+│  Timeline                  t ││ Scale test 1 ───────────────── │ The PM owner and agent need a bounded and           ┃
+│  Usage                     u ││  ○ S-900    64-membe… synthetic│ consistent view of current responsibilities;        │
+│  Settings                  , ││                                │ operational continuity should not depend on an      │
+├──────────────────────────────┤│                                │ ever-growing conversation.                          │
+│  Ask                       / ││                                │                                                     │
+│  Go to                    ^K ││                                │ GOAL                                                │
+│                              ││                                │ Deliver a bounded first wave of PM information and  │
+│                              ││                                │ lifecycle visibility improvements, while reviewing  │
+│                              ││                                │ a longer-term hybrid supervisor design without      │
+│                              ││                                │ authorizing it wholesale.                           │
+│                              ││                                │                                                     │
+│                              ││                                │ CHANGES                                             │
+│                              ││                                │ • A bounded common semantic read contract for PM    │
+│                              ││                                │   CLI and native tools, with scope-specific         │
+│                              ││                                │   rendering and complete detail access.             │
+│                              ││                                │ • Existing attention, inbox, question, wait and     │
+│                              ││                                │   receipt records as one read-only obligation       │
+│                              ││                                │   view; no second scheduler or task database.       │
+│                              ││                                │ • Measure the improved loop and document an         │
+│                              ││                                ├─────────────────────────────────────────────────────┤
+│                              ││                                │  Accept ·…     Request…     Diff P1 …      Open…    │
+│                              ││                                │ Runs corral plan accept T-885 --rev P2 after a      │
+│                              ││                                │ fresh confirm…                                      │
+╰─ This device pawis-desktop ──╯╰────────────────────────────────┴─────────────────────────────────────────────────────╯
+  j k  plan  J K  member  x  scale │  i  Inbox  n  Now  .   p   a  Agents  r   t   u   ,  Settings │  /  Ask  ^K  Go to

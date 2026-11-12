@@ -1,0 +1,24 @@
+ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live          fixture
+╭─ corral ─────────────╮╭──────────────────────────────────────────────────────╮
+│ Autopilot            ││ Needs you 5 ───────────────────────────────────────  ┃
+│ independent work     ││▌  Worker asks · T-868/R1/Q1                          ┃
+│ continues            ││▌● Restore policy: pane-origin input only, or all… 3h │
+├──────────────────────┤│   Plan awaits acceptance · T-885 P2                  │
+│▌ Inbox         5   i ││ ● PM supervisor evolution: bounded reads         10h │
+│  Now               n ││   PM asks · PM/Q7 · sample                           │
+│  Changes      12   . ││ ● T-852 repair budget: re-gate only, or one mor… 12m │
+│  Plans         6   p │├──────────────────────────────────────────────────────┤
+│  Agents        7   a ││  needs you   owner only   blocking                   ┃
+│  Review        3   r ││ T-868/R1/Q1 · rev 2                                  │
+│  Timeline          t ││ from worker T-868 R1 · escalated by the PM · 3h ago  │
+│  Usage             u ││ Restore policy: pane-origin input only, or all       │
+│  Settings          , ││ origins?                                             │
+├──────────────────────┤├───┬───────────────────────────────────────────────── │
+│  Ask               / ││ S │ SITUATION                                        │
+│  Go to            ^K ││   │ T-701@P2 leaves one restore-policy decision      │
+│                      ││   │ open for T-868: on stock/plain paths where       │
+│                      │├───┴──────────────────────────────────────────────────┤
+│                      ││  Answer · option 1   Ask the worker                  │
+│                      ││  Discuss with PM                                     │
+╰─ pawis-desktop ──────╯╰──────────────────────────────────────────────────────╯
+  move  En… open  focus  choose │  i   n   .   p   a   r   t   u   ,  │  /   ^K

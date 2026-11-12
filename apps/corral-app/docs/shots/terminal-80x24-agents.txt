@@ -1,0 +1,24 @@
+ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live          fixture
+╭─ corral ─────────────╮╭──────────────────────────────────────────────────────╮
+│ Autopilot            ││ Agents                                  Wall   List  │
+│ independent work     │├──────────────────────────────────────────────────────┤
+│ continues            ││ workstation  daemon hos…  machine name illustrative  ┃
+├──────────────────────┤│                                                      ┃
+│  Inbox         5   i ││   ◐ A-7 Quick thread  waiting on you  Your…  pinned  ┃
+│  Now               n ││ ───────────────────────────────────────────────────  ┃
+│  Changes      12   . ││    live       PM          supervis… live      21:40  ┃
+│  Plans         6   p ││    working    T-871       annotati… live      21:17  ┃
+│▌ Agents        7   a ││    working    T-854       Co-work…  snapshot  01:10  ┃
+│  Review        3   r ││    needs you  T-868       host-que… live      19:12  ┃
+│  Timeline          t ││    gating     gate-T-890  quick…    live      22:03  ┃
+│  Usage             u ││    gating     gate-T-894  gate…     live      22:06  ┃
+│  Settings          , ││    idle       T-867       queue-co… live      22:05  ┃
+├──────────────────────┤│ ───────────────────────────────────────────────────  ┃
+│  Ask               / ││  Assistant sessions 5 · daemon and pane ──────────   │
+│  Go to            ^K ││   ◐ A-15  T-854…      live · since 21:02  pane…      │
+│                      ││   ○ A-17  Board TUI mockup…  open  pane w9A:p1 ·…    │
+│                      ││   ○ A-12  Co-work C2…  open · task done  pane…       │
+│                      ││   ○ A-11  PM read contrac…  ended  − · focus T-890…  │
+│                      ││   ◐ A-18  Changes…    live · since 20:31  runs:…     │
+╰─ pawis-desktop ──────╯╰──────────────────────────────────────────────────────╯
+  i  Inbox  n  Now  .   p   a   r   t   u   ,  Settings │  /  Ask  ^K  Go to

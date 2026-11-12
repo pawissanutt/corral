@@ -1,0 +1,36 @@
+ ◉ Corral │ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live    22:12  fixture · snapshot 2026-11-07 22:12
+╭─ corral ─────────────────────╮╭──────────────────────────────────────────────────────────────────────────────────────╮
+│ Autopilot                    ││ Commands                                          ↑↓  move   Enter  run   Esc  close │
+│ independent work continues   ││ › Go to, open a task id, answer, accept…                                             │
+├──────────────────────────────┤├──────────────────────────────────────────────────────────────────────────────────────┤
+│  Inbox                 5   i ││ Needs you                                                                            ┃
+│▌ Now                       n ││ Answer T-868/R1/Q1 · restore policy                                                  ┃
+│  Changes              12   . ││ Review plan T-885 P2 · accept or request changes                                     ┃
+│  Plans                 6   p ││ Go to                                                                                ┃
+│  Agents                7   a ││ Inbox                                                                             i  ┃
+│  Review                3   r ││ Now                                                                               n  ┃
+│  Timeline                  t ││ Changes                                                                           .  ┃
+│  Usage                     u ││ Plans                                                                             p  ┃
+│  Settings                  , ││ Agents                                                                            a  ┃
+├──────────────────────────────┤│ Review                                                                            r  ┃
+│  Ask                       / ││ Timeline                                                                          t  ┃
+│▌ Go to                    ^K ││ Usage                                                                             u  │
+│                              ││ Settings                                                                          ,  │
+│                              ││ Open                                                                                 │
+│                              ││ T-890 pm-bounded-read-contract                                                       │
+│                              ││ T-894 api-connections                                                                │
+│                              ││ T-871 annotation-service · session                                                   │
+│                              ││ T-868 host-queue-ledger · session                                                    │
+│                              ││ Plan T-870 Pi input queue lifecycle                                                  │
+│                              ││ Device                                                                               │
+│                              ││ Pair a new device                                                                    │
+│                              ││ View                                                                                 │
+│                              ││ Switch transcript / terminal                                                      `  │
+│                              ││ Settings                                                                             │
+│                              ││ Settings: Devices                                                                    │
+│                              ││ Settings: Machines                                                                   │
+│                              ││ Settings: Connection                                                                 │
+│                              ││ Settings: Notifications                                                              │
+│                              ││ Settings: Assistant                                                                  │
+╰─ This device pawis-desktop ──╯╰──────────────────────────────────────────────────────────────────────────────────────╯
+  j k  move  Enter  open  Tab  tab │  i  Inbox  n  Now  .   p   a  Agents  r   t   u   ,  Settings │  /  Ask  ^K  Go to

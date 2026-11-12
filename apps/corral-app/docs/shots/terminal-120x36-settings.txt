@@ -1,0 +1,36 @@
+ ◉ Corral │ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live    22:12  fixture · snapshot 2026-11-07 22:12
+╭─ corral ─────────────────────╮╭──────────────────────────────────────────────────────────────────────────────────────╮
+│ Autopilot                    ││ ╭─ Devices ───────────────────────────────────────────────────────────────────────╮  ┃
+│ independent work continues   ││ │ One owner, many devices. Each device signs its actions; revoking one ends its   │  ┃
+├──────────────────────────────┤│ │ sessions at once.                                                               │  ┃
+│  Inbox                 5   i ││ │                                                                                 │  ┃
+│  Now                       n ││ │ ╭─────────────────────────────────────────────────────────────────────────────╮ │  ┃
+│  Changes              12   . ││ │ │ QR: open Devices in the desktop or phone app to show it                     │ │  ┃
+│  Plans                 6   p ││ │ │                                                                             │ │  ┃
+│  Agents                7   a ││ │ │ ✓ Show the QR on a trusted surface                                          │ │  ┃
+│  Review                3   r ││ │ │   Here, or run corral device pair in a terminal on the daemon host.         │ │  ┃
+│  Timeline                  t ││ │ │ ✓ Scan it on the new device                                                 │ │  ┃
+│  Usage                     u ││ │ │   The QR carries the daemon public key, reach hints and a one-time token    │ │  ┃
+│▌ Settings                  , ││ │ │   (expires in 5 min).                                                       │ │  ┃
+│  ▌ Devices                   ││ │ │ 3 Compare the code on both screens                                          │ │  ┃
+│    Machines                  ││ │ │   Both sides derive it from the key exchange; a mismatch means someone is   │ │  ┃
+│    Connection                ││ │ │   in the middle.                                                            │ │  ┃
+│    Notifications             ││ │ │ 4 Confirm here                                                              │ │  ┃
+│    Assistant                 ││ │ │   Only a trusted surface can confirm. The new device then appears below and │ │  ┃
+│    Autopilot & grants        ││ │ │   can be revoked any time.                                                  │ │  ┃
+│    General                   ││ │ │                                                                             │ │  ┃
+├──────────────────────────────┤│ │ │ ▲ pawis-ipad wants to pair · iPadOS · via direct · lan                      │ │  ┃
+│  Ask                       / ││ │ │   Code on that device: 482 913                                              │ │  ┃
+│  Go to                    ^K ││ │ │    Codes match · confirm    Reject                                          │ │  ┃
+│                              ││ │ │                                                                             │ │  ┃
+│                              ││ │ │  daemon key      ed25519 · 7F3A 91C2 · 0E5B D4A8                            │ │  │
+│                              ││ │ │  reach hints     loopback · lan 192.168.1.20:7419 · tailscale               │ │  │
+│                              ││ │ │                  workstation.tail · relay relay.pawis.dev                   │ │  │
+│                              ││ │ │  token           one-time · expires 22:17                                   │ │  │
+│                              ││ │ │                                                                             │ │  │
+│                              ││ │ │  Back a step    Next step (demo)                                            │ │  │
+│                              ││ │ ╰─────────────────────────────────────────────────────────────────────────────╯ │  │
+│                              ││ │                                                                                 │  │
+│                              ││ │ pawis-desktop  this device   via=app:pawis-desktop                              │  │
+╰─ This device pawis-desktop ──╯╰──────────────────────────────────────────────────────────────────────────────────────╯
+  i  Inbox  n  Now  .  Changes  p  Plans  a  Agents  r  Review  t  Timeline  u  Usage  ,  Settings │  /  Ask  ^K  Go to

@@ -1,0 +1,36 @@
+ ◉ Corral │ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live    22:12  fixture · snapshot 2026-11-07 22:12
+╭─ corral ─────────────────────╮╭──────────────────────────────────────────────────────────────────────────────────────╮
+│ Autopilot                    ││ ‹ Agents  T-868 host-queue-ledger                 `  switch   Transcript   Terminal  │
+│ independent work continues   │├──────────────────────────────────────────────────────────────────────────────────────┤
+├──────────────────────────────┤│ herdr-core · w12C:p2 · 140×46  live stream · scrollback…  keys go to the agent's…    │
+│  Inbox                 5   i │├──────────────────────────────────────────────────────────────────────────────────────┤
+│  Now                       n ││ pi 1.5.0 · corral bound session · T-868 R1 · pi-sol xhigh                            │
+│  Changes              12   . ││ ───────────────────────────────────────────────────────────                          │
+│  Plans                 6   p ││ ● Edit packages/corral-pi/src/bridge/queue.ts                                        │
+│▌ Agents                7   a ││   +88 -3                                                                             │
+│  Review                3   r ││ ● Bash bun run --bun typecheck                                                       │
+│  Timeline                  t ││   ok 11.0s                                                                           │
+│  Usage                     u ││                                                                                      │
+│  Settings                  , ││ ? T-868/R1/Q1 · waiting on the owner                                                 │
+├──────────────────────────────┤│   Restore policy: pane-origin input only, or all origins?                            │
+│  Ask                       / ││   1. Restore only pane-origin input; leave Corral/extension items queued             │
+│  Go to                    ^K ││   2. Retain restore-all; journal removals, resubmit as new pane input                │
+│                              ││                                                                                      │
+│                              ││ owner (app:pawis-iphone): Does option 1 change anything in rich mode?                │
+│                              ││ ● No. Rich mode stays read-only/count-only; neither option restores there.           │
+│                              ││                                                                                      │
+│                              ││ queued  0 steering · 0 follow-ups · queued, not execution                            │
+│                              ││ ›                                                                                    │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+╰─ This device pawis-desktop ──╯╰──────────────────────────────────────────────────────────────────────────────────────╯
+  i  Inbox  n  Now  .  Changes  p  Plans  a  Agents  r  Review  t  Timeline  u  Usage  ,  Settings │  /  Ask  ^K  Go to

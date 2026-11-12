@@ -1,0 +1,36 @@
+ ◉ Corral │ ● corrald healthy  ● herdr-core ok  ● herdr-tui ok  ● PM live    22:12  fixture · snapshot 2026-11-07 22:12
+╭─ corral ─────────────────────╮╭──────────────────────────────────────────────────────────────────────────────────────╮
+│ Autopilot                    ││Your verdict 1 ──────────┤ T-868 · R1 · candidate 85b45e1e                            ┃
+│ independent work continues   ││▌ ● T-868 · 85b45e1e     │ base main · 5 files · +334 −28                             ┃
+├──────────────────────────────┤│    host-queue-ledger    │ host-queue-ledger                                          ┃
+│  Inbox                 5   i ││    gate ✓ · review ✓ ·… ├─────────────────────────────────────────────────────────── ┃
+│  Now                       n ││Verifying 3 ─────────────┤ VERDICTS · BOUND TO CANDIDATE SHA ───────────────────────  ┃
+│  Changes              12   . ││  ◐ T-890 · 1751bd2      │ ◌ gate   f34f3df6  04:45 fail …  stale · older candidate   ┃
+│  Plans                 6   p ││    pm-bounded-read-cont…│ ✓ gate   85b45e1e  08:26 pass · quick tier · receipt…      ┃
+│  Agents                7   a ││    quick gate running   │ ✓ review 85b45e1e  22:40 approve · R1-review2 · notes…     ┃
+│▌ Review                3   r ││  ◐ T-894 · 6b36916      │ ○ you    85b45e1e        your verdict                      ┃
+│  Timeline                  t ││    api-connections      ├─────────────────────────────────────────────────────────── ┃
+│  Usage                     u ││    gate running         │ Diff · 5 files  Report  Screenshot  Gate log               ┃
+│  Settings                  , ││  ◆ T-867 · 5949a4b      ├─────────────────────────────────────────────────────────── ┃
+├──────────────────────────────┤│    queue-contract-core  │                                                            ┃
+│  Ask                       / ││    gate stale · re-gate │ packages/corral-… lines illustrative Ask about this hunk   ┃
+│  Go to                    ^K ││ T-868 here is a replay  │ @@ -212,9 +212,9 @@ describe("cross-lane paging")          │
+│                              ││ of its 2026-11-08       │  212  212     const lane = await privateHerdr({ plugins:   │
+│                              ││ review; the rest follow │  213      -   const inputs = 256;                          │
+│                              ││ the snapshot.           │       213 +   const inputs = 128;                          │
+│                              ││                         │  ╭──────────────────────────────────────────────────────╮  │
+│                              ││                         │  │ reviewer · pi-sol · R1-review2 · on 85b45e1e         │  │
+│                              ││                         │  │ Fixture-only change: 256 → 128 inputs. Every         │  │
+│                              ││                         │  │ assertion, the 512 ring and the production           │  │
+│                              ││                         │  │ event/frame bounds are unchanged; the original red   │  │
+│                              ││                         │  │ on f34f3df6 stays in history.                        │  │
+│                              ││                         │  │ Reply or add a line comment as owner…             c  │  │
+│                              ││                         │  ╰──────────────────────────────────────────────────────╯  │
+│                              ││                         │  214  214     for (let i = 0; i < inputs; i++) await       │
+│                              ││                         │  215  215     const events = await readAll(lane, { page:   │
+│                              ││                         ├────────────────────────────────────────────────────────────┤
+│                              ││                         │  Approve 85b45e1e    Request changes                       │
+│                              ││                         │    Verdicts apply to 85b45e1e only; a new candidate makes… │
+│                              ││                         │                        actor=owner · via=app:pawis-desktop │
+╰─ This device pawis-desktop ──╯╰─────────────────────────┴────────────────────────────────────────────────────────────╯
+  s  split │  i  Inbox  n  Now  .  Changes  p  Plans  a  Agents  r  Review  t   u   ,  Settings │  /  Ask  ^K  Go to

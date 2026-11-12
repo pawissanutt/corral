@@ -1,0 +1,13 @@
+# Machine-local build settings for this WSL2 host.
+
+# The global ~/.cargo/config.toml sets rustc-wrapper = "sccache", which crashes on this host.
+[build]
+rustc-wrapper = ""
+
+# The web target compiles C to WebAssembly and needs clang and llvm-ar. This host has no
+# system clang and no sudo, so the Ubuntu clang-18 packages are unpacked under ~/.local/opt/llvm18.
+# `force` is needed because nsh exports the bare names `clang` and `llvm-ar` for this target.
+# With `sudo apt install clang llvm` this whole table can go.
+[env]
+CC_wasm32_unknown_unknown = { value = "/home/pawis/.local/opt/llvm18/usr/lib/llvm-18/bin/clang", force = true }
+AR_wasm32_unknown_unknown = { value = "/home/pawis/.local/opt/llvm18/usr/lib/llvm-18/bin/llvm-ar", force = true }
