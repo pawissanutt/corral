@@ -153,9 +153,9 @@ test("/questions takes the owner's own typed answer, keeps drafts across questio
   await handlers.get("session_start")?.({}, ctx);
   const id = q.ask("Q", [{ question: "Which release?", options: ["One", "Two"] },
     { question: "Notify?", options: ["Yes", "No"], freeText: false }]).id;
-  const down = "\x1b[B", right = "\x1b[C", left = "\x1b[D";
+  const down = "\x1b[B", tab = "\t", back = "\x1b[Z";
   // Typing on Other, moving to Q2 and back keeps the draft; Escape leaves the question pending.
-  keys = [down, down, "ship 1.4", right, left, "\x1b"];
+  keys = [down, down, "ship 1.4", tab, back, "\x1b"];
   await command(id, ctx);
   expect(screen).toContain("Other: ship 1.4");
   expect(q.get(id)?.status).toBe("pending"); expect(records).toEqual([]);

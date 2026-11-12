@@ -118,3 +118,39 @@ test("a pasted note survives revision and a partial Escape", () => {
   dialog.handleInput("\x1b");
   expect(result).toEqual({ submitted: false, answers: [{ selected: ["One"], text: "keep database unchanged!" }] });
 });
+
+const plainText = (lines: string[]) => lines.join("\n").replace(/\x1b_[^\x07]*\x07|\x1b\[[0-9;]*m/g, "");
+
+test("a typed answer wider than the field keeps the caret visible, edits mid-text and shows in full before Submit", () => {
+  let result: DialogResult | undefined;
+  const dialog = new AskDialog([{ question: "Which?", options: [{ label: "One" }, { label: "Two" }] }], (r) => { result = r; });
+  const long = "Ship only after the database migration has passed QA; NEVER deploy before sign-off";
+  dialog.handleInput("\x1b[B"); dialog.handleInput("\x1b[B");
+  dialog.handleInput(long);
+  const row = plainText(dialog.render(40)).split("\n").find((l) => l.includes("Other:"))!;
+  expect(row).toContain("sign-off");
+  expect(row).not.toContain("Ship only");
+  dialog.handleInput("\x01"); // Home: the field scrolls back to the start
+  expect(plainText(dialog.render(40))).toContain("Ship only");
+  for (let k = 0; k < 4; k++) dialog.handleInput("\x1b[C");
+  dialog.handleInput(" 1.4");
+  dialog.handleInput("\r");
+  const summary = plainText(dialog.render(40)).replace(/\n/g, " ");
+  for (const word of ["Ship 1.4 only", "migration", "NEVER", "sign-off"]) expect(summary).toContain(word);
+  dialog.handleInput("\r");
+  expect(result).toEqual({ submitted: true, answers: [{ selected: [], text: long.replace("Ship", "Ship 1.4") }] });
+});
+
+test("Space clears a chosen single option so typed text replaces it instead of becoming a note", () => {
+  let result: DialogResult | undefined;
+  const dialog = new AskDialog([{ question: "Which?", options: [{ label: "A" }, { label: "B" }], freeText: true }], (r) => { result = r; });
+  dialog.handleInput("\r"); // choose A
+  dialog.handleInput("\x1b[Z"); // back to the question
+  expect(plainText(dialog.render(72))).toContain("Space clear");
+  dialog.handleInput(" "); // clear A
+  dialog.handleInput("\x1b[B"); dialog.handleInput("\x1b[B");
+  expect(plainText(dialog.render(72))).toContain("Other:");
+  dialog.handleInput("neither"); dialog.handleInput("\r");
+  dialog.handleInput("\x1b");
+  expect(result).toEqual({ submitted: false, answers: [{ selected: [], text: "neither" }] });
+});
