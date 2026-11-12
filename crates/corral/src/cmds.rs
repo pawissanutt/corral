@@ -734,7 +734,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
                 crate::stats::run(&ctx, &by, since.as_deref(), json, html, out.as_deref())
             }
         }
-        Cmd::Sync { watch } => {
+        Cmd::Sync { watch, interval } => {
             let ctx = Ctx::open_for_sync(&start_dir(&root)?)?;
             entry.apply(&ctx.store)?;
             if !watch {
@@ -747,7 +747,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
                 if let Err(e) = corral_ops::supervise(&ctx) {
                     eprintln!("supervise: {e:#}");
                 }
-                std::thread::sleep(Duration::from_secs(2));
+                std::thread::sleep(Duration::from_secs(interval));
             }
         }
         Cmd::Autopilot { action, json } => crate::mode_cmd::legacy(open(&root)?, &action, json),

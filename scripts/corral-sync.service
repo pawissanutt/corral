@@ -4,12 +4,15 @@ Description=Corral supervised sync (user service)
 [Service]
 Type=simple
 # Replace both placeholders with absolute paths before enabling this unit.
-ExecStart=/ABSOLUTE/PATH/TO/corral --root "<WORKSPACE>" sync --watch
+# --interval 15: this driver runs beside a board that already syncs every two seconds.
+ExecStart=/ABSOLUTE/PATH/TO/corral --root "<WORKSPACE>" sync --watch --interval 15
 Restart=always
 RestartSec=5
 # Select the store's existing herdr server explicitly; never start one here.
 # Environment=CORRAL_HERDR_SESSION=your-session
 # Environment=HERDR_SOCKET_PATH=/absolute/path/to/herdr.sock
+# The user manager's PATH often lacks herdr; list the directories this driver needs.
+# Environment=PATH=/home/you/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 [Install]
 WantedBy=default.target

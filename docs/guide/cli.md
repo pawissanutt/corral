@@ -81,7 +81,7 @@ Commands:
   retry                   Start a fresh run for a task
   discard                 Discard the current run and drop the task
   jump                    Focus the task's herdr pane
-  sync                    Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing every 2 s, headless)
+  sync                    Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing, headless)
   autopilot               Compatibility alias: shared status, workspace pause, or guidance for scoped activation
   hook                    herdr plugin event hook: run sync once, always exit 0
   bind-session            Bind legacy pane ownership using verified launch or plugin-registration evidence
@@ -1111,7 +1111,7 @@ Run one corral-pi host request: a JSON envelope on stdin, one JSON receipt on st
 Usage: corral agent call [OPTIONS] --op <OP>
 
 Options:
-      --op <OP>      Enumerated v1 operation; must equal the envelope's op [possible values: hello, event, receipt_lookup, ask, withdraw, wait, progress, todo, checkpoint, evidence, artifact, gate, done, verdict, question_answer, question_escalate, question_cancel, reply, comment, capture, read_brief, read_next, read_show, read_list, read_search, read_route, read_artifacts, read_content, read_lessons, read_annotations, inbox_read, inbox_resolve, job, job_monitor, plan_write, plan_submit, plan_verdict, owner_action, write_permission, assistant_plan, assistant_plan_review, assistant_handoff, memory_list, memory_read, memory_put, memory_remove]
+      --op <OP>      Enumerated v1 operation; must equal the envelope's op [possible values: hello, event, receipt_lookup, ask, withdraw, wait, progress, todo, notes, pm_action, pm_shadow, checkpoint, evidence, artifact, gate, done, verdict, question_answer, question_escalate, question_cancel, reply, comment, capture, read_brief, read_next, read_show, read_list, read_search, read_route, read_artifacts, read_content, read_lessons, read_annotations, inbox_read, inbox_resolve, job, job_monitor, plan_write, plan_submit, plan_verdict, owner_action, write_permission, assistant_plan, assistant_plan_review, assistant_handoff, memory_list, memory_read, memory_put, memory_remove]
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -2009,6 +2009,8 @@ Usage: corral report [OPTIONS]
 Options:
       --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
       --since <SINCE>      Include dispatches started in the last N hours, days or weeks [default: 30d]
+      --until <UNTIL>      Exclusive RFC 3339 end timestamp (requires --by-item)
+      --by-item            Report per-item API-equivalent cost estimates for reporting, not limits
       --project <PROJECT>  Only this project's tasks
       --open               Open the pinned page through the loopback artifact server
       --json               Print the analytics model as JSON
@@ -4241,14 +4243,15 @@ Options:
 ## `corral sync`
 
 ```text
-Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing every 2 s, headless)
+Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing, headless)
 
 Usage: corral sync [OPTIONS]
 
 Options:
-      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
       --watch
-  -h, --help         Print help
+      --interval <INTERVAL>  Seconds to sleep between --watch passes; raise it for a driver that runs beside a board [default: 2]
+  -h, --help                 Print help
 ```
 
 ## `corral autopilot`
@@ -4301,14 +4304,215 @@ Open the PM pane, or inspect the next PM decision
 Usage: corral pm [OPTIONS] [COMMAND]
 
 Commands:
-  bench    Replay frozen events and score code policy or imported model decisions, offline
-  next     Read authorized actions, pending decisions and waits without changing state
-  brief    Compact board state and the next decision, without syncing
-  act      Revalidate a revision-bound action and run the existing authorized executors
-  present  Acknowledge presentation, not resolution, of an exact owner decision
-  resolve  Record an actual owner answer to a workspace coordination decision
-  inbox    The PM inbox: requests from assistants and the owner, each with a recorded outcome
-  help     Print this message or the help of the given subcommand(s)
+  notes         Manage durable PM context as the owner
+  guard-resume  Resume a PM paused by the cache usage guard
+  relaunch      Recover the recorded corral-pi PM in the same conversation, without taking focus
+  rotate        Start a fresh PM conversation in a new generation once nothing in the old one would be lost; prints the blocking reasons otherwise
+  shadow        Shadow dispatcher observations (no effect)
+  bench         Replay frozen events and score code policy or imported model decisions, offline
+  next          Read authorized actions, pending decisions and waits without changing state
+  brief         Compact board state and the next decision, without syncing
+  act           Revalidate a revision-bound action and run the existing authorized executors
+  present       Acknowledge presentation, not resolution, of an exact owner decision
+  resolve       Record an actual owner answer to a workspace coordination decision
+  inbox         The PM inbox: requests from assistants and the owner, each with a recorded outcome
+  help          Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral pm notes`
+
+```text
+Manage durable PM context as the owner
+
+Usage: corral pm notes [OPTIONS] <COMMAND>
+
+Commands:
+  list       Read the complete bounded record
+  add        Add caller-attributed context (not an authorization)
+  supersede  Replace a note, retaining its supersession link
+  remove     Remove a note
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+#### `corral pm notes list`
+
+```text
+Read the complete bounded record
+
+Usage: corral pm notes list [OPTIONS]
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+#### `corral pm notes add`
+
+```text
+Add caller-attributed context (not an authorization)
+
+Usage: corral pm notes add [OPTIONS] --kind <KIND> --text <TEXT>
+
+Options:
+      --kind <KIND>
+
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --text <TEXT>
+
+      --provenance <PROVENANCE>
+
+      --reason <REASON>
+
+      --resume-when <RESUME_WHEN>
+
+      --expect-revision <EXPECT_REVISION>
+
+      --json
+
+  -h, --help
+          Print help
+```
+
+#### `corral pm notes supersede`
+
+```text
+Replace a note, retaining its supersession link
+
+Usage: corral pm notes supersede [OPTIONS] --text <TEXT> <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --text <TEXT>
+
+      --provenance <PROVENANCE>
+
+      --reason <REASON>
+
+      --resume-when <RESUME_WHEN>
+
+      --expect-revision <EXPECT_REVISION>
+
+      --json
+
+  -h, --help
+          Print help
+```
+
+#### `corral pm notes remove`
+
+```text
+Remove a note
+
+Usage: corral pm notes remove [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+
+Options:
+      --expect-revision <EXPECT_REVISION>
+
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json
+
+  -h, --help
+          Print help
+```
+
+### `corral pm guard-resume`
+
+```text
+Resume a PM paused by the cache usage guard
+
+Usage: corral pm guard-resume [OPTIONS]
+
+Options:
+      --json
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral pm relaunch`
+
+```text
+Recover the recorded corral-pi PM in the same conversation, without taking focus
+
+Usage: corral pm relaunch [OPTIONS]
+
+Options:
+      --replace
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --reason <REASON>  [default: owner_request]
+      --json
+  -h, --help             Print help
+```
+
+### `corral pm rotate`
+
+```text
+Start a fresh PM conversation in a new generation once nothing in the old one would be lost; prints the blocking reasons otherwise
+
+Usage: corral pm rotate [OPTIONS]
+
+Options:
+      --reason <REASON>  [default: owner_request]
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --force            Rotate despite blockers, except an open turn, an open delivery envelope or a starting successor
+      --json
+  -h, --help             Print help
+```
+
+### `corral pm shadow`
+
+```text
+Shadow dispatcher observations (no effect)
+
+Usage: corral pm shadow [OPTIONS] <COMMAND>
+
+Commands:
+  list    Show cumulative counters and the most recent observations
+  export  Export non-stale choices as pm bench response JSONL
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+#### `corral pm shadow list`
+
+```text
+Show cumulative counters and the most recent observations
+
+Usage: corral pm shadow list [OPTIONS]
+
+Options:
+      --json
+      --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --limit <LIMIT>  [default: 20]
+  -h, --help           Print help
+```
+
+#### `corral pm shadow export`
+
+```text
+Export non-stale choices as pm bench response JSONL
+
+Usage: corral pm shadow export [OPTIONS]
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
