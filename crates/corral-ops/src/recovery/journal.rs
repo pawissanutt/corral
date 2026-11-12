@@ -27,7 +27,9 @@ pub(crate) fn bind_journal(
             },
             attempt,
         ),
-        RecoveryEffect::PlanAcceptance { .. } | RecoveryEffect::CodeAcceptance { .. } => {
+        RecoveryEffect::ExternalCompletion { .. }
+        | RecoveryEffect::PlanAcceptance { .. }
+        | RecoveryEffect::CodeAcceptance { .. } => {
             anyhow::bail!("acceptance is not launch authorization")
         }
     };
@@ -100,7 +102,8 @@ pub(super) fn append_links(ctx: &Ctx, record: &mut RecoveryRecord) -> Result<()>
                 candidate: candidate.clone(),
             })
         }
-        RecoveryEffect::PlanAcceptance { .. }
+        RecoveryEffect::ExternalCompletion { .. }
+        | RecoveryEffect::PlanAcceptance { .. }
         | RecoveryEffect::CodeAcceptance { .. }
         | RecoveryEffect::Admission { .. } => None,
     };
@@ -114,7 +117,9 @@ pub(super) fn append_links(ctx: &Ctx, record: &mut RecoveryRecord) -> Result<()>
             ..
         } => Some(RecoveryAdmissionStage::CodeReview),
         RecoveryEffect::Admission { stage, .. } => Some(*stage),
-        RecoveryEffect::PlanAcceptance { .. } | RecoveryEffect::CodeAcceptance { .. } => None,
+        RecoveryEffect::ExternalCompletion { .. }
+        | RecoveryEffect::PlanAcceptance { .. }
+        | RecoveryEffect::CodeAcceptance { .. } => None,
     };
     let journal = if let Some(stage) = stage {
         ctx.store

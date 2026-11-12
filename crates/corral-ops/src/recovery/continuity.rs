@@ -39,6 +39,9 @@ fn validate(
         "recovery_stale: raw policy, sources or reviewer definitions changed"
     );
     match &record.preview.request.target.identity {
+        RecoveryIdentity::External { .. } => {
+            anyhow::bail!("external completion is not native recovery acceptance")
+        }
         RecoveryIdentity::Plan {
             plan,
             artifact_sha256,

@@ -326,6 +326,7 @@ fn resume_checks_require_exact_canonical_answers_landing_and_hold_evidence() {
                     "branch":"corral/T","base":"main","base_sha":"base","started":now()
                 }))?];
                 task.landed = Some(corral_core::LandingReceipt {
+                    external: None,
                     run: receipt_run.into(),
                     sha: "a".repeat(40),
                 });

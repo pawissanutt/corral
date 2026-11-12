@@ -834,6 +834,19 @@ pub(crate) fn protected(ctx: &Ctx, tasks: &[corral_core::Task]) -> Result<HashSe
         })
         .map(|a| a.path.clone())
         .collect();
+    // Accepted external delivery must retain the exact evidence bytes as well as their hashes.
+    for task in tasks {
+        for record in crate::recovery::recover_history(ctx, &task.id)? {
+            if let corral_core::RecoveryEffect::ExternalCompletion { delivery, .. } =
+                &record.preview.proposed_effect
+            {
+                paths.extend(
+                    [&delivery.gate, &delivery.review, &delivery.landing]
+                        .map(|proof| proof.reference.clone()),
+                );
+            }
+        }
+    }
     for session in ctx.store.list_assistants()? {
         paths.extend(
             session

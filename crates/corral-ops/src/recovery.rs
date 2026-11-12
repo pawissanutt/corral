@@ -21,6 +21,7 @@ mod code;
 mod continuity;
 pub(crate) use code::*;
 mod evaluate;
+mod external;
 mod policy;
 mod receipts;
 mod snapshot;

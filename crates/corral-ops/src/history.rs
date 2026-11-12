@@ -28,6 +28,7 @@ impl Landed {
         match self.strategy.as_str() {
             "fast_forward" => "ff",
             "keep_branch" => "kept",
+            "external_forced" => "external/forced",
             s => s,
         }
     }

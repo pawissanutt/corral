@@ -15,6 +15,8 @@ enum Action {
     UseReviewer,
     AcceptPlan,
     AcceptCode,
+    /// Reconcile work already delivered externally; never merge the native candidate
+    ReconcileExternal,
     ForceAdmission,
 }
 
@@ -72,8 +74,11 @@ pub struct RecoverArgs {
     /// Plan acceptance resolutions; binds the actual file bytes into the preview
     #[arg(long)]
     notes_file: Option<PathBuf>,
+    /// ExternalDelivery JSON: full commit/tree and exact gate/review/landing artifact paths + hashes
+    #[arg(long)]
+    external_file: Option<PathBuf>,
     /// Read durable operations, not preview proposals
-    #[arg(long, conflicts_with_all = ["action", "stage", "plan", "run", "reviewer", "merge", "exceptions", "notes_file", "apply", "reason"])]
+    #[arg(long, conflicts_with_all = ["action", "stage", "plan", "run", "reviewer", "merge", "exceptions", "notes_file", "external_file", "apply", "reason"])]
     history: bool,
     /// Exact current preview digest; not permission and never a yes/force flag
     #[arg(long, requires = "reason")]
@@ -103,6 +108,10 @@ impl RecoverArgs {
         ensure!(
             matches!(action, Action::AcceptPlan) == self.notes_file.is_some(),
             "--notes-file is required only for accept-plan"
+        );
+        ensure!(
+            matches!(action, Action::ReconcileExternal) == self.external_file.is_some(),
+            "--external-file is required only for reconcile-external"
         );
         let notes = self
             .notes_file
@@ -152,6 +161,17 @@ impl RecoverArgs {
                     _ => anyhow::bail!("accept-code needs --merge keep, rebase or ff"),
                 },
             },
+            Action::ReconcileExternal => RecoveryAction::ReconcileExternal {
+                delivery: serde_json::from_slice(
+                    &std::fs::read(
+                        self.external_file
+                            .as_ref()
+                            .context("missing external manifest")?,
+                    )
+                    .context("reading external delivery manifest")?,
+                )
+                .context("parsing ExternalDelivery manifest")?,
+            },
             Action::ForceAdmission => {
                 // The helper supplies current pressure identity, never caller-selected episode data.
                 return Ok(recovery::RecoveryInput {
@@ -172,6 +192,7 @@ impl RecoverArgs {
 
     fn target(&self, preview: &RecoveryPreview) -> Result<()> {
         let (plan, run) = match &preview.request.target.identity {
+            RecoveryIdentity::External { run, .. } => (None, Some(run.as_str())),
             RecoveryIdentity::Plan { plan, .. } => (Some(plan.as_str()), None),
             RecoveryIdentity::Code { candidate, .. } => (None, Some(candidate.run.as_str())),
             RecoveryIdentity::Admission { plan, run, .. } => (plan.as_deref(), run.as_deref()),
@@ -203,6 +224,26 @@ pub fn run(start: &Path, args: RecoverArgs) -> Result<()> {
         return Ok(());
     }
     let input = args.input(&ctx)?;
+    // Exact external retries return the committed outcome, even after the task became Done.
+    // Neither the old digest nor the supplied reason creates new authority.
+    if let Some(digest) = &args.apply
+        && matches!(input.action, RecoveryAction::ReconcileExternal { .. })
+        && let Some(record) = recovery::recover_history(&ctx, &args.id)?
+            .into_iter()
+            .find(|r| r.preview.digest == *digest)
+    {
+        args.target(&record.preview)?;
+        let record = recovery::recover_apply(&ctx, &record.preview, &input, None)?;
+        println!("{}", serde_json::to_string_pretty(&record)?);
+        ensure!(
+            record
+                .outcomes
+                .last()
+                .is_some_and(|o| o.state == RecoveryState::Applied),
+            "external reconciliation has no committed Applied outcome; inspect --history"
+        );
+        return Ok(());
+    }
     let preview = recovery::recover_preview(&ctx, &args.id, &input)?;
     args.target(&preview)?;
     if let Some(digest) = &args.apply {

@@ -27,7 +27,12 @@ pub fn recover_apply(
                 ))? == preview.digest,
             "recovery request changed; obtain a new preview and confirmation"
         );
-        project_event(ctx, id, &record)?;
+        if !matches!(
+            record.preview.proposed_effect,
+            RecoveryEffect::ExternalCompletion { .. }
+        ) {
+            project_event(ctx, id, &record)?;
+        }
         return Ok(record);
     }
     let confirmation =
@@ -52,6 +57,9 @@ pub fn recover_apply(
         )],
         links: vec![],
     };
+    if matches!(input.action, RecoveryAction::ReconcileExternal { .. }) {
+        return super::external::apply(ctx, input, record);
+    }
     ctx.store.save_recovery_record(id, &record)?;
     record.outcomes.push(outcome(
         RecoveryState::Applying,
@@ -112,6 +120,9 @@ fn execute(ctx: &Ctx, input: &RecoveryInput, record: &RecoveryRecord) -> Result<
         }
         RecoveryAction::AcceptPlan { .. } => {
             accept_plan(ctx, input, record)?;
+        }
+        RecoveryAction::ReconcileExternal { .. } => {
+            anyhow::bail!("external completion requires its atomic transaction")
         }
         RecoveryAction::AcceptCode { merge } => {
             let strategy = match merge {
@@ -231,7 +242,12 @@ pub fn recover_reconcile(ctx: &Ctx, id: &str, operation: &str) -> Result<Recover
         .context("unknown recovery operation")?;
     let task = ctx.store.get(id)?;
     if state(&record)? == RecoveryState::Applied {
-        repair_plan_acceptance(ctx, &task, &record)?;
+        if !matches!(
+            record.preview.proposed_effect,
+            RecoveryEffect::ExternalCompletion { .. }
+        ) {
+            repair_plan_acceptance(ctx, &task, &record)?;
+        }
         record = records(ctx, id)?
             .into_iter()
             .find(|r| r.id == operation)
@@ -293,6 +309,7 @@ pub fn recover_reconcile(ctx: &Ctx, id: &str, operation: &str) -> Result<Recover
                 false
             }
         }
+        RecoveryEffect::ExternalCompletion { .. } => false, // External completion commits atomically.
         RecoveryEffect::CodeAcceptance { .. } => {
             if landed {
                 code_acceptance_link(ctx, id, &record)?;
@@ -364,7 +381,7 @@ fn repair_plan_acceptance(ctx: &Ctx, task: &Task, record: &RecoveryRecord) -> Re
     Ok(())
 }
 
-fn project_event(ctx: &Ctx, id: &str, record: &RecoveryRecord) -> Result<()> {
+pub(super) fn project_event(ctx: &Ctx, id: &str, record: &RecoveryRecord) -> Result<()> {
     // Event and projection marker commit together; a restart cannot duplicate the event.
     let key = format!(
         "{}-{}-{}",

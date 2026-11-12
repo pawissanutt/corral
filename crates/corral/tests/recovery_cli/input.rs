@@ -102,6 +102,29 @@ fn closed_action_matrix_maps_only_its_exact_parameters_and_exceptions() {
         code.exceptions,
         BTreeSet::from([RecoveryCheck::GateOutcome, RecoveryCheck::ReviewOutcome])
     );
+    let external_file = temp.path().join("delivery.json");
+    let delivery = serde_json::json!({
+        "commit":"a".repeat(40), "tree":"b".repeat(40),
+        "gate":{"reference":"artifacts/T-001/R1/gate.txt", "sha256":"c".repeat(64)},
+        "review":{"reference":"artifacts/T-001/R1/review.md", "sha256":"d".repeat(64)},
+        "landing":{"reference":"artifacts/T-001/R1/landing.md", "sha256":"e".repeat(64)}
+    });
+    std::fs::write(&external_file, serde_json::to_vec(&delivery).unwrap()).unwrap();
+    let external = parse(&[
+        "T-001",
+        "--action",
+        "reconcile-external",
+        "--external-file",
+        external_file.to_str().unwrap(),
+        "--waive",
+        "native-candidate",
+    ])
+    .input(&ctx)
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(external.action).unwrap()["delivery"],
+        delivery
+    );
     let force = parse(&[
         "T-001",
         "--action",
@@ -144,6 +167,16 @@ fn closed_action_matrix_maps_only_its_exact_parameters_and_exceptions() {
             "alternate",
         ],
         vec!["T-001", "--action", "accept-plan"],
+        vec!["T-001", "--action", "reconcile-external"],
+        vec![
+            "T-001",
+            "--action",
+            "reconcile-external",
+            "--external-file",
+            external_file.to_str().unwrap(),
+            "--merge",
+            "ff",
+        ],
     ] {
         assert!(parse(&args).input(&ctx).is_err());
     }

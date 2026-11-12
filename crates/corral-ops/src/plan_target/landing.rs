@@ -358,6 +358,33 @@ impl Target {
     }
 }
 
+/// Read-only refusal for external completion; never publish or discard another Plan landing.
+pub(crate) fn require_no_unfinished(repo: &std::path::Path) -> Result<()> {
+    let dir = directory(repo)?;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("reading Plan landing journals"),
+    };
+    for entry in entries {
+        let path = entry.context("reading Plan landing journal entry")?.path();
+        if path.extension().is_some_and(|ext| ext == "json") {
+            let target: Target = serde_json::from_slice(
+                &std::fs::read(path).context("reading Plan landing journal")?,
+            )
+            .context("parsing Plan landing journal")?;
+            ensure!(
+                target.initialized
+                    && target.pending.is_none()
+                    && target.receipts.iter().all(LandingReceipt::is_published),
+                "conflicting unfinished Plan integration {}",
+                target.plan
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Recovery is independent of the terminal engine and never launches another executor.
 pub(crate) fn reconcile_all(ctx: &Ctx) -> Result<()> {
     let mut repos = std::collections::BTreeSet::new();

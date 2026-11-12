@@ -46,6 +46,7 @@ malicious process with the owner's full OS identity and terminal control.
 | `use-reviewer` | `--stage plan-review` or `code-review`, `--reviewer PROFILE` | `configured-reviewer-binding` and/or `reviewer-family-policy` only where actually unsatisfied. One genuine separate attempt, different profile and effective model from the saved author; no persistent route/policy edit. |
 | `accept-plan` | `--notes-file PATH` | `independent-plan-review` when missing; explicitly include `--waive independent-plan-review`. Current bytes/specification, legal attachment and every owner decision resolution remain required. Existing recovery checks can also be inherited and must be named exactly. No independent approve is fabricated. |
 | `accept-code` | `--merge keep`, `rebase` or `ff` | `gate-outcome` / `review-outcome` for completed current failures/nonapproval (plus any inherited exceptions). Missing, pending, unverifiable or stale configured receipts cannot be waived. |
+| `reconcile-external` | `--external-file PATH` | `native-candidate`, plus `gate-outcome` / `review-outcome` where configured and `required-evidence` for an audited task. All are explicit waivers of native acceptance, never external evidence promoted into native PASS. No Git mutation. |
 | `force-admission` | One `--stage dispatch`, `plan-dispatch`, `gate`, `code-review` or `plan-review` | `resource-pressure` only, explicitly named. Current pressure episode/thresholds are bound automatically. Dependencies, slots, ownership, policy and Git integrity still apply; no reusable force bit. |
 
 `--waive CHECK` is repeatable (or comma-separated) and must match **exactly** the
@@ -68,9 +69,65 @@ question; prose assessment is not a verdict. Recovery acceptance leaves the pare
 or published children on dispatch hold. A separate explicit Ready/queue authorization
 is required before implementation can start.
 
+## Work already delivered outside Corral
+
+Use `reconcile-external` only for work already present on the task's configured destination,
+not to merge an obsolete candidate. Attach the external gate, review and landing evidence to
+this task first. Write an `ExternalDelivery` JSON manifest with full lowercase object IDs and
+exact stored artifact paths (not pins or follow-latest aliases):
+
+```json
+{
+  "commit": "<full-delivered-commit>",
+  "tree": "<that-commit-tree>",
+  "gate": {"reference": "artifacts/T-042/R1/gate.txt", "sha256": "<artifact-sha256>"},
+  "review": {"reference": "artifacts/T-042/R1/review.md", "sha256": "<artifact-sha256>"},
+  "landing": {"reference": "artifacts/T-042/R1/landing.md", "sha256": "<artifact-sha256>"}
+}
+```
+
+The manifest is the owner's explicit binding of those external observations to that
+commit/tree; Corral checks the Git objects, destination ancestry and exact artifact bytes.
+It does not infer a native gate PASS or reviewer verdict from external prose.
+
+```bash
+corral recover T-042 --action reconcile-external --run R1 \
+  --external-file delivery.json --waive native-candidate,gate-outcome,review-outcome --json
+corral recover T-042 --action reconcile-external --run R1 \
+  --external-file delivery.json --waive native-candidate,gate-outcome,review-outcome \
+  --apply <preview-digest> --reason "Already delivered separately; accept these exact native exceptions."
+```
+
+Use the preview's exact waiver set; include `required-evidence` when present. The preview
+binds the task/run revision, current destination branch/head/tree, delivered commit/tree,
+external evidence hashes and original native observations. Application still needs the
+same fresh local-owner terminal ceremony. A comment, inbox quotation or historical approval
+is not authority. Changed task, configuration, destination or evidence requires a fresh
+preview and confirmation. Repeating the exact applied request/digest returns its committed
+outcome without another ceremony or effects; `--history` also reads that outcome.
+
+The commit must be reachable on `refs/heads/main`, or the current execution Plan's configured
+integration branch with an intact, settled target journal. This command never adopts or repairs
+an externally moved Plan journal. Missing/unreachable objects, tree/hash mismatches, a changed
+frozen destination, active gate/review/submission, unfinished recovery or integration, unresolved
+owner questions and existing completion-intent/ownership guards refuse before completion.
+Tracker Plans still require aggregate acceptance.
+
+Completion atomically records Done and a landing receipt with `external` provenance, plus an
+`approved` event labeled `strategy=external_forced`, `acceptance_mode=external_forced`,
+`policy_satisfied=false` and the exact waived checks. Cards and Acceptance history name
+**external/forced delivery**; landed-state readers retain its distinct strategy and recovery
+reference. Normal status bookkeeping releases task WIP and satisfies Done dependencies. No
+native candidate is merged again, no gate/review receipt is fabricated, and no repair history,
+allowance, unresolved disclosure, assistant/worktree evidence or unrelated task is reset.
+Evidence bytes remain protected from artifact retention. Resources stay retained, driver state
+is not resumed, and process drain is explicitly **not claimed**. Ordinary approval guards are
+unchanged.
+
 ## Receipts, uncertainty and compatibility
 
-Durable intent precedes effects. Original plan/check artifacts and verdicts remain
+Native operation intent precedes effects; external reconciliation commits its intent and
+completion in one canonical transaction. Original plan/check artifacts and verdicts remain
 unchanged. History retains the authorization reason, attestation, policy sources,
 observations, overridden/waived checks, immutable outcomes and journal/receipt links.
 `acceptance_mode=owner_recovery` and `policy_satisfied=false` distinguish an exception

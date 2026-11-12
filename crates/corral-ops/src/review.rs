@@ -667,7 +667,7 @@ fn approve_landed_inner(
         }
     };
         if strategy != ApproveStrategy::KeepBranch {
-            head.landed = Some(corral_core::LandingReceipt {
+            head.landed = Some(corral_core::LandingReceipt { external: None,
                 run: run.id.clone(),
                 sha: sha.clone(),
             });

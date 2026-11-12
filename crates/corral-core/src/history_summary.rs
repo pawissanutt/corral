@@ -114,6 +114,9 @@ pub struct RecoverySummary {
     /// Records with an Applied outcome that carries an actual effect.
     #[serde(with = "crate::container_facts::fixed")]
     pub applied: u64,
+    /// Applied external/forced completion, never native policy acceptance.
+    #[serde(with = "crate::container_facts::fixed")]
+    pub external_forced: u64,
     /// Records whose latest outcome is Authorized or Applying (not yet settled).
     #[serde(with = "crate::container_facts::fixed")]
     pub unsettled: u64,
@@ -154,6 +157,10 @@ impl RecoverySummary {
                 continue;
             }
             s.applied += 1;
+            s.external_forced += u64::from(matches!(
+                record.preview.proposed_effect,
+                crate::RecoveryEffect::ExternalCompletion { .. }
+            ));
             let (mut review, mut other) = (false, false);
             for c in record.preview.checks.iter().filter(|c| {
                 matches!(

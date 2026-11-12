@@ -6,7 +6,7 @@ pub(super) fn task_revision(task: &Task) -> Result<String> {
     hash(&Store::render_task_markdown(&task))
 }
 
-struct Evaluation {
+pub(super) struct Evaluation {
     checks: Vec<RecoveryCheckRecord>,
     blockers: Vec<RecoveryBlocker>,
 }
@@ -200,7 +200,7 @@ impl Evaluation {
             waived,
         );
     }
-    fn observation(
+    pub(super) fn observation(
         &mut self,
         check: RecoveryCheck,
         observed: RecoveryObservation,
@@ -471,6 +471,9 @@ pub(super) fn preview(ctx: &Ctx, task: &Task, input: &RecoveryInput) -> Result<R
                     dispatch_holds: vec![task.id.clone()],
                 },
             )
+        }
+        RecoveryAction::ReconcileExternal { delivery } => {
+            super::external::evaluate(ctx, task, delivery, &mut e)?
         }
         RecoveryAction::AcceptCode { merge } => {
             let run = task.current_run().context("no code run")?;

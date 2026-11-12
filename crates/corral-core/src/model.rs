@@ -724,11 +724,21 @@ pub struct TaskResult {
     pub spec_digest: String,
 }
 
-/// Actual base advancement, recorded with the successful owner or automatic landing.
+/// Explicit external/forced provenance; native receipts leave this absent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalLanding {
+    pub recovery: crate::RecoveryReference,
+    pub destination: crate::ExternalDestination,
+    pub tree: String,
+}
+
+/// Verified delivery, recorded with native landing or explicit external reconciliation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LandingReceipt {
     pub run: String,
     pub sha: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<ExternalLanding>,
 }
 
 /// A task file: `.corral/tasks/<id>-<slug>.md` = YAML frontmatter (this struct minus `body`/`path`) + markdown body.
