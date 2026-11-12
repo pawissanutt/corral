@@ -154,11 +154,13 @@ fn measured_pass(
 ) -> (Duration, Option<String>) {
     let started = Instant::now();
     let before = process_cpu();
+    let timing_before = corral_ops::timing::snapshot();
     let error = execute(ctx, supervisor);
     let spent = match (before, process_cpu()) {
         (Some(before), Some(after)) => after.saturating_sub(before),
         _ => started.elapsed(),
     };
+    corral_ops::timing::pass(ctx.store.dir(), started, &timing_before);
     (spent, error)
 }
 

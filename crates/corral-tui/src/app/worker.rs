@@ -35,12 +35,15 @@ impl WorkerMsg {
         synced: Result<(Vec<Change>, crate::attention::Snapshot, String), String>,
     ) -> Self {
         Self::Synced(synced.and_then(|(changes, attention, operating_header)| {
-            crate::board::BoardSnapshot::load_with_attention(ctx, attention)
-                .map(|mut snapshot| {
-                    snapshot.operating_header = operating_header;
-                    (changes, Box::new(snapshot))
-                })
-                .map_err(|error| corral_herdr::friendly_error(&error))
+            {
+                let _timing = corral_core::timing::span("board.snapshot");
+                crate::board::BoardSnapshot::load_with_attention(ctx, attention)
+            }
+            .map(|mut snapshot| {
+                snapshot.operating_header = operating_header;
+                (changes, Box::new(snapshot))
+            })
+            .map_err(|error| corral_herdr::friendly_error(&error))
         }))
     }
 

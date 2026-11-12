@@ -838,50 +838,71 @@ pub enum PluginCmd {
     },
 }
 
-fn main() {
-    let matches = ext_cmd::command().try_get_matches().unwrap_or_else(|err| {
-        ext_cmd::forward_unknown(&err);
-        // Preserve machine-readable failures even when structured arguments do not parse.
-        let mut args = std::env::args_os().skip(1);
-        let structured = loop {
-            match args.next() {
-                Some(arg) if arg == "--root" => {
-                    args.next();
+fn main() -> std::process::ExitCode {
+    let started = std::time::Instant::now();
+    let mut verb = String::new();
+    let code = main_exit(&mut verb);
+    corral_ops::timing::process(started, &verb);
+    std::process::ExitCode::from(u8::try_from(code).unwrap_or(1))
+}
+
+fn main_exit(verb: &mut String) -> i32 {
+    let matches = match ext_cmd::command().try_get_matches() {
+        Ok(matches) => matches,
+        Err(err) => {
+            ext_cmd::forward_unknown(&err);
+            // Preserve machine-readable failures even when structured arguments do not parse.
+            let mut args = std::env::args_os().skip(1);
+            let structured = loop {
+                match args.next() {
+                    Some(arg) if arg == "--root" => {
+                        args.next();
+                    }
+                    Some(arg) if arg.to_string_lossy().starts_with("--root=") => {}
+                    Some(arg) if arg == "setup" => break Some("setup"),
+                    Some(arg) if arg == "selection" => break Some("selection"),
+                    Some(arg) if arg == "repair" => break Some("repair"),
+                    Some(arg) if arg == "annotation" && args.any(|arg| arg == "--json") => {
+                        break Some("annotation");
+                    }
+                    Some(_) | None => break None,
                 }
-                Some(arg) if arg.to_string_lossy().starts_with("--root=") => {}
-                Some(arg) if arg == "setup" => break Some("setup"),
-                Some(arg) if arg == "selection" => break Some("selection"),
-                Some(arg) if arg == "repair" => break Some("repair"),
-                Some(arg) if arg == "annotation" && args.any(|arg| arg == "--json") => {
-                    break Some("annotation");
+            };
+            if let Some(command) = structured
+                && err.use_stderr()
+            {
+                if command == "annotation" {
+                    eprintln!(
+                        "{}",
+                        serde_json::json!({"error": {
+                            "code":"bad_request", "message":err.to_string(), "detail":null
+                        }})
+                    );
+                } else {
+                    eprintln!(
+                        "{}",
+                        serde_json::json!({"command":command,"error":err.to_string()})
+                    );
                 }
-                Some(_) | None => break None,
+                return err.exit_code();
             }
-        };
-        if let Some(command) = structured
-            && err.use_stderr()
-        {
-            if command == "annotation" {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({"error": {
-                        "code":"bad_request", "message":err.to_string(), "detail":null
-                    }})
-                );
-            } else {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({"command":command,"error":err.to_string()})
-                );
-            }
-            std::process::exit(err.exit_code());
+            let code = err.exit_code();
+            let _ = err.print();
+            return code;
         }
-        err.exit()
-    });
+    };
+    *verb = timing_verb(&matches);
     if let Some(("ext", ext)) = matches.subcommand() {
-        std::process::exit(ext_cmd::run(ext));
+        return ext_cmd::run(ext);
     }
-    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
+    let cli = match Cli::from_arg_matches(&matches) {
+        Ok(cli) => cli,
+        Err(err) => {
+            let code = err.exit_code();
+            let _ = err.print();
+            return code;
+        }
+    };
     let annotation_json = matches!(&cli.cmd, Some(Cmd::Annotation(args)) if args.json);
     let setup_json = match &cli.cmd {
         Some(Cmd::Setup(args)) => Some(args.cmd.name()),
@@ -910,15 +931,15 @@ fn main() {
     }
     if let Err(err) = result {
         if err.is::<wait_cmd::WaitTimeout>() {
-            std::process::exit(124);
+            return 124;
         }
         if annotation_json {
             eprintln!("{}", annotation_cmd::error_json(&err));
-            std::process::exit(1);
+            return 1;
         }
         if err.is::<entry::AssistantRefused>() {
             eprintln!("error: {err}");
-            std::process::exit(2);
+            return 2;
         }
         if let Some(command) = repair_json {
             eprintln!(
@@ -957,6 +978,32 @@ fn main() {
         } else {
             eprintln!("error: {}", corral_herdr::friendly_error(&err));
         }
-        std::process::exit(1);
+        return 1;
+    }
+    0
+}
+
+fn timing_verb(matches: &clap::ArgMatches) -> String {
+    matches
+        .subcommand()
+        .map(|(command, args)| corral_ops::timing::verb(command, args.subcommand_name()))
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod timing_tests {
+    #[test]
+    fn timing_verb_does_not_record_option_or_task_values() {
+        let matches = crate::ext_cmd::command()
+            .try_get_matches_from([
+                "corral",
+                "--root",
+                "/private/workspace",
+                "gate",
+                "private-task-title",
+                "--wait",
+            ])
+            .unwrap();
+        assert_eq!(super::timing_verb(&matches), "gate");
     }
 }

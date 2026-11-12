@@ -146,6 +146,7 @@ pub(crate) fn scrub_env(
 /// Runs git and returns the raw output without checking the exit status.
 fn git_raw(dir: &Path, args: &[&str]) -> Result<Output> {
     work::record();
+    let _timer = work::timed();
     let mut command = Command::new("git");
     scrub_env(&mut command, std::env::vars_os().map(|(name, _)| name));
     command

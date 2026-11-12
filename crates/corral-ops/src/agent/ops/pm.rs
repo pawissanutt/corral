@@ -522,9 +522,9 @@ fn reply(ctx: &Ctx, origin: &RequestOrigin, p: &Text) -> Result<CallResponse> {
     }
 }
 
-fn summary(task: &Task) -> Value {
-    json!({"id":task.id,"title":task.title,"status":task.status,"project":task.project,
-        "kind":task.kind,"size":task.size,"difficulty":task.difficulty,"priority":task.priority})
+fn summary(task: &impl corral_core::TaskRef) -> Value {
+    json!({"id":task.id(),"title":task.title(),"status":task.status(),"project":task.project(),
+        "kind":task.kind(),"size":task.size(),"difficulty":task.difficulty(),"priority":task.priority()})
 }
 
 pub(super) fn page(values: Vec<Value>, offset: usize, limit: usize) -> Result<Value> {
@@ -602,12 +602,12 @@ fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Va
     } else {
         [project.to_owned()].into()
     };
-    let includes = |task: &Task| task.project.as_ref().is_some_and(|p| projects.contains(p));
     match op {
         AgentOp::InboxRead => {
             super::pm_inbox::read(ctx, super::payload(envelope, super::pm_inbox::READ_FIELDS)?)
         }
         AgentOp::ReadShow => {
+            let _timing = corral_core::timing::span("agent.read_show");
             let p: Show = super::payload(envelope, "task, section?, key?, offset?, limit?")?;
             let task = target(ctx, &p.task, project)?;
             // A run carries many receipts and a specification may exceed a frame. Keep every
@@ -694,6 +694,7 @@ fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Va
             }
         }
         AgentOp::ReadSearch => {
+            let _timing = corral_core::timing::span("agent.read_search");
             let p: Search = super::payload(envelope, "query, limit?")?;
             let limit = p.limit.unwrap_or(20);
             let mut hits = Vec::new();
@@ -716,17 +717,31 @@ fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Va
             )
         }
         AgentOp::ReadList => {
+            let _timing = corral_core::timing::span("agent.read_list");
             let p: Page = super::payload(envelope, "offset?, limit?, status?")?;
-            let tasks = ctx
-                .store
-                .list()?
+            let mut heads = Vec::new();
+            for project in &projects {
+                heads.extend(ctx.store.heads(
+                    &corral_core::backend::HeadQuery::ProjectUpdated {
+                        project: project.clone(),
+                    },
+                )?);
+            }
+            // Match Store::list order, not the project query's updated order.
+            heads.sort_by(|a, b| (a.num, &a.id).cmp(&(b.num, &b.id)));
+            let tasks = heads
                 .iter()
-                .filter(|t| includes(t) && p.status.is_none_or(|s| t.status == s))
+                .filter(|head| p.status.is_none_or(|status| head.status == status))
                 .map(summary)
                 .collect();
             page(tasks, p.offset, p.limit.unwrap_or(20))
         }
         AgentOp::ReadBrief | AgentOp::ReadNext | AgentOp::ReadLessons => {
+            let _timing = match op {
+                AgentOp::ReadBrief => Some(corral_core::timing::span("agent.read_brief")),
+                AgentOp::ReadNext => Some(corral_core::timing::span("agent.read_next")),
+                _ => None,
+            };
             let _: Empty = super::payload(envelope, "no fields")?;
             if op == AgentOp::ReadLessons {
                 let mut lessons = Vec::new();
@@ -741,7 +756,6 @@ fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Va
                 }
                 return page(lessons, 0, 100);
             }
-            let tasks: Vec<_> = ctx.store.list()?.into_iter().filter(includes).collect();
             // Share CLI priority and effective authority, but select within approved projects.
             // This projects a readback only; it never invokes pm_act or sync.
             let next = crate::pm_workset::next_for_projects(ctx, &projects)?;
@@ -749,12 +763,27 @@ fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Va
                 return super::pm_bound::bounded_next(&next, corral_core::agent::RESULT_MAX_BYTES);
             }
             let mut counts = std::collections::BTreeMap::new();
-            for task in &tasks {
-                *counts.entry(task.status.as_str()).or_insert(0usize) += 1;
+            let status_counts = ctx
+                .store
+                .view()?
+                .aggregates(&[corral_core::backend::AggregateName::StatusCounts])?
+                .status_counts;
+            for count in status_counts {
+                if count.n > 0 && projects.contains(&count.project) {
+                    *counts.entry(count.status).or_insert(0u64) += count.n;
+                }
             }
-            let questions: Vec<_> = tasks
-                .iter()
-                .flat_map(crate::questions::views)
+            // This is the same pending projection as questions::list(..., false):
+            // native owners only, semantic closure applied, no task-history hydration.
+            let mut heads = ctx.store.unfinished_native_heads()?;
+            heads.retain(|head| head.project.as_ref().is_some_and(|p| projects.contains(p)));
+            heads.sort_by(|a, b| (a.num, &a.id).cmp(&(b.num, &b.id)));
+            let mut pending = Vec::new();
+            for head in heads {
+                pending.extend(crate::questions::recorded_pending_views_ref(&head)?);
+            }
+            let questions: Vec<_> = pending
+                .into_iter()
                 .filter(|q| q.pending)
                 .map(|q| {
                     json!({"task":q.task,"key":q.question.key,

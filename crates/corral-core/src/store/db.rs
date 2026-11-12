@@ -104,6 +104,7 @@ fn open_gate_file(corral: &Path) -> Result<fs::File> {
 fn acquire_gate(corral: &Path) -> Result<StoreGate> {
     let file = open_gate_file(corral)?;
     let deadline = Instant::now() + GATE_WAIT;
+    let wait = crate::timing::LOCK_WAIT.start();
     loop {
         match file.try_lock_shared() {
             Ok(()) => break,
@@ -118,6 +119,7 @@ fn acquire_gate(corral: &Path) -> Result<StoreGate> {
             }
         }
     }
+    drop(wait);
     let holders = corral.join("lock").join(HOLDERS);
     fs::create_dir_all(&holders).with_context(|| format!("creating {}", holders.display()))?;
     let me = crate::blob::ProcessIdentity::current()?;
@@ -135,7 +137,9 @@ fn acquire_gate(corral: &Path) -> Result<StoreGate> {
 /// Returns filesystem errors.
 pub fn try_exclusive_store_gate(corral: &Path) -> Result<Option<crate::StoreLock>> {
     let file = open_gate_file(corral)?;
-    match file.try_lock() {
+    let result = file.try_lock();
+    crate::timing::record_lock_try(result.is_err());
+    match result {
         Ok(()) => Ok(Some(crate::StoreLock::new(file))),
         Err(fs::TryLockError::WouldBlock) => Ok(None),
         Err(fs::TryLockError::Error(error)) => Err(error).context("taking the store gate"),

@@ -95,6 +95,7 @@ impl Herdr {
     /// Probes the executable without contacting or starting a server.
     pub fn version(&self) -> Result<String> {
         crate::work::record();
+        let timer = crate::work::timed();
         let output = Command::new(&self.bin)
             .arg("--version")
             .stdin(std::process::Stdio::null())
@@ -106,6 +107,7 @@ impl Herdr {
                     anyhow::Error::new(error).context("checking the herdr executable")
                 }
             })?;
+        drop(timer);
         let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if !output.status.success() || version_numbers(&version).is_none() {
             bail!("could not read the herdr version. Reinstall it: `{INSTALL_HERDR}`");

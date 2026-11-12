@@ -18,15 +18,18 @@ const SAVE_EVERY: Duration = Duration::from_secs(10);
 pub(crate) fn start(ctx: &Ctx, shared: &Arc<Shared>) -> Result<JoinHandle<()>> {
     let ctx = ctx.clone();
     let path = cache_path(&ctx).context("locating daemon projection cache")?;
-    let projection = match Projection::load(&path) {
-        Some(mut projection) => match projection.fold(&ctx) {
-            Ok(_) => projection,
-            Err(error) => {
-                eprintln!("corrald loading board cache: {error:#}; rebuilding");
-                Projection::rebuild(&ctx).context("rebuilding daemon board projection")?
-            }
-        },
-        None => Projection::rebuild(&ctx).context("building daemon board projection")?,
+    let projection = {
+        let _timing = corral_core::timing::span("projector.fold");
+        match Projection::load(&path) {
+            Some(mut projection) => match projection.fold(&ctx) {
+                Ok(_) => projection,
+                Err(error) => {
+                    eprintln!("corrald loading board cache: {error:#}; rebuilding");
+                    Projection::rebuild(&ctx).context("rebuilding daemon board projection")?
+                }
+            },
+            None => Projection::rebuild(&ctx).context("building daemon board projection")?,
+        }
     };
     *shared.projection() = Some(projection);
     let shared = Arc::clone(shared);
@@ -91,9 +94,12 @@ fn fold(ctx: &Ctx, shared: &Shared, dirty: &mut bool) -> Result<()> {
         projection.clone()
     };
     let previous = projection.folded_through;
-    let outcome = projection
-        .fold(ctx)
-        .context("folding daemon board changes")?;
+    let outcome = {
+        let _timing = corral_core::timing::span("projector.fold");
+        projection
+            .fold(ctx)
+            .context("folding daemon board changes")?
+    };
     *dirty |= outcome.reset || previous != outcome.folded_through;
     *shared.projection() = Some(projection);
     Ok(())

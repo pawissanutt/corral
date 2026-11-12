@@ -241,7 +241,9 @@ fn project(
     attention: Option<&crate::attention::AttentionBoard>,
     projects: Option<&std::collections::BTreeSet<String>>,
 ) -> Result<(PmWorkset, EffectivePolicy)> {
+    let _span = corral_core::timing::span("pm.workset");
     if !ctx.store.is_snapshot() {
+        let _span = corral_core::timing::span("pm.prepare");
         // Legacy recovery can read artifact files and wait for publication storage. Do not
         // spend the evaluation's lease on that work. The pinned phase below still prepares
         // its own revision-bound derivations; explicit snapshots never advance here.
@@ -251,6 +253,7 @@ fn project(
     }
     // A renewed projection reuses the real host observation, never repeats the probe.
     let admission = if attention.is_none() {
+        let _span = corral_core::timing::span("pm.admission");
         // Moving discovery before the view must not hide its FU-3 work from accounting.
         let _hot = corral_core::work::HotScope::enter();
         Some(crate::resources::read_admission(ctx)?)
@@ -267,19 +270,27 @@ fn project_snapshot(
     projects: Option<&std::collections::BTreeSet<String>>,
 ) -> Result<(PmWorkset, EffectivePolicy)> {
     {
+        let _span = corral_core::timing::span("pm.prepare");
         let _prepare = corral_core::work::Preparation::enter();
         crate::lesson_rows::prepare_coordination(ctx)?;
         crate::approvals::prepare(ctx)?;
         crate::pm_next::observe::prepare(ctx)?;
     }
     let _hot = corral_core::work::HotScope::enter();
+    let _heads_span = corral_core::timing::span("pm.heads");
     let heads = crate::pm_next::heads::inputs(ctx)?;
-    let mut policy = ctx.store.effective_operating_policy()?;
+    drop(_heads_span);
+    let mut policy = {
+        let _span = corral_core::timing::span("pm.policy");
+        ctx.store.effective_operating_policy()?
+    };
     let has_operating_scope = !policy.tasks.is_empty();
+    let _heads_span = corral_core::timing::span("pm.heads");
     let tasks = heads
         .iter()
         .map(crate::pm_next::heads::shell)
         .collect::<Result<Vec<_>>>()?;
+    drop(_heads_span);
     let mut scope = scope::ProjectScope::new(&tasks, projects, &policy);
     // Narrow recommendations, never add authority or change its revision-bound identity.
     policy.tasks.retain(|id, _| scope.includes(id));
@@ -287,6 +298,7 @@ fn project_snapshot(
     let board = if let Some(board) = attention {
         board
     } else {
+        let _span = corral_core::timing::span("pm.attention");
         fresh = crate::attention::board_hot_with_admission(
             ctx,
             ctx.store.now(),
@@ -309,10 +321,13 @@ fn project_snapshot(
         crate::gate_script::q(&crate::prompt::corral_bin()?.display().to_string()),
         crate::gate_script::q(&ctx.store.root().display().to_string())
     );
-    let mut observations =
-        crate::pm_next::observe::with_admission(ctx, &board.tasks, sampled_admission)?;
+    let mut observations = {
+        let _span = corral_core::timing::span("pm.observe");
+        crate::pm_next::observe::with_admission(ctx, &board.tasks, sampled_admission)?
+    };
     scope.observations(&mut observations);
     observations.sort_by_key(crate::pm_next::rank);
+    let _decisions_span = corral_core::timing::span("pm.decisions");
     let mut actions = Vec::new();
     let mut decisions = Vec::new();
     let mut waits = Vec::new();
@@ -430,6 +445,8 @@ fn project_snapshot(
     if has_operating_scope {
         decisions.retain(|decision| policy.tasks.contains_key(&decision.task));
     }
+    drop(_decisions_span);
+    let _rest_span = corral_core::timing::span("pm.rest");
     let mut progress = ScopedProgress {
         total: policy.tasks.len(),
         ..Default::default()
@@ -542,7 +559,11 @@ fn project_snapshot(
     } else {
         OperatingStatus::Waiting
     };
-    let inbox = scope.inbox(ctx, &bin)?;
+    drop(_rest_span);
+    let inbox = {
+        let _span = corral_core::timing::span("pm.inbox");
+        scope.inbox(ctx, &bin)?
+    };
     let next = actions
         .first()
         .map(|a| a.action.clone())
@@ -555,7 +576,10 @@ fn project_snapshot(
         .or_else(|| inbox.first().cloned())
         .or_else(|| waits.first().cloned())
         .unwrap_or_else(|| crate::pm_next::pm_select(&[], &bin));
-    let mut next = scope.enrich(ctx, next, actions.is_empty())?;
+    let mut next = {
+        let _span = corral_core::timing::span("pm.enrich");
+        scope.enrich(ctx, next, actions.is_empty())?
+    };
     if let Some(condition) = board
         .tasks
         .iter()

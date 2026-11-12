@@ -138,6 +138,7 @@ fn sync_passes(
     let Some(_loop_pass) = ctx.store.loop_pass()? else {
         return Ok(Vec::new());
     };
+    let _pass = corral_core::timing::span("sync.pass");
     if !crate::session_scope::owns_inventory(ctx)? {
         return Ok(Vec::new());
     }
@@ -236,6 +237,7 @@ fn sync_scoped(
     attention: Option<&mut Option<crate::attention::AttentionBoard>>,
     scope: &SyncScope,
 ) -> Result<Vec<Change>> {
+    let phase = corral_core::timing::span("sync.setup");
     // Reuse short ownership views, but re-read an expired guard after a slow external
     // step. This never retries the step; inventory still re-reads under its lease.
     let mut fresh = ctx.clone();
@@ -292,6 +294,8 @@ fn sync_scoped(
         }
         return Ok(changes);
     }
+    drop(phase);
+    let phase = corral_core::timing::span("sync.inventory");
     // Wait out GC's exclusive storage before taking the reconciliation lease every finishing
     // launch needs, so a write in this pass never parks it (T-505). The pass holds no storage:
     // each artifact write shares it only around itself (T-659).
@@ -427,6 +431,8 @@ fn sync_scoped(
     // Launching queued/autopilot work must acquire an exclusive ownership claim.
     // No consumer below this point receives the sampled pane IDs.
     drop(inventory);
+    drop(phase);
+    let _phase = corral_core::timing::span("sync.dispatch");
     // Post-land hooks run commands that may call corral: never under storage or the lease (T-509).
     scope.workspace_only(|| crate::hooks::reconcile_post_land(ctx))?;
     scope.workspace_only(|| crate::assistant::workflow::handoff::recovery::reconcile(ctx))?;

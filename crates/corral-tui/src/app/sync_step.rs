@@ -9,8 +9,14 @@ pub(crate) fn run_with_attention(
     let (sender, diagnostics) = std::sync::mpsc::channel();
     let synced = {
         let _capture = corral_core::capture_messages(sender);
-        let synced = corral_ops::sync_with_attention(ctx);
-        corral_ops::refresh_active_usage(&ctx.store);
+        let synced = {
+            let _timing = corral_core::timing::span("board.sync");
+            corral_ops::sync_with_attention(ctx)
+        };
+        {
+            let _timing = corral_core::timing::span("board.usage");
+            corral_ops::refresh_active_usage(&ctx.store);
+        }
         synced
     };
     let mut unavailable = None;
@@ -27,6 +33,7 @@ pub(crate) fn run_with_attention(
         Ok(board)
     } else {
         // A foreign scope or busy reconciliation lease did not classify this pass.
+        let _timing = corral_core::timing::span("board.attention");
         crate::attention::load_board(ctx, jiff::Timestamp::now())
     };
     Ok(read_back(ctx, changes, attention))
@@ -40,7 +47,10 @@ pub(crate) fn run_installed(
 ) -> Result<(Vec<Change>, crate::attention::Snapshot, String), String> {
     corral_ops::sync_installed(ctx, installed)
         .map_err(|error| corral_herdr::friendly_error(&error))?;
-    let attention = crate::attention::load_board(ctx, jiff::Timestamp::now());
+    let attention = {
+        let _timing = corral_core::timing::span("board.attention");
+        crate::attention::load_board(ctx, jiff::Timestamp::now())
+    };
     Ok(read_back(ctx, Vec::new(), attention))
 }
 
@@ -57,7 +67,10 @@ pub(crate) fn run_daemon(
     {
         let _ = client.nudge("board", Some(wait));
     }
-    let attention = crate::attention::load_board(ctx, jiff::Timestamp::now());
+    let attention = {
+        let _timing = corral_core::timing::span("board.attention");
+        crate::attention::load_board(ctx, jiff::Timestamp::now())
+    };
     Ok(read_back(ctx, Vec::new(), attention))
 }
 
@@ -69,7 +82,10 @@ fn read_back(
     let workset = attention
         .as_ref()
         .map_err(|error| anyhow::anyhow!(error.clone()))
-        .and_then(|board| corral_ops::pm_workset_with_attention(ctx, board));
+        .and_then(|board| {
+            let _timing = corral_core::timing::span("board.workset");
+            corral_ops::pm_workset_with_attention(ctx, board)
+        });
     (
         changes,
         attention.and_then(crate::attention::from_board),
