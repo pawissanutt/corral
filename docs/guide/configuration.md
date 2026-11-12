@@ -1222,6 +1222,25 @@ todo = false
 Settings are resolved once per generation and again on explicit resume. See
 [corral-pi capabilities](corral-pi.md#capabilities) for the catalog and recovery behavior.
 
+### pm.cache_key (experiment, opt-in)
+
+```toml
+[pm.cache_key]
+mode = "session" # Default; opt in with "stable".
+```
+
+`stable` derives a non-secret cache key from store identity, PM role, provider, model and
+a version constant. It affects only Codex PM conversation requests, not session identity,
+summaries or auxiliary requests. Unsupported routes retain provider defaults and print one
+launch diagnostic. The setting is captured in the PM launch snapshot, so it changes at the
+next generation.
+
+Cache sharing is an experiment, not an assumed saving. Compare the cache-read share of the
+first conversation request after `corral pm rotate` with `mode = "session"` versus
+`"stable"`, keeping model and stable prompt prefix unchanged. Using recorded usage, compute
+`cacheRead / (input + cacheRead + cacheWrite)`. Exclude summary and auxiliary requests;
+repeat comparisons because provider cache retention is not guaranteed.
+
 ### PM shadow observations (opt-in)
 
 Shadow is PM-only and disabled in every preset. Its generation-bound settings are:
@@ -1245,6 +1264,37 @@ once per generation; after 256 distinct digests, observation stops for that gene
 The hourly cap counts attempts, not successful choices. Failures are diagnosed
 once, never retried, and host shutdown/replacement aborts outstanding model work.
 Usage is attributed separately as `shadow`, not as a PM request.
+
+### PM expert consultation (opt-in)
+
+Expert is PM-only, disabled in every preset, and absent from disabled capability
+snapshots. It adds the model-facing `corral_expert` tool when explicitly enabled:
+
+```toml
+[agent.capabilities.pm.expert]
+enabled = false
+# model = "openai-codex/gpt-6.1-sol" # required when enabled; no parent-model fallback
+max_turns = 24                    # 1..=64
+timeout_secs = 600                # 1..=600, the same upper bound as Explore
+max_parallel = 1                  # 1..=16; excess consultations queue
+```
+
+The tool accepts `question` (up to 4 KiB), optional `context` (up to 8 KiB), and
+optional `paths` (up to 16 hints). The configured model must resolve in the
+parent's bound provider. Each call creates one isolated auxiliary session; it
+inherits no conversation, skills, context files, hooks or Corral client.
+Its fixed file tools are `read`, `grep`, `find`, and `ls`, plus
+`lsp_diagnostics`, `lsp_definition`, and `lsp_references` only when those local
+LSP tools are available. It has no web tools, shell, writes, Code Mode, child
+delegation or board read/mutation operations.
+
+The expert treats task text, logs and file contents as untrusted data and is
+instructed to cite `path:line` evidence. Its answer is advice to the PM, never
+authority. Results include final text capped at Explore's 32,768-character
+budget and `{ model, turns, truncated }` metadata. Usage is recorded separately
+as `expert`, including uncertain spend on interruption. Toggling this capability
+changes the PM's tool schema and takes effect at the next generation; when
+disabled, the PM tool list and system prompt are unchanged.
 
 ## herdr
 

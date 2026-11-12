@@ -206,7 +206,8 @@ fn print_action(action: &PmAction) {
     }
 }
 
-/// Prints the new generation's pane or every blocking reason; a refusal exits non-zero.
+/// Prints the new generation's pane, why the rotation degraded to a relaunch, or every
+/// blocking reason; anything but a rotation exits non-zero.
 fn rotate(ctx: &corral_ops::Ctx, reason: &str, force: bool, json: bool) -> Result<()> {
     let outcome = corral_ops::rotate_pm(ctx, reason, force)?;
     if json {
@@ -230,6 +231,23 @@ fn rotate(ctx: &corral_ops::Ctx, reason: &str, force: bool, json: bool) -> Resul
                 }
             }
             Ok(())
+        }
+        corral_ops::RotateOutcome::RelaunchedInstead {
+            pane,
+            generation,
+            reasons,
+            ..
+        } => {
+            let because: Vec<&str> = reasons.iter().map(|r| r.sentence.as_str()).collect();
+            let line = format!(
+                "rotation deferred: conversation continued in generation {generation} (pane \
+                 {pane}) because {}",
+                because.join("; ")
+            );
+            if !json {
+                println!("{line}");
+            }
+            bail!(line)
         }
         corral_ops::RotateOutcome::Blocked { reasons, .. } => {
             if !json {

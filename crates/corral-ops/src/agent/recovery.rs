@@ -317,7 +317,8 @@ pub(crate) fn recover_with(
         stop_host(host)?;
         replaced = true;
     }
-    let rotation = launch.as_ref().is_some_and(|launch| launch.rotation);
+    let decide = launch.as_ref().and_then(|launch| launch.rotate);
+    let rotation = decide.is_some();
     let reason = match (restore.is_some(), rotation) {
         (true, _) => "rewind",
         (false, true) => "rotate",
@@ -329,6 +330,9 @@ pub(crate) fn recover_with(
     let deadline = Instant::now() + Duration::from_secs(ctx.store.config.agent.drain_secs);
     let draining = drain(ctx, container, n, deadline)?;
     reconcile(ctx, container, n)?;
+    // A rotation decides only now, from the frozen generation's records and journal: anything
+    // it still owes keeps the conversation (an ordinary relaunch).
+    let fresh = decide.map(|decide| decide()).transpose()?.unwrap_or(false);
     let interrupted = classify_lost(ctx, container, n, &plan)?;
     let unconfirmed = settle_unconfirmed(ctx, container, n, &state)?;
     if let Some(restore) = restore.as_mut() {
@@ -341,7 +345,7 @@ pub(crate) fn recover_with(
             &plan.pane,
             &resolved,
             launch.as_ref().is_some_and(|launch| launch.adopted),
-            launch.as_ref().is_none_or(|launch| launch.continue_session),
+            launch.as_ref().is_none_or(|launch| launch.continue_session) && !fresh,
         )?,
         (None, None) => bail!("the PM relaunch command is missing"),
     };
@@ -351,12 +355,8 @@ pub(crate) fn recover_with(
     };
     let next = snapshot(ctx, container)?.0.binding.generation;
     // A rotation retires the latest bound conversation; its binding stays on its generation.
-    let previous_session = if rotation {
-        latest_session(&state)
-    } else {
-        None
-    };
-    let rotation = rotation.then_some(notice::Rotation {
+    let previous_session = if fresh { latest_session(&state) } else { None };
+    let rotation = fresh.then_some(notice::Rotation {
         previous_session: previous_session.as_deref(),
     });
     let notice = post_notice(
@@ -386,11 +386,14 @@ pub(crate) fn recover_with(
     if let Some(task) = container.task() {
         super::hooks::sync::settle_lost(ctx, task)?;
     }
-    let outcome = json!({
+    let mut outcome = json!({
         "container": container.key(), "fenced": n, "generation": next, "pane": plan.pane,
         "replaced": replaced, "draining": draining, "notice": notice.id,
         "calls": interrupted.calls, "unconfirmed": unconfirmed_json(&unconfirmed),
     });
+    if rotation.is_some() {
+        outcome["rotated"] = json!(fresh);
+    }
     ctx.store.log_event(
         container.task(),
         "agent_resumed",

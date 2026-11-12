@@ -432,7 +432,14 @@ fn discovery_handles_omp_project_directory_and_ignores_artifacts() {
     fs::create_dir_all(&artifacts).unwrap();
     fs::write(artifacts.join("journal.jsonl"), "not a transcript").unwrap();
     // When discovered by cwd and time.
-    let usage = collect_from(tmp.path(), &run(), false, &Config::default_for(tmp.path())).unwrap();
+    let usage = collect_from(
+        tmp.path(),
+        tmp.path(),
+        &run(),
+        false,
+        &Config::default_for(tmp.path()),
+    )
+    .unwrap();
     // Then the transcript, not its artifacts, supplies the measurement.
     assert_eq!(usage.input, 10955);
 }
@@ -504,7 +511,14 @@ fn omp_home_relative_bucket_is_discovered_using_header_cwd() {
     )
     .unwrap();
     // When the collector applies directory discovery and authoritative cwd/time checks.
-    let usage = collect_from(tmp.path(), &run, false, &Config::default_for(tmp.path())).unwrap();
+    let usage = collect_from(
+        tmp.path(),
+        tmp.path(),
+        &run,
+        false,
+        &Config::default_for(tmp.path()),
+    )
+    .unwrap();
     // Then both assistant responses, but no unrelated cwd, are attributed.
     assert_eq!(usage.total_tokens(), 11215);
 }

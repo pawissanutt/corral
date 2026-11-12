@@ -1,7 +1,7 @@
 use super::*;
 use std::io::Write;
 
-// Cache counter fixtures must not overlap a test that advances board generations.
+// Keep shared-fixture tests serialized; other stores have independent cache namespaces.
 static CACHE_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 const HEADER: &str = "{\"type\":\"session\",\"cwd\":\"/fixture/project\"}\n";
@@ -20,7 +20,7 @@ fn session(
     PathBuf,
     std::sync::MutexGuard<'static, ()>,
 ) {
-    let serial = CACHE_TESTS.lock().unwrap();
+    let serial = CACHE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("session.jsonl");
     fs::write(&path, text).unwrap();
@@ -28,7 +28,7 @@ fn session(
 }
 
 fn cached(path: &Path, run: &Run) -> Result<Option<Usage>> {
-    transcript_cache::with_lines(path, |lines| {
+    transcript_cache::with_lines(path.parent().unwrap(), path, |lines| {
         parse_session_entries(
             lines,
             run,
@@ -53,7 +53,7 @@ fn appended_usage_is_decoded_once_and_matches_full_reparse() {
     let first = format!("{HEADER}{}", response("a", 1, 2));
     let (_tmp, path, _serial) = session(&first);
     cached(&path, &run()).unwrap();
-    let before = transcript_cache::counts(&path);
+    let before = transcript_cache::counts(path.parent().unwrap(), &path);
     let next = response("b", 3, 4);
     append(&path, &next);
     // When refreshing the transcript repeatedly.
@@ -68,7 +68,7 @@ fn appended_usage_is_decoded_once_and_matches_full_reparse() {
     );
     assert_eq!((usage.input, usage.output, usage.entries.len()), (4, 6, 2));
     assert_eq!(again, usage);
-    let after = transcript_cache::counts(&path);
+    let after = transcript_cache::counts(path.parent().unwrap(), &path);
     assert_eq!((after.0 - before.0, after.1 - before.1), (1, 1));
 }
 
@@ -80,7 +80,7 @@ fn partial_trailing_usage_is_replaced_when_completed() {
     let (_tmp, path, _serial) = session(&format!("{HEADER}{}", &line[..split]));
     assert!(cached(&path, &run()).is_err());
     assert_eq!(
-        transcript_cache::counts(&path).2,
+        transcript_cache::counts(path.parent().unwrap(), &path).2,
         u64::try_from(HEADER.len()).unwrap()
     );
     append(&path, &line[split..]);
@@ -177,18 +177,21 @@ fn unchanged_usage_skips_payload_reads_and_decoding() {
     // Given an already parsed transcript.
     let (_tmp, path, _serial) = session(OMP);
     let before = cached(&path, &run()).unwrap();
-    let counts = transcript_cache::counts(&path);
+    let counts = transcript_cache::counts(path.parent().unwrap(), &path);
     // When refreshing an unchanged identity, length and anchor.
     let after = cached(&path, &run()).unwrap();
     // Then only the bounded anchor check runs, not a transcript payload read.
     assert_eq!(after, before);
-    assert_eq!(transcript_cache::counts(&path), counts);
+    assert_eq!(
+        transcript_cache::counts(path.parent().unwrap(), &path),
+        counts
+    );
 }
 
 #[test]
 fn active_usage_reads_indexed_events_only_for_active_tasks() {
     // Given multiple active tasks and a task outside the board refresh cohort.
-    let _serial = CACHE_TESTS.lock().unwrap();
+    let _serial = CACHE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
     for status in [
@@ -217,7 +220,7 @@ fn cached_usage_reapplies_windows_models_prices_and_claude_triggers() {
     let (_tmp, path, _serial) = session(CLAUDE);
     let mut snapshot = run();
     let config = Config::default_for(Path::new("/fixture"));
-    transcript_cache::with_lines(&path, |lines| {
+    transcript_cache::with_lines(path.parent().unwrap(), &path, |lines| {
         parse_session_entries(lines, &snapshot, true, &config)
     })
     .unwrap();
@@ -228,7 +231,7 @@ fn cached_usage_reapplies_windows_models_prices_and_claude_triggers() {
     }))
     .unwrap();
     // When aggregating the same decoded lines for the review's current context.
-    let usage = transcript_cache::with_lines(&path, |lines| {
+    let usage = transcript_cache::with_lines(path.parent().unwrap(), &path, |lines| {
         parse_session_entries(lines, &snapshot, true, &config)
     })
     .unwrap();
@@ -248,6 +251,63 @@ fn unrelated_cwd_still_short_circuits_later_cached_errors() {
     let usage = cached(&path, &run()).unwrap();
     // Then the transcript contributes nothing, just as the full parser would.
     assert_eq!(usage, None);
+}
+
+#[test]
+fn another_stores_refresh_preserves_warm_entries_and_thread_local_read_counters() {
+    use corral_core::work::{self, Counter, HotScope};
+
+    let (a_dir, a_path, _serial) = session(OMP);
+    let a = Store::init(a_dir.path()).unwrap();
+    let b_dir = tempfile::tempdir().unwrap();
+    let b = Store::init(b_dir.path()).unwrap();
+    let b_path = b.root().join("session.jsonl");
+    fs::write(&b_path, OMP).unwrap();
+    transcript_cache::refresh(a.root(), || {
+        cached(&a_path, &run()).unwrap();
+    })
+    .unwrap();
+    let counts = transcript_cache::counts(a.root(), &a_path);
+    let _hot = HotScope::enter();
+    let before = work::snapshot();
+
+    // B really reads and decodes on another thread between A's warm-up and measured read.
+    let b_root = b.root().to_path_buf();
+    std::thread::spawn(move || {
+        let _hot = HotScope::enter();
+        let before = work::snapshot();
+        transcript_cache::refresh(&b_root, || {
+            cached(&b_path, &run()).unwrap();
+        })
+        .unwrap();
+        assert!(
+            work::snapshot()
+                .since(&before)
+                .total(Counter::TranscriptBytesRead)
+                > 0
+        );
+    })
+    .join()
+    .unwrap();
+
+    assert!(transcript_cache::contains(a.root(), &a_path));
+    assert_eq!(
+        work::snapshot()
+            .since(&before)
+            .total(Counter::TranscriptBytesRead),
+        0
+    );
+    transcript_cache::refresh(a.root(), || {
+        cached(&a_path, &run()).unwrap();
+    })
+    .unwrap();
+    assert_eq!(
+        work::snapshot()
+            .since(&before)
+            .total(Counter::TranscriptBytesRead),
+        0
+    );
+    assert_eq!(transcript_cache::counts(a.root(), &a_path), counts);
 }
 
 #[path = "usage_cache_eviction_tests.rs"]

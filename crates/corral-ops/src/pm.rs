@@ -211,18 +211,19 @@ pub(crate) fn relaunch(ctx: &Ctx, reason: &str, replace: bool) -> Result<String>
     if recovery.keep_current(ctx, replace)? {
         return Ok(pm.pane.clone());
     }
-    Ok(successor(ctx, pm, reason, replace, false)?.0)
+    Ok(successor(ctx, pm, reason, replace, None)?.0)
 }
 
 /// Fence, drain and reconcile `pm`, then launch its next generation in a corral-owned pane
 /// without focus; returns the pane and the recovery outcome. A relaunch continues the
-/// conversation; a `rotation` starts a fresh one. The caller holds the `pm-recovery` lease.
+/// conversation; a `rotate` decision, made once the predecessor is frozen, may start a fresh
+/// one (outcome `rotated`). The caller holds the `pm-recovery` lease.
 pub(crate) fn successor(
     ctx: &Ctx,
     pm: &corral_core::agent::AgentPm,
     reason: &str,
     replace: bool,
-    rotation: bool,
+    rotate: Option<&dyn Fn() -> Result<bool>>,
 ) -> Result<(String, serde_json::Value)> {
     use crate::agent::recovery::{RecoveryLaunch, recover_with};
     use corral_core::agent::ContainerRef;
@@ -248,8 +249,8 @@ pub(crate) fn successor(
             pane: Some(&pane),
             profile: Some(&resolved),
             adopted: false,
-            continue_session: !rotation,
-            rotation,
+            continue_session: true,
+            rotate,
         }),
         None,
     )?;
@@ -258,7 +259,7 @@ pub(crate) fn successor(
         "pane": pane, "reason": reason, "replaced": outcome["replaced"],
         "previous_pane": previous_pane,
     });
-    let kind = if rotation {
+    let kind = if outcome["rotated"] == true {
         detail["fenced"] = outcome["fenced"].clone();
         detail["generation"] = outcome["generation"].clone();
         "pm_rotated"

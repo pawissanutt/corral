@@ -2,28 +2,28 @@
 //!
 //! A relaunch continues the PM's conversation in a new generation; a rotation opens a new
 //! generation with a fresh Pi session, the answer to context growth. Work that lives only in
-//! the old conversation would be lost with it, so rotation waits for a barrier read from
-//! records under the `pm-recovery` lease: a host that merely looks idle is never sufficient.
-//! Nothing rotates automatically; only the owner's `corral pm rotate` calls `rotate`.
-use std::collections::{BTreeMap, HashSet};
-use std::io::{BufRead, BufReader, Read};
-use std::path::{Path, PathBuf};
+//! the old conversation would be lost with it, so rotation decides in two steps under the
+//! `pm-recovery` lease ("freeze, then decide"): a pre-check of records and the bound journal
+//! refuses without changing anything; when it is clear, the predecessor is stopped and fenced
+//! like `relaunch --replace` and the barrier is read again from that frozen evidence. Anything
+//! owed then keeps the conversation (an ordinary relaunch), so the worst case costs one
+//! restart of the same conversation, never a lost one. A host that merely looks idle is never
+//! sufficient. Nothing rotates automatically; only the owner's `corral pm rotate` calls it.
+use std::cell::RefCell;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
 use corral_core::StepState;
 use corral_core::agent::{AuxiliaryOutcome, JobState, UsageSessionKind, pm_state};
 use corral_core::inbox::{Inbox, ReceiptLevel, Recipient};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use sha2::{Digest, Sha256};
+use serde::Serialize;
+use serde_json::json;
 
 use crate::Ctx;
 use crate::agent::recovery::PmRecoveryLease;
 
-/// The Pi host's owner-dialog journal entry (`host/pending-questions.ts`).
-const DIALOG_ENTRY: &str = "corral_owner_question";
-const JOURNAL_MAX_BYTES: u64 = crate::agent::usage::SESSION_MAX_BYTES;
-const LINE_MAX_BYTES: usize = 1024 * 1024;
+#[path = "pm_rotation_journal.rs"]
+mod journal;
 
 /// An owner dialog the old conversation still owes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -54,7 +54,17 @@ pub enum Blocker {
         id: String,
         state: DialogState,
     },
-    DialogJournalUnreadable {
+    /// Pi input of this generation still waiting in its steer/follow-up queue.
+    QueuedInput {
+        item: String,
+        origin: String,
+        mode: String,
+    },
+    /// A delivery the host accepted (its `corral_delivery` entry) that never became a turn.
+    UnconsumedDelivery {
+        key: String,
+    },
+    JournalUnreadable {
         file: PathBuf,
         error: String,
     },
@@ -88,12 +98,18 @@ pub enum Blocker {
 }
 
 impl Blocker {
-    /// Blockers even the owner's `--force` cannot override: fencing would cut a turn or a
-    /// delivery in flight, or replace a successor another entry is starting.
+    /// Blockers even the owner's `--force` cannot override: fencing would cut a turn, queued
+    /// input or a delivery in flight, the journal that proves otherwise cannot be read, or a
+    /// successor another entry is starting would be replaced.
     pub fn hard(&self) -> bool {
         matches!(
             self,
-            Self::SuccessorStarting { .. } | Self::OpenTurn { .. } | Self::OpenEnvelope { .. }
+            Self::SuccessorStarting { .. }
+                | Self::OpenTurn { .. }
+                | Self::QueuedInput { .. }
+                | Self::UnconsumedDelivery { .. }
+                | Self::JournalUnreadable { .. }
+                | Self::OpenEnvelope { .. }
         )
     }
 
@@ -115,8 +131,14 @@ impl Blocker {
                 id,
                 state: DialogState::AnsweredUndelivered,
             } => format!("the owner's answer to dialog {id} has not reached the conversation"),
-            Self::DialogJournalUnreadable { file, error } => format!(
-                "owner dialogs in {} could not be checked: {error}",
+            Self::QueuedInput { item, origin, mode } => {
+                format!("{origin} input {item} is still queued ({mode}) in the conversation")
+            }
+            Self::UnconsumedDelivery { key } => {
+                format!("delivery {key} reached the host but never became part of a turn")
+            }
+            Self::JournalUnreadable { file, error } => format!(
+                "the conversation journal {} could not be checked: {error}",
                 file.display()
             ),
             Self::InboxMessage { id, kind } => {
@@ -145,6 +167,7 @@ impl Blocker {
                     UsageSessionKind::WebSearch => "web search",
                     UsageSessionKind::Summary => "summary",
                     UsageSessionKind::Shadow => "shadow",
+                    UsageSessionKind::Expert => "expert",
                 }
             ),
             Self::PlanStep { plan, step, label } => format!(
@@ -192,6 +215,14 @@ pub enum RotateOutcome {
         /// Blockers the owner's `--force` overrode.
         overridden: Vec<Reason>,
     },
+    /// The frozen predecessor still owed something: `generation` continues its conversation
+    /// through the ordinary recovery path.
+    RelaunchedInstead {
+        pane: String,
+        generation: u32,
+        fenced: u32,
+        reasons: Vec<Reason>,
+    },
     /// Nothing changed.
     Blocked {
         generation: u32,
@@ -199,10 +230,17 @@ pub enum RotateOutcome {
     },
 }
 
-/// The rotation barrier of the recorded PM, read under the `pm-recovery` lease.
+#[cfg(test)]
+thread_local! {
+    /// Runs between the pre-check and the freeze: models input arriving in that window.
+    static BEFORE_FREEZE: RefCell<Option<Box<dyn FnOnce()>>> = const { RefCell::new(None) };
+}
+
+/// The rotation pre-check of the recorded PM, read under the `pm-recovery` lease.
 pub fn barrier(ctx: &Ctx) -> Result<Barrier> {
     let lease = PmRecoveryLease::acquire(ctx)?;
-    let (reasons, _) = survey(ctx, &lease)?;
+    let n = current_generation(&lease)?;
+    let (reasons, _) = survey(ctx, n, lease.pending(ctx))?;
     Ok(if reasons.is_empty() {
         Barrier::Clear
     } else {
@@ -210,57 +248,96 @@ pub fn barrier(ctx: &Ctx) -> Result<Barrier> {
     })
 }
 
-/// Rotate the PM into a fresh conversation: under the `pm-recovery` lease, refuse with the
-/// barrier's reasons and change nothing, or fence, drain and reconcile like a relaunch and
-/// launch generation n+1 on a new Pi session in a corral-owned pane, without focus.
-/// `force` (owner shell only) overrides every blocker but the hard ones.
+/// Rotate the PM into a fresh conversation. Under the `pm-recovery` lease a blocked pre-check
+/// changes nothing. Otherwise the predecessor is stopped, fenced, drained and reconciled like
+/// a relaunch, the barrier is read again from that frozen evidence, and generation n+1 starts
+/// a new Pi session when it is still clear, or continues the conversation when anything is
+/// owed. Either way it launches in a corral-owned pane, without focus. `force` (owner shell
+/// only) overrides the soft reasons, at both reads; the hard ones always win.
 pub fn rotate(ctx: &Ctx, reason: &str, force: bool) -> Result<RotateOutcome> {
     ensure!(
         !force || !managed_entry(),
         "pm rotate --force needs the owner's shell, not a PM, assistant or agent"
     );
     let lease = PmRecoveryLease::acquire(ctx)?;
-    let (reasons, previous_session) = survey(ctx, &lease)?;
-    let pm = lease
-        .current
-        .as_ref()
-        .context("there is no corral-pi PM to rotate")?;
-    let fenced = pm.state.binding.generation;
-    if reasons.iter().any(|reason| !force || reason.blocker.hard()) {
+    let fenced = current_generation(&lease)?;
+    let (reasons, previous_session) = survey(ctx, fenced, lease.pending(ctx))?;
+    if blocks(&reasons, force) {
         return Ok(RotateOutcome::Blocked {
             generation: fenced,
             reasons,
         });
     }
+    #[cfg(test)]
+    if let Some(hook) = BEFORE_FREEZE.with(|hook| hook.borrow_mut().take()) {
+        hook();
+    }
+    let pm = lease
+        .current
+        .as_ref()
+        .context("there is no corral-pi PM to rotate")?;
+    let frozen = RefCell::new(Vec::new());
+    let decide = || -> Result<bool> {
+        let (reasons, _) = survey(ctx, fenced, false)?;
+        let fresh = !blocks(&reasons, force);
+        *frozen.borrow_mut() = reasons;
+        Ok(fresh)
+    };
+    let decide: &dyn Fn() -> Result<bool> = &decide;
     // A live idle host is stopped first, exactly as `relaunch --replace` stops it.
-    let (pane, outcome) = crate::pm::successor(ctx, pm, reason, true, true)?;
+    let (pane, outcome) = crate::pm::successor(ctx, pm, reason, true, Some(decide))?;
     let generation = outcome["generation"]
         .as_u64()
         .and_then(|n| u32::try_from(n).ok())
         .context("the rotation outcome names no generation")?;
-    Ok(RotateOutcome::Rotated {
+    let reasons = frozen.into_inner();
+    if outcome["rotated"] == true {
+        return Ok(RotateOutcome::Rotated {
+            pane,
+            generation,
+            fenced,
+            previous_session,
+            overridden: reasons,
+        });
+    }
+    ctx.store.log_event(
+        None,
+        "pm_rotation_deferred",
+        json!({
+            "pane": pane, "reason": reason, "fenced": fenced, "generation": generation,
+            "reasons": reasons,
+        }),
+    )?;
+    Ok(RotateOutcome::RelaunchedInstead {
         pane,
         generation,
         fenced,
-        previous_session,
-        overridden: reasons,
+        reasons,
     })
+}
+
+fn blocks(reasons: &[Reason], force: bool) -> bool {
+    reasons.iter().any(|reason| !force || reason.blocker.hard())
+}
+
+fn current_generation(lease: &PmRecoveryLease) -> Result<u32> {
+    lease
+        .current
+        .as_ref()
+        .map(|pm| pm.state.binding.generation)
+        .filter(|n| *n > 0)
+        .context("there is no corral-pi PM to rotate")
 }
 
 fn managed_entry() -> bool {
     crate::automation_controls::agent_entry() || std::env::var("CORRAL_PM").as_deref() == Ok("1")
 }
 
-/// Every blocker, and the Pi session ID of the conversation a rotation would retire.
-fn survey(ctx: &Ctx, lease: &PmRecoveryLease) -> Result<(Vec<Reason>, Option<String>)> {
-    let head = lease
-        .current
-        .as_ref()
-        .filter(|pm| pm.state.binding.generation > 0)
-        .context("there is no corral-pi PM to rotate")?;
-    let n = head.state.binding.generation;
+/// Every blocker of generation `n`, and the Pi session ID of the conversation a rotation
+/// would retire. Read before the freeze as a pre-check and after it as the decision.
+fn survey(ctx: &Ctx, n: u32, starting: bool) -> Result<(Vec<Reason>, Option<String>)> {
     let mut blockers = Vec::new();
-    if lease.pending(ctx) {
+    if starting {
         blockers.push(Blocker::SuccessorStarting { generation: n });
     }
     // The work index holds open turns, pending questions and unreaped jobs; generations (at
@@ -298,9 +375,9 @@ fn survey(ctx: &Ctx, lease: &PmRecoveryLease) -> Result<(Vec<Reason>, Option<Str
         .map(|(_, bound)| bound);
     if let Some(bound) = bound {
         let now = ctx.store.now().as_millisecond();
-        match open_dialogs(&bound.session_file, &bound.session_id, now) {
-            Ok(dialogs) => blockers.extend(dialogs),
-            Err(error) => blockers.push(Blocker::DialogJournalUnreadable {
+        match journal::owed(&bound.session_file, &bound.session_id, n, now) {
+            Ok(owed) => blockers.extend(owed),
+            Err(error) => blockers.push(Blocker::JournalUnreadable {
                 file: bound.session_file.clone(),
                 error: format!("{error:#}"),
             }),
@@ -379,119 +456,6 @@ fn inbox_blockers(ctx: &Ctx) -> Result<Vec<Blocker>> {
         }
     }
     Ok(blockers)
-}
-
-/// One journaled owner dialog, as `host/pending-questions.ts` appends it.
-#[derive(Deserialize)]
-struct Dialog {
-    version: u32,
-    id: String,
-    session: String,
-    status: String,
-    /// Milliseconds since the epoch.
-    expires: f64,
-    #[serde(default)]
-    message: Option<String>,
-}
-
-/// The dialogs `session`'s host would restore from `file`: the latest record of each id,
-/// owed while pending and unexpired, or answered while no user message equals its recorded
-/// answer. A missing file holds none; a file that cannot be read completely is an error.
-fn open_dialogs(file: &Path, session: &str, now_ms: i64) -> Result<Vec<Blocker>> {
-    let handle = match std::fs::File::open(file) {
-        Ok(handle) => handle,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error).with_context(|| format!("opening {}", file.display())),
-    };
-    let mut reader = BufReader::new(handle.take(JOURNAL_MAX_BYTES + 1));
-    let mut dialogs = BTreeMap::new();
-    let mut delivered = HashSet::new();
-    let mut read = 0u64;
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        let n = reader
-            .read_until(b'\n', &mut line)
-            .with_context(|| format!("reading {}", file.display()))?;
-        if n == 0 {
-            break;
-        }
-        read += u64::try_from(n).context("journal length overflow")?;
-        ensure!(
-            read <= JOURNAL_MAX_BYTES,
-            "{} exceeds {JOURNAL_MAX_BYTES} bytes",
-            file.display()
-        );
-        // A skipped user message can only make an answer look undelivered, never the reverse.
-        if line.len() > LINE_MAX_BYTES
-            || !(contains(&line, DIALOG_ENTRY.as_bytes()) || contains(&line, b"\"user\""))
-        {
-            continue;
-        }
-        let Ok(entry) = serde_json::from_slice::<Value>(&line) else {
-            continue;
-        };
-        if entry["type"] == "custom" && entry["customType"] == DIALOG_ENTRY {
-            if let Ok(dialog) = Dialog::deserialize(&entry["data"])
-                && dialog.version == 1
-                && dialog.session == session
-            {
-                dialogs.insert(dialog.id.clone(), dialog);
-            }
-        } else if entry["type"] == "message" && entry["message"]["role"] == "user" {
-            delivered.insert(digest(&user_text(&entry["message"]["content"])));
-        }
-    }
-    let now = now_ms as f64;
-    Ok(dialogs
-        .into_values()
-        .filter_map(|dialog| {
-            let state = match dialog.status.as_str() {
-                "pending" if dialog.expires > now => DialogState::Pending,
-                "answered"
-                    if dialog
-                        .message
-                        .as_deref()
-                        .is_none_or(|message| !delivered.contains(&digest(message))) =>
-                {
-                    DialogState::AnsweredUndelivered
-                }
-                _ => return None,
-            };
-            Some(Blocker::OwnerDialog {
-                id: dialog.id,
-                state,
-            })
-        })
-        .collect())
-}
-
-/// A user message's text exactly as the host compares it with a recorded answer.
-fn user_text(content: &Value) -> String {
-    match content {
-        Value::String(text) => text.clone(),
-        Value::Array(parts) => parts
-            .iter()
-            .map(|part| {
-                if part["type"] == "text" {
-                    part["text"].as_str().unwrap_or("")
-                } else {
-                    ""
-                }
-            })
-            .collect(),
-        _ => String::new(),
-    }
-}
-
-fn digest(text: &str) -> Vec<u8> {
-    Sha256::digest(text.as_bytes()).to_vec()
-}
-
-fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle)
 }
 
 #[cfg(all(test, target_os = "linux"))]

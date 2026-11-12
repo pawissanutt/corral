@@ -84,6 +84,7 @@
     "oracle",
     "headless",
     "queue_control",
-    "shadow"
+    "shadow",
+    "expert"
   ]
 }

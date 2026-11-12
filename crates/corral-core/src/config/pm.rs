@@ -16,6 +16,9 @@ pub struct PmCfg {
     /// PM-only cache-health pause and price-tier reporting.
     #[serde(default)]
     pub guard: PmGuardCfg,
+    /// Opt-in provider cache-key experiment, fixed in the launch snapshot.
+    #[serde(default)]
+    pub cache_key: PmCacheKeyCfg,
     /// Actionable event kinds delivered to the PM when push is enabled.
     #[serde(default = "default_push_kinds")]
     pub push_kinds: Vec<String>,
@@ -25,6 +28,20 @@ pub struct PmCfg {
     pub attention_owner_secs: u64,
     #[serde(default = "yes")]
     pub attention_notify: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PmCacheKeyCfg {
+    pub mode: PmCacheKeyMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PmCacheKeyMode {
+    #[default]
+    Session,
+    Stable,
 }
 
 /// `[pm.guard]` observes provider usage; it is never a spend limit.
@@ -89,6 +106,7 @@ impl Default for PmCfg {
             push_events: false,
             supervise: false,
             guard: PmGuardCfg::default(),
+            cache_key: PmCacheKeyCfg::default(),
             push_kinds: default_push_kinds(),
             attention_secs: attention::seconds(),
             attention_owner_secs: attention::owner_seconds(),
@@ -96,3 +114,7 @@ impl Default for PmCfg {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "pm_tests.rs"]
+mod tests;

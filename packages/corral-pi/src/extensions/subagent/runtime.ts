@@ -5,7 +5,7 @@ import type { AuxiliarySettings } from "./settings.ts";
 import { AuxiliaryHistory, type HelperEvent } from "./inspection.ts";
 import { researchBudget, type ResearchOptions, type ResearchReport } from "./research.ts";
 
-export type AuxiliaryKind = "explore" | "oracle" | "web_search" | "shadow";
+export type AuxiliaryKind = "explore" | "oracle" | "web_search" | "shadow" | "expert";
 export type Outcome = "completed" | "uncertain" | "not_started";
 export interface PlanReviewAssociation {
   readonly workflow: string; readonly review: string; readonly digest: string;
@@ -41,12 +41,14 @@ export interface AuxiliaryResult {
   readonly text: string;
   readonly outcome: "completed" | "uncertain";
   readonly report?: ResearchReport;
+  readonly turns?: number;
 }
 export interface AuxiliaryResponse extends AuxiliaryResult {
   readonly request: string;
   readonly generation: number;
   readonly truncated: boolean;
   readonly sessionFile?: string;
+  readonly model?: string;
 }
 export interface AuxiliaryOptions {
   readonly settings: AuxiliarySettings;
@@ -102,12 +104,14 @@ export class AuxiliaryRuntime {
   private readonly oracle = new Slots(1);
   private readonly webSearch = new Slots(1);
   private readonly shadow = new Slots(1);
+  private readonly expert: Slots;
   private readonly controllers = new Set<AbortController>();
   private readonly requests = new Map<string, Promise<AuxiliaryResponse>>();
   private readonly reviews = new Map<string, AuxiliaryHandle>();
   private stopped = false;
   constructor(private readonly options: AuxiliaryOptions) {
     this.explore = new Slots(options.settings.explore?.max_parallel ?? 1);
+    this.expert = new Slots(options.settings.expert?.max_parallel ?? 1);
     this.history = new AuxiliaryHistory(options.changed);
   }
   run(kind: AuxiliaryKind, id: string, prompt: string, signal?: AbortSignal, research?: ResearchOptions, shadowOptions?: readonly string[]) {
@@ -141,6 +145,7 @@ export class AuxiliaryRuntime {
       case "oracle": return this.oracle;
       case "web_search": return this.webSearch;
       case "shadow": return this.shadow;
+      case "expert": return this.expert;
     }
   }
   private async perform(kind: AuxiliaryKind, request: string, prompt: string, outer?: AbortSignal, research?: ResearchOptions, review?: ReviewMission, shadowOptions?: readonly string[]): Promise<AuxiliaryResponse> {
@@ -195,8 +200,9 @@ export class AuxiliaryRuntime {
       signal.throwIfAborted();
       result = await options.execute({ request, kind, provider, model, prompt,
         sessionFile: reference.session_file, sessionId: request,
-        maxTurns: kind === "explore" ? researchBudget(research ?? {}, options.settings.explore?.max_turns ?? 1).maxTurns : 1,
-        ...(kind === "explore" ? { research: research ?? {}, deadlineAt } : {}),
+        maxTurns: kind === "explore" ? researchBudget(research ?? {}, options.settings.explore?.max_turns ?? 1).maxTurns
+          : kind === "expert" ? options.settings.expert?.max_turns ?? 24 : 1,
+        ...(kind === "explore" ? { research: research ?? {}, deadlineAt } : kind === "expert" ? { deadlineAt } : {}),
         ...(review ? { review, checkReview: async () => { await options.record({ ...common, action: "check" }); } } : {}),
         ...(serviceTier ? { serviceTier } : {}),
         observe: event => { if (!signal.aborted) this.history.observe(request, event); } }, signal);
@@ -236,6 +242,7 @@ export class AuxiliaryRuntime {
     return { ...result, text: kind === "web_search" || review ? result.text : result.text.slice(0, 32768),
       truncated: !review && kind !== "web_search" && result.text.length > 32768,
       request, generation: options.generation,
+      ...(kind === "expert" ? { model: `${provider}/${model}` } : {}),
       ...(observation.sessionFile ? { sessionFile: observation.sessionFile } : {}),
     };
   }
@@ -252,6 +259,7 @@ export class AuxiliaryRuntime {
     return { explore: this.explore.state(), oracle: this.oracle.state(),
       web_search: this.webSearch.state(),
       ...(this.options.settings.shadow ? { shadow: this.shadow.state() } : {}),
+      ...(this.options.settings.expert ? { expert: this.expert.state() } : {}),
       stopped: this.stopped };
   }
 }

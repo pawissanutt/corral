@@ -93,6 +93,10 @@ test("owner question changes stay in host messages without changing the default 
   expect(compacted.some(message => message.role === "custom" && message.customType === OWNER_QUESTION_STATE)).toBeFalse();
   // Automatic continuations skip before_agent_start: restore state in the first request.
   const restored = context({ type: "context", messages: compacted })?.messages;
+  const repeated = context({ type: "context", messages: compacted })?.messages;
+  expect(JSON.stringify(repeated)).toBe(JSON.stringify(restored));
+  expect(restored?.length).toBe(compacted.length + 1);
+  expect(restored?.slice(0, -1)).toEqual(compacted);
   expect(restored?.filter(message => message.role === "custom" && message.customType === OWNER_QUESTION_STATE)).toHaveLength(1);
   const restoredState = restored?.at(-1);
   expect(restoredState?.role === "custom" && restoredState.content).toContain(renderOwnerQuestionState(questions));

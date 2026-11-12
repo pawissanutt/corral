@@ -17,6 +17,9 @@ use crate::config::agent_capabilities::{
     compaction_settings, job_settings, skill_settings, template_settings,
 };
 
+#[path = "capabilities_pm_aux.rs"]
+pub(super) mod pm_aux;
+
 /// A configured settings table, or the effective settings a snapshot records.
 pub type CapabilitySettings = BTreeMap<String, Value>;
 
@@ -222,13 +225,8 @@ pub const CATALOG: &[CapabilityDef] = &[
         host: true,
         settings: Some(super::auxiliary::oracle_settings),
     },
-    CapabilityDef {
-        key: "shadow",
-        summary: "host-only tool-free PM decision observation",
-        defaults: |role| (role == AgentRole::Pm).then_some([false; 3]),
-        host: true,
-        settings: Some(super::auxiliary::shadow_settings),
-    },
+    pm_aux::SHADOW,
+    pm_aux::EXPERT,
     CapabilityDef {
         key: "checkpoints",
         summary: "worker turn checkpoints for owner rewinds",
@@ -597,21 +595,11 @@ impl CapabilitySnapshot {
     /// (what such a host ran: upstream compaction and prompt lessons) except the wave-0 todo
     /// flag it recorded. Nothing about it is reconstructed or refused.
     pub fn legacy(role: AgentRole, todo: bool) -> Self {
-        let features = CATALOG
-            .iter()
-            .filter(|def| def.key != "shadow")
-            .filter_map(|def| Some((def, (def.defaults)(role)?)))
-            .map(|(def, defaults)| {
-                let state = CapabilityState {
-                    enabled: if def.key == "todo" { todo } else { defaults[0] },
-                    source: CapabilitySource::Legacy,
-                    unavailable: None,
-                    settings: CapabilitySettings::new(),
-                };
-                (def.key.to_owned(), state)
-            })
-            .collect();
-        Self::new(role, SnapshotPreset::LegacyStrict, features)
+        Self::new(
+            role,
+            SnapshotPreset::LegacyStrict,
+            pm_aux::legacy_features(role, todo),
+        )
     }
 
     pub fn enabled(&self, key: &str) -> bool {
@@ -847,22 +835,6 @@ mod mcp_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn pm_catalog_matches_assistant_except_pm_specific_capabilities() {
-        for def in CATALOG {
-            assert_eq!(
-                (def.defaults)(AgentRole::Pm),
-                match def.key {
-                    "write_permissions" => None,
-                    "shadow" => Some([false; 3]),
-                    _ => (def.defaults)(AgentRole::Assistant),
-                },
-                "{}",
-                def.key
-            );
-        }
-    }
 
     #[test]
     fn interactive_host_test_fixtures_are_actual_default_snapshots() {

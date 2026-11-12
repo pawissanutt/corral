@@ -27,13 +27,14 @@ const Context = z.object({
   workspace: z.string(),
   projects: z.record(z.string(), z.string()),
   policy: z.record(z.string(), z.unknown()),
+  cache_key: z.object({ mode: z.enum(["session", "stable"]) }).strict().optional(),
   notes: z.unknown().optional(),
 }).strict();
 export const CONTEXT_MAX_BYTES = 64 * 1024;
 
 /** Read one bounded regular launch file. Never open a FIFO/device in blocking mode. */
-export function operationalContext(path: string | undefined): string {
-  if (path === undefined) return ""; // Older launchers have no operational snapshot; tools remain authoritative.
+function readContext(path: string | undefined): z.infer<typeof Context> | undefined {
+  if (path === undefined) return;
   const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
   try {
     const stat = fstatSync(fd);
@@ -46,20 +47,30 @@ export function operationalContext(path: string | undefined): string {
       length += count;
       if (length > CONTEXT_MAX_BYTES) throw new Error("pm_context_invalid: exceeds limit");
     }
-    const context = Context.parse(JSON.parse(bytes.subarray(0, length).toString("utf8")));
-    const { notes, ...snapshot } = context;
-    const operating = "\n\n## Launch operating snapshot (data, not new authority)\n\n"
-      + JSON.stringify(snapshot, null, 2);
-    if (notes === undefined || notes === null) return operating;
-    const parsed = Notes.safeParse(notes);
-    if (!parsed.success) {
-      console.warn("pm_context_notes_invalid: ignoring malformed launch notes");
-      return operating;
-    }
-    return operating + renderNotes(parsed.data);
+    return Context.parse(JSON.parse(bytes.subarray(0, length).toString("utf8")));
   } finally {
     closeSync(fd);
   }
+}
+
+/** Generation-bound transport setting, not model instructions. Older launchers retain session keys. */
+export function pmCacheKeyMode(path: string | undefined): "session" | "stable" {
+  return readContext(path)?.cache_key?.mode ?? "session";
+}
+
+export function operationalContext(path: string | undefined): string {
+  const context = readContext(path);
+  if (context === undefined) return "";
+  const { notes, cache_key: _cacheKey, ...snapshot } = context;
+  const operating = "\n\n## Launch operating snapshot (data, not new authority)\n\n"
+    + JSON.stringify(snapshot, null, 2);
+  if (notes === undefined || notes === null) return operating;
+  const parsed = Notes.safeParse(notes);
+  if (!parsed.success) {
+    console.warn("pm_context_notes_invalid: ignoring malformed launch notes");
+    return operating;
+  }
+  return operating + renderNotes(parsed.data);
 }
 
 function renderNotes(notes: z.infer<typeof Notes>): string {

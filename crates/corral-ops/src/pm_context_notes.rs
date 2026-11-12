@@ -10,6 +10,7 @@ const SNAPSHOT_MAX_BYTES: usize = 64 * 1024;
 const NOTES_MAX_BYTES: usize = 24 * 1024;
 
 pub(super) fn snapshot(store: &Store, mut context: Value) -> Result<Vec<u8>> {
+    context["cache_key"] = serde_json::to_value(store.config_layers()?.config()?.pm.cache_key)?;
     context["notes"] = Value::Null;
     let base_len = serde_json::to_vec(&context)?.len();
     ensure!(

@@ -49,6 +49,7 @@ impl NativeRecord {
                     UsageSessionKind::Explore => "explore",
                     UsageSessionKind::Oracle => "oracle",
                     UsageSessionKind::Shadow => "shadow",
+                    UsageSessionKind::Expert => "expert",
                     UsageSessionKind::Summary => "summary",
                     UsageSessionKind::WebSearch => "web_search",
                 };

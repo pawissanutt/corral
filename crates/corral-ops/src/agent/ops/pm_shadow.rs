@@ -63,6 +63,17 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         Admission::Replay(stored) => return receipts::respond(ctx, &container, *stored, true),
         Admission::New(admitted) => admitted,
     };
+    let enabled = admitted
+        .resolved
+        .generation(&container, admitted.origin.binding.generation)?
+        .is_some_and(|generation| generation.capability("shadow"));
+    if !enabled {
+        return Err(Rejection::new(
+            RejectCode::OpNotAllowed,
+            "shadow is disabled for this generation",
+        )
+        .into());
+    }
     receipts::commit(ctx, &admitted, |_, _| {
         if request.digest.len() != 64 || !request.digest.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(bad("digest must be a 64-character hexadecimal SHA-256"));

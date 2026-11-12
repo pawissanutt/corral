@@ -76,7 +76,7 @@ pub fn refresh_usage(store: &Store, id: &str) -> Result<()> {
 /// tasks, other tasks, the task's earlier runs and other runs' events are never read.
 pub fn refresh_active_usage(store: &Store) {
     let _hot = corral_core::work::HotScope::enter();
-    let refreshed = transcript_cache::refresh(|| {
+    let refreshed = transcript_cache::refresh(store.root(), || {
         let heads = match store.heads(&HeadQuery::Open { project: None }) {
             Ok(heads) => heads,
             Err(error) => {
@@ -448,7 +448,7 @@ pub(crate) fn collect(run: &mut Run, store: &Store) {
     } else {
         (|| {
             let (root, claude) = session_root(run, store)?;
-            collect_from(&root, run, claude, &store.config)
+            collect_from(store.root(), &root, run, claude, &store.config)
         })()
     };
     match result {
@@ -589,10 +589,16 @@ fn session_paths_of(root: &Path, worktree: &Path, claude: bool) -> Result<Vec<Pa
     Ok(paths)
 }
 
-fn collect_from(root: &Path, run: &Run, claude: bool, config: &Config) -> Result<Usage> {
+fn collect_from(
+    scope: &Path,
+    root: &Path,
+    run: &Run,
+    claude: bool,
+    config: &Config,
+) -> Result<Usage> {
     let mut total = None;
     for path in session_paths(root, run, claude)? {
-        if let Some(usage) = transcript_cache::with_lines(&path, |lines| {
+        if let Some(usage) = transcript_cache::with_lines(scope, &path, |lines| {
             parse_session_entries(lines, run, claude, config)
         })? {
             add(&mut total, usage)?;

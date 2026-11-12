@@ -16,9 +16,10 @@ pub(crate) struct RecoveryLaunch<'a> {
     pub profile: Option<&'a ResolvedProfile>,
     pub adopted: bool,
     pub continue_session: bool,
-    /// A rotation (`continue_session` false): fence reason `rotate` and the notice says the
-    /// successor starts a fresh conversation.
-    pub rotation: bool,
+    /// A rotation attempt (fence reason `rotate`): called once the predecessor is stopped,
+    /// fenced, drained and reconciled; `true` starts a fresh conversation with the rotation
+    /// notice, `false` keeps the conversation as an ordinary relaunch.
+    pub rotate: Option<&'a dyn Fn() -> Result<bool>>,
 }
 
 impl<'a> RecoveryLaunch<'a> {
@@ -30,7 +31,7 @@ impl<'a> RecoveryLaunch<'a> {
             profile: Some(profile),
             adopted: true,
             continue_session,
-            rotation: false,
+            rotate: None,
         }
     }
 }
