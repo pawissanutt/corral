@@ -1,6 +1,10 @@
 # Supervised sync
 
-`corral sync --watch` reconciles every two seconds and then runs the PM supervisor.
+`corral sync --watch` reconciles, runs the PM supervisor, then sleeps `--interval`
+seconds (default 2, at most 300). A full pass is not free on a large store, and a
+watch driver beside a running board repeats the board's work, so the shipped unit uses
+`--interval 15`: recovery spacing is measured in minutes and the board still syncs
+every two seconds. Use the default only when the watch driver is the sole sync driver.
 One-shot sync, board sync and plugin hooks do not run it. The watch driver writes a
 heartbeat even with recovery disabled. A systemd **user** service can restart the
 watch driver after an exit; nothing installs or enables it automatically.
@@ -10,7 +14,13 @@ watch driver after an exit; nothing installs or enables it automatically.
 In the workspace's `.corral/corral.toml`:
 
 ```toml
+[profiles.pi]
+harness = "corral-pi"
+model = "gpt-6.1-sol"
+vendor = "openai"
+
 [pm]
+agent = "pi"
 supervise = true
 ```
 
@@ -66,7 +76,10 @@ a lock cannot itself advance this driver's heartbeat.
 1. Copy `scripts/corral-sync.service` to
    `~/.config/systemd/user/corral-sync.service` (create that directory if needed).
 2. Edit the copy: replace the executable placeholder with the absolute path to the
-   installed `corral` binary and `<WORKSPACE>` with the absolute workspace root.
+   installed `corral` binary and `<WORKSPACE>` with the absolute workspace root. A user
+   manager's default `PATH` usually lacks tools installed in user directories, such as
+   `herdr`; set the commented `Environment=PATH=...` line when
+   `systemctl --user show-environment` shows that.
 3. Select the **existing store-owned** server explicitly with the commented
    `Environment=CORRAL_HERDR_SESSION=...` or `Environment=HERDR_SOCKET_PATH=...`
    line appropriate to your server. Do not leave conflicting selectors. A wrong

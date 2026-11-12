@@ -582,10 +582,13 @@ pub enum Cmd {
     },
     /// Focus the task's herdr pane
     Jump { id: String },
-    /// Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing every 2 s, headless)
+    /// Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing, headless)
     Sync {
         #[arg(long)]
         watch: bool,
+        /// Seconds to sleep between --watch passes; raise it for a driver that runs beside a board
+        #[arg(long, requires = "watch", default_value_t = 2, value_parser = clap::value_parser!(u64).range(1..=300))]
+        interval: u64,
     },
     /// Compatibility alias: shared status, workspace pause, or guidance for scoped activation
     Autopilot {
