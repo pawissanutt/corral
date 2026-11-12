@@ -247,7 +247,7 @@ the item `escalated_to_owner`.
 inbox and delivers it as a follow-up turn. A host that is down gets the message when sync
 finds it live again; the key and the host's idempotency keep it to one delivery. An ended
 session receives nothing: the outcome stays in the item, which its session record lists.
-The normal board/sync worker still owns automatic transitions.
+The daemon, or the board/sync worker when no daemon owns the loop, owns automatic transitions.
 
 ### Opt-in corral-pi PM
 
@@ -282,8 +282,8 @@ supersede a PM answer. Owner answers, deadlines, acceptance and authority change
 tools. This role has no shell, edit, MCP or skills, including after reload or
 session replacement. These are tool boundaries, not an OS sandbox.
 
-Pi PM tools never call sync, `pm act` or `pm_workset`. Keep the board's sync
-loop running, or run `corral sync --watch` independently. Readback and a
+Pi PM tools never call sync, `pm act` or `pm_workset`. Keep `corral daemon run`
+running, or keep a board open when no daemon is installed. Readback and a
 waiting PM do not drive the loop. Sync reposts pending question wakes into
 the healthy, scoped Pi PM's inbox, deduplicated by `qwake:<question>:<revision>`,
 then uses the Pi delivery adapter to start an idle turn. Publication
@@ -331,9 +331,9 @@ Read `pm brief --json`'s `health` before following a card:
   retained without replay. No worker or PM restart is required.
 
 Run `corral sync` at startup and after binding or restarting the board, then
-recompute `brief` and `next`. The board syncs every two seconds; plugin hooks
-require terminal events. Without a board, keep `corral sync --watch` in the
-harness's background subscription. `wait`, `brief` and `next` do not drive sync.
+recompute `brief` and `next`. The daemon drives regular syncs; without it the board
+ticks and plugin hooks require terminal events. Use `corral daemon run` for a
+headless loop. `wait`, `brief` and `next` do not drive sync.
 On wait timeout, retain the last successful cursor and sync once if no driver
 is active before re-arming. Prefer structured task/project filters to event
 prose greps.

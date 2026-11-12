@@ -1665,8 +1665,8 @@ priority over owner decisions. Task cards, lesson recommendations and task/proje
 inbox requests are filtered to the approved projects before selection. Inbox items without
 typed task/project bindings remain workspace-wide; mixed or unresolved references are not
 assumed local. These tools never run sync or `pm act`, start work, or record a presentation.
-A separate board/sync loop is required for wakes: keep the board running or run
-`corral sync --watch` outside the PM. A healthy scoped Pi PM
+A separate sync loop is required for wakes: keep corrald running, or keep the board
+running without a daemon. Use `corral daemon run` outside the PM. A healthy scoped Pi PM
 receives each pending question wake through the Pm inbox. Its subject retains the outbox
 dedupe key `qwake:<question>:<revision>`. Sync acknowledges the question's outbox only after
 publication; if corral crashes between publication and acknowledgement, the next pass finds
@@ -2059,7 +2059,7 @@ resumes the PM's host in its saved pane, retaining its workspace identity and du
    their `--json` entry carries `hold` (`envelope`, `code`, `generation`, `supervised`,
    `release`). `corral inbox inspect-retry` reports `held_for_replacement` with the releasing
    command, `corral pm relaunch --replace --reason input_limit`. With `pm.supervise = true`,
-   `corral sync --watch` runs that relaunch by itself; otherwise the owner runs it. Unless the
+   corrald runs that relaunch by itself; otherwise the owner runs it. Unless the
    shared Pi session holds its `corral_delivery` entry, which observes it as above, recovery or
    the next delivery pass against a replacement generation logs `delivery_requeued`
    (`envelope`, `code`, `generation`, `members`) and returns its unobserved, non-terminal

@@ -114,6 +114,28 @@ recorded in the handoff.
 - Expert access to corral records is not built because helper sessions have no authenticated
   corral client.
 
+## Daemon direction, November 12
+
+The owner chose to move Corral to an always-on daemon, `corrald`, with a separate app
+(`/home/pawis/corral-app-design/REQUIREMENTS.md` and `ARCHITECTURE.md`; section 11 of the
+latter maps this record onto it). Consequences for this record:
+
+- **The supervisor moves.** `corral sync --watch` under `corral-sync.service` was this
+  record's loop owner. The daemon is the only loop owner in the new design, so the
+  supervisor call moves into its loop and the watch driver, its `--interval` flag and that
+  unit are removed.
+- **Paused, not to be built from this record:** separate project PMs with leases and
+  per-scope cursors (section F and the team-of-PMs design assumed no daemon), and removing
+  the PM's shell in favour of more typed actions (it waits for the app's command router,
+  which should share one entry point per command with `pm_action`).
+- **Still needed, now owned by the daemon design:** PM questions in the store so any device
+  can answer them, and the proactive generation roll before a cap is reached.
+- **Unaffected:** notes, the cheap dispatcher and its shadow data, expert consult, cost
+  attribution and rotation.
+
+The Board next tasks (T-902 to T-919) were dropped the same day: the new terminal board is
+a target of the app, not a second ratatui crate.
+
 ## Live rollout, November 12
 
 Done on the owner's instruction, outside the board. Install evidence (hashes, logs, the

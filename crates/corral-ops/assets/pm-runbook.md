@@ -45,8 +45,8 @@ PM configuration reference below; read its effective policy and authority at sta
    confirmation. Live PM policy delivery is independent of optional event pushes and
    explicitly supersedes conflicting startup instructions without restarting workers.
 3. Run `{{bin}} sync` after startup, binding or a board restart, and recompute the card.
-   Autopilot advances only on sync: the board ticks every two seconds; hooks need events.
-   Without a board, keep `{{bin}} sync --watch` in a background subscription.
+   Autopilot advances only on sync: corrald drives the loop when installed.
+   Otherwise keep a board open, or run `{{bin}} daemon run` for a headless loop.
    `wait`, `pm brief` and `pm next` do not sync. On wait timeout, retain the cursor;
    if no sync driver is active, sync once before re-arming. Fresh-state passes use the
    existing executors until quiescent; unchanged external waits end the pass, not the

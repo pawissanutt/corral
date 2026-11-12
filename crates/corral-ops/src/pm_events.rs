@@ -9,7 +9,7 @@ use crate::Ctx;
 
 const STATE: RecordArea<EventCursor> = RecordArea::new("pm-events");
 
-/// Serialize delivery across board workers, hooks, and `sync --watch`.
+/// Serialize delivery across the loop owner and direct command writers.
 ///
 /// Disabled/unavailable delivery checkpoints EOF so those events are skipped, not queued.
 /// A failed prompt leaves its cursor uncommitted for the next sync.

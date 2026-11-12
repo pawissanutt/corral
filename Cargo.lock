@@ -320,8 +320,10 @@ dependencies = [
  "anyhow",
  "clap",
  "corral-core",
+ "corral-daemon",
  "corral-herdr",
  "corral-ops",
+ "corral-protocol",
  "corral-tui",
  "jiff",
  "notify",
@@ -356,6 +358,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "corral-daemon"
+version = "0.4.0"
+dependencies = [
+ "anyhow",
+ "corral-core",
+ "corral-herdr",
+ "corral-ops",
+ "corral-protocol",
+ "jiff",
+ "rustix 1.1.5",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "corral-git"
 version = "0.4.0"
 dependencies = [
@@ -382,6 +399,7 @@ dependencies = [
  "corral-git",
  "corral-herdr",
  "corral-ops",
+ "corral-protocol",
  "flate2",
  "fs2",
  "getrandom 0.4.3",
@@ -405,6 +423,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "corral-protocol"
+version = "0.4.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "corral-tui"
 version = "0.4.0"
 dependencies = [
@@ -413,6 +439,7 @@ dependencies = [
  "corral-git",
  "corral-herdr",
  "corral-ops",
+ "corral-protocol",
  "image",
  "jiff",
  "pulldown-cmark",

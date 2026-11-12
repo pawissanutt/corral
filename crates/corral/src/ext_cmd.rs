@@ -91,6 +91,7 @@ pub const RESERVED: &[&str] = &[
     "discard",
     "jump",
     "sync",
+    "daemon",
     "autopilot",
     "hook",
     "bind-session",

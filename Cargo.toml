@@ -38,7 +38,9 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 clap = { version = "4", features = ["derive"] }
 tempfile = "3"
 corral-core = { path = "crates/corral-core" }
+corral-protocol = { path = "crates/corral-protocol" }
 corral-herdr = { path = "crates/corral-herdr" }
 corral-git = { path = "crates/corral-git" }
 corral-ops = { path = "crates/corral-ops" }
+corral-daemon = { path = "crates/corral-daemon" }
 corral-tui = { path = "crates/corral-tui" }

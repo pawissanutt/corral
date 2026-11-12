@@ -106,7 +106,6 @@ mod work_paths;
 #[cfg(test)]
 mod work_probe;
 
-const SYNC_EVERY: Duration = Duration::from_secs(2);
 const HERDR_CHECK_EVERY: Duration = Duration::from_secs(10);
 /// With work waiting, this long without a completed sync pass is a stall the header reports.
 const SYNC_STALL_AFTER: Duration = Duration::from_secs(5 * 60);

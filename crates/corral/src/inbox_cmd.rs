@@ -236,7 +236,7 @@ pub fn run(store: &Store, args: InboxArgs) -> Result<()> {
                 print_entry(&entry);
                 if let Some(hold) = entry.hold.as_ref().filter(|hold| hold.supervised) {
                     println!(
-                        "Next: `corral sync --watch` runs `{}` (pm.supervise = true)",
+                        "Next: corrald runs `{}` (pm.supervise = true)",
                         hold.release
                     );
                 } else if let Some(hold) = &entry.hold {

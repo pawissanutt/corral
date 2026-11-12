@@ -62,7 +62,7 @@ enum GateNow {
 }
 
 /// Advances every Review task as far as it can go now (called by `sync`). Re-reads corral.toml first, so
-/// `corral autopilot off` also stops long-running syncs (the board, `sync --watch`); with the kill switch off
+/// `corral autopilot off` also stops long-running syncs (corrald, or a board without it); with the kill switch off
 /// nothing auto-advances. Transient failures use the diagnostic sink and retry on the next sync.
 /// A project scope advances only that project's tasks and leaves workspace deliveries to the next sync.
 pub(crate) fn advance_all(
@@ -117,7 +117,7 @@ pub(crate) fn advance_all(
 }
 
 fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<Vec<Change>>> {
-    // The board worker, the herdr hook and `sync --watch` may sync at once; one of them advances a task.
+    // Serialize this task's advancement, including manual actions racing the loop owner.
     let Some(_lock) = ctx.store.try_lock(&format!("autopilot-{id}"))? else {
         return Ok(None);
     };

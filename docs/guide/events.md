@@ -44,6 +44,17 @@ starting a fresh default wait at the tail could skip events between subscription
 Sequences are durable, increasing database positions. Readers resume from the stored sequence;
 they do not depend on a JSONL file's size, rotation or byte boundaries.
 
+## Daemon health events
+
+`daemon_started`, `daemon_degraded` and `daemon_recovered` describe the loop owner's
+lifecycle and health transitions. They have actor `system` and `via=daemon`, with the
+reason set, process ID, version and timestamps in their detail. The `daemon/state`
+record is updated only on startup, changed degradation reasons, recovery and stop;
+the per-pass heartbeat is a runtime file, not a database event.
+These informational kinds are not PM-actionable and do not wake default wait or push
+subscriptions.
+
+
 ## Candidate annotation events
 
 [Candidate review annotations](annotations.md) append `annotation_opened`,

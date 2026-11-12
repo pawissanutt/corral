@@ -91,7 +91,7 @@ pub(crate) fn store_gate(
                 .collect();
             bail!(
                 "the store is open in other corral processes after waiting {}s: {}; stop the board, \
-                 `corral sync --watch` and the herdr plugin hook, then retry; nothing changed",
+                 corrald and the herdr plugin hook, then retry; nothing changed",
                 wait.as_secs(),
                 if pids.is_empty() {
                     "no registered holder".to_owned()

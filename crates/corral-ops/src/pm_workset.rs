@@ -102,6 +102,7 @@ pub struct PmWorkset {
 
 mod options;
 mod project_executor;
+pub use project_executor::PmDaemonPass;
 pub(crate) use project_executor::act as pm_act_checked;
 mod scope;
 pub(crate) use options::authority;
@@ -606,6 +607,8 @@ pub struct PmActionResult {
     pub workset: PmWorkset,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diagnosis: Option<corral_core::RepairLedger>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon_pass: Option<PmDaemonPass>,
 }
 
 /// Recompute a revision-bound action, then use the existing authorized sync executors, scoped

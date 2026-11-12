@@ -470,10 +470,7 @@ impl Inbox<'_> {
                 .map(|n| format!("PM generation {n}'s host"))
                 .unwrap_or_else(|| "the PM host".into());
             let release = if hold.supervised {
-                format!(
-                    "pm.supervise is on, so `corral sync --watch` runs `{}`",
-                    hold.release
-                )
+                format!("pm.supervise is on, so corrald runs `{}`", hold.release)
             } else {
                 format!("pm.supervise is off, so run `{}`", hold.release)
             };

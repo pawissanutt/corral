@@ -10,6 +10,8 @@ mod automation_cmd;
 mod cmds;
 mod completion_cmd;
 mod config_cmd;
+mod daemon_cmd;
+mod daemon_unit;
 mod dashboard_cmd;
 mod digest_cmd;
 mod doctor;
@@ -582,13 +584,12 @@ pub enum Cmd {
     },
     /// Focus the task's herdr pane
     Jump { id: String },
-    /// Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing, headless)
-    Sync {
-        #[arg(long)]
-        watch: bool,
-        /// Seconds to sleep between --watch passes; raise it for a driver that runs beside a board
-        #[arg(long, requires = "watch", default_value_t = 2, value_parser = clap::value_parser!(u64).range(1..=300))]
-        interval: u64,
+    /// Reconcile tasks once; use `corral daemon run` for the always-on loop
+    Sync {},
+    /// Manage the workspace's always-on sync daemon
+    Daemon {
+        #[command(subcommand)]
+        cmd: daemon_cmd::DaemonCmd,
     },
     /// Compatibility alias: shared status, workspace pause, or guidance for scoped activation
     Autopilot {
@@ -597,7 +598,7 @@ pub enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// herdr plugin event hook: run sync once, always exit 0
+    /// herdr plugin event hook: nudge the daemon or sync once, always exit 0
     Hook,
     /// Bind legacy pane ownership using verified launch or plugin-registration evidence
     BindSession {
