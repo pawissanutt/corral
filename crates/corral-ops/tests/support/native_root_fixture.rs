@@ -12,8 +12,6 @@ pub(super) struct Roots {
     pub assistant: String,
     pub pm: bridge::Bridge,
     pub assist: bridge::Bridge,
-    pub _pm_process: bridge::HostProc,
-    pub _assistant_process: bridge::HostProc,
 }
 
 fn close(run: &mut corral_core::Run, socket: &Path) {
@@ -113,7 +111,11 @@ fn inbox(store: &corral_core::Store, recipient: Recipient, scale: usize) {
     assert!(inbox.unfinished_messages().unwrap().is_empty());
 }
 
-pub(super) fn roots(scale: usize) -> Roots {
+pub(super) fn roots(
+    scale: usize,
+    pm_process: &bridge::HostProc,
+    assistant_process: &bridge::HostProc,
+) -> Roots {
     let fx = super::native_sync_budget::fixture(scale);
     let state = fx
         .task()
@@ -219,21 +221,19 @@ pub(super) fn roots(scale: usize) -> Roots {
         .store
         .fixture_append_events(&line.repeat(10_000 + 2 * scale - count))
         .unwrap();
-    let pm_process = bridge::HostProc::spawn(true);
-    let assistant_process = bridge::HostProc::spawn(true);
     let pm_host = fx.bind(
         &BindTarget::Pm {
             project: String::new(),
         },
         "w9:p2",
-        &pm_process,
+        pm_process,
     );
     let assistant_host = fx.bind(
         &BindTarget::Assistant {
             session: assistant.clone(),
         },
         "w9:p3",
-        &assistant_process,
+        assistant_process,
     );
     for host in [&pm_host, &assistant_host] {
         assert_eq!(host.identity.generation, 1000);
@@ -276,7 +276,5 @@ pub(super) fn roots(scale: usize) -> Roots {
         assistant,
         pm,
         assist,
-        _pm_process: pm_process,
-        _assistant_process: assistant_process,
     }
 }

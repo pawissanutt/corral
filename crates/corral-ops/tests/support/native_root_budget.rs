@@ -155,9 +155,13 @@ fn native_root_sync_fresh_process_child() {
 
 #[test]
 fn whole_root_pm_and_assistant_sync_has_exact_history_cost_in_warm_and_fresh_processes() {
+    // Hold real identities fixed across histories: decimal PID/start-time widths are
+    // fixture inputs to bounded root reads, not additional history work.
+    let pm_process = bridge::HostProc::spawn(true);
+    let assistant_process = bridge::HostProc::spawn(true);
     let mut costs = Vec::new();
     for scale in [1, 10] {
-        let roots = fixture::roots(scale);
+        let roots = fixture::roots(scale, &pm_process, &assistant_process);
         let (ctx, probe) = context(roots.fx.root());
         corral_core::clock::pin_thread(Some(native::data::at(100_000)));
         crate::resources::pin_psi(Some((Some(0.25), Some(1.5))));
