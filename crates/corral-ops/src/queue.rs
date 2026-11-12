@@ -231,6 +231,9 @@ pub(crate) use plan_intent::{pending_plan_reason, queued_plan_requested};
 mod snapshot;
 pub(crate) use snapshot::{check_snapshot, check_snapshot_head};
 
+mod dependencies;
+pub(crate) use dependencies::{dependency_check, head as dependency_head};
+
 pub(crate) fn resolve_plan<T: corral_core::TaskRef + ?Sized>(
     ctx: &Ctx,
     task: &T,
@@ -518,62 +521,13 @@ pub(crate) fn validate_plan(ctx: &Ctx, plan: &DispatchPlan) -> Result<()> {
     Ok(())
 }
 
-/// Reject malformed graphs before ordinary dependency waiting; Done alone satisfies a dependency.
-pub(crate) fn dependency_check<T: corral_core::TaskFieldsRef + ?Sized>(
-    store: &Store,
-    task: &T,
-) -> Result<Option<String>> {
-    fn visit(
-        store: &Store,
-        id: &str,
-        depends_on: &[String],
-        path: &mut Vec<String>,
-        checked: &mut Vec<String>,
-    ) -> Result<()> {
-        if path.iter().any(|seen| seen == id) {
-            path.push(id.to_owned());
-            bail!("dependency cycle: {}", path.join(" -> "));
-        }
-        if checked.iter().any(|seen| seen == id) {
-            return Ok(());
-        }
-        path.push(id.to_owned());
-        for dep in depends_on {
-            let head = store
-                .head(dep)
-                .with_context(|| format!("{id}: missing dependency {dep}"))?;
-            visit(store, &head.task.id, &head.task.depends_on, path, checked)?;
-        }
-        path.pop();
-        checked.push(id.to_owned());
-        Ok(())
-    }
-    visit(
-        store,
-        task.id(),
-        task.depends_on(),
-        &mut Vec::new(),
-        &mut Vec::new(),
-    )?;
-    for id in task.depends_on() {
-        let dep = store.head(id)?.task;
-        if dep.status != Status::Done {
-            return Ok(Some(format!(
-                "waiting on {} ({})",
-                dep.id,
-                dep.status.label()
-            )));
-        }
-    }
-    Ok(None)
-}
-
 pub(crate) fn blocked_reason(
     ctx: &Ctx,
     store: &Store,
     task: &Task,
     force_resources: bool,
 ) -> Result<Option<String>> {
+    let _span = corral_core::timing::span("queue.blocked_reason");
     corral_core::Park::require_unparked(task)?;
     if matches!(task.status, Status::Idea | Status::Backlog | Status::Ready)
         && let Some(reason) = pending_plan_reason(store, task)?
@@ -603,7 +557,8 @@ pub(crate) fn capacity_reason(
         return Ok(Some(reason));
     }
     for id in &task.depends_on {
-        let dep = store.head(id)?.task;
+        let head = dependency_head(store, id)?;
+        let dep = &head.task;
         if let Some(project) = dep.project.as_deref()
             && let Some(reason) = crate::operational_blocker(ctx, project)?
         {

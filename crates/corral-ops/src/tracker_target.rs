@@ -37,8 +37,8 @@ pub(super) fn prerequisites(
     task.depends_on
         .iter()
         .map(|id| {
-            let dependency_head = store
-                .head(id)
+            // Shared with dependency_check: one read per pinned pass.
+            let dependency_head = crate::queue::dependency_head(store, id)
                 .with_context(|| format!("{}: missing dependency {id}", task.id))?;
             let mut dependency = dependency_head.to_shell_task()?;
             let mut result = PlanPrerequisite {
@@ -162,16 +162,33 @@ pub(super) fn prerequisites(
 }
 
 pub(crate) fn target_blocker(store: &Store, task: &Task) -> Result<Option<String>> {
-    let Some(plan) = store.execution_plan_head(&store.head(&task.id)?)? else {
+    let _span = corral_core::timing::span("queue.target_blocker");
+    let head = store.head(&task.id)?;
+    let Some(plan_head) = store.execution_plan_head(&head)? else {
         return Ok(None);
     };
-    let plan = plan.to_shell_task()?;
+    let plan = plan_head.to_shell_task()?;
     if let Err(error) = crate::plan_recovery::require_active(store, &plan) {
         return Ok(Some(format!("{error:#}")));
     }
     // Admission must retain the actual member's bound run/infra-wait context. The
     // target helper resolves its parent through heads, so this does not hydrate history.
-    crate::plan_target::check_dispatch_target(store, task)?;
+    // On one pinned view, a task with its stored membership has the Plan just resolved;
+    // a live store resolves it again.
+    let pinned = store.is_snapshot()
+        && task.id == head.id
+        && task.tracker == head.tracker
+        && task.approved_scope.is_some() == head.approved_scope.is_some()
+        && task.parent == head.parent
+        && task.project == head.project
+        && task.children == head.children;
+    crate::plan_target::check_dispatch_target(store, task, || {
+        if pinned {
+            Ok(Some(plan_head.clone()))
+        } else {
+            store.execution_plan_ref(task)
+        }
+    })?;
     let prerequisites = prerequisites(store, &plan, task)?;
     let reason = prerequisites
         .iter()

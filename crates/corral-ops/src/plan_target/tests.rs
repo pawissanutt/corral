@@ -465,7 +465,10 @@ fn interrupted_initial_claim_reaches_its_checked_dispatch_recovery() {
     f.target.initialized = false;
     f.target.save().unwrap();
     // When admission resumes the same owned claim.
-    check_dispatch_target(&f.ctx.store, &f.task).unwrap();
+    check_dispatch_target(&f.ctx.store, &f.task, || {
+        f.ctx.store.execution_plan_ref(&f.task)
+    })
+    .unwrap();
     let (target, _) = prepare_dispatch(&f.ctx, &f.task).unwrap().unwrap();
     // Then full validation precedes admission and no second target is created.
     target.check().unwrap();

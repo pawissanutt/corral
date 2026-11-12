@@ -63,6 +63,7 @@ pub(crate) fn likely_files<T: corral_core::TaskFieldsRef + ?Sized>(
     ctx: &Ctx,
     task: &T,
 ) -> Result<Vec<String>> {
+    let _span = corral_core::timing::span("lessons.likely_files");
     let Some(project) = task.project().as_deref() else {
         return Ok(vec![]);
     };
@@ -70,10 +71,11 @@ pub(crate) fn likely_files<T: corral_core::TaskFieldsRef + ?Sized>(
     let _followup = corral_core::work::followup("FU-3", "likely_files");
     let words = keywords(&format!("{} {}", task.title(), task.body()));
     // Similarity uses only titles/kinds, including terminal tasks. Read project-indexed
-    // headers once per pinned pass, never full tasks or their accumulated histories.
+    // headers once per pinned pass, never full tasks or their accumulated histories, and
+    // split each title into keywords once rather than once per inferred task.
     let titles = ctx
         .store
-        .pass_derived(&format!("lesson-path-titles\0{project}"), || {
+        .pass_derived(&format!("lesson-path-title-words\0{project}"), || {
             use corral_core::backend::{PageReq, TaskOrder, TaskQuery};
             let view = ctx.store.view()?;
             let query = TaskQuery {
@@ -85,14 +87,18 @@ pub(crate) fn likely_files<T: corral_core::TaskFieldsRef + ?Sized>(
             let mut titles = Vec::new();
             loop {
                 let found = view.tasks(&query, page.clone())?;
-                for header in &found.items {
+                for header in found.items {
                     corral_core::work::decoded(
                         corral_core::work::Counter::TaskHeadDecodes,
-                        u64::try_from(serde_json::to_vec(header)?.len())?,
+                        u64::try_from(serde_json::to_vec(&header)?.len())?,
                         corral_core::work::Subject::Plain,
                     );
+                    titles.push(TitleWords {
+                        words: keywords(&header.fields.title),
+                        kind: header.fields.kind,
+                        id: header.id,
+                    });
                 }
-                titles.extend(found.items);
                 match found.next {
                     Some(next) => page.after = Some(next),
                     None => return Ok(titles),
@@ -103,9 +109,8 @@ pub(crate) fn likely_files<T: corral_core::TaskFieldsRef + ?Sized>(
         .iter()
         .filter(|t| t.id != *task.id())
         .filter(|t| {
-            let overlap = keywords(&t.fields.title).intersection(&words).count();
-            overlap >= 2
-                || (overlap > 0 && t.fields.kind.is_some() && t.fields.kind == *task.kind())
+            let overlap = t.words.intersection(&words).count();
+            overlap >= 2 || (overlap > 0 && t.kind.is_some() && t.kind == *task.kind())
         })
         .map(|t| t.id.clone())
         .collect();
@@ -129,6 +134,13 @@ pub(crate) fn likely_files<T: corral_core::TaskFieldsRef + ?Sized>(
         }
     }
     Ok(files.into_iter().collect())
+}
+
+/// A project task's identity, kind and title keywords, as title similarity reads them.
+struct TitleWords {
+    id: String,
+    kind: Option<String>,
+    words: BTreeSet<String>,
 }
 
 fn keywords(text: &str) -> BTreeSet<String> {

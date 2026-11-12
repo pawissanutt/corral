@@ -1,5 +1,6 @@
 //! Read-only, source-backed eligibility and ranking for Idea promotion.
-use std::collections::{BTreeSet, HashSet};
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::Result;
 use corral_core::{Status, TaskSize};
@@ -43,6 +44,8 @@ pub struct PromotionCandidate {
 /// All eligible Ideas, irrespective of promotion mode or current free capacity.
 /// Reads tasks and bounded historical lesson signals; never mutates board state.
 pub fn promotion_shortlist(ctx: &Ctx) -> Result<Vec<PromotionCandidate>> {
+    let _span = corral_core::timing::span("promotion.shortlist");
+    let snapshot = corral_core::timing::span("promotion.snapshot");
     let ctx = &Ctx {
         store: ctx.store.read_only_snapshot()?,
         ..ctx.clone()
@@ -64,7 +67,10 @@ pub fn promotion_shortlist(ctx: &Ctx) -> Result<Vec<PromotionCandidate>> {
     let dependencies = ctx
         .store
         .heads(&corral_core::backend::HeadQuery::Ids(dependency_ids))?;
+    drop(snapshot);
 
+    // An active task's paths are inferred once per shortlist, not once per compared Idea.
+    let mut active_scopes: HashMap<&str, Scopes> = HashMap::new();
     let mut out = Vec::new();
     for task in tasks.iter().filter(|t| t.status == Status::Idea) {
         let Some(project) = task.project.as_deref() else {
@@ -95,7 +101,7 @@ pub fn promotion_shortlist(ctx: &Ctx) -> Result<Vec<PromotionCandidate>> {
             continue;
         };
         let likely_files = crate::lessons::likely_files(ctx, task)?;
-        let paths: BTreeSet<_> = task.write_scope.iter().chain(&likely_files).collect();
+        let paths = Scopes::new(task.write_scope.iter().chain(&likely_files));
         let mut candidate = PromotionCandidate {
             id: task.id.clone(),
             why: String::new(),
@@ -111,44 +117,39 @@ pub fn promotion_shortlist(ctx: &Ctx) -> Result<Vec<PromotionCandidate>> {
             labels: task.labels.clone(),
             depends_on: task.depends_on.clone(),
             write_scope: task.write_scope.clone(),
-            likely_files: likely_files.clone(),
+            likely_files,
             compared_tasks: vec![],
             unchecked_tasks: vec![],
             overlap_evidence: vec![],
         };
+        let mut conflict = false;
         for active in tasks.iter().filter(|t| {
             t.id != task.id
                 && t.project == task.project
                 && (matches!(t.status, Status::Running | Status::NeedsMe) || t.launch.is_some())
         }) {
             candidate.compared_tasks.push(active.id.clone());
-            let files = crate::lessons::likely_files(ctx, active)?;
-            let other: BTreeSet<_> = active.write_scope.iter().chain(&files).collect();
+            let other = match active_scopes.entry(active.id.as_str()) {
+                Entry::Occupied(known) => known.into_mut(),
+                Entry::Vacant(slot) => {
+                    let files = crate::lessons::likely_files(ctx, active)?;
+                    slot.insert(Scopes::new(active.write_scope.iter().chain(&files)))
+                }
+            };
             if paths.is_empty() || other.is_empty() {
                 candidate.overlap_checked = false;
                 candidate.unchecked_tasks.push(active.id.clone());
                 continue;
             }
-            let mut overlaps = BTreeSet::new();
-            for left in &paths {
-                for right in &other {
-                    if scopes_overlap(left, right) {
-                        overlaps.insert(format!("{}: {left} intersects {right}", active.id));
-                    }
-                }
-            }
-            if !overlaps.is_empty() {
-                candidate.predicted_conflicts.push(active.id.clone());
-                candidate.overlap_evidence.extend(overlaps);
-            }
+            // Any predicted conflict excludes this Idea, so its evidence is never reported
+            // and later pairs need no intersection.
+            conflict = conflict || paths.overlaps(other);
+        }
+        if conflict {
+            continue;
         }
         candidate.compared_tasks.sort();
         candidate.unchecked_tasks.sort();
-        candidate.predicted_conflicts.sort();
-        candidate.overlap_evidence.sort();
-        if !candidate.predicted_conflicts.is_empty() {
-            continue;
-        }
         let overlap = if paths.is_empty() {
             "overlap check skipped: no declared or historically inferable Idea paths".into()
         } else if !candidate.unchecked_tasks.is_empty() {
@@ -261,6 +262,57 @@ fn acceptance(body: &str) -> Option<String> {
         }
     }
     (!content.is_empty()).then(|| content.join(" "))
+}
+
+/// One task's declared and inferred paths, split so wildcard-free pairs compare by hash:
+/// two scopes without `*` overlap exactly when their `./`-trimmed text is equal.
+struct Scopes {
+    literal: HashSet<String>,
+    globs: Vec<String>,
+}
+
+impl Scopes {
+    fn new<'a>(paths: impl IntoIterator<Item = &'a String>) -> Self {
+        let mut scopes = Self {
+            literal: HashSet::new(),
+            globs: Vec::new(),
+        };
+        for path in paths {
+            if path.contains('*') {
+                scopes.globs.push(path.clone());
+            } else {
+                scopes
+                    .literal
+                    .insert(path.trim_start_matches("./").to_owned());
+            }
+        }
+        scopes
+    }
+
+    fn is_empty(&self) -> bool {
+        self.literal.is_empty() && self.globs.is_empty()
+    }
+
+    /// Whether `scopes_overlap(mine, theirs)` holds for any pair.
+    fn overlaps(&self, other: &Self) -> bool {
+        let (fewer, more) = if self.literal.len() <= other.literal.len() {
+            (&self.literal, &other.literal)
+        } else {
+            (&other.literal, &self.literal)
+        };
+        fewer.iter().any(|path| more.contains(path))
+            || self.globs.iter().any(|glob| {
+                other
+                    .globs
+                    .iter()
+                    .chain(&other.literal)
+                    .any(|theirs| scopes_overlap(glob, theirs))
+            })
+            || other
+                .globs
+                .iter()
+                .any(|glob| self.literal.iter().any(|mine| scopes_overlap(mine, glob)))
+    }
 }
 
 // Product automata for the same `*`/`**` syntax used by T-064. Unlike matching

@@ -259,6 +259,8 @@ pub(crate) fn with_admission(
         _ => crate::dispatch_policy::headroom_slots(ctx)?,
     };
     if headroom > 0 {
+        // The shortlist and each candidate's automatic capacity check.
+        let _span = corral_core::timing::span("pm.observe.ideas");
         let mut shortlist = Vec::new();
         for candidate in crate::promotion::promotion_shortlist(ctx)? {
             let mode = ctx
