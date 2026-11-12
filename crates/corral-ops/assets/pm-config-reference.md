@@ -12,6 +12,11 @@ At startup and after policy changes read `corral mode status`, `corral automatio
 `corral pm brief --json` for effective policy and blockers. Policy delivery supersedes
 older instructions. Config is durable, but finite grants expire and must be checked again.
 
+Automatic transitions require the sync loop: corrald owns it when running; otherwise
+the board and hooks retain their legacy passes. Use `corral daemon status` to read
+health; owner service setup is `corral daemon install`. `pm.supervise` opts into PM
+recovery by corrald, not permission to dispatch or resolve owner decisions.
+
 | Owner intent | Action and readback |
 |---|---|
 | Automate dispatch, review or landing | Use `corral mode autopilot --task T-042 --dispatch` to preview; include `--accept` only if landing is requested. Inspect scope, exclusions, expiration and digest. Only the owner can confirm the exact preview interactively with `corral automation confirm --task T-042 --dispatch --digest <preview-id>` (include the same selection and authority flags). Never edit generated grant identity fields. For project/future tasks use the supported bounded `--include-new` preview options, not an unlimited promise. Check `corral automation status`. Assist is the default; review settings alone confer no authority. |

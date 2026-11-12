@@ -219,7 +219,7 @@ omo runs also count a recently modified OmO session file as activity (docs/herdr
 
 When `corral done` moves a run to Review and the effective review policy (`[review]` <
 `[projects.<p>.review]` < task `review:`) has a gate, a reviewer or `accept = "auto"`, sync (board
-worker, herdr hook, headless `corral sync --watch`) drives it with no owner action. The sub-state
+worker or hook without a daemon; otherwise corrald) drives it with no owner action. The sub-state
 lives on the run (`autopilot: {stage, reason, sha, at}`); every transition logs one `autopilot`
 event: `gating -> reviewing -> landing -> done`, or `reviewed`, `changes`, `blocked`, `escalated`.
 

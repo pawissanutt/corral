@@ -264,6 +264,13 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
             ArtifactCmd::Add { session: own, .. } => file_if_own(own.as_deref() == Some(session)),
             ArtifactCmd::Gc { .. } | ArtifactCmd::SetTier { .. } => Refused,
         },
+        Cmd::Daemon { cmd } => match cmd {
+            crate::daemon_cmd::DaemonCmd::Status { .. } => Read,
+            crate::daemon_cmd::DaemonCmd::Run { .. }
+            | crate::daemon_cmd::DaemonCmd::Nudge
+            | crate::daemon_cmd::DaemonCmd::Stop { .. }
+            | crate::daemon_cmd::DaemonCmd::Install { .. } => Refused,
+        },
         Cmd::Pm { cmd } => match cmd {
             Some(PmCmd::Bench { .. } | PmCmd::Next { .. } | PmCmd::Brief { .. }) => Read,
             Some(PmCmd::Notes { cmd }) => match cmd {

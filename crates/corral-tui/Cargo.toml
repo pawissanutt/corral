@@ -20,6 +20,7 @@ corral-core.workspace = true
 corral-herdr.workspace = true
 corral-git.workspace = true
 corral-ops.workspace = true
+corral-protocol.workspace = true
 
 [dev-dependencies]
 corral-ops = { workspace = true, features = ["hermetic-harness"] }

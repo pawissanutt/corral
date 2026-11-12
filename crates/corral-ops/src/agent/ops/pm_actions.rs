@@ -302,6 +302,10 @@ fn act(ctx: &Ctx, scope: &str, id: &str) -> Result<Value> {
         "authority": authority, "status": status.as_str(),
         "policy_revision": acted.workset.policy_revision, "workset_status": acted.workset.status,
     });
+    if let Some(daemon_pass) = &acted.daemon_pass {
+        result["daemon_pass"] =
+            serde_json::to_value(daemon_pass).context("encoding daemon pass outcome")?;
+    }
     if let Some(diagnosis) = &acted.diagnosis {
         result["diagnosis"] = serde_json::to_value(diagnosis)?;
         if serde_json::to_vec(&result)?.len() > RESULT_BUDGET {

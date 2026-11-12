@@ -81,9 +81,10 @@ Commands:
   retry                   Start a fresh run for a task
   discard                 Discard the current run and drop the task
   jump                    Focus the task's herdr pane
-  sync                    Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing, headless)
+  sync                    Reconcile tasks once; use `corral daemon run` for the always-on loop
+  daemon                  Manage the workspace's always-on sync daemon
   autopilot               Compatibility alias: shared status, workspace pause, or guidance for scoped activation
-  hook                    herdr plugin event hook: run sync once, always exit 0
+  hook                    herdr plugin event hook: nudge the daemon or sync once, always exit 0
   bind-session            Bind legacy pane ownership using verified launch or plugin-registration evidence
   pm                      Open the PM pane, or inspect the next PM decision
   focus-board             Go back to this workspace's board pane, opening one only if none is running (the back-to-board key)
@@ -4243,15 +4244,98 @@ Options:
 ## `corral sync`
 
 ```text
-Reconcile tasks with herdr and advance the review autopilot (--watch: keep syncing, headless)
+Reconcile tasks once; use `corral daemon run` for the always-on loop
 
 Usage: corral sync [OPTIONS]
 
 Options:
-      --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --watch
-      --interval <INTERVAL>  Seconds to sleep between --watch passes; raise it for a driver that runs beside a board [default: 2]
-  -h, --help                 Print help
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+## `corral daemon`
+
+```text
+Manage the workspace's always-on sync daemon
+
+Usage: corral daemon [OPTIONS] <COMMAND>
+
+Commands:
+  run      Run the workspace sync daemon in the foreground
+  status   Read daemon health (exit 0 healthy, 1 degraded, 2 down)
+  nudge    Request a pass (exit 2 if no daemon answers)
+  stop     Stop the daemon after its current pass
+  install  Write a service definition without enabling or starting it
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral daemon run`
+
+```text
+Run the workspace sync daemon in the foreground
+
+Usage: corral daemon run [OPTIONS]
+
+Options:
+      --once         Complete one pass and exit
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral daemon status`
+
+```text
+Read daemon health (exit 0 healthy, 1 degraded, 2 down)
+
+Usage: corral daemon status [OPTIONS]
+
+Options:
+      --json         Print the health snapshot as JSON
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral daemon nudge`
+
+```text
+Request a pass (exit 2 if no daemon answers)
+
+Usage: corral daemon nudge [OPTIONS]
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral daemon stop`
+
+```text
+Stop the daemon after its current pass
+
+Usage: corral daemon stop [OPTIONS]
+
+Options:
+      --drain        Drain the running pass before stopping
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral daemon install`
+
+```text
+Write a service definition without enabling or starting it
+
+Usage: corral daemon install [OPTIONS]
+
+Options:
+      --print        Print the service definition without writing it
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --force        Replace a different existing service definition
+  -h, --help         Print help
 ```
 
 ## `corral autopilot`
@@ -4273,7 +4357,7 @@ Options:
 ## `corral hook`
 
 ```text
-herdr plugin event hook: run sync once, always exit 0
+herdr plugin event hook: nudge the daemon or sync once, always exit 0
 
 Usage: corral hook [OPTIONS]
 

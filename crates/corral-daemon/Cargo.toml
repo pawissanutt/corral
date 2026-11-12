@@ -1,0 +1,21 @@
+[package]
+name = "corral-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+jiff.workspace = true
+corral-core.workspace = true
+corral-ops.workspace = true
+corral-protocol.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", features = ["net", "process", "event"] }
+
+[dev-dependencies]
+corral-herdr.workspace = true

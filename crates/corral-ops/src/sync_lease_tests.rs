@@ -58,3 +58,62 @@ fn obligation_phase_renews_after_external_work_but_not_explicit_snapshots() {
         Some(ViewError::Expired { .. })
     ));
 }
+
+#[cfg(unix)]
+#[test]
+fn foreign_loop_lease_prevents_sync_effects_until_released() {
+    use corral_core::Store;
+    use corral_herdr::Herdr;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("herdr");
+    std::fs::write(&bin, r#"#!/bin/sh
+if [ "$1" = "--session" ]; then shift 2; fi
+case "$1 $2" in
+  "workspace list") echo '{"result":{"workspaces":[]}}' ;;
+  "pane list") echo '{"result":{"panes":[{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","agent":"fixture","agent_status":"working"}]}}' ;;
+  "pane process-info") echo '{"result":{"process_info":{"shell_pid":10,"foreground_processes":[]}}}' ;;
+  "pane read") echo 'working' ;;
+  "notification show") echo '{"result":{}}' ;;
+  *) exit 1 ;;
+esac
+"#).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let herdr = Herdr::with_bin(bin, Some("corral-test".into()));
+    let store = Store::init(dir.path()).unwrap();
+    let task = store
+        .create_initialized("Working again", None, Status::NeedsMe, "", |task| {
+            task.runs.push(serde_json::from_value(json!({
+                "id":"R1", "agent":"fixture", "worktree":dir.path(), "branch":"main",
+                "base":"main", "base_sha":"base", "started":Timestamp::now(),
+                "agent_state":"blocked",
+                "herdr":{"workspace_id":"w1","pane_id":"w1:p1","socket":herdr.socket_path()?}
+            }))?);
+            Ok(())
+        })
+        .unwrap();
+    let owner = Store::open(dir.path()).unwrap();
+    assert!(owner.own_loop().unwrap());
+    let ctx = Ctx {
+        store,
+        herdr,
+        resource_probe: crate::resources::FixedResourceProbe::arc(),
+    };
+    let before = serde_json::to_value(&task).unwrap();
+    let (changes, attention) = sync_with_attention(&ctx).unwrap();
+    assert!(changes.is_empty());
+    assert!(attention.is_none());
+    assert_eq!(
+        serde_json::to_value(ctx.store.get(&task.id).unwrap()).unwrap(),
+        before
+    );
+    owner.release_loop();
+    let (changes, _) = sync_with_attention(&ctx).unwrap();
+    assert!(
+        changes
+            .iter()
+            .any(|change| change.task == task.id && change.to == Status::Running)
+    );
+    assert_eq!(ctx.store.get(&task.id).unwrap().status, Status::Running);
+}

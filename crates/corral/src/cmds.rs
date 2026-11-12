@@ -734,22 +734,32 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
                 crate::stats::run(&ctx, &by, since.as_deref(), json, html, out.as_deref())
             }
         }
-        Cmd::Sync { watch, interval } => {
+        Cmd::Sync {} => {
             let ctx = Ctx::open_for_sync(&start_dir(&root)?)?;
             entry.apply(&ctx.store)?;
-            if !watch {
-                return sync_once(&ctx);
-            }
-            loop {
-                if let Err(e) = sync_once(&ctx) {
-                    eprintln!("sync: {e:#}");
-                }
-                if let Err(e) = corral_ops::supervise(&ctx) {
-                    eprintln!("supervise: {e:#}");
-                }
-                std::thread::sleep(Duration::from_secs(interval));
+            if ctx.store.loop_owned_elsewhere()? {
+                let completed = corral_ops::daemon_client::Client::connect(&ctx.store)
+                    .and_then(|client| match client {
+                        Some(mut client) => client
+                            .nudge("cli", Some(Duration::from_secs(20)))
+                            .map(|ack| ack.completed),
+                        None => Ok(false),
+                    })
+                    .unwrap_or(false);
+                println!(
+                    "corrald owns the loop; requested pass {}",
+                    if completed {
+                        "completed"
+                    } else {
+                        "did not complete within the bounded wait"
+                    }
+                );
+                Ok(())
+            } else {
+                sync_once(&ctx)
             }
         }
+        Cmd::Daemon { cmd } => crate::daemon_cmd::run(&start_dir(&root)?, cmd, &entry),
         Cmd::Autopilot { action, json } => crate::mode_cmd::legacy(open(&root)?, &action, json),
         Cmd::Pm { cmd } => crate::pm_cmd::run(&start_dir(&root)?, cmd, &entry),
         Cmd::FocusBoard => crate::up::focus_board(&open(&root)?),

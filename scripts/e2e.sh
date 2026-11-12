@@ -248,8 +248,8 @@ run "$CORRAL" --root "$W" dispatch "$T2" || fail "dispatch $T2"
 WS2=$(tfield '.runs[-1].herdr.workspace_id')
 pass "$T2 dispatched in workspace $WS2"
 
-step "headless corral sync --watch drives $T2 to done (no owner command)"
-"$CORRAL" --root "$W" sync --watch >"$W/watch.log" 2>&1 &
+step "headless corral daemon drives $T2 to done (no owner command)"
+"$CORRAL" --root "$W" daemon run >"$W/watch.log" 2>&1 &
 WATCH=$!
 deadline=$((SECONDS + 120))
 while :; do

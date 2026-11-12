@@ -47,6 +47,8 @@ mod head_run;
 mod head_turn_retention;
 mod head_wait;
 mod heads;
+mod lock_guard;
+mod loop_owner;
 mod member_gate;
 pub(crate) mod migrate_rows;
 mod native_counts;
@@ -76,6 +78,7 @@ pub use head::{CheckpointMetas, TaskHead};
 pub use head_api::Board;
 pub use head_mut::TaskHeadMut;
 pub use heads::*;
+pub use lock_guard::StoreLock;
 pub use member_gate::{MemberGateAmended, MemberGateAmendment};
 use plan_scope::ScopeWrite;
 pub use task_ref_head::shell_of;
@@ -110,6 +113,7 @@ pub struct Store {
     pub(crate) config_hash: String,
     executable: Arc<Executable>,
     skew_reported: Arc<AtomicBool>,
+    loop_owner: Arc<std::sync::Mutex<Option<StoreLock>>>,
     db: Arc<db::Db>,
     /// Set only on a `read_only_snapshot`: every read comes from one view of the store.
     frozen: Option<Arc<snapshot::Frozen>>,
@@ -120,24 +124,6 @@ pub struct Store {
     pub(crate) snapshot_view: Arc<crate::session_binding::SnapshotView>,
     /// Startup upgrade decision, shared by this handle's clones, not a live PM-state cache.
     pub(crate) pm_upgrade_checked: Arc<AtomicBool>,
-}
-
-/// Release the advisory lock at the operation boundary, even if a concurrent
-/// fork still holds a duplicate of the open-file description.
-pub struct StoreLock(fs::File);
-
-impl StoreLock {
-    pub(crate) fn new(file: fs::File) -> StoreLock {
-        StoreLock(file)
-    }
-}
-
-impl Drop for StoreLock {
-    fn drop(&mut self) {
-        if let Err(error) = self.0.unlock() {
-            crate::messages::report(None, "store lock", format!("releasing store lock: {error}"));
-        }
-    }
 }
 
 impl Store {
@@ -165,7 +151,7 @@ impl Store {
             .with_context(|| format!("opening {}", path.display()))?;
         f.lock()
             .with_context(|| format!("locking {}", path.display()))?;
-        let guard = StoreLock(f);
+        let guard = StoreLock::new(f);
         if self.submission_barrier.is_some() {
             self.submission_barrier(&format!("lock:{name}"));
         }
@@ -197,7 +183,7 @@ impl Store {
         } else {
             f.try_lock()
         } {
-            Ok(()) => Ok(Some(StoreLock(f))),
+            Ok(()) => Ok(Some(StoreLock::new(f))),
             Err(fs::TryLockError::WouldBlock) => Ok(None),
             Err(fs::TryLockError::Error(e)) => {
                 Err(e).with_context(|| format!("locking {}", path.display()))
@@ -367,6 +353,7 @@ impl Store {
             config_hash: String::new(),
             executable: Executable::current()?,
             skew_reported: Arc::new(AtomicBool::new(false)),
+            loop_owner: Arc::default(),
             db,
             frozen: None,
             submission_barrier: None,
@@ -495,7 +482,7 @@ impl Store {
             .with_context(|| format!("opening {}", lock.display()))?;
         file.lock()
             .with_context(|| format!("locking {}", lock.display()))?;
-        Ok(StoreLock(file))
+        Ok(StoreLock::new(file))
     }
 
     /// All tasks (including done/dropped), sorted by numeric id.

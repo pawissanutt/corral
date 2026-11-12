@@ -12,7 +12,7 @@ Authorize automatic dispatch explicitly:
 corral dashboard set T-042 --interval-secs 3600 \
   --next-due 2026-10-16T12:00:00Z --authorize-dispatch
 corral dashboard show T-042
-corral sync --watch
+corral daemon run
 ```
 
 `set` configures or resumes a schedule. Without `--authorize-dispatch` it fails

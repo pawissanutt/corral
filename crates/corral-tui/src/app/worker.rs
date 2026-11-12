@@ -6,6 +6,7 @@ use std::sync::{
 };
 
 use super::*;
+use corral_ops::loop_pacing::{SYNC_EVERY, periodic_wait, process_cpu};
 
 pub(super) enum WorkerMsg {
     Synced(std::result::Result<(Vec<Change>, Box<crate::board::BoardSnapshot>), String>),
@@ -16,7 +17,9 @@ impl WorkerMsg {
     /// One board pass: in process while this executable is current; once an update latched it
     /// off, through `installed`, so autopilot keeps running until the board restarts (T-587).
     pub(super) fn pass(ctx: &Ctx, messages: &Sender<Message>, installed: &Path) -> Self {
-        if ctx.store.runtime_latched() {
+        if ctx.store.loop_owned_elsewhere().unwrap_or(true) {
+            Self::loaded(ctx, sync_step::run_daemon(ctx, None))
+        } else if ctx.store.runtime_latched() {
             Self::loaded(ctx, sync_step::run_installed(ctx, installed))
         } else {
             Self::synced_with_attention(ctx, messages)
@@ -84,6 +87,9 @@ pub(super) fn spawn_worker_with_status(
                 stopped.recv_timeout(SYNC_EVERY),
                 Err(RecvTimeoutError::Timeout)
             ) {
+                if maintenance_store.loop_owned_elsewhere().unwrap_or(true) {
+                    continue;
+                }
                 if let Err(error) = maintenance_store.maintain_database() {
                     let _ = maintenance_messages.send(Message {
                         task: None,
@@ -97,6 +103,9 @@ pub(super) fn spawn_worker_with_status(
         let _maintenance_stop = maintenance_stop;
         let installed = ctx.store.installed_executable().to_path_buf();
         let mut herdr_checked: Option<Instant> = None;
+        let mut daemon_checked: Option<Instant> = None;
+        let mut daemon_notice: Option<String> = None;
+        let mut explicit = false;
         loop {
             syncing.store(true, Ordering::Release);
             let (started, cpu_before) = (Instant::now(), process_cpu());
@@ -121,8 +130,33 @@ pub(super) fn spawn_worker_with_status(
                     return;
                 }
             }
-            let update = WorkerMsg::pass(&ctx, &messages, &installed);
-            if let Err(error) = ctx.store.maintain_database() {
+            let daemon_owned = ctx.store.loop_owned_elsewhere().unwrap_or(true);
+            if daemon_owned {
+                if daemon_checked.is_none_or(|at| at.elapsed() >= Duration::from_secs(10)) {
+                    daemon_checked = Some(Instant::now());
+                    let health = corral_ops::daemon_client::health(&ctx.store);
+                    daemon_notice =
+                        (!matches!(health.daemon, corral_protocol::DaemonState::Healthy))
+                            .then(|| health.line());
+                }
+            } else {
+                daemon_checked = None;
+                daemon_notice = None;
+            }
+            let mut update = if daemon_owned {
+                WorkerMsg::loaded(
+                    &ctx,
+                    sync_step::run_daemon(&ctx, explicit.then(|| Duration::from_secs(5))),
+                )
+            } else {
+                WorkerMsg::pass(&ctx, &messages, &installed)
+            };
+            if let (Some(notice), WorkerMsg::Synced(Ok((_, snapshot)))) =
+                (&daemon_notice, &mut update)
+            {
+                snapshot.operating_header = format!("{notice}\n{}", snapshot.operating_header);
+            }
+            if !daemon_owned && let Err(error) = ctx.store.maintain_database() {
                 let _ = messages.send(Message {
                     task: None,
                     file: None,
@@ -140,8 +174,13 @@ pub(super) fn spawn_worker_with_status(
                 _ => started.elapsed(),
             };
             match trigger_rx.recv_timeout(periodic_wait(spent)) {
-                Ok(()) => for () in trigger_rx.try_iter() {},
-                Err(RecvTimeoutError::Timeout) => {}
+                Ok(()) => {
+                    explicit = true;
+                    for () in trigger_rx.try_iter() {}
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    explicit = false;
+                }
                 Err(RecvTimeoutError::Disconnected) => return,
             }
         }
@@ -149,50 +188,25 @@ pub(super) fn spawn_worker_with_status(
     (trigger_tx, msg_rx)
 }
 
-/// The longest wait between periodic syncs; it bounds how late autopilot reacts on its own.
-const SYNC_MAX_WAIT: Duration = Duration::from_secs(60);
-
-/// Back off costly idle passes to about 5% of a core (before the one-minute latency cap).
-/// Explicit user triggers bypass the wait and are coalesced, never replayed as a pass per key.
-pub(super) fn periodic_wait(pass_cpu: Duration) -> Duration {
-    pass_cpu.saturating_mul(19).clamp(SYNC_EVERY, SYNC_MAX_WAIT)
-}
-
-/// CPU time used so far by this whole process (every thread), where /proc provides it.
-fn process_cpu() -> Option<Duration> {
-    let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
-    // utime and stime are fields 14 and 15; the first field after the parenthesized name is 3.
-    let mut fields = stat.rsplit_once(')')?.1.split_whitespace();
-    let utime: u64 = fields.nth(11)?.parse().ok()?;
-    let stime: u64 = fields.next()?.parse().ok()?;
-    // Linux reports these in USER_HZ, which is 100 on every architecture.
-    Some(Duration::from_millis(
-        utime.saturating_add(stime).saturating_mul(10),
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn periodic_sync_waits_nineteen_times_pass_cpu_between_two_and_sixty_seconds() {
-        let ms = Duration::from_millis;
-        assert_eq!(periodic_wait(Duration::ZERO), SYNC_EVERY);
-        assert_eq!(periodic_wait(ms(100)), SYNC_EVERY);
-        assert_eq!(periodic_wait(ms(500)), ms(9_500));
-        assert_eq!(periodic_wait(ms(1_500)), ms(28_500));
-        assert_eq!(periodic_wait(ms(2_000)), ms(38_000));
-        assert_eq!(periodic_wait(ms(4_000)), SYNC_MAX_WAIT);
-        assert_eq!(periodic_wait(Duration::MAX), SYNC_MAX_WAIT);
-    }
-
-    #[test]
-    fn process_cpu_is_read_and_never_runs_backwards() {
-        let before = process_cpu();
-        if cfg!(target_os = "linux") {
-            assert!(before.is_some());
-        }
-        assert!(process_cpu() >= before);
+    fn daemon_owned_tick_never_enters_in_process_sync() {
+        let dir = tempfile::tempdir().unwrap();
+        let owner = corral_core::Store::init(dir.path()).unwrap();
+        assert!(owner.own_loop().unwrap());
+        let store = corral_core::Store::open(dir.path()).unwrap();
+        let ctx = Ctx {
+            store,
+            herdr: corral_herdr::Herdr::with_bin(dir.path().join("must-not-run"), None),
+            resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
+        };
+        // An in-process sync would check runtime and latch off on this version.
+        std::fs::write(ctx.store.dir().join("state/schema-version"), "999\n").unwrap();
+        let (sender, _messages) = mpsc::channel();
+        let _ = WorkerMsg::pass(&ctx, &sender, Path::new("/must-not-run"));
+        assert!(!ctx.store.runtime_latched());
     }
 }

@@ -202,6 +202,7 @@ pub fn run(
         .root()
         .canonicalize()
         .context("resolving workspace root")?;
+    crate::daemon_cmd::startup_health(&ctx.store)?;
     if !show_existing(&ctx, &root)? {
         open_board(&ctx, &root)?;
     }

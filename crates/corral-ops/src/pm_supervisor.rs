@@ -1,4 +1,4 @@
-//! Watch-driver-only health, lock diagnostics and opt-in PM recovery.
+//! Daemon-loop health, lock diagnostics and opt-in PM recovery.
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
@@ -16,7 +16,7 @@ const HEARTBEAT: RecordArea<Heartbeat> = RecordArea::new("pm-supervisor");
 const INPUT_LIMIT: RecordArea<u32> = RecordArea::new("pm-supervisor");
 const INTERVAL: i64 = 10;
 pub(crate) const BACKOFF: i64 = 300;
-const LOCKS: [&str; 4] = [
+pub const LOCKS: [&str; 4] = [
     "artifact-storage",
     "pm-question-wake-outbox",
     "dispatch",
@@ -213,14 +213,61 @@ pub(crate) fn health(ctx: &Ctx) -> Result<Value> {
     Ok(value)
 }
 
+/// Bounded daemon readback; computed off the socket request path.
+pub struct DaemonHealth {
+    pub owned: bool,
+    pub pm: corral_protocol::PmState,
+    pub stores_percent: u64,
+}
+
+pub fn daemon_health(ctx: &Ctx) -> Result<DaemonHealth> {
+    use corral_core::agent::{GENERATIONS_MAX, RECEIPTS_MAX};
+    use corral_protocol::PmState;
+
+    let heartbeat = HEARTBEAT
+        .load(&ctx.store, "heartbeat")
+        .context("reading supervisor heartbeat")?;
+    let pm = if heartbeat
+        .as_ref()
+        .is_some_and(|h| h.status == "relaunch_failed" || h.attempts.reported)
+    {
+        PmState::Absent
+    } else if heartbeat
+        .as_ref()
+        .is_some_and(|h| h.attempts.successor_generation.is_some())
+    {
+        PmState::Relaunching
+    } else if let Some(pm) =
+        pm_state::load_current(&ctx.store).context("reading current PM for daemon health")?
+    {
+        if crate::agent::pi::host_alive(&pm.state).context("probing PM host for daemon health")? {
+            PmState::Live
+        } else {
+            PmState::Absent
+        }
+    } else {
+        PmState::Absent
+    };
+    let receipts = pm_state::child_count(&ctx.store, "receipts").context("counting PM receipts")?;
+    let generations =
+        pm_state::child_count(&ctx.store, "generations").context("counting PM generations")?;
+    Ok(DaemonHealth {
+        owned: crate::session_scope::owns_inventory(ctx)
+            .context("checking daemon runtime ownership")?,
+        pm,
+        stores_percent: (receipts.saturating_mul(100) / RECEIPTS_MAX as u64)
+            .max(generations.saturating_mul(100) / GENERATIONS_MAX as u64),
+    })
+}
+
 /// A bridge refusal is generation-local, not evidence that the PM accepted the envelope.
 pub(crate) fn input_limit(ctx: &Ctx, generation: u32) -> Result<()> {
     INPUT_LIMIT.save(&ctx.store, "input_limit", &generation)
 }
 
-/// Run only after reconciliation in `sync --watch`, never in hooks or one-shot sync.
+/// Run only after reconciliation in `corral daemon run`, never in hooks or one-shot sync.
 pub fn supervise(ctx: &Ctx) -> Result<()> {
-    // Multiple watch drivers must not race the attempt counter or duplicate diagnostics.
+    // Concurrent callers must not race the attempt counter or duplicate diagnostics.
     let Some(_lease) = ctx.store.try_lock("pm-supervisor")? else {
         return Ok(());
     };
@@ -524,7 +571,7 @@ fn observed_at_endpoint(inbox: &Inbox<'_>, seq: u64, endpoint: &std::path::Path)
 }
 
 #[cfg(target_os = "linux")]
-fn lock_holder(path: &std::path::Path) -> String {
+pub fn lock_holder(path: &std::path::Path) -> String {
     use std::os::unix::fs::MetadataExt;
     let found = (|| -> Option<String> {
         let metadata = std::fs::metadata(path).ok()?;
@@ -562,7 +609,7 @@ fn lock_holder(path: &std::path::Path) -> String {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn lock_holder(_path: &std::path::Path) -> String {
+pub fn lock_holder(_path: &std::path::Path) -> String {
     "unknown".into()
 }
 

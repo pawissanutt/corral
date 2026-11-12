@@ -113,7 +113,7 @@ separate terminal and the old binary available throughout the rollback window.
    gate is history, not a synthetic pass or fail. Run the **new candidate** with
    `corral migrate --dry-run --json`; it must list no blockers. Never manufacture
    terminal states to bypass this check on the live board.
-2. Stop board, `sync --watch` and the herdr plugin hook. Ensure no opener remains.
+2. Stop the board, corrald and the herdr plugin hook. Ensure no opener remains.
    An exclusive store-gate timeout names live holders: stop those owners safely;
    do not remove locks or edit SQLite files.
 3. Preserve the installed executable, e.g. copy `~/.cargo/bin/corral` to

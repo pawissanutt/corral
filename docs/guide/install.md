@@ -194,6 +194,15 @@ independent proof of publisher identity. Archives and checksum files come
 from the same release. macOS notarization and Windows Authenticode signing
 are not part of this release pipeline.
 
+## Optional: always-on workspace daemon
+
+After workspace setup, run `corral daemon install --print` to inspect the service,
+then `corral daemon install` and execute its printed enable commands yourself.
+The installer never starts systemd or launchd services. See [daemon](daemon.md)
+for the captured PATH and socket, boot lingering, health, upgrades and rollback.
+Without a service manager, use `corral daemon run` in the foreground.
+
+
 ## Optional: the corral-pi agent host
 
 The [corral-pi host](corral-pi.md) is opt-in and needs nothing above unless you configure a

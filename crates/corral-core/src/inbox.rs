@@ -398,7 +398,7 @@ pub struct InboxHold {
     pub code: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation: Option<u32>,
-    /// `pm.supervise`: `corral sync --watch` replaces the PM by itself.
+    /// `pm.supervise`: corrald replaces the PM by itself.
     pub supervised: bool,
     /// The owner command that replaces the PM and so releases the hold.
     pub release: String,

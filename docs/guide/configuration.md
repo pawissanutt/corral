@@ -8,7 +8,7 @@ The user file is optional and may contain only `profiles`, `harnesses`, `ui`, an
 All other sections, including `projects`, `review`, and `limits`, belong in the workspace.
 You can change configuration three ways:
 
-- edit it by hand (a running board or `corral sync --watch` picks up changes);
+- edit it by hand (a running daemon, or a board without one, picks up changes);
 - `corral config get <key> --source`, `corral config set <key> <value>` and `corral config validate`, where `get`
   prints defaults too, `set` keeps your comments and is refused when the result would be invalid, and
   `corral config path` prints the workspace file's location. `--source` adds the effective layer and
@@ -914,7 +914,7 @@ effort = "high"
 
 ## sync
 
-How `corral sync` (and the board's background sync) reads agent activity.
+How `corral sync` and the daemon (or the board without a daemon) read agent activity.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -999,7 +999,7 @@ Which fields a board card shows beyond its id, title and status line. Cost is on
 | `columns` | none | Per-column override of `fields`, keyed `backlog`, `ready`, `running`, `blocked`, `review` or `done`. The legacy `needs_me` override remains accepted; `blocked` wins when both are present. |
 
 Cost is the task total across every run, review and gate, summed per usage entry so nothing known is lost, and
-the board refreshes unfinished runs from their harness transcripts on every sync (no need to open the task). The
+the loop owner refreshes unfinished runs from their harness transcripts on every sync (no need to open the task). The
 label keeps the source: `$1.50` is spend the harness reported; `sub ~$1.50` is the API-equivalent estimate from the
 pricing table (subscription runs report no spend); mixed tasks show both, `$10.00 + sub ~$2.00`. A trailing `+` means
 some tokens are unpriced, so the amount is a lower bound. A task that never ran shows `$0.00`; runs with nothing
@@ -1132,7 +1132,7 @@ scratch_root = "/home/me/miti-workspace/.scratch"
 |---|---|---|
 | `agent` | `"omo"` | Profile used for the workspace PM pane (`corral pm`, `P` on the board). Must name a profile. |
 | `push_events` | `false` | Opt in to sync pushing `[corral]` messages to the live PM pane only. |
-| `supervise` | `false` | Allow `sync --watch` to relaunch a dead or unresponsive corral-pi PM. Heartbeat and lock diagnostics run regardless. See [supervisor](supervisor.md). |
+| `supervise` | `false` | Allow corrald to relaunch a dead or unresponsive corral-pi PM. Heartbeat and lock diagnostics run regardless. See [daemon](daemon.md). |
 | `push_kinds` | `attention_due` plus the existing ten default task/configuration kinds | Selected actionable kinds; see [events](events.md) for the complete list. Only PM-relevant config changes wake the PM. Unknown names are rejected; `[]` selects none. |
 | `attention_secs` | `900` | PM condition re-wake age, 60..86400 seconds. |
 | `attention_owner_secs` | `1800` | Owner notification age; greater than `attention_secs`, at most 604800 seconds (7 days). |

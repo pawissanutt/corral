@@ -12,10 +12,12 @@ herdr CLI shapes (captured from herdr 0.9.3): docs/herdr-cli.md.
 | crates/corral-herdr | typed wrapper over the `herdr` CLI (JSON output) |
 | crates/corral-git | git subprocess helpers: worktrees, diffs, merges |
 | crates/corral-ops | application services shared by CLI and TUI (dispatch, sync, review, artifacts, PM) |
+| crates/corral-protocol | framed daemon RPC, shared wire types and BoardView DTOs |
+| crates/corral-daemon | workspace loop lease, sync/maintenance threads, local daemon server and health |
 | crates/corral-tui | ratatui board and screens |
 | crates/corral | the `corral` binary: clap CLI wiring, herdr plugin manifest in `plugin/` |
 
-Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and git never depend on each other.
+Dependencies flow corral -> {daemon, tui, ops} -> {core, herdr, git, protocol}; daemon -> ops. Leaf crates never depend on each other.
 
 ## Conventions
 
@@ -46,6 +48,7 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
   not just Cargo's build lock. Compile once per gate and reuse its candidate-bound metadata.
   Keep the gate/work-budget test-clock feature union aligned to avoid a redundant rebuild.
 - Check one crate: `cargo check -p <crate>`; test one crate: `cargo test -p <crate>`.
+- The `corral` binary includes `corral daemon`; build the daemon and protocol crates with the workspace. Install its workspace user service explicitly with `corral daemon install`; builds never enable services.
 - Test binaries carry no debuginfo (`[profile.test] debug = false`); panic messages keep
   their file and line. When a backtrace needs line numbers, rerun that one test with
   `CARGO_PROFILE_TEST_DEBUG=line-tables-only cargo test -p <crate> <name>`.

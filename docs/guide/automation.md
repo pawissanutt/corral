@@ -277,8 +277,8 @@ every = "1d"
 
 The first enabled sync reports the preceding interval. Later scheduled reports start
 at the previous scheduled snapshot, including any downtime, and manual reports do
-not advance that cursor. There is no independent timer: run the board, plugin hooks,
-or `corral sync --watch` for regular syncs. Each report has its own pin and protected
+not advance that cursor. There is no independent timer: keep corrald running, or
+use the board and plugin hooks without a daemon. Each report has its own pin and protected
 Report artifact. Like sprint reports, artifacts attach to the first existing task;
 an empty workspace gets one Done report-anchor task, reused by later digests.
 
@@ -318,8 +318,8 @@ without that exact range are refused rather than guessing from the dispatch base
 
 When `corral done` moves a run to Review, the review policy has work to do, and a
 confirmed operating grant authorizes the next action, every sync advances that run
-with no action from you. Syncs happen in the board, in the herdr plugin's event hook, and
-headlessly with `corral sync --watch`.
+with no action from you. The daemon drives sync; without it, the board and the
+herdr plugin's event hook run passes. Use `corral daemon run` for a headless loop.
 
 Each run carries an autopilot state, shown on its card and review screen, and every change of state is logged to
 `.corral/events.jsonl`:
@@ -443,13 +443,12 @@ fast-forward, cannot reuse the old receipts.
 
 ### Updates and state compatibility
 
-The board, watch loop and autopilot check the running executable on every sync before side effects.
-Replacing or deleting that executable stops new gates, reviews and dispatches, records `version_skew`,
-and reports "corral was updated; restart the board (q, then corral up)". The outdated process never
-writes again, but the board keeps autopilot running: it hands each later sync pass to the installed
-executable (`corral sync` against the same store, herdr and session) and only reads the result back,
-with the restart notice in its header until you restart it. The headless `corral sync --watch` loop
-only refuses. Restart explicitly; automatic re-execution is not enabled.
+The loop owner and autopilot check the running executable before sync side effects.
+Replacing or deleting it stops new gates, reviews and dispatches and records `version_skew`.
+The daemon finishes its pass and exits 75 so its service manager restarts the installed
+binary. An outdated board keeps reading results: it nudges the daemon when present,
+otherwise hands passes to the installed executable. Restart that board explicitly.
+See [daemon](daemon.md) for service installation and coordinated upgrades.
 
 When no sync pass completes for five minutes while tasks wait in Review, Ready or Running, the board
 header reports that autopilot stalled, with the last sync error or that the current pass has not
@@ -483,7 +482,7 @@ corral autopilot off       # compatibility alias for mode pause (workspace-wide)
 corral autopilot on        # writes nothing; explains mode autopilot
 ```
 
-Pause is re-read at every side effect, including by a long-running board or `sync --watch`.
+Pause is re-read at every side effect, including by corrald or a long-running board.
 While paused nothing new is dispatched, gated, reviewed, repaired or landed automatically;
 running agents, gates and reviewers are not interrupted, their receipts are still collected,
 and a gate that finishes during the pause does not start a reviewer. All manual commands
@@ -630,7 +629,7 @@ its reservation is reused.
 
 `queue pause` (`dispatch.paused`) only narrows coding admission; `queue resume` cannot resume an
 operating-mode pause or authorize review. `mode pause` stops every automatic action. Neither kills
-running work. Keep a board, hook or `corral sync --watch` driver alive to execute either queue.
+running work. Keep corrald running, or a board/hook without a daemon, to execute either queue.
 
 ### Automatic Backlog dispatch and Idea promotion
 
@@ -680,7 +679,7 @@ unspecified fields inherit the workspace values.
 Every automatic promotion and dispatch writes a `dispatch_policy` event containing the reason,
 rank, eligibility inputs, free slots, and selected route where applicable. `corral autopilot status`
 shows the effective settings, daily count, and recent decision inputs even while the operating
-policy is paused or in Assist. The board, plugin hooks, and `corral sync --watch` provide periodic evaluation; no PM model
+policy is paused or in Assist. The daemon (or board/plugin hooks without one) provides periodic evaluation; no PM model
 is needed to keep the policy running. `queue pause` stops automatic admission too.
 
 T-099 owns this dispatch/promotion policy. T-019's remaining scope is daily digests and reversible

@@ -22,6 +22,7 @@ mod automation_status;
 mod autopilot;
 pub use autopilot::recover_infrastructure;
 mod availability;
+pub mod boardview;
 mod cleanup;
 mod cleanup_worktree;
 mod comments;
@@ -31,6 +32,7 @@ mod content_refresh;
 mod content_scan;
 mod content_search;
 mod ctx;
+pub mod daemon_client;
 pub mod dashboard;
 pub mod delivery;
 mod desktop_notifications;
@@ -68,6 +70,7 @@ mod lesson_distill;
 pub mod lesson_rows;
 mod lesson_signals;
 mod lessons;
+pub mod loop_pacing;
 pub mod memory;
 mod movement;
 #[cfg(not(target_os = "linux"))]
@@ -279,11 +282,15 @@ pub use pm_rotation::{
     Barrier, Blocker, Reason as RotationReason, RotateOutcome, barrier as rotation_barrier,
     rotate as rotate_pm,
 };
-pub use pm_supervisor::supervise;
+pub use pm_supervisor::{
+    DaemonHealth, LOCKS as SUPERVISOR_LOCKS, daemon_health, lock_holder as supervisor_lock_holder,
+    supervise,
+};
 pub use pm_usage_guard::resume as pm_guard_resume;
 pub use pm_workset::{
-    OperatingStatus, PmActionOutcome, PmActionResult, PmDecision, PmExecutable, PmWorkset,
-    ScopedProgress, pm_act, pm_workset, pm_workset_with_attention, pm_workset_with_policy,
+    OperatingStatus, PmActionOutcome, PmActionResult, PmDaemonPass, PmDecision, PmExecutable,
+    PmWorkset, ScopedProgress, pm_act, pm_workset, pm_workset_with_attention,
+    pm_workset_with_policy,
 };
 pub use pricing::{
     CacheRateFallback, PriceShadow, PricingCheck, UnpricedModel, pricing_check, pricing_coverage,
