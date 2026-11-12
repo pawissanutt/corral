@@ -128,14 +128,22 @@ fn run_with_state(
             }
             shared.wait(periodic_wait(spent), true);
         }
-        if shared.lock().upgrading {
-            return Ok(Exit::Upgrade);
+        let upgrading = shared.lock().upgrading;
+        if !upgrading {
+            transitions
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .stopped(&ctx.store, &shared.health())?;
         }
-        transitions
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .stopped(&ctx.store, &shared.health())?;
-        Ok(Exit::Stopped)
+        drop(cleanup);
+        if let Some(error) = shared.lock().server_error.take() {
+            bail!("daemon server failed: {error}");
+        }
+        Ok(if upgrading {
+            Exit::Upgrade
+        } else {
+            Exit::Stopped
+        })
     }
 }
 

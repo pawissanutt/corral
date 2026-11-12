@@ -1,6 +1,7 @@
 //! Test-only schema generator; no separately maintained wire descriptions.
 use schemars::{JsonSchema, SchemaGenerator, generate::SchemaSettings};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 
 use crate::{rpc, subscription::*, *};
 
@@ -12,24 +13,12 @@ fn method<P: JsonSchema, R: JsonSchema>(
     notification: bool,
     errors: &[rpc::ErrorCode],
 ) -> Value {
-    let schema = generator.root_schema_for::<P>();
-    let params = schema.get("properties").and_then(Value::as_object);
-    let required = schema.get("required").and_then(Value::as_array);
-    let params: Vec<_> = params
-        .into_iter()
-        .flatten()
-        .map(|(name, schema)| {
-            json!({
-                "name": name,
-                "required": required.is_some_and(|items| items.iter().any(|v| v == name)),
-                "schema": schema,
-            })
-        })
-        .collect();
+    let schema = serde_json::to_value(generator.root_schema_for::<P>()).unwrap();
+    let params = parameter_descriptors(&schema);
     let mut entry = json!({
         "name": name,
         "params": params,
-        "errors": errors.iter().map(|code| json!({"code": code, "message": code})).collect::<Vec<_>>(),
+        "x-wire-errors": errors.iter().map(|code| json!({"code": code, "message": code})).collect::<Vec<_>>(),
         "x-notification": notification,
         "x-params-schema": generator.subschema_for::<P>(),
     });
@@ -37,6 +26,55 @@ fn method<P: JsonSchema, R: JsonSchema>(
         entry["result"] = json!({"name": "result", "schema": generator.subschema_for::<R>()});
     }
     entry
+}
+
+fn parameter_descriptors(schema: &Value) -> Vec<Value> {
+    let branches = schema
+        .get("oneOf")
+        .or_else(|| schema.get("anyOf"))
+        .and_then(Value::as_array)
+        .map_or_else(|| std::slice::from_ref(schema), Vec::as_slice);
+    let names: BTreeSet<_> = branches
+        .iter()
+        .filter_map(|branch| branch.get("properties").and_then(Value::as_object))
+        .flat_map(|properties| properties.keys())
+        .collect();
+    names
+        .into_iter()
+        .map(|name| {
+            let mut alternatives = Vec::new();
+            let mut required_in = Vec::new();
+            for (index, branch) in branches.iter().enumerate() {
+                if let Some(property) = branch
+                    .get("properties")
+                    .and_then(|properties| properties.get(name))
+                    && !alternatives.contains(&property)
+                {
+                    alternatives.push(property);
+                }
+                if branch
+                    .get("required")
+                    .and_then(Value::as_array)
+                    .is_some_and(|required| required.iter().any(|field| field == name))
+                {
+                    required_in.push(index);
+                }
+            }
+            let schema = if alternatives.len() == 1 {
+                (*alternatives[0]).clone()
+            } else {
+                json!({"anyOf": alternatives})
+            };
+            let required = required_in.len() == branches.len();
+            let mut descriptor = json!({"name": name, "required": required, "schema": schema});
+            if !required && !required_in.is_empty() {
+                // Indices refer to the branches in x-params-schema. The standard
+                // boolean is true only when every alternative requires this field.
+                descriptor["x-required-in"] = json!(required_in);
+            }
+            descriptor
+        })
+        .collect()
 }
 
 fn document() -> Value {
@@ -99,4 +137,31 @@ fn checked_in_schema_is_current() {
         checked_in, generated,
         "wire schema is stale; regenerate with: {REGENERATE}"
     );
+}
+
+#[test]
+fn sub_delta_catalog_preserves_union_parameters_and_requiredness() {
+    let document = document();
+    let delta = document["methods"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|method| method["name"] == SUB_DELTA)
+        .unwrap();
+    let params = delta["params"].as_array().unwrap();
+    let names: Vec<_> = params
+        .iter()
+        .map(|param| param["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["cursor", "epoch", "left", "more", "rows", "topic"]);
+    let topic = params
+        .iter()
+        .find(|param| param["name"] == "topic")
+        .unwrap();
+    assert_eq!(topic["required"], true);
+    assert_eq!(topic["schema"]["anyOf"].as_array().unwrap().len(), 3);
+    let rows = params.iter().find(|param| param["name"] == "rows").unwrap();
+    assert_eq!(rows["required"], false);
+    assert_eq!(rows["x-required-in"], json!([0, 1]));
+    assert_eq!(rows["schema"]["anyOf"].as_array().unwrap().len(), 2);
 }

@@ -881,16 +881,6 @@
   },
   "methods": [
     {
-      "errors": [
-        {
-          "code": "unsupported_version",
-          "message": "unsupported_version"
-        },
-        {
-          "code": "invalid_params",
-          "message": "invalid_params"
-        }
-      ],
       "name": "hello",
       "params": [
         {
@@ -927,23 +917,19 @@
       "x-notification": false,
       "x-params-schema": {
         "$ref": "#/components/schemas/Hello"
-      }
-    },
-    {
-      "errors": [
+      },
+      "x-wire-errors": [
+        {
+          "code": "unsupported_version",
+          "message": "unsupported_version"
+        },
         {
           "code": "invalid_params",
           "message": "invalid_params"
-        },
-        {
-          "code": "unauthenticated",
-          "message": "unauthenticated"
-        },
-        {
-          "code": "internal",
-          "message": "internal"
         }
-      ],
+      ]
+    },
+    {
       "name": "ping",
       "params": [],
       "result": {
@@ -955,10 +941,8 @@
       "x-notification": false,
       "x-params-schema": {
         "$ref": "#/components/schemas/Ping"
-      }
-    },
-    {
-      "errors": [
+      },
+      "x-wire-errors": [
         {
           "code": "invalid_params",
           "message": "invalid_params"
@@ -971,7 +955,9 @@
           "code": "internal",
           "message": "internal"
         }
-      ],
+      ]
+    },
+    {
       "name": "bye",
       "params": [
         {
@@ -991,10 +977,8 @@
       "x-notification": false,
       "x-params-schema": {
         "$ref": "#/components/schemas/Bye"
-      }
-    },
-    {
-      "errors": [
+      },
+      "x-wire-errors": [
         {
           "code": "invalid_params",
           "message": "invalid_params"
@@ -1007,7 +991,9 @@
           "code": "internal",
           "message": "internal"
         }
-      ],
+      ]
+    },
+    {
       "name": "nudge",
       "params": [
         {
@@ -1039,10 +1025,8 @@
       "x-notification": false,
       "x-params-schema": {
         "$ref": "#/components/schemas/Nudge"
-      }
-    },
-    {
-      "errors": [
+      },
+      "x-wire-errors": [
         {
           "code": "invalid_params",
           "message": "invalid_params"
@@ -1055,7 +1039,9 @@
           "code": "internal",
           "message": "internal"
         }
-      ],
+      ]
+    },
+    {
       "name": "health.get",
       "params": [],
       "result": {
@@ -1067,10 +1053,8 @@
       "x-notification": false,
       "x-params-schema": {
         "$ref": "#/components/schemas/HealthGet"
-      }
-    },
-    {
-      "errors": [
+      },
+      "x-wire-errors": [
         {
           "code": "invalid_params",
           "message": "invalid_params"
@@ -1083,7 +1067,9 @@
           "code": "internal",
           "message": "internal"
         }
-      ],
+      ]
+    },
+    {
       "name": "daemon.stop",
       "params": [
         {
@@ -1103,10 +1089,8 @@
       "x-notification": false,
       "x-params-schema": {
         "$ref": "#/components/schemas/Stop"
-      }
-    },
-    {
-      "errors": [
+      },
+      "x-wire-errors": [
         {
           "code": "invalid_params",
           "message": "invalid_params"
@@ -1119,7 +1103,9 @@
           "code": "internal",
           "message": "internal"
         }
-      ],
+      ]
+    },
+    {
       "name": "sub.open",
       "params": [
         {
@@ -1153,19 +1139,127 @@
       "x-notification": false,
       "x-params-schema": {
         "$ref": "#/components/schemas/SubOpen"
-      }
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
     },
     {
-      "errors": [],
       "name": "sub.delta",
-      "params": [],
+      "params": [
+        {
+          "name": "cursor",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/BoardCursor"
+          },
+          "x-required-in": [
+            0,
+            1
+          ]
+        },
+        {
+          "name": "epoch",
+          "required": false,
+          "schema": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "x-required-in": [
+            0,
+            1
+          ]
+        },
+        {
+          "name": "left",
+          "required": false,
+          "schema": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "x-required-in": [
+            0,
+            1
+          ]
+        },
+        {
+          "name": "more",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          },
+          "x-required-in": [
+            0,
+            1
+          ]
+        },
+        {
+          "name": "rows",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BoardRow"
+                },
+                "type": "array"
+              },
+              {
+                "description": "A health page contains the single current snapshot.",
+                "items": {
+                  "$ref": "#/components/schemas/Health"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "x-required-in": [
+            0,
+            1
+          ]
+        },
+        {
+          "name": "topic",
+          "required": true,
+          "schema": {
+            "anyOf": [
+              {
+                "const": "board",
+                "type": "string"
+              },
+              {
+                "const": "health",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      ],
       "x-notification": true,
       "x-params-schema": {
         "$ref": "#/components/schemas/SubDelta"
-      }
+      },
+      "x-wire-errors": []
     },
     {
-      "errors": [],
       "name": "sub.reset",
       "params": [
         {
@@ -1188,23 +1282,10 @@
       "x-notification": true,
       "x-params-schema": {
         "$ref": "#/components/schemas/SubReset"
-      }
+      },
+      "x-wire-errors": []
     },
     {
-      "errors": [
-        {
-          "code": "invalid_params",
-          "message": "invalid_params"
-        },
-        {
-          "code": "unauthenticated",
-          "message": "unauthenticated"
-        },
-        {
-          "code": "internal",
-          "message": "internal"
-        }
-      ],
       "name": "sub.ack",
       "params": [
         {
@@ -1231,10 +1312,8 @@
       "x-notification": false,
       "x-params-schema": {
         "$ref": "#/components/schemas/SubAck"
-      }
-    },
-    {
-      "errors": [
+      },
+      "x-wire-errors": [
         {
           "code": "invalid_params",
           "message": "invalid_params"
@@ -1247,7 +1326,9 @@
           "code": "internal",
           "message": "internal"
         }
-      ],
+      ]
+    },
+    {
       "name": "sub.close",
       "params": [
         {
@@ -1267,7 +1348,21 @@
       "x-notification": false,
       "x-params-schema": {
         "$ref": "#/components/schemas/SubClose"
-      }
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
     }
   ],
   "openrpc": "1.3.2",
