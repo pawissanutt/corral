@@ -55,8 +55,7 @@ pub(crate) fn start(listener: UnixListener, shared: Arc<Shared>, store: &Path) -
                     Ok(_) => {}
                     Err(rustix::io::Errno::INTR) => continue,
                     Err(error) => {
-                        eprintln!("corrald polling listener: {error:#}");
-                        shared.stop(false);
+                        shared.fail_server(format!("polling daemon listener: {error}"));
                         break;
                     }
                 }
@@ -87,16 +86,27 @@ pub(crate) fn start(listener: UnixListener, shared: Arc<Shared>, store: &Path) -
                             eprintln!("corrald accepting client: {error:#}");
                         }
                     }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                    Err(error) => {
-                        eprintln!("corrald listener: {error:#}");
-                        shared.stop(false);
-                    }
+                    Err(error) => accept_error(&shared, error),
                 }
             }
         })
         .context("starting daemon socket server")?;
     Ok(())
+}
+
+pub(super) fn accept_error(shared: &Shared, error: std::io::Error) {
+    use std::io::ErrorKind;
+    match error.kind() {
+        ErrorKind::WouldBlock | ErrorKind::Interrupted | ErrorKind::ConnectionAborted => {}
+        _ if matches!(error.raw_os_error(), Some(code)
+            if code == rustix::io::Errno::MFILE.raw_os_error()
+                || code == rustix::io::Errno::NFILE.raw_os_error()) =>
+        {
+            eprintln!("corrald accepting client: {error}; retrying after descriptor exhaustion");
+            shared.wait(Duration::from_millis(500), false);
+        }
+        _ => shared.fail_server(format!("accepting daemon connection: {error}")),
+    }
 }
 
 fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) -> Result<()> {

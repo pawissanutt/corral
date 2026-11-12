@@ -173,12 +173,12 @@ impl<'a> Topics<'a> {
                 }
             }
             Topic::Health => {
-                let snapshot = self.shared.health();
                 let mut health = self
                     .shared
                     .health_topic
                     .lock()
                     .unwrap_or_else(|error| error.into_inner());
+                let snapshot = self.shared.health();
                 if health.1.daemon != snapshot.daemon
                     || health.1.runtimes != snapshot.runtimes
                     || health.1.pm != snapshot.pm

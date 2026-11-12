@@ -101,3 +101,35 @@ fn in_pass_nudges_coalesce_and_completion_requires_a_later_started_pass() {
     assert!(!shared.lock().pending);
     assert_eq!(passes, 2);
 }
+
+#[cfg(unix)]
+#[test]
+fn fatal_listener_error_returns_error_after_socket_and_lease_cleanup() {
+    let fixture = Fixture::new();
+    let shared = Arc::new(Shared::new());
+    let socket = daemon_client::socket_path(&fixture.ctx.store);
+    let result = run_with_state(
+        fixture.ctx.clone(),
+        RunOptions { once: false },
+        |_, _| {
+            assert!(socket.exists());
+            server::accept_error(
+                &shared,
+                std::io::Error::other("injected fatal listener error"),
+            );
+            None
+        },
+        Arc::clone(&shared),
+    );
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("injected fatal listener error")
+    );
+    assert!(shared.lock().closed);
+    assert!(!socket.exists());
+    assert!(!fixture.ctx.store.owns_loop());
+    assert!(fixture.ctx.store.own_loop().unwrap());
+    fixture.ctx.store.release_loop();
+}

@@ -136,6 +136,11 @@ latter maps this record onto it). Consequences for this record:
 The Board next tasks (T-902 to T-919) were dropped the same day: the new terminal board is
 a target of the app, not a second ratatui crate.
 
+Phase 1 of that design is built on branch `corrald`: `corral daemon run|status|nudge|stop|install`,
+the loop lease and fence, the supervisor inside the daemon loop, the BoardView projection with
+`corral list --view`, and the wire schema. See [the daemon guide](../guide/daemon.md). The
+"Supervisor" and "Step 3b" parts of this record describe the watch driver it replaces.
+
 ## Live rollout, November 12
 
 Done on the owner's instruction, outside the board. Install evidence (hashes, logs, the

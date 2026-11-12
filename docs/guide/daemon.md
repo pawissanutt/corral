@@ -38,6 +38,8 @@ Connections are capped at 64, require hello within five seconds, and have absolu
 per-frame I/O deadlines. Client connect is nonblocking and deadline-bounded.
 Orderly shutdown allows at most two seconds for outstanding connection writers
 after closing the loop, so a draining stop's reply is written before process exit.
+Interrupted or aborted accepts retry; descriptor exhaustion retries after 500 ms.
+Other listener failures drain and exit nonzero so the service manager can restart.
 
 ## Projected board
 

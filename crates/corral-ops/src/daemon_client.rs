@@ -310,12 +310,18 @@ impl Client {
 #[cfg(unix)]
 fn connect_socket(socket: &Path, deadline: Instant) -> std::io::Result<UnixStream> {
     use rustix::net::{AddressFamily, SocketAddrUnix, SocketFlags, SocketType};
-    let fd = rustix::net::socket_with(
-        AddressFamily::UNIX,
-        SocketType::STREAM,
-        SocketFlags::NONBLOCK | SocketFlags::CLOEXEC,
-        None,
-    )?;
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let flags = SocketFlags::NONBLOCK | SocketFlags::CLOEXEC;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let flags = SocketFlags::empty();
+    let fd = rustix::net::socket_with(AddressFamily::UNIX, SocketType::STREAM, flags, None)?;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    {
+        let descriptor_flags = rustix::io::fcntl_getfd(&fd)?;
+        rustix::io::fcntl_setfd(&fd, descriptor_flags | rustix::io::FdFlags::CLOEXEC)?;
+        let status_flags = rustix::fs::fcntl_getfl(&fd)?;
+        rustix::fs::fcntl_setfl(&fd, status_flags | rustix::fs::OFlags::NONBLOCK)?;
+    }
     let address = SocketAddrUnix::new(socket)?;
     match rustix::net::connect(&fd, &address) {
         Ok(()) => {}

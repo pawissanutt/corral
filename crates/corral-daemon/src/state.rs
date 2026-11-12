@@ -33,6 +33,7 @@ pub(crate) struct State {
     pub elapsed: Option<Duration>,
     pub cpu: Duration,
     pub last_error: Option<String>,
+    pub server_error: Option<String>,
     pub failures: u8,
     pub last_success: Instant,
     pub foreign: bool,
@@ -65,6 +66,7 @@ impl Shared {
                 elapsed: None,
                 cpu: Duration::ZERO,
                 last_error: None,
+                server_error: None,
                 failures: 0,
                 last_success: Instant::now(),
                 foreign: false,
@@ -164,6 +166,13 @@ impl Shared {
 
     pub fn nudge(&self, wait: Option<Duration>) -> NudgeAck {
         self.wait_nudge(self.request_nudge(), wait)
+    }
+
+    pub fn fail_server(&self, error: String) {
+        let mut state = self.lock();
+        state.server_error.get_or_insert(error);
+        state.stop = true;
+        self.changed.notify_all();
     }
 
     pub fn stop(&self, upgrading: bool) {
