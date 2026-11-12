@@ -163,6 +163,14 @@ formatting, the size limit, clippy and 5,739 workspace tests. The two small comm
 that (`daf59e96`, `55c6601f`) were checked with clippy and the tests of the crates they
 touch.
 
+The first client of the daemon's socket followed the same day: the Corral app moved into
+this repository as `apps/corral-app/`, and its terminal build, started with
+`CORRAL_SOCKET="$(corral daemon socket)"`, shows the daemon's health line and board and
+follows them. It is read-only and serves no other screen yet; see
+`apps/corral-app/README.md`. Checked against the live daemon (health, 189 rows, cost and
+age changes arriving) and against a throwaway daemon that was stopped and restarted (the
+last board stayed, marked stale, and the app reconnected and showed a task added meanwhile).
+
 ## Live rollout, November 12
 
 Done on the owner's instruction, outside the board. Install evidence (hashes, logs, the
