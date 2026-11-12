@@ -25,8 +25,9 @@ read `status`; the PM may `nudge` and should report a down daemon to the owner.
 
 With a daemon owning the loop, `corral sync` requests a pass, waits at most 20 seconds
 and reports whether it completed. It exits successfully even if that wait expires.
-The hook nudges without opening the store; the board nudges and reads back state.
-Explicit board refresh waits up to five seconds; periodic ticks do not wait.
+The hook nudges without opening the store. The board reads state back on its periodic
+ticks without nudging, so the daemon keeps its own pace; an explicit board refresh asks
+for a pass and waits up to five seconds for it.
 The daemon performs usage refresh and database maintenance instead of the board.
 Without a daemon, sync runs one pass, hooks retain coalesced passes, and the board
 retains its periodic sync and maintenance. Read-only PM commands never drive sync.
