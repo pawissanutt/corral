@@ -146,6 +146,15 @@ Found during rollout:
 - **An existing gate-claim retry repeats on every pass.** T-947 and T-950 cannot start a
   gate (T-951 has the cause), and each sync pass claims and fails again. This predates the
   rollout at about 100 events an hour; a second sync driver adds to it.
+- **Owner-question state stopped the cache from growing.** This build moved that state
+  out of the system prompt into a host message. When a question was asked or answered
+  inside a run, the message was added to each request without being journaled, so it sat
+  at a different position every time and cached input stayed at 196,480 tokens while
+  re-billed input grew to 29k per request. Fixed in `a30482d3` by journaling it; after the
+  relaunch (generation 27) cached input grew again. A mid-run question change has not yet
+  recurred live.
+- **Each relaunch costs one uncached read** of the whole context (about $0.45 at 240k).
+  The rollout relaunched the PM three times.
 
 `5b6aedd4` was checked with the docs check, clippy and formatting for the `corral` crate,
 not a gate.
