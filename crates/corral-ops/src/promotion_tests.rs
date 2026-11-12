@@ -300,6 +300,55 @@ fn wildcard_intersections_are_not_literal_path_matches() {
 }
 
 #[test]
+fn indexed_scopes_overlap_exactly_when_some_path_pair_does() {
+    let sets: [&[&str]; 9] = [
+        &[],
+        &["src/a.rs"],
+        &["./src/a.rs", "docs/x.md"],
+        &["src/b.rs"],
+        &["src/**/*.rs"],
+        &["src/**", "README.md"],
+        &["docs/*"],
+        &["src/ab*.rs"],
+        &["src/*cd.rs", "src"],
+    ];
+    for a in sets {
+        for b in sets {
+            let paths = |set: &[&str]| set.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>();
+            let (left, right) = (paths(a), paths(b));
+            let pairwise = left
+                .iter()
+                .any(|l| right.iter().any(|r| scopes_overlap(l, r)));
+            let indexed = Scopes::new(&left).overlaps(&Scopes::new(&right));
+            assert_eq!(indexed, pairwise, "{a:?} {b:?}");
+        }
+    }
+}
+
+#[test]
+fn shortlist_infers_an_active_tasks_files_once_not_once_per_idea() {
+    use corral_core::work::{self, HotScope};
+    // Given two eligible Ideas and one active task of their project.
+    let (_tmp, ctx) = workspace();
+    for n in 0..2 {
+        idea(&ctx, &format!("Idea {n}"));
+    }
+    ctx.store
+        .create("Worker", Some("app"), Status::Running, "")
+        .unwrap();
+    // When the board is shortlisted once.
+    let _scope = HotScope::enter();
+    let before = work::snapshot();
+    let candidates = promotion_shortlist(&ctx).unwrap();
+    let calls = work::snapshot()
+        .since(&before)
+        .followup_calls("FU-3", "likely_files");
+    // Then each Idea and the active task infer their paths once.
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(calls, 3);
+}
+
+#[test]
 fn auto_candidates_exclude_overlapping_launches_only_within_the_same_project() {
     let (_tmp, mut ctx) = workspace();
     ctx.store.config.dispatch.promote_ideas = corral_core::PromoteIdeas::Auto;

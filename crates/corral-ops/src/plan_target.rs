@@ -289,7 +289,12 @@ pub(crate) fn prepare_dispatch(ctx: &Ctx, task: &Task) -> Result<Option<(Target,
 }
 
 /// Read-only readiness check. An unclaimed target can be initialized during dispatch.
-pub(crate) fn check_dispatch_target(store: &Store, task: &Task) -> Result<()> {
+/// `plan` resolves the task's execution Plan, and is called only where the check needs it.
+pub(crate) fn check_dispatch_target(
+    store: &Store,
+    task: &Task,
+    plan: impl FnOnce() -> Result<Option<TaskHead>>,
+) -> Result<()> {
     // Sending a bound defect back to its existing worker does not touch the target.
     // Validate the frozen run as usual, tolerating only the marker already fenced
     // by its recorded wait; target_blocker still qualifies every prerequisite.
@@ -309,7 +314,7 @@ pub(crate) fn check_dispatch_target(store: &Store, task: &Task) -> Result<()> {
             Err(error) => Err(error),
         };
     }
-    if let Some((plan, branch)) = integration_plan(store, task)? {
+    if let Some((plan, branch)) = plan()?.map(integration_binding).transpose()?.flatten() {
         let repo = store.project_path(task.project.as_deref().context("task has no project")?)?;
         if let Some(target) = Target::load(&repo, &branch)? {
             target.check_owner(store, &plan)?;

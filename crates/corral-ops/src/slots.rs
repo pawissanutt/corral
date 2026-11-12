@@ -193,6 +193,7 @@ pub(crate) fn capacity_reason<T: corral_core::TaskFieldsRef + ?Sized>(
 
 /// A waiting finishing step gets first refusal, but a saturated project cannot block others.
 pub(crate) fn finishing_first(store: &Store, candidate: &str) -> Result<Option<String>> {
+    let _span = corral_core::timing::span("queue.finishing_first");
     if !store
         .effective_operating_policy()
         .is_ok_and(|policy| policy.mode == corral_core::OperatingMode::Autopilot && !policy.paused)
@@ -206,11 +207,13 @@ pub(crate) fn finishing_first(store: &Store, candidate: &str) -> Result<Option<S
     {
         return Ok(None);
     }
-    for head in heads.iter() {
+    // Only unheld Review heads can wait on finishing work; the shell copies these head
+    // fields, so skip every other head before building its compatibility task.
+    for head in heads
+        .iter()
+        .filter(|head| head.hold.is_none() && head.status == Status::Review && head.id != candidate)
+    {
         let task = head.to_shell_task()?;
-        if task.hold.is_some() || task.status != Status::Review || task.id == candidate {
-            continue;
-        }
         if crate::operating::require(store, &task, corral_core::OperatingActionKind::Gate).is_err()
         {
             continue;
