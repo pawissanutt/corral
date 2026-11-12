@@ -201,6 +201,7 @@ pub(crate) fn start(
                         state.foreign = !health.owned;
                         state.pm = health.pm;
                         state.stores_percent = health.stores_percent;
+                        state.stores_pressed = health.stores_pressed;
                     }
                     Err(error) => eprintln!("corrald sampling health: {error:#}"),
                 }
