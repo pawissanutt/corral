@@ -401,6 +401,66 @@ impl Inbox<'_> {
         Ok(true)
     }
 
+    /// Records that envelope `number`'s bound session refused attempt `refusal.attempt` before
+    /// admitting it. The adapter writes it before the attempt's outcome, so an interrupted
+    /// attempt keeps the evidence.
+    pub fn record_refusal(&self, number: u64, refusal: &Refusal) -> Result<()> {
+        self.save_record("refused", &format!("{number:020}"), refusal)
+    }
+
+    /// The recorded pre-admission refusal of `envelope`'s latest attempt, when there is one.
+    pub fn refusal(&self, envelope: &Envelope) -> Result<Option<Refusal>> {
+        let latest = u64::try_from(envelope.attempts.len())?;
+        Ok(self
+            .record::<Refusal>("refused", &format!("{:020}", envelope.number))?
+            .filter(|refusal| latest > 0 && refusal.attempt == latest))
+    }
+
+    /// Settles a refused envelope (see [`Refusal`]) without a terminal state: each member that
+    /// is neither observed nor terminal returns to pending, so the next publication carries it
+    /// in a fresh envelope with a new idempotency key. Caller holds the deliver lock.
+    pub fn requeue_refused(&self, envelope: &Envelope, refusal: &Refusal) -> Result<Vec<u64>> {
+        let _lock = self.lock()?;
+        let mut members = Vec::new();
+        for seq in &envelope.members {
+            if self.receipt(*seq, ReceiptLevel::Observed)?.is_none()
+                && self.terminal(*seq)?.is_none()
+            {
+                members.push(*seq);
+            }
+        }
+        let number = envelope.number;
+        let ids: Vec<String> = members
+            .iter()
+            .map(|seq| format!("{}#{seq}", self.key()))
+            .collect();
+        self.update_state(|s| {
+            if !members.is_empty() {
+                // The refused publication authorized delivery, even of an info-only flush.
+                self.save_record(
+                    "control",
+                    "flush",
+                    &json!({"at":self.store.now(),"via":"requeue","envelope":number}),
+                )?;
+            }
+            self.save_record(
+                "settled",
+                &format!("{number:020}"),
+                &json!({"via":"requeue","code":refusal.code,"generation":refusal.generation,
+                    "at":self.store.now()}),
+            )?;
+            if s.open_envelope == Some(number) {
+                s.open_envelope = None;
+            }
+            self.event(
+                "delivery_requeued",
+                json!({"envelope":number,"code":refusal.code,"generation":refusal.generation,
+                    "members":ids}),
+            )
+        })?;
+        Ok(members)
+    }
+
     pub fn begin_attempt(&self, envelope: &mut Envelope, now: Timestamp) -> Result<()> {
         let _lock = self.lock()?;
         let old = self.envelope(envelope.number)?;

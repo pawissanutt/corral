@@ -181,7 +181,7 @@ fn full_pm_receipt_family_reclaims_settled_receipts_of_ended_generations() {
     .unwrap();
     // When a later append reclaims under the limit check, in the same transaction.
     let evicted = pm_state::update_selected(&store, &pm_state::Selection::default(), |saved| {
-        let evicted = pm_state::reclaim_receipts(&store)?;
+        let evicted = pm_state::retain(&store, &pm_state::RetentionLimits::PM)?.receipts;
         let pm = saved.as_mut().unwrap();
         pm.state
             .receipts

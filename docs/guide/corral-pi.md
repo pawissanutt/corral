@@ -800,6 +800,13 @@ correction. `{"op":"wait","step":"land","on":{"kind":"event","event":"T-12 lands
 `"on":{"kind":"owner","question":"..."}` marks a step as waiting; starting or finishing it
 clears that. Updates may name `"plan":"P2"`, and one that names an older plan is refused.
 
+Every session-ledger wait stores a review deadline: `deadline` may supply an RFC 3339
+timestamp from now through seven days ahead; otherwise event waits default to two hours
+and owner waits to 24 hours. At the next sync after a PM deadline passes, corral posts
+one keyed `pm_wait_wake` inbox message per step and plan revision. Legacy waits without
+a deadline are due immediately, once. The wake is a pointer, not authority: the PM
+must review the condition and clear or renew its wait; corral does not change the ledger.
+
 The host restores the ledger at startup and resume and gives every model request a bounded
 summary of the current plan (identity, revision, outstanding steps, waits and the next
 action). It is built from the latest accepted ledger right before each request, so a todo
@@ -1719,7 +1726,15 @@ Each launch starts a fresh conversation by default. Pass `-c` or `--continue` wi
 to resume the previous written transcript. `corral agent resume --pm` remains an explicit
 recovery command and continues that transcript.
 
-It refuses, before writing anything, with:
+`corral pm relaunch [--replace] [--reason <text>]` recovers an already recorded corral-pi
+PM and continues the same conversation. A live host is left alone unless `--replace` is
+passed. Recovery drains and reconciles the predecessor, then starts the next generation
+in its corral-owned pane, or creates one if the old pane is gone or was owner-adopted.
+It prints the destination pane id, never takes focus, and never types into an adopted
+pane; moving to a corral-owned pane ends adoption. Unlike `corral pm`, it cannot create
+the first PM or start a fresh conversation.
+
+`corral pi --pm` refuses, before writing anything, with:
 
 | Code | Meaning |
 |---|---|
@@ -1951,6 +1966,14 @@ resumes the PM's host in its saved pane, retaining its workspace identity and du
    (`delivery_fenced`): a `corral_delivery` entry for it in the shared Pi session observes its
    messages; otherwise each is marked failed `delivery_unknown` and the notice lists it as
    delivery unknown. Only `corral inbox retry <id>` sends such a message again.
+
+   A PM envelope the old generation refused with `input_limit` reached nobody, so it is
+   neither failed nor orphaned. While that generation stays bound, delivery holds it without
+   another send (`delivery_blocked`, `host_refused`). Unless the shared Pi session holds its
+   `corral_delivery` entry, which observes it as above, recovery or the next delivery pass
+   against a replacement generation logs `delivery_requeued` (`envelope`, `code`,
+   `generation`, `members`) and returns its unobserved, non-terminal messages to pending.
+   The next generation receives them once, in a fresh envelope under a new key.
 6. It opens the next generation in the same pane, posts one `recovery_notice` message listing
    every classified call (its subject carries them as data), runs `corral agent launch` there,
    logs `agent_call_reconciled` for each corral call and `agent_resumed`, and returns a task it

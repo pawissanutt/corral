@@ -384,6 +384,7 @@ pub fn pass(ctx: &Ctx) -> Result<()> {
     if pm_state::load_current(&ctx.store)?.is_some() {
         consulted("sync");
         super::super::pm_wake::repost(ctx)?;
+        super::super::pm_wait_wake::sweep(ctx)?;
         if let Some(pm) = pm_state::load_current(&ctx.store)? {
             probe_one(ctx, &Recipient::Pm, &ContainerRef::Pm, &pm.state);
         }

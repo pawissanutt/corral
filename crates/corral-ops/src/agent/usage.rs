@@ -86,14 +86,35 @@ fn collect_state_inner(
     complete: bool,
 ) -> Result<Usage> {
     // Generations that resumed the same file are read once; copies are deduplicated by key.
+    // Retired PM generations keep their transcripts in the archive; both are read in
+    // generation order, so retirement never changes which binding claims a file first.
+    let retired = state.retired.as_ref();
+    let mut bound: Vec<(u32, &Path, &str)> = state
+        .generations
+        .iter()
+        .filter_map(|g| {
+            let b = g.bound.as_ref()?;
+            Some((g.n, b.session_file.as_path(), b.session_id.as_str()))
+        })
+        .chain(retired.into_iter().flat_map(|r| {
+            r.transcripts.iter().map(|t| {
+                (
+                    t.generation,
+                    t.session_file.as_path(),
+                    t.session_id.as_str(),
+                )
+            })
+        }))
+        .collect();
+    bound.sort_by_key(|(n, ..)| *n);
     let mut files: BTreeMap<&Path, (&str, Option<&str>)> = BTreeMap::new();
-    for bound in state.generations.iter().filter_map(|g| g.bound.as_ref()) {
-        files
-            .entry(bound.session_file.as_path())
-            .or_insert((bound.session_id.as_str(), model));
+    for (_, file, session_id) in bound {
+        files.entry(file).or_insert((session_id, model));
     }
     for session in &state.usage_sessions {
-        if state.generation(session.generation).is_none() {
+        if state.generation(session.generation).is_none()
+            && !state.generation_retired(session.generation)
+        {
             bail!(
                 "usage session references absent generation {}",
                 session.generation
@@ -106,10 +127,19 @@ fn collect_state_inner(
     if files.is_empty() {
         bail!("no bound Pi session");
     }
-    let bindings: BTreeMap<_, _> = state
-        .generations
-        .iter()
-        .filter_map(|g| g.connection.clone().map(|b| (g.n, b)))
+    let bindings: BTreeMap<_, _> = retired
+        .into_iter()
+        .flat_map(|r| {
+            r.connections
+                .iter()
+                .flat_map(|c| c.generations.iter().map(move |n| (*n, c.binding.clone())))
+        })
+        .chain(
+            state
+                .generations
+                .iter()
+                .filter_map(|g| g.connection.clone().map(|b| (g.n, b))),
+        )
         .collect();
     for binding in bindings.values() {
         binding.validate()?;

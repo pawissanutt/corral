@@ -3,7 +3,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-pub use super::pm_records::Selection;
+pub use super::pm_records::{Retention, RetentionLimits, Selection};
 use super::{AGENT_RECORD_VERSION, AgentRunState};
 use crate::Store;
 
@@ -93,10 +93,11 @@ pub fn child_count(store: &Store, kind: &str) -> Result<u64> {
     super::pm_records::count(store, kind)
 }
 
-/// Evicts the oldest settled receipts of ended generations once the family is full.
-/// Call under the same transaction as the limit check it precedes.
-pub fn reclaim_receipts(store: &Store) -> Result<u64> {
-    super::pm_records::reclaim_receipts(store)
+/// One retention pass over the PM container at `limits` (`RetentionLimits::PM` in shipped
+/// code): evicts settled receipts of ended generations and retires ended generations once
+/// either family nears its cap. Call under the same transaction as the limit check it precedes.
+pub fn retain(store: &Store, limits: &RetentionLimits) -> Result<Retention> {
+    super::pm_records::retain(store, limits)
 }
 
 /// The binding and current host generation, independent of retained history.
@@ -111,9 +112,32 @@ pub fn update_selected<R>(
     selection: &Selection,
     f: impl FnOnce(&mut Option<AgentPm>) -> Result<(R, bool)>,
 ) -> Result<R> {
+    update_inner(store, selection, None, f)
+}
+
+/// `update_selected` preceded by a retention pass at `limits` in the same transaction, so the
+/// callback reads only what retention kept. Opening a generation uses it.
+pub fn update_retained<R>(
+    store: &Store,
+    selection: &Selection,
+    limits: &RetentionLimits,
+    f: impl FnOnce(&mut Option<AgentPm>) -> Result<(R, bool)>,
+) -> Result<R> {
+    update_inner(store, selection, Some(limits), f)
+}
+
+fn update_inner<R>(
+    store: &Store,
+    selection: &Selection,
+    retention: Option<&RetentionLimits>,
+    f: impl FnOnce(&mut Option<AgentPm>) -> Result<(R, bool)>,
+) -> Result<R> {
     let _board = store.lock("dispatch")?;
     let _pm = store.lock("agent-pm")?;
     store.records_transaction(|| {
+        if let Some(limits) = retention {
+            super::pm_records::retain(store, limits)?;
+        }
         let before = super::pm_records::read(store, selection)?;
         let mut pm = before.as_ref().map(|(_, pm)| pm.clone());
         let (result, write) = f(&mut pm)?;

@@ -73,7 +73,9 @@ export const sessionTodoTool: CorralToolSpec = {
     + "init opens a plan (refused while the current plan has open steps; a finished plan rolls into history). "
     + "append adds steps to a phase, or opens a new phase when you give its label. start, done and drop "
     + "(with a reason) move a step. wait records that an open step waits on a named event or an owner answer; "
-    + "starting or finishing the step clears it. The receipt returns the plan, revision and disposition.",
+    + "starting or finishing the step clears it. Every wait has a deadline (default 2 h for events, "
+    + "24 h for the owner), after which corral wakes the session for that step. "
+    + "The receipt returns the plan, revision and disposition.",
   op: "todo",
   parameters: Type.Union([
     Type.Object({ op: Type.Literal("init"), phases: Type.Array(Phase) }, { additionalProperties: false }),
@@ -88,6 +90,7 @@ export const sessionTodoTool: CorralToolSpec = {
       { additionalProperties: false }),
     Type.Object({
       op: Type.Literal("wait"), step: Type.String(), plan: Plan,
+      deadline: Type.Optional(Type.String({ format: "date-time" })),
       on: Type.Union([
         Type.Object({ kind: Type.Literal("event"), event: Type.String({ description: "The observable event" }) },
           { additionalProperties: false }),
@@ -103,7 +106,7 @@ export const sessionTodoTool: CorralToolSpec = {
       case "start":
       case "done": return pick(params, ["op", "step", "plan"]);
       case "drop": return pick(params, ["op", "step", "reason", "plan"]);
-      case "wait": return pick(params, ["op", "step", "on", "plan"]);
+      case "wait": return pick(params, ["op", "step", "on", "plan", "deadline"]);
       default: throw new Error("invalid todo operation");
     }
   },

@@ -375,6 +375,18 @@ pub struct Attempt {
     pub outcome: Option<SendOutcome>,
 }
 
+/// The bound session refused an envelope attempt before admitting it (Pi's `input_limit`):
+/// nothing reached that session, which will refuse it again, so a replacement session gets
+/// its members in a fresh envelope. Kept beside the envelope, keyed by its number.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Refusal {
+    /// The refused attempt's ordinal; a later attempt makes the record stale.
+    pub attempt: u64,
+    pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope {
     pub number: u64,

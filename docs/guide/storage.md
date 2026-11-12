@@ -620,6 +620,36 @@ files older than the grace period are adopted and removed.
 - **Finished worktrees** follow [cleanup](cleanup.md#finished-worktrees-at-sync).
 - **The cache root** can be deleted at any time; only timing changes.
 
+### PM container retention
+
+The corral-pi PM container outlives every host generation, so its receipt family (cap 16,384)
+and its generation records (cap 64) are reclaimed by one pass. It runs inside the PM transaction
+before every PM receipt append (including hello) and before a new generation opens, once
+receipts reach 15,360 or generations reach 56, which leaves room for the request that triggered
+it. It reclaims each family down to half.
+
+- **Evicted:** settled receipts of ended (fenced) generations, oldest first. Under generation
+  pressure the pass also empties the oldest ended generations that nothing pins.
+- **Retired:** ended generations that then hold no receipts. Their usage attribution (bound
+  transcript, session ID, connection binding, and whether they predate budget accounting) is
+  first copied into an archive on the PM head, so usage totals and the budget
+  `legacy_usage_gap` are the same before and after.
+- **Never evicted or retired:** the current generation and its receipts; the newest bound
+  generation, whose transcript a relaunch continues; a receipt owing a settlement or a
+  post-commit effect, or watched by an active wake, and its generation; a generation with a
+  pending question or a job that still needs reaping; budget request rows. A fenced
+  generation's open turns can never be settled, so they do not pin it.
+- **Generation floor:** every retired generation number is below the floor recorded in the
+  archive. The generation counter never resets or reuses a number, and a request naming a
+  retired generation is refused `agent_fenced`, like any fenced generation.
+
+Only a full receipt family whose receipts all belong to the current generation or are pinned
+still refuses `receipt_limit`; a launch refuses only when no generation could be retired.
+
+The first retirement writes PM head layout 3. Binaries that know only layout 2 refuse that
+head (`unsupported PM record layout`) instead of misreading it, so retirement is one-way: the
+rollback point for an older binary is before the first retirement.
+
 ### Artifact commands
 
 ```sh

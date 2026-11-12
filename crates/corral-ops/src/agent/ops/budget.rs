@@ -82,9 +82,8 @@ pub(super) fn budget(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 .filter(|f| f.enabled)
                 .map(|f| BudgetLimits::from_settings(&f.settings))
                 .unwrap_or_default();
-            let legacy_usage_gap = state.generations.iter().any(|g| {
-                g.bound.is_some() && g.capabilities.as_ref().is_none_or(|s| s.catalog < 7)
-            });
+            // Retired generations carry their gap in the container's archive.
+            let legacy_usage_gap = state.legacy_usage_gap();
             let admitted = match p.action.as_str() {
                 "reserve" => {
                     if p.response.is_some() || p.tokens == 0 {

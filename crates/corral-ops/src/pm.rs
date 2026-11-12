@@ -179,33 +179,13 @@ fn open_pm_with(
             "pm_replaced",
         )?;
     }
-    let _board = ctx
-        .store
-        .try_lock("dispatch")?
-        .context("operating policy is being updated; retry opening the PM")?;
-    let policy = crate::pm_policy::snapshot(ctx)?;
-    save_prompt(ctx, &policy)?;
-    let state = PmState {
-        pane_id: created.pane_id.clone(),
-        bootstrap: connection.clone(),
-        execution: Some(PmExecution {
-            harness: resolved.harness.clone(),
-            model: resolved.model.clone(),
-            vendor: resolved.vendor.clone(),
-        }),
-    };
-    crate::pm_policy::begin_startup(ctx, &created.pane_id, &policy)?;
-    STATE.save(&ctx.store, "state", &state)?;
-    let command = crate::launch_exit::arm(ctx, &command, &pm_receipt(ctx, &created.pane_id)?)?;
-    ctx.herdr
-        .pane_run(&created.pane_id, &format!("export CORRAL_PM=1; {command}"))?;
-    crate::pm_policy::confirm_startup(ctx, &created.pane_id)?;
-    // Release the board boundary before metadata, focus and event accounting.
-    drop(_board);
-    corral_core::inbox::Inbox::new(&ctx.store, corral_core::inbox::Recipient::Pm)?
-        .record_pm_launch()?;
-    ctx.herdr
-        .pane_report_metadata(&created.pane_id, "corral PM", &[])?;
+    launch_pm(
+        ctx,
+        &created.pane_id,
+        connection.clone(),
+        &resolved,
+        &command,
+    )?;
     ctx.herdr.pane_focus(&created.pane_id)?;
     ctx.store.log_event(
         None,
@@ -213,6 +193,101 @@ fn open_pm_with(
         json!({ "pane": created.pane_id, "agent": agent, "bootstrap": connection }),
     )?;
     Ok(created.pane_id)
+}
+
+/// Recover the recorded corral-pi PM without taking focus or starting a new conversation.
+pub(crate) fn relaunch(ctx: &Ctx, reason: &str, replace: bool) -> Result<String> {
+    use crate::agent::recovery::{RecoveryLaunch, recover_with};
+    use corral_core::agent::{ContainerRef, pm_state};
+
+    let _delivery = ctx
+        .store
+        .try_lock("pm-policy")?
+        .context("PM policy delivery is in progress; retry relaunching the PM")?;
+    let pm = pm_state::load_current(&ctx.store)?
+        .filter(|pm| pm.state.binding.generation > 0)
+        .context("there is no corral-pi PM to relaunch")?;
+    let alive = crate::agent::pi::host_alive(&pm.state)?;
+    if alive && !replace {
+        return Ok(pm.pane);
+    }
+    // Validate the replacement before creating a pane or touching the predecessor.
+    let resolved = crate::agent::hooks::pm::profile(ctx)?;
+    let adopted = pm.adopted();
+    let previous_pane = pm.pane;
+    // Even a live adopted host becomes the owner's shell once replacement stops it.
+    // Never send a launch command to that shell.
+    let pane = if !adopted && ctx.herdr.pane_get(&previous_pane)?.is_some() {
+        previous_pane.clone()
+    } else {
+        ctx.herdr
+            .workspace_create(ctx.store.root(), "corral PM", false)?
+            .pane_id
+    };
+    let (outcome, prepared) = recover_with(
+        ctx,
+        &ContainerRef::Pm,
+        replace,
+        Some(RecoveryLaunch {
+            pane: Some(&pane),
+            profile: Some(&resolved),
+            adopted: false,
+            continue_session: true,
+        }),
+        None,
+    )?;
+    launch_pm(ctx, &pane, None, &resolved, &prepared.command())?;
+    ctx.store.log_event(
+        None,
+        "pm_relaunched",
+        json!({
+            "pane": pane, "reason": reason, "replaced": outcome["replaced"],
+            "previous_pane": previous_pane,
+        }),
+    )?;
+    Ok(pane)
+}
+
+/// CLI access to the same recovery entry point used by the supervisor.
+pub fn relaunch_pm(ctx: &Ctx, reason: &str, replace: bool) -> Result<String> {
+    relaunch(ctx, reason, replace)
+}
+
+/// Commit policy startup and launch into a corral-owned pane; focus remains the caller's choice.
+fn launch_pm(
+    ctx: &Ctx,
+    pane: &str,
+    connection: Option<SetupConnection>,
+    resolved: &ResolvedProfile,
+    command: &str,
+) -> Result<()> {
+    let _board = ctx
+        .store
+        .try_lock("dispatch")?
+        .context("operating policy is being updated; retry opening the PM")?;
+    let policy = crate::pm_policy::snapshot(ctx)?;
+    save_prompt(ctx, &policy)?;
+    let state = PmState {
+        pane_id: pane.into(),
+        bootstrap: connection,
+        execution: Some(PmExecution {
+            harness: resolved.harness.clone(),
+            model: resolved.model.clone(),
+            vendor: resolved.vendor.clone(),
+        }),
+    };
+    crate::pm_policy::begin_startup(ctx, pane, &policy)?;
+    STATE.save(&ctx.store, "state", &state)?;
+    let command = crate::launch_exit::arm(ctx, command, &pm_receipt(ctx, pane)?)?;
+    ctx.herdr
+        .pane_run(pane, &format!("export CORRAL_PM=1; {command}"))?;
+    crate::pm_policy::confirm_startup(ctx, pane)?;
+    // Release the board boundary before metadata, focus and event accounting.
+    drop(_board);
+    corral_core::inbox::Inbox::new(&ctx.store, corral_core::inbox::Recipient::Pm)?
+        .record_pm_launch()?;
+    ctx.herdr.pane_report_metadata(pane, "corral PM", &[])?;
+    Ok(())
 }
 
 /// The live PM session and what it actually runs, from the canonical PM record.
@@ -461,5 +536,108 @@ mod tests {
             std::fs::read_to_string(home.path().join(".agents/skills/corral/SKILL.md")).unwrap();
         assert!(installed.contains(runbook.trim()));
         assert_eq!(installed, crate::role_skill_markdown("corral").unwrap());
+    }
+
+    #[cfg(target_os = "linux")]
+    fn assert_dead_pm_relaunch(adopted: bool, pane_gone: bool) {
+        use crate::agent::bridge::fixture::{self as f, HostProc};
+        use corral_core::agent::pm_state;
+        use corral_core::inbox::Recipient;
+
+        let fx = crate::agent::hooks::pm::tests::fixture();
+        let mut host = HostProc::spawn(true);
+        let bound = fx.bind(
+            &crate::agent::BindTarget::Pm {
+                project: String::new(),
+            },
+            "pm-pane",
+            &host,
+        );
+        f::write_session(&bound, &f::session(&[], &[]));
+        if adopted {
+            pm_state::update(&fx.ctx.store, |pm| {
+                pm.as_mut().unwrap().adopted_pane = Some("pm-pane".into());
+                Ok(((), true))
+            })
+            .unwrap();
+        }
+        host.kill();
+        if pane_gone {
+            std::fs::remove_file(fx.root().join("pm-pane")).unwrap();
+        }
+
+        let pane = super::relaunch(&f::ctx_at(fx.root()), "host_lost", false).unwrap();
+
+        assert_ne!(pane, "pm-pane");
+        assert_eq!(fx.calls("workspace create").len(), 1);
+        assert!(fx.calls("pane focus").is_empty());
+        let calls = fx.calls("pane run");
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with(&format!("pane run {pane} ")));
+        assert!(calls[0].contains("export CORRAL_PM=1;"));
+        let pm = pm_state::load(&fx.ctx.store).unwrap().unwrap();
+        assert_eq!(pm.pane, pane);
+        assert_eq!(pm.state.binding.generation, 2);
+        assert!(pm.state.generation(1).unwrap().fenced.is_some());
+        assert!(!pm.adopted());
+        assert!(pm.adopted_pane.is_none());
+        let bootstrap: crate::agent::launch::Bootstrap = serde_json::from_slice(
+            &std::fs::read(
+                crate::agent::launch::generation_dir(&fx.ctx.store, &Recipient::Pm, 2)
+                    .unwrap()
+                    .join("bootstrap.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(bootstrap.pane, pane);
+        assert_eq!(bootstrap.resume_session, Some(f::session_file(&bound)));
+        assert!(!bootstrap.fresh_session);
+        let saved = super::STATE.load(&fx.ctx.store, "state").unwrap().unwrap();
+        assert_eq!(saved.pane_id, pane);
+        let events = fx.events("pm_relaunched");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].detail["previous_pane"], "pm-pane");
+        assert_eq!(events[0].detail["replaced"], false);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn dead_pm_with_gone_pane_continues_in_new_pane_without_focus() {
+        assert_dead_pm_relaunch(false, true);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn dead_adopted_pm_moves_to_corral_owned_pane_without_typing_into_owner_pane() {
+        assert_dead_pm_relaunch(true, false);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_pm_relaunch_without_replace_is_a_noop() {
+        use crate::agent::bridge::fixture::HostProc;
+        use corral_core::agent::pm_state;
+
+        let fx = crate::agent::hooks::pm::tests::fixture();
+        let host = HostProc::spawn(true);
+        fx.bind(
+            &crate::agent::BindTarget::Pm {
+                project: String::new(),
+            },
+            "pm-pane",
+            &host,
+        );
+        let before = pm_state::load(&fx.ctx.store).unwrap();
+
+        assert_eq!(
+            super::relaunch(&fx.ctx, "host_lost", false).unwrap(),
+            "pm-pane"
+        );
+        assert_eq!(pm_state::load(&fx.ctx.store).unwrap(), before);
+        assert!(fx.calls("workspace create").is_empty());
+        assert!(fx.calls("pane run").is_empty());
+        assert!(fx.calls("pane focus").is_empty());
+        assert!(fx.events("pm_relaunched").is_empty());
     }
 }

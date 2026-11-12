@@ -18,6 +18,12 @@ pub(crate) fn push_events(ctx: &Ctx, herdr_available: bool) -> Result<()> {
     let Some(_lock) = ctx.store.try_lock("pm-events")? else {
         return Ok(());
     };
+    if let Some(pm) = corral_core::agent::pm_state::load_current(&ctx.store)?
+        .filter(crate::agent::pm_wake::healthy)
+    {
+        return crate::agent::pm_event_wake::push(ctx, pm);
+    }
+    crate::agent::pm_event_wake::checkpoint(ctx)?;
     let pane = if ctx.store.config.pm.push_events && herdr_available {
         crate::pm::live_pm_pane(ctx)?
     } else {

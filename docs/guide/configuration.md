@@ -1132,6 +1132,7 @@ scratch_root = "/home/me/miti-workspace/.scratch"
 |---|---|---|
 | `agent` | `"omo"` | Profile used for the workspace PM pane (`corral pm`, `P` on the board). Must name a profile. |
 | `push_events` | `false` | Opt in to sync pushing `[corral]` messages to the live PM pane only. |
+| `supervise` | `false` | Allow `sync --watch` to relaunch a dead or unresponsive corral-pi PM. Heartbeat and lock diagnostics run regardless. See [supervisor](supervisor.md). |
 | `push_kinds` | `attention_due` plus the existing ten default task/configuration kinds | Selected actionable kinds; see [events](events.md) for the complete list. Only PM-relevant config changes wake the PM. Unknown names are rejected; `[]` selects none. |
 | `attention_secs` | `900` | PM condition re-wake age, 60..86400 seconds. |
 | `attention_owner_secs` | `1800` | Owner notification age; greater than `attention_secs`, at most 604800 seconds (7 days). |

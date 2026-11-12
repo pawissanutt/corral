@@ -744,6 +744,9 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
                 if let Err(e) = sync_once(&ctx) {
                     eprintln!("sync: {e:#}");
                 }
+                if let Err(e) = corral_ops::supervise(&ctx) {
+                    eprintln!("supervise: {e:#}");
+                }
                 std::thread::sleep(Duration::from_secs(2));
             }
         }

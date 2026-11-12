@@ -172,21 +172,35 @@ push_kinds = ["done", "needs_me", "stuck", "blocked", "escalated", "config_chang
               "lessons_due", "run_resumed", "wait_transition", "pm_decision_resolved", "attention_due"]
 ```
 
-Push is off by default, including for existing configs. Enable it in `.corral/corral.toml` or
-Settings > General > PM event push. PM push kinds is a comma-separated list of PM-actionable
+For non-Pi PMs, paste push is off by default, including for existing configs. Enable it in
+`.corral/corral.toml` or Settings > General > PM event push. PM push kinds is a comma-separated list of PM-actionable
 names: the eleven above by default, plus the opt-in `delivery_uncertain`, `delivery_orphaned`,
 `message_unobserved`, `question_opened`, `question_escalated`, `question_unattended`,
 `turn_ended_without_report` and `slot_reacquired`. Clearing it selects none. Invalid names block saving. `config_changed`
 wakes the PM only when the event's `pm_relevant` flag is true. `config_invalid` is available
 to `wait` and config history but is not a PM push kind.
 
-Sync sends selected events as `[corral]` messages only to the remembered, live PM pane, using
-the same `agent_prompt` and terminal fallback as replies. It does not start a PM or send to
-coding-agent panes. Position persists in the database's `pm-events` records. Disabled push,
-unavailable herdr, and an absent PM checkpoint the event tail during sync: skipped events are
-not replayed later. A first-ever enabled sync with a live PM and no saved cursor considers the
-retained history from sequence zero. To skip old history, run one sync with push disabled first.
-Event delivery is awareness, not authorization to dispatch, approve, or recover a process.
+A bound, healthy corral-pi PM receives selected events and `attention_due` as durable
+`pm_event_wake` inbox messages, independently of `push_events`; `push_kinds` still selects
+the other events. Each pass coalesces routine events into one bounded digest, keeping the
+newest event per distinct cause and counting repeats. Urgent events (`escalated`,
+`question_escalated`, `needs_me`, `blocked`) are posted separately, before the digest.
+Subject keys deduplicate publication retries: digests use `pmev:<first seq>-<last seq>`,
+urgent events use `<cause>#<event seq>`. Question causes use `q:<question key>`; other
+conditions use `cond:<task>:<normalized kind>` (`workspace` for events without a task).
+The native route starts at the current event tail, checkpoints skipped history while no
+healthy Pi PM exists, and advances only after durable publication. Failed delivery leaves
+messages queued but does not block later events. This path never pastes into the Pi pane.
+
+For non-Pi PMs only, sync sends selected events as `[corral]` messages to the remembered,
+live PM pane, using the same `agent_prompt` and terminal fallback as replies. It does not
+start a PM or send to coding-agent panes. Position persists in the database's `pm-events`
+records. Disabled push, unavailable herdr, and an absent PM checkpoint the event tail during
+sync: skipped events are not replayed later. A first-ever enabled sync with a live non-Pi PM
+and no saved cursor considers retained history from sequence zero. To skip old history,
+run one sync with push disabled first.
+Event delivery is awareness, not authorization to dispatch, approve, or recover a process;
+read fresh brief/next before acting.
 
 ### Attention lifecycle and routing
 

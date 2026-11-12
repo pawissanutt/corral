@@ -273,9 +273,13 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
                 PmInboxCmd::Post { .. } | PmInboxCmd::Withdraw { .. } => File,
                 PmInboxCmd::Claim { .. } | PmInboxCmd::Resolve { .. } => Refused,
             },
-            None | Some(PmCmd::Act { .. } | PmCmd::Present { .. } | PmCmd::Resolve { .. }) => {
-                Refused
-            }
+            None
+            | Some(
+                PmCmd::Act { .. }
+                | PmCmd::Present { .. }
+                | PmCmd::Resolve { .. }
+                | PmCmd::Relaunch { .. },
+            ) => Refused,
         },
         Cmd::Harness {
             cmd: HarnessCmd::List { .. },

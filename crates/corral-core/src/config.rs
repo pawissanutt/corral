@@ -387,6 +387,9 @@ pub struct PmCfg {
     /// Opt in to actionable event delivery to the live workspace PM pane.
     #[serde(default)]
     pub push_events: bool,
+    /// Allow the watch driver to relaunch the corral-pi PM.
+    #[serde(default)]
+    pub supervise: bool,
     /// Actionable event kinds delivered to the PM when push is enabled.
     #[serde(default = "default_push_kinds")]
     pub push_kinds: Vec<String>,
@@ -459,6 +462,7 @@ impl Default for PmCfg {
         PmCfg {
             agent: "omo".into(),
             push_events: false,
+            supervise: false,
             push_kinds: default_push_kinds(),
             attention_secs: attention::seconds(),
             attention_owner_secs: attention::owner_seconds(),

@@ -116,6 +116,9 @@ pub enum WaitOn {
 pub struct StepWait {
     pub step: String,
     pub on: WaitOn,
+    /// Session review deadline; absent only in ledgers stored before deadline support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<Timestamp>,
 }
 
 impl RunProgress {

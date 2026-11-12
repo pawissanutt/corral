@@ -8,7 +8,9 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use corral_core::TaskRef;
 use corral_core::agent::{AgentBinding, AgentGeneration, ContainerRef, HostHealth, pm_state};
-use corral_core::inbox::{Envelope, Inbox, ObserveCursor, Recipient, SendOutcome, SessionBinding};
+use corral_core::inbox::{
+    Envelope, Inbox, ObserveCursor, Recipient, Refusal, SendOutcome, SessionBinding,
+};
 use serde_json::json;
 
 use crate::Ctx;
@@ -31,9 +33,10 @@ pub const ENTRY_TYPE: &str = "corral_delivery";
 /// The host refuses `submit_input` text over 8 KiB (`INPUT_MAX_BYTES` in bridge/protocol.ts).
 pub const INPUT_MAX_BYTES: usize = 8 * 1024;
 
-/// Bridge refusals that prove the input itself can never be admitted. Every other failure
-/// (closed socket, unreadable reply, a host that is not ready) is uncertain: the host keeps
-/// one outcome per key for the generation's lifetime, so a resend of the same key is safe.
+/// Bridge refusals that prove the input itself can never be admitted. A PM's `input_limit`
+/// is definite for its generation only (see `input_limit`). Every other failure (closed
+/// socket, unreadable reply, a host that is not ready) is uncertain: the host keeps one
+/// outcome per key for the generation's lifetime, so a resend of the same key is safe.
 const PERMANENT: [&str; 3] = ["bad_input", "frame_too_large", "unknown_command"];
 
 /// The registered corral-pi adapter.
@@ -195,8 +198,47 @@ fn disposition(value: Disposition) -> &'static str {
     }
 }
 
+/// A PM generation that admitted its last input key refuses every new one before admission,
+/// so the envelope reached nobody. The supervisor marker requesting a replacement generation
+/// is written first, then the refusal; the envelope then waits for that generation (see
+/// `crate::delivery::refused`). Either write failing leaves the attempt uncertain, as before.
+fn input_limit(
+    ctx: &Ctx,
+    envelope: &Envelope,
+    generation: u32,
+    refusal: &BridgeError,
+) -> SendOutcome {
+    let recorded = crate::pm_supervisor::input_limit(ctx, generation).and_then(|()| {
+        let attempt = u64::try_from(envelope.attempts.len()).context("attempt ordinal")?;
+        Inbox::new(&ctx.store, Recipient::Pm)?.record_refusal(
+            envelope.number,
+            &Refusal {
+                attempt,
+                code: refusal.code.clone(),
+                generation: Some(generation),
+            },
+        )
+    });
+    match recorded {
+        Ok(()) => SendOutcome::Rejected {
+            reason: format!(
+                "corral_pi submit_input: {refusal}; PM generation replacement requested"
+            ),
+            retryable_after_fix: true,
+        },
+        Err(error) => SendOutcome::Uncertain {
+            reason: format!("corral_pi submit_input: {refusal}; recording input limit: {error:#}"),
+        },
+    }
+}
+
 impl CorralPiAdapter {
-    fn submit(binding: &SessionBinding, envelope: &Envelope, text: String) -> SendOutcome {
+    fn submit(
+        ctx: &Ctx,
+        binding: &SessionBinding,
+        envelope: &Envelope,
+        text: String,
+    ) -> SendOutcome {
         let Some((dir, generation)) = binding.endpoint.as_deref().and_then(endpoint_generation)
         else {
             return SendOutcome::Rejected {
@@ -217,6 +259,15 @@ impl CorralPiAdapter {
             Ok(reply) => reply,
             Err(error) => {
                 return match error.downcast_ref::<BridgeError>() {
+                    Some(refusal)
+                        if refusal.code == "input_limit"
+                            && Recipient::parse_key(
+                                envelope.idempotency_key.split('@').next().unwrap_or(""),
+                            )
+                            .is_ok_and(|recipient| recipient == Recipient::Pm) =>
+                    {
+                        input_limit(ctx, envelope, generation, refusal)
+                    }
                     Some(refusal) if PERMANENT.contains(&refusal.code.as_str()) => {
                         SendOutcome::Rejected {
                             reason: format!("corral_pi submit_input: {refusal}"),
@@ -366,7 +417,7 @@ impl DeliveryAdapter for CorralPiAdapter {
                 };
             }
         }
-        Self::submit(binding, envelope, text)
+        Self::submit(ctx, binding, envelope, text)
     }
 
     fn observe(

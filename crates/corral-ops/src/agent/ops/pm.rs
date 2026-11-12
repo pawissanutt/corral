@@ -746,7 +746,7 @@ fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Va
             // This projects a readback only; it never invokes pm_act or sync.
             let next = crate::pm_workset::next_for_projects(ctx, &projects)?;
             if op == AgentOp::ReadNext {
-                return Ok(serde_json::to_value(next)?);
+                return super::pm_bound::bounded_next(&next, corral_core::agent::RESULT_MAX_BYTES);
             }
             let mut counts = std::collections::BTreeMap::new();
             for task in &tasks {
@@ -762,7 +762,11 @@ fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Va
                     "state":q.effective_state,"blocking":q.question.blocking})
                 })
                 .collect();
-            Ok(json!({"project":project,"counts":counts,"next":next,"questions":questions}))
+            super::pm_bound::bounded_brief(
+                &next,
+                json!({"project":project,"counts":counts,"questions":questions}),
+                corral_core::agent::RESULT_MAX_BYTES,
+            )
         }
         _ => Err(super::unavailable(op, OWNER)),
     }

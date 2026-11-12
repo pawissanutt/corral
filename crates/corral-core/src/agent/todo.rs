@@ -2,12 +2,17 @@
 use std::collections::HashSet;
 
 use anyhow::{Context, Result, bail, ensure};
+use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::{ProgressPhase, ProgressStep, RunProgress, StepState, StepWait, WaitOn};
 
 /// Longest wait description a session ledger stores.
 pub const WAIT_TEXT_MAX: usize = 256;
+/// Default review intervals for event and owner waits in a session ledger.
+pub const EVENT_WAIT_DEADLINE: SignedDuration = SignedDuration::from_hours(2);
+pub const OWNER_WAIT_DEADLINE: SignedDuration = SignedDuration::from_hours(24);
+const WAIT_DEADLINE_MAX: SignedDuration = SignedDuration::from_hours(7 * 24);
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -62,6 +67,8 @@ pub enum TodoAction {
     Wait {
         step: String,
         on: WaitOn,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        deadline: Option<Timestamp>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         plan: Option<String>,
     },
@@ -141,16 +148,18 @@ impl TodoAction {
                 Some(previous)
             }
         };
-        self.step(base, spec, 0)
+        self.step(base, spec, 0, None)
     }
 
     /// Apply the command to `base`; an init replaces it and continues after revision `floor`,
     /// so a ledger's revision never moves backwards across successive plans.
+    /// Session callers supply their timestamp; worker ledgers cannot wait and supply none.
     pub(crate) fn step(
         &self,
         base: Option<&RunProgress>,
         spec: &str,
         floor: u64,
+        now: Option<Timestamp>,
     ) -> Result<RunProgress> {
         let mut progress = match (self, base) {
             (Self::Init { phases }, _) => RunProgress {
@@ -200,7 +209,9 @@ impl TodoAction {
                     },
                 )?;
             }
-            Self::Wait { step, on, .. } => {
+            Self::Wait {
+                step, on, deadline, ..
+            } => {
                 let text = wait_text(on);
                 ensure!(
                     !text.trim().is_empty()
@@ -208,11 +219,26 @@ impl TodoAction {
                         && !text.chars().any(char::is_control),
                     "invalid_todo_wait"
                 );
+                let now = now.context("todo_wait_needs_a_session_ledger")?;
+                let deadline = match deadline {
+                    Some(deadline) => *deadline,
+                    None => now
+                        .checked_add(match on {
+                            WaitOn::Event { .. } => EVENT_WAIT_DEADLINE,
+                            WaitOn::Owner { .. } => OWNER_WAIT_DEADLINE,
+                        })
+                        .context("todo_wait_deadline_range")?,
+                };
+                ensure!(
+                    deadline >= now && deadline.duration_since(now) <= WAIT_DEADLINE_MAX,
+                    "todo_wait_deadline_range"
+                );
                 open_step(&mut progress, step)?;
                 progress.waits.retain(|wait| wait.step != *step);
                 progress.waits.push(StepWait {
                     step: step.clone(),
                     on: on.clone(),
+                    deadline: Some(deadline),
                 });
             }
         }
@@ -245,5 +271,83 @@ impl TodoAction {
             .checked_add(1)
             .context("progress_revision_exhausted")?;
         Ok(progress)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::agent::request::RequestLedger;
+
+    #[test]
+    fn session_waits_store_bounded_deadlines_and_load_legacy_waits() {
+        let now: Timestamp = "2026-11-11T12:00:00Z".parse().unwrap();
+        let mut requests = RequestLedger::default();
+        let init: TodoAction = serde_json::from_value(json!({
+            "op": "init",
+            "phases": [{"id": "work", "label": "Work",
+                "steps": [{"id": "check", "label": "Check"}]}]
+        }))
+        .unwrap();
+        let base = requests.apply(&init, None, "pm:corral", now).unwrap();
+        for (on, duration) in [
+            (
+                json!({"kind": "event", "event": "gate finishes"}),
+                EVENT_WAIT_DEADLINE,
+            ),
+            (
+                json!({"kind": "owner", "question": "Which scope?"}),
+                OWNER_WAIT_DEADLINE,
+            ),
+        ] {
+            let mut payload = json!({"op": "wait", "step": "check", "on": on});
+            let action: TodoAction = serde_json::from_value(payload.clone()).unwrap();
+            let progress = requests
+                .apply(&action, Some(&base), "pm:corral", now)
+                .unwrap();
+            assert_eq!(
+                progress.waits[0].deadline,
+                Some(now.checked_add(duration).unwrap())
+            );
+
+            let mut stored = serde_json::to_value(&progress).unwrap();
+            stored["waits"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("deadline");
+            let legacy: RunProgress = serde_json::from_value(stored).unwrap();
+            assert_eq!(legacy.waits[0].deadline, None);
+            assert!(
+                serde_json::to_value(&legacy).unwrap()["waits"][0]
+                    .get("deadline")
+                    .is_none()
+            );
+
+            for offset in [
+                SignedDuration::from_nanos(-1),
+                WAIT_DEADLINE_MAX + SignedDuration::from_nanos(1),
+            ] {
+                payload["deadline"] = json!(now.checked_add(offset).unwrap());
+                let action: TodoAction = serde_json::from_value(payload.clone()).unwrap();
+                assert_eq!(
+                    requests
+                        .apply(&action, Some(&base), "pm:corral", now)
+                        .unwrap_err()
+                        .to_string(),
+                    "todo_wait_deadline_range"
+                );
+            }
+            for offset in [SignedDuration::ZERO, WAIT_DEADLINE_MAX] {
+                let deadline = now.checked_add(offset).unwrap();
+                payload["deadline"] = json!(deadline);
+                let action: TodoAction = serde_json::from_value(payload.clone()).unwrap();
+                let explicit = requests
+                    .apply(&action, Some(&base), "pm:corral", now)
+                    .unwrap();
+                assert_eq!(explicit.waits[0].deadline, Some(deadline));
+            }
+        }
     }
 }
