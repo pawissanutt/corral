@@ -1,6 +1,6 @@
 # Corral app
 
-Corral is a Rust app built on [NSH 0.5.0](https://nsh.dev), with desktop, web, phone and terminal forms. The crate is `nsh-app-corral` and its root component is `App`. It presents the interactive mockup's content using fixtures in `src/model/`. There is no daemon, protocol or network connection; actions change local state only.
+Corral is a Rust app built on [NSH 0.5.0](https://nsh.dev), with desktop, web, phone and terminal forms. The crate is `nsh-app-corral` and its root component is `App`. By default it presents the interactive mockup's content using fixtures in `src/model/`, and actions change local state only. Started with a daemon socket, a native build shows `corrald`'s health and board instead; see [Live data](#live-data).
 
 The app includes:
 
@@ -16,7 +16,7 @@ The app includes:
 
 The command palette's **Demo** group changes Connection, Data and Assistant states and opens the hotkey window, share sheet and lock-screen push demos. Open the palette with `Ctrl K`.
 
-This is a sibling of `/home/pawis/miti-workspace/corral`, not part of that repository or its Cargo workspace. Design sources are `/home/pawis/corral-app-design/REQUIREMENTS.md`, `ARCHITECTURE.md` and `mockup/`.
+The app lives in the corral repository as `apps/corral-app/`. It is its own Cargo workspace with its own toolchain, not a member of corral's workspace. Design sources are `/home/pawis/corral-app-design/REQUIREMENTS.md`, `ARCHITECTURE.md` and `mockup/`.
 
 ## Quick start
 
@@ -29,6 +29,18 @@ nsh run --target tui
 ```
 
 The web development server is at http://127.0.0.1:8790/ and rebuilds on save.
+
+## Live data
+
+With a `corrald` running for the workspace (see `docs/guide/daemon.md` in this repository), start the terminal build with the daemon's socket:
+
+```sh
+CORRAL_SOCKET="$(corral daemon socket)" nsh run --target tui
+```
+
+The app then opens in its Daemon data state. The health strip and Now come from the daemon and follow it as it changes; if the daemon goes away the last board stays, marked stale, and the app reconnects by itself. The daemon serves only health and the board today, so the other destinations say so, and the selected task shows the facts the board row carries (no steps, evidence or session yet). The app is read-only towards the daemon: it sends no commands.
+
+The palette's Demo group switches Data back to Fixture. The web build cannot open a Unix socket and has no Daemon state.
 
 ## Commands
 
@@ -44,8 +56,6 @@ Run one cargo or NSH build at a time on this shared host.
 | `python3 -m http.server --bind 127.0.0.1 --directory .nsh/out/Corral 4173` | Serve the packaged site on loopback |
 | `nsh run --target web` | Run the web development server |
 | `nsh run --target tui` | Run in the current terminal |
-
-There are 33 unit tests in `src/model/` and `src/ui/kit/rows.rs`, and 13 headless shell tests in `tests/shell.rs`.
 
 ## Keys
 
@@ -86,4 +96,4 @@ Native desktop backends are behind the off-by-default `desktop` Cargo feature be
 
 ## Not built
 
-Daemon transport, native window chrome, tray, system-level global hotkey, share and push integration, biometric confirmation and installer packaging are not built. The hotkey window, share sheet and lock-screen push are local demos. The web package command produces a static site, not an installer.
+Not built: a daemon transport for the web and phone builds (the daemon speaks only its Unix socket), any command to the daemon, live data for destinations other than Now, native window chrome, tray, system-level global hotkey, share and push integration, biometric confirmation and installer packaging. The hotkey window, share sheet and lock-screen push are local demos. The web package command produces a static site, not an installer.

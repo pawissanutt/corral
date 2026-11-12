@@ -25,6 +25,30 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 /// local queue when there is one, the policy table. Phone: the cards two to a row. Terminal:
 /// one card per row, the pressed one banded by NSH.
 pub fn page(app: AppState) -> AnyElement {
+    if untracked(|| app.daemon()) {
+        return dynamic(move || {
+            let rows = app.feed.with(settings::daemon_connection_details);
+            untracked(move || {
+                frame(
+                    app,
+                    "Connection",
+                    12.0,
+                    vec![qtable(
+                        app,
+                        &[Width::Fixed(120.0), Width::Fill],
+                        rows.into_iter()
+                            .map(|(key, value)| {
+                                vec![
+                                    cell(app, key, Token::Ink3, false).into_element(),
+                                    mono_cell(app, value, Token::Ink).into_element(),
+                                ]
+                            })
+                            .collect(),
+                    )],
+                )
+            })
+        });
+    }
     let v = untracked(|| read(app, settings::connection));
     let title = if app.form == Form::Phone {
         v.phone_title

@@ -378,9 +378,10 @@ fn commands(app: AppState, query: &str) -> Vec<CommandItem> {
     let section = app.nav.with(|nav| nav.settings);
     let theme = app.theme.get();
     let data = app.data.get();
-    let conn = app.conn.get();
-    let mode = app.mode.get();
-    palette_model::filtered(query)
+    let env = app.env();
+    let conn = env.conn;
+    let mode = env.mode;
+    palette_model::filtered(query, crate::client::configured(), data)
         .into_iter()
         .map(|command| {
             let checked = match command.action {
@@ -403,7 +404,12 @@ fn commands(app: AppState, query: &str) -> Vec<CommandItem> {
 
 /// Resolves selection through the same pure command table that produced the displayed row.
 fn run(app: AppState, id: &str, query: &str) {
-    if let Some(action) = palette_model::run(id, query) {
+    if let Some(action) = palette_model::run(
+        id,
+        query,
+        crate::client::configured(),
+        app.data.get_untracked(),
+    ) {
         app.run_command(action);
     }
 }

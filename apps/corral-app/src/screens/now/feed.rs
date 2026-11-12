@@ -41,8 +41,8 @@ fn change_mark(app: AppState, kind: ChangeKind) -> AnyElement {
     }
 }
 
-fn mono(form: Form, content: &'static str, size: f32) -> AnyElement {
-    let words = text(content)
+fn mono(form: Form, content: impl Into<SharedString>, size: f32) -> AnyElement {
+    let words = text(content.into())
         .number_of_lines(1u32)
         .text_color(color(Token::Ink3));
     if form == Form::Terminal {
@@ -153,20 +153,25 @@ pub(crate) fn row(app: AppState, event: &FeedRow, test_id: String) -> AnyElement
     }
 }
 
-/// One owner hold, in the feed's columns: the date the hold was placed, its mark, the id, the
-/// title with the project dimmed after it. Not pressable, as in the mock.
+/// One hold, in the feed's columns: when the hold began, its mark, the id, the title with its
+/// attribution dimmed after it. Not pressable, as in the mock.
 pub(crate) fn hold(app: AppState, held: &HoldRow) -> AnyElement {
     let form = app.form;
-    let label = format!("{} {} {}", held.hold.since, held.hold.id, held.hold.title);
+    let label = format!("{} {} {}", held.since, held.id, held.title);
     let row = view()
         .flex_row()
         .items_center()
         .flex_shrink_0()
         .overflow_hidden()
         .label(label)
-        .child(column(form, 40.0, 5.0, mono(form, held.hold.since, 11.0)))
+        .child(column(
+            form,
+            40.0,
+            5.0,
+            mono(form, held.since.clone(), 11.0),
+        ))
         .child(column(form, 14.0, 1.0, mark(app, held.mark, Hue::Neutral)))
-        .child(column(form, 50.0, 5.0, mono(form, held.hold.id, 11.0)))
+        .child(column(form, 50.0, 5.0, mono(form, held.id, 11.0)))
         .child(
             view()
                 .flex_1()

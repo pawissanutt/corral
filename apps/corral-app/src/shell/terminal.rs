@@ -125,7 +125,12 @@ fn sidebar(
     let body = view()
         .flex_1()
         .min_h(px(0.0))
-        .child(dynamic(move || workspace.get().map(autopilot)))
+        .child(dynamic(move || {
+            workspace
+                .get()
+                .filter(|ws| !ws.autopilot.is_empty())
+                .map(autopilot)
+        }))
         .child(
             scroll().flex_1().min_h(px(0.0)).child(
                 view()
@@ -155,7 +160,7 @@ fn sidebar(
         .child(dynamic(move || {
             workspace.get().map(|ws| {
                 term::top_title(
-                    text(ws.name)
+                    text(ws.name.into_owned())
                         .number_of_lines(1u32)
                         .font_weight(FontWeight::BOLD)
                         .text_color(color(Token::Ink)),
@@ -190,7 +195,7 @@ fn autopilot(ws: Workspace) -> AnyElement {
 /// This device, in the sidebar's bottom line: with its caption where the line has room.
 fn device(ws: Workspace) -> AnyElement {
     term::bottom_title(dynamic(move || {
-        let name = text(ws.device)
+        let name = text(ws.device.clone().into_owned())
             .font_weight(FontWeight::BOLD)
             .text_color(color(Token::Ink));
         if term::wide() {
@@ -295,9 +300,10 @@ fn keep(destination: Destination) -> u8 {
 
 /// The key line's groups in order, a line between each two: the keys of the page in view (when
 /// the model gives it any), the destinations, then Ask and Go to.
-fn groups(destination: Destination, page: Option<Page>) -> Vec<Vec<Entry>> {
+fn groups(destination: Destination, page: Option<Page>, daemon: bool) -> Vec<Vec<Entry>> {
     let own: Vec<Entry> = key_legend(destination, page)
         .into_iter()
+        .filter(|_| !daemon || destination == Destination::Now)
         .map(|(keys, name)| Entry {
             keys: String::from(keys),
             name,
@@ -349,11 +355,11 @@ fn line_cells(groups: &[Vec<Entry>], keep: u8) -> usize {
 /// When the grid is short of room the names give way one by one, the least used first; the
 /// page's keep theirs.
 fn key_line(app: AppState) -> AnyElement {
-    let route = computed(move || (app.destination(), app.page()));
+    let route = computed(move || (app.destination(), app.page(), app.daemon()));
     dynamic(move || {
         let room = term::columns();
-        let (destination, page) = route.get();
-        let groups = groups(destination, page);
+        let (destination, page, daemon) = route.get();
+        let groups = groups(destination, page, daemon);
         let keep = (0..=KEEP_PAGE)
             .find(|&keep| line_cells(&groups, keep) <= room)
             .unwrap_or(KEEP_PAGE);

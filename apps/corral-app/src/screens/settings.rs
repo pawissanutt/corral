@@ -40,7 +40,7 @@ pub fn screen(app: AppState) -> AnyElement {
 /// it and keeps the Ask button over it.
 pub fn section_phone(app: AppState, section: SettingsSection) -> PhonePage {
     let body = match section {
-        SettingsSection::Devices => devices::phone(app),
+        SettingsSection::Devices if !untracked(|| app.daemon()) => devices::phone(app),
         other => page(app, other),
     };
     PhonePage {
@@ -56,6 +56,16 @@ pub fn section_phone(app: AppState, section: SettingsSection) -> PhonePage {
 
 /// The section's content on the current form.
 fn page(app: AppState, section: SettingsSection) -> AnyElement {
+    if untracked(|| app.daemon()) {
+        if let Some(line) = crate::model::settings::daemon_section_notice(section) {
+            return parts::frame(
+                app,
+                section.label(),
+                12.0,
+                vec![parts::cell(app, line, Token::Ink3, false).into_element()],
+            );
+        }
+    }
     match section {
         SettingsSection::Devices => devices::page(app),
         SettingsSection::Machines => sections::machines(app),

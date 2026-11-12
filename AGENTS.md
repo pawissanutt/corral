@@ -19,6 +19,11 @@ herdr CLI shapes (captured from herdr 0.9.3): docs/herdr-cli.md.
 
 Dependencies flow corral -> {daemon, tui, ops} -> {core, herdr, git, protocol}; daemon -> ops. Leaf crates never depend on each other.
 
+`apps/corral-app/` is the Corral app (NSH, Rust): its own Cargo workspace and toolchain (rustc 1.97),
+not a workspace member, and not built or tested by `scripts/gate.sh`. It depends on
+`crates/corral-protocol` by path and reaches the daemon only through its socket. Read
+`apps/corral-app/AGENTS.md` before working there; run its commands from that directory.
+
 ## Conventions
 
 - Rust 2024, MSRV 1.94, errors via `anyhow` with context on every external call.

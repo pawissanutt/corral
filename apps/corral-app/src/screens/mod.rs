@@ -41,11 +41,11 @@ pub struct PhonePage {
 /// The destination's screen; the disconnected frame while no daemon answers. Made again only
 /// when the data state crosses that line, so a screen keeps its own state otherwise.
 pub fn destination(app: AppState, destination: Destination) -> AnyElement {
-    let disconnected = computed(move || app.data.get() == DataState::Disconnected);
+    let data = computed(move || app.data.get());
     dynamic(move || {
-        let disconnected = disconnected.get();
+        let data = data.get();
         untracked(move || {
-            if disconnected {
+            if unavailable(data, destination) {
                 frame(app, destination)
             } else {
                 screen(app, destination)
@@ -59,14 +59,17 @@ pub fn destination(app: AppState, destination: Destination) -> AnyElement {
 /// plans are selected in place there, so their destination's screen shows them. Made again
 /// only when the route itself changes; the screens track their own state.
 pub fn content(app: AppState) -> AnyElement {
-    let route = computed(move || {
-        let disconnected = app.data.get() == DataState::Disconnected;
-        (app.destination(), app.page(), disconnected)
-    });
+    let route = computed(move || (app.destination(), app.page(), app.data.get()));
     dynamic(move || {
-        let (destination, page, disconnected) = route.get();
+        let (destination, page, data) = route.get();
         untracked(move || {
-            if disconnected {
+            if unavailable(data, destination)
+                || (data == DataState::Daemon
+                    && matches!(
+                        page,
+                        Some(Page::Question | Page::Session(_) | Page::Thread(_))
+                    ))
+            {
                 return frame(app, destination);
             }
             match page {
@@ -77,6 +80,12 @@ pub fn content(app: AppState) -> AnyElement {
             }
         })
     })
+}
+
+fn unavailable(data: DataState, destination: Destination) -> bool {
+    data == DataState::Disconnected
+        || (data == DataState::Daemon
+            && !matches!(destination, Destination::Now | Destination::Settings))
 }
 
 /// Each destination's own screen.
@@ -172,7 +181,7 @@ fn frame(app: AppState, destination: Destination) -> AnyElement {
                 .number_of_lines(1),
         );
     let body = view().px(px(frame.pad_x)).pt(px(frame.body_pad_y)).child(
-        text(move || app.snapshot().body_line())
+        text(move || app.snapshot().body_line(destination).into_owned())
             .test_id("page-body")
             .text_size(px(text_size(app.form)))
             .text_color(color(if app.form == Form::Terminal {

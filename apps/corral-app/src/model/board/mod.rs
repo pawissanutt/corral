@@ -2,6 +2,9 @@
 //! since the last visit, and the patch hunk both the question and the review show.
 
 mod data;
+mod line;
+
+pub use line::{TaskLine, daemon_actor, now_hue, stage_word};
 
 use crate::model::hue::Hue;
 
@@ -150,12 +153,7 @@ impl Task {
 
     /// The colour of the now-phrase: needs you, held, stale (drawn as held), or none.
     pub fn now_hue(&self) -> Hue {
-        match self.actor {
-            Actor::You => Hue::You,
-            Actor::Held => Hue::Held,
-            _ if self.now.contains("stale") => Hue::Held,
-            _ => Hue::Neutral,
-        }
+        now_hue(self.actor, self.now)
     }
 
     /// Above the $20 warning.

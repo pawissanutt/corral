@@ -2,7 +2,15 @@
 
 ## Scope
 
-This app contains the mockup's destination content: Inbox and its question handover sheet, Now, Changes, Plans, Agents and sessions, Review, Timeline, Usage, Settings, the Ask composer and assistant threads. There is no daemon, protocol or network connection: data comes from fixtures in `src/model/`, and actions change local state only. Never touch `/home/pawis/miti-workspace/corral`; this project is its sibling, not part of that repository or its Cargo workspace. Design sources are `/home/pawis/corral-app-design/REQUIREMENTS.md`, `ARCHITECTURE.md` and `mockup/`.
+This app lives in the corral repository as `apps/corral-app/`. It is its own Cargo workspace with its own toolchain and is not a member of corral's workspace; corral's gate does not build or test it. Design sources are `/home/pawis/corral-app-design/REQUIREMENTS.md`, `ARCHITECTURE.md` and `mockup/`.
+
+The app has three data states (`DataState`):
+
+- **Fixture** (default): the mockup's destination content from fixtures in `src/model/`: Inbox and its question handover sheet, Now, Changes, Plans, Agents and sessions, Review, Timeline, Usage, Settings, the Ask composer and assistant threads. Actions change local state only.
+- **Daemon**: a session with `corrald` over its Unix socket, on native builds started with `CORRAL_SOCKET` set to the socket's absolute path (`corral daemon socket` prints it). The daemon serves health and the board, so the health strip and Now are live; every other destination says the daemon does not serve it yet. Never show fixture content as daemon data. The app sends the daemon no commands.
+- **Disconnected**: the frame shown with no daemon.
+
+The web build cannot open a Unix socket: all client code is compiled out there and the Daemon state is not offered. The only crate the app takes from corral is `corral-protocol` (wire types), by path.
 
 Replies to newly typed Ask messages are not simulated, as in the mockup. Only these NSH Storage keys persist: `corral.destination`, `corral.settings`, `corral.theme`, `corral.data`, `corral.conn`, `corral.mode` and `corral.now.layout`.
 
@@ -10,6 +18,8 @@ Replies to newly typed Ask messages are not simulated, as in the mockup. Only th
 
 - `src/lib.rs`: root `App`.
 - `src/model/`: pure Rust, with no `nsh_*` imports or I/O; holds data, wording, state, reducers and view builders for every form.
+- `src/model/daemon.rs`: owned data received from `corrald` (`Feed`: link, health, board) and its pure updates.
+- `src/client/`: the daemon session, native only: socket path, blocking session over `corral-protocol`, wire-to-model mapping, and the task that feeds `AppState::feed`.
 - `src/model/hue.rs`, `text.rs`, `effect.rs`: semantic colours, rich text, environment and reducer effects.
 - `src/model/nav.rs`, `health.rs`, `fixture.rs`, `commands.rs`: navigation, health and fixture snapshots, and palette commands.
 - `src/model/board/`: shared board snapshot, tasks, changes and review hunk.
@@ -56,4 +66,3 @@ Use the [NSH documentation index](https://nsh.dev/llms.txt); documentation pages
 
 Keep tests few and name each for the defect it catches. Test at the lowest layer that can fail. Do not pin wording, styles or incidental layout.
 
-There are 33 unit tests in `src/model/` and `src/ui/kit/rows.rs`, and 13 headless shell tests in `tests/shell.rs`.

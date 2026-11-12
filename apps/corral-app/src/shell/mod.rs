@@ -15,7 +15,7 @@ use crate::model::commands::{
     CONFIRM_CANCEL, CONFIRM_EFFECT_HEADING, CONFIRM_PRESENCE, CONFIRM_SUB, confirm_label,
     confirm_word, risk,
 };
-use crate::model::health::{ConnectionBanner, connection_banner};
+use crate::model::health::{ConnectionBanner, connection_banner, daemon_connection_banner};
 use crate::model::{Form, Hue, Tone};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};
@@ -30,7 +30,14 @@ use crate::ui::tokens::{Token, color};
 /// Diagnostics and Queue open Settings › Connection; Restart corrald answers with a toast).
 /// The phone's has no buttons. test_id "conn-banner", buttons "btn-<label>".
 pub fn banner(app: AppState) -> AnyElement {
-    let shown = computed(move || connection_banner(app.conn.get(), app.form));
+    let shown = computed(move || {
+        if app.daemon() {
+            app.feed
+                .with(|feed| daemon_connection_banner(feed, app.form))
+        } else {
+            connection_banner(app.env().conn, app.form)
+        }
+    });
     dynamic(move || {
         let banner = shown.get()?;
         Some(untracked(move || banner_face(app, banner)))
@@ -76,7 +83,7 @@ fn tone_hue(tone: Tone) -> Hue {
 /// Whether the board shows as stale: corrald down or this device offline, where what shows is
 /// the last known state (the mock's `.is-stale`).
 pub fn stale(app: AppState) -> bool {
-    app.conn.get().refuses()
+    app.env().conn.refuses()
 }
 
 /// The toast over `app.toast`, leaving after 3.4 s or when the next one replaces it.

@@ -1,6 +1,9 @@
 //! Settings fixtures, pairing state, actions and renderer-ready views.
 
 mod data;
+mod live;
+
+pub use live::{daemon_connection_details, daemon_section_notice};
 
 use crate::model::board::Mark;
 use crate::model::effect::{Conn, Effect, Env, Risk};

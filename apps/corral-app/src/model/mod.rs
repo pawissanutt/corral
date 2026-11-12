@@ -8,6 +8,8 @@ pub mod assistant;
 pub mod board;
 /// Palette commands and confirmation previews.
 pub mod commands;
+/// Owned snapshots received from the daemon.
+pub mod daemon;
 /// Reducer effects and environment switches.
 pub mod effect;
 /// Fixture snapshots for the shell.

@@ -1,6 +1,7 @@
 //! Corral's app shell: the navigation frame on desktop and web, phone and terminal. `nsh run`,
 //! `nsh package` and `cargo run` mount [`App`].
 
+pub mod client;
 pub mod model;
 pub mod screens;
 pub mod shell;

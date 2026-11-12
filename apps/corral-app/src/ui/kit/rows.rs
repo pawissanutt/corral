@@ -10,7 +10,7 @@
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::board::{Actor, Task, money, rail_label, task};
+use crate::model::board::{Actor, TaskLine};
 use crate::model::hue::Hue;
 use crate::state::AppState;
 use crate::ui::kit::marks::{actor, delta, hue_ink, rail};
@@ -20,31 +20,6 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, row_height, text_siz
 const RING: f32 = 2.0;
 /// The phone row's least height (`.prow`).
 const PHONE_ROW: f32 = 60.0;
-
-/// What a screen reader hears for a task row: id, title, the rail, the now-phrase, age, cost,
-/// and whether it changed since the last visit.
-fn task_label(task: &Task) -> String {
-    let mut parts = vec![format!("{} {}", task.id, task.title), rail_label(task.rail)];
-    parts.extend(
-        [task.now, task.age.unwrap_or_default()]
-            .into_iter()
-            .filter(|part| !part.is_empty())
-            .map(str::to_owned),
-    );
-    let cost = money(task.cost);
-    if !cost.is_empty() {
-        parts.push(cost);
-    }
-    if task.changed {
-        parts.push("changed since your last visit".to_owned());
-    }
-    parts.join(", ")
-}
-
-/// Queued and parked tasks read a step quieter (`.r-queued`, `.r-parked`).
-fn quiet(task: &Task) -> bool {
-    matches!(task.actor, Actor::Queued | Actor::Parked)
-}
 
 /// Which of the task row's optional columns a row holds. The delta, actor mark, full id, title
 /// and rail always show; as the row narrows the now-phrase goes first, then age, then cost, each
@@ -127,36 +102,37 @@ pub fn task_columns(form: Form, width: f32) -> TaskColumns {
     TaskColumns { now, age, cost }
 }
 
-/// The task row for `id` (from `board::task`), selected while `selected` says so; a press calls
-/// `on_press`. One element for screen readers (a button with its selected state, labelled with
-/// the whole row, hidden columns included). Desktop: one 30 pt line in fixed columns: the delta
-/// when changed, the actor dot, the mono id, the title cut to fit, the rail, the now-phrase in its
-/// hue (needs you bold orange, held and stale amber), age and cost right-aligned, cost amber
-/// above $20; selected is the sel fill with a 1 pt ink bar at the leading edge. Phone: two lines:
-/// dot, id, bold title and rail; then the delta, the now-phrase in its hue and `age · cost`.
-/// Terminal: one line of Cells: selection bar, delta, actor glyph, id, title, rail glyphs, now,
-/// age, cost. Desktop and terminal rows measure their own width and hide the now-phrase, then
-/// age, then cost as they narrow ([`task_columns`]).
+/// The task row for `line`, selected while `selected` says so; a press calls `on_press`. The row
+/// draws only what `line` holds, whichever board it came from. One element for screen readers (a
+/// button with its selected state, labelled with the whole row, hidden columns included).
+/// Desktop: one 30 pt line in fixed columns: the delta when changed, the actor dot, the mono id,
+/// the title cut to fit, the rail, the now-phrase in its hue (needs you bold orange, held and
+/// stale amber), age and cost right-aligned, cost amber above $20; selected is the sel fill with a
+/// 1 pt ink bar at the leading edge. Phone: two lines: dot, id, bold title and rail; then the
+/// delta, the now-phrase in its hue and `age · cost`. Terminal: one line of Cells: selection bar,
+/// delta, actor glyph, id, title, rail glyphs, now, age, cost. Desktop and terminal rows measure
+/// their own width and hide the now-phrase, then age, then cost as they narrow
+/// ([`task_columns`]).
 pub fn task_row(
     app: AppState,
-    id: &'static str,
+    line: TaskLine,
     selected: impl Fn() -> bool + 'static,
     on_press: impl Fn() + 'static,
     test_id: impl Into<String>,
 ) -> AnyElement {
     let form = app.form;
-    let task = task(id);
     let width = signal(0.0_f32);
     let columns = computed(move || task_columns(form, in_units(form, width.get())));
+    let label = line.label();
     let content = match form {
-        Form::Desktop => desktop_cells(app, &task, columns),
-        Form::Phone => phone_lines(app, &task),
-        Form::Terminal => terminal_cells(app, &task, columns),
+        Form::Desktop => desktop_cells(app, line, columns),
+        Form::Phone => phone_lines(app, line),
+        Form::Terminal => terminal_cells(app, line, columns),
     };
     let measure = (form != Form::Phone).then_some(width);
     shell(
         app,
-        task_label(&task).into(),
+        label.into(),
         test_id.into(),
         selected,
         on_press,
@@ -174,8 +150,8 @@ fn in_units(form: Form, points: f32) -> f32 {
 }
 
 /// The colour of the task's now-phrase.
-fn now_ink(task: &Task) -> AdaptiveColor {
-    match task.now_hue() {
+fn now_ink(line: &TaskLine) -> AdaptiveColor {
+    match line.now_hue {
         Hue::Neutral => color(Token::Ink2),
         hue => hue_ink(hue),
     }
@@ -224,25 +200,34 @@ fn optional(
 
 /// `10px 14px 50px minmax(0, 1fr) 64px 150px 34px 46px`, 8 pt apart; now, age and cost as
 /// `columns` holds them.
-fn desktop_cells(app: AppState, task: &Task, columns: Memo<TaskColumns>) -> Vec<AnyElement> {
-    let leading = if task.changed {
+fn desktop_cells(app: AppState, line: TaskLine, columns: Memo<TaskColumns>) -> Vec<AnyElement> {
+    let leading = if line.changed {
         delta(app)
     } else {
         view().into_element()
     };
-    let id_ink = color(if task.actor == Actor::Queued {
+    let id_ink = color(if line.actor == Actor::Queued {
         Token::Ink4
     } else {
         Token::Ink3
     });
-    let title_ink = color(if quiet(task) { Token::Ink2 } else { Token::Ink });
-    let needs_you = task.now_hue() == Hue::You;
-    let cost_ink = color(if task.hot() { Token::Held } else { Token::Ink3 });
+    let title_ink = color(if line.quiet() {
+        Token::Ink2
+    } else {
+        Token::Ink
+    });
+    let needs_you = line.now_hue == Hue::You;
+    let cost_ink = color(if line.cost_high {
+        Token::Held
+    } else {
+        Token::Ink3
+    });
+    let now_ink = now_ink(&line);
     vec![
         column(DESK_DELTA, leading),
-        column(DESK_ACTOR, actor(app, task.actor)),
-        column(DESK_ID, mono_cell(task.id, 11.5, id_ink)),
-        text(task.title)
+        column(DESK_ACTOR, actor(app, line.actor)),
+        column(DESK_ID, mono_cell(line.id, 11.5, id_ink)),
+        text(line.title)
             .flex_1()
             .min_w(px(0.0))
             .truncate()
@@ -250,43 +235,45 @@ fn desktop_cells(app: AppState, task: &Task, columns: Memo<TaskColumns>) -> Vec<
             .text_size(px(text_size(app.form)))
             .text_color(title_ink)
             .into_element(),
-        column(DESK_RAIL, rail(app, task.rail)),
+        column(DESK_RAIL, rail(app, line.rail)),
         optional(
             px(DESK_NOW),
             false,
             move || columns.get().now,
-            text(task.now)
+            text(line.now)
                 .flex_1()
                 .min_w(px(0.0))
                 .truncate()
                 .font_family(FONT_TEXT)
                 .text_size(px(12.0))
-                .text_color(now_ink(task))
+                .text_color(now_ink)
                 .when(needs_you, |t| t.font_weight(FontWeight::SEMIBOLD)),
         ),
         optional(
             px(DESK_AGE),
             true,
             move || columns.get().age,
-            mono_cell(task.age.unwrap_or_default(), 11.0, color(Token::Ink3)),
+            mono_cell(line.age, 11.0, color(Token::Ink3)),
         ),
         optional(
             px(DESK_COST),
             true,
             move || columns.get().cost,
-            mono_cell(money(task.cost), 11.0, cost_ink),
+            mono_cell(line.cost, 11.0, cost_ink),
         ),
     ]
 }
 
 /// Two lines: `id · title · rail` / `Δ now · age · cost`, the second under the title.
-fn phone_lines(app: AppState, task: &Task) -> Vec<AnyElement> {
-    let quieter = task.actor == Actor::Queued;
+fn phone_lines(app: AppState, line: TaskLine) -> Vec<AnyElement> {
+    let quieter = line.actor == Actor::Queued;
+    let now_ink = now_ink(&line);
+    let tail = line.meta();
     let first = view()
         .flex_row()
         .items_center()
         .gap(px(10.0))
-        .child(column(12.0, actor(app, task.actor)))
+        .child(column(12.0, actor(app, line.actor)))
         .child(
             view()
                 .flex_1()
@@ -294,9 +281,9 @@ fn phone_lines(app: AppState, task: &Task) -> Vec<AnyElement> {
                 .flex_row()
                 .items_baseline()
                 .gap(px(8.0))
-                .child(mono_cell(task.id, 13.0, color(Token::Ink3)).flex_shrink_0())
+                .child(mono_cell(line.id, 13.0, color(Token::Ink3)).flex_shrink_0())
                 .child(
-                    text(task.title)
+                    text(line.title)
                         .flex_1()
                         .min_w(px(0.0))
                         .truncate()
@@ -310,27 +297,22 @@ fn phone_lines(app: AppState, task: &Task) -> Vec<AnyElement> {
                         .text_color(color(if quieter { Token::Ink2 } else { Token::Ink })),
                 ),
         )
-        .child(rail(app, task.rail));
-    let tail = [task.age.unwrap_or_default().to_owned(), money(task.cost)]
-        .into_iter()
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join(" · ");
+        .child(rail(app, line.rail));
     let second = view()
         .flex_row()
         .items_center()
         .gap(px(8.0))
         // Under the title: past the 12 pt dot column and its 10 pt gap.
         .pl(px(22.0))
-        .when(task.changed, |line| line.child(delta(app)))
+        .when(line.changed, |second| second.child(delta(app)))
         .child(
-            text(task.now)
+            text(line.now)
                 .flex_1()
                 .min_w(px(0.0))
                 .truncate()
                 .font_family(FONT_TEXT)
                 .text_size(px(13.5))
-                .text_color(now_ink(task)),
+                .text_color(now_ink),
         )
         .child(mono_cell(tail, 12.0, color(Token::Ink3)).flex_shrink_0());
     vec![
@@ -346,26 +328,32 @@ fn phone_lines(app: AppState, task: &Task) -> Vec<AnyElement> {
 
 /// One line of Cells: Δ, actor, id (6), title, rail (7), then now (22), age (3) and cost (5) as
 /// `columns` holds them.
-fn terminal_cells(app: AppState, task: &Task, columns: Memo<TaskColumns>) -> Vec<AnyElement> {
-    let leading = if task.changed {
+fn terminal_cells(app: AppState, line: TaskLine, columns: Memo<TaskColumns>) -> Vec<AnyElement> {
+    let leading = if line.changed {
         delta(app)
     } else {
         text(" ").into_element()
     };
     let words = |content: String, ink: Token| text(content).truncate().text_color(color(ink));
-    let now_ink = match task.now_hue() {
+    let now_ink = match line.now_hue {
         Hue::Neutral => color(Token::Ink),
         hue => hue_ink(hue),
     };
+    let needs_you = line.now_hue == Hue::You;
+    let cost_ink = if line.cost_high {
+        Token::Held
+    } else {
+        Token::Ink3
+    };
     vec![
         leading,
-        actor(app, task.actor),
+        actor(app, line.actor),
         view()
             .w(cells(TERM_ID))
             .flex_shrink_0()
-            .child(words(task.id.to_owned(), Token::Ink3))
+            .child(words(line.id.to_owned(), Token::Ink3))
             .into_element(),
-        text(task.title)
+        text(line.title)
             .flex_1()
             .min_w(px(0.0))
             .truncate()
@@ -374,35 +362,30 @@ fn terminal_cells(app: AppState, task: &Task, columns: Memo<TaskColumns>) -> Vec
         view()
             .w(cells(TERM_RAIL))
             .flex_shrink_0()
-            .child(rail(app, task.rail))
+            .child(rail(app, line.rail))
             .into_element(),
         optional(
             cells(TERM_NOW),
             false,
             move || columns.get().now,
-            text(task.now)
+            text(line.now)
                 .flex_1()
                 .min_w(px(0.0))
                 .truncate()
                 .text_color(now_ink)
-                .when(task.now_hue() == Hue::You, |t| {
-                    t.font_weight(FontWeight::BOLD)
-                }),
+                .when(needs_you, |t| t.font_weight(FontWeight::BOLD)),
         ),
         optional(
             cells(TERM_AGE),
             true,
             move || columns.get().age,
-            words(task.age.unwrap_or_default().to_owned(), Token::Ink3),
+            words(line.age, Token::Ink3),
         ),
         optional(
             cells(TERM_COST),
             true,
             move || columns.get().cost,
-            words(
-                money(task.cost),
-                if task.hot() { Token::Held } else { Token::Ink3 },
-            ),
+            words(line.cost, cost_ink),
         ),
     ]
 }
@@ -627,16 +610,8 @@ fn shell(
 
 #[cfg(test)]
 mod tests {
-    use super::{TaskColumns, task_columns, task_label};
+    use super::{TaskColumns, task_columns};
     use crate::model::Form;
-    use crate::model::board::Task;
-
-    #[test]
-    fn row_label_leaves_out_a_missing_age_and_cost_instead_of_empty_parts() {
-        let label = task_label(&Task::unknown("T-1"));
-        assert!(!label.contains(", ,"));
-        assert!(!label.ends_with(", "));
-    }
 
     #[test]
     fn a_narrowing_row_drops_now_then_age_then_cost_and_never_brings_one_back() {

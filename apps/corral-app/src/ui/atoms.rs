@@ -367,29 +367,29 @@ fn count_chip(form: Form, n: u32, needs_you: bool, test_id: &str) -> AnyElement 
 
 /// The parts the snapshot shows after its segments; none while disconnected, so nothing else can
 /// pass for a healthy reading.
-struct Extras {
-    reach: Option<&'static str>,
+struct Extras<'a> {
+    reach: Option<&'a str>,
     /// The reach path is end-to-end encrypted: a lock leads it.
     e2e: bool,
-    attention: Option<&'static str>,
-    clock: Option<&'static str>,
-    source: Option<&'static str>,
+    attention: Option<&'a str>,
+    clock: Option<&'a str>,
+    source: Option<&'a str>,
 }
 
-impl Extras {
-    fn of(snapshot: &Snapshot) -> Option<Extras> {
+impl<'a> Extras<'a> {
+    fn of(snapshot: &'a Snapshot) -> Option<Extras<'a>> {
         let health = &snapshot.health;
         snapshot.connected().then_some(Extras {
-            reach: health.reach,
+            reach: health.reach.as_deref(),
             e2e: health.e2e,
-            attention: health.attention,
-            clock: health.clock,
-            source: health.source,
+            attention: health.attention.as_deref(),
+            clock: health.clock.as_deref(),
+            source: health.source.as_deref(),
         })
     }
 
     /// Reach, attention, clock and source, in the order they show.
-    fn parts(&self) -> [Option<&'static str>; 4] {
+    fn parts(&self) -> [Option<&'a str>; 4] {
         [self.reach, self.attention, self.clock, self.source]
     }
 
@@ -586,7 +586,7 @@ fn strip(app: AppState, snapshot: &Snapshot) -> Vec<AnyElement> {
 
 /// The strip's second row. The source label wins the room: reach gives way first, then
 /// attention, then the clock.
-fn strip_extras(app: AppState, extras: &Extras, present: [bool; 4]) -> AnyElement {
+fn strip_extras(app: AppState, extras: &Extras<'_>, present: [bool; 4]) -> AnyElement {
     let fit = Fit::new();
     let cut = computed(move || {
         let widths = fit.widths.get();
@@ -680,13 +680,13 @@ fn shell_segment(segment: &Segment, compact: bool, first: bool) -> View {
         .when(tone == Tone::Fail, |v| v.bg(on_shell(Token::Fail)))
         .child(tone_dot(dot))
         .child(
-            text(segment.name)
+            text(segment.name.as_ref().to_owned())
                 .number_of_lines(1u32)
                 .text_size(px(size))
                 .text_color(name_ink),
         )
         .child(
-            text(segment.value)
+            text(segment.value.as_ref().to_owned())
                 .number_of_lines(1u32)
                 .text_size(px(size))
                 .text_color(value_ink)
@@ -724,13 +724,7 @@ fn tone_dot(fill: AdaptiveColor) -> AnyElement {
 /// Reach, attention, clock or source on the shell, as [`Extras::parts`] numbers them. The
 /// desktop's reach is a button to Settings › Connection (the phone strip is one already), a
 /// lock before it on an end-to-end path; attention leads with the changed-since mark.
-fn shell_part(
-    app: AppState,
-    part: usize,
-    content: &'static str,
-    e2e: bool,
-    size: f32,
-) -> AnyElement {
+fn shell_part(app: AppState, part: usize, content: &str, e2e: bool, size: f32) -> AnyElement {
     match part {
         REACH => {
             let reach = view()
@@ -769,8 +763,8 @@ fn shell_part(
     }
 }
 
-fn shell_caption(content: &'static str, ink: Token, size: f32) -> AnyElement {
-    text(content)
+fn shell_caption(content: &str, ink: Token, size: f32) -> AnyElement {
+    text(content.to_owned())
         .flex_shrink_0()
         .number_of_lines(1u32)
         .text_size(px(size))
@@ -778,8 +772,8 @@ fn shell_caption(content: &'static str, ink: Token, size: f32) -> AnyElement {
         .into_element()
 }
 
-fn shell_clock(content: &'static str, size: f32) -> AnyElement {
-    text(content)
+fn shell_clock(content: &str, size: f32) -> AnyElement {
+    text(content.to_owned())
         .flex_shrink_0()
         .number_of_lines(1u32)
         .font_family(FONT_MONO)
@@ -791,7 +785,7 @@ fn shell_clock(content: &'static str, size: f32) -> AnyElement {
 
 /// The source label as the mock's snapshot tag: an outlined held-tone tag, so fixture data never
 /// reads as live.
-fn shell_source(content: &'static str) -> AnyElement {
+fn shell_source(content: &str) -> AnyElement {
     let held = on_shell(Token::Held);
     view()
         .flex_row()
@@ -803,7 +797,7 @@ fn shell_source(content: &'static str) -> AnyElement {
         .border_1()
         .border_color(held.opacity(0.5))
         .child(
-            text(content)
+            text(content.to_owned())
                 .test_id("health-source")
                 .number_of_lines(1u32)
                 .text_size(px(10.5))

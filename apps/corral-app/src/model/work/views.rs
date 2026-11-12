@@ -7,7 +7,7 @@ use crate::model::nav::{Destination, Form, PhoneTab};
 use crate::model::text::{Rich, span};
 
 use super::{
-    Action, Button, ButtonKind, CtxTab, GroupedList, HOLDS, Hold, Inspector, Live, LowTab, NowTab,
+    Action, Button, ButtonKind, CtxTab, GroupedList, HOLDS, Inspector, Live, LowTab, NowTab,
     PlanContext, State, grouped_list_with_question, inspector, live, plan_context, question_open,
 };
 
@@ -28,7 +28,7 @@ pub struct Status {
     /// Dim and desaturate board content when the daemon is down or the device is offline.
     pub dimmed: bool,
     /// Snapshot timestamp to accompany stale views.
-    pub as_of: Option<&'static str>,
+    pub as_of: Option<String>,
     /// Connection banner; healthy and relay connections have no banner.
     pub banner: Option<Banner>,
 }
@@ -96,7 +96,7 @@ pub fn status(env: Env) -> Status {
     };
     Status {
         dimmed: env.conn.refuses(),
-        as_of: env.conn.refuses().then_some("as of 22:08"),
+        as_of: env.conn.refuses().then(|| "as of 22:08".to_owned()),
         banner,
     }
 }
@@ -142,14 +142,18 @@ pub fn feed(_state: &State, _env: Env) -> Vec<FeedRow> {
         .collect()
 }
 
-/// A displayed owner-hold row, with the source's neutral mark and dim project suffix.
+/// A displayed hold row, with the source's neutral mark and dim attribution suffix.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HoldRow {
-    /// Original task, project, date and optional owner answer.
-    pub hold: Hold,
+    /// Mono task id.
+    pub id: &'static str,
+    /// When the hold began: a date, or how long ago.
+    pub since: String,
+    /// Full task title, for screen readers.
+    pub title: String,
     /// The hold row's neutral not-applicable mark.
     pub mark: Mark,
-    /// Title followed by the dimmed project attribution.
+    /// Title followed by the dimmed attribution.
     pub text: Rich,
 }
 
@@ -158,7 +162,9 @@ pub fn holds(_state: &State, _env: Env) -> Vec<HoldRow> {
     HOLDS
         .iter()
         .map(|hold| HoldRow {
-            hold: *hold,
+            id: hold.id,
+            since: hold.since.to_owned(),
+            title: hold.title.to_owned(),
             mark: Mark::Na,
             text: vec![span(hold.title), span(format!(" · {}", hold.project)).dim()],
         })

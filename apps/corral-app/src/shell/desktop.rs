@@ -103,7 +103,7 @@ fn top_bar(app: AppState, workspace: Memo<Option<Workspace>>) -> AnyElement {
 /// its place, so hiding it never changes the room the health line gets.
 fn workspace_path(app: AppState, ws: Workspace) -> AnyElement {
     let cramped = signal(false);
-    text(ws.path)
+    text(ws.path.into_owned())
         .flex_shrink(PATH_SHRINK)
         .min_w(px(0.0))
         .truncate()
@@ -158,18 +158,20 @@ fn project(app: AppState, ws: Workspace) -> AnyElement {
         .px(px(8.0))
         .gap(px(2.0))
         .child(
-            text(ws.name)
+            text(ws.name.into_owned())
                 .truncate()
                 .text_size(px(base))
                 .font_weight(FontWeight::BOLD)
                 .text_color(color(Token::ShellInk)),
         )
-        .child(
-            text(ws.autopilot)
-                .number_of_lines(2u32)
-                .text_size(px(base - 2.0))
-                .text_color(color(Token::ShellInk2)),
-        )
+        .when(!ws.autopilot.is_empty(), |v| {
+            v.child(
+                text(ws.autopilot)
+                    .number_of_lines(2u32)
+                    .text_size(px(base - 2.0))
+                    .text_color(color(Token::ShellInk2)),
+            )
+        })
         .into_element()
 }
 
@@ -309,7 +311,7 @@ fn device_footer(app: AppState, ws: Workspace) -> AnyElement {
                 .text_size(px(small))
                 .text_color(color(Token::ShellInk2))
                 .child(
-                    text(ws.device)
+                    text(ws.device.into_owned())
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(color(Token::ShellInk)),
                 ),
@@ -318,7 +320,7 @@ fn device_footer(app: AppState, ws: Workspace) -> AnyElement {
             text(format!("{SIGNS_AS} "))
                 .text_size(px(small))
                 .text_color(color(Token::ShellInk2))
-                .child(text(ws.via).font_family(FONT_MONO)),
+                .child(text(ws.via.into_owned()).font_family(FONT_MONO)),
         )
         .into_element()
 }
