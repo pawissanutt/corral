@@ -153,7 +153,7 @@ fn automatic_backlog_uses_priority_then_age_and_reserves_review_headroom() {
     }
     fx.grant(&[&low, &older, &newer, &middle]);
     // When automatic admission runs.
-    let changes = advance(&fx.ctx, Fixture::now()).unwrap();
+    let changes = advance(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All).unwrap();
     // Then ranking determines the three runs and two slots remain for finishing work.
     assert_eq!(
         changes
@@ -216,7 +216,7 @@ fn dependencies_require_done_and_dequeued_backlog_stays_held() {
         .unwrap();
     fx.grant(&[&blocked, &held, &ready]);
     // When the policy runs.
-    let changes = advance(&fx.ctx, Fixture::now()).unwrap();
+    let changes = advance(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All).unwrap();
     // Then only Done satisfies admission; dequeue remains an explicit hold.
     assert_eq!(changes.len(), 2);
     assert!(changes.iter().all(|c| c.task == ready.id));
@@ -263,7 +263,7 @@ fn auto_promotes_and_dispatches_even_when_backlog_automation_is_disabled() {
     let idea = fx.task("Automatic idea", Status::Idea);
     fx.grant(&[&backlog, &idea]);
     // When the policy runs.
-    let changes = advance(&fx.ctx, Fixture::now()).unwrap();
+    let changes = advance(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All).unwrap();
     // Then promotion and dispatch are separately audited, with no manual backlog admission.
     assert_eq!(
         changes.iter().map(|c| c.to).collect::<Vec<_>>(),
@@ -295,16 +295,18 @@ fn daily_cap_is_durable_across_syncs_and_resets_at_utc_midnight() {
     let first = fx.task("First idea", Status::Idea);
     let second = fx.task("Second idea", Status::Idea);
     fx.grant(&[&first, &second]);
-    advance(&fx.ctx, Fixture::now()).unwrap();
+    advance(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All).unwrap();
     let reopened = Ctx {
         store: Store::open(fx.ctx.store.root()).unwrap(),
         ..fx.ctx.clone()
     };
     // When another sync occurs the same UTC day, then the following day.
-    assert!(advance(&reopened, Fixture::now()).unwrap().is_empty());
+    let all = &crate::sync::SyncScope::All;
+    assert!(advance(&reopened, Fixture::now(), all).unwrap().is_empty());
     let changes = advance(
         &reopened,
         Fixture::now() + jiff::SignedDuration::from_hours(24),
+        all,
     )
     .unwrap();
     // Then the cap persists across processes but the next UTC date gets a fresh budget.
@@ -410,7 +412,7 @@ fn malformed_backlog_does_not_block_other_dependency_ready_work() {
     let good = fx.task("Valid backlog", Status::Backlog);
     fx.grant(&[&broken, &good]);
     // When the policy evaluates both.
-    let changes = advance(&fx.ctx, Fixture::now()).unwrap();
+    let changes = advance(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All).unwrap();
     // Then the error is visible and does not leave usable slots idle.
     assert_eq!(changes.len(), 2);
     assert!(changes.iter().all(|c| c.task == good.id));
@@ -442,7 +444,7 @@ fn project_override_can_disable_default_backlog_admission() {
     let task = fx.task("Manual project backlog", Status::Backlog);
     fx.grant(&[&task]);
     // When automatic admission runs.
-    let changes = advance(&fx.ctx, Fixture::now()).unwrap();
+    let changes = advance(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All).unwrap();
     // Then effective project policy wins without queue authorization.
     assert!(changes.is_empty());
     let task = fx.ctx.store.get(&task.id).unwrap();
@@ -465,11 +467,11 @@ fn concurrent_policy_passes_cannot_exceed_the_daily_cap() {
     std::thread::scope(|scope| {
         let left = scope.spawn(|| {
             start.wait();
-            advance(&fx.ctx, Fixture::now()).unwrap()
+            advance(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All).unwrap()
         });
         let right = scope.spawn(|| {
             start.wait();
-            advance(&fx.ctx, Fixture::now()).unwrap()
+            advance(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All).unwrap()
         });
         left.join().unwrap();
         right.join().unwrap();

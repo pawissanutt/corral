@@ -69,6 +69,7 @@ pub fn sync_with_attention(
         &SystemProcesses,
         None,
         Some(&mut attention),
+        &SyncScope::All,
     )?;
     Ok((changes, attention))
 }
@@ -91,6 +92,7 @@ pub fn sync_hook(ctx: &Ctx) -> Result<Vec<Change>> {
             &SystemProcesses,
             Some(&source),
             None,
+            &SyncScope::All,
         );
     }
     sync(ctx)
@@ -107,7 +109,19 @@ pub fn sync_at_with_processes(
     now: Timestamp,
     processes: &dyn ProcessControl,
 ) -> Result<Vec<Change>> {
-    sync_passes(ctx, now, processes, None, None)
+    sync_passes(ctx, now, processes, None, None, &SyncScope::All)
+}
+
+/// One pass whose task effects reach only `scope`'s tasks; see [`SyncScope`].
+pub(crate) fn sync_in(ctx: &Ctx, scope: &SyncScope) -> Result<Vec<Change>> {
+    sync_passes(
+        ctx,
+        corral_core::clock::now(),
+        &SystemProcesses,
+        None,
+        None,
+        scope,
+    )
 }
 
 fn sync_passes(
@@ -116,6 +130,7 @@ fn sync_passes(
     processes: &dyn ProcessControl,
     source: Option<&Ctx>,
     attention: Option<&mut Option<crate::attention::AttentionBoard>>,
+    scope: &SyncScope,
 ) -> Result<Vec<Change>> {
     // Latch replacement/schema skew before any preparation reopens a snapshot and
     // reports only a generic incompatible-schema error (T-587).
@@ -128,7 +143,7 @@ fn sync_passes(
     // Recovery and derivation preparation run before the measured passes.
     crate::settling::recover(ctx)?;
     let mut rebuild = false;
-    let changes = hot_passes(ctx, now, processes, source, &mut rebuild, attention)?;
+    let changes = hot_passes(ctx, now, processes, source, &mut rebuild, attention, scope)?;
     // Rebuildable state recovers outside the measured hot path (plan T-253 section 4).
     if rebuild && let Err(error) = crate::content_refresh::refresh_search_index(ctx) {
         crate::content_refresh::defer_corrupt_blob_cache_refresh(error)?;
@@ -144,6 +159,7 @@ fn hot_passes(
     source: Option<&Ctx>,
     rebuild: &mut bool,
     mut attention: Option<&mut Option<crate::attention::AttentionBoard>>,
+    scope: &SyncScope,
 ) -> Result<Vec<Change>> {
     let _hot = corral_core::work::HotScope::enter();
     let mut changes = Vec::new();
@@ -158,6 +174,7 @@ fn hot_passes(
             source,
             rebuild,
             attention.as_deref_mut(),
+            scope,
         )?;
         let progressed = pass.iter().any(|change| change.to != Status::NeedsMe);
         changes.extend(pass);
@@ -178,6 +195,10 @@ fn hot_passes(
         for action in &workset.actions {
             if let Some(id) = &action.action.task {
                 let task = ctx.store.head(id)?;
+                // A scoped pass cannot act on a foreign action, so it cannot continue on one.
+                if !scope.includes(task.project.as_deref()) {
+                    continue;
+                }
                 // Terminal samples cannot create another attempt. Only a new
                 // action, candidate/receipt, plan, round or policy can continue.
                 let key = crate::verification::digest(&serde_json::to_vec(&(
@@ -210,6 +231,7 @@ fn sync_scoped(
     source: Option<&Ctx>,
     rebuild: &mut bool,
     attention: Option<&mut Option<crate::attention::AttentionBoard>>,
+    scope: &SyncScope,
 ) -> Result<Vec<Change>> {
     // Reuse short ownership views, but re-read an expired guard after a slow external
     // step. This never retries the step; inventory still re-reads under its lease.
@@ -227,8 +249,9 @@ fn sync_scoped(
     crate::hold::reconcile(ctx)?;
     crate::desktop_notifications::reconcile(ctx)?;
     crate::report::scheduled_digest_and_report_at(ctx, now)?;
-    let mut changes = crate::queue::migrate_backlog(ctx)?;
-    changes.extend(crate::tracker::reconcile(ctx)?);
+    // Status moves on any project's legacy queue entries and trackers: workspace sync only.
+    let mut changes = scope.workspace_only(|| crate::queue::migrate_backlog(ctx))?;
+    changes.extend(scope.workspace_only(|| crate::tracker::reconcile(ctx))?);
     let resources = crate::resources::observe(ctx, now)?;
     // A holding observation already fences this operation. Reuse its real admission for
     // attention; launch-capable paths still perform their own fresh admission checks.
@@ -246,15 +269,17 @@ fn sync_scoped(
         crate::messages::report(None, "pm-policy", format!("{error:#}"));
     }
     if !herdr_available {
-        crate::hooks::reconcile_post_land(ctx)?;
+        scope.workspace_only(|| crate::hooks::reconcile_post_land(ctx))?;
         crate::gate::collect_finished(ctx, now)?;
         crate::storage_gc::lifecycle_pass(ctx, now)?;
         let search_stamp = crate::content_refresh::task_stamp(ctx)?;
-        for head in open_heads(ctx)? {
+        for head in scope.heads(open_heads(ctx)?) {
             crate::obligations_sync::reconcile_head(ctx, &ctx.store.head(&head.id)?, now, None)?;
         }
-        crate::movement::reconcile(ctx, now, false)?;
-        reconcile_attention(ctx, now, None, attention, held_admission.as_deref())?;
+        scope.workspace_only(|| crate::movement::reconcile(ctx, now, false))?;
+        scope.workspace_only(|| {
+            reconcile_attention(ctx, now, None, attention, held_admission.as_deref())
+        })?;
         crate::pm_events::push_events(ctx, false)?;
         crate::desktop_notifications::reconcile(ctx)?;
         match crate::content_refresh::refresh_after_sync_if_due(ctx, &[], &search_stamp) {
@@ -281,7 +306,9 @@ fn sync_scoped(
                 crate::gate::collect_finished(ctx, now)?;
             }
         }
-        reconcile_attention(ctx, now, None, attention, held_admission.as_deref())?;
+        scope.workspace_only(|| {
+            reconcile_attention(ctx, now, None, attention, held_admission.as_deref())
+        })?;
         return Ok(changes);
     };
     let search_stamp = crate::content_refresh::task_stamp(ctx)?;
@@ -307,7 +334,11 @@ fn sync_scoped(
     let snapshot = inventory.snapshot(&panes);
     crate::cleanup::sweep_inventory(ctx, &board, &inventory.panes);
     // Each task's head is read afresh: gate collection above may have just recorded a result.
-    for head in &board.heads {
+    for head in board
+        .heads
+        .iter()
+        .filter(|head| scope.includes(head.project.as_deref()))
+    {
         if let Some(change) =
             crate::obligations_sync::reconcile_one(ctx, &head.id, now, Some(&panes))?
         {
@@ -320,7 +351,7 @@ fn sync_scoped(
         .into_iter()
         .map(|head| (head.id.clone(), head.detach()))
         .collect();
-    for head in open_heads(ctx)? {
+    for head in scope.heads(open_heads(ctx)?) {
         if !crate::session_scope::owns_head(ctx, &head)? {
             continue;
         }
@@ -380,11 +411,11 @@ fn sync_scoped(
     }
     // Indexed owed work survives terminal status and retired planning/review containers.
     for (_, head) in native {
-        if crate::session_scope::owns_head(ctx, &head)? {
+        if scope.includes(head.project.as_deref()) && crate::session_scope::owns_head(ctx, &head)? {
             crate::agent::hooks::sync::task_id(ctx, &head.id, now)?;
         }
     }
-    crate::delivery::owner::reconcile_all(ctx)?;
+    scope.workspace_only(|| crate::delivery::owner::reconcile_all(ctx))?;
     crate::pm_inbox::sweep(ctx)?;
     crate::agent::hooks::sync::pass(ctx)?;
     crate::review_budget::reconcile(ctx, snapshot, now)?;
@@ -392,21 +423,27 @@ fn sync_scoped(
     // No consumer below this point receives the sampled pane IDs.
     drop(inventory);
     // Post-land hooks run commands that may call corral: never under storage or the lease (T-509).
-    crate::hooks::reconcile_post_land(ctx)?;
-    crate::assistant::workflow::handoff::recovery::reconcile(ctx)?;
-    crate::hold::resume_gates(ctx)?;
-    crate::agent::gate_queue::advance_heads(ctx, &ctx.store.unfinished_native_heads()?)?;
-    crate::plan_pilot::advance_all(ctx, now)?;
-    changes.extend(crate::availability::advance_all(ctx, now)?);
-    changes.extend(crate::autopilot::advance_all(ctx, now)?);
+    scope.workspace_only(|| crate::hooks::reconcile_post_land(ctx))?;
+    scope.workspace_only(|| crate::assistant::workflow::handoff::recovery::reconcile(ctx))?;
+    scope.workspace_only(|| crate::hold::resume_gates(ctx))?;
+    let native = scope.heads(ctx.store.unfinished_native_heads()?);
+    crate::agent::gate_queue::advance_heads(ctx, &native)?;
+    crate::plan_pilot::advance_all(ctx, now, scope)?;
+    changes.extend(scope.workspace_only(|| crate::availability::advance_all(ctx, now))?);
+    changes.extend(crate::autopilot::advance_all(ctx, now, scope)?);
     crate::hold::reconcile(ctx)?;
-    crate::movement::reconcile(ctx, now, true)?;
-    changes.extend(crate::dashboard::advance(ctx, now)?);
-    changes.extend(crate::parked::reacquire_woken(ctx, &open_heads(ctx)?)?);
-    changes.extend(crate::queue_drain::start_queued(ctx, now)?);
-    changes.extend(crate::dispatch_policy::advance(ctx, now)?);
-    let pm_live = Some(crate::pm::live_pm_pane(ctx)?.is_some());
-    reconcile_attention(ctx, now, pm_live, attention, held_admission.as_deref())?;
+    scope.workspace_only(|| crate::movement::reconcile(ctx, now, true))?;
+    changes.extend(scope.workspace_only(|| crate::dashboard::advance(ctx, now))?);
+    changes.extend(crate::parked::reacquire_woken(
+        ctx,
+        &scope.heads(open_heads(ctx)?),
+    )?);
+    changes.extend(crate::queue_drain::start_queued(ctx, now, scope)?);
+    changes.extend(crate::dispatch_policy::advance(ctx, now, scope)?);
+    scope.workspace_only(|| {
+        let pm_live = Some(crate::pm::live_pm_pane(ctx)?.is_some());
+        reconcile_attention(ctx, now, pm_live, attention, held_admission.as_deref())
+    })?;
     crate::agent::effects::failpoint("sync_events");
     crate::pm_events::push_events(ctx, true)?;
     crate::desktop_notifications::reconcile(ctx)?;
@@ -425,54 +462,13 @@ fn sync_scoped(
 mod read_phase;
 use read_phase::{open_heads, watchdog_inputs};
 
-/// A held card has relinquished dispatch authority. Preserve its pane for inspection;
-/// membership moves remain permitted and do not themselves terminate a live worker.
-fn close_held_run(
-    ctx: &Ctx,
-    task: &TaskHead,
-    panes: &HashMap<String, PaneInfo>,
-    now: Timestamp,
-) -> Result<()> {
-    if task.status != Status::Backlog || !task.dispatch_hold || task.park.is_some() {
-        return Ok(());
-    }
-    let Some(run) = task
-        .current_run
-        .as_deref()
-        .filter(|run| run.outcome.is_none())
-    else {
-        return Ok(());
-    };
-    let Some(pane_id) = run.herdr.as_ref().map(|h| &h.pane_id) else {
-        return Ok(());
-    };
-    let reason = match panes.get(pane_id) {
-        None => "gone",
-        Some(pane) if matches!(pane.status, AgentStatus::Idle | AgentStatus::Done) => "idle",
-        _ => return Ok(()),
-    };
-    let run_id = run.id.clone();
-    let _attribution = ctx.store.attribute(corral_core::Actor::System);
-    ctx.store.update_head(&task.id, |current| {
-        if current.status == Status::Backlog
-            && current.dispatch_hold
-            && current.park.is_none()
-            && let Some(run) = current
-                .current_run_mut()
-                .filter(|r| r.id == run_id && r.outcome.is_none())
-        {
-            run.outcome = Some(RunOutcome::Abandoned);
-            run.ended = Some(now);
-            ctx.store.log_event(
-                Some(&task.id),
-                "run_abandoned",
-                json!({"run": run_id, "reason": reason}),
-            )?;
-        }
-        Ok(())
-    })?;
-    Ok(())
-}
+#[path = "sync/held_phase.rs"]
+mod held_phase;
+use held_phase::close_held_run;
+
+#[path = "sync/scope.rs"]
+mod scope;
+pub(crate) use scope::SyncScope;
 
 #[path = "sync/resource_phase.rs"]
 mod resource_driver;

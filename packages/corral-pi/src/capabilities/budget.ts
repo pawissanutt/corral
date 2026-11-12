@@ -8,6 +8,8 @@ import { getServiceTierCostMultiplier } from "@earendil-works/pi-ai/api/openai-c
 export interface BudgetReply extends Record<string, unknown> {
   admitted?: boolean;
   exhausted?: boolean;
+  guard_paused?: boolean;
+  reason?: string;
 }
 export interface BudgetOptions {
   /** A subprocess lane can perform hidden additional requests; it has no finite hard bound. */
@@ -41,7 +43,10 @@ export function reservation(model: Model<Api>, output: number, multiplier = 1) {
 function actual(model: Model<Api>, usage: Usage, multiplier: number) {
   const tokens = integer(integer(usage.input) + integer(usage.output) + integer(usage.cacheRead) + integer(usage.cacheWrite));
   // Freeze this request's model and tier pricing, rather than trusting mutable usage.cost or repricing history on resume.
-  return { tokens, usd_nanos: nanos(calculateCost(model, structuredClone(usage)).total * multiplier) };
+  return { tokens, usd_nanos: nanos(calculateCost(model, structuredClone(usage)).total * multiplier),
+    usage: { input: integer(usage.input), cache_read: integer(usage.cacheRead),
+      cache_write: integer(usage.cacheWrite), output: integer(usage.output) },
+    provider: model.provider, model: model.id };
 }
 export class RunBudget {
   private readonly active = new Set<AbortController>();
@@ -79,6 +84,11 @@ export class RunBudget {
       try {
         this.last = await this.options.record({ kind: "budget", action: "reserve", request, ...bound, unbounded });
         if (this.last.admitted !== true) {
+          // A cache-health hold is resumable in this same session, not exhaustion. Do not
+          // latch stop(), cancel unrelated requests, or emit the budget-limit lifecycle.
+          if (this.last.reason === "cache_guard_paused") {
+            throw new Error("cache_guard_paused: PM cache health hold; inspect `corral pm brief`, then owner `corral pm guard-resume` to continue");
+          }
           if (this.limited()) {
             this.stop();
             throw new Error("budget_exhausted: reservation refused (remaining balance, uncertainty, unbounded transport or pricing gap); inspect budget state");
@@ -108,6 +118,9 @@ export class RunBudget {
                   if (self.last.exhausted) self.stop();
                 }
               }
+              // result() resolves as soon as lazyStream publishes the terminal event,
+              // before this iterator's finally runs. Retire the finished request first.
+              if (event.type === "done" || event.type === "error") self.active.delete(controller);
               yield event;
             }
           } finally { self.active.delete(controller); }

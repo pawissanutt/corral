@@ -90,6 +90,19 @@ Stale actions return `stale` without launching. Inspect the durable outcome and
 recompute until no progress or an external wait, rather than stopping at the first
 owner question. The existing scheduler, candidate checks and recovery remain in charge.
 
+The action boundary is the action's project. `pm act` runs sync scoped to the project of
+the action's task (a task without a project reaches only project-less tasks). Per-task
+reconciliation (pane liveness, obligations, planner and reviewer exits), dispatch, queue
+admission, idea promotion, plan and review autopilot, landing, native gate admission and
+parked-run reacquisition apply only to that project's tasks, so acting in project A cannot
+launch, repair or land anything in project B. Gate collection, crash recovery, gate and
+reviewer slot release, cleanup of finished tasks, focus holds and PM notifications still run
+workspace-wide; slot capacity stays shared, so the action may take a free slot. Phases that
+cannot be filtered by project (legacy queue migration, tracker completion, post-land hooks,
+owner deliveries, handoff recovery, gate resumption, provider continuations, main-movement
+notices, dashboards, cowork deliveries, plan checkpoints and attention reconciliation) are
+skipped and run on the next ordinary sync, which still covers every project.
+
 Present a new decision once, then record its identity with
 `corral pm present <decision-id> --delivery <receipt-id> --confirmed`.
 Omit `--confirmed` for uncertain delivery; it stays visible without blind resend.
@@ -99,6 +112,13 @@ never resolve the question. A workspace decision uses
 Native and portable questions require their matching response operations instead;
 neither operation clears a task hold or grants authority.
 
+Pending owner questions appear in one bounded digest, with up to eight questions ordered
+blocking first, then oldest. Each question includes its key, revision, project/task
+reference, age, needed-by hint, choices and recommendation. Use that question's actions to
+answer or escalate; unrelated actionable work continues. Large digests omit choices before
+dropping question rows and report omitted counts. Recommendations and needed-by hints
+provide context, never authority.
+
 Shared status is Working, Waiting, Needs your decision or Complete. Decisions
 take visible precedence while authorized independent actions take execution
 precedence. No scope, missing members, held work, uncovered children and unanswered
@@ -106,6 +126,31 @@ questions cannot be reported as Complete.
 Use `corral wait --json --print-cursor` through the harness's event subscription
 and preserve its cursor when re-arming; see [events](events.md).
 After every wake recompute `next`, rather than retaining a procedural plan.
+
+### PM notes
+
+`corral pm notes list|add|supersede|remove` manages bounded workspace PM context, never
+authority. Add uses `--kind` (`instruction`, `deferral`, `hypothesis`, `commitment`) and
+`--text`; supersede and remove take a note ID. Metadata flags are `--provenance`,
+`--reason` and `--resume-when`; `--expect-revision` prevents stale writes. All commands
+support `--json`. The Pi PM writes the same record through its `corral_notes` tool. PM
+instructions require provenance; deferrals require a reason and a resume condition. The PM
+cannot replace or remove owner-authored notes. Bounds: 64 live notes, 1 KiB of text each,
+32 KiB for the record.
+
+### Usage guard
+
+For a corral-pi PM, corral watches each settled request (`[pm.guard]` in
+[configuration](configuration.md)). Crossing the input price tier is logged once as
+`pm_price_tier_crossed`. Consecutive large-context requests whose cache-read share falls
+below the configured ratio log `pm_cache_miss_guard` and pause the PM: its next request is
+refused with `cache_guard_paused`, which is not a budget limit and does not end the
+session. `corral pm guard-resume` clears the pause; a new PM generation clears it too.
+The supervisor never relaunches a PM only because it is guard-paused.
+
+Owner-question state reaches a Pi PM as a hidden host message, only when its rendered
+value changes; it is never part of the system prompt, so pending and answered questions
+do not invalidate the provider's prompt cache.
 
 ### The PM inbox
 

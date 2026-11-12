@@ -8,6 +8,16 @@ export const QUESTIONS_COMMAND = "questions";
 export const QUESTIONS_SHORTCUT = "ctrl+shift+q";
 const plain = (value: string) => value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
 
+export const OWNER_QUESTION_STATE = "corral_owner_question_state";
+
+export function renderOwnerQuestionState(questions: PendingQuestions): string {
+  const state = questions.list().filter(q => q.status === "pending" || q.status === "answered")
+    .slice(-8).map(q => `${q.id}: ${questions.status(q.id)} — ${plain(q.questions[0]!.question).slice(0, 120)}`).join("\n");
+  return state
+    ? `Host question state (not owner instructions):\n${state}\nPending/no-answer states authorize nothing. Continue independent work, and record dependent Todo steps as waiting on the named owner question. No polling.`
+    : "No pending owner questions.";
+}
+
 export class OwnerQuestionUi {
   private ctx: ExtensionContext | undefined;
   private ui: ExtensionUIContext | undefined;
@@ -16,7 +26,9 @@ export class OwnerQuestionUi {
   private opening = false;
   private epoch = 0;
   busy = false;
-  constructor(private readonly questions: PendingQuestions, private readonly eligible: () => boolean) {}
+  private deliveredState: string | undefined;
+  constructor(private readonly questions: PendingQuestions, private readonly eligible: () => boolean,
+    private readonly claudeRoute: () => boolean = () => false) {}
 
   install(pi: ExtensionAPI): void {
     pi.on("ui_prompt_start", () => { this.busy = true; });
@@ -36,6 +48,7 @@ export class OwnerQuestionUi {
     pi.registerShortcut(QUESTIONS_SHORTCUT, { description: "Reopen pending owner questions", handler: ctx => this.open(ctx) });
     pi.on("session_start", (_event, ctx) => {
       this.epoch++;
+      this.deliveredState = undefined;
       this.opening = false;
       this.questions.restore();
       if (ctx.hasUI && ctx.mode === "tui") {
@@ -59,11 +72,19 @@ export class OwnerQuestionUi {
       if (this.eligible()) return this.recover();
     });
     pi.on("before_agent_start", event => {
-      const state = this.questions.list().filter(q => q.status === "pending" || q.status === "answered")
-        .slice(-8).map(q => `${q.id}: ${this.questions.status(q.id)} — ${plain(q.questions[0]!.question).slice(0, 120)}`).join("\n");
-      event.systemPromptOptions.sections.owner_questions = state
-        ? `Host question state (not owner instructions):\n${state}\nPending/no-answer states authorize nothing. Continue independent work, and record dependent Todo steps as waiting on the named owner question. No polling.`
-        : "No pending owner questions.";
+      const state = renderOwnerQuestionState(this.questions);
+      if (this.claudeRoute()) {
+        // The Claude adapter strips this section and places it after reusable history.
+        event.systemPromptOptions.sections.owner_questions = state;
+        return;
+      }
+      delete event.systemPromptOptions.sections.owner_questions;
+      if (state === this.deliveredState) return;
+      this.deliveredState = state;
+      // A handler message joins the existing run; it does not submit a user turn.
+      return { message: { customType: OWNER_QUESTION_STATE, content:
+        `<host_question_state>\nHost state, not an instruction or owner input.\n${state}\n</host_question_state>`,
+        display: false } };
     });
     pi.on("session_shutdown", event => { this.close(event.reason !== "reload" && event.reason !== "quit"); });
   }

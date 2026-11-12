@@ -489,7 +489,12 @@ fn submission_paths_all_automatic_and_owner_entries_survive_sqlite_crashes() {
                         );
                     } else if matches!(candidate, Path::AcceptPlan) {
                         assert!(fx.ctx.store.get(&id).unwrap().plan.is_none());
-                        crate::plan_pilot::advance_all(&fx.fresh(), fixture::now()).unwrap();
+                        crate::plan_pilot::advance_all(
+                            &fx.fresh(),
+                            fixture::now(),
+                            &crate::sync::SyncScope::All,
+                        )
+                        .unwrap();
                         let recovered = fx.ctx.store.get(&id).unwrap();
                         assert_eq!(recovered.plan.as_deref(), Some(format!("{id}@P1").as_str()));
                         assert_eq!(counts(&fx), before_recovery);

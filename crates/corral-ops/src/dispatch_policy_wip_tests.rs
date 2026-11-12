@@ -34,7 +34,7 @@ fn coding_reservation_blocks_next_claim_until_landing() {
         None
     );
     fx.grant(&[&backlog]);
-    advance(&fx.ctx, Fixture::now()).unwrap();
+    advance(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All).unwrap();
     assert_eq!(fx.ctx.store.get(&backlog.id).unwrap().status, Status::Ready);
     let candidate = fx.ctx.store.get(&second.id).unwrap();
     assert_eq!(

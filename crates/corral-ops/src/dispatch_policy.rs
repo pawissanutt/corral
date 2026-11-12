@@ -254,7 +254,12 @@ fn automatic_task(ctx: &Ctx, task: &Task) -> bool {
 }
 
 /// One serialized pass across sync callers; manual writers still use the board claim lock.
-pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
+/// A project scope admits and promotes only that project's tasks; capacity stays shared.
+pub(crate) fn advance(
+    ctx: &Ctx,
+    now: Timestamp,
+    scope: &crate::sync::SyncScope,
+) -> Result<Vec<Change>> {
     let Some(_policy) = ctx.store.try_lock("dispatch-policy")? else {
         return Ok(vec![]);
     };
@@ -273,6 +278,9 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         .store
         .heads(&corral_core::backend::HeadQuery::Open { project: None })?
     {
+        if !scope.includes(head.project.as_deref()) {
+            continue;
+        }
         let task = head.to_shell_task()?;
         if automatic_task(ctx, &task) {
             backlog.push(task);
@@ -310,7 +318,8 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
             .find(|candidate| {
                 !considered.contains(&candidate.id)
                     && ctx.store.head(&candidate.id).is_ok_and(|task| {
-                        !task.tracker
+                        scope.includes(task.project.as_deref())
+                            && !task.tracker
                             && ctx
                                 .store
                                 .config

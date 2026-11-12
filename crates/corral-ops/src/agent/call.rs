@@ -18,6 +18,9 @@ use crate::questions::{
     self, Actor, AnswerInput, Applied, PmRequest, QuestionRefusal, RefusalKind,
 };
 
+#[path = "call_names.rs"]
+mod names;
+
 /// Every v1 op. A host never sends a command string; ops outside this list are bad requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AgentOp {
@@ -29,6 +32,7 @@ pub enum AgentOp {
     Wait,
     Progress,
     Todo,
+    Notes,
     Checkpoint,
     Evidence,
     Artifact,
@@ -94,7 +98,7 @@ const ASSISTANT: &[AgentRole] = &[AgentRole::Assistant];
 const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm, AgentRole::Assistant];
 
 impl AgentOp {
-    pub const ALL: [AgentOp; 46] = [
+    pub const ALL: [AgentOp; 47] = [
         AgentOp::Hello,
         AgentOp::Event,
         AgentOp::ReceiptLookup,
@@ -103,6 +107,7 @@ impl AgentOp {
         AgentOp::Wait,
         AgentOp::Progress,
         AgentOp::Todo,
+        AgentOp::Notes,
         AgentOp::Checkpoint,
         AgentOp::Evidence,
         AgentOp::Artifact,
@@ -142,57 +147,6 @@ impl AgentOp {
         AgentOp::MemoryPut,
         AgentOp::MemoryRemove,
     ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            AgentOp::Hello => "hello",
-            AgentOp::Event => "event",
-            AgentOp::ReceiptLookup => "receipt_lookup",
-            AgentOp::Ask => "ask",
-            AgentOp::Withdraw => "withdraw",
-            AgentOp::Wait => "wait",
-            AgentOp::Progress => "progress",
-            AgentOp::Todo => "todo",
-            AgentOp::Checkpoint => "checkpoint",
-            AgentOp::Evidence => "evidence",
-            AgentOp::Artifact => "artifact",
-            AgentOp::Gate => "gate",
-            AgentOp::Done => "done",
-            AgentOp::Verdict => "verdict",
-            AgentOp::QuestionAnswer => "question_answer",
-            AgentOp::QuestionEscalate => "question_escalate",
-            AgentOp::QuestionCancel => "question_cancel",
-            AgentOp::Reply => "reply",
-            AgentOp::Comment => "comment",
-            AgentOp::Capture => "capture",
-            AgentOp::ReadBrief => "read_brief",
-            AgentOp::ReadNext => "read_next",
-            AgentOp::ReadShow => "read_show",
-            AgentOp::ReadList => "read_list",
-            AgentOp::ReadSearch => "read_search",
-            AgentOp::ReadRoute => "read_route",
-            AgentOp::ReadArtifacts => "read_artifacts",
-            AgentOp::ReadContent => "read_content",
-            AgentOp::ReadLessons => "read_lessons",
-            AgentOp::ReadAnnotations => "read_annotations",
-            AgentOp::InboxRead => "inbox_read",
-            AgentOp::InboxResolve => "inbox_resolve",
-            AgentOp::Job => "job",
-            AgentOp::JobMonitor => "job_monitor",
-            AgentOp::PlanWrite => "plan_write",
-            AgentOp::PlanSubmit => "plan_submit",
-            AgentOp::PlanVerdict => "plan_verdict",
-            AgentOp::OwnerAction => "owner_action",
-            AgentOp::WritePermission => "write_permission",
-            AgentOp::AssistantPlan => "assistant_plan",
-            AgentOp::AssistantPlanReview => "assistant_plan_review",
-            AgentOp::AssistantHandoff => "assistant_handoff",
-            AgentOp::MemoryList => "memory_list",
-            AgentOp::MemoryRead => "memory_read",
-            AgentOp::MemoryPut => "memory_put",
-            AgentOp::MemoryRemove => "memory_remove",
-        }
-    }
 
     pub fn parse(name: &str) -> Option<AgentOp> {
         AgentOp::ALL.into_iter().find(|op| op.as_str() == name)
@@ -241,6 +195,7 @@ impl AgentOp {
     /// The role module that handles the op; `None` for the ops `call` handles itself.
     fn route(self, role: AgentRole) -> Option<Route> {
         match self {
+            AgentOp::Notes => None,
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup | AgentOp::ReadAnnotations => {
                 None
             }
@@ -580,6 +535,7 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
             AgentOp::ReceiptLookup => super::ops::receipt_lookup(ctx, &envelope),
             AgentOp::ReadAnnotations => super::ops::annotations::read(ctx, &envelope),
             AgentOp::Todo => super::ops::todo::call(ctx, &envelope),
+            AgentOp::Notes => super::ops::notes::call(ctx, &envelope),
             AgentOp::MemoryList
             | AgentOp::MemoryRead
             | AgentOp::MemoryPut

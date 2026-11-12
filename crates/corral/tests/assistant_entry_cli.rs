@@ -490,6 +490,19 @@ const ROWS: &[(&str, &[&str], Class)] = &[
     ("pm present", &["d-1", "--delivery", "pane"], Refused),
     ("pm resolve", &["d-1", "--answer", "yes"], Refused),
     ("pm relaunch", &[], Refused),
+    ("pm guard-resume", &[], Refused),
+    ("pm notes list", &[], Read),
+    (
+        "pm notes add",
+        &["--kind", "hypothesis", "--text", "context"],
+        Refused,
+    ),
+    (
+        "pm notes supersede",
+        &["n-1", "--text", "replacement"],
+        Refused,
+    ),
+    ("pm notes remove", &["n-1"], Refused),
     (
         "pm inbox post",
         &["--kind", "question", "--subject", "Which cache?"],

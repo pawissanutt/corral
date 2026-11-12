@@ -33,6 +33,7 @@ mod plan_cmd;
 mod plugin;
 mod pm_cmd;
 mod pm_inbox_cmd;
+mod pm_notes_cmd;
 mod pricing_cmd;
 mod question_cmd;
 mod queue;

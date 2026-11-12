@@ -101,6 +101,7 @@ mod pm_next;
 mod pm_policy;
 mod pm_questions;
 mod pm_supervisor;
+mod pm_usage_guard;
 mod pm_workset;
 mod pricing;
 mod profile_selector;
@@ -175,6 +176,9 @@ mod test_support;
 
 use corral_core::messages;
 
+pub use agent::cost_records::{
+    CostCoverage, CostReport, CostRow, CostWindow, by_item as pm_cost_by_item,
+};
 pub use analytics::PhaseTotals;
 pub use analytics::{ANALYTICS_SCHEMA_VERSION, Analytics, collect_analytics};
 pub use artifact_gc::{
@@ -267,6 +271,7 @@ pub use pm_policy::{pm_policy_health, reconcile_pm_policy};
 #[doc(hidden)]
 pub use pm_questions::set_transcript_settle_window;
 pub use pm_supervisor::supervise;
+pub use pm_usage_guard::resume as pm_guard_resume;
 pub use pm_workset::{
     OperatingStatus, PmActionOutcome, PmActionResult, PmDecision, PmExecutable, PmWorkset,
     ScopedProgress, pm_act, pm_workset, pm_workset_with_attention, pm_workset_with_policy,

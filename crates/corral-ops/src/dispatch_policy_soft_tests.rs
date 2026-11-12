@@ -67,7 +67,7 @@ fn independent_pools_reserve_adhoc_room_without_subtracting_finishing_headroom()
     let second = fx.task("Second normal", Status::Backlog);
     let waiting = fx.task("Waiting normal", Status::Backlog);
     fx.grant(&[&first, &second, &waiting]);
-    advance(&fx.ctx, Fixture::now()).unwrap();
+    advance(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All).unwrap();
     assert_eq!(status(&fx, &first.id), Status::Running);
     assert_eq!(status(&fx, &second.id), Status::Running);
     assert_eq!(status(&fx, &waiting.id), Status::Backlog);
@@ -87,7 +87,7 @@ fn independent_pools_reserve_adhoc_room_without_subtracting_finishing_headroom()
     assert_eq!((usage.agents.normal, usage.agents.adhoc), (2, 1));
     assert_eq!(usage.unfinished.total(), 3);
     finish(&fx, &first.id);
-    advance(&fx.ctx, Fixture::now()).unwrap();
+    advance(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All).unwrap();
     assert_eq!(status(&fx, &waiting.id), Status::Running);
     let heads = crate::pm_next::heads::open(&fx.ctx.store).unwrap();
     assert_eq!(
@@ -107,7 +107,7 @@ fn automatic_backlog_stops_at_soft_target_while_p0_and_manual_use_headroom_up_to
     let third = fx.task("Third", Status::Backlog);
     fx.grant(&[&first, &second, &third]);
     // When automatic admission runs, it fills only to the soft target and explains the wait.
-    advance(&fx.ctx, Fixture::now()).unwrap();
+    advance(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All).unwrap();
     assert_eq!(status(&fx, &first.id), Status::Running);
     assert_eq!(status(&fx, &second.id), Status::Running);
     assert_eq!(status(&fx, &third.id), Status::Backlog);
@@ -119,7 +119,7 @@ fn automatic_backlog_stops_at_soft_target_while_p0_and_manual_use_headroom_up_to
     set(&fx, &urgent.id, "P0", None);
     set(&fx, &urgent2.id, "P0", None);
     fx.grant(&[&third, &urgent, &urgent2]);
-    advance(&fx.ctx, Fixture::now()).unwrap();
+    advance(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All).unwrap();
     assert_eq!(status(&fx, &urgent.id), Status::Running);
     assert_eq!(status(&fx, &urgent2.id), Status::Backlog);
     assert_eq!(status(&fx, &third.id), Status::Backlog);
@@ -160,7 +160,7 @@ fn p0_and_red_main_ideas_use_headroom_while_ordinary_ideas_wait() {
             _ => None,
         })
         .collect();
-    advance(&fx.ctx, Fixture::now()).unwrap();
+    advance(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All).unwrap();
     // Then only the P0 Idea is offered and promoted into the headroom.
     assert_eq!(cards, [vec![urgent.id.clone()]]);
     assert_eq!(status(&fx, &urgent.id), Status::Running);
@@ -170,7 +170,7 @@ fn p0_and_red_main_ideas_use_headroom_while_ordinary_ideas_wait() {
     let red = fx.task("Red main idea", Status::Idea);
     set(&fx, &red.id, "P2", Some("red_main"));
     fx.grant(&[&ordinary, &red]);
-    advance(&fx.ctx, Fixture::now()).unwrap();
+    advance(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All).unwrap();
     assert_eq!(status(&fx, &red.id), Status::Running);
     assert_eq!(status(&fx, &ordinary.id), Status::Idea);
     assert_eq!(used(&fx), 3);
@@ -185,7 +185,8 @@ fn automatic_ready_waits_at_soft_target_while_owner_queue_uses_headroom() {
     let first = manual(&fx, "Manual one");
     let second = manual(&fx, "Manual two");
     // When the Ready queue drains.
-    crate::queue_drain::start_queued(&fx.ctx, Fixture::now()).unwrap();
+    crate::queue_drain::start_queued(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All)
+        .unwrap();
     // Then automatic Ready work stays unlaunched with the soft-target reason.
     assert_eq!(status(&fx, &automatic.id), Status::Ready);
     assert!(fx.ctx.store.get(&automatic.id).unwrap().launch.is_none());
@@ -198,14 +199,16 @@ fn automatic_ready_waits_at_soft_target_while_owner_queue_uses_headroom() {
     // When the owner queues work, it launches in the same headroom.
     let owner = fx.task("Owner queued", Status::Ready);
     crate::queue::enqueue(&fx.ctx, &owner.id, &DispatchOpts::default()).unwrap();
-    crate::queue_drain::start_queued(&fx.ctx, Fixture::now()).unwrap();
+    crate::queue_drain::start_queued(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All)
+        .unwrap();
     assert_eq!(status(&fx, &owner.id), Status::Running);
     assert_eq!(status(&fx, &automatic.id), Status::Ready);
     assert_eq!(used(&fx), 3);
     // When capacity is released below the soft target, the automatic task is admitted.
     finish(&fx, &first.id);
     finish(&fx, &second.id);
-    crate::queue_drain::start_queued(&fx.ctx, Fixture::now()).unwrap();
+    crate::queue_drain::start_queued(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All)
+        .unwrap();
     assert_eq!(status(&fx, &automatic.id), Status::Running);
     assert_eq!(used(&fx), 2);
 }
@@ -220,11 +223,13 @@ fn a_blocked_ready_queue_resolves_the_operating_policy_once_per_drain() {
     fx.grant(&waiting.iter().collect::<Vec<_>>());
     manual(&fx, "Manual one");
     manual(&fx, "Manual two");
-    crate::queue_drain::start_queued(&fx.ctx, Fixture::now()).unwrap();
+    crate::queue_drain::start_queued(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All)
+        .unwrap();
     // When the queue drains again with every task still blocked (T-547).
     let resolves = || corral_core::work::count(corral_core::work::Work::PolicyResolve);
     let before = resolves();
-    crate::queue_drain::start_queued(&fx.ctx, Fixture::now()).unwrap();
+    crate::queue_drain::start_queued(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All)
+        .unwrap();
     // Then each was checked and skipped against one policy resolution, not one per check.
     for task in &waiting {
         let current = fx.ctx.store.get(&task.id).unwrap();
@@ -276,7 +281,8 @@ fn interrupted_automatic_launch_recovery_respects_soft_target_without_leaking_a_
     std::fs::remove_file(engine.join("fail-create")).unwrap();
     let first = manual(&fx, "Manual one");
     manual(&fx, "Manual two");
-    crate::queue_drain::start_queued(&fx.ctx, Fixture::now()).unwrap();
+    crate::queue_drain::start_queued(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All)
+        .unwrap();
     // Then recovery does not bypass the soft target or hold a reservation.
     let held = fx.ctx.store.get(&automatic.id).unwrap();
     assert_ne!(held.status, Status::Running);
@@ -289,7 +295,8 @@ fn interrupted_automatic_launch_recovery_respects_soft_target_without_leaking_a_
     );
     // When capacity is released, recovery reuses the same run.
     finish(&fx, &first.id);
-    crate::queue_drain::start_queued(&fx.ctx, Fixture::now()).unwrap();
+    crate::queue_drain::start_queued(&fx.ctx, Fixture::now(), &crate::sync::SyncScope::All)
+        .unwrap();
     let recovered = fx.ctx.store.get(&automatic.id).unwrap();
     assert_eq!(recovered.status, Status::Running);
     assert_eq!(recovered.runs.len(), 1);

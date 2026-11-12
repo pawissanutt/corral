@@ -107,9 +107,13 @@ fn tracker_ready_and_backlog_admission_skip_without_mutation_or_failure_events()
     let events = ctx.store.events().unwrap().len();
     assert!(crate::queue::migrate_backlog(&ctx).unwrap().is_empty());
     assert!(
-        crate::dispatch_policy::advance(&ctx, "2026-10-18T00:00:00Z".parse().unwrap())
-            .unwrap()
-            .is_empty()
+        crate::dispatch_policy::advance(
+            &ctx,
+            "2026-10-18T00:00:00Z".parse().unwrap(),
+            &crate::sync::SyncScope::All,
+        )
+        .unwrap()
+        .is_empty()
     );
     assert_eq!(ctx.store.list().unwrap(), before);
     assert_eq!(ctx.store.events().unwrap().len(), events);

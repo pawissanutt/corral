@@ -1032,7 +1032,8 @@ export class HostSession {
           + "This state report is not owner input, execution consent, review approval or a filesystem grant." }] };
     });
     if (this.ownerQuestions) {
-      this.questionUi = new OwnerQuestionUi(this.ownerQuestions, () => this.bound && !this.closing);
+      this.questionUi = new OwnerQuestionUi(this.ownerQuestions, () => this.bound && !this.closing,
+        () => this.session.model?.api === CLAUDE_SDK_API);
       this.questionUi.install(pi);
     }
     pi.on("session_start", async () => {
@@ -1326,6 +1327,8 @@ export class HostSession {
     this.ownerInput = false;
     // Before the prompt is recorded: its parent is the cursor a rewind to this turn restores.
     if (this.bound) this.checkpoint("start");
+    this.costTurn({ phase: "start",
+      key: origin.kind === "bridge" || origin.kind === "continuation" ? origin.idempotency_key : null });
     this.report("turn_started", { origin, provider: this.session.model?.provider, model: this.session.model?.id });
     if (this.budget.state().stopped) this.report("budget_exhausted", { budget: this.budget.state() });
     this.options.herdr?.turnStarted();
@@ -1362,9 +1365,21 @@ export class HostSession {
     const ownerInput = this.ownerInput;
     this.ownerInput = false;
     if (this.bound) this.checkpoint("end");
+    this.costTurn({ phase: "end" });
     this.report("turn_ended", { aborted, cancelled, owner_input: ownerInput });
     this.options.herdr?.turnEnded();
     this.commands?.flush();
+  }
+
+  private costTurn(marker: { phase: "start"; key: string | null } | { phase: "end" }): void {
+    if (this.options.identity.role !== "pm") return;
+    try {
+      this.session.sessionManager.appendCustomEntry("corral_cost_turn", {
+        generation: this.options.identity.generation, turn: this.turn, ...marker,
+      }, { immediate: true });
+    } catch {
+      // Cost attribution is best-effort reporting, never turn admission.
+    }
   }
 
   private checkpoint(phase: "start" | "end"): void {

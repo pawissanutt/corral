@@ -136,6 +136,7 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                 "event",
                 "receipt_lookup",
                 "todo",
+                "notes",
                 "question_answer",
                 "question_escalate",
                 "question_cancel",

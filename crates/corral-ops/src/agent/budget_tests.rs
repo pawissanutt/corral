@@ -1,7 +1,7 @@
 //! Offline, real bridge transactions; no inference or live herdr.
 use super::test_support::*;
 use super::*;
-use corral_core::agent::AgentRole;
+use corral_core::agent::{AgentRole, ContainerRef, RequestReceipt};
 use serde_json::json;
 
 #[test]
@@ -155,4 +155,109 @@ fn budget_concurrent_admission_replay_fence_and_adaptive_resume() {
     println!(
         "four concurrent admissions; replay deduped; stale host fenced; unchanged resume stopped; raised resume retains 4 uncertain reservations"
     );
+}
+
+#[test]
+fn pm_budget_settles_guard_only_pm_and_owner_resume_reopens_admission() {
+    fn event(fx: &Fx, host: &Host, seq: u64, payload: serde_json::Value) -> RequestReceipt {
+        committed(&send(
+            fx,
+            &envelope(
+                host,
+                "event",
+                &event_request_id(host.identity.generation, seq),
+                payload,
+                false,
+            ),
+            "event",
+        ))
+    }
+    fn settle(fx: &Fx, host: &Host, seq: u64, key: &str) {
+        let reserved = event(
+            fx,
+            host,
+            seq,
+            json!({
+                "kind":"budget", "action":"reserve", "request":key,
+                "tokens":300_001, "priced":true,
+            }),
+        );
+        assert_eq!(reserved.result["admitted"], true);
+        event(
+            fx,
+            host,
+            seq + 1,
+            json!({
+                "kind":"budget", "action":"settle", "request":key, "response":key,
+                "tokens":260_001, "provider":"fixture", "model":"fixture",
+                "usage":{"input":150_000, "cache_read":0, "cache_write":110_000, "output":1},
+            }),
+        );
+    }
+    let fx = fx();
+    let pm = bind(
+        &fx,
+        &BindTarget::Pm {
+            project: String::new(),
+        },
+        "pm",
+        "pm-session",
+    );
+    committed(&hello(&fx, &pm));
+    settle(&fx, &pm, 1, "pm-first");
+    let guard = || {
+        fx.ctx
+            .store
+            .record::<serde_json::Value>("pm-usage-guard", "current")
+            .unwrap()
+            .unwrap()
+    };
+    let before = guard();
+    assert_eq!(before["value"]["observations"].as_array().unwrap().len(), 1);
+    assert_eq!(before["value"]["consecutive_misses"], 1);
+    let worker_task = worker_task(&fx, "p1");
+    let worker = bind(
+        &fx,
+        &BindTarget::Worker {
+            task: worker_task,
+            run: "R1".into(),
+        },
+        "p1",
+        "worker-session",
+    );
+    committed(&hello(&fx, &worker));
+    settle(&fx, &worker, 1, "worker");
+    let (_, target) = reviewer_task(&fx);
+    let reviewer = bind(&fx, &target, "p2", "reviewer-session");
+    committed(&hello(&fx, &reviewer));
+    settle(&fx, &reviewer, 1, "reviewer");
+    assert_eq!(guard(), before);
+    settle(&fx, &pm, 3, "pm-second");
+    assert_eq!(events(&fx, "pm_cache_miss_guard"), 1);
+    let paused = crate::pm_usage_guard::health(&fx.ctx).unwrap();
+    assert_eq!(paused["status"]["state"], "paused");
+    assert_eq!(paused["last_ratio"], 0.0);
+    let denied = event(
+        &fx,
+        &pm,
+        5,
+        json!({
+            "kind":"budget", "action":"reserve", "request":"denied", "tokens":1,
+        }),
+    );
+    assert_eq!(denied.result["admitted"], false);
+    assert_eq!(denied.result["reason"], "cache_guard_paused");
+    assert_eq!(denied.result["exhausted"], false);
+    assert_eq!(state(&fx, &ContainerRef::Pm).budget.requests.len(), 2);
+    assert!(crate::pm_usage_guard::resume(&fx.ctx).unwrap());
+    assert!(!crate::pm_usage_guard::resume(&fx.ctx).unwrap());
+    let resumed = event(
+        &fx,
+        &pm,
+        6,
+        json!({
+            "kind":"budget", "action":"reserve", "request":"resumed", "tokens":1, "priced":true,
+        }),
+    );
+    assert_eq!(resumed.result["admitted"], true);
 }

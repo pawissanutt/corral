@@ -1,9 +1,11 @@
-//! Read-only, deterministic PM policy. Observations contain facts, never model recommendations.
+//! Read-only, deterministic PM policy. Question recommendations are context, never authority.
 pub(crate) mod heads;
 pub(crate) mod inbox;
 pub(crate) mod observe;
 mod plan;
 mod questions;
+pub use questions::{QuestionDetails, QuestionDigest};
+pub(crate) use questions::{digest_question_next, fit_digest};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -101,6 +103,8 @@ pub enum PmObservation {
         question_kind: String,
         blocking: bool,
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        details: Option<QuestionDetails>,
     },
     /// A corral-pi question that waits on the owner: escalated, or unattended.
     OwnerQuestion {
@@ -110,6 +114,8 @@ pub enum PmObservation {
         question_kind: String,
         text: String,
         reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        details: Option<QuestionDetails>,
     },
 }
 
@@ -171,7 +177,7 @@ pub struct PmOption {
     pub requires_owner: bool,
 }
 
-/// Exactly one action. `command` is the recommended option, not permission to act as owner.
+/// One action or a bounded question digest; recommendations never grant authority.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PmAction {
     pub kind: PmActionKind,
@@ -185,6 +191,8 @@ pub struct PmAction {
     pub requires_owner: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shortlist: Vec<crate::promotion::PromotionCandidate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_digest: Option<QuestionDigest>,
 }
 
 fn option(id: &str, label: &str, command: String, requires_owner: bool) -> PmOption {
@@ -451,6 +459,7 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
                 recommended: id.into(),
                 requires_owner,
                 shortlist: vec![],
+                question_digest: None,
             };
         }
         GateNeeded { task } => (
@@ -590,6 +599,7 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
                 recommended: "inspect_plan".into(),
                 requires_owner: true,
                 shortlist: vec![],
+                question_digest: None,
             };
         }
     };
@@ -614,14 +624,14 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
             IdleIdeas { shortlist, .. } => shortlist.clone(),
             _ => vec![],
         },
+        question_digest: None,
     }
 }
 
 pub(crate) fn rank(observation: &PmObservation) -> u8 {
     match observation {
-        PmObservation::Question { .. }
-        | PmObservation::OwnerQuestion { .. }
-        | PmObservation::AgentQuestion { .. } => 0,
+        PmObservation::Question { .. } => 0,
+        PmObservation::OwnerQuestion { .. } | PmObservation::AgentQuestion { .. } => 11,
         PmObservation::StaleReview { .. } => 1,
         PmObservation::GateUntrusted { .. } => 2,
         PmObservation::LoadFailure { .. } => 3,
@@ -635,7 +645,7 @@ pub(crate) fn rank(observation: &PmObservation) -> u8 {
         PmObservation::AutomaticWait { .. } => 8,
         PmObservation::ReadyToLand { .. } => 9,
         PmObservation::Dispatch { .. } => 10,
-        PmObservation::IdleIdeas { .. } => 11,
+        PmObservation::IdleIdeas { .. } => 12,
     }
 }
 
@@ -660,6 +670,7 @@ pub fn pm_select(observations: &[PmObservation], bin: &str) -> PmAction {
         recommended: "wait".into(),
         requires_owner: false,
         shortlist: vec![],
+        question_digest: None,
     }
 }
 
@@ -713,6 +724,7 @@ pub(crate) fn enrich(
             recommended: "distill".into(),
             requires_owner: due.profile.is_none(),
             shortlist: vec![],
+            question_digest: None,
         };
     }
     if let Some(id) = &action.task {

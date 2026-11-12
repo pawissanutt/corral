@@ -1,6 +1,6 @@
 // Offline production roles in real Pi sessions: loadout selection, receipt transport and denial.
 import { expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -113,6 +113,23 @@ for (const launch of cases) {
       await host.submit({ text: "Update progress", busyPolicy: "prompt", idempotencyKey: "todo-input", origin: "test" }, "rq-todo");
       await ended;
       await host.drained();
+      if (launch.role === "pm" && launch.todo === true) {
+        const started = corral.calls().map(call => call.envelope)
+          .find(call => call.op === "event" && call.payload.kind === "turn_started");
+        expect(started).toBeDefined();
+        const file = host.session.sessionFile;
+        if (!file) throw new Error("PM session journal missing");
+        const journal = readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line));
+        const markers = journal.filter(entry => entry.type === "custom" && entry.customType === "corral_cost_turn");
+        expect(markers.map(entry => entry.data)).toEqual([
+          { generation: started?.identity.generation, turn: started?.payload.turn, phase: "start", key: "todo-input" },
+          { generation: started?.identity.generation, turn: started?.payload.turn, phase: "end" },
+        ]);
+        const response = journal.findIndex(entry => entry.type === "message" && entry.message.role === "assistant");
+        const lastResponse = journal.findLastIndex(entry => entry.type === "message" && entry.message.role === "assistant");
+        expect(response).toBeGreaterThan(journal.indexOf(markers[0]));
+        expect(journal.indexOf(markers[1])).toBeGreaterThan(lastResponse);
+      }
       // Then only enabled roles send the receipted operation, with bound identity and request ID.
       const calls = corral.calls().map((call) => call.envelope).filter((call) => call.op === "todo");
       expect(calls).toHaveLength(enabled ? 1 : 0);

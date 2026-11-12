@@ -22,6 +22,7 @@ mod call;
 mod capabilities_tests;
 pub mod cli;
 pub mod connections;
+pub(crate) mod cost_records;
 pub mod credentials;
 pub mod delivery;
 pub mod effects;

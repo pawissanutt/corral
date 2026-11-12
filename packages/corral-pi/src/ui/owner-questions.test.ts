@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { BeforeAgentStartEvent, BeforeAgentStartEventResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { buildSystemPrompt, normalizeBuildSystemPromptOptions } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.js";
 import { PendingQuestions, QUESTION_ENTRY, type QuestionEntry } from "../host/pending-questions.ts";
-import { OwnerQuestionUi, QUESTIONS_SHORTCUT } from "./owner-questions.ts";
+import { OwnerQuestionUi, OWNER_QUESTION_STATE, QUESTIONS_SHORTCUT, renderOwnerQuestionState } from "./owner-questions.ts";
 
 test("owner UI dismisses without consent, preserves permission dialogs and fences stale callbacks", async () => {
   const entries: QuestionEntry[] = [];
@@ -41,4 +42,46 @@ test("owner UI dismisses without consent, preserves permission dialogs and fence
   expect(q.cancel(id)).toBe("cancelled");
   expect(await q.answer(id, [{ option: "One" }])).toBe("cancelled");
   expect(records).toBe(0);
+});
+
+test("owner question changes stay in host messages without changing the default system prefix or duplicating state", async () => {
+  const entries: QuestionEntry[] = [];
+  const questions = new PendingQuestions({ session: () => "owned", generation: 1, entries: () => entries,
+    append: data => { entries.push({ type: "custom", customType: QUESTION_ENTRY, data }); }, changed() {},
+    record: async text => text, deliver: async () => false });
+  let before!: (event: BeforeAgentStartEvent) => BeforeAgentStartEventResult | void;
+  const api = {
+    on: (name: string, handler: typeof before) => { if (name === "before_agent_start") before = handler; },
+    registerCommand() {}, registerShortcut() {},
+  } as unknown as ExtensionAPI;
+  let claude = false;
+  new OwnerQuestionUi(questions, () => true, () => claude).install(api);
+  const start = () => {
+    const options = normalizeBuildSystemPromptOptions({ cwd: "/project", appendSystemPrompt: "Stable role contract" });
+    const event = { type: "before_agent_start", messageType: "user", prompt: "continue",
+      systemPromptOptions: options, systemPrompt: buildSystemPrompt(options) } as BeforeAgentStartEvent;
+    const result = before(event);
+    return { system: buildSystemPrompt(options), message: result?.message, options };
+  };
+  const id = questions.ask("Q", [{ question: "Which release?", options: ["One", "Two"] }]).id;
+  const pending = start();
+  expect(pending.system).not.toContain("Which release?");
+  expect(pending.options.sections.owner_questions).toBeUndefined();
+  expect(pending.message?.customType).toBe(OWNER_QUESTION_STATE);
+  expect(pending.message?.content).toContain(renderOwnerQuestionState(questions));
+  expect(start().message).toBeUndefined();
+  await questions.answer(id, [{ option: "One" }]);
+  expect(questions.status(id)).toBe("answered");
+  const answered = start();
+  expect(answered.system).toBe(pending.system);
+  expect(answered.message?.content).toContain(renderOwnerQuestionState(questions));
+  expect(answered.message?.content).not.toBe(pending.message?.content);
+  expect(start().message).toBeUndefined();
+  questions.cancel(questions.ask("Other", [{ question: "Other?", options: ["Yes", "No"] }]).id);
+  // The rendered pending/answered state is unchanged by a cancelled question.
+  expect(start().message).toBeUndefined();
+  claude = true;
+  const routed = start();
+  expect(routed.message).toBeUndefined();
+  expect(routed.options.sections.owner_questions).toBe(renderOwnerQuestionState(questions));
 });

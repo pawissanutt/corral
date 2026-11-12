@@ -40,5 +40,6 @@ pub fn pm_health(ctx: &Ctx) -> Result<Value> {
         "last_version_skew":ctx.store.events_of(None, &["version_skew"])?.last(),
         "policy_delivery":crate::pm_policy::pm_policy_health(ctx)?,
         "supervisor":crate::pm_supervisor::health(ctx)?,
+        "usage_guard":crate::pm_usage_guard::health(ctx)?,
     }))
 }

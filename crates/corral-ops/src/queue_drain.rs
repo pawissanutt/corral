@@ -14,7 +14,12 @@ use crate::{Change, Ctx, DispatchOpts, DispatchOutcome};
 const REFUSALS: corral_core::records::RecordArea<BTreeMap<String, RefusalRecord>> =
     corral_core::records::RecordArea::new("queue-refusals");
 
-pub(crate) fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
+/// A project scope drains only that project's queue; refusal records of the others are kept.
+pub(crate) fn start_queued(
+    ctx: &Ctx,
+    now: Timestamp,
+    scope: &crate::sync::SyncScope,
+) -> Result<Vec<Change>> {
     let mut fresh = ctx.clone();
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;
@@ -38,6 +43,7 @@ pub(crate) fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     crate::queue::sort_candidates(&mut queued);
     let mut refusals = Refusals::load(ctx)?;
     refusals.retain(&queued);
+    queued.retain(|task| scope.includes(task.project.as_deref()));
     let mut changes = Vec::new();
     let mut view = Some(board);
     for (index, task) in queued.into_iter().enumerate() {

@@ -121,12 +121,15 @@ pub(crate) fn handles(task: &Task) -> bool {
         || (task.status == Status::Review && task.current_run().is_none() && !task.plans.is_empty())
 }
 
-pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<()> {
+pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp, scope: &crate::sync::SyncScope) -> Result<()> {
     let _attribution = ctx.store.attribute(corral_core::Actor::Autopilot);
     for task in ctx
         .store
         .heads(&corral_core::backend::HeadQuery::Open { project: None })?
     {
+        if !scope.includes(task.project.as_deref()) {
+            continue;
+        }
         let Some(_lock) = ctx.store.try_lock(&format!("plan-pilot-{}", task.id))? else {
             continue;
         };

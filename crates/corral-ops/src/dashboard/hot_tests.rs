@@ -266,8 +266,12 @@ fn scheduled_work_does_not_grow_with_terminal_tasks_or_events() {
         })
     );
     assert_eq!(
-        unattributed(|| crate::plan_pilot::advance_all(&base, now).unwrap()),
-        unattributed(|| crate::plan_pilot::advance_all(&grown, now).unwrap())
+        unattributed(
+            || crate::plan_pilot::advance_all(&base, now, &crate::sync::SyncScope::All).unwrap()
+        ),
+        unattributed(
+            || crate::plan_pilot::advance_all(&grown, now, &crate::sync::SyncScope::All).unwrap()
+        )
     );
     assert_eq!(
         unattributed(|| last_scheduled(&base)),

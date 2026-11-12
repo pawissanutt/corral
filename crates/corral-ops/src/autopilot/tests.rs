@@ -96,12 +96,22 @@ fn skipped_lease_preserves_error_until_evaluated_pass() {
         .try_lock(&format!("autopilot-{}", task.id))
         .unwrap()
         .unwrap();
-    advance_all(&ctx, corral_core::clock::now()).unwrap();
+    advance_all(
+        &ctx,
+        corral_core::clock::now(),
+        &crate::sync::SyncScope::All,
+    )
+    .unwrap();
     let runs = ctx.store.condition_runs(Some(&task.id)).unwrap();
     assert_eq!(runs.len(), 1);
     assert!(runs[0].closed_seq.is_none());
     drop(lock);
-    advance_all(&ctx, corral_core::clock::now()).unwrap();
+    advance_all(
+        &ctx,
+        corral_core::clock::now(),
+        &crate::sync::SyncScope::All,
+    )
+    .unwrap();
     let runs = ctx.store.condition_runs(Some(&task.id)).unwrap();
     assert!(runs[0].closed_seq.is_some());
 }
