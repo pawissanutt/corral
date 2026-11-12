@@ -16,9 +16,11 @@ use corral_core::agent::{
     self, AgentRunState, ContainerRef, Executor, HookSettings, HostHealth, InterruptedCall,
     ReceiptState, RequestReceipt, ResumeClass, pm_state,
 };
+#[cfg(all(test, target_os = "linux"))]
+use corral_core::inbox::Message;
 #[cfg(test)]
 use corral_core::inbox::MessageBinding;
-use corral_core::inbox::{Inbox, Message, Post, Recipient, Urgency};
+use corral_core::inbox::{Inbox, Post, Recipient, Urgency};
 use serde_json::{Value, json};
 
 use super::admission::{BindTarget, fence_generation};
@@ -26,7 +28,7 @@ use super::bridge::BridgeClient;
 use super::bridge::cancel as cancels;
 use super::bridge::interrupted::{self, ScanLimit};
 use super::bridge::liveness::{bound_host, gone};
-use super::bridge::notice::{self, Unconfirmed, binding};
+use super::bridge::notice::{self, binding};
 use super::cli::{AgentTarget, CancelArgs, ResumeArgs};
 use super::effects;
 use super::launch::{
@@ -244,7 +246,13 @@ pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> R
 
 #[path = "recovery_launch.rs"]
 mod launch;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) use launch::PmRecoveryInProgress;
 pub(crate) use launch::{PmRecoveryLease, RecoveryLaunch};
+
+#[path = "recovery_notice_post.rs"]
+mod post;
+use post::{latest_session, post_notice, settle_unconfirmed, unconfirmed_json};
 
 /// Resume, or with `adopt` (`corral pi` taking over a dead PM) the same fencing, drain and
 /// notice with generation n+1 opened in the adopting pane and launched in-process from the
@@ -309,10 +317,11 @@ pub(crate) fn recover_with(
         stop_host(host)?;
         replaced = true;
     }
-    let reason = if restore.is_some() {
-        "rewind"
-    } else {
-        "resume"
+    let rotation = launch.as_ref().is_some_and(|launch| launch.rotation);
+    let reason = match (restore.is_some(), rotation) {
+        (true, _) => "rewind",
+        (false, true) => "rotate",
+        (false, false) => "resume",
     };
     fence_generation(&ctx.store, container, n, reason)?;
     remove_control(ctx, container, n)?;
@@ -341,7 +350,23 @@ pub(crate) fn recover_with(
         None => prepared.command(),
     };
     let next = snapshot(ctx, container)?.0.binding.generation;
-    let notice = post_notice(ctx, container, (n, next), &interrupted, &unconfirmed, &plan)?;
+    // A rotation retires the latest bound conversation; its binding stays on its generation.
+    let previous_session = if rotation {
+        latest_session(&state)
+    } else {
+        None
+    };
+    let rotation = rotation.then_some(notice::Rotation {
+        previous_session: previous_session.as_deref(),
+    });
+    let notice = post_notice(
+        ctx,
+        container,
+        (n, next),
+        (&interrupted, &unconfirmed),
+        rotation,
+        &plan,
+    )?;
     for call in interrupted.calls.iter().filter(|c| c.request_id.is_some()) {
         let class = super::bridge::interrupted::class_name(call.class);
         ctx.store.log_event(
@@ -675,87 +700,6 @@ pub(crate) fn evidence_dir(ctx: &Ctx, container: &ContainerRef) -> Result<std::p
     } else {
         Ok(ctx.store.scratch_tmp()?.join("agent-recovery"))
     }
-}
-
-/// The envelope generation `n` was sent and never confirmed, settled without a resend so the
-/// notice is published first.
-fn settle_unconfirmed(
-    ctx: &Ctx,
-    container: &ContainerRef,
-    n: u32,
-    state: &AgentRunState,
-) -> Result<Vec<Unconfirmed>> {
-    let Some(bound) = state.generation(n).and_then(|g| g.bound.as_ref()) else {
-        return Ok(Vec::new());
-    };
-    let to = recipient(container);
-    let endpoint = generation_dir(&ctx.store, &to, n)?.join(SOCKET_FILE);
-    notice::settle_unconfirmed(ctx, &to, &endpoint, &bound.session_file)
-}
-
-fn unconfirmed_json(unconfirmed: &[Unconfirmed]) -> Value {
-    let each = |m: &Unconfirmed| json!({"id": m.id, "kind": m.kind, "observed": m.observed});
-    Value::Array(unconfirmed.iter().map(each).collect())
-}
-
-/// Posts the generation's one notice; `in_progress` receipts are marked in the same commit, so
-/// sync later posts exactly one update for each.
-fn post_notice(
-    ctx: &Ctx,
-    container: &ContainerRef,
-    (lost, next): (u32, u32),
-    interrupted: &Interrupted,
-    unconfirmed: &[Unconfirmed],
-    plan: &Relaunch,
-) -> Result<Message> {
-    let inbox = Inbox::new(&ctx.store, recipient(container))?;
-    let run = plan.artifact_run.as_deref();
-    let keep = |text: &str| notice::keep_complete(ctx, container, lost, run, text);
-    let calls = &interrupted.calls;
-    let body = notice::body(inbox.key(), lost, next, interrupted, unconfirmed, keep)?;
-    let key = format!("recovery:{}/g{lost}", container.key());
-    let mut subject = json!({
-        "key": key, "lost": lost, "generation": next, "calls": calls,
-        "unconfirmed": unconfirmed_json(unconfirmed),
-    });
-    if !interrupted.scan_limits.is_empty() {
-        subject["scan"] = json!({"complete": false, "limits": interrupted.scan_limits});
-    }
-    let post = || Post {
-        kind: NOTICE_KIND,
-        urgency: Urgency::Wake,
-        author: "corral",
-        body: &body,
-        binding: binding(container),
-        subject: Some(subject.clone()),
-        max_payload: corral_core::inbox::MAX_PAYLOAD,
-    };
-    let Some(task_id) = container.task() else {
-        return inbox.post(post());
-    };
-    let _posting = inbox.lock()?;
-    let mut posted = None;
-    ctx.store.try_update(task_id, |task| {
-        let message = inbox.reserve_in(task, post())?;
-        let state =
-            agent::container_state_mut(task, container).context("the agent binding disappeared")?;
-        for receipt in &mut state.receipts {
-            if interrupted.running.contains(&receipt.request_id) {
-                let mark = json!({"outcome": "in_progress"});
-                crate::review_budget::evidence(
-                    receipt,
-                    &mark,
-                    NOTICE_SOURCE,
-                    Some(message.id.clone()),
-                );
-            }
-        }
-        posted = Some(message);
-        Ok(true)
-    })?;
-    let message = posted.context("the recovery notice was not reserved")?;
-    inbox.announce(&message)?;
-    Ok(message)
 }
 
 /// Every corral-pi container of the task with a receipt owed its one `recovery_update`.

@@ -178,7 +178,11 @@ fn check_met(store: &Store, check: &ResumeCheck) -> Result<bool> {
             }
         }
         "status" | "landed" | "hold-lifted" => {
-            let head = if let Ok(id) = Store::normalize_id(target) {
+            // Mirror crate::park::checks: task lookup is exact, so a numeric project
+            // name must not resolve to an aliased task before the project lookup.
+            let head = if let Ok(id) = Store::normalize_id(target)
+                && id == target
+            {
                 store.head_if_exists(&id)?
             } else {
                 None

@@ -54,6 +54,73 @@ pub struct QuestionDigest {
     pub questions_omitted: usize,
 }
 
+/// Human-readable presentation of the same question facts and exact action commands.
+pub fn question_digest_lines(digest: &QuestionDigest) -> Vec<String> {
+    let mut lines = Vec::new();
+    for question in &digest.questions {
+        let details = &question.details;
+        lines.push(format!(
+            "Question {} (revision {}): project {}; task {}; {}; age {}s; needed_by {}{}",
+            question.key,
+            question.revision,
+            details.project.as_deref().unwrap_or("none"),
+            question.task,
+            if details.blocking {
+                "blocking"
+            } else {
+                "non-blocking"
+            },
+            question.age_seconds,
+            details
+                .needed_by
+                .map_or_else(|| "none".into(), |at| at.to_string()),
+            if question.requires_owner {
+                "; owner required"
+            } else {
+                ""
+            },
+        ));
+        lines.push(format!("Text: {}", question.text));
+        if question.text_bytes_omitted > 0 {
+            lines.push(format!(
+                "Text bytes omitted: {}",
+                question.text_bytes_omitted
+            ));
+        }
+        for choice in &details.options {
+            lines.push(format!("Choice: {} = {}", choice.label, choice.value));
+            if choice.label_bytes_omitted > 0 {
+                lines.push(format!(
+                    "Choice label bytes omitted: {}",
+                    choice.label_bytes_omitted
+                ));
+            }
+        }
+        if details.options_omitted > 0 {
+            lines.push(format!("Choices omitted: {}", details.options_omitted));
+        }
+        if let Some(recommendation) = &details.recommendation {
+            lines.push(format!("Recommendation (context only): {recommendation}"));
+        }
+        if details.recommendation_bytes_omitted > 0 {
+            lines.push(format!(
+                "Recommendation bytes omitted: {}",
+                details.recommendation_bytes_omitted
+            ));
+        }
+        for action in &question.actions {
+            lines.push(format!(
+                "Option {}: {} -> {}",
+                action.id, action.label, action.command
+            ));
+        }
+    }
+    if digest.questions_omitted > 0 {
+        lines.push(format!("Questions omitted: {}", digest.questions_omitted));
+    }
+    lines
+}
+
 fn preview(text: &str, bytes: usize) -> (String, usize) {
     let mut end = text.len().min(bytes);
     while !text.is_char_boundary(end) {

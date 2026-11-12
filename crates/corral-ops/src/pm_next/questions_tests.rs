@@ -168,3 +168,34 @@ fn question_digest_caps_one_batch_at_eight_and_counts_unshown_questions() {
     assert_eq!(digest.questions_omitted, 1);
     assert_eq!(digest.questions[0].key, "T-001/R1/Q0");
 }
+
+#[test]
+fn question_digest_text_preserves_each_questions_original_answer_and_escalate_commands() {
+    let decisions = [
+        decision(&question("T-001/R1/Q1", false, 1)),
+        decision(&question("T-001/R1/Q2", false, 2)),
+    ];
+    let mut next = decisions[0].action.clone();
+    digest_question_next(
+        &decisions,
+        &mut next,
+        "2026-11-11T00:01:00Z".parse().unwrap(),
+    )
+    .unwrap();
+    let lines = question_digest_lines(next.question_digest.as_ref().unwrap());
+    for decision in &decisions {
+        for action in &decision.action.options {
+            let prefix = format!("Option {}: {} -> ", action.id, action.label);
+            assert_eq!(
+                lines
+                    .iter()
+                    .filter_map(|line| line.strip_prefix(prefix.as_str()))
+                    .filter(|command| *command == action.command.as_str())
+                    .count(),
+                1,
+                "{}",
+                action.command
+            );
+        }
+    }
+}

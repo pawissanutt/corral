@@ -762,11 +762,12 @@ fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Va
                     "state":q.effective_state,"blocking":q.question.blocking})
                 })
                 .collect();
-            super::pm_bound::bounded_brief(
+            let brief = super::pm_bound::bounded_brief(
                 &next,
                 json!({"project":project,"counts":counts,"questions":questions}),
                 corral_core::agent::RESULT_MAX_BYTES,
-            )
+            )?;
+            super::pm_shadow::with_brief_digest(brief, &next)
         }
         _ => Err(super::unavailable(op, OWNER)),
     }

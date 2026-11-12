@@ -283,7 +283,9 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
                 PmCmd::Act { .. }
                 | PmCmd::Present { .. }
                 | PmCmd::Resolve { .. }
-                | PmCmd::Relaunch { .. },
+                | PmCmd::Relaunch { .. }
+                | PmCmd::Rotate { .. }
+                | PmCmd::Shadow { .. },
             ) => Refused,
         },
         Cmd::Harness {

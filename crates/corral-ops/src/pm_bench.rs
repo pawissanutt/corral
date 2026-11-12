@@ -91,6 +91,22 @@ pub struct PmBenchResponse {
     pub reported_cost_usd: Option<f64>,
 }
 
+/// The retained non-stale shadow ring, in the offline response-import JSONL shape.
+/// Costs are unknown here; authoritative usage attribution lives in cost records.
+pub fn pm_shadow_export(ctx: &crate::Ctx) -> Result<Vec<PmBenchResponse>> {
+    Ok(corral_core::agent::pm_shadow::load(&ctx.store)?
+        .decisions
+        .into_iter()
+        .filter(|decision| !decision.stale)
+        .map(|decision| PmBenchResponse {
+            case_id: decision.digest,
+            model: decision.model,
+            option: decision.choice,
+            reported_cost_usd: None,
+        })
+        .collect())
+}
+
 /// Sequential checkpoint, including the original event and accumulated board facts.
 #[derive(Debug, Clone, Serialize)]
 pub struct PmReplayStep {

@@ -135,7 +135,17 @@ fn envelope_spanning_two_projects_is_shared_without_guessing_a_task() {
 
 #[test]
 fn report_reconciles_container_usage_and_keeps_legacy_and_unmatched_requests_unallocated() {
-    let fx = ts::fx();
+    let mut fx = ts::fx();
+    fx.ctx.store.config.pricing.insert(
+        "gpt-5".into(),
+        corral_core::Price {
+            input: 1.0,
+            output: 2.0,
+            cache_read: None,
+            cache_write: None,
+            aliases: Vec::new(),
+        },
+    );
     let host = pm(&fx);
     let id = ts::worker_task(&fx, "worker");
     pm_cost::prepare(
@@ -168,10 +178,13 @@ fn report_reconciles_container_usage_and_keeps_legacy_and_unmatched_requests_una
             "usage":{"input":input,"cacheRead":2,"cacheWrite":3,"output":4,"cost":{"total":0.25}}
         }})
     };
+    let mut unpriced = assistant("item-unpriced", 20);
+    unpriced["message"]["model"] = json!("pm-cost-unpriced-fixture");
     let lines = vec![
         assistant("legacy", 1),
         json!({"type":"custom","customType":"corral_cost_turn","data":{"generation":1,"turn":1,"phase":"start","key":"pm:env1"}}),
         assistant("item", 10),
+        unpriced,
         json!({"type":"custom","customType":"corral_cost_turn","data":{"generation":1,"turn":1,"phase":"end"}}),
         assistant("outside", 100),
         json!({"type":"custom","customType":"corral_cost_turn","data":{"generation":1,"turn":2,"phase":"start"}}),
@@ -193,9 +206,25 @@ fn report_reconciles_container_usage_and_keeps_legacy_and_unmatched_requests_una
     let total = super::super::usage::collect_container(&ContainerRef::Pm, &fx.ctx.store).unwrap();
     let report = by_item(&fx.ctx, CostWindow::default()).unwrap();
     assert_eq!(report.total, total);
-    assert_eq!(report.coverage.total_requests, 4);
-    assert_eq!(report.coverage.attributed_requests, 1);
+    assert_eq!(report.coverage.total_requests, 5);
+    assert_eq!(report.coverage.attributed_requests, 2);
     assert_eq!(report.coverage.legacy, 2);
+    let item = report
+        .rows
+        .iter()
+        .find(|row| row.task.as_deref() == Some(id.as_str()))
+        .unwrap();
+    assert_eq!(item.requests, 2);
+    assert!(item.usd.is_some());
+    assert_eq!(item.unpriced_tokens, 29);
+    assert_eq!(
+        report
+            .rows
+            .iter()
+            .map(|row| row.unpriced_tokens)
+            .sum::<u64>(),
+        report.total.unpriced_tokens
+    );
     let unallocated = report
         .rows
         .iter()
@@ -231,4 +260,116 @@ fn report_reconciles_container_usage_and_keeps_legacy_and_unmatched_requests_una
             .iter()
             .any(|r| r.class == CostClass::Overhead && r.requests == 0)
     );
+}
+
+#[test]
+fn queued_spans_join_their_own_envelope_without_reusing_the_turn_attribution() {
+    let fx = ts::fx();
+    let host = pm(&fx);
+    let a = ts::worker_task(&fx, "a");
+    let b = ts::worker_task(&fx, "b");
+    let pending = |key: &str, task: &str| PendingCause {
+        envelope_key: key.into(),
+        cause: Cause {
+            class: CostClass::Item,
+            project: Some("corral".into()),
+            task: Some(task.into()),
+            ..Cause::default()
+        },
+    };
+    pm_cost::prepare(&fx.ctx.store, pending("pm:env-a", &a)).unwrap();
+    pm_cost::bind(
+        &fx.ctx.store,
+        1,
+        1,
+        &TurnOrigin {
+            kind: TurnOriginKind::Bridge,
+            idempotency_key: Some("pm:env-a".into()),
+        },
+        None,
+    )
+    .unwrap();
+    let response = |id: &str, input: u64| {
+        json!({
+            "type": "message", "id": id,
+            "message": {
+                "role": "assistant", "responseId": id,
+                "usage": {"input": input, "cacheRead": 2, "cacheWrite": 3, "output": 4}
+            }
+        })
+    };
+    let lines = [
+        json!({"type":"custom", "customType":"corral_cost_turn",
+            "data":{"generation":1, "turn":1, "phase":"start", "key":"pm:env-a"}}),
+        response("a", 11),
+        // No end marker or new turn: queued input changes the cause within the same turn.
+        json!({"type":"custom", "customType":"corral_cost_turn",
+            "data":{"generation":1, "turn":1, "phase":"start", "key":"pm:env-b", "queued":true}}),
+        response("b", 22),
+        json!({"type":"custom", "customType":"corral_cost_turn",
+            "data":{"generation":1, "turn":1, "phase":"end"}}),
+    ];
+    std::fs::create_dir_all(&host.sessions).unwrap();
+    std::fs::write(
+        host.sessions.join("session.jsonl"),
+        format!(
+            "{}\n",
+            lines
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    )
+    .unwrap();
+    let missing = by_item(&fx.ctx, CostWindow::default()).unwrap();
+    let a_row = missing
+        .rows
+        .iter()
+        .find(|row| row.task.as_deref() == Some(a.as_str()))
+        .unwrap();
+    assert_eq!((a_row.requests, a_row.input), (1, 11));
+    let unallocated = missing
+        .rows
+        .iter()
+        .find(|row| row.class == CostClass::Unallocated)
+        .unwrap();
+    assert_eq!((unallocated.requests, unallocated.input), (1, 22));
+    assert_eq!(missing.coverage.attributed_requests, 1);
+
+    pm_cost::prepare(&fx.ctx.store, pending("pm:env-b", &b)).unwrap();
+    let resolved = by_item(&fx.ctx, CostWindow::default()).unwrap();
+    assert_eq!(resolved.total, missing.total);
+    assert_eq!(
+        resolved.total,
+        super::super::usage::collect_container(&ContainerRef::Pm, &fx.ctx.store).unwrap()
+    );
+    let b_row = resolved
+        .rows
+        .iter()
+        .find(|row| row.task.as_deref() == Some(b.as_str()))
+        .unwrap();
+    assert_eq!((b_row.requests, b_row.input), (1, 22));
+    assert_eq!(resolved.coverage.total_requests, 2);
+    assert_eq!(resolved.coverage.attributed_requests, 2);
+    assert_eq!(
+        resolved.rows.iter().map(|row| row.input).sum::<u64>(),
+        resolved.total.input
+    );
+    assert_eq!(pm_cost::load(&fx.ctx.store).unwrap().pending.len(), 1);
+
+    // A later canonical binding of B still resolves the earlier queued span by its key.
+    pm_cost::bind(
+        &fx.ctx.store,
+        1,
+        2,
+        &TurnOrigin {
+            kind: TurnOriginKind::Bridge,
+            idempotency_key: Some("pm:env-b".into()),
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(by_item(&fx.ctx, CostWindow::default()).unwrap(), resolved);
+    assert!(pm_cost::load(&fx.ctx.store).unwrap().pending.is_empty());
 }

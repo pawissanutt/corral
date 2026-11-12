@@ -9,7 +9,7 @@
 mod tests;
 
 use anyhow::{Context, Result};
-use corral_core::agent::{AgentRole, ReceiptState, RequestOrigin, RequestReceipt};
+use corral_core::agent::{AgentRole, ReceiptState, RequestOrigin, RequestReceipt, pm_state};
 use corral_core::attention::ConditionKey;
 use corral_core::{Responsible, ResumeCheck, Store, TaskHead};
 use jiff::Timestamp;
@@ -20,6 +20,7 @@ use super::super::admission::{self, Admission, Mode, Resolved};
 use super::super::call::{CallResponse, RejectCode, Rejection};
 use super::super::effects;
 use super::super::envelope::Envelope;
+use crate::park::{InScope, PmPark};
 use crate::{Ctx, PmActionOutcome, PmWorkset};
 
 const FIELDS: &str =
@@ -87,6 +88,7 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     };
     let scope = pm.state.binding.project.as_str();
     let origin = &admitted.origin;
+    let generation = origin.binding.generation;
     match action {
         Action::Act { id } => reserve(ctx, origin, &id, || act(ctx, scope, &id)),
         Action::Park {
@@ -107,19 +109,33 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                         clip(&format!("{error:#}"), REASON_MAX),
                     )
                 })?;
-            let review = review_by
+            let review_by_secs = review_by
                 .as_deref()
                 .map_or(Ok(PARK_REVIEW_SECS), review_secs)?;
+            // The early check refuses cheaply; the service repeats it inside its write lock.
             let head = in_scope(ctx, scope, &task)?;
             let resume_action = resume_action.unwrap_or_default();
+            let request = PmPark {
+                reason: &reason,
+                resume_when: &checks,
+                resume_action: &resume_action,
+                review_by_secs,
+                now: Timestamp::now(),
+            };
+            let fresh = |store: &Store, project: Option<&str>| {
+                fresh_scope(store, generation, &head.id, project)
+            };
             reserve(ctx, origin, &head.id, || {
-                park(ctx, &head.id, &reason, &checks, &resume_action, review)
+                park(ctx, &head.id, &request, &fresh)
             })
         }
         Action::Attend { key, note } => {
             let head = in_scope(ctx, scope, key.split('/').next().unwrap_or_default())?;
+            let fresh = |store: &Store, project: Option<&str>| {
+                fresh_scope(store, generation, &head.id, project)
+            };
             reserve(ctx, origin, &key, || {
-                attend(ctx, &head.id, &key, &note, &origin.request_id)
+                attend(ctx, &head.id, &key, &note, &origin.request_id, &fresh)
             })
         }
     }
@@ -152,8 +168,8 @@ fn reserve(
     effects::failpoint("pm_reserved_before_effect");
     let (state, result) = match apply() {
         Ok(result) => (ReceiptState::Committed, result),
-        Err(error) => match error.downcast_ref::<Rejection>() {
-            Some(rejection) => (ReceiptState::Rejected, refusal(rejection)),
+        Err(error) => match rejection_of(&error) {
+            Some(rejection) => (ReceiptState::Rejected, refusal(&rejection)),
             None => (
                 ReceiptState::Uncertain,
                 json!({
@@ -163,11 +179,50 @@ fn reserve(
             ),
         },
     };
-    let receipt = effects::pm_settle(&ctx.store, &reserved.receipt, state, result)?;
+    let receipt = effects::pm_settle(&ctx.store, &reserved.receipt, state, fit(result)?)?;
     Ok(CallResponse::Receipt {
         receipt,
         replayed: false,
     })
+}
+
+fn rejection_of(error: &anyhow::Error) -> Option<Rejection> {
+    if let Some(rejection) = error.downcast_ref::<Rejection>() {
+        return Some(rejection.clone());
+    }
+    error
+        .downcast_ref::<corral_core::agent::AgentRefusal>()
+        .map(|refusal| Rejection::from(refusal.clone()))
+}
+
+fn size(value: &Value) -> Result<usize> {
+    Ok(serde_json::to_vec(value)?.len())
+}
+
+/// The settled result never exceeds the budget and is never refused after the effect: the
+/// largest fields beyond the identifying ones are dropped and named in `omitted`.
+fn fit(mut result: Value) -> Result<Value> {
+    const KEEP: [&str; 5] = ["action", "outcome", "code", "task", "key"];
+    let mut omitted = Vec::new();
+    while size(&result)? > RESULT_BUDGET {
+        let Value::Object(fields) = &mut result else {
+            return Ok(json!({"outcome": "omitted"}));
+        };
+        let mut largest = None;
+        for (name, value) in fields.iter() {
+            let bytes = size(value)?;
+            if !KEEP.contains(&name.as_str()) && largest.as_ref().is_none_or(|(_, n)| bytes > *n) {
+                largest = Some((name.clone(), bytes));
+            }
+        }
+        let Some((name, _)) = largest else {
+            return Ok(json!({"outcome": "omitted"}));
+        };
+        fields.remove(&name);
+        omitted.push(name);
+        fields.insert("omitted".into(), json!(omitted));
+    }
+    Ok(result)
 }
 
 fn refusal(rejection: &Rejection) -> Value {
@@ -192,13 +247,27 @@ fn in_scope(ctx: &Ctx, scope: &str, task: &str) -> Result<TaskHead> {
                 clip(&format!("unknown task: {error:#}"), REASON_MAX),
             )
         })?;
-    if !super::super::hooks::pm::contains(&ctx.store, scope, head.project.as_deref())? {
+    check_scope(&ctx.store, scope, &head.id, head.project.as_deref())?;
+    Ok(head)
+}
+
+fn check_scope(store: &Store, scope: &str, task: &str, project: Option<&str>) -> Result<()> {
+    if !super::super::hooks::pm::contains(store, scope, project)? {
         return Err(reject(
             RejectCode::OutOfScope,
-            format!("{} lies outside the PM's project scope", head.id),
+            format!("{task} lies outside the PM's project scope"),
         ));
     }
-    Ok(head)
+    Ok(())
+}
+
+/// The in-lock recheck: the PM's current binding, liveness and approved scope against the
+/// task's project as just reread under the write lock.
+fn fresh_scope(store: &Store, generation: u32, task: &str, project: Option<&str>) -> Result<()> {
+    let pm = pm_state::load_current(store)?
+        .ok_or_else(|| reject(RejectCode::ContainerNotFound, "no corral-pi PM is bound"))?;
+    admission::recheck_pm(&pm, generation)?;
+    check_scope(store, &pm.state.binding.project, task, project)
 }
 
 /// `pm act`'s revalidation and scoped executor, with the PM's scope checked on the freshly
@@ -269,8 +338,12 @@ fn stale(workset: &PmWorkset) -> anyhow::Error {
     .into()
 }
 
-/// Park and attend refuse with their own machine prefixes; the refusal keeps them.
+/// Park and attend refuse with their own machine prefixes; the refusal keeps them. A typed
+/// refusal from the in-lock scope or liveness recheck keeps its own code.
 fn service_refusal(error: &anyhow::Error) -> anyhow::Error {
+    if let Some(rejection) = rejection_of(error) {
+        return rejection.into();
+    }
     let reason = clip(&format!("{error:#}"), REASON_MAX);
     let code = if reason.contains("owner_park:") {
         RejectCode::OpNotAllowed
@@ -298,38 +371,49 @@ fn review_secs(value: &str) -> Result<u64> {
         })
 }
 
-/// The `corral attention park` service as the PM: it never replaces an owner park.
-fn park(
-    ctx: &Ctx,
-    task: &str,
-    reason: &str,
-    checks: &[ResumeCheck],
-    resume_action: &str,
-    review_secs: u64,
-) -> Result<Value> {
-    let now = Timestamp::now();
-    let parked =
-        match crate::park::park_by_pm(ctx, task, reason, checks, resume_action, review_secs, now) {
-            Ok(park) => park,
-            // The park and its event are one task write; a PM park stamped with this request's
-            // time is the evidence it committed before the error.
-            Err(error) => ctx
-                .store
-                .head(task)?
-                .park
-                .clone()
-                .filter(|park| park.by == Responsible::Pm && park.at == now)
-                .ok_or_else(|| service_refusal(&error))?,
-        };
+/// A check in the park grammar it was written in, bounded by the check's 512-byte target.
+fn predicate(check: &ResumeCheck) -> String {
+    let target = check.target.as_deref().unwrap_or_default();
+    let expected = check.expected.as_deref().unwrap_or_default();
+    match check.kind.as_str() {
+        "status" => format!("status:{target}={expected}"),
+        "answered" => format!("answered:{target}@{expected}"),
+        kind => format!("{kind}:{target}"),
+    }
+}
+
+/// The `corral attention park` service as the PM: it never replaces an owner park, and the
+/// PM's fresh scope is rechecked on the locked task.
+fn park(ctx: &Ctx, task: &str, request: &PmPark<'_>, fresh: InScope<'_>) -> Result<Value> {
+    let parked = match crate::park::park_by_pm(ctx, task, request, fresh) {
+        Ok(park) => park,
+        // The park and its event are one task write; a PM park stamped with this request's
+        // time is the evidence it committed before the error.
+        Err(error) => ctx
+            .store
+            .head(task)?
+            .park
+            .clone()
+            .filter(|park| park.by == Responsible::Pm && park.at == request.now)
+            .ok_or_else(|| service_refusal(&error))?,
+    };
     Ok(json!({
         "action": "park", "outcome": "parked", "task": task, "revision": parked.revision,
         "by": parked.by, "review_by": parked.review_by,
-        "resume_when": parked.resume_when.iter().map(|check| &check.description).collect::<Vec<_>>(),
+        "resume_when": parked.resume_when.iter().map(predicate).collect::<Vec<_>>(),
     }))
 }
 
-/// Attention handling as the PM, after the service rereads the item; stale keys are refused.
-fn attend(ctx: &Ctx, task: &str, key: &str, note: &str, request: &str) -> Result<Value> {
+/// Attention handling as the PM, after the service rereads the item; stale keys are refused
+/// and the PM's fresh scope is rechecked under the task's write lock.
+fn attend(
+    ctx: &Ctx,
+    task: &str,
+    key: &str,
+    note: &str,
+    request: &str,
+    fresh: InScope<'_>,
+) -> Result<Value> {
     let handling = match crate::attention::attend_by_pm(
         ctx,
         key,
@@ -337,6 +421,7 @@ fn attend(ctx: &Ctx, task: &str, key: &str, note: &str, request: &str) -> Result
         ATTEND_NEXT_CHECK_SECS,
         request,
         Timestamp::now(),
+        fresh,
     ) {
         Ok(handling) => handling,
         // Handling commits before its wake publication; the request names the record.

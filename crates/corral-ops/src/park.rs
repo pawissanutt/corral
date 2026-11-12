@@ -1,6 +1,6 @@
 //! Parking changes execution eligibility, never authority or owner dispatch holds.
 use anyhow::{Context, Result, ensure};
-use corral_core::{Park, Responsible, ResumeCheck, Task};
+use corral_core::{Park, Responsible, ResumeCheck, Store, Task};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
@@ -37,26 +37,35 @@ pub fn park(
     )
 }
 
+/// The native PM's scope recheck, run on the task's fresh project inside the write lock.
+pub(crate) type InScope<'a> = &'a dyn Fn(&Store, Option<&str>) -> Result<()>;
+
+/// What the native PM asks to park, validated exactly as `corral attention park`.
+pub(crate) struct PmPark<'a> {
+    pub(crate) reason: &'a str,
+    pub(crate) resume_when: &'a [ResumeCheck],
+    pub(crate) resume_action: &'a str,
+    pub(crate) review_by_secs: u64,
+    pub(crate) now: Timestamp,
+}
+
 /// A park by the authenticated native PM (`pm_action`), whose identity replaces the CLI's
-/// environment and context guard. The same validation applies; it never replaces an owner park.
+/// environment and context guard. The same validation applies; it never replaces an owner park,
+/// and `in_scope` refuses a task whose project left the PM's scope before anything is written.
 pub(crate) fn park_by_pm(
     ctx: &Ctx,
     id: &str,
-    reason: &str,
-    resume_when: &[ResumeCheck],
-    resume_action: &str,
-    review_by_secs: u64,
-    now: Timestamp,
+    request: &PmPark<'_>,
+    in_scope: InScope<'_>,
 ) -> Result<Park> {
-    park_as(
-        ctx,
-        id,
-        reason,
-        resume_when,
-        resume_action,
-        review_by_secs,
-        (now, Responsible::Pm),
-    )
+    let park = new_park(
+        request.reason,
+        request.resume_when,
+        request.resume_action,
+        request.review_by_secs,
+        (request.now, Responsible::Pm),
+    )?;
+    write_park(ctx, id, park, Some(in_scope))
 }
 
 fn park_as(
@@ -68,12 +77,22 @@ fn park_as(
     review_by_secs: u64,
     entry: (Timestamp, Responsible),
 ) -> Result<Park> {
-    let (now, by) = entry;
+    let park = new_park(reason, resume_when, resume_action, review_by_secs, entry)?;
+    write_park(ctx, id, park, None)
+}
+
+fn new_park(
+    reason: &str,
+    resume_when: &[ResumeCheck],
+    resume_action: &str,
+    review_by_secs: u64,
+    (now, by): (Timestamp, Responsible),
+) -> Result<Park> {
     ensure!(
         (3600..=604800).contains(&review_by_secs),
         "park review_by must be 1h..7d"
     );
-    let mut park = Park {
+    let park = Park {
         version: 1,
         revision: 0,
         by,
@@ -85,7 +104,15 @@ fn park_as(
         ready_at: None,
     };
     park.validate()?;
-    ctx.store.dispatch_update(id, |_, task| {
+    Ok(park)
+}
+
+fn write_park(ctx: &Ctx, id: &str, mut park: Park, in_scope: Option<InScope<'_>>) -> Result<Park> {
+    let by = park.by;
+    ctx.store.dispatch_update(id, |store, task| {
+        if let Some(in_scope) = in_scope {
+            in_scope(store, task.project.as_deref())?;
+        }
         ensure!(
             Park::supports(task.status),
             "{} is {}; cannot park",

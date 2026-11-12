@@ -113,11 +113,12 @@ owner question. The existing scheduler, candidate checks and recovery remain in 
 
 The action boundary is the action's project. `pm act` runs sync scoped to the project of
 the action's task (a task without a project reaches only project-less tasks). Per-task
-reconciliation (pane liveness, obligations, planner and reviewer exits), dispatch, queue
-admission, idea promotion, plan and review autopilot, landing, native gate admission and
-parked-run reacquisition apply only to that project's tasks, so acting in project A cannot
-launch, repair or land anything in project B. Gate collection, crash recovery, gate and
-reviewer slot release, cleanup of finished tasks, focus holds and PM notifications still run
+reconciliation (pane liveness, obligations, planner and reviewer exits), focus holds and
+cancellation of held review work, dispatch, queue admission, idea promotion, plan and review
+autopilot, landing, native gate admission and parked-run reacquisition apply only to that
+project's tasks, so acting in project A cannot hold, launch, repair or land anything in
+project B. The focus itself is still read workspace-wide. Gate collection, crash recovery,
+gate and reviewer slot release, cleanup of finished tasks and PM notifications still run
 workspace-wide; slot capacity stays shared, so the action may take a free slot. Phases that
 cannot be filtered by project (legacy queue migration, tracker completion, post-land hooks,
 owner deliveries, handoff recovery, gate resumption, provider continuations, main-movement
@@ -172,12 +173,19 @@ turn markers are reported as legacy and stay unallocated.
 
 ### Usage guard
 
-For a corral-pi PM, corral watches each settled request (`[pm.guard]` in
-[configuration](configuration.md)). Crossing the input price tier is logged once as
-`pm_price_tier_crossed`. Consecutive large-context requests whose cache-read share falls
-below the configured ratio log `pm_cache_miss_guard` and pause the PM: its next request is
-refused with `cache_guard_paused`, which is not a budget limit and does not end the
-session. `corral pm guard-resume` clears the pause; a new PM generation clears it too.
+For a corral-pi PM, corral watches settled requests (`[pm.guard]` in
+[configuration](configuration.md)). Only the PM's ordinary conversation lineage counts
+toward the cache-miss streak and ratio history. Standalone summaries and auxiliary
+requests are retained with their purpose but neither increment nor reset the streak.
+The first conversation read of a generation, or after a completed compaction summary
+in the same cache lineage, is expected to be cold and starts a new streak at zero;
+subsequent large-context misses count. Auxiliary summaries do not restart this streak.
+Thus the default two-miss threshold pauses on the third genuinely uncached conversation
+request after a cold start, not on a conversation request followed by compaction.
+Conversation price-tier crossings log `pm_price_tier_crossed` without pausing.
+A cache-miss episode logs `pm_cache_miss_guard` and pauses the next request with
+`cache_guard_paused`, which is not a budget limit and does not end the session.
+`corral pm guard-resume` clears the pause; a new PM generation clears it too.
 The supervisor never relaunches a PM only because it is guard-paused.
 
 Owner-question state reaches a Pi PM as a hidden host message, only when its rendered

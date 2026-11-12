@@ -37,6 +37,10 @@ struct Payload {
     provider: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    purpose: crate::pm_usage_guard::RequestPurpose,
+    #[serde(default)]
+    cache_lineage: Option<String>,
 }
 fn bad(message: &str) -> anyhow::Error {
     Rejection::new(RejectCode::BadRequest, message).into()
@@ -56,7 +60,7 @@ pub(super) fn budget(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         || p.tokens > 9_007_199_254_740_991
         || p.usd_nanos > 9_007_199_254_740_991
         || p.usage.as_ref().is_some_and(|usage| !usage.valid(p.tokens))
-        || [&p.provider, &p.model]
+        || [&p.provider, &p.model, &p.cache_lineage]
             .into_iter()
             .flatten()
             .any(|name| name.is_empty() || name.len() > 256)
@@ -159,6 +163,8 @@ pub(super) fn budget(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                             crate::pm_usage_guard::Observation {
                                 generation,
                                 request: p.request,
+                                purpose: p.purpose,
+                                cache_lineage: p.cache_lineage,
                                 response,
                                 model: p.model,
                                 provider: p.provider,

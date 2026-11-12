@@ -86,15 +86,12 @@ fn filter_project(report: &mut CostReport, project: &str) {
         report.total.cache_read = report.total.cache_read.saturating_add(row.cache_read);
         report.total.cache_write = report.total.cache_write.saturating_add(row.cache_write);
         report.total.output = report.total.output.saturating_add(row.output);
+        report.total.unpriced_tokens = report
+            .total
+            .unpriced_tokens
+            .saturating_add(row.unpriced_tokens);
         if let Some(usd) = row.usd {
             *report.total.estimated_usd.get_or_insert(0.0) += usd;
-        } else {
-            report.total.unpriced_tokens = report.total.unpriced_tokens.saturating_add(
-                row.input
-                    .saturating_add(row.cache_read)
-                    .saturating_add(row.cache_write)
-                    .saturating_add(row.output),
-            );
         }
     }
     if report.total.estimated_usd.is_some() {
@@ -119,7 +116,7 @@ fn print_table(report: &mut CostReport, project: Option<&str>) {
         );
     }
     println!(
-        "{:<11} {:<16} {:<24} {:>8} {:>12} {:>12} {:>12} {:>12} {:>12}",
+        "{:<11} {:<16} {:<24} {:>8} {:>12} {:>12} {:>12} {:>12} {:>12} {:>12}",
         "CLASS",
         "PROJECT",
         "TASK / ITEM",
@@ -128,7 +125,8 @@ fn print_table(report: &mut CostReport, project: Option<&str>) {
         "CACHE READ",
         "CACHE WRITE",
         "OUTPUT",
-        "USD"
+        "USD",
+        "UNPRICED"
     );
     report.rows.sort_by(|a, b| {
         b.usd
@@ -147,6 +145,7 @@ fn print_table(report: &mut CostReport, project: Option<&str>) {
             cache_write: report.total.cache_write,
             output: report.total.output,
             usd: report.total.estimated_usd,
+            unpriced_tokens: report.total.unpriced_tokens,
             ..CostRow::default()
         },
     );
@@ -176,7 +175,7 @@ fn print_row(class: &str, row: &CostRow) {
         |usd| format!("{usd:.4}"),
     );
     println!(
-        "{class:<11} {:<16} {:<24} {:>8} {:>12} {:>12} {:>12} {:>12} {:>12}",
+        "{class:<11} {:<16} {:<24} {:>8} {:>12} {:>12} {:>12} {:>12} {:>12} {:>12}",
         row.project.as_deref().unwrap_or("-"),
         row.task
             .as_deref()
@@ -188,6 +187,7 @@ fn print_row(class: &str, row: &CostRow) {
         row.cache_write,
         row.output,
         usd,
+        row.unpriced_tokens,
     );
 }
 

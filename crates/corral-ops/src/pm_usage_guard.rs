@@ -48,9 +48,22 @@ impl RequestUsage {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RequestPurpose {
+    #[default]
+    Conversation,
+    Summary,
+    Other,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct Observation {
     pub generation: u32,
+    #[serde(default)]
+    pub purpose: RequestPurpose,
+    #[serde(default)]
+    pub cache_lineage: Option<String>,
     pub request: String,
     pub response: String,
     pub model: Option<String>,
@@ -76,6 +89,14 @@ enum State {
     },
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct ConversationUsage {
+    total_input_tokens: u64,
+    cache_read_ratio: f64,
+    #[serde(default)]
+    cache_lineage: Option<String>,
+}
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 struct Guard {
@@ -83,6 +104,8 @@ struct Guard {
     observations: VecDeque<Observation>,
     consecutive_misses: u32,
     state: State,
+    last_conversation: Option<ConversationUsage>,
+    summary_since_conversation: bool,
 }
 
 impl Guard {
@@ -99,55 +122,76 @@ impl Guard {
         matches!(self.state, State::Paused { .. })
     }
 
-    /// Only transitions emit reports: report-only mode also reports once per miss episode.
+    /// Only the session's conversation lineage can diagnose a reusable-prefix miss.
     fn observe(
         &mut self,
         cfg: &PmGuardCfg,
         observation: Observation,
     ) -> Vec<(&'static str, Value)> {
         self.for_generation(observation.generation);
-        let total = observation.usage.total_input();
-        let ratio = observation.usage.ratio();
         let mut events = Vec::new();
-        let detail = || {
-            json!({
-                "generation":observation.generation, "request":observation.request,
-                "response":observation.response, "model":observation.model,
-                "provider":observation.provider, "usage":observation.usage,
-                "total_input_tokens":total, "cache_read_ratio":ratio,
-            })
-        };
-        if let Some(previous) = self.observations.back()
-            && previous.usage.total_input() < cfg.price_tier_input_tokens
-            && total >= cfg.price_tier_input_tokens
-        {
-            let mut event = detail();
-            event["previous_input_tokens"] = json!(previous.usage.total_input());
-            event["price_tier_input_tokens"] = json!(cfg.price_tier_input_tokens);
-            events.push(("pm_price_tier_crossed", event));
-        }
-        let previous_misses = self.consecutive_misses;
-        if total >= cfg.large_context_tokens && ratio < cfg.min_cache_read_ratio {
-            self.consecutive_misses = self.consecutive_misses.saturating_add(1);
-        } else {
-            self.consecutive_misses = 0;
-        }
-        if previous_misses < cfg.consecutive_misses
-            && self.consecutive_misses >= cfg.consecutive_misses
-            && !self.paused()
-        {
-            if cfg.pause {
-                self.state = State::Paused {
-                    since: observation.at,
-                    reason: PauseReason::CacheGuardPaused,
-                };
+        if observation.purpose == RequestPurpose::Conversation {
+            let total = observation.usage.total_input();
+            let ratio = observation.usage.ratio();
+            let detail = || {
+                json!({
+                    "generation":observation.generation, "request":observation.request,
+                    "response":observation.response, "model":observation.model,
+                    "provider":observation.provider, "usage":observation.usage,
+                    "purpose":observation.purpose,
+                    "total_input_tokens":total, "cache_read_ratio":ratio,
+                })
+            };
+            if let Some(previous) = self.last_conversation.as_ref()
+                && previous.total_input_tokens < cfg.price_tier_input_tokens
+                && total >= cfg.price_tier_input_tokens
+            {
+                let mut event = detail();
+                event["previous_input_tokens"] = json!(previous.total_input_tokens);
+                event["price_tier_input_tokens"] = json!(cfg.price_tier_input_tokens);
+                events.push(("pm_price_tier_crossed", event));
             }
-            let mut event = detail();
-            event["consecutive_misses"] = json!(self.consecutive_misses);
-            event["large_context_tokens"] = json!(cfg.large_context_tokens);
-            event["min_cache_read_ratio"] = json!(cfg.min_cache_read_ratio);
-            event["paused"] = json!(cfg.pause);
-            events.push(("pm_cache_miss_guard", event));
+            // A new generation or completed same-lineage summary has no warm
+            // conversation prefix yet. Start the new streak after its first read.
+            let cold_start = self.last_conversation.is_none() || self.summary_since_conversation;
+            let previous_misses = self.consecutive_misses;
+            if !cold_start && total >= cfg.large_context_tokens && ratio < cfg.min_cache_read_ratio
+            {
+                self.consecutive_misses = self.consecutive_misses.saturating_add(1);
+            } else {
+                self.consecutive_misses = 0;
+            }
+            if previous_misses < cfg.consecutive_misses
+                && self.consecutive_misses >= cfg.consecutive_misses
+                && !self.paused()
+            {
+                if cfg.pause {
+                    self.state = State::Paused {
+                        since: observation.at,
+                        reason: PauseReason::CacheGuardPaused,
+                    };
+                }
+                let mut event = detail();
+                event["consecutive_misses"] = json!(self.consecutive_misses);
+                event["large_context_tokens"] = json!(cfg.large_context_tokens);
+                event["min_cache_read_ratio"] = json!(cfg.min_cache_read_ratio);
+                event["paused"] = json!(cfg.pause);
+                events.push(("pm_cache_miss_guard", event));
+            }
+            self.last_conversation = Some(ConversationUsage {
+                total_input_tokens: total,
+                cache_read_ratio: ratio,
+                cache_lineage: observation.cache_lineage.clone(),
+            });
+            self.summary_since_conversation = false;
+        } else if observation.purpose == RequestPurpose::Summary
+            && self
+                .last_conversation
+                .as_ref()
+                .is_none_or(|previous| previous.cache_lineage == observation.cache_lineage)
+        {
+            // Keep the streak and last ratio unchanged while structural work runs.
+            self.summary_since_conversation = true;
         }
         if self.observations.len() >= HISTORY {
             self.observations.pop_front();
@@ -215,8 +259,8 @@ pub(crate) fn health(ctx: &Ctx) -> Result<Value> {
     Ok(json!({
         "generation":guard.generation, "status":guard.state,
         "consecutive_misses":guard.consecutive_misses,
-        "last_ratio":guard.observations.back().map(|o| o.usage.ratio()),
-        "last_total_input_tokens":guard.observations.back().map(|o| o.usage.total_input()),
+        "last_ratio":guard.last_conversation.as_ref().map(|o| o.cache_read_ratio),
+        "last_total_input_tokens":guard.last_conversation.as_ref().map(|o| o.total_input_tokens),
     }))
 }
 

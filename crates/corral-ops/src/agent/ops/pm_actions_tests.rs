@@ -5,7 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Stdio;
 
-use corral_core::agent::ReceiptState;
+use corral_core::agent::{ReceiptState, pm_state};
 use corral_core::{
     AgentCmd, OperatingAuthority, OperatingSelection, Park, Responsible, Status, Store,
 };
@@ -14,7 +14,8 @@ use serde_json::{Value, json};
 
 use crate::Ctx;
 use crate::agent::test_support::{self as ts, Fx, Host, committed, hello};
-use crate::agent::{BindTarget, CallResponse, tool_request_id};
+use crate::agent::{BindTarget, CallResponse, FAILPOINT, RejectCode, Rejection, tool_request_id};
+use crate::attention::handling_tests::fixture::{Fx as AttentionFx, at};
 
 fn git(repo: &Path, args: &[&str]) {
     let result = crate::test_support::command("git", repo)
@@ -370,4 +371,117 @@ fn unknown_actions_and_fields_are_bad_requests() {
             "{call}"
         );
     }
+}
+
+#[test]
+fn park_rechecks_the_pm_scope_inside_its_write_lock() {
+    // Given a park that passed the early scope check, after which the PM's scope moves away.
+    let (fx, host) = fixture();
+    let task = create(&fx, "Waiting", "alpha");
+    let store = fx.ctx.store.clone();
+    FAILPOINT.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move |name| {
+            if name == "pm_reserved_before_effect" {
+                pm_state::update(&store, |pm| {
+                    pm.as_mut().unwrap().state.binding.project = "other".into();
+                    Ok(((), true))
+                })
+                .unwrap();
+            }
+        }))
+    });
+    // When the park reaches its write.
+    let payload = json!({"action": "park", "task": task, "reason": "Wait"});
+    let response = send(&fx, &request(&host, "park-race", payload));
+    FAILPOINT.with(|slot| *slot.borrow_mut() = None);
+    // Then the stored refusal is out_of_scope and the task stays unparked.
+    assert_eq!(refused(&response), "out_of_scope");
+    assert!(fx.ctx.store.get(&task).unwrap().park.is_none());
+}
+
+#[test]
+fn attend_rechecks_the_scope_inside_its_write_lock() {
+    // Given a current attention key on an alpha task.
+    let fx = AttentionFx::new();
+    let task = fx.stalled(Some("alpha"));
+    let key = crate::attention::board(&fx.ctx, at(0))
+        .unwrap()
+        .tasks
+        .into_iter()
+        .find(|row| row.task == task.id)
+        .unwrap()
+        .assessment
+        .conditions
+        .into_iter()
+        .find_map(|condition| condition.key.map(|key| key.0))
+        .unwrap();
+    let scoped = |scope: &'static str| {
+        let id = task.id.clone();
+        move |store: &Store, project: Option<&str>| super::check_scope(store, scope, &id, project)
+    };
+    // When the scope no longer contains alpha at the write.
+    let revoked = scoped("beta");
+    let error =
+        crate::attention::attend_by_pm(&fx.ctx, &key, "Look", 1800, "rq-1", at(100), &revoked)
+            .unwrap_err();
+    // Then the refusal is out_of_scope and no handling is recorded.
+    assert_eq!(
+        error.downcast_ref::<Rejection>().unwrap().code,
+        RejectCode::OutOfScope
+    );
+    let handled = |fx: &AttentionFx| {
+        fx.ctx
+            .store
+            .get(&task.id)
+            .unwrap()
+            .attention
+            .records
+            .values()
+            .any(|record| record.handling.is_some())
+    };
+    assert!(!handled(&fx));
+    // And with the scope intact the same request records its handling.
+    let allowed = scoped("alpha");
+    crate::attention::attend_by_pm(&fx.ctx, &key, "Look", 1800, "rq-1", at(100), &allowed).unwrap();
+    assert!(handled(&fx));
+}
+
+#[test]
+fn park_with_eight_maximal_checks_settles_within_the_result_budget() {
+    // Given eight accepted checks, each at the 512-byte target bound.
+    let (fx, host) = fixture();
+    let task = create(&fx, "Waiting", "alpha");
+    let checks: Vec<String> = (0..8)
+        .map(|n| format!("decision:{n}{}", "d".repeat(511)))
+        .collect();
+    let payload = json!({"action": "park", "task": task, "reason": "Wait", "resume_when": checks});
+    // When the PM parks.
+    let parked = committed(&send(&fx, &request(&host, "park-max", payload)));
+    // Then the park committed and its result is bounded, in the park grammar.
+    assert_eq!(
+        fx.ctx
+            .store
+            .get(&task)
+            .unwrap()
+            .park
+            .unwrap()
+            .resume_when
+            .len(),
+        8
+    );
+    assert!(serde_json::to_vec(&parked.result).unwrap().len() <= super::RESULT_BUDGET);
+    assert_eq!(parked.result["resume_when"][0], checks[0].as_str());
+}
+
+#[test]
+fn an_oversized_result_degrades_instead_of_failing() {
+    let result = json!({
+        "action": "park", "outcome": "parked", "task": "T-1",
+        "resume_when": vec!["x".repeat(1024); 8], "revision": 3,
+    });
+    let fitted = super::fit(result).unwrap();
+    assert!(serde_json::to_vec(&fitted).unwrap().len() <= super::RESULT_BUDGET);
+    assert_eq!(fitted["outcome"], "parked");
+    assert_eq!(fitted["revision"], 3);
+    assert_eq!(fitted["omitted"], json!(["resume_when"]));
 }

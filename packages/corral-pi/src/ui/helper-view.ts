@@ -5,7 +5,7 @@ import type { ActivityRow } from "./activity-view.ts";
 import { plainLabel } from "./panels-view.ts";
 
 export function helperKind(kind: HelperInspection["kind"]): string {
-  switch (kind) { case "explore": return "Explore"; case "oracle": return "Oracle"; case "web_search": return "Search"; }
+  switch (kind) { case "explore": return "Explore"; case "oracle": return "Oracle"; case "web_search": return "Search"; case "shadow": return "Shadow"; }
 }
 export function helperPhase(phase: HelperInspection["phase"]): string {
   switch (phase) {

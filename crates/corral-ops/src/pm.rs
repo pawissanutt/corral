@@ -200,8 +200,7 @@ fn open_pm_with(
 
 /// Recover the recorded corral-pi PM without taking focus or starting a new conversation.
 pub(crate) fn relaunch(ctx: &Ctx, reason: &str, replace: bool) -> Result<String> {
-    use crate::agent::recovery::{PmRecoveryLease, RecoveryLaunch, recover_with};
-    use corral_core::agent::ContainerRef;
+    use crate::agent::recovery::PmRecoveryLease;
 
     let recovery = PmRecoveryLease::acquire(ctx)?;
     let pm = recovery
@@ -212,6 +211,22 @@ pub(crate) fn relaunch(ctx: &Ctx, reason: &str, replace: bool) -> Result<String>
     if recovery.keep_current(ctx, replace)? {
         return Ok(pm.pane.clone());
     }
+    Ok(successor(ctx, pm, reason, replace, false)?.0)
+}
+
+/// Fence, drain and reconcile `pm`, then launch its next generation in a corral-owned pane
+/// without focus; returns the pane and the recovery outcome. A relaunch continues the
+/// conversation; a `rotation` starts a fresh one. The caller holds the `pm-recovery` lease.
+pub(crate) fn successor(
+    ctx: &Ctx,
+    pm: &corral_core::agent::AgentPm,
+    reason: &str,
+    replace: bool,
+    rotation: bool,
+) -> Result<(String, serde_json::Value)> {
+    use crate::agent::recovery::{RecoveryLaunch, recover_with};
+    use corral_core::agent::ContainerRef;
+
     // Validate the replacement before creating a pane or touching the predecessor.
     let resolved = crate::agent::hooks::pm::profile(ctx)?;
     let adopted = pm.adopted();
@@ -233,20 +248,25 @@ pub(crate) fn relaunch(ctx: &Ctx, reason: &str, replace: bool) -> Result<String>
             pane: Some(&pane),
             profile: Some(&resolved),
             adopted: false,
-            continue_session: true,
+            continue_session: !rotation,
+            rotation,
         }),
         None,
     )?;
     launch_pm(ctx, &pane, None, &resolved, &prepared.command())?;
-    ctx.store.log_event(
-        None,
-        "pm_relaunched",
-        json!({
-            "pane": pane, "reason": reason, "replaced": outcome["replaced"],
-            "previous_pane": previous_pane,
-        }),
-    )?;
-    Ok(pane)
+    let mut detail = json!({
+        "pane": pane, "reason": reason, "replaced": outcome["replaced"],
+        "previous_pane": previous_pane,
+    });
+    let kind = if rotation {
+        detail["fenced"] = outcome["fenced"].clone();
+        detail["generation"] = outcome["generation"].clone();
+        "pm_rotated"
+    } else {
+        "pm_relaunched"
+    };
+    ctx.store.log_event(None, kind, detail)?;
+    Ok((pane, outcome))
 }
 
 /// CLI access to the same recovery entry point used by the supervisor.

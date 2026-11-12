@@ -21,7 +21,8 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
     restrictProvider(models, "openai-codex", network.fetch as typeof globalThis.fetch);
     writeFileSync(join(cwd, "source.txt"), "fixture source");
     const settings = { explore: { max_parallel: 3, model: null, max_turns: 12, timeout_secs: 30 },
-      oracle: { model: "openai-codex/gpt-6.1-sol", timeout_secs: 30 } };
+      oracle: { model: "openai-codex/gpt-6.1-sol", timeout_secs: 30 },
+      shadow: { model: "openai-codex/gpt-6-luna", timeout_secs: 60, max_per_hour: 30 } };
     const refs: Record<string, unknown>[] = [];
     const runtime = new AuxiliaryRuntime({ settings, generation: 4, provider: "openai-codex", model: "gpt-6.1-sol",
       sessionId: () => "parent",
@@ -111,6 +112,13 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
     const limited = await runtime.run("oracle", "limited", "consult once");
     expect(limited.outcome).toBe("uncertain");
     expect(transport.requests - before).toBe(1);
+    // The detached shadow uses the same isolated SDK path without inheriting tools/resources.
+    transport.script([{ text: '{"choice":"wait","reason":"unsure"}' }]);
+    const shadow = await runtime.run("shadow", "shadow", "Choose wait or escalate", undefined, undefined, ["wait"]);
+    expect(shadow.outcome).toBe("completed");
+    const shadowTranscript = readFileSync(join(cwd, `${shadow.request}.jsonl`), "utf8").split("\n").filter(Boolean).map(s => JSON.parse(s));
+    expect(shadowTranscript.flatMap(entry => entry.message?.toolsAdded ?? [])).toHaveLength(0);
+    expect(refs.filter(event => event.usage_kind === "shadow" && event.action === "finish").map(event => event.outcome)).toEqual(["completed"]);
     await runtime.close();
     console.log("real SDK: allowed read succeeded; write/recursive spawn failed; oracle declared zero tools; cancellation saved once");
   } finally { globalThis.fetch = originalFetch; rmSync(cwd, { recursive: true, force: true }); }

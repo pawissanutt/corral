@@ -1768,6 +1768,40 @@ supervised relaunch share a non-blocking recovery lease; a competing attempt rep
 that recovery is already in progress. A just-opened generation awaiting hello is left
 alone for the supervisor's five-minute startup cooldown, including with `--replace`.
 
+`corral pm rotate [--reason <text>] [--force] [--json]` starts a **fresh** conversation in a
+new generation, the answer to context growth (every request re-reads the whole context).
+An idle-looking host is not a safe point by itself, so rotation first reads a barrier from
+records under the same recovery lease. It is blocked while any of these holds:
+
+| Reason | Blocks while |
+|---|---|
+| `successor_starting` | another entry just opened a generation that has not completed hello |
+| `open_turn` | the current generation has a turn without an end |
+| `board_question` | a board question the PM asked is pending |
+| `owner_dialog` | an owner dialog in the bound Pi session is pending, or answered but its answer is not yet a user message there |
+| `dialog_journal_unreadable` | the bound Pi session file cannot be read completely (missing is fine) |
+| `inbox_message` | a PM inbox message is neither observed nor terminal |
+| `open_envelope` | a PM delivery envelope is open |
+| `job`, `monitor` | a background job is live or exited with an unreaped process group, or a monitor watches a live job |
+| `auxiliary_child` | an auxiliary child of the current generation is prepared or running |
+| `plan_step` | a `corral_todo` step is in progress and is not a wait |
+| `usage_guard_paused` | the usage guard paused the PM (`corral pm guard-resume` clears it) |
+
+Blocked, it changes nothing, prints each reason with a sentence (or, with `--json`,
+`{"outcome":"blocked","generation":N,"reasons":[{"reason":...,"sentence":...}]}`) and exits
+non-zero. Clear, it runs the relaunch path (a live idle host is stopped first, then fence,
+drain and reconcile) but the new generation's bootstrap asks for a new Pi session file. It
+launches in the corral-owned pane, or a new one when the old pane is gone or owner-adopted,
+never takes focus, and prints the pane and the new generation
+(`{"outcome":"rotated","pane":...,"generation":N+1,"fenced":N,"previous_session":...,"overridden":[]}`).
+The recovery notice to the new generation says it is a rotation, names the previous Pi
+session, and points to `corral_notes` and `corral_todo` for carried context; corral writes no
+note on the PM's behalf. The old generation keeps its session binding, so usage and cost of
+the old conversation stay reportable; the usage guard resets with the generation as usual.
+`--force` overrides every reason except `successor_starting`, `open_turn` and
+`open_envelope`, and is refused from PM, assistant and agent shells. Nothing rotates
+automatically: the supervisor and `pm.supervise` never call it.
+
 `corral pi --pm` refuses, before writing anything, with:
 
 | Code | Meaning |

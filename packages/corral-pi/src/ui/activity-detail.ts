@@ -140,7 +140,7 @@ function toolLine(message: HelperMessage): string {
   return PANEL_MUTED + (TOOL_GLYPHS[name] ?? "•") + " " + name + "  " + summary + tail;
 }
 function helperRole(kind: HelperInspection["kind"]): string {
-  switch (kind) { case "explore": return "research helper"; case "oracle": return "oracle helper"; case "web_search": return "web search helper"; }
+  switch (kind) { case "explore": return "research helper"; case "oracle": return "oracle helper"; case "web_search": return "web search helper"; case "shadow": return "shadow observer"; }
 }
 function helperDetail(helper: HelperInspection, input: ActivityViewInput, width: number): string[] {
   const snapshot = input.snapshot, status = helperStatus(helper, input.now), agents = snapshot?.agents ?? [];

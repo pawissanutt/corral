@@ -499,11 +499,12 @@ pub(super) fn attend_authorized(
     } else {
         Responsible::Owner
     };
-    attend_as(ctx, key, note, next_check_secs, request, now, by)
+    attend_as(ctx, key, note, next_check_secs, request, now, (by, None))
 }
 
 /// Handling by the authenticated native PM (`pm_action`), whose identity replaces the CLI's
-/// environment and context guard; the item is reread and validated exactly as for the CLI.
+/// environment and context guard; the item is reread and validated exactly as for the CLI, and
+/// `in_scope` refuses a task whose project left the PM's scope before the handling is written.
 pub(crate) fn attend_by_pm(
     ctx: &Ctx,
     key: &str,
@@ -511,16 +512,10 @@ pub(crate) fn attend_by_pm(
     next_check_secs: u64,
     request: &str,
     now: Timestamp,
+    in_scope: crate::park::InScope<'_>,
 ) -> Result<AttentionHandling> {
-    attend_as(
-        ctx,
-        key,
-        note,
-        next_check_secs,
-        request,
-        now,
-        Responsible::Pm,
-    )
+    let handler = (Responsible::Pm, Some(in_scope));
+    attend_as(ctx, key, note, next_check_secs, request, now, handler)
 }
 
 fn attend_as(
@@ -530,7 +525,7 @@ fn attend_as(
     next_check_secs: u64,
     request: &str,
     now: Timestamp,
-    by: Responsible,
+    (by, in_scope): (Responsible, Option<crate::park::InScope<'_>>),
 ) -> Result<AttentionHandling> {
     ensure!(
         !note.trim().is_empty() && note.len() <= MAX_ATTENTION_NOTE_BYTES,
@@ -648,6 +643,10 @@ fn attend_as(
         && !(task.park.is_some() && condition.kind == "unexpected_stall");
     let mut accepted = None;
     ctx.store.update_attention(id, |ledger| {
+        // Under the task's write lock: no project move can interleave with this check.
+        if let Some(in_scope) = in_scope {
+            in_scope(&ctx.store, ctx.store.head(id)?.project.as_deref())?;
+        }
         if !ledger.records.contains_key(&key) {
             ensure!(
                 ledger.records.len() < 31,

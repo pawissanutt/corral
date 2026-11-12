@@ -1167,8 +1167,8 @@ pause = true
 |---|---|---|
 | `large_context_tokens` | `1..=9007199254740991` | Minimum total input at which a low cache-read ratio counts as a miss. |
 | `min_cache_read_ratio` | finite `0..=1` | Ratios strictly below this value count as misses; equality is a hit. |
-| `consecutive_misses` | `1..=4294967295` | Consecutive large-context misses before reporting and optionally pausing. A hit or small context resets the counter. |
-| `price_tier_input_tokens` | `1..=9007199254740991` | Report each transition from below this input threshold to at or above it; never pause for price alone. |
+| `consecutive_misses` | `1..=4294967295` | Consecutive large-context conversation misses after the expected cold read before reporting and optionally pausing. A conversation hit or small context resets the counter. |
+| `price_tier_input_tokens` | `1..=9007199254740991` | Report conversation transitions from below this input threshold to at or above it; never pause for price alone. |
 | `pause` | boolean | `false` reports cache-miss episodes without pausing; not a spend limit. |
 
 The provider-normalized usage fields match the transcript reader's `WireUsage`:
@@ -1179,9 +1179,21 @@ are not context input and are excluded from the denominator. The terminal settle
 carries the same buckets, model and provider; request and generation come from its
 authenticated budget envelope. Older hosts without usage telemetry do not manufacture misses.
 
-The bounded `pm-usage-guard` record retains the last eight observations. A miss episode
-emits one `pm_cache_miss_guard`; upward tier crossings emit `pm_price_tier_crossed`.
-`corral pm brief` health shows the current state, pause timestamp and last ratio.
+Settles also carry `purpose = "conversation" | "summary" | "other"` and the routing
+`cache_lineage` (session ID); missing purpose defaults to `conversation` for older hosts.
+Pi's agent-loop callback and canonical session ID identify ordinary PM requests.
+Standalone no-cache summary calls and auxiliary lineages are structural: they are
+recorded, but do not change the miss counter or conversation ratio history.
+The first conversation request in a generation, or following a completed same-lineage
+compaction summary, is an expected cold read and starts a new streak at zero.
+With the default threshold, three genuinely uncached large conversation requests
+without a structural boundary pause on the third. No usage-drop heuristic
+or raised miss threshold is needed.
+
+The bounded `pm-usage-guard` record retains the last eight purpose-tagged observations
+and the last conversation ratio. A miss episode emits one `pm_cache_miss_guard`;
+conversation tier crossings emit `pm_price_tier_crossed`. `corral pm brief` health shows
+the current state, pause timestamp and last conversation ratio.
 A paused PM's next request reservation returns `admitted = false` with typed reason
 `cache_guard_paused`, not budget exhaustion. The host keeps the conversation and does not
 start that provider request. Owner `corral pm guard-resume` clears the hold and miss
@@ -1209,6 +1221,30 @@ todo = false
 
 Settings are resolved once per generation and again on explicit resume. See
 [corral-pi capabilities](corral-pi.md#capabilities) for the catalog and recovery behavior.
+
+### PM shadow observations (opt-in)
+
+Shadow is PM-only and disabled in every preset. Its generation-bound settings are:
+
+```toml
+[agent.capabilities.pm.shadow]
+enabled = false
+# model = "openai-codex/gpt-6-luna" # required when enabled; must resolve in the bound provider
+timeout_secs = 60                 # 1..=600
+max_per_hour = 30                 # 1..=600
+```
+
+When enabled, an inbox-started PM turn also starts a detached, one-turn, tool-free
+model choice over the `next` card returned by `read_brief`. It sees only kind, task reference,
+why, evidence and option IDs/labels, never the code recommendation, conversation,
+skills or repository context. Output must be exactly `{"choice":"<option id or escalate>","reason":"<short>"}`.
+The host records the observation through `pm_shadow`; it never changes or informs
+the real PM turn, authorizes an effect, or adds PM tools/system-prompt sections.
+Continuation turns and owner-typed input do not trigger it. A digest runs at most
+once per generation; after 256 distinct digests, observation stops for that generation.
+The hourly cap counts attempts, not successful choices. Failures are diagnosed
+once, never retried, and host shutdown/replacement aborts outstanding model work.
+Usage is attributed separately as `shadow`, not as a PM request.
 
 ## herdr
 

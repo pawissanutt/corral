@@ -81,7 +81,7 @@ export function helperStatus(helper: HelperInspection, now: number): Status {
   }
 }
 export function helperKindName(kind: HelperInspection["kind"]): string {
-  switch (kind) { case "explore": return "explore"; case "oracle": return "oracle"; case "web_search": return "search"; }
+  switch (kind) { case "explore": return "explore"; case "oracle": return "oracle"; case "web_search": return "search"; case "shadow": return "shadow"; }
 }
 
 export interface ActivityEntry {

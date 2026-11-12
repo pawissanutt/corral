@@ -348,6 +348,18 @@ impl TryFrom<RawCapabilities> for AgentCapabilities {
                         role.as_str()
                     ));
                 }
+                if key == "shadow"
+                    && settings.get(key) == Some(true)
+                    && settings
+                        .settings(key)
+                        .get("model")
+                        .and_then(serde_json::Value::as_str)
+                        .is_none()
+                {
+                    return Err(
+                        "[agent.capabilities.pm.shadow] model is required when enabled".into(),
+                    );
+                }
                 let Some(RoleSetting::Table(table)) = setting else {
                     continue;
                 };
@@ -482,6 +494,11 @@ impl AgentCapabilities {
                     }
                     None => (defaults[self.0.preset.index()], CapabilitySource::Preset),
                 };
+                // An absent shadow entry means disabled. Preserve pre-shadow canonical
+                // snapshots/digests unless this generation explicitly requests observation.
+                if def.key == "shadow" && !wanted {
+                    return None;
+                }
                 let lacking = def.host && supported.is_some_and(|keys| !keys.contains(def.key));
                 let unavailable = (wanted && lacking).then(|| {
                     format!(
@@ -834,6 +851,10 @@ pub(crate) fn compaction_settings(
 #[cfg(test)]
 #[path = "agent_capabilities_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "agent_capabilities_shadow_tests.rs"]
+mod shadow_tests;
 
 #[cfg(test)]
 #[path = "agent_capabilities_web_search_tests.rs"]

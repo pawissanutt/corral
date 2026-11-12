@@ -1,7 +1,7 @@
 // All provider streams (including retries, compaction and auxiliary sessions) pass here after
 // credential restrictions. The authoritative balance lives in Corral, outside every transcript.
 import { randomUUID, createHash } from "node:crypto";
-import { calculateCost, type Api, type Model, type StreamFunction, type Usage } from "@earendil-works/pi-ai";
+import { calculateCost, type Api, type Model, type StreamFunction, type StreamOptions, type Usage } from "@earendil-works/pi-ai";
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { getServiceTierCostMultiplier } from "@earendil-works/pi-ai/api/openai-codex-responses";
 
@@ -14,6 +14,8 @@ export interface BudgetReply extends Record<string, unknown> {
 export interface BudgetOptions {
   /** A subprocess lane can perform hidden additional requests; it has no finite hard bound. */
   readonly unbounded?: boolean;
+  /** Canonical session lineage; auxiliary agent loops must not affect its cache streak. */
+  sessionId?(): string;
   record(payload: Record<string, unknown>): Promise<BudgetReply>;
   cancel(): void;
   onStop?(): void;
@@ -53,6 +55,15 @@ export class RunBudget {
   private stopped = false;
   private last: BudgetReply | undefined;
   constructor(private readonly options: BudgetOptions) {}
+  private purpose(options: StreamOptions | undefined): "conversation" | "summary" | "other" {
+    // Pi's agent loop forwards its convertToLlm callback; completeSummarization
+    // instead explicitly disables cache retention and omits all agent-loop config.
+    const agentLoop = options && "convertToLlm" in options && typeof options.convertToLlm === "function";
+    if (agentLoop && options?.sessionId === this.options.sessionId?.()) return "conversation";
+    if (!agentLoop && options?.cacheRetention === "none") return "summary";
+    // Older embedding callers do not supply the canonical lineage callback.
+    return this.options.sessionId === undefined ? "conversation" : "other";
+  }
   private limited(): boolean {
     const limits = this.last?.limits as { max_tokens?: number | null; max_usd_nanos?: number | null } | undefined;
     return limits === undefined || limits.max_tokens != null || limits.max_usd_nanos != null;
@@ -73,6 +84,8 @@ export class RunBudget {
       if (this.stopped) throw new Error("budget_exhausted: explicit resume with increased configured limits is required");
       options?.signal?.throwIfAborted();
       const request = randomUUID();
+      const purpose = this.purpose(options);
+      const cache_lineage = options?.sessionId;
       const output = Math.min(options?.maxTokens ?? model.maxTokens, model.maxTokens);
       const tier = options && "serviceTier" in options ? options.serviceTier : undefined;
       const multiplier = model.api === "openai-codex-responses" && tier === "priority"
@@ -114,7 +127,7 @@ export class RunBudget {
                 ])).digest("hex");
                 const usage = actual(model, message.usage, multiplier);
                 if (usage.tokens > 0) {
-                  self.last = await self.options.record({ kind: "budget", action: "settle", request, response, ...usage });
+                  self.last = await self.options.record({ kind: "budget", action: "settle", request, response, purpose, cache_lineage, ...usage });
                   if (self.last.exhausted) self.stop();
                 }
               }

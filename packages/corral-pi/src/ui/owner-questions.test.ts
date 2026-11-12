@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import type { BeforeAgentStartEvent, BeforeAgentStartEventResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type BeforeAgentStartEvent, type BeforeAgentStartEventResult, type ContextEvent, type ContextEventResult,
+  type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildSystemPrompt, normalizeBuildSystemPromptOptions } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.js";
 import { PendingQuestions, QUESTION_ENTRY, type QuestionEntry } from "../host/pending-questions.ts";
 import { OwnerQuestionUi, OWNER_QUESTION_STATE, QUESTIONS_SHORTCUT, renderOwnerQuestionState } from "./owner-questions.ts";
@@ -49,18 +50,30 @@ test("owner question changes stay in host messages without changing the default 
   const questions = new PendingQuestions({ session: () => "owned", generation: 1, entries: () => entries,
     append: data => { entries.push({ type: "custom", customType: QUESTION_ENTRY, data }); }, changed() {},
     record: async text => text, deliver: async () => false });
-  let before!: (event: BeforeAgentStartEvent) => BeforeAgentStartEventResult | void;
+  const sessionManager = SessionManager.inMemory("/project");
+  const ctx = { sessionManager, hasUI: false } as unknown as ExtensionContext;
+  let before!: (event: BeforeAgentStartEvent, ctx: ExtensionContext) => BeforeAgentStartEventResult | void;
+  let context!: (event: ContextEvent) => ContextEventResult | void;
+  const handlers = new Map<string, unknown>();
   const api = {
-    on: (name: string, handler: typeof before) => { if (name === "before_agent_start") before = handler; },
+    on: (name: string, handler: unknown) => {
+      handlers.set(name, handler);
+      if (name === "before_agent_start") before = handler as typeof before;
+      if (name === "context") context = handler as typeof context;
+    },
     registerCommand() {}, registerShortcut() {},
   } as unknown as ExtensionAPI;
   let claude = false;
-  new OwnerQuestionUi(questions, () => true, () => claude).install(api);
+  new OwnerQuestionUi(questions, () => false, () => claude).install(api);
   const start = () => {
     const options = normalizeBuildSystemPromptOptions({ cwd: "/project", appendSystemPrompt: "Stable role contract" });
     const event = { type: "before_agent_start", messageType: "user", prompt: "continue",
       systemPromptOptions: options, systemPrompt: buildSystemPrompt(options) } as BeforeAgentStartEvent;
-    const result = before(event);
+    const result = before(event, ctx);
+    if (result?.message) {
+      const message = result.message;
+      sessionManager.appendCustomMessageEntry(message.customType, message.content, message.display, message.details);
+    }
     return { system: buildSystemPrompt(options), message: result?.message, options };
   };
   const id = questions.ask("Q", [{ question: "Which release?", options: ["One", "Two"] }]).id;
@@ -69,6 +82,23 @@ test("owner question changes stay in host messages without changing the default 
   expect(pending.options.sections.owner_questions).toBeUndefined();
   expect(pending.message?.customType).toBe(OWNER_QUESTION_STATE);
   expect(pending.message?.content).toContain(renderOwnerQuestionState(questions));
+  expect(start().message).toBeUndefined();
+  // Reload/resume must inspect retained context rather than reset an in-memory flag.
+  new OwnerQuestionUi(questions, () => false, () => claude).install(api);
+  await (handlers.get("session_start") as (event: unknown, ctx: ExtensionContext) => unknown)({}, ctx);
+  expect(start().message).toBeUndefined();
+  const kept = sessionManager.appendMessage({ role: "user", content: "continue", timestamp: 0 });
+  sessionManager.appendCompaction("Summary without authoritative host state", kept, 1);
+  const compacted = sessionManager.buildSessionProjection().messages;
+  expect(compacted.some(message => message.role === "custom" && message.customType === OWNER_QUESTION_STATE)).toBeFalse();
+  // Automatic continuations skip before_agent_start: restore state in the first request.
+  const restored = context({ type: "context", messages: compacted })?.messages;
+  expect(restored?.filter(message => message.role === "custom" && message.customType === OWNER_QUESTION_STATE)).toHaveLength(1);
+  const restoredState = restored?.at(-1);
+  expect(restoredState?.role === "custom" && restoredState.content).toContain(renderOwnerQuestionState(questions));
+  expect(context({ type: "context", messages: restored! })).toBeUndefined();
+  // The next submitted run journals one fresh snapshot; subsequent starts retain it.
+  expect(start().message?.content).toBe(pending.message?.content);
   expect(start().message).toBeUndefined();
   await questions.answer(id, [{ option: "One" }]);
   expect(questions.status(id)).toBe("answered");
