@@ -379,17 +379,25 @@ impl<'a> Inbox<'a> {
 
     pub fn entry(&self, seq: u64) -> Result<InboxEntry> {
         let _lock = self.lock()?;
+        let observed = self.receipt(seq, ReceiptLevel::Observed)?;
+        let terminal = self.terminal(seq)?;
+        let envelope = self
+            .record::<u64>("message-envelope", &format!("{seq:020}"))?
+            .map(|number| self.envelope(number))
+            .transpose()?;
+        let hold = match &envelope {
+            Some(envelope) if observed.is_none() && terminal.is_none() => self.hold_of(envelope)?,
+            _ => None,
+        };
         Ok(InboxEntry {
             message: self.message(seq)?,
             execution: self.execution_view(seq)?,
             admitted: self.receipt(seq, ReceiptLevel::Admitted)?,
-            observed: self.receipt(seq, ReceiptLevel::Observed)?,
-            terminal: self.terminal(seq)?,
+            observed,
+            terminal,
             effect: self.record("effects", &format!("{seq:020}"))?,
-            envelope: self
-                .record::<u64>("message-envelope", &format!("{seq:020}"))?
-                .map(|number| self.envelope(number))
-                .transpose()?,
+            envelope,
+            hold,
         })
     }
 

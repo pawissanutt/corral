@@ -4,9 +4,15 @@
 //!
 //! 1. evict settled receipts of ended generations, oldest first. Under generation pressure it
 //!    also empties the oldest ended generations that nothing else pins;
-//! 2. retire ended generations that then hold no receipts, after archiving their usage
-//!    attribution on the head;
-//! 3. advance the generation floor; the generation counter itself never resets.
+//! 2. retire ended generations that then hold no receipts, after writing one history record
+//!    of each one's usage attribution (never read on the hot path);
+//! 3. advance the generation floor in the head; the generation counter itself never resets.
+//!
+//! A pass that reclaims nothing records an idle watermark in the head and later passes skip
+//! the scan while it holds. It holds only while the current generation and the pressured
+//! families are unchanged and no write touched a pinning family other than appending a
+//! current-generation receipt (`save` clears it); those are the only ways a fruitless pass can
+//! become fruitful.
 //!
 //! A fenced generation can no longer commit, so dropping its replay answer only turns a stale
 //! retry into a fenced refusal. Never evicted or retired: the current generation and its
@@ -18,9 +24,10 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, ensure};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{Child, Head, LAYOUT_RETIRED, area, split, supported, work_area};
+use super::{Child, Head, LAYOUT_RETIRED, RETIRED, area, split, supported, work_area};
 use crate::Store;
 use crate::agent::{
     AgentGeneration, AgentQuestion, GENERATIONS_HIGH_WATER, GENERATIONS_MAX, JobRecord,
@@ -54,6 +61,14 @@ pub struct Retention {
     pub receipt_count: u64,
 }
 
+/// A retention pass under these pressures reclaimed nothing while `generation` was current.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct Idle {
+    generation: u32,
+    receipts: bool,
+    generations: bool,
+}
+
 struct Held {
     ordinal: u64,
     key: String,
@@ -81,7 +96,7 @@ fn remove(store: &Store, kind: &str, key: &str) -> Result<()> {
 }
 
 /// One retention pass. Call under the PM transaction whose limit check or read it precedes;
-/// `save` rereads the counters and archive it writes.
+/// `save` rereads the counters, floor and watermark it writes.
 pub fn retain(store: &Store, limits: &RetentionLimits) -> Result<Retention> {
     let Some(doc) = store.record::<Value>("agent-pm", "current")? else {
         return Ok(Retention::default());
@@ -101,14 +116,19 @@ pub fn retain(store: &Store, limits: &RetentionLimits) -> Result<Retention> {
     let generations = head.counts.get("generations").copied().unwrap_or(0);
     let receipt_pressure = receipts >= limits.receipts_high_water;
     let generation_pressure = generations >= limits.generations_high_water;
-    if !receipt_pressure && !generation_pressure {
+    let current = head.pm.state.binding.generation;
+    let idle = head.idle.is_some_and(|idle| {
+        idle.generation == current
+            && (!receipt_pressure || idle.receipts)
+            && (!generation_pressure || idle.generations)
+    });
+    if idle || (!receipt_pressure && !generation_pressure) {
         return Ok(Retention {
             receipt_count: receipts,
             ..Retention::default()
         });
     }
 
-    let current = head.pm.state.binding.generation;
     let mut ended: Vec<(String, AgentGeneration)> = children(store, "generations")?
         .into_iter()
         .map(|(key, _, generation)| (key, generation))
@@ -163,8 +183,10 @@ pub fn retain(store: &Store, limits: &RetentionLimits) -> Result<Retention> {
     held.sort_unstable_by_key(|h| h.ordinal);
 
     let mut evict = BTreeSet::new();
+    let receipt_excess = receipts.saturating_sub(limits.receipts_retained);
+    let generation_excess = generations.saturating_sub(limits.generations_retained);
     if receipt_pressure {
-        let excess = receipts.saturating_sub(limits.receipts_retained);
+        let excess = receipt_excess;
         evict.extend(
             held.iter()
                 .filter(|h| h.evictable)
@@ -173,7 +195,7 @@ pub fn retain(store: &Store, limits: &RetentionLimits) -> Result<Retention> {
         );
     }
     if generation_pressure {
-        let excess = generations.saturating_sub(limits.generations_retained);
+        let excess = generation_excess;
         let emptied: BTreeSet<u32> = ended
             .iter()
             .map(|(_, g)| g.n)
@@ -201,11 +223,13 @@ pub fn retain(store: &Store, limits: &RetentionLimits) -> Result<Retention> {
         if pinned.contains(&generation.n) || holding.contains(&generation.n) {
             continue;
         }
-        head.pm
+        let record = head
+            .pm
             .state
             .retired
             .get_or_insert_with(Default::default)
-            .archive(generation);
+            .retire(generation);
+        store.save_record(RETIRED, &format!("{:010}", generation.n), &record)?;
         remove(store, "generations", key)?;
         retired += 1;
     }
@@ -213,12 +237,24 @@ pub fn retain(store: &Store, limits: &RetentionLimits) -> Result<Retention> {
     let evicted = evict.len() as u64;
     let receipt_count = receipts.saturating_sub(evicted);
     if evicted > 0 || retired > 0 {
+        head.idle = None;
         head.counts.insert("receipts".into(), receipt_count);
         head.counts
             .insert("generations".into(), generations.saturating_sub(retired));
         if head.pm.state.retired.is_some() {
             head.layout = LAYOUT_RETIRED;
         }
+        store.save_record("agent-pm", "current", &head)?;
+    } else if (!receipt_pressure || receipt_excess > 0)
+        && (!generation_pressure || generation_excess > 0)
+    {
+        // With a positive excess, nothing reclaimed means nothing was eligible, whatever the
+        // limits: the outcome can change only through what clears the watermark.
+        head.idle = Some(Idle {
+            generation: current,
+            receipts: receipt_pressure,
+            generations: generation_pressure,
+        });
         store.save_record("agent-pm", "current", &head)?;
     }
     Ok(Retention {

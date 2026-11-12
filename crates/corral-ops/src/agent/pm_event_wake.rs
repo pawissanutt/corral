@@ -1,5 +1,5 @@
-//! Board events and `attention_due` for a bound corral-pi PM, published as keyed wakes into
-//! the PM inbox and delivered by the Pi adapter instead of pasted into the pane.
+//! Board event wakes are durable even while the native PM is lost. A frozen batch survives
+//! publication/checkpoint crashes; host health controls transport and flood control only.
 
 use std::collections::BTreeMap;
 
@@ -8,31 +8,93 @@ use corral_core::agent::AgentPm;
 use corral_core::inbox::{Inbox, MessageBinding, Post, Recipient, Urgency};
 use corral_core::records::RecordArea;
 use corral_core::{Event, EventCursor, actionable_kind, format_event_line};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::Ctx;
 
-const STATE: RecordArea<EventCursor> = RecordArea::new("pm-event-wakes");
+const STATE: RecordArea<CursorState> = RecordArea::new("pm-event-wakes");
 const POINTER: &str = "A wake is a pointer, not authority. Read fresh brief/next before acting.\n";
 // Leave room for inbox framing (including worst-case sequence numbers) and the omission count.
 const BODY_BUDGET: usize = super::delivery::INPUT_MAX_BYTES - 512;
 
-/// While the native route is unavailable, skip history rather than replay it on binding.
-/// The caller holds the shared `pm-events` lock for both routes.
-pub(crate) fn checkpoint(ctx: &Ctx) -> Result<()> {
-    STATE.save(&ctx.store, "state", ctx.store.events_since(None)?.cursor())
+#[derive(Serialize, Deserialize)]
+struct CursorState {
+    // Preserve the original cursor document's shape for records written before frozen batches.
+    #[serde(flatten)]
+    cursor: EventCursor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pending: Option<FrozenBatch>,
 }
 
-/// Publish before advancing; transport failure never holds the durable event cursor.
+#[derive(Serialize, Deserialize)]
+struct FrozenBatch {
+    from: EventCursor,
+    to: EventCursor,
+    key: String,
+    // Snapshot selection and content too: config changes and log retention cannot change a replay.
+    events: Vec<Event>,
+    urgent_separate: bool,
+}
+
+/// Only the non-native route skips history. The caller holds the shared `pm-events` lock.
+pub(crate) fn checkpoint(ctx: &Ctx) -> Result<()> {
+    let tail = ctx.store.events_since(None)?.cursor().clone();
+    if STATE
+        .load(&ctx.store, "state")?
+        .is_some_and(|state| state.cursor == tail && state.pending.is_none())
+    {
+        return Ok(());
+    }
+    STATE.save(
+        &ctx.store,
+        "state",
+        &CursorState {
+            cursor: tail,
+            pending: None,
+        },
+    )
+}
+
+/// Publication never depends on health; only a healthy bound PM may receive native input.
 pub(crate) fn push(ctx: &Ctx, pm: AgentPm) -> Result<()> {
-    let cursor = match STATE.load(&ctx.store, "state")? {
-        Some(cursor) => cursor,
-        None => {
-            checkpoint(ctx)?;
+    let Some(mut state) = STATE.load(&ctx.store, "state")? else {
+        // First binding starts at EOF, not at sequence zero.
+        return checkpoint(ctx);
+    };
+    let healthy = super::pm_wake::healthy(&pm);
+    let inbox = Inbox::new(&ctx.store, Recipient::Pm)?;
+    if state.pending.is_none() {
+        if !healthy
+            && inbox
+                .pending_messages()?
+                .iter()
+                .any(|message| message.kind == "pm_event_wake")
+        {
+            // One unobserved wake already requests recovery. Hold the range for catch-up.
             return Ok(());
         }
+        freeze(ctx, &mut state, healthy)?;
+    }
+    let Some(batch) = state.pending.as_ref() else {
+        return Ok(());
     };
-    let mut reader = ctx.store.events_since(Some(cursor))?;
+    let posted = publish_pass(ctx, &inbox, batch)?;
+    state.cursor = batch.to.clone();
+    state.pending = None;
+    ctx.store.records_transaction(|| {
+        STATE.save(&ctx.store, "state", &state)?;
+        // After the cursor commits no batch at or below it can replay; only live keys remain.
+        super::pm_wake_keys::retain(ctx, "event", &|_| false)
+    })?;
+    if posted > 0 && healthy {
+        deliver(ctx, pm)?;
+    }
+    Ok(())
+}
+
+fn freeze(ctx: &Ctx, state: &mut CursorState, healthy: bool) -> Result<()> {
+    let mut reader = ctx.store.events_since(Some(state.cursor.clone()))?;
     let mut events = Vec::new();
     for _ in 0..256 {
         let before = reader.read_position();
@@ -47,15 +109,32 @@ pub(crate) fn push(ctx: &Ctx, pm: AgentPm) -> Result<()> {
         }
     }
     if events.is_empty() {
-        return STATE.save(&ctx.store, "state", reader.cursor());
+        // A genuinely quiet pass performs no write. Deliberately filtered events can advance.
+        if &state.cursor != reader.cursor() {
+            state.cursor = reader.cursor().clone();
+            STATE.save(&ctx.store, "state", state)?;
+        }
+        return Ok(());
     }
-    let inbox = Inbox::new(&ctx.store, Recipient::Pm)?;
-    let posted = publish_pass(&inbox, &events)?;
-    STATE.save(&ctx.store, "state", reader.cursor())?;
-    if posted > 0 {
-        deliver(ctx, pm)?;
-    }
-    Ok(())
+    let digest_events: Vec<_> = events
+        .iter()
+        .filter(|event| !healthy || !urgent(event))
+        .collect();
+    let first = digest_events
+        .first()
+        .map_or(events[0].seq, |event| event.seq);
+    let last = digest_events
+        .last()
+        .map_or(events[events.len() - 1].seq, |event| event.seq);
+    state.pending = Some(FrozenBatch {
+        from: state.cursor.clone(),
+        to: reader.cursor().clone(),
+        key: format!("pmev:{first}-{last}"),
+        events,
+        urgent_separate: healthy,
+    });
+    // This commit precedes every inbox post. Replays cannot grow the batch boundary.
+    STATE.save(&ctx.store, "state", state)
 }
 
 fn deliver(ctx: &Ctx, pm: AgentPm) -> Result<()> {
@@ -113,16 +192,19 @@ fn causes(event: &Event) -> Vec<String> {
         keys.push(format!(
             "cond:{}:{}",
             event.task.as_deref().unwrap_or("workspace"),
-            actionable_kind(event).unwrap_or(&event.kind),
+            actionable_kind(event).unwrap_or(&event.kind)
         ));
     }
     keys
 }
 
-fn publish_pass(inbox: &Inbox<'_>, events: &[Event]) -> Result<usize> {
+fn publish_pass(ctx: &Ctx, inbox: &Inbox<'_>, batch: &FrozenBatch) -> Result<usize> {
     let mut posted = 0;
-    // Urgent events precede the routine digest even when they occurred later in the pass.
-    for event in events.iter().filter(|event| urgent(event)) {
+    for event in batch
+        .events
+        .iter()
+        .filter(|event| batch.urgent_separate && urgent(event))
+    {
         let causes = causes(event);
         let key = format!("{}#{}", causes[0], event.seq);
         let mut line = format_event_line(event);
@@ -136,6 +218,7 @@ fn publish_pass(inbox: &Inbox<'_>, events: &[Event]) -> Result<usize> {
             line.push_str(" [truncated]");
         }
         posted += usize::from(publish(
+            ctx,
             inbox,
             &key,
             &causes,
@@ -144,7 +227,11 @@ fn publish_pass(inbox: &Inbox<'_>, events: &[Event]) -> Result<usize> {
             &format!("{POINTER}{line}"),
         )?);
     }
-    let routine: Vec<_> = events.iter().filter(|event| !urgent(event)).collect();
+    let routine: Vec<_> = batch
+        .events
+        .iter()
+        .filter(|event| !batch.urgent_separate || !urgent(event))
+        .collect();
     let (Some(first), Some(last)) = (routine.first(), routine.last()) else {
         return Ok(posted);
     };
@@ -176,8 +263,9 @@ fn publish_pass(inbox: &Inbox<'_>, events: &[Event]) -> Result<usize> {
         ));
     }
     posted += usize::from(publish(
+        ctx,
         inbox,
-        &format!("pmev:{}-{}", first.seq, last.seq),
+        &batch.key,
         &grouped.into_keys().collect::<Vec<_>>(),
         first.seq,
         last.seq,
@@ -186,8 +274,8 @@ fn publish_pass(inbox: &Inbox<'_>, events: &[Event]) -> Result<usize> {
     Ok(posted)
 }
 
-/// The subject is the durable dedupe record if a crash loses the cursor write.
 fn publish(
+    ctx: &Ctx,
     inbox: &Inbox<'_>,
     key: &str,
     causes: &[String],
@@ -195,27 +283,23 @@ fn publish(
     last_seq: u64,
     body: &str,
 ) -> Result<bool> {
-    if inbox.messages()?.into_iter().any(|message| {
-        message.kind == "pm_event_wake"
-            && message
-                .subject
-                .as_ref()
-                .is_some_and(|subject| subject["key"] == key)
-    }) {
-        return Ok(false);
-    }
-    inbox.post(Post {
-        kind: "pm_event_wake",
-        urgency: Urgency::Wake,
-        author: "corral",
-        body,
-        binding: MessageBinding::default(),
-        subject: Some(
-            json!({"key": key, "causes": causes, "first_seq": first_seq, "last_seq": last_seq}),
-        ),
-        max_payload: super::delivery::INPUT_MAX_BYTES,
-    })?;
-    Ok(true)
+    ctx.store.records_transaction(|| {
+        if !super::pm_wake_keys::claim(ctx, "event", key)? {
+            return Ok(false);
+        }
+        inbox.post(Post {
+            kind: "pm_event_wake",
+            urgency: Urgency::Wake,
+            author: "corral",
+            body,
+            binding: MessageBinding::default(),
+            subject: Some(
+                json!({"key": key, "causes": causes, "first_seq": first_seq, "last_seq": last_seq}),
+            ),
+            max_payload: super::delivery::INPUT_MAX_BYTES,
+        })?;
+        Ok(true)
+    })
 }
 
 #[cfg(all(test, unix))]

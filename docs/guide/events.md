@@ -180,17 +180,25 @@ names: the eleven above by default, plus the opt-in `delivery_uncertain`, `deliv
 wakes the PM only when the event's `pm_relevant` flag is true. `config_invalid` is available
 to `wait` and config history but is not a PM push kind.
 
-A bound, healthy corral-pi PM receives selected events and `attention_due` as durable
-`pm_event_wake` inbox messages, independently of `push_events`; `push_kinds` still selects
-the other events. Each pass coalesces routine events into one bounded digest, keeping the
-newest event per distinct cause and counting repeats. Urgent events (`escalated`,
-`question_escalated`, `needs_me`, `blocked`) are posted separately, before the digest.
+A recorded native corral-pi PM receives selected events and `attention_due` as durable
+`pm_event_wake` inbox messages, independently of `push_events` and host health;
+`push_kinds` still selects the other events. With a healthy host, each pass coalesces
+routine events into one bounded digest, keeping the newest event per distinct cause and
+counting repeats. Urgent events (`escalated`, `question_escalated`, `needs_me`, `blocked`)
+are posted separately, before the digest. An unavailable host instead gets one recovery
+digest including urgent events; while that wake remains unobserved, later events stay
+behind the cursor for catch-up rather than flooding the inbox.
+
 Subject keys deduplicate publication retries: digests use `pmev:<first seq>-<last seq>`,
 urgent events use `<cause>#<event seq>`. Question causes use `q:<question key>`; other
 conditions use `cond:<task>:<normalized kind>` (`workspace` for events without a task).
-The native route starts at the current event tail, checkpoints skipped history while no
-healthy Pi PM exists, and advances only after durable publication. Failed delivery leaves
-messages queued but does not block later events. This path never pastes into the Pi pane.
+The native cursor starts at the current event tail. Before publication, a durable pending
+batch freezes its range, key and selected event contents, so appended events cannot change
+a crash replay's identity. Publication and its keyed index commit atomically; the cursor
+then advances and clears that batch. Only healthy hosts receive delivery attempts, and
+failed transport leaves messages queued without losing events. No recorded native PM,
+including an unhealthy or unbound one, ever takes the paste path. When no native PM is
+recorded, skipped history is checkpointed rather than replayed on first binding.
 
 For non-Pi PMs only, sync sends selected events as `[corral]` messages to the remembered,
 live PM pane, using the same `agent_prompt` and terminal fallback as replies. It does not
