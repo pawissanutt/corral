@@ -44,14 +44,18 @@ pub(crate) fn run_installed(
     Ok(read_back(ctx, Vec::new(), attention))
 }
 
-/// A daemon-owned board only requests a pass and reads the resulting state.
+/// A daemon-owned board reads the daemon's result back. Only an explicit refresh (`wait` is
+/// set) asks for a pass: a nudge on every periodic tick would start a daemon pass per board
+/// tick and defeat the daemon's own pacing.
 pub(crate) fn run_daemon(
     ctx: &Ctx,
     wait: Option<std::time::Duration>,
 ) -> Result<(Vec<Change>, crate::attention::Snapshot, String), String> {
     // Failure to reach the daemon never authorizes a competing in-process pass.
-    if let Ok(Some(mut client)) = corral_ops::daemon_client::Client::connect(&ctx.store) {
-        let _ = client.nudge("board", wait);
+    if let Some(wait) = wait
+        && let Ok(Some(mut client)) = corral_ops::daemon_client::Client::connect(&ctx.store)
+    {
+        let _ = client.nudge("board", Some(wait));
     }
     let attention = crate::attention::load_board(ctx, jiff::Timestamp::now());
     Ok(read_back(ctx, Vec::new(), attention))
