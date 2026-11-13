@@ -1,4 +1,5 @@
 //! The workspace's single synchronization loop owner.
+mod classic;
 #[cfg(unix)]
 mod commands;
 mod health;
@@ -8,18 +9,27 @@ mod reader;
 mod server;
 mod state;
 
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use corral_core::{Actor, Store};
 use corral_ops::{
-    Ctx, daemon_client,
-    loop_pacing::{periodic_wait, process_cpu},
+    Ctx, FullReason, PassMemory, PassReport, PassRequest, StepId, daemon_client,
+    loop_pacing::{periodic_wait, process_cpu, quiet_wait},
 };
+use jiff::Timestamp;
 
 use state::Shared;
+
+/// While this file exists beside the daemon socket, every pass is full and also reports
+/// the steps and tasks the incremental rules would have skipped although they acted.
+const SYNC_AUDIT_SWITCH: &str = "sync-audit-on";
+/// While this file exists beside the daemon socket, every pass is full (no skipping).
+const SYNC_FULL_SWITCH: &str = "sync-full-on";
 
 pub struct RunOptions {
     pub once: bool,
@@ -44,11 +54,15 @@ impl Exit {
 pub fn run(start: &Path, options: RunOptions) -> Result<Exit> {
     let ctx = Ctx::open_for_sync(start).context("opening daemon workspace")?;
     let shared = Arc::new(Shared::new());
-    run_with_state(
+    // Incremental state lives only in this loop: a restart begins with a full pass.
+    let mut memory = PassMemory::new();
+    let pacing = Cell::new(Pacing::default());
+    run_loop(
         ctx,
         options,
-        |ctx, supervisor| pass(ctx, supervisor, &shared),
+        |ctx, supervisor| pass(ctx, supervisor, &shared, &mut memory, &pacing),
         Arc::clone(&shared),
+        |spent| pacing.get().wait(spent, Timestamp::now()),
     )
 }
 
@@ -61,11 +75,24 @@ fn run_with_pass(
     run_with_state(ctx, options, execute, Arc::new(Shared::new()))
 }
 
+#[cfg(test)]
 fn run_with_state(
+    ctx: Ctx,
+    options: RunOptions,
+    execute: impl FnMut(&mut Ctx, bool) -> Option<String>,
+    shared: Arc<Shared>,
+) -> Result<Exit> {
+    run_loop(ctx, options, execute, shared, periodic_wait)
+}
+
+/// `pace` turns the CPU time of the pass just finished into the wait before the next one;
+/// a nudge still starts the next pass at once.
+fn run_loop(
     mut ctx: Ctx,
     options: RunOptions,
     mut execute: impl FnMut(&mut Ctx, bool) -> Option<String>,
     shared: Arc<Shared>,
+    mut pace: impl FnMut(Duration) -> Duration,
 ) -> Result<Exit> {
     if !ctx.store.own_loop().context("claiming daemon loop lease")? {
         if options.once {
@@ -140,7 +167,7 @@ fn run_with_state(
             if shared.lock().stop {
                 break;
             }
-            shared.wait(periodic_wait(spent), true);
+            shared.wait(pace(spent), true);
         }
         let upgrading = shared.lock().upgrading;
         if !upgrading {
@@ -178,10 +205,73 @@ fn measured_pass(
     (spent, error)
 }
 
-fn pass(ctx: &mut Ctx, supervisor: bool, shared: &Shared) -> Option<String> {
+/// What the loop needs from the pass just finished to pace the next one.
+#[derive(Debug, Clone, Copy, Default)]
+struct Pacing {
+    /// The pass ran no gated step: it only checked its inputs.
+    quiet: bool,
+    /// The earliest time the planner knows a step or task comes due.
+    next_due: Option<Timestamp>,
+}
+
+impl Pacing {
+    fn of(report: Option<&PassReport>) -> Self {
+        report.map_or_else(Self::default, |report| Self {
+            quiet: report.quiet,
+            next_due: report.next_due,
+        })
+    }
+
+    /// The CPU-proportional wait, shortened to the next due time, never negative.
+    fn wait(self, spent: Duration, now: Timestamp) -> Duration {
+        let paced = if self.quiet {
+            quiet_wait(spent)
+        } else {
+            periodic_wait(spent)
+        };
+        self.next_due.map_or(paced, |due| {
+            paced.min(Duration::try_from(due.duration_since(now)).unwrap_or(Duration::ZERO))
+        })
+    }
+}
+
+/// A `cli`/`board` nudge or the `sync-full-on` switch asks for a full pass.
+fn pass_request((full, nudged): (bool, bool), forced: bool) -> PassRequest {
+    if full || forced {
+        PassRequest::Full(FullReason::Owner)
+    } else if nudged {
+        PassRequest::Nudged
+    } else {
+        PassRequest::Paced
+    }
+}
+
+/// Daemon extras D1-D3 follow the planner's rules; after a failed pass they all run.
+fn extra_due(
+    memory: &mut PassMemory,
+    report: Option<&PassReport>,
+    step: StepId,
+    now: Timestamp,
+) -> bool {
+    report.is_none_or(|report| memory.extra_due(step, report, now))
+}
+
+fn pass(
+    ctx: &mut Ctx,
+    supervisor: bool,
+    shared: &Shared,
+    memory: &mut PassMemory,
+    pacing: &Cell<Pacing>,
+) -> Option<String> {
+    let runtime = daemon_client::runtime_dir(&ctx.store);
+    let forced = runtime.join(SYNC_FULL_SWITCH).exists();
+    memory.set_audit(!forced && runtime.join(SYNC_AUDIT_SWITCH).exists());
+    let taken = shared.take_request();
+    let request = pass_request(taken, forced);
     let (sender, diagnostics) = std::sync::mpsc::channel();
     let mut errors = Vec::new();
     let mut attention = None;
+    let mut report = None;
     {
         let _capture = corral_core::capture_messages(sender);
         step(
@@ -190,42 +280,66 @@ fn pass(ctx: &mut Ctx, supervisor: bool, shared: &Shared) -> Option<String> {
             &mut errors,
         );
         step(
-            corral_ops::sync_with_attention(ctx).map(|(_, board)| {
+            corral_ops::sync_incremental(ctx, memory, request).map(|(_, board, pass_report)| {
                 if let Some(board) = board
                     && let Ok(view) = ctx.store.view()
                 {
                     attention = Some((view.seq().0, board));
                 }
+                report = Some(pass_report);
             }),
             "synchronizing",
             &mut errors,
         );
-        corral_ops::refresh_active_usage(&ctx.store);
-        if supervisor {
+        if report.is_none() {
+            // The failed pass already consumed its feed delta; plan the next one from scratch.
+            *memory = PassMemory::new();
+        }
+        let now = Timestamp::now();
+        if extra_due(memory, report.as_ref(), StepId::Usage, now) {
+            corral_ops::refresh_active_usage(&ctx.store);
+        }
+        if supervisor && extra_due(memory, report.as_ref(), StepId::Supervise, now) {
             step(corral_ops::supervise(ctx), "supervising PM", &mut errors);
         }
-        step(
-            ctx.store.maintain_database(),
-            "maintaining database",
-            &mut errors,
-        );
+        if extra_due(memory, report.as_ref(), StepId::MaintainDatabase, now) {
+            step(
+                ctx.store.maintain_database(),
+                "maintaining database",
+                &mut errors,
+            );
+        }
         step(
             touch_heartbeat(&ctx.store),
             "touching heartbeat",
             &mut errors,
         );
     }
-    // Later pass stages may write too. Lease bookkeeping is harmless, but any
-    // other intervening change makes the reader load its own attention board.
-    let attention = attention.filter(|(seq, _)| {
-        ctx.store
-            .view()
-            .is_ok_and(|view| reader::unchanged(view.as_ref(), *seq))
-    });
-    *shared
-        .attention
-        .lock()
-        .unwrap_or_else(|error| error.into_inner()) = attention;
+    if attention.is_some() || report.as_ref().is_none_or(|report| report.attention) {
+        // Later pass stages may write too. Lease bookkeeping is harmless, but any
+        // other intervening change makes the reader load its own attention board.
+        let attention = attention.filter(|(seq, _)| {
+            ctx.store
+                .view()
+                .is_ok_and(|view| reader::unchanged(view.as_ref(), *seq))
+        });
+        *shared
+            .attention
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = attention;
+    } else {
+        keep_attention(ctx, shared);
+    }
+    if taken.0
+        && report
+            .as_ref()
+            .is_some_and(|report| report.full == Some(FullReason::Owner))
+    {
+        // Only an owner's request (not `sync-full-on`) forces the frame; set before `finish`
+        // publishes the pass, so the reader sees both together.
+        shared.classic_force.store(true, Ordering::Relaxed);
+    }
+    pacing.set(Pacing::of(report.as_ref()));
     for message in diagnostics.try_iter() {
         for line in message.text.lines() {
             eprintln!("{}: {line}", message.source);
@@ -235,6 +349,38 @@ fn pass(ctx: &mut Ctx, supervisor: bool, shared: &Shared) -> Option<String> {
         None
     } else {
         Some(errors.join("; "))
+    }
+}
+
+/// The pass skipped attention: the previous board stays current while the feed is unchanged
+/// since it was computed.
+fn keep_attention(ctx: &Ctx, shared: &Shared) {
+    let Some(seq) = shared
+        .attention
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .map(|(seq, _)| *seq)
+    else {
+        return;
+    };
+    // Scan without holding the mutex; the reader may advance the board's sequence meanwhile.
+    if ctx
+        .store
+        .view()
+        .is_ok_and(|view| reader::unchanged(view.as_ref(), seq))
+    {
+        return;
+    }
+    let mut attention = shared
+        .attention
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if attention
+        .as_ref()
+        .is_some_and(|(current, _)| *current == seq)
+    {
+        *attention = None;
     }
 }
 

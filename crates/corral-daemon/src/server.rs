@@ -206,6 +206,7 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) ->
                                     cap == wire::BOARD_V1
                                         || cap == wire::READ_V1
                                         || cap == wire::cmd::CMD_V1
+                                        || cap == wire::CLASSIC_V1
                                 })
                                 .collect(),
                             daemon: wire::DaemonInfo {

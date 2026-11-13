@@ -21,19 +21,13 @@ fn done_page_and_header_sources_are_bounded_with_terminal_and_nested_growth() {
             fx.ctx.store.fixture_put_task(&task).unwrap();
         }
         let before = work::snapshot();
-        let source;
-        {
-            let _hot = HotScope::enter();
-            let ctx = Ctx {
-                store: fx.ctx.store.read_only_snapshot().unwrap(),
-                ..fx.ctx.clone()
-            };
-            source = sources::FrameSources::load(&ctx).unwrap();
-        }
+        // When the board computes its local frame through the classic cache.
+        let frame = super::frame_tests::local_frame(&fx.ctx, fx.now.get());
+        let report = work::snapshot().since(&before);
+        let source = super::frame_tests::heads(&frame);
         // Then only the K most recent Done heads are decoded, while the aggregate sees all.
         assert_eq!(
             source
-                .heads
                 .iter()
                 .filter(|h| h.status == Status::Done)
                 .map(|h| h.id.as_str())
@@ -41,7 +35,7 @@ fn done_page_and_header_sources_are_bounded_with_terminal_and_nested_growth() {
             ["T-007"]
         );
         assert_eq!(
-            source
+            frame
                 .status_counts
                 .iter()
                 .filter(|c| c.status == "done")
@@ -51,7 +45,7 @@ fn done_page_and_header_sources_are_bounded_with_terminal_and_nested_growth() {
         );
         for status in [Status::NeedsMe, Status::Review, Status::Ready] {
             assert_eq!(
-                source
+                frame
                     .status_counts
                     .iter()
                     .filter(|c| Status::parse(&c.status) == Some(status))
@@ -60,7 +54,6 @@ fn done_page_and_header_sources_are_bounded_with_terminal_and_nested_growth() {
                 1
             );
         }
-        let report = work::snapshot().since(&before);
         assert_eq!(report.unattributed_hydrations(), 0);
         report.check_identity().unwrap();
         reports.push(report);
@@ -233,19 +226,19 @@ fn recovered_done_card_keeps_labels_with_flat_reads_over_retained_recovery_histo
             recovery_rows::append_outcome(&mut later, corral_core::RecoveryState::Unknown);
             store.save_recovery_record("T-007", &later).unwrap();
         }
-        // When the board loads its frame sources and renders the card from the head alone.
+        // When the board computes its local frame and renders the card from the frame's head alone.
         let before = work::snapshot();
-        let (source, lines);
-        {
+        let frame = super::frame_tests::local_frame(&fx.ctx, fx.now.get());
+        let lines = {
             let _hot = HotScope::enter();
-            let ctx = Ctx {
-                store: store.read_only_snapshot().unwrap(),
-                ..fx.ctx.clone()
-            };
-            source = sources::FrameSources::load(&ctx).unwrap();
-            let head = source.heads.iter().find(|h| h.id == "T-007").unwrap();
-            let shell = head.to_shell_task().unwrap();
-            lines = cards::card_lines(
+            let heads = super::frame_tests::heads(&frame);
+            let head = heads.iter().find(|h| h.id == "T-007").unwrap();
+            let shell = corral_ops::classic::shells(&frame)
+                .unwrap()
+                .into_iter()
+                .find(|task| task.id == "T-007")
+                .unwrap();
+            cards::card_lines(
                 &shell,
                 &[],
                 &fx.ctx.store.config,
@@ -256,8 +249,8 @@ fn recovered_done_card_keeps_labels_with_flat_reads_over_retained_recovery_histo
                     head: Some(head),
                     ..Default::default()
                 },
-            );
-        }
+            )
+        };
         let report = work::snapshot().since(&before);
         assert_eq!(report.unattributed_hydrations(), 0);
         report.check_identity().unwrap();

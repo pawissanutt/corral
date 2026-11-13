@@ -37,6 +37,12 @@ mod cmd;
 pub use cmd::{CmdReply, Connected, SubmitReply};
 
 #[cfg(unix)]
+#[path = "daemon_client_classic.rs"]
+mod classic;
+#[cfg(unix)]
+pub use classic::ClassicWatch;
+
+#[cfg(unix)]
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub fn runtime_dir(store: &Store) -> PathBuf {
@@ -70,6 +76,8 @@ pub struct Client {
     read_capable: bool,
     #[cfg(unix)]
     cmd_capable: bool,
+    #[cfg(unix)]
+    classic_capable: bool,
 }
 
 impl Client {
@@ -112,6 +120,7 @@ impl Client {
             next_id: 0,
             read_capable: false,
             cmd_capable: false,
+            classic_capable: false,
         };
         let welcome: Welcome = client.request_with_timeout(
             corral_protocol::HELLO,
@@ -124,6 +133,7 @@ impl Client {
                     corral_protocol::BOARD_V1.into(),
                     corral_protocol::read::READ_V1.into(),
                     corral_protocol::cmd::CMD_V1.into(),
+                    corral_protocol::CLASSIC_V1.into(),
                 ],
                 client: ClientInfo {
                     kind: "cli".into(),
@@ -146,6 +156,10 @@ impl Client {
             .caps
             .iter()
             .any(|cap| cap == corral_protocol::cmd::CMD_V1);
+        client.classic_capable = welcome
+            .caps
+            .iter()
+            .any(|cap| cap == corral_protocol::CLASSIC_V1);
         Ok(client)
     }
 

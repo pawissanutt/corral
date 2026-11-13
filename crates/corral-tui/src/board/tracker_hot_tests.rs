@@ -222,14 +222,15 @@ fn frame_tracker_load_keeps_member_from_supplied_view_after_writer() {
         .unwrap();
     let expected = corral_ops::plan_progress(&fx.ctx, PLAN).unwrap();
     let before = work::snapshot();
-    let (ctx, sources) = {
+    let ctx = {
         let _hot = HotScope::enter();
         let ctx = Ctx {
             store: fx.ctx.store.read_only_snapshot().unwrap(),
             ..fx.ctx.clone()
         };
-        let sources = sources::FrameSources::load(&ctx).unwrap();
-        (ctx, sources)
+        // The frame's listing reads the open board on its pinned view first.
+        ctx.store.cached_board().unwrap();
+        ctx
     };
     let writer = Store::open_unobserved(fx.ctx.store.root()).unwrap();
     writer
@@ -240,9 +241,8 @@ fn frame_tracker_load_keeps_member_from_supplied_view_after_writer() {
         .unwrap();
     let progress = {
         let _hot = HotScope::enter();
-        // When the same component used by BoardSnapshot loads tracker progress.
-        let task = sources.tasks.iter().find(|task| task.id == PLAN).unwrap();
-        crate::plan::tracker::load(&ctx, task).unwrap().unwrap()
+        // When the component the classic frame calls on its pinned read projects the tracker.
+        corral_ops::plan_progress_in(&ctx, &ctx.store, PLAN).unwrap()
     };
     // Then the complete frame projection remains at its original committed state.
     assert_eq!(

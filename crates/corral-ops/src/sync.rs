@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use corral_core::{AutoStage, RunOutcome, Status, TaskHead};
@@ -74,6 +74,49 @@ pub fn sync_with_attention(
     Ok((changes, attention))
 }
 
+/// The daemon's pass: [`sync_with_attention`] with every step and task admitted by the
+/// incremental planner over `memory` (incremental contract A.2). A pass that stopped at an
+/// ownership fence, met an unknown inventory or failed leaves `memory` empty, so the next pass
+/// is full: the feed it consumed may hold changes for steps it never reached.
+pub fn sync_incremental(
+    ctx: &Ctx,
+    memory: &mut PassMemory,
+    request: PassRequest,
+) -> Result<(
+    Vec<Change>,
+    Option<crate::attention::AttentionBoard>,
+    PassReport,
+)> {
+    sync_incremental_at(ctx, memory, request, corral_core::clock::now())
+}
+
+fn sync_incremental_at(
+    ctx: &Ctx,
+    memory: &mut PassMemory,
+    request: PassRequest,
+    now: Timestamp,
+) -> Result<(
+    Vec<Change>,
+    Option<crate::attention::AttentionBoard>,
+    PassReport,
+)> {
+    // The planner compares this pass's config with the previous pass's (CFG); the pass
+    // itself reloads its own copy as every pass does.
+    let mut current = ctx.clone();
+    current.reload_config()?;
+    let mut attention = None;
+    let scope = SyncScope::All;
+    let mut planner = memory.begin(&current, request, now)?;
+    let mut pass = PassInputs::new(now, &SystemProcesses, None, &scope, &mut planner);
+    let result = run_passes(ctx, &mut pass, Some(&mut attention));
+    let complete = pass.started > 0 && pass.ended == pass.started;
+    let report = planner.finish(now);
+    if !complete || result.is_err() {
+        *memory = PassMemory::new();
+    }
+    Ok((result?, attention, report))
+}
+
 /// A plugin hook must belong to both the invoking server and the selected client.
 /// Config or CORRAL_HERDR_SESSION may retarget a client, but cannot transfer an event.
 pub fn sync_hook(ctx: &Ctx) -> Result<Vec<Change>> {
@@ -124,6 +167,7 @@ pub(crate) fn sync_in(ctx: &Ctx, scope: &SyncScope) -> Result<Vec<Change>> {
     )
 }
 
+/// Every non-daemon pass: all steps, all tasks, nothing measured.
 fn sync_passes(
     ctx: &Ctx,
     now: Timestamp,
@@ -132,111 +176,21 @@ fn sync_passes(
     attention: Option<&mut Option<crate::attention::AttentionBoard>>,
     scope: &SyncScope,
 ) -> Result<Vec<Change>> {
-    // Latch replacement/schema skew before any preparation reopens a snapshot and
-    // reports only a generic incompatible-schema error (T-587).
-    ctx.store.check_runtime()?;
-    let Some(_loop_pass) = ctx.store.loop_pass()? else {
-        return Ok(Vec::new());
-    };
-    let _pass = corral_core::timing::span("sync.pass");
-    if !crate::session_scope::owns_inventory(ctx)? {
-        return Ok(Vec::new());
-    }
-    // Unobserved opens defer PM upgrades until this ownership check has succeeded.
-    corral_core::agent::pm_state::migrate(&ctx.store)?;
-    // Recovery and derivation preparation run before the measured passes.
-    crate::settling::recover(ctx)?;
-    let mut rebuild = false;
-    let changes = hot_passes(ctx, now, processes, source, &mut rebuild, attention, scope)?;
-    // Rebuildable state recovers outside the measured hot path (plan T-253 section 4).
-    if rebuild && let Err(error) = crate::content_refresh::refresh_search_index(ctx) {
-        crate::content_refresh::defer_corrupt_blob_cache_refresh(error)?;
-    }
-    Ok(changes)
+    let mut gate = FullGate;
+    let mut pass = PassInputs::new(now, processes, source, scope, &mut gate);
+    run_passes(ctx, &mut pass, attention)
 }
 
-/// The measured passes; `rebuild` is set when a pass could not follow the search index.
-fn hot_passes(
-    ctx: &Ctx,
-    now: Timestamp,
-    processes: &dyn ProcessControl,
-    source: Option<&Ctx>,
-    rebuild: &mut bool,
-    mut attention: Option<&mut Option<crate::attention::AttentionBoard>>,
-    scope: &SyncScope,
-) -> Result<Vec<Change>> {
-    let _hot = corral_core::work::HotScope::enter();
-    let mut changes = Vec::new();
-    let mut attempted = std::collections::BTreeSet::new();
-    loop {
-        // The change-feed position, never a serialization of board history.
-        let before = ctx.store.view()?.seq();
-        let pass = sync_scoped(
-            ctx,
-            now,
-            processes,
-            source,
-            rebuild,
-            attention.as_deref_mut(),
-            scope,
-        )?;
-        let progressed = pass.iter().any(|change| change.to != Status::NeedsMe);
-        changes.extend(pass);
-        let after = ctx.store.view()?.seq();
-        // A concurrent owner's write is not this pass's progress. In
-        // particular, landing during rebuildable indexing must not make this
-        // same sync consume a new repair round on an owner-ready peer.
-        if !progressed || before == after {
-            break;
-        }
-        // Existing executors do the work. Recompute only after durable progress,
-        // never await an owner question or poll an unchanged external condition.
-        let workset = crate::pm_workset(ctx)?;
-        if workset.actions.is_empty() {
-            break;
-        }
-        let mut fresh_action = false;
-        for action in &workset.actions {
-            if let Some(id) = &action.action.task {
-                let task = ctx.store.head(id)?;
-                // A scoped pass cannot act on a foreign action, so it cannot continue on one.
-                if !scope.includes(task.project.as_deref()) {
-                    continue;
-                }
-                // Terminal samples cannot create another attempt. Only a new
-                // action, candidate/receipt, plan, round or policy can continue.
-                let key = crate::verification::digest(&serde_json::to_vec(&(
-                    &workset.policy_revision,
-                    id,
-                    action.authority,
-                    &action.action.evidence,
-                    task.rounds,
-                    task.current_run
-                        .as_ref()
-                        .map(|run| (&run.id, &run.gate, &run.review)),
-                    task.last_plan
-                        .as_ref()
-                        .map(|plan| (plan, plan.facts.children_rev)),
-                ))?);
-                fresh_action |= attempted.insert(key);
-            }
-        }
-        if !fresh_action {
-            break;
-        }
-    }
-    Ok(changes)
-}
-
+/// One pass in the call order of the incremental contract's step table (A.1.1): every step
+/// with a [`StepId`] runs only when `pass.gate` admits it; the rest run every pass.
 fn sync_scoped(
     ctx: &Ctx,
-    now: Timestamp,
-    processes: &dyn ProcessControl,
-    source: Option<&Ctx>,
+    pass: &mut PassInputs<'_>,
     rebuild: &mut bool,
     attention: Option<&mut Option<crate::attention::AttentionBoard>>,
-    scope: &SyncScope,
 ) -> Result<Vec<Change>> {
+    pass.started += 1;
+    let (now, scope) = (pass.now, pass.scope);
     let phase = corral_core::timing::span("sync.setup");
     // Reuse short ownership views, but re-read an expired guard after a slow external
     // step. This never retries the step; inventory still re-reads under its lease.
@@ -251,13 +205,24 @@ fn sync_scoped(
         return Ok(Vec::new());
     }
     ctx.store.check_runtime()?;
-    crate::hold::reconcile(ctx, scope)?;
-    crate::desktop_notifications::reconcile(ctx)?;
-    crate::report::scheduled_digest_and_report_at(ctx, now)?;
+    gated(ctx, pass.gate(), StepId::HoldFirst, || {
+        crate::hold::reconcile(ctx, scope)
+    })?;
+    gated(ctx, pass.gate(), StepId::DesktopFirst, || {
+        crate::desktop_notifications::reconcile(ctx)
+    })?;
+    gated(ctx, pass.gate(), StepId::Digest, || {
+        crate::report::scheduled_digest_and_report_at(ctx, now)
+    })?;
     // Status moves on any project's legacy queue entries and trackers: workspace sync only.
-    let mut changes = scope.workspace_only(|| crate::queue::migrate_backlog(ctx))?;
-    changes.extend(scope.workspace_only(|| crate::tracker::reconcile(ctx))?);
+    let mut changes = gated(ctx, pass.gate(), StepId::MigrateBacklog, || {
+        scope.workspace_only(|| crate::queue::migrate_backlog(ctx))
+    })?;
+    changes.extend(gated(ctx, pass.gate(), StepId::TrackerReconcile, || {
+        scope.workspace_only(|| crate::tracker::reconcile(ctx))
+    })?);
     let resources = crate::resources::observe(ctx, now)?;
+    pass.gate().observe_resources(&resources);
     // A holding observation already fences this operation. Reuse its real admission for
     // attention; launch-capable paths still perform their own fresh admission checks.
     let held_admission = resources
@@ -265,33 +230,60 @@ fn sync_scoped(
         .as_ref()
         .filter(|_| resources.held)
         .map(|reason| format!("waiting: machine busy ({reason})"));
-    changes.extend(resource_phase(ctx, &resources, now)?);
-    crate::lesson_distill::announce_due(ctx, now)?;
+    changes.extend(gated(ctx, pass.gate(), StepId::ResourcePhase, || {
+        resource_phase(ctx, &resources, now)
+    })?);
+    gated(ctx, pass.gate(), StepId::LessonsDue, || {
+        crate::lesson_distill::announce_due(ctx, now)
+    })?;
     let herdr_available = ctx.herdr.available();
-    if let Err(error) = crate::pm_policy::reconcile_pm_policy(ctx, herdr_available) {
-        // Policy-delivery trouble is visible, but cannot stop receipt collection
-        // or unrelated already-authorized work.
-        crate::messages::report(None, "pm-policy", format!("{error:#}"));
-    }
+    pass.gate().observe_herdr(herdr_available);
+    gated(ctx, pass.gate(), StepId::PmPolicy, || {
+        if let Err(error) = crate::pm_policy::reconcile_pm_policy(ctx, herdr_available) {
+            // Policy-delivery trouble is visible, but cannot stop receipt collection
+            // or unrelated already-authorized work.
+            crate::messages::report(None, "pm-policy", format!("{error:#}"));
+        }
+        Ok(())
+    })?;
     if !herdr_available {
-        scope.workspace_only(|| crate::hooks::reconcile_post_land(ctx))?;
-        crate::gate::collect_finished(ctx, now)?;
-        crate::storage_gc::lifecycle_pass(ctx, now)?;
-        crate::storage_gc::outputs::schedule(ctx, now)?;
+        gated(ctx, pass.gate(), StepId::PostLand, || {
+            scope.workspace_only(|| crate::hooks::reconcile_post_land(ctx))
+        })?;
+        gated(ctx, pass.gate(), StepId::GateCollect, || {
+            crate::gate::collect_finished(ctx, now).map(drop)
+        })?;
+        gated(ctx, pass.gate(), StepId::LifecycleGc, || {
+            crate::storage_gc::lifecycle_pass(ctx, now)
+        })?;
+        gated(ctx, pass.gate(), StepId::OutputsSchedule, || {
+            crate::storage_gc::outputs::schedule(ctx, now)
+        })?;
         let search_stamp = crate::content_refresh::task_stamp(ctx)?;
         for head in scope.heads(open_heads(ctx)?) {
-            crate::obligations_sync::reconcile_head(ctx, &ctx.store.head(&head.id)?, now, None)?;
+            gated_task(ctx, pass.gate(), StepId::Obligations, &head, || {
+                crate::obligations_sync::reconcile_head(ctx, &ctx.store.head(&head.id)?, now, None)
+            })?;
         }
-        scope.workspace_only(|| crate::movement::reconcile(ctx, now, false))?;
-        scope.workspace_only(|| {
-            reconcile_attention(ctx, now, None, attention, held_admission.as_deref())
+        gated(ctx, pass.gate(), StepId::Movement, || {
+            scope.workspace_only(|| crate::movement::reconcile(ctx, now, false))
         })?;
-        crate::pm_events::push_events(ctx, false)?;
-        crate::desktop_notifications::reconcile(ctx)?;
+        gated(ctx, pass.gate(), StepId::Attention, || {
+            scope.workspace_only(|| {
+                reconcile_attention(ctx, now, None, attention, held_admission.as_deref())
+            })
+        })?;
+        gated(ctx, pass.gate(), StepId::PmEvents, || {
+            crate::pm_events::push_events(ctx, false)
+        })?;
+        gated(ctx, pass.gate(), StepId::DesktopSecond, || {
+            crate::desktop_notifications::reconcile(ctx)
+        })?;
         match crate::content_refresh::refresh_after_sync_if_due(ctx, &[], &search_stamp) {
             Ok(followed) => *rebuild |= !followed,
             Err(error) => crate::content_refresh::defer_corrupt_blob_cache_refresh(error)?,
         }
+        pass.ended += 1;
         return Ok(changes);
     }
     drop(phase);
@@ -306,34 +298,56 @@ fn sync_scoped(
         // lease here; the healthy path already owns one through inventory.
         if let Some(_ownership) = ctx.store.try_begin_session_pass()? {
             let board = ctx.store.board(None)?.detach();
-            let source_owned = source
+            let source_owned = pass
+                .source
                 .map(|source| crate::session_scope::owns_board(source, &ctx.store, &board))
                 .transpose()?
                 .unwrap_or(true);
             if source_owned && crate::session_scope::owns_board(ctx, &ctx.store, &board)? {
-                crate::gate::collect_finished(ctx, now)?;
+                gated(ctx, pass.gate(), StepId::GateCollect, || {
+                    crate::gate::collect_finished(ctx, now).map(drop)
+                })?;
             }
         }
-        scope.workspace_only(|| {
-            reconcile_attention(ctx, now, None, attention, held_admission.as_deref())
+        gated(ctx, pass.gate(), StepId::Attention, || {
+            scope.workspace_only(|| {
+                reconcile_attention(ctx, now, None, attention, held_admission.as_deref())
+            })
         })?;
         return Ok(changes);
     };
+    pass.gate().observe_inventory(&inventory.panes);
     let search_stamp = crate::content_refresh::task_stamp(ctx)?;
-    let board = ctx.store.board(None)?.detach();
+    // The daemon's planner (the measuring gate) refreshes this handle's cached board, so a
+    // quiet pass decodes no unchanged head; every other pass reads the open board whole.
+    let board = if pass.gate().measures() {
+        ctx.store.cached_board()?
+    } else {
+        ctx.store.board(None)?
+    }
+    .detach();
     crate::agent::effects::failpoint("sync_tasks_read");
     if !crate::session_scope::owns_board(ctx, &ctx.store, &board)? {
         return Ok(changes);
     }
-    if let Some(source) = source
+    if let Some(source) = pass.source
         && !crate::session_scope::owns_board(source, &ctx.store, &board)?
     {
         return Ok(changes);
     }
-    crate::gate::collect_finished(ctx, now)?;
-    crate::scratch_reclaim::reclaim_scratch_pass(ctx, now)?;
-    crate::storage_gc::lifecycle_pass(ctx, now)?;
-    crate::storage_gc::outputs::schedule(ctx, now)?;
+    pass.gate().observe_heads(&board.heads);
+    gated(ctx, pass.gate(), StepId::GateCollect, || {
+        crate::gate::collect_finished(ctx, now).map(drop)
+    })?;
+    gated(ctx, pass.gate(), StepId::ScratchReclaim, || {
+        crate::scratch_reclaim::reclaim_scratch_pass(ctx, now)
+    })?;
+    gated(ctx, pass.gate(), StepId::LifecycleGc, || {
+        crate::storage_gc::lifecycle_pass(ctx, now)
+    })?;
+    gated(ctx, pass.gate(), StepId::OutputsSchedule, || {
+        crate::storage_gc::outputs::schedule(ctx, now)
+    })?;
     let panes: HashMap<String, PaneInfo> = inventory
         .panes
         .iter()
@@ -341,131 +355,38 @@ fn sync_scoped(
         .map(|p| (p.pane_id.clone(), p))
         .collect();
     let snapshot = inventory.snapshot(&panes);
-    crate::cleanup::sweep_inventory(ctx, &board, &inventory.panes);
-    // Each task's head is read afresh: gate collection above may have just recorded a result.
-    for head in board
-        .heads
-        .iter()
-        .filter(|head| scope.includes(head.project.as_deref()))
-    {
-        if let Some(change) =
-            crate::obligations_sync::reconcile_one(ctx, &head.id, now, Some(&panes))?
-        {
-            changes.push(change);
-        }
-    }
-    let mut native: BTreeMap<_, _> = ctx
-        .store
-        .unfinished_native_heads()?
-        .into_iter()
-        .map(|head| (head.id.clone(), head.detach()))
-        .collect();
-    for head in scope.heads(open_heads(ctx)?) {
-        if !crate::session_scope::owns_head(ctx, &head)? {
-            continue;
-        }
-        crate::plan_pilot::reconcile(ctx, &head.to_shell_task()?, snapshot, now)?;
-        let reconciled = ctx.store.head(&head.id)?;
-        if reconciled.status != head.status {
-            changes.push(Change {
-                task: head.id.clone(),
-                from: head.status,
-                to: reconciled.status,
-                note: reconciled
-                    .last_plan_run
-                    .as_ref()
-                    .and_then(|r| r.pending_reply.clone())
-                    .unwrap_or_else(|| "planner agent state changed".into()),
-                stage: None,
-            });
-        }
-        let current = reconciled.to_shell_task()?;
-        if let Some(change) = crate::launch_exit::plan_review(ctx, &current, snapshot, now)? {
-            changes.push(change);
-        }
-        crate::plan_acceptance::reconcile_exit(ctx, &current)?;
-        if let Some(change) =
-            crate::reviewer::reconcile_review_sampled_at(ctx, &head.id, now, snapshot)?
-        {
-            changes.push(change);
-        }
-        // One hook call per task holding live corral-pi work; other tasks never reach it.
-        let (head, agent) = if native.remove(&head.id).is_some() {
-            let synced = crate::agent::hooks::sync::task_id(ctx, &head.id, now)?;
-            (ctx.store.head(&head.id)?, synced)
-        } else {
-            (ctx.store.head(&head.id)?, Default::default())
-        };
-        let shell = head.to_shell_task()?;
-        let agent_healthy = agent.current_worker_healthy(&shell);
-        close_held_run(ctx, &head, &panes, now)?;
-        if !crate::plan_pilot::handles(&shell) && head.status.holds_slot() && head.launch.is_none()
-        {
-            if let Some(change) = crate::provider_stall::advance_agent(ctx, &head, &panes, now)? {
-                changes.push(change);
-                continue;
-            }
-            if let Some(change) = reconcile(
-                ctx,
-                &head,
-                snapshot,
-                now,
-                processes,
-                agent_healthy,
-                agent.attention.as_deref(),
-            )? {
-                changes.push(change);
-            }
-        }
-    }
-    // Indexed owed work survives terminal status and retired planning/review containers.
-    for (_, head) in native {
-        if scope.includes(head.project.as_deref()) && crate::session_scope::owns_head(ctx, &head)? {
-            crate::agent::hooks::sync::task_id(ctx, &head.id, now)?;
-        }
-    }
-    scope.workspace_only(|| crate::delivery::owner::reconcile_all(ctx))?;
-    crate::pm_inbox::sweep(ctx)?;
-    crate::agent::hooks::sync::pass(ctx)?;
-    crate::review_budget::reconcile(ctx, snapshot, now)?;
+    gated(ctx, pass.gate(), StepId::SweepInventory, || {
+        crate::cleanup::sweep_inventory(ctx, &board, &inventory.panes);
+        Ok(())
+    })?;
+    changes.extend(head_phase::reconcile_heads(
+        ctx, pass, &board, &panes, snapshot,
+    )?);
+    gated(ctx, pass.gate(), StepId::OwnerDelivery, || {
+        scope.workspace_only(|| crate::delivery::owner::reconcile_all(ctx))
+    })?;
+    gated(ctx, pass.gate(), StepId::PmInbox, || {
+        crate::pm_inbox::sweep(ctx)
+    })?;
+    gated(ctx, pass.gate(), StepId::AgentHooksPass, || {
+        crate::agent::hooks::sync::pass(ctx)
+    })?;
+    gated(ctx, pass.gate(), StepId::ReviewBudget, || {
+        crate::review_budget::reconcile(ctx, snapshot, now)
+    })?;
     // Launching queued/autopilot work must acquire an exclusive ownership claim.
     // No consumer below this point receives the sampled pane IDs.
     drop(inventory);
     drop(phase);
-    let _phase = corral_core::timing::span("sync.dispatch");
-    // Post-land hooks run commands that may call corral: never under storage or the lease (T-509).
-    scope.workspace_only(|| crate::hooks::reconcile_post_land(ctx))?;
-    scope.workspace_only(|| crate::assistant::workflow::handoff::recovery::reconcile(ctx))?;
-    scope.workspace_only(|| crate::hold::resume_gates(ctx))?;
-    let native = scope.heads(ctx.store.unfinished_native_heads()?);
-    crate::agent::gate_queue::advance_heads(ctx, &native)?;
-    crate::plan_pilot::advance_all(ctx, now, scope)?;
-    changes.extend(scope.workspace_only(|| crate::availability::advance_all(ctx, now))?);
-    changes.extend(crate::autopilot::advance_all(ctx, now, scope)?);
-    crate::hold::reconcile(ctx, scope)?;
-    scope.workspace_only(|| crate::movement::reconcile(ctx, now, true))?;
-    changes.extend(scope.workspace_only(|| crate::dashboard::advance(ctx, now))?);
-    changes.extend(crate::parked::reacquire_woken(
+    changes.extend(dispatch_phase::dispatch(
         ctx,
-        &scope.heads(open_heads(ctx)?),
+        pass,
+        rebuild,
+        attention,
+        &search_stamp,
+        held_admission.as_deref(),
     )?);
-    changes.extend(crate::queue_drain::start_queued(ctx, now, scope)?);
-    changes.extend(crate::dispatch_policy::advance(ctx, now, scope)?);
-    scope.workspace_only(|| {
-        let pm_live = Some(crate::pm::live_pm_pane(ctx)?.is_some());
-        reconcile_attention(ctx, now, pm_live, attention, held_admission.as_deref())
-    })?;
-    crate::agent::effects::failpoint("sync_events");
-    crate::pm_events::push_events(ctx, true)?;
-    crate::desktop_notifications::reconcile(ctx)?;
-    match crate::content_refresh::refresh_after_sync_if_due(ctx, &[], &search_stamp) {
-        Ok(followed) => *rebuild |= !followed,
-        Err(error) => crate::content_refresh::defer_corrupt_blob_cache_refresh(error)?,
-    }
-    // External container IPC follows admission and holds no inventory lease.
-    if let Err(error) = crate::sandbox_cleanup::sweep(ctx) {
-        crate::messages::report(None, "sandbox-cleanup", format!("{error:#}"));
-    }
+    pass.ended += 1;
     Ok(changes)
 }
 
@@ -476,6 +397,29 @@ use read_phase::{open_heads, watchdog_inputs};
 #[path = "sync/held_phase.rs"]
 mod held_phase;
 use held_phase::close_held_run;
+
+#[path = "sync/pass_gate.rs"]
+mod pass_gate;
+use pass_gate::{PassInputs, gated, gated_task, run_passes};
+pub(crate) use pass_gate::{effect, mark};
+
+#[path = "sync/head_phase.rs"]
+mod head_phase;
+
+#[path = "sync/dispatch_phase.rs"]
+mod dispatch_phase;
+
+#[path = "sync/gate.rs"]
+mod gate;
+pub use gate::StepId;
+pub(crate) use gate::{Effect, FullGate, StepGate};
+
+#[path = "sync/incremental.rs"]
+mod incremental;
+pub use incremental::{FullReason, PassMemory, PassReport, PassRequest};
+
+#[path = "sync/task_due.rs"]
+mod task_due;
 
 #[path = "sync/scope.rs"]
 mod scope;
@@ -907,3 +851,7 @@ mod guard_tests;
 #[cfg(test)]
 #[path = "sync_lease_tests.rs"]
 mod lease_tests;
+
+#[cfg(test)]
+#[path = "sync/incremental_pass_tests.rs"]
+mod incremental_pass_tests;

@@ -131,9 +131,14 @@ fn header_counts_derived_membership_on_load_and_worker_refresh() {
             Ok(())
         })
         .unwrap();
-    let snapshot = crate::board::BoardSnapshot::load_with_attention(
+    let snapshot = crate::board::BoardSnapshot::load_cached(
         &fx.ctx,
-        crate::attention::load(&fx.ctx, fx.now.get()),
+        &mut corral_ops::classic::ClassicCache::new(),
+        corral_ops::classic::ClassicInputs {
+            now: fx.now.get(),
+            attention: Some(crate::attention::load_board(&fx.ctx, fx.now.get())),
+            force: true,
+        },
     )
     .unwrap();
 

@@ -21,6 +21,7 @@ use crate::git_watch::{GitChanges, GitTarget, GitWatch, stat_fingerprint};
 
 mod parts;
 mod plan;
+pub use parts::gauges;
 #[cfg(test)]
 mod tests;
 
@@ -166,8 +167,8 @@ struct Plan<'a> {
     git: &'a GitChanges,
     stages_due: bool,
     attention_due: bool,
-    /// The caller supplied attention, so the cache does not compute it.
-    supplied: bool,
+    /// The caller's attention; the cache then does not compute it.
+    supplied: Option<&'a Result<AttentionBoard, String>>,
 }
 
 /// Everything one pinned read recomputed; parts left None keep their cached value.
@@ -181,7 +182,10 @@ struct Computed {
     stages: Option<(BTreeMap<String, String>, bool, bool)>,
     automation: Option<BTreeMap<String, String>>,
     plan_review: Option<BTreeMap<String, String>>,
+    /// The attention board this read computed (None when supplied or not dirty).
     attention: Option<Result<AttentionBoard, String>>,
+    /// The operating text, read back with this read's or the supplied attention.
+    operating: Option<String>,
 }
 
 impl ClassicCache {
@@ -252,7 +256,7 @@ impl ClassicCache {
             git: &git,
             stages_due: self.gating && due(self.stages_at, STAGES_EVERY),
             attention_due: due(self.attention_at, ATTENTION_EVERY),
-            supplied: inputs.attention.is_some(),
+            supplied: inputs.attention.as_ref(),
         };
         let any = match self.checked_through {
             Some(cursor) => FeedDelta::since(&*ctx.store.view()?, cursor, FEED_LIMIT).any(),
@@ -265,32 +269,36 @@ impl ClassicCache {
             || !git.projects.is_empty()
             || plan.stages_due
             || plan.attention_due
-            || plan.supplied
+            || plan.supplied.is_some()
             || due(self.gauges_at, GAUGES_EVERY);
         if !work {
             return Ok(None);
         }
         if any || full {
-            // Preparation may wait on derivation locks or do substantial filesystem work.
+            // Preparation may write, wait on derivation locks or do substantial filesystem
+            // work: it runs on the live store before the frame's one pinned read, which
+            // therefore observes it (as the board's frame load did). The operating text's
+            // workset prepares its own derivations on the pinned read, as `pm_read::evaluate`
+            // does; its failures, like attention's, degrade only that part of the frame.
             let _span = corral_core::timing::span("classic.prepare");
+            let _prepare = corral_core::work::Preparation::enter();
             crate::lesson_rows::prepare_coordination(ctx)?;
         }
         let _hot = corral_core::work::HotScope::enter();
         // Gauges, admission and attention share one host observation.
         let sampled = sampled(ctx);
         let mut computed = sampled.read_step(|read| self.compute(read, &plan))?;
-        let attention = match inputs.attention {
-            Some(attention) => Some(attention),
-            None => computed.attention.take(),
-        };
-        let attention = attention.map(|attention| {
-            let _span = corral_core::timing::span("classic.attention");
-            let operating = operating(&sampled, &attention);
-            Attention {
+        let attention = match (computed.operating.take(), inputs.attention) {
+            (Some(operating), Some(attention)) => Some(Attention {
                 attention,
                 operating,
-            }
-        });
+            }),
+            (Some(operating), None) => computed.attention.take().map(|attention| Attention {
+                attention,
+                operating,
+            }),
+            (None, _) => None,
+        };
         if config_changed {
             self.config = Some(ctx.store.config.clone());
         }
@@ -435,11 +443,19 @@ impl ClassicCache {
                 |task| parts::plan_review(read, task),
             )
         });
-        let attention =
-            (!plan.supplied && (full || delta.any() || plan.attention_due)).then(|| {
+        let attention = match plan.supplied {
+            Some(_) => None,
+            None if full || delta.any() || plan.attention_due => {
                 let _span = corral_core::timing::span("classic.attention");
-                attention_at(read, plan.now)
-            });
+                Some(attention_at(read, plan.now))
+            }
+            None => None,
+        };
+        // On this pinned read: the workset skips its live preparation (done before the read).
+        let operating = plan.supplied.or(attention.as_ref()).map(|attention| {
+            let _span = corral_core::timing::span("classic.attention");
+            operating(read, attention)
+        });
         Ok(Computed {
             seq: delta.through,
             full,
@@ -450,6 +466,7 @@ impl ClassicCache {
             automation,
             plan_review,
             attention,
+            operating,
         })
     }
 
@@ -469,6 +486,7 @@ impl ClassicCache {
             automation,
             plan_review,
             attention: _,
+            operating: _,
         } = computed;
         self.checked_through = Some(seq);
         if full {
@@ -711,7 +729,9 @@ fn attention_at(ctx: &Ctx, now: Timestamp) -> Result<AttentionBoard, String> {
     result.map_err(|error| format!("{error:#}"))
 }
 
-/// The operating header read back with the frame's attention, as `board_readback` does.
+/// The operating header read back with the frame's attention, as `board_readback` does. On
+/// the frame's pinned ctx the workset evaluates on that same view (no view of its own); its
+/// live-store preparation ran before the read.
 fn operating(ctx: &Ctx, attention: &Result<AttentionBoard, String>) -> String {
     let workset = attention
         .as_ref()

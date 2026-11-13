@@ -284,7 +284,7 @@ fn missing_read_capability_never_sends_a_read_request() {
         );
     });
     let mut client = Client::connect_at(&socket).unwrap().unwrap();
-    assert!(client.read(ReadKind::BoardReadback).unwrap().is_none());
+    assert!(client.read(ReadKind::PmNext).unwrap().is_none());
     assert!(client.nudge("fixture", None).unwrap().completed);
     server.join().unwrap();
 }

@@ -3,9 +3,6 @@
 mod strip;
 pub(crate) use strip::{StripState, load as load_strip};
 pub(crate) use strip::{action, draw, height};
-pub(crate) fn gate_state(state: corral_ops::watch::ProgressState) -> &'static str {
-    gate::state(state).0
-}
 mod content;
 mod gate;
 mod plan_cells;

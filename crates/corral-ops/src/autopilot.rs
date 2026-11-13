@@ -65,11 +65,24 @@ enum GateNow {
 /// `corral autopilot off` also stops long-running syncs (corrald, or a board without it); with the kill switch off
 /// nothing auto-advances. Transient failures use the diagnostic sink and retry on the next sync.
 /// A project scope advances only that project's tasks and leaves workspace deliveries to the next sync.
+#[cfg(test)]
 pub(crate) fn advance_all(
     ctx: &Ctx,
     now: Timestamp,
     scope: &crate::sync::SyncScope,
 ) -> Result<Vec<Change>> {
+    advance_tasks(ctx, now, scope, &mut crate::sync::FullGate)
+}
+
+/// [`advance_all`] advancing only the Review tasks `gate` admits (sync row 34), and the
+/// workspace tail when it admits that (row 34b).
+pub(crate) fn advance_tasks(
+    ctx: &Ctx,
+    now: Timestamp,
+    scope: &crate::sync::SyncScope,
+    gate: &mut dyn crate::sync::StepGate,
+) -> Result<Vec<Change>> {
+    use crate::sync::{StepId, effect, mark};
     let _span = corral_core::timing::span("sync.autopilot_advance_all");
     let _attribution = ctx.store.attribute(corral_core::Actor::Autopilot);
     let mut store = ctx.store.clone();
@@ -82,15 +95,21 @@ pub(crate) fn advance_all(
     let review = corral_core::timing::span("sync.autopilot_advance_all.review_tasks");
     let tasks = output::review_tasks(&ctx)?;
     drop(review);
-    for task in tasks {
+    for listed in tasks {
         let _span = corral_core::timing::span("sync.autopilot_advance_all.task");
-        let task = ctx.store.head(&task.id)?;
+        // Decided on the listed head, so a skipped task is not read again.
+        if !gate.task(StepId::Autopilot, &listed) {
+            continue;
+        }
+        let task = ctx.store.head(&listed.id)?;
         if !scope.includes(task.project.as_deref()) {
             continue;
         }
         if crate::plan_pilot::handles_ref(&task)? {
             continue;
         }
+        let before = mark(&ctx, gate)?;
+        let count = changes.len();
         // Defer typed markers to advance, which records them under the task lock.
         let authority = if task.infra_wait.is_none() {
             let _span = corral_core::timing::span("sync.autopilot_advance_all.authority");
@@ -117,15 +136,22 @@ pub(crate) fn advance_all(
                 output::record_error(&ctx, &task, &error)?;
             }
         }
+        let acted = effect(&ctx, before, changes.len() - count)?;
+        gate.finished_task(StepId::Autopilot, &task.id, acted);
     }
     // Cowork deliveries and due plan checkpoints span every project.
-    if *scope == crate::sync::SyncScope::All {
+    if *scope == crate::sync::SyncScope::All && gate.run(StepId::AutopilotWorkspace) {
+        let before = mark(&ctx, gate)?;
         {
             let _span = corral_core::timing::span("sync.autopilot_advance_all.cowork");
             cowork::deliver_pending(&ctx);
         }
-        let _span = corral_core::timing::span("sync.autopilot_advance_all.checkpoints");
-        crate::plan_acceptance::checkpoint::start_due(&ctx);
+        {
+            let _span = corral_core::timing::span("sync.autopilot_advance_all.checkpoints");
+            crate::plan_acceptance::checkpoint::start_due(&ctx);
+        }
+        let acted = effect(&ctx, before, 0)?;
+        gate.finished(StepId::AutopilotWorkspace, acted);
     }
     Ok(changes)
 }

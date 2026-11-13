@@ -31,15 +31,16 @@ socket path from this command: `CORRAL_SOCKET="$(corral daemon socket)"`.
 
 With a daemon owning the loop, `corral sync` requests a pass, waits at most 20 seconds
 and reports whether it completed. It exits successfully even if that wait expires.
-The hook nudges without opening the store. The board reads state back on its periodic
-ticks without nudging, so the daemon keeps its own pace; an explicit board refresh asks
-for a pass and waits up to five seconds for it.
+The hook nudges without opening the store. The classic board follows the frame the
+daemon pushes (see [Served reads](#served-reads)) without nudging, so the daemon keeps
+its own pace; an explicit board refresh asks for a full pass and waits up to five
+seconds for it.
 The daemon performs usage refresh and database maintenance instead of the board.
 Without a daemon, sync runs one pass, hooks retain coalesced passes, and the board
 retains its periodic sync and maintenance. Read-only PM commands never drive sync.
 
-The daemon keeps the board's pacing rule: wait 19 times the CPU time used by a
-pass, clamped between 2 and 60 seconds. A nudge starts the next pass at once.
+Passes are incremental and paced as described in
+[Incremental passes](#incremental-passes). A nudge starts the next pass at once.
 PM, runtime and store gauges are sampled about every 15 seconds.
 Connections are capped at 64, require hello within five seconds, and have absolute
 per-frame I/O deadlines. Client connect is nonblocking and deadline-bounded.
@@ -47,6 +48,66 @@ Orderly shutdown allows at most two seconds for outstanding connection writers
 after closing the loop, so a draining stop's reply is written before process exit.
 Interrupted or aborted accepts retry; descriptor exhaustion retries after 500 ms.
 Other listener failures drain and exit nonzero so the service manager can restart.
+
+## Incremental passes
+
+The daemon remembers, in memory only, what each sync step last saw: the store change
+feed position, the herdr pane inventory, Git ref and index file stats of open tasks'
+worktrees and of project repositories, resource admission, herdr availability, and
+when each step and task last ran or comes due. A pass then runs a step only when one
+of its inputs changed or a time it depends on came due, and runs the per-task steps
+only for tasks whose state, panes, worktree, task-keyed records or deadlines changed.
+Steps whose inputs live outside the store (transcripts, gate results, PM health,
+harness files) still run at least every 20 or 60 seconds, the sandbox sweep every five
+minutes. Usage refresh, PM supervision and database maintenance follow the same
+rules after the pass; the heartbeat is touched on every pass.
+
+A quiet pass is one where nothing changed and nothing came due: it only checks its
+inputs (one feed scan, one herdr pane listing, a few file stats per worktree and
+repository, no Git subprocess, no store write) and costs tens of milliseconds instead
+of the second or more a full pass takes.
+
+A pass is full, running every step for every open task as `corral sync` does without a
+daemon, when:
+
+- the daemon has just started (memory is empty);
+- `corral sync`, `corral daemon nudge` or an explicit board refresh asked for it
+  (hook and PM nudges only start an incremental pass early);
+- the configuration or the session binding changed, or herdr became available or
+  unavailable;
+- the change feed has a gap or more than 4,096 entries since the previous pass;
+- the clock went backwards or jumped forward by more than ten minutes;
+- ten minutes passed since the last full pass. This bounds how late a step can react
+  to an input the rules do not watch.
+
+Pacing: after a quiet pass the daemon waits 19 times the pass's CPU time, clamped
+between 5 and 60 seconds; after a pass that did work it waits 19 times the CPU time,
+clamped between 2 and 60 seconds. Either wait is shortened to the earliest time a
+step or task comes due (an idle or startup threshold, a deadline, a schedule). A
+nudge starts the next pass at once. Expect one extra "echo" pass after any pass that
+wrote: it sees those writes, reruns the affected steps once and settles.
+
+Two switch files beside the daemon socket change this, checked at the start of every
+pass like the timing switch ([timing guide](timing.md)); no restart is needed:
+
+- `sync-full-on` turns skipping off: every pass is full. Use it to rule out the
+  incremental planner when something reacts late, or as a rollback switch.
+- `sync-audit-on` makes every pass full while still deciding what an incremental pass
+  would have skipped. A step or task that would have been skipped but wrote to the store
+  or reported a change is printed to the daemon's stderr (the service journal) as
+  `corrald sync audit: <Step>[ task <id>] would have been skipped but acted`. If both
+  files exist, `sync-full-on` wins and nothing is audited.
+
+```sh
+touch "$(dirname "$(corral daemon socket)")/sync-audit-on"
+rm "$(dirname "$(corral daemon socket)")/sync-audit-on"
+```
+
+With timing on, each pass record counts audit findings in span `sync.audit.wrong_skip`
+(`n` is the number of wrong skips in that pass). It should stay absent or zero; any
+finding names a rule that misses an input, so report the printed step and task. Spans
+`sync.quiet` and `sync.full` appear once in the record of each quiet or full pass, and
+`sync.skip` counts the steps and tasks a pass skipped.
 
 ## Projected board
 
@@ -69,24 +130,28 @@ until `sub.ack`. Slow subscribers retain only a cursor, never a backlog of rows.
 `welcome.caps` negotiates `board.v1`; `welcome.daemon.epoch` identifies the projection.
 `welcome.daemon.store` is the store directory path (the workspace root's `.corral`).
 Health deltas reflect condition or completed-pass changes, not elapsed-age ticks.
+Topic `classic` (capability `classic.v1`) carries only a change notice for the classic
+board frame: epoch, revision, store sequence and time. One notice is in flight until
+`sub.ack`, the latest revision wins, and a different epoch resets the topic.
 
 ## Served reads
 
 The socket's `read.v1` capability serves PM next/brief readouts, the workspace PM
-agent's bounded `read_next` / `read_brief` documents, and the classic board's
-attention snapshot and operating status. A dedicated reader thread computes them
-without holding up sync. PM and agent PM documents reuse their last result only
-while it is younger than ten seconds and no non-lease store change occurred;
-agent PM documents are never warmed in the background.
+agent's bounded `read_next` / `read_brief` documents, and the classic board's frame.
+A dedicated reader thread computes them without holding up sync. PM and agent PM
+documents reuse their last result only while it is younger than ten seconds and no
+non-lease store change occurred; agent PM documents are never warmed in the background.
 
-The classic board's read-back stays warm for 120 seconds after its latest request.
-While warm, the reader refreshes it in the background after a non-lease change or
-once it is older than 30 seconds, with refresh starts at least ten seconds apart.
-Queued client requests take priority. The board can reuse an unchanged read-back
-younger than 45 seconds, so periodic ticks normally receive an already-computed
-result. Background sequence checks run at most once per second and stop when cold.
-Lease bookkeeping does not affect readouts; bounded change-feed checks ignore it.
-The board can also reuse the last pass's attention under the same non-lease rule.
+The classic board's frame (`classic_frame`: tasks, counts, pins, plan progress,
+gauges, waits, attention and operating status) is computed by the daemon on the reader
+thread while a board subscribes to `classic`, and for 120 seconds after the latest frame
+read. It recomputes only the parts whose inputs changed, at most every 500 ms, and
+publishes a new revision only when the content changed; every board receives the same
+encoded document. A full pass asked for by the owner recomputes every part. Queued client
+requests take priority. Lease bookkeeping does not affect readouts; bounded change-feed
+checks ignore it. The frame reuses the last pass's attention under the same non-lease
+rule. Without a daemon, or when the read is refused, the board computes the same frame
+itself.
 
 Readouts contain executable-bound commands and action IDs, so a request must match
 both the daemon's executable path and build identity; mismatches are refused.

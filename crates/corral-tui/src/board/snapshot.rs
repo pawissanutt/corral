@@ -1,4 +1,8 @@
-//! Store-backed board data, loaded on the sync worker and applied without store I/O.
+//! Board data from a classic frame, computed by the daemon or by a local `ClassicCache` on the
+//! sync worker, and applied without store I/O.
+use anyhow::Context as _;
+use corral_ops::classic::{ClassicCache, ClassicFrame, ClassicInputs};
+
 use super::*;
 
 /// An owned board refresh. UI-only state (selection, scroll, overlays and clock) stays in the view.
@@ -30,148 +34,93 @@ impl BoardSnapshot {
         Self::load_at(ctx, Timestamp::now())
     }
 
+    /// A full local frame at `now`, computed from scratch.
     pub(super) fn load_at(ctx: &Ctx, now: Timestamp) -> Result<Self> {
-        Self::load_refresh(ctx, now, None)
+        Self::load_cached(
+            ctx,
+            &mut ClassicCache::new(),
+            ClassicInputs {
+                now,
+                attention: None,
+                force: true,
+            },
+        )
     }
 
-    pub(crate) fn load_with_attention(
+    /// Refreshes the caller's local frame cache, then applies its current frame.
+    pub(crate) fn load_cached(
         ctx: &Ctx,
-        attention: crate::attention::Snapshot,
+        cache: &mut ClassicCache,
+        inputs: ClassicInputs,
     ) -> Result<Self> {
-        Self::load_refresh(ctx, Timestamp::now(), Some(attention))
+        cache.refresh(ctx, inputs)?;
+        let frame = cache
+            .current()
+            .context("classic frame cache has no frame after a refresh")?;
+        Self::from_frame(ctx, ClassicFrame::clone(&frame))
     }
 
-    fn load_refresh(
-        ctx: &Ctx,
-        now: Timestamp,
-        attention: Option<crate::attention::Snapshot>,
-    ) -> Result<Self> {
-        // Preparation may wait on derivation locks or do substantial filesystem work.
-        // Never age a frame view while it runs. Sample the host once, outside the
-        // retryable read derivation; all later admission reads replay that observation.
-        let _span = corral_core::timing::span("board.snap.prepare");
-        corral_ops::lesson_rows::prepare_coordination(ctx)?;
-        let _hot = corral_core::work::HotScope::enter();
-        let sampled = crate::attention::refresh_context(ctx);
-        drop(_span);
-        sampled.read_step(|read| Self::load_view(read, ctx.clone(), now, attention.clone()))
-    }
-
-    fn load_view(
-        ctx: &Ctx,
-        live_ctx: Ctx,
-        now: Timestamp,
-        attention: Option<crate::attention::Snapshot>,
-    ) -> Result<Self> {
-        let (sources, finishes, unreviewed) = ctx.read_step(|read| {
-            let _span = corral_core::timing::span("board.snap.sources");
-            let mut sources = sources::FrameSources::load(read)?;
-            drop(_span);
-            let _span = corral_core::timing::span("board.snap.finishes");
-            let finishes = corral_ops::finishes_for(
-                &read.store,
-                &sources
-                    .heads
-                    .iter()
-                    .filter(|h| matches!(h.status, Status::Done | Status::Dropped))
-                    .map(|h| h.id.clone())
-                    .collect::<Vec<_>>(),
-            )?;
-            drop(_span);
-            let _span = corral_core::timing::span("board.snap.unreviewed");
-            let mut unreviewed = HashMap::new();
-            for head in &sources.heads {
-                if head.status == Status::Review {
-                    let count = head
-                        .summary
-                        .kept_artifacts
-                        .saturating_sub(head.reviewed_keep_artifacts()?);
-                    if count > 0 {
-                        unreviewed.insert(
-                            head.id.clone(),
-                            usize::try_from(count).unwrap_or(usize::MAX),
-                        );
-                    }
-                }
-            }
-            drop(_span);
-            sources.heads = sources
-                .heads
-                .into_iter()
-                .map(corral_core::TaskHead::detach)
-                .collect();
-            Ok((sources, finishes, unreviewed))
-        })?;
-        let sources::FrameSources {
-            tasks,
+    /// The only constructor besides tests; daemon and local paths both end here. Reads no store.
+    pub(crate) fn from_frame(ctx: &Ctx, frame: ClassicFrame) -> Result<Self> {
+        let _span = corral_core::timing::span("board.frame.apply");
+        let tasks = corral_ops::classic::shells(&frame)?;
+        let ClassicFrame {
+            attention,
+            operating,
             heads,
             obligations,
             status_counts,
             slot_usage,
             done_ids,
             pins,
-        } = sources;
-        let _span = corral_core::timing::span("board.snap.plan_progress");
-        let plan_progress = tasks
-            .iter()
-            .filter_map(|task| crate::plan::tracker::load(ctx, task).map(|p| (task.id.clone(), p)))
+            finishes,
+            unreviewed,
+            plan_progress,
+            resources,
+            waits,
+            stages,
+            automation_blocks,
+            plan_review_waits,
+            ..
+        } = frame;
+        let pins: Vec<shelf::Entry> = pins
+            .into_iter()
+            .map(|pin| shelf::Entry {
+                pin: pin.pin,
+                target: pin.target,
+            })
             .collect();
-        drop(_span);
-        let _span = corral_core::timing::span("board.snap.resources");
-        let resource_ctx = crate::attention::refresh_context(ctx);
-        let (resources, waits) =
-            crate::resources::ResourceDisplay::sample_board(&resource_ctx, &tasks);
-        drop(_span);
         let pinned = pins
             .iter()
             .filter_map(|entry| PinRef::parse(&entry.pin.target).ok())
             .map(|reference| reference.task().to_string())
             .collect();
-        let _span = corral_core::timing::span("board.snap.stages");
-        let stages = autopilot::active_stages(ctx, &tasks);
-        drop(_span);
-        let _span = corral_core::timing::span("board.snap.automation");
-        let automation_blocks = tasks
-            .iter()
-            .filter_map(|task| {
-                let reason = corral_ops::automation_blocker(ctx, task)
-                    .unwrap_or_else(|error| Some(format!("automation unavailable: {error:#}")));
-                reason.map(|reason| (task.id.clone(), reason))
-            })
-            .collect();
-        drop(_span);
-        let _span = corral_core::timing::span("board.snap.plan_review");
-        let plan_review_waits = tasks
-            .iter()
-            .filter_map(|task| Some((task.id.clone(), corral_ops::plan_review_wait(ctx, task)?)))
-            .collect();
-        drop(_span);
         Ok(Self {
-            attention: attention.unwrap_or_else(|| {
-                let _span = corral_core::timing::span("board.snap.attention");
-                crate::attention::load(&resource_ctx, now)
-            }),
-            ctx: live_ctx,
+            attention: attention.and_then(crate::attention::from_board),
+            ctx: ctx.clone(),
             tasks,
             heads: heads
                 .into_iter()
-                .map(|h| (h.id.clone(), h.detach()))
+                .map(|wire| {
+                    let head = corral_core::TaskHead::from_wire(wire);
+                    (head.id.clone(), head)
+                })
                 .collect(),
-            obligations,
+            obligations: obligations.into_iter().collect(),
             status_counts,
             slot_usage,
-            done_ids,
-            resources,
-            operating_header: String::new(),
-            finishes,
-            waits,
+            done_ids: done_ids.into_iter().collect(),
+            resources: crate::resources::ResourceDisplay::from_gauges(&resources),
+            operating_header: operating,
+            finishes: finishes.into_iter().collect(),
+            waits: waits.into_iter().collect(),
             pins,
             pinned,
-            stages,
-            automation_blocks,
-            plan_review_waits,
-            unreviewed,
-            plan_progress,
+            stages: stages.into_iter().collect(),
+            automation_blocks: automation_blocks.into_iter().collect(),
+            plan_review_waits: plan_review_waits.into_iter().collect(),
+            unreviewed: unreviewed.into_iter().collect(),
+            plan_progress: plan_progress.into_iter().collect(),
         })
     }
 
