@@ -66,6 +66,11 @@ pub fn run(ctx: &Ctx, args: SearchArgs) -> Result<()> {
         }
         return Ok(());
     }
+    let pinned = Ctx {
+        store: ctx.store.read_only_snapshot()?,
+        ..ctx.clone()
+    };
+    let ctx = &pinned;
     let query = args.query.as_deref().unwrap_or("");
     ensure!(query.len() <= 4096, "search query exceeds 4096 bytes");
     let options = ContentSearch {

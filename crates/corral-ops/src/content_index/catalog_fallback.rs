@@ -49,7 +49,7 @@ pub(super) fn build(ctx: &Ctx, reindex: bool) -> Result<Catalog> {
     };
     write_tasks(ctx, &root, &mut manifest)?;
     write_assistants(ctx, &root, &mut manifest)?;
-    write_events(ctx, &root, &mut manifest, event_tail)?;
+    write_events(ctx, &root, &mut manifest, 0, event_tail, false)?;
     let cache = if reindex {
         Cache::default()
     } else {
@@ -64,7 +64,7 @@ pub(super) fn build(ctx: &Ctx, reindex: bool) -> Result<Catalog> {
     };
     // Only admitted prefixes are read. All other bodies remain untouched until the query
     // streams its eligible records; no full-source terms or grams are computed here.
-    catalog.rebuild_prefixes(ctx, reindex, true)?;
+    catalog.rebuild_prefixes(ctx, reindex, true, None)?;
     Ok(catalog)
 }
 
@@ -89,26 +89,17 @@ fn write_tasks(ctx: &Ctx, root: &Path, manifest: &mut Manifest) -> Result<()> {
                 .context("listing fallback search task headers")
         })?;
         for header in page.items {
-            let Some((mut scan, spec)) = metadata::begin(ctx, &header.id)? else {
-                continue;
-            };
             let name = format!("task-{}.jsonl", manifest.tasks.len());
             let mut partition = writer(root, &name)?;
-            write_metadata(root, spec, &mut partition)?;
-            loop {
-                // The scanner releases its short view before returning each bounded page.
-                let (records, done) = metadata::next(ctx, &mut scan)?;
-                for record in records {
-                    write_metadata(root, record, &mut partition)?;
-                }
-                if done {
-                    break;
-                }
-            }
+            let exists = task_records(ctx, &header.id, |record| {
+                write_metadata(root, record, &mut partition)
+            })?;
             partition
                 .flush()
                 .context("flushing temporary task search partition")?;
-            manifest.tasks.insert(header.id, name);
+            if exists {
+                manifest.tasks.insert(header.id, name);
+            }
         }
         let Some(after) = page.next else {
             break;
@@ -118,21 +109,30 @@ fn write_tasks(ctx: &Ctx, root: &Path, manifest: &mut Manifest) -> Result<()> {
     Ok(())
 }
 
-fn write_assistants(ctx: &Ctx, root: &Path, manifest: &mut Manifest) -> Result<()> {
-    let sessions = ctx.read_step(|read| read.store.list_assistants())?;
-    let name = "assistants.jsonl";
-    let mut partition = writer(root, name)?;
-    for session in sessions {
-        for artifact in session.artifacts.iter().filter(|a| a.purged_at.is_none()) {
-            if crate::artifact_storage::content_available(ctx, artifact)? {
-                write_metadata(
-                    root,
-                    Record::artifact(&session.id, artifact),
-                    &mut partition,
-                )?;
-            }
+pub(super) fn task_records(
+    ctx: &Ctx,
+    id: &str,
+    mut visit: impl FnMut(Record) -> Result<()>,
+) -> Result<bool> {
+    let Some((mut scan, spec)) = metadata::begin(ctx, id)? else {
+        return Ok(false);
+    };
+    visit(spec)?;
+    loop {
+        let (records, done) = metadata::next(ctx, &mut scan)?;
+        for record in records {
+            visit(record)?;
+        }
+        if done {
+            return Ok(true);
         }
     }
+}
+
+fn write_assistants(ctx: &Ctx, root: &Path, manifest: &mut Manifest) -> Result<()> {
+    let name = "assistants.jsonl";
+    let mut partition = writer(root, name)?;
+    assistant_records(ctx, |record| write_metadata(root, record, &mut partition))?;
     partition
         .flush()
         .context("flushing temporary assistant search partition")?;
@@ -140,13 +140,34 @@ fn write_assistants(ctx: &Ctx, root: &Path, manifest: &mut Manifest) -> Result<(
     Ok(())
 }
 
-fn write_events(ctx: &Ctx, root: &Path, manifest: &mut Manifest, tail: u64) -> Result<()> {
+pub(super) fn assistant_records(
+    ctx: &Ctx,
+    mut visit: impl FnMut(Record) -> Result<()>,
+) -> Result<()> {
+    let sessions = ctx.read_step(|read| read.store.list_assistants())?;
+    for session in sessions {
+        for artifact in session.artifacts.iter().filter(|a| a.purged_at.is_none()) {
+            if crate::artifact_storage::content_available(ctx, artifact)? {
+                visit(Record::artifact(&session.id, artifact))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn write_events(
+    ctx: &Ctx,
+    root: &Path,
+    manifest: &mut Manifest,
+    mut after: u64,
+    tail: u64,
+    delta: bool,
+) -> Result<()> {
     let name = "events.jsonl";
     let body_name = "events.body";
     let mut partition = writer(root, name)?;
     let mut bodies = writer(root, body_name)?;
     let mut offset = 0_u64;
-    let mut after = 0_u64;
     'events: while after < tail {
         let query = EventQuery {
             after: Some(EventSeq(after)),
@@ -162,6 +183,7 @@ fn write_events(ctx: &Ctx, root: &Path, manifest: &mut Manifest, tail: u64) -> R
             break;
         }
         for row in page.items {
+            let _span = delta.then(|| corral_core::timing::span("search.catalog.delta_event"));
             if row.seq.0 > tail {
                 break 'events;
             }

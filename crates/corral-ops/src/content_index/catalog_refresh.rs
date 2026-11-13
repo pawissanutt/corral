@@ -29,6 +29,11 @@ const VERSION: u32 = 2;
 const ROWS: u32 = 16;
 const FEED_ENTRIES: u32 = 64;
 
+// Task partitions + assistant namespace + event sequence distance amortize republishing.
+pub(super) const LAZY_DELTA_SIZE: usize = 1024;
+// The first relevant feed change gets at least 30 minutes to accumulate more work.
+pub(super) const LAZY_MAX_AGE_SECS: i64 = 1800;
+
 #[derive(Serialize, Deserialize)]
 enum Phase {
     Headers(Option<String>),
@@ -100,10 +105,46 @@ pub(super) fn read_manifest(root: &Path) -> Result<Option<Manifest>> {
     }
 }
 
+pub(super) fn generation_available(root: &Path, manifest: &Manifest) -> Result<bool> {
+    if manifest.prefix_file.is_empty() {
+        return Ok(false);
+    }
+    match fs::metadata(root.join(&manifest.prefix_file)) {
+        Ok(metadata) => {
+            Ok(metadata.is_file() && metadata.len() > 0 && metadata.len() <= super::INDEX_BYTES)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error).context("inspecting published catalog prefixes"),
+    }
+}
+
+pub(super) fn lazy_due(delta: &super::delta::Delta) -> bool {
+    delta.has_changes()
+        && (delta.size() >= LAZY_DELTA_SIZE || delta.age_seconds() >= LAZY_MAX_AGE_SECS)
+}
+
+#[cfg(not(test))]
+pub(super) fn due(ctx: &Ctx, manifest: &Manifest) -> Result<bool> {
+    if !generation_available(&root(ctx)?, manifest)? {
+        return Ok(true);
+    }
+    let pinned = Ctx {
+        store: ctx.store.read_only_snapshot()?,
+        ..ctx.clone()
+    };
+    Ok(match super::delta::plan(&pinned, manifest)? {
+        Some(delta) => lazy_due(&delta),
+        None => true,
+    })
+}
+
 fn relevant(scope: &ChangeScope) -> bool {
     matches!(
         scope,
-        ChangeScope::Task { .. } | ChangeScope::Artifact { .. } | ChangeScope::Events { .. }
+        ChangeScope::Task { .. }
+            | ChangeScope::Artifact { .. }
+            | ChangeScope::Events { .. }
+            | ChangeScope::Lifecycle { .. }
     ) || matches!(scope, ChangeScope::Record { area, .. } if area == "assistant-sessions")
 }
 
@@ -136,7 +177,10 @@ pub(super) fn published(ctx: &Ctx) -> Result<Option<Catalog>> {
     let Some(manifest) = read_manifest(&root)? else {
         return Ok(None);
     };
-    if !current(ctx, manifest.after)? {
+    if manifest.config_fingerprint.as_deref()
+        != Some(super::delta::config_fingerprint(ctx)?.as_str())
+        || !current(ctx, manifest.after)?
+    {
         return Ok(None);
     }
     let path = root.join(&manifest.prefix_file);
@@ -167,7 +211,12 @@ pub(super) fn published(ctx: &Ctx) -> Result<Option<Catalog>> {
 }
 
 fn initialize(ctx: &Ctx, root: &Path, canonical: bool) -> Result<Progress> {
-    if !canonical && let Some(manifest) = read_manifest(root)? {
+    let config_fingerprint = super::delta::config_fingerprint(ctx)?;
+    if !canonical
+        && let Some(manifest) = read_manifest(root)?
+        && manifest.config_fingerprint.as_deref() == Some(config_fingerprint.as_str())
+        && generation_available(root, &manifest)?
+    {
         return Ok(Progress {
             target: manifest.after,
             manifest,
@@ -186,6 +235,7 @@ fn initialize(ctx: &Ctx, root: &Path, canonical: bool) -> Result<Progress> {
         manifest: Manifest {
             version: VERSION,
             after,
+            config_fingerprint: Some(config_fingerprint),
             ..Manifest::default()
         },
         phase: Phase::Headers(None),
@@ -239,6 +289,12 @@ pub(super) fn advance_with_cache(ctx: &Ctx, cache: Option<&super::Cache>) -> Res
             Err(error) => return Err(error).context("opening catalog progress"),
         }
     };
+    if progress.manifest.config_fingerprint.as_deref()
+        != Some(super::delta::config_fingerprint(ctx)?.as_str())
+    {
+        // Configuration changes require canonical metadata, not redundant lexical extraction.
+        progress = initialize(ctx, &root, restart)?;
+    }
     // A restart request is consumed only after the new starting checkpoint is durable.
     if restart {
         save(&path, &progress)?;
@@ -281,7 +337,10 @@ pub(super) fn advance_with_cache(ctx: &Ctx, cache: Option<&super::Cache>) -> Res
                         temporary: None,
                     };
                     // No store view or artifact-storage/index lock survives into admission.
-                    catalog.rebuild_prefixes(ctx, progress.reindex, false)?;
+                    catalog.rebuild_prefixes(ctx, progress.reindex, false, None)?;
+                    catalog.manifest.config_fingerprint =
+                        Some(super::delta::config_fingerprint(ctx)?);
+                    catalog.manifest.published_at = Some(corral_core::clock::now());
                     let bytes = serde_json::to_vec(&catalog.manifest)
                         .context("encoding published catalog")?;
                     crate::artifact_storage::replace(&root.join("manifest.json"), &bytes)?;
@@ -629,11 +688,13 @@ fn follow_batch(ctx: &Ctx, progress: &mut Progress) -> Result<()> {
                     tasks.insert(corral_core::Store::normalize_id(&num.0.to_string())?);
                     touched = true;
                 }
-                ChangeScope::Artifact { task } if task.starts_with("T-") => {
+                ChangeScope::Artifact { task } | ChangeScope::Lifecycle { task }
+                    if task.starts_with("T-") =>
+                {
                     tasks.insert(task);
                     touched = true;
                 }
-                ChangeScope::Artifact { .. } => {
+                ChangeScope::Artifact { .. } | ChangeScope::Lifecycle { .. } => {
                     progress.assistants = true;
                     touched = true;
                 }

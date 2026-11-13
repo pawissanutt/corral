@@ -53,11 +53,19 @@ artifacts; task specifications; owner comments and change requests; run/review s
 and searchable event details. Content scopes select the same documents as the fallback. Purged
 and binary content follows the existing exclusion rules. This is derived data, never source authority.
 
-A generation is usable only after complete publication and a freshness check against the change
-feed. Task, artifact, event and assistant-session changes invalidate it; unrelated changes can
-advance without rebuilding content. Changed tasks are re-derived, events append from the indexed
-event sequence, and unchanged source fingerprints reuse lexical data. A pruned feed or explicit
-`--reindex` requests a canonical rebuild. No incomplete generation selects candidates.
+A complete published generation can serve with an exact bounded delta from the query's pinned
+store view. The overlay drops touched task partitions and the changed assistant namespace before
+canonical rederivation, and appends events after the generation's event sequence. Unchanged
+generation terms select candidates; changed metadata reuses immutable lexical sidecars when
+available, otherwise source bodies are streamed conservatively. Delta queries do not build body
+lexical indexes. No incomplete generation selects candidates.
+
+Query planning allows at most 16384 feed entries, 64 touched task partitions and 4096 event-sequence
+distance. These bound source groups, not individual source records: rederivation streams every
+record in the affected groups, and one task may contain many records. A pruned feed, configuration
+mismatch, explicit `--reindex`, exceeded bound or merged-cache failure uses the full canonical
+streaming fallback.
+Logical source rows and owner predicates use the same pinned read-only snapshot.
 
 With the catalog enabled, queries and daemon prefix-index maintenance can schedule one worker per
 store per process. The worker is a detached **Rust thread inside the caller**, named
@@ -66,8 +74,8 @@ A daemon can keep it alive; a short-lived CLI process cannot: process exit stops
 The next worker or explicit maintenance command resumes durable progress. There is no external
 worker command spawned behind a query.
 
-Queries never wait for the builder lease, run the build inline, or require its success. A cold,
-stale or failed generation uses the complete streaming fallback described below. Setup/build
+Queries never wait for the builder lease, run the build inline, or require its success. A missing,
+unusable or failed generation uses the complete streaming fallback described below. Setup/build
 errors are diagnosed and deferred; corrupt published data is invalidated and the query retries
 through the fallback. Required source read errors still reach the caller.
 
@@ -84,8 +92,12 @@ CORRAL_SEARCH_CATALOG=1 corral --root /private/copy search 'needle' --in all --j
 `--catalog-build` is explicit foreground maintenance: it resumes checkpoints and returns after
 publication, rather than starting a thread that dies with the CLI. Run status in another terminal
 to inspect `phase`, `queued_tasks`, metadata/source cursors and indexed/published sequences.
-`ready: true` means a complete generation is currently usable; new relevant writes can make it
-stale again. `incomplete` does not claim a worker is alive. `deferred` includes the last persisted
+`delta_size` counts touched task partitions, a changed assistant namespace and event-sequence
+distance; `serving_generation_plus_delta` identifies an overlay-backed generation. `ready: true`
+means a complete generation is currently usable, including with an exact bounded overlay.
+`delta_age_secs` measures time since the first relevant feed change, not the age of an idle
+generation, so an isolated write after a quiet period does not immediately force compaction.
+`incomplete` does not claim a worker is alive. `deferred` includes the last persisted
 build error. Status neither starts nor waits for a builder. A busy foreground builder command
 reports that another process owns the batch lease instead of waiting.
 
@@ -103,39 +115,60 @@ Status reports the actual paths. Under `<store.cache_root()>/search-catalog/`:
 - `builder.lock` is the nonblocking, cross-process batch lease; `restart` requests a canonical
   restart. `last-error.txt` records a deferred failure. Completed builds remove `progress.json`.
 
+Manifests also attest the configuration fingerprint and publication time. Older generations
+without configuration attestation are rebuilt before serving; immutable lexical objects can be
+reused during that one-time metadata rebuild.
+
 ### Work, locking and memory
 
-Metadata batches read at most 64 headers/change entries or 16 task/event rows, plus keyed parent
-lookups. Views are released before hashing, file writes and source scanning. Lexical batches index
-one source document. Checkpoints resume completed sources rather than restarting the corpus.
-The final publication batch projects prefixes using externally sorted descriptors.
+Builder metadata batches read at most 64 headers/change entries or 16 task/event rows, plus keyed
+parent lookups. Their short per-page views are released before hashing, file writes and source
+scanning. Lexical batches index one source document. Checkpoints resume completed sources rather
+than restarting the corpus. Queries instead retain one logical read-only snapshot through scanning
+and result assembly, including feed/delta rows, owner predicates and selected JSON rows.
+Publication persists the generation's metadata and immutable lexical sidecars. After publication,
+maintenance defers compaction below 1024 source units (task partitions, assistant namespace and
+event-sequence distance), unless a nonempty delta has aged 1800 seconds. This lazy policy does not
+weaken query freshness: bounded changes are served by the exact overlay in the meantime.
 
 The private builder lease covers one batch, including its checkpoint; a large source or the final
 projection can take longer, so there is no fixed wall-time bound per batch. Serving queries never
 acquire that lease. No query/build-wide artifact-storage or exclusive serving-index lock is held.
 Artifact storage is locked only while fetching current encoding metadata and opening its reader,
-not while scanning its body. Fallback prefix-cache publication uses a nonblocking index lock for
-one bounded cache write; a busy writer skips publication without changing local results.
+not while scanning its body. Encoding metadata uses one reused live Store handle per phase,
+separate from the query's logical snapshot. Fallback prefix-cache publication uses a nonblocking
+index lock for one bounded cache write; a busy writer skips publication without changing local results.
 
-Warm content queries stream catalog descriptors/lexical data to select candidates, read only
-candidate source bodies and keyed owners, then assemble the existing result shape/order. Cost is
-catalog metadata plus candidate bytes, not decompression of every artifact. Full vocabularies are
-capped at 8192 terms/128 KiB per document, with 8192-byte words. Larger vocabularies use a fixed
+Warm content queries stream merged generation-plus-delta descriptors/lexical data to select
+candidates. Candidate scanning reads only candidate bodies and keyed owners; the statistics
+projection below can additionally need newly admitted prefixes. Results retain their existing
+shape/order. Unchanged artifact/text lexical sidecars are reused; missing lexical data conservatively
+streams the source. Full vocabularies are capped at 8192 terms/128 KiB per document, with 8192-byte
+words. Larger vocabularies use a fixed
 16 KiB substring filter. Short/Unicode terms and filter false positives conservatively stream those
 sources. Negative-only or metadata-only queries may still scan all eligible bodies.
 
-Prefix admission and inverse document frequencies retain the existing ordering/reuse rules:
-4096 documents, 256 KiB per document, 8 MiB total text and 64 MiB serialized cache. Descriptor
-sorting uses approximately 2 MiB chunks and at most 32 merge runs. Readers scan in 64 KiB chunks.
-These are buffer/work bounds, not a hard RSS limit: individual store rows, the assistant-session
-list, pending task identifiers, manifests and allocator overhead also consume memory.
-`search.index_open_refresh`, `search.catalog.batch`, `search.catalog.build` and the other
-`search.*` phase spans expose this work.
+Each query reprojects prefix inverse document frequencies, cached prefixes and supplemental task
+text over the merged corpus, using the same current global prefix-cache seed and admission,
+sorting and reuse rules as the full fallback. Scores are exact, not approximations. This final
+corpus-prefix projection CPU cost is paid per search, not on every daemon write.
+The generation's cached extracted prefixes can supply unchanged canonical bytes, but never seed
+admission or IDF. Empty incomplete cache entries are not treated as extracted prefixes. Missing
+reusable prefixes are read from their sources, subject to the same admission/text budget.
+Prefix bounds remain 4096 documents, 256 KiB per document, 8 MiB total text and 64 MiB serialized
+cache. Descriptor sorting uses approximately 2 MiB chunks and at most 32 merge runs. Readers scan
+in 64 KiB chunks. These are buffer/work bounds, not a hard RSS limit: individual store rows, the
+assistant-session list, pending task identifiers, manifests and allocator overhead also consume memory.
+`search.index_open_refresh`, `search.catalog.batch` and `search.catalog.build` expose phase work.
+`search.catalog.delta` includes metadata overlay and exact prefix projection; its `delta_task`,
+`delta_assistants`, `delta_event` and `delta_source` spans expose source work.
+`search.catalog.generation` identifies the zero-delta path.
 
 ### Streaming fallback and plain task results
 
 With the catalog disabled, both cold and subsequent queries use the fallback. With it enabled,
-a missing or stale catalog uses the same fallback while independent maintenance may advance.
+a missing generation or one without a usable bounded delta uses the same fallback while independent
+maintenance may advance.
 It reads heads/search-relevant task rows in pages of 16 without hydrating all tasks or their
 agent receipt histories. Events are read in pages of 64 and spooled sequentially into a disposable
 body pack. The temporary metadata catalog lives only for the query.

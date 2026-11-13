@@ -73,12 +73,18 @@ pub struct ContentHit {
 
 /// Searches the shared extracted-text index, streaming overflow documents when necessary.
 /// The index is a derived cache; tasks, artifact snapshots and events are never modified.
-/// A cold or outdated catalog uses query-local fallback data while its builder runs.
+/// Behind generations use exact bounded overlays; unmergeable catalogs use the fallback.
 pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result<Vec<ContentHit>> {
-    match search_content_once(ctx, input, options, false) {
+    let storage = content_index::search_storage_context(ctx)?;
+    let pinned = Ctx {
+        store: ctx.store.read_only_snapshot()?,
+        ..ctx.clone()
+    };
+    let ctx = &pinned;
+    match search_content_once(ctx, &storage, input, options, false) {
         Err(error) if crate::content_index::catalog::is_corrupt(&error) => {
             crate::content_index::catalog::repair(ctx);
-            search_content_once(ctx, input, options, true)
+            search_content_once(ctx, &storage, input, options, true)
         }
         result => result,
     }
@@ -86,6 +92,7 @@ pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result
 
 fn search_content_once(
     ctx: &Ctx,
+    storage: &Ctx,
     input: &str,
     options: &ContentSearch,
     force_fallback: bool,
@@ -184,7 +191,7 @@ fn search_content_once(
             _ => "search.event_scan",
         });
         if let Some(found) = crate::content_scan::search_record(
-            ctx,
+            storage,
             &record,
             owner
                 .as_ref()
