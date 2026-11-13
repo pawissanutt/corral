@@ -82,8 +82,9 @@ fn run_with_state(
         .context("attributing daemon writes")?;
     prepare_runtime(&ctx.store)?;
     if options.once {
+        let mut timing_before = corral_ops::timing::snapshot();
         shared.begin();
-        let (cpu, error) = measured_pass(&mut ctx, false, &mut execute);
+        let (cpu, error) = measured_pass(&mut ctx, false, &mut execute, &mut timing_before);
         shared.finish(cpu, error);
         if ctx.store.runtime_latched() {
             return Ok(Exit::Upgrade);
@@ -118,8 +119,9 @@ fn run_with_state(
             .unwrap_or_else(|error| error.into_inner())
             .started(&ctx.store, &shared.health())?;
         health::start(&ctx, &shared, Arc::clone(&transitions))?;
+        let mut timing_before = corral_ops::timing::snapshot();
         while shared.begin() {
-            let (spent, error) = measured_pass(&mut ctx, true, &mut execute);
+            let (spent, error) = measured_pass(&mut ctx, true, &mut execute, &mut timing_before);
             shared.finish(spent, error);
             if ctx.store.runtime_latched() {
                 shared.stop(true);
@@ -160,16 +162,16 @@ fn measured_pass(
     ctx: &mut Ctx,
     supervisor: bool,
     execute: &mut impl FnMut(&mut Ctx, bool) -> Option<String>,
+    timing_before: &mut corral_ops::timing::Snapshot,
 ) -> (Duration, Option<String>) {
     let started = Instant::now();
     let before = process_cpu();
-    let timing_before = corral_ops::timing::snapshot();
     let error = execute(ctx, supervisor);
     let spent = match (before, process_cpu()) {
         (Some(before), Some(after)) => after.saturating_sub(before),
         _ => started.elapsed(),
     };
-    corral_ops::timing::pass(ctx.store.dir(), started, &timing_before);
+    *timing_before = corral_ops::timing::pass(ctx.store.dir(), started, timing_before);
     (spent, error)
 }
 
@@ -210,10 +212,13 @@ fn pass(ctx: &mut Ctx, supervisor: bool, shared: &Shared) -> Option<String> {
             &mut errors,
         );
     }
-    // Later pass stages may write too: never label an earlier attention board
-    // with a newer sequence. On any intervening write, the reader loads its own.
-    let attention =
-        attention.filter(|(seq, _)| ctx.store.view().is_ok_and(|view| view.seq().0 == *seq));
+    // Later pass stages may write too. Lease bookkeeping is harmless, but any
+    // other intervening change makes the reader load its own attention board.
+    let attention = attention.filter(|(seq, _)| {
+        ctx.store
+            .view()
+            .is_ok_and(|view| reader::unchanged(view.as_ref(), *seq))
+    });
     *shared
         .attention
         .lock()

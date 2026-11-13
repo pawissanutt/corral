@@ -72,9 +72,10 @@ Health deltas reflect condition or completed-pass changes, not elapsed-age ticks
 
 The socket's `read.v1` capability serves PM next/brief readouts and the classic
 board's attention snapshot and operating status. A dedicated reader thread computes
-them without holding up sync. Each kind reuses its last document only while the
-store change sequence is unchanged and the document is younger than ten seconds.
-The board can reuse the last pass's attention snapshot at the same sequence.
+them without holding up sync. Each kind reuses its last document only while it is
+younger than ten seconds and no non-lease store change occurred. Lease bookkeeping
+does not affect readouts; bounded change-feed checks ignore it. The board can reuse
+the last pass's attention snapshot under the same non-lease change rule.
 
 Readouts contain executable-bound commands and action IDs, so a request must match
 both the daemon's executable path and build identity; mismatches are refused.

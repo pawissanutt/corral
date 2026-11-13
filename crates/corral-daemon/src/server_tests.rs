@@ -555,7 +555,7 @@ fn executable_mismatch_is_refused_before_computing_a_read() {
 }
 
 #[test]
-fn repeated_read_computes_once_until_the_store_sequence_changes() {
+fn lease_bookkeeping_reuses_a_read_but_task_changes_force_recomputation() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let fixture = Fixture::new();
     let shared = Arc::new(Shared::new());
@@ -569,6 +569,9 @@ fn repeated_read_computes_once_until_the_store_sequence_changes() {
     let (mut stream, worker) = read_connection(&fixture, &shared);
     send_request(&mut stream, wire::READ, read_request(ReadKind::PmNext));
     let (first, _) = read_document(&mut stream);
+    let before = fixture.ctx.store.view().unwrap().seq();
+    fixture.ctx.store.with_blob_lease(|| Ok(())).unwrap();
+    assert!(fixture.ctx.store.view().unwrap().seq() > before);
     send_request(&mut stream, wire::READ, read_request(ReadKind::PmNext));
     let (second, _) = read_document(&mut stream);
     assert!(!first.cached);

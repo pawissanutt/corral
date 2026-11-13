@@ -56,7 +56,7 @@ pub fn verb(command: &str, subcommand: Option<&str>) -> String {
 /// Emits once at the CLI's common exit funnel, without opening a store.
 pub fn process(started: Instant, verb: &str) {
     if let Some(dir) = timing::store_dir() {
-        append(
+        let _ = append(
             &crate::daemon_client::runtime_dir_of(dir),
             "process",
             verb,
@@ -66,15 +66,16 @@ pub fn process(started: Instant, verb: &str) {
     }
 }
 
-/// Emits a difference of process-wide counters for one completed daemon pass.
-pub fn pass(dir: &Path, started: Instant, before: &Snapshot) {
+/// Emits a difference of process-wide counters and returns the sampled endpoint.
+pub fn pass(dir: &Path, started: Instant, before: &Snapshot) -> Snapshot {
     append(
         &crate::daemon_client::runtime_dir_of(dir),
         "pass",
         "daemon pass",
         started.elapsed(),
         before,
-    );
+    )
+    .unwrap_or_else(snapshot)
 }
 
 fn ms(nanos: u64) -> f64 {
@@ -117,7 +118,12 @@ struct Record<'a> {
     spans: BTreeMap<&'static str, SpanTotal>,
 }
 
-fn record<'a>(kind: &'a str, verb: &'a str, wall: Duration, before: &Snapshot) -> Record<'a> {
+fn record<'a>(
+    kind: &'a str,
+    verb: &'a str,
+    wall: Duration,
+    before: &Snapshot,
+) -> (Record<'a>, Snapshot) {
     let after = snapshot();
     let lock = delta(after.lock, before.lock);
     let busy = delta(after.busy, before.busy);
@@ -133,15 +139,15 @@ fn record<'a>(kind: &'a str, verb: &'a str, wall: Duration, before: &Snapshot) -
     });
     let spans = after
         .spans
-        .into_iter()
+        .iter()
         .filter_map(|(name, (count, nanos))| {
             let (old_count, old_nanos) = before.spans.get(name).copied().unwrap_or_default();
             let n = count.saturating_sub(old_count);
             let nanos = nanos.saturating_sub(old_nanos);
-            (n != 0 || nanos != 0).then_some((name, SpanTotal { n, ms: ms(nanos) }))
+            (n != 0 || nanos != 0).then_some((*name, SpanTotal { n, ms: ms(nanos) }))
         })
         .collect();
-    Record {
+    let record = Record {
         ts: jiff::Timestamp::now().to_string(),
         pid: std::process::id(),
         kind,
@@ -161,7 +167,8 @@ fn record<'a>(kind: &'a str, verb: &'a str, wall: Duration, before: &Snapshot) -
         git_ms: ms(git.nanos),
         git_calls: git.count,
         spans,
-    }
+    };
+    (record, after)
 }
 
 fn max_rss_kb() -> Option<u64> {
@@ -182,31 +189,39 @@ fn max_rss_kb() -> Option<u64> {
     }
 }
 
-fn append(dir: &Path, kind: &str, verb: &str, wall: Duration, before: &Snapshot) {
+fn append(
+    dir: &Path,
+    kind: &str,
+    verb: &str,
+    wall: Duration,
+    before: &Snapshot,
+) -> Option<Snapshot> {
     if !dir.join("timing-on").exists() {
-        return;
+        return None;
     }
     let Ok(mut file) = OpenOptions::new()
         .create(true)
         .append(true)
         .open(dir.join("timing.jsonl"))
     else {
-        return;
+        return None;
     };
     if !file
         .metadata()
         .is_ok_and(|metadata| metadata.len() <= MAX_BYTES)
     {
-        return;
+        return None;
     }
-    let Ok(mut line) = serde_json::to_vec(&record(kind, verb, wall, before)) else {
-        return;
+    let (record, after) = record(kind, verb, wall, before);
+    let Ok(mut line) = serde_json::to_vec(&record) else {
+        return Some(after);
     };
     line.push(b'\n');
     if line.len() < 4096 {
         // A single O_APPEND write prevents records from concurrent CLI processes interleaving.
         let _ = file.write(&line);
     }
+    Some(after)
 }
 
 #[cfg(test)]
@@ -215,7 +230,7 @@ mod tests {
     fn timing_record_is_json_without_argument_values() {
         let dir = tempfile::tempdir().unwrap();
         let command = super::verb("pm", Some("brief"));
-        super::append(
+        let _ = super::append(
             dir.path(),
             "process",
             &command,
@@ -224,7 +239,7 @@ mod tests {
         );
         assert!(!dir.path().join("timing.jsonl").exists());
         std::fs::write(dir.path().join("timing-on"), "").unwrap();
-        super::append(
+        let _ = super::append(
             dir.path(),
             "process",
             &command,
