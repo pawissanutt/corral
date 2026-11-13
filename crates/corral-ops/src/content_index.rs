@@ -12,15 +12,18 @@ use sha2::{Digest, Sha256};
 
 use crate::Ctx;
 
+pub(crate) mod catalog;
 mod events;
 mod follow;
+mod grams;
+mod lexical;
 
 pub(crate) use follow::{Delta, follow};
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
-pub(crate) use tests::{ARTIFACT_EXTRACTIONS, SNAPSHOTS};
+pub(crate) use tests::{ARTIFACT_EXTRACTIONS, CATALOG_READS, SNAPSHOTS};
 
 const VERSION: u32 = 1;
 pub(crate) const DOCUMENT_BYTES: usize = 256 * 1024;
@@ -48,6 +51,7 @@ pub(crate) struct Document {
 pub(crate) enum Source {
     Artifact(Artifact),
     Text(String),
+    File(std::path::PathBuf),
 }
 
 pub(crate) struct Record {
@@ -69,7 +73,6 @@ struct Cache {
 /// Content snapshots are shared by command search and the board's task search.
 pub(crate) struct Snapshot {
     pub records: Vec<Record>,
-    pub postings: BTreeMap<String, Vec<String>>,
 }
 
 pub(crate) fn words(text: &str) -> impl Iterator<Item = String> + '_ {
@@ -263,6 +266,13 @@ fn extract(ctx: &Ctx, record: &mut Record) -> Result<()> {
     match &record.source {
         Source::Text(text) => {
             bytes.extend_from_slice(&text.as_bytes()[..text.len().min(DOCUMENT_BYTES + 1)])
+        }
+        Source::File(path) => {
+            File::open(path)
+                .context("opening indexed source text")?
+                .take(u64::try_from(DOCUMENT_BYTES + 1).context("document limit overflow")?)
+                .read_to_end(&mut bytes)
+                .context("extracting indexed source text")?;
         }
         Source::Artifact(artifact) => {
             let _storage = crate::artifact_storage::storage_lock(ctx)?;
@@ -496,16 +506,6 @@ pub(crate) fn lock(ctx: &Ctx) -> Result<File> {
     Ok(lock)
 }
 
-/// Uses the caller's index lock, keeping the read-view/feed-position contract.
-pub(crate) fn snapshot_locked(ctx: &Ctx, tasks: &[Task], reindex: bool) -> Result<Snapshot> {
-    if !reindex {
-        return build_locked(ctx, tasks, Update::Incremental, None);
-    }
-    let (view_ctx, seq) = one_view(ctx)?;
-    let tasks = view_ctx.store.list()?;
-    build_locked(&view_ctx, &tasks, Update::Reindex, Some(seq))
-}
-
 fn build_snapshot(
     ctx: &Ctx,
     tasks: &[Task],
@@ -559,7 +559,7 @@ fn build_locked(
                 Source::Artifact(artifact) => Some(crate::content_refresh::file_stamp(
                     &ctx.store.dir().join(&artifact.path),
                 )?),
-                Source::Text(_) => None,
+                Source::Text(_) | Source::File(_) => None,
             };
         }
         if let Some(cached) = previous
@@ -638,8 +638,5 @@ fn build_locked(
     if let Some(seq) = cursor {
         crate::content_refresh::write_cursor(&dir, seq)?;
     }
-    Ok(Snapshot {
-        records,
-        postings: cache.postings,
-    })
+    Ok(Snapshot { records })
 }

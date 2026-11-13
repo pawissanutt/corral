@@ -143,7 +143,7 @@ pub(crate) fn follow(ctx: &Ctx, delta: &Delta) -> Result<bool> {
 }
 
 /// Re-derives the documents one task's changes touched.
-fn task(
+pub(super) fn task(
     ctx: &Ctx,
     id: &str,
     changed: &TaskDelta,

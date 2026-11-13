@@ -85,16 +85,24 @@ pub fn run(ctx: &Ctx, args: SearchArgs) -> Result<()> {
         }
     } else {
         // Keep T-047's machine-consumed task shape for existing callers.
-        let tasks = corral_ops::search_tasks(&ctx.store, query)?;
+        let ids = corral_ops::SearchData::search_ids(&ctx.store, query, options.limit)?;
+        let _assembly = corral_core::timing::span("search.result_assembly");
         if args.json {
-            let rows: Vec<_> = tasks
+            // Render one keyed task at a time: JSON task rows do not expose full histories.
+            let rows: Vec<_> = ids
                 .iter()
-                .take(options.limit)
-                .map(|t| crate::cmds::task_output::task_json(t, false))
-                .collect();
+                .map(|id| {
+                    let task = ctx.store.get(id)?;
+                    Ok(crate::cmds::task_output::task_json(&task, false))
+                })
+                .collect::<Result<_>>()?;
             println!("{}", serde_json::to_string(&rows)?);
         } else {
-            crate::list_cols::print(ctx, &tasks[..tasks.len().min(options.limit)], &[])?;
+            let tasks = ids
+                .iter()
+                .map(|id| ctx.store.get(id))
+                .collect::<Result<Vec<_>>>()?;
+            crate::list_cols::print(ctx, &tasks, &[])?;
         }
     }
     Ok(())

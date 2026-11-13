@@ -11,6 +11,8 @@ use super::read_cache;
 thread_local! {
     pub(crate) static SNAPSHOTS: Cell<usize> = const { Cell::new(0) };
     pub(crate) static ARTIFACT_EXTRACTIONS: Cell<usize> = const { Cell::new(0) };
+    pub(crate) static CATALOG_EXTRACTIONS: Cell<usize> = const { Cell::new(0) };
+    pub(crate) static CATALOG_READS: Cell<usize> = const { Cell::new(0) };
 }
 
 #[test]
@@ -90,4 +92,100 @@ fn cached_index_is_decoded_with_block_reads_not_per_byte_reads() {
     assert_eq!(actual.version, expected.version);
     assert_eq!(actual.postings, expected.postings);
     assert!(reads.get() < 16, "{} underlying file reads", reads.get());
+}
+
+#[test]
+fn warm_search_reads_only_matching_overflow_blobs_at_two_catalog_sizes() {
+    use crate::{ContentSearch, search_content};
+    use corral_core::work::{self, HotScope, Work};
+    use corral_core::{ArtifactKind, PinRef, Status, Store};
+
+    let measure = |unrelated: usize| {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = crate::resources::FixedResourceProbe::ctx(Store::init(dir.path()).unwrap());
+        let task = ctx
+            .store
+            .create("catalog fixture", None, Status::Ready, "")
+            .unwrap();
+        let padding = "noise\n".repeat(super::DOCUMENT_BYTES / 6 + 1);
+        let source = dir.path().join("hit.log");
+        std::fs::write(
+            &source,
+            format!("{padding}generic_worker_gate_wait_collects_once\n"),
+        )
+        .unwrap();
+        let hit =
+            crate::add_artifact(&ctx, &task.id, &source, Some(ArtifactKind::Log), None).unwrap();
+        for i in 0..unrelated {
+            let source = dir.path().join(format!("unrelated-{i}.log"));
+            std::fs::write(&source, format!("{padding}unrelated {i}\n")).unwrap();
+            crate::add_artifact(&ctx, &task.id, &source, Some(ArtifactKind::Log), None).unwrap();
+        }
+        let options = ContentSearch::default();
+        let query = "generic_worker_gate_wait_collects_once";
+        search_content(&ctx, query, &options).unwrap();
+        let before = work::snapshot();
+        let parses = work::count(Work::EventParse);
+        let extractions = CATALOG_EXTRACTIONS.get();
+        let reads = CATALOG_READS.get();
+        let hits = {
+            let _hot = HotScope::enter();
+            search_content(&ctx, query, &options).unwrap()
+        };
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0].reference,
+            PinRef::of_artifact(&task.id, &hit).to_string()
+        );
+        (
+            CATALOG_READS.get() - reads,
+            CATALOG_EXTRACTIONS.get() - extractions,
+            work::snapshot().since(&before).full_task_hydrations(),
+            work::count(Work::EventParse) - parses,
+        )
+    };
+    let small = measure(1);
+    assert_eq!(small, (1, 0, 0, 0));
+    assert_eq!(measure(3), small);
+}
+
+#[test]
+fn streamed_task_search_preserves_legacy_ranking_after_catalog_changes() {
+    use crate::SearchData;
+    use corral_core::query::Query;
+    use corral_core::{Status, Store};
+
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = crate::resources::FixedResourceProbe::ctx(Store::init(dir.path()).unwrap());
+    let first = ctx
+        .store
+        .create("ranking fixture", None, Status::Ready, "body needle")
+        .unwrap();
+    ctx.store
+        .create("other needle", None, Status::Ready, "")
+        .unwrap();
+    for body in ["initial evidence needle", "changed evidence needle"] {
+        ctx.store
+            .update(&first.id, |task| {
+                task.body = body.into();
+                Ok(())
+            })
+            .unwrap();
+        let source = dir.path().join("evidence.log");
+        std::fs::write(&source, body).unwrap();
+        crate::add_artifact(&ctx, &first.id, &source, None, None).unwrap();
+        for input in ["needle", "evidence", "-absent", "status:ready needle"] {
+            let query = Query::parse(input, corral_core::clock::now()).unwrap();
+            let legacy = SearchData::load(&ctx.store).unwrap();
+            let expected: Vec<_> = legacy
+                .ranked(&query)
+                .into_iter()
+                .map(|i| legacy.tasks[i].id.clone())
+                .collect();
+            assert_eq!(
+                SearchData::search_ids(&ctx.store, input, 100).unwrap(),
+                expected
+            );
+        }
+    }
 }

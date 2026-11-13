@@ -268,7 +268,12 @@ pub(crate) fn search_record<'a>(
         } else {
             match &record.source {
                 Source::Text(text) => Box::new(text.as_bytes()),
+                Source::File(path) => {
+                    Box::new(std::fs::File::open(path).context("opening indexed source text")?)
+                }
                 Source::Artifact(artifact) => {
+                    #[cfg(test)]
+                    crate::content_index::CATALOG_READS.with(|count| count.set(count.get() + 1));
                     crate::artifact_storage::artifact_reader(ctx, artifact)?
                 }
             }
