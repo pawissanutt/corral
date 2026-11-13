@@ -18,6 +18,8 @@ mod build;
 pub use build::{BuildCfg, BuildExit, BuildProfileCfg};
 mod pm;
 pub use pm::{PmCfg, PmGuardCfg};
+mod search;
+pub use search::SearchCfg;
 
 fn review_is_empty(review: &ReviewOverride) -> bool {
     review.is_empty() && review.infra_wait_secs.is_none()
@@ -60,6 +62,9 @@ pub struct Config {
     /// `[load_sandbox]`: opt-in repository load-test prompts and container cleanup.
     #[serde(default)]
     pub load_sandbox: LoadSandboxCfg,
+    /// `[search]`: opt-in content-search catalog.
+    #[serde(default)]
+    pub search: SearchCfg,
     #[serde(default)]
     pub dispatch: DispatchCfg,
     /// Project key -> project. Keys are what tasks reference in `project:`.
@@ -619,6 +624,7 @@ impl Config {
             limits: Limits::default(),
             resources: crate::ResourcesCfg::default(),
             load_sandbox: LoadSandboxCfg::default(),
+            search: SearchCfg::default(),
             dispatch: DispatchCfg::default(),
             projects,
             defaults: Defaults::default(),

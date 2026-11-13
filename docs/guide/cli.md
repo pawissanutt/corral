@@ -3534,6 +3534,8 @@ Options:
       --limit <LIMIT>      Maximum hits, capped at 100 [default: 20]
       --context <CONTEXT>  Source lines before and after the matching line, capped at 20 [default: 0]
       --reindex            Rebuild the derived index from canonical stored content
+      --catalog-build      Resume the opt-in complete-source catalog in the foreground
+      --catalog-status     Show durable catalog progress without starting a builder
       --json
   -h, --help               Print help
 ```

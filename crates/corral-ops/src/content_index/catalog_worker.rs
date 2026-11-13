@@ -21,6 +21,9 @@ pub(crate) fn schedule(_ctx: &Ctx, _force: bool) -> Result<()> {
 #[cfg(not(test))]
 pub(crate) fn schedule(ctx: &Ctx, force: bool) -> Result<()> {
     use anyhow::Context;
+    if !super::super::enabled(ctx) {
+        return Ok(());
+    }
     let root = super::root(ctx)?;
     if !force
         && !root.join("restart").is_file()
@@ -46,14 +49,37 @@ pub(crate) fn schedule(ctx: &Ctx, force: bool) -> Result<()> {
         .name("corral-search-index".into())
         .spawn(move || {
             let result = (|| -> Result<()> {
+                // Priority reduction is a condition of this optional worker: defer rather
+                // than compete with foreground queries if the host refuses it.
                 #[cfg(target_os = "linux")]
                 rustix::process::nice(10).context("lowering catalog worker priority")?;
+                ctx.reload_config()
+                    .context("reloading catalog worker config")?;
+                if !super::super::enabled(&ctx) {
+                    return Ok(());
+                }
                 let cache = super::load_prefix_cache(&ctx)?;
-                while let super::Step::More = super::advance_with_cache(&ctx, Some(&cache))? {}
+                loop {
+                    ctx.reload_config()
+                        .context("reloading catalog worker config")?;
+                    if !super::super::enabled(&ctx) {
+                        break;
+                    }
+                    match super::advance_with_cache(&ctx, Some(&cache))? {
+                        super::Step::More => {}
+                        super::Step::Busy => break,
+                        super::Step::Ready => {
+                            if let Err(error) = super::control::clear_error(&ctx) {
+                                eprintln!("search catalog error status unavailable: {error:#}");
+                            }
+                            break;
+                        }
+                    }
+                }
                 Ok(())
             })();
             if let Err(error) = result {
-                eprintln!("search catalog build deferred: {error:#}");
+                super::super::deferred(&ctx, &error);
             }
             if let Ok(mut running) = RUNNING.lock() {
                 running.remove(&worker_root);

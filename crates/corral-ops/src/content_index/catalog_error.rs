@@ -19,7 +19,13 @@ pub(crate) fn is_corrupt(error: &anyhow::Error) -> bool {
     error.is::<Corrupt>()
 }
 
-pub(crate) fn repair(ctx: &Ctx) -> Result<()> {
+pub(crate) fn repair(ctx: &Ctx) {
+    if let Err(error) = invalidate(ctx) {
+        super::deferred(ctx, &error);
+    }
+}
+
+fn invalidate(ctx: &Ctx) -> Result<()> {
     // Published partitions are immutable; invalidation needs no serving-index lock.
     let root = ctx.store.cache_root()?.join("search-catalog");
     std::fs::create_dir_all(&root).context("creating catalog repair directory")?;

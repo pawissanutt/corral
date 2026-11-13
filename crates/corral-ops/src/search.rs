@@ -18,20 +18,29 @@ impl SearchData {
     /// require each task, so visit one at a time and hydrate only selected output rows later.
     /// Incomplete catalogs use query-local fallback data without waiting for the builder.
     pub fn search_ids(store: &Store, input: &str, limit: usize) -> Result<Vec<String>> {
-        match Self::search_ids_once(store, input, limit) {
+        match Self::search_ids_once(store, input, limit, false) {
             Err(error) if crate::content_index::catalog::is_corrupt(&error) => {
-                crate::content_index::catalog::repair(&crate::Ctx::from_store(store.clone()))?;
-                Self::search_ids_once(store, input, limit)
+                crate::content_index::catalog::repair(&crate::Ctx::from_store(store.clone()));
+                Self::search_ids_once(store, input, limit, true)
             }
             result => result,
         }
     }
 
-    fn search_ids_once(store: &Store, input: &str, limit: usize) -> Result<Vec<String>> {
+    fn search_ids_once(
+        store: &Store,
+        input: &str,
+        limit: usize,
+        force_fallback: bool,
+    ) -> Result<Vec<String>> {
         let _span = corral_core::timing::span("search.tasks");
         let query = Query::parse(input, corral_core::clock::now())?;
         let ctx = crate::Ctx::from_store(store.clone());
-        let published = crate::content_index::catalog::Catalog::open(&ctx, false)?;
+        let published = if force_fallback {
+            None
+        } else {
+            crate::content_index::catalog::Catalog::open(&ctx, false)?
+        };
         let _fallback = published
             .is_none()
             .then(|| corral_core::timing::span("search.fallback"));

@@ -19,17 +19,21 @@ impl ArtifactSearch {
     /// # Errors
     /// Returns an error if tasks, snapshots or the derived cache cannot be read.
     pub fn load(ctx: &Ctx) -> Result<Self> {
-        match Self::load_once(ctx) {
+        match Self::load_once(ctx, false) {
             Err(error) if content_index::catalog::is_corrupt(&error) => {
-                content_index::catalog::repair(ctx)?;
-                Self::load_once(ctx)
+                content_index::catalog::repair(ctx);
+                Self::load_once(ctx, true)
             }
             result => result,
         }
     }
 
-    fn load_once(ctx: &Ctx) -> Result<Self> {
-        let published = Catalog::open(ctx, false)?;
+    fn load_once(ctx: &Ctx, force_fallback: bool) -> Result<Self> {
+        let published = if force_fallback {
+            None
+        } else {
+            Catalog::open(ctx, false)?
+        };
         let _fallback = published
             .is_none()
             .then(|| corral_core::timing::span("search.fallback"));

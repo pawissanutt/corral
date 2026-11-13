@@ -26,11 +26,31 @@ use error::Corrupt;
 pub(crate) use refresh::advance_batch;
 #[cfg(test)]
 pub(crate) use refresh::interrupt_after_batches;
+pub(crate) use refresh::{build_foreground, status};
 #[path = "catalog_metadata.rs"]
 mod metadata;
-// Emergency safety cutover: never wait for or depend on catalog construction in production.
-// Unit regressions can explicitly advance and exercise complete generations.
-pub(super) const BACKGROUND_CATALOG_BUILD_ENABLED: bool = false;
+/// Environment overrides apply to the same binary, including long-lived daemon workers.
+pub(super) fn enabled(ctx: &Ctx) -> bool {
+    enabled_with_override(
+        ctx.store.config.search.catalog,
+        std::env::var("CORRAL_SEARCH_CATALOG").ok().as_deref(),
+    )
+}
+
+fn enabled_with_override(configured: bool, value: Option<&str>) -> bool {
+    match value {
+        Some("1") => true,
+        Some("0") => false,
+        _ => configured,
+    }
+}
+
+fn deferred(ctx: &Ctx, error: &anyhow::Error) {
+    eprintln!("search catalog build deferred: {error:#}");
+    if let Err(status_error) = refresh::record_error(ctx, error) {
+        eprintln!("search catalog error status unavailable: {status_error:#}");
+    }
+}
 pub(crate) use error::{is_corrupt, repair};
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -75,19 +95,28 @@ impl Catalog {
     /// Never waits for a build. Only complete, current immutable generations serve hits.
     pub fn open(ctx: &Ctx, reindex: bool) -> Result<Option<Self>> {
         let _span = corral_core::timing::span("search.index_open_refresh");
-        if !BACKGROUND_CATALOG_BUILD_ENABLED && !cfg!(test) {
+        if !enabled(ctx) && !cfg!(test) {
             return Ok(None);
         }
-        if reindex {
-            refresh::request_reindex(ctx)?;
-            refresh::schedule(ctx, true)?;
-            return Ok(None);
+        let result = (|| {
+            if reindex {
+                refresh::request_reindex(ctx)?;
+                refresh::schedule(ctx, true)?;
+                return Ok(None);
+            }
+            let ready = refresh::published(ctx)?;
+            if ready.is_none() {
+                refresh::schedule(ctx, true)?;
+            }
+            Ok(ready)
+        })();
+        match result {
+            Ok(ready) => Ok(ready),
+            Err(error) => {
+                deferred(ctx, &error);
+                Ok(None)
+            }
         }
-        let ready = refresh::published(ctx)?;
-        if ready.is_none() {
-            refresh::schedule(ctx, true)?;
-        }
-        Ok(ready)
     }
 
     pub fn fallback(ctx: &Ctx, reindex: bool) -> Result<Self> {
@@ -96,10 +125,13 @@ impl Catalog {
 
     /// The daemon and CLI schedule a worker, never a full synchronous source scan.
     pub fn maintain(ctx: &Ctx) -> Result<()> {
-        if !BACKGROUND_CATALOG_BUILD_ENABLED {
+        if !enabled(ctx) {
             return Ok(());
         }
-        refresh::schedule(ctx, false)
+        if let Err(error) = refresh::schedule(ctx, false) {
+            deferred(ctx, &error);
+        }
+        Ok(())
     }
 
     fn visit_entries(&self, mut visit: impl FnMut(Entry) -> Result<()>) -> Result<()> {
@@ -625,4 +657,20 @@ fn write_metadata(root: &Path, record: Record, writer: &mut impl Write) -> Resul
     writer
         .write_all(b"\n")
         .context("terminating source metadata")
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::enabled_with_override;
+
+    #[test]
+    fn catalog_override_wins_only_for_explicit_zero_or_one() {
+        for configured in [false, true] {
+            assert!(enabled_with_override(configured, Some("1")));
+            assert!(!enabled_with_override(configured, Some("0")));
+            for value in [None, Some(""), Some("true"), Some(" 1")] {
+                assert_eq!(enabled_with_override(configured, value), configured);
+            }
+        }
+    }
 }

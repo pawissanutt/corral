@@ -41,69 +41,113 @@ decoded source bytes and stops after the final requested line, without reading t
 
 ## Derived index
 
-### Current safety cutover: streaming fallback
+### Opt-in complete-source catalog
 
-`BACKGROUND_CATALOG_BUILD_ENABLED` is currently `false` in
-`crates/corral-ops/src/content_index/catalog.rs`. Production queries do not start, wait for,
-restart, or consult the complete-source catalog. This restores correct search while its
-large-store background build is kept disabled. Both cold and subsequent queries currently
-use the same streaming fallback; they do not yet gain the catalog's candidate-selection speedup.
+`[search] catalog = false` is the default. `CORRAL_SEARCH_CATALOG=1` enables the catalog
+for that process; `CORRAL_SEARCH_CATALOG=0` disables it even when configured. Other values
+defer to configuration. The same binary supports both paths. Configuration changes are checked
+between worker batches; an environment override continues to win.
 
-The fallback reads heads and search-relevant task rows in pages of 16, without hydrating every
-task or loading agent receipt histories. It reads events in pages of 64 and writes their details
-sequentially to one disposable body pack, rather than retaining the whole event history.
-Each metadata view is released before source hashing, temporary-file writes or body scanning.
-The temporary catalog lives only for the query.
+The catalog covers every eligible artifact snapshot, including transient logs and assistant-session
+artifacts; task specifications; owner comments and change requests; run/review summaries and notes;
+and searchable event details. Content scopes select the same documents as the fallback. Purged
+and binary content follows the existing exclusion rules. This is derived data, never source authority.
 
-The existing `content-search.json` prefix cache still defines inverse document frequencies and
-supplemental task-search text. Its limits remain 4096 documents, 256 KiB per document, 8 MiB of
-text and 64 MiB serialized. Prefix admission retains the existing ordering and reuse rules.
-Descriptors are externally sorted using bounded buffers; only admitted prefixes are extracted.
-All fallback queries attempt to persist the bounded prefix cache using a nonblocking index lock,
-preserving reuse by later queries and refreshes. A busy writer only skips publication, not the
-locally built results. An explicit `--reindex` bypasses cached prefixes and reads canonical sources.
+A generation is usable only after complete publication and a freshness check against the change
+feed. Task, artifact, event and assistant-session changes invalidate it; unrelated changes can
+advance without rebuilding content. Changed tasks are re-derived, events append from the indexed
+event sequence, and unchanged source fingerprints reuse lexical data. A pruned feed or explicit
+`--reindex` requests a canonical rebuild. No incomplete generation selects candidates.
 
-Eligible overflow bodies are scanned as in the old implementation, including matches after the
-cached prefix. Artifact, task-text and packed-event readers stream in 64 KiB chunks. A scan can
-therefore still cost the total eligible source bytes: this safety path is not hit-proportional.
-It avoids whole-store task/event retention and the complete vocabulary build that previously
-prevented a cold query from answering. Its live-store latency and output equality must be measured,
-not inferred from the disabled catalog's performance.
-Metadata preparation and temporary spooling add CPU work; bounded memory does not imply lower
-CPU cost than the previous whole-store scan.
+With the catalog enabled, queries and daemon prefix-index maintenance can schedule one worker per
+store per process. The worker is a detached **Rust thread inside the caller**, named
+`corral-search-index`, not a child command. On Linux it lowers its CPU priority before working.
+A daemon can keep it alive; a short-lived CLI process cannot: process exit stops that thread.
+The next worker or explicit maintenance command resumes durable progress. There is no external
+worker command spawned behind a query.
 
-No query-wide artifact-storage or exclusive index lock is held. Artifact storage is locked only
-while opening a stable reader with current encoding metadata, then released before scanning.
-Required overflow/candidate read errors reach the caller; missing sources cannot silently preserve
-the artifact finder's old results. Cached prefix matches need not reopen their source.
-`search.fallback` measures the fallback query, with `search.fallback.prepare` for metadata preparation
-and the existing `search.*` phase spans for scans and assembly.
+Queries never wait for the builder lease, run the build inline, or require its success. A cold,
+stale or failed generation uses the complete streaming fallback described below. Setup/build
+errors are diagnosed and deferred; corrupt published data is invalidated and the query retries
+through the fallback. Required source read errors still reach the caller.
 
-### Resumable catalog engine (production-disabled)
+### Starting, observing and resuming a build
 
-The complete-source engine stores immutable published partitions separately from
-`search-catalog/progress.json`. It checkpoints the metadata family/page cursor, queued-source byte
-offset, indexed event sequence and change-feed position after each batch. Interrupted or failed
-work resumes from that checkpoint instead of discarding the completed source index.
+For a private store copy, these commands use the same binary without changing its default:
 
-Metadata batches contain at most 64 task headers/change entries or 16 task/event rows, plus keyed
-parent lookups. Lexical batches index one source document. A large archive may take longer to
-index, but its reader holds neither a store view nor a serving index/storage lock. The final prefix
-projection streams index descriptors with bounded sorting buffers and the existing text budget.
-`search.catalog.batch` records completed/attempted batches.
+```sh
+CORRAL_SEARCH_CATALOG=1 corral --root /private/copy search --catalog-build
+CORRAL_SEARCH_CATALOG=1 corral --root /private/copy search --catalog-status --json
+CORRAL_SEARCH_CATALOG=1 corral --root /private/copy search 'needle' --in all --json
+```
 
-The worker uses a separate nonblocking builder lease; queries never acquire it. When enabled,
-daemon refreshes and CLI queries schedule an independent worker rather than doing a full build
-inline. On Linux it runs at reduced CPU priority. Stale or incomplete generations cannot suppress
-hits: the entire query falls back to the correct streaming path, not a partial-result union.
-Only complete generations covering the relevant feed changes can select candidate bodies.
+`--catalog-build` is explicit foreground maintenance: it resumes checkpoints and returns after
+publication, rather than starting a thread that dies with the CLI. Run status in another terminal
+to inspect `phase`, `queued_tasks`, metadata/source cursors and indexed/published sequences.
+`ready: true` means a complete generation is currently usable; new relevant writes can make it
+stale again. `incomplete` does not claim a worker is alive. `deferred` includes the last persisted
+build error. Status neither starts nor waits for a builder. A busy foreground builder command
+reports that another process owns the batch lease instead of waiting.
 
-Complete vocabularies are capped at 8192 terms and 128 KiB per document, with words capped at
-8192 bytes. Larger vocabularies use a fixed 16 KiB substring filter. Short/Unicode terms and filter
-false positives conservatively stream those sources. Negative-only or metadata-only queries may
-also scan all eligible bodies.
+After interruption, rerun the same build command; do not add `--reindex` unless a full canonical
+restart is intended. Use `--catalog-build --reindex` for that restart. Disable automatic work with
+`CORRAL_SEARCH_CATALOG=0` for the process, or set `search.catalog` false when no enabling environment
+override exists. A running worker checks the switch before its next batch.
 
-Plain task-result search preserves fuzzy and historical predicates by evaluating one task at a
+Status reports the actual paths. Under `<store.cache_root()>/search-catalog/`:
+
+- `progress.json` atomically checkpoints the metadata family/page cursor, queued-source byte
+  offset, indexed event sequence and feed position after each batch.
+- `manifest.json` publishes a complete generation and names its immutable partitions, private
+  prefix cache and supplemental task text. `objects/` holds derived text/lexical objects.
+- `builder.lock` is the nonblocking, cross-process batch lease; `restart` requests a canonical
+  restart. `last-error.txt` records a deferred failure. Completed builds remove `progress.json`.
+
+### Work, locking and memory
+
+Metadata batches read at most 64 headers/change entries or 16 task/event rows, plus keyed parent
+lookups. Views are released before hashing, file writes and source scanning. Lexical batches index
+one source document. Checkpoints resume completed sources rather than restarting the corpus.
+The final publication batch projects prefixes using externally sorted descriptors.
+
+The private builder lease covers one batch, including its checkpoint; a large source or the final
+projection can take longer, so there is no fixed wall-time bound per batch. Serving queries never
+acquire that lease. No query/build-wide artifact-storage or exclusive serving-index lock is held.
+Artifact storage is locked only while fetching current encoding metadata and opening its reader,
+not while scanning its body. Fallback prefix-cache publication uses a nonblocking index lock for
+one bounded cache write; a busy writer skips publication without changing local results.
+
+Warm content queries stream catalog descriptors/lexical data to select candidates, read only
+candidate source bodies and keyed owners, then assemble the existing result shape/order. Cost is
+catalog metadata plus candidate bytes, not decompression of every artifact. Full vocabularies are
+capped at 8192 terms/128 KiB per document, with 8192-byte words. Larger vocabularies use a fixed
+16 KiB substring filter. Short/Unicode terms and filter false positives conservatively stream those
+sources. Negative-only or metadata-only queries may still scan all eligible bodies.
+
+Prefix admission and inverse document frequencies retain the existing ordering/reuse rules:
+4096 documents, 256 KiB per document, 8 MiB total text and 64 MiB serialized cache. Descriptor
+sorting uses approximately 2 MiB chunks and at most 32 merge runs. Readers scan in 64 KiB chunks.
+These are buffer/work bounds, not a hard RSS limit: individual store rows, the assistant-session
+list, pending task identifiers, manifests and allocator overhead also consume memory.
+`search.index_open_refresh`, `search.catalog.batch`, `search.catalog.build` and the other
+`search.*` phase spans expose this work.
+
+### Streaming fallback and plain task results
+
+With the catalog disabled, both cold and subsequent queries use the fallback. With it enabled,
+a missing or stale catalog uses the same fallback while independent maintenance may advance.
+It reads heads/search-relevant task rows in pages of 16 without hydrating all tasks or their
+agent receipt histories. Events are read in pages of 64 and spooled sequentially into a disposable
+body pack. The temporary metadata catalog lives only for the query.
+
+Eligible overflow bodies are streamed, including matches beyond cached prefixes. This path costs
+all eligible source bytes plus metadata preparation/spooling; it is bounded-memory but not
+hit-proportional, and need not use less CPU than the old whole-store scan. Prefix matches can reuse
+the bounded `content-search.json` cache, which fallback queries attempt to persist with its feed
+cursor. Explicit `--reindex` bypasses cached prefixes and reads canonical sources.
+`search.fallback` measures the whole fallback query; `search.fallback.prepare` measures preparation.
+
+Plain task-result search preserves fuzzy/historical predicates by evaluating one full task at a
 time, ranking scalar identifiers, then reading selected output rows. JSON rendering likewise loads
-one selected task at a time. It still reads query-visible task history, but never retains the entire
-listing for the CLI search command. Source tasks, events and artifacts remain read-only.
+one selected task at a time. This still reads query-visible task histories, but never retains the
+entire listing for the CLI search command. Source tasks, events and artifacts remain unmodified.
