@@ -39,8 +39,8 @@ selector = selectors.DefaultSelector()
 log = bytearray()
 INCOMPLETE = re.compile(r'\x1b(?:\[[0-?]*[ -/]*|[\]_P^](?:[^\x07\x1b]|\x1b(?!\\))*\x1b?|[()])?\Z', re.S)
 TOKEN = re.compile(r'\x1b\[([<=>?]?)([\d;:]*)[ -/]*([@-~])|\x1b[\]_P^].*?(?:\x07|\x1b\\)|\x1b[()].|\x1b.|[\x00-\x1f\x7f]|[^\x00-\x1f\x7f\x1b]+', re.S)
-# The status bar's role badge, then the binding dot (● bound, ○ not bound), possibly with styling between.
-BOUND = re.compile(rb'\xe2\x96\x8cASSISTANT(?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f')
+# The status bar: the role pill ` ASSISTANT `, then the binding dot and generation (`● g1` bound, `○` not), styling between.
+BOUND = re.compile(rb' ASSISTANT (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* g1\b')
 
 
 class Screen:
@@ -188,17 +188,24 @@ process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ??
         os.kill(proc.pid, signal.SIGWINCH)
     def click(col, row): send(f'\x1b[<0;{col + 1};{row + 1}M\x1b[<0;{col + 1};{row + 1}m'.encode())
     def main_columns():
-        # The rail paints its own tab row on the top line, ending with its ▸ toggle.
-        return screen.columns - 35 if screen.columns >= 105 and screen.lines()[0].endswith('▸') else screen.columns
+        # From 105 columns the sidebar is a rail inside the main view: a `│` column on its left, its first row
+        # (under the tab rule) the tabs `Context Files Plan` ending with the `Ctrl+B ▸` toggle.
+        edge = screen.columns - 35
+        rail = screen.columns >= 105 and any(row[edge] == '│' and ''.join(row[edge:]).rstrip().endswith('▸') for row in screen.cells)
+        return edge if rail else screen.columns
+    def main_lines():
+        # Rows the rail occupies lose its cells; header, tabs, dock, composer, status bar and footer span the full width.
+        edge = main_columns()
+        return [''.join(row[:edge] if edge < screen.columns and row[edge] == '│' else row).rstrip() for row in screen.cells]
     def tab(label, key):
         """Row and cell of a main view tab's label, read from the rendered tab row."""
-        for row, line in enumerate(screen.lines(main_columns())):
+        for row, line in enumerate(main_lines()):
             if key in line and label in line: return row, screen.column(row, label)
         return None
     def item(key):
         """Row and cell of the Inbox list row whose task is `key`'s task: left of the list/detail rule."""
         task = key.split('/')[0]
-        for row, line in enumerate(screen.lines(main_columns())):
+        for row, line in enumerate(main_lines()):
             left = line.split('│')[0]
             if '│' in line and task in left and 'F11' not in line: return row, screen.column(row, task)
         return None

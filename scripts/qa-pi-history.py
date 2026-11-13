@@ -34,8 +34,8 @@ selector = selectors.DefaultSelector()
 master = slave = watch = None
 proc = None
 log = bytearray()
-# The status bar's role badge, then the binding dot (● bound, ○ not bound), possibly with styling between.
-BOUND = re.compile(rb'\xe2\x96\x8cASSISTANT(?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f')
+# The status bar: the role pill ` ASSISTANT `, then the binding dot and generation (`● g1` bound, `○` not), styling between.
+BOUND = re.compile(rb' ASSISTANT (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* g1\b')
 try:
     env = {key: value for key, value in os.environ.items() if not key.startswith(('HERDR_', 'CORRAL_', 'PI_'))}
     env.update(HOME=str(work/'home'), XDG_CONFIG_HOME=str(work/'config'), XDG_DATA_HOME=str(work/'data'),

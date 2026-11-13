@@ -31,8 +31,8 @@ log = bytearray()
 scenes = []
 resizes = []
 size = dict(columns=140, rows=46)
-# The status bar's role badge, then the binding dot (● bound, ○ not bound), possibly with styling between.
-BOUND = re.compile(rb'\xe2\x96\x8cWORKER(?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f')
+# The status bar: the role pill ` WORKER `, then the binding dot and generation (`● g1` bound, `○` not), styling between.
+BOUND = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* g1\b')
 try:
     env = {k: v for k, v in os.environ.items() if not k.startswith(('HERDR_', 'CORRAL_', 'PI_'))}
     env.update(HOME=str(work / 'home'), XDG_CONFIG_HOME=str(work / 'config'), XDG_DATA_HOME=str(work / 'data'),

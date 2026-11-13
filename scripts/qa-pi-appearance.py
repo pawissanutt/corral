@@ -170,23 +170,32 @@ try:
                     if not predicate() and host.poll() is not None: raise AssertionError('Host exited: ' + reason)
 
     def main_columns():
-        # The rail paints its own tab row on the top line, ending with its ▸ toggle.
-        rail = screen.columns >= 105 and screen.lines()[0].endswith('▸')
-        return screen.columns - 35 if rail else screen.columns
+        # From 105 columns the sidebar is a rail inside the main view: a `│` column on its left, its first row
+        # (under the tab rule) the tabs `Context Files Plan` ending with the `Ctrl+B ▸` toggle.
+        edge = screen.columns - 35
+        rail = screen.columns >= 105 and any(row[edge] == '│' and ''.join(row[edge:]).rstrip().endswith('▸') for row in screen.cells)
+        return edge if rail else screen.columns
 
-    def visible(text): return text in '\n'.join(screen.lines(main_columns()))
+    def main_lines():
+        # Rows the rail occupies lose its cells; header, tabs, dock, composer, status bar and footer span the full width.
+        edge = main_columns()
+        return [''.join(row[:edge] if edge < screen.columns and row[edge] == '│' else row).rstrip() for row in screen.cells]
+
+    def visible(text): return text in '\n'.join(main_lines())
     def on_screen(text): return text in '\n'.join(screen.lines())
 
     def bound():
-        # The status bar's role badge carries the binding dot: ● bound, ○ not bound.
-        return any(re.search(r'▌WORKER\s*●', line) for line in screen.lines())
+        # The status bar: the role pill ` WORKER `, then the binding dot and generation: `● g1` bound, `○` not.
+        return any(re.match(r'  WORKER  ● g1\b', line) for line in screen.lines())
 
-    def palette_open():
-        # The palette's filter row: its › prompt, with the session scope (role · project) on the right.
-        return any(line.startswith('›') and 'worker · demo' in line for line in screen.lines(main_columns()))
+    def palette_row():
+        # The F2 popup is centred on the whole screen, over the rail: its filter row is `│ › query … role · project │`.
+        return next((line for line in screen.lines() if re.search(r'│ › .*worker · demo\s*│', line)), None)
+
+    def palette_open(): return palette_row() is not None
 
     def sidebar_row():
-        for line in screen.lines(main_columns()):
+        for line in main_lines():
             if all(word in line for word in ('Context', 'Files', 'Plan')) and '▴' in line: return line
         return None
 
@@ -213,11 +222,12 @@ try:
         send('\x1bOQ')
         until(palette_open, 'F2 opens the actions palette')
         if query: send(query)
-        until(lambda: any('›' in line and query in line for line in screen.lines(main_columns())), 'keyboard search ' + query)
+        until(lambda: query in (palette_row() or ''), 'keyboard search ' + query)
     until(bound, 'production host bound')
     save('dark-140x46')
     palette('answer')
-    until(lambda: on_screen('Role worker cannot answer'), 'bound role-disabled answer route')
+    # The popup is at most 78 cells wide: the answer row's reason is clipped after the role it names.
+    until(lambda: on_screen('answer flow (not sent) · unavailable: Role worker'), 'bound role-disabled answer route')
     save('role-disabled-140x46')
     send('\r')
     send('x')

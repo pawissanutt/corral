@@ -44,8 +44,10 @@ size = dict(columns=140, rows=46)
 candidate = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip()
 INCOMPLETE = re.compile(r'\x1b(?:\[[0-?]*[ -/]*|[\]_P^](?:[^\x07\x1b]|\x1b(?!\\))*\x1b?|[()])?\Z', re.S)
 TOKEN = re.compile(r'\x1b\[([<=>?]?)([\d;:]*)[ -/]*([@-~])|\x1b[\]_P^].*?(?:\x07|\x1b\\)|\x1b[()].|\x1b.|[\x00-\x1f\x7f]|[^\x00-\x1f\x7f\x1b]+', re.S)
-# The status bar's role badge, then the binding dot (● bound, ○ not bound), possibly with styling between.
-BOUND = re.compile(rb'\xe2\x96\x8cWORKER(?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f')
+# The status bar: the role pill ` WORKER `, then the binding dot and generation (`● g1` bound, `○` not), styling between.
+BOUND = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* g1\b')
+# The Agents view of a session with no helper calls, children or jobs: its empty state (the rail says `no agents or jobs yet`).
+NO_AGENTS = 'No agents yet.'
 
 
 class Screen:
@@ -225,18 +227,26 @@ try:
     def click(col, row): send(f'\x1b[<0;{col + 1};{row + 1}M\x1b[<0;{col + 1};{row + 1}m'.encode())
 
     def main_columns():
-        # The rail paints its own tab row on the top line, ending with its ▸ toggle.
-        return screen.columns - 35 if screen.columns >= 105 and screen.lines()[0].endswith('▸') else screen.columns
+        # From 105 columns the sidebar is a rail inside the main view: a `│` column on its left, its first row
+        # (under the tab rule) the tabs `Context Files Plan` ending with the `Ctrl+B ▸` toggle.
+        edge = screen.columns - 35
+        rail = screen.columns >= 105 and any(row[edge] == '│' and ''.join(row[edge:]).rstrip().endswith('▸') for row in screen.cells)
+        return edge if rail else screen.columns
+
+    def main_lines():
+        # Rows the rail occupies lose its cells; header, tabs, dock, composer, status bar and footer span the full width.
+        edge = main_columns()
+        return [''.join(row[:edge] if edge < screen.columns and row[edge] == '│' else row).rstrip() for row in screen.cells]
 
     def composer_bar():
-        """The composer bar's row with the cells of its model ▾ and effort ↻, read from the rendered row."""
-        for row, line in enumerate(screen.lines(main_columns())):
+        """The model/effort bar inside the composer box, with the cells of its model ▾ and effort ↻, read from the rendered row."""
+        for row, line in enumerate(main_lines()):
             if '▾' in line and '↻' in line: return dict(row=row, model=screen.column(row, '▾'), effort=screen.column(row, '↻'))
         return None
 
     def footer_keys():
-        """Words of the footer hint row, the last non-empty row of the main column."""
-        rows = [line for line in screen.lines(main_columns()) if line.strip()]
+        """Words of the footer row: the last non-empty row, full width under the rule above it."""
+        rows = [line for line in main_lines() if line.strip()]
         return rows[-1].split() if rows else []
 
     until(lambda: BOUND.search(log) is not None, 'production panel host bound')
@@ -286,7 +296,7 @@ try:
     until(lambda: text('Draft survives', mark), 'unsent draft during the held stream')
     # F8: the agents view during the held stream, then F6 hands the focus to the sidebar and Esc takes it back.
     mark = len(log); send(b'\x1b[19~')
-    until(lambda: text('helper calls and jobs', mark), 'Agents view on the bound generation')
+    until(lambda: text(NO_AGENTS, mark), 'Agents view on the bound generation')
     save_frame('inspect-agents', mark)
     mark = len(log); send(b'\x1b[17~')
     until(lambda: text('←→', mark), 'sidebar focus: its keys in the footer')
@@ -315,11 +325,11 @@ try:
     assert len(sessions) == 1 and len(users) == 1, (sessions, users)
     # T-693: owned real-input inspection, never resumes or rebinds the session.
     mark = len(log); send(b'\x1b[19~')
-    until(lambda: text('helper calls and jobs', mark), 'agents view')
+    until(lambda: text(NO_AGENTS, mark), 'agents view')
     save_frame('agents-wide', mark)
     binding('agents-wide', False, {'current': 1, 'open': False})
     mark = len(log); resize(52, 24)
-    until(lambda: text('host observations', mark) and log.endswith(b'\x1b[?2026l'), 'narrow agents view')
+    until(lambda: text(NO_AGENTS, mark) and log.endswith(b'\x1b[?2026l'), 'narrow agents view')
     save_frame('agents-narrow', mark)
     binding('agents-narrow', False, {'current': 1, 'open': False})
     mark = len(log); send(b'\x1b[20~'); resize(140, 46)
@@ -352,7 +362,7 @@ try:
     binding('job-exited', False, {'current': settled, 'open': False})
     # The notice turn already shows Chat; F9 keeps it there.
     send(b'\x1b[20~')
-    until(lambda: any('BACKGROUND_STARTED' in line for line in screen.lines(main_columns())), 'return from jobs to original conversation')
+    until(lambda: any('BACKGROUND_STARTED' in line for line in main_lines()), 'return from jobs to original conversation')
     mark = len(log); send(b'/fixture-call fixture_forbidden\r'); send(b'Call the fixture sentinel.\r')
     until(lambda: text('Tool fixture_forbidden not found', mark) and len(kinds('turn_ended')) == settled + 1, 'role guard refusal')
     assert not text('forbidden tool ran')

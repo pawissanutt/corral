@@ -191,20 +191,27 @@ try:
                     if not predicate() and host.poll() is not None: raise AssertionError('Host exited: ' + reason)
 
     def main_columns():
-        # The rail paints its own tab row on the top line, ending with its ▸ toggle.
-        rail = screen.columns >= 105 and screen.lines()[0].endswith('▸')
-        return screen.columns - 35 if rail else screen.columns
+        # From 105 columns the sidebar is a rail inside the main view: a `│` column on its left, its first row
+        # (under the tab rule) the tabs `Context Files Plan` ending with the `Ctrl+B ▸` toggle.
+        edge = screen.columns - 35
+        rail = screen.columns >= 105 and any(row[edge] == '│' and ''.join(row[edge:]).rstrip().endswith('▸') for row in screen.cells)
+        return edge if rail else screen.columns
 
-    def visible(text): return text in '\n'.join(screen.lines(main_columns()))
+    def main_lines():
+        # Rows the rail occupies lose its cells; header, tabs, dock, composer, status bar and footer span the full width.
+        edge = main_columns()
+        return [''.join(row[:edge] if edge < screen.columns and row[edge] == '│' else row).rstrip() for row in screen.cells]
+
+    def visible(text): return text in '\n'.join(main_lines())
     def on_screen(text): return text in '\n'.join(screen.lines())
 
     def bound():
-        # The status bar's role badge carries the binding dot: ● bound, ○ not bound.
-        return any(re.search(r'▌WORKER\s*●', line) for line in screen.lines())
+        # The status bar: the role pill ` WORKER `, then the binding dot and generation: `● g1` bound, `○` not.
+        return any(re.match(r'  WORKER  ● g1\b', line) for line in screen.lines())
 
     def footer():
-        """The footer hint row: the last non-empty row of the main column."""
-        rows = [line for line in screen.lines(main_columns()) if line.strip()]
+        """The footer hint row: the last non-empty row, full width under the rule above it."""
+        rows = [line for line in main_lines() if line.strip()]
         return rows[-1] if rows else ''
 
     def sidebar_focused():
@@ -213,7 +220,7 @@ try:
 
     def sidebar_row():
         """The collapsed sidebar row (▴) or the open drawer's tab row (▾) above the composer."""
-        for row, line in enumerate(screen.lines(main_columns())):
+        for row, line in enumerate(main_lines()):
             if all(word in line for word in ('Context', 'Files', 'Plan')) and ('▴' in line or '▾' in line):
                 return row, line
         return None
@@ -223,18 +230,22 @@ try:
     COMPARISONS = ('candidate', 'since session', 'working tree', 'unstaged', 'staged')
 
     def comparison():
-        """The comparison the Changes chip row names, or None outside Changes."""
-        for line in screen.lines(main_columns()):
+        """The comparison the Changes comparison row names (`candidate ▾  <base> → <head> …`), or None outside Changes."""
+        for line in main_lines():
             for name in COMPARISONS:
                 if name + ' ▾' in line: return name
         return None
 
+    def changes_open():
+        """Changes has the focus: its footer offers `c compare`."""
+        return 'compare' in footer().split()
+
     def anchor():
-        lines = screen.lines(main_columns())
+        lines = main_lines()
         tabs = next((row for row, line in enumerate(lines) if 'F9' in line), None)
         if tabs is None: raise AssertionError('no main view tab row\n' + '\n'.join(lines))
-        top = tabs + 1  # The transcript starts below the header rows and the tab row.
-        while top < len(lines) and not lines[top].strip(): top += 1
+        top = tabs + 1  # The transcript starts below the header rows, the tab row and the rule under it.
+        while top < len(lines) and (not lines[top].strip() or set(lines[top]) == {'─'}): top += 1
         for row in range(top, len(lines)):
             marker = re.search(r'P(\d\d)(E| )', lines[row])
             if marker:
@@ -274,22 +285,31 @@ try:
     def drawer_body():
         """Which of the three rows below the drawer's tab row list a changed file."""
         found = sidebar_row()
-        lines = screen.lines(main_columns())
+        lines = main_lines()
         if not found: return []
         return [any(name in line for name in NOTES) for line in lines[found[0] + 1:found[0] + 4]]
 
+    def drawer_selected():
+        """The changed file on the drawer row that carries the selection bar `▌`, or None."""
+        found = sidebar_row()
+        if not found: return None
+        for line in main_lines()[found[0] + 1:found[0] + 3]:
+            if line.startswith('▌'): return next((name for name in NOTES if name in line), None)
+        return None
+
     checks = []
     until(bound, 'production panel host bound')
-    # F7, then `c` from the committed candidate (this fixture supplies no inspection) to the session comparison.
+    # F7 opens Changes on the committed candidate (this fixture supplies no inspection), whose comparison row
+    # names it; `c` steps to the session comparison, whose row names that.
     send('\x1b[18~')
-    until(lambda: comparison() is not None, 'Changes comparison chip')
+    until(lambda: changes_open() and comparison() == 'candidate', 'Changes on the candidate: its comparison row names it')
     for _ in COMPARISONS:
         if comparison() == 'since session': break
         before = comparison(); send('c')
         until(lambda: comparison() not in (None, before), 'next comparison after c')
     until(lambda: comparison() == 'since session' and all(visible(name) for name in NOTES), 'session comparison lists the owned changes')
     send('\x1b[20~')
-    until(lambda: comparison() is None, 'F9 returns to Chat')
+    until(lambda: comparison() is None and not changes_open(), 'F9 returns to Chat')
     checks.append(f'F7 and c select the session comparison: {len(NOTES)} owned working-tree changes')
     send('/fixture-panel-reading\r')
     send('Stream the reading fixture.\r')
@@ -355,15 +375,21 @@ try:
     send('\x1b[17~')
     until(sidebar_focused, 'F6 focuses the open drawer')
     save('pager-80x14')
+    # The drawer shows two files: ↓ moves the selection inside the window first, and the window scrolls by one
+    # only when the selection would leave it.
     send('\x1b[B')
-    until(lambda: (pager() or {}).get('first') == 2, 'keyboard next item')
-    assert (pager() or {}).get('last') == 3 and drawer_body() == [True, True, False], ('drawer body is not two file rows', pager(), drawer_body())
+    until(lambda: drawer_selected() == NOTES[1], 'keyboard next item inside the window')
+    assert (pager() or {}).get('first') == 1 and drawer_body() == [True, True, False], ('the window moved before the selection left it', pager(), drawer_body())
+    send('\x1b[B')
+    until(lambda: (pager() or {}).get('first') == 2, 'keyboard next item past the window scrolls it by one')
+    assert (pager() or {}).get('last') == 3 and drawer_selected() == NOTES[2] and drawer_body() == [True, True, False], ('drawer body is not two file rows', pager(), drawer_body())
+    # ‹ selects the item before the window and ends the page there; › selects the first item past it and starts there.
     now = pager(); click(now['prev'], now['row'])
     until(lambda: (pager() or {}).get('first') == 1, 'pointer previous page')
     now = pager(); click(now['next'], now['row'])
-    until(lambda: (pager() or {}).get('first') == 2, 'pointer next page')
+    until(lambda: (pager() or {}).get('first') == 3, 'pointer next page')
     save('pager-pointer-80x14')
-    checks.append(f'80x14: a Files tab click opens the drawer with two body rows and its pager ‹ n/{start["total"]} ›; Down and ‹/› clicks move the same item')
+    checks.append(f'80x14: a Files tab click opens the two-row drawer with its pager ‹ n/{start["total"]} ›; Down moves the selection, then scrolls the window by one; ‹/› clicks turn whole pages')
     before = pager()
     send('\x15/fixture-native-confirm\r')
     until(lambda: on_screen('Native permission fixture'), 'native dialog')
@@ -376,7 +402,7 @@ try:
     checks.append('dialog owns input: a pager click, F6 and Ctrl+B underneath it change nothing; Esc cancels')
     send('\x1b[17~')
     until(sidebar_focused, 'F6 focuses the drawer after the dialog')
-    assert (pager() or {}).get('first') == 2 and drawer_body() == [True, True, False], ('F6 after the dialog moved the drawer', pager())
+    assert (pager() or {}).get('first') == 3 and drawer_body() == [True, True, False], ('F6 after the dialog moved the drawer', pager())
     save('after-dialog-80x14')
     send('\x15\x04')
     until(lambda: b'\x1b[?1049l' in log, 'terminal restored')

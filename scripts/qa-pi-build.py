@@ -46,8 +46,11 @@ checks: list[str] = []
 resizes = [dict(offset=0, columns=140, rows=46)]
 INCOMPLETE = re.compile(r'\x1b(?:\[[0-?]*[ -/]*|[\]_P^](?:[^\x07\x1b]|\x1b(?!\\))*\x1b?|[()])?\Z', re.S)
 TOKEN = re.compile(r'\x1b\[([<=>?]?)([\d;:]*)[ -/]*([@-~])|\x1b[\]_P^].*?(?:\x07|\x1b\\)|\x1b[()].|\x1b.|[\x00-\x1f\x7f]|[^\x00-\x1f\x7f\x1b]+', re.S)
-# The status bar's role badge, then the binding dot: ● bound, ○ not bound.
-BOUND = re.compile(r'▌BUILD\s*●')
+# The status bar: the role pill ` BUILD `, then the binding. A build session has no corral binding and reads
+# `○ unbound` (the word from 105 columns), never a generation.
+UNBOUND = re.compile(r'^  BUILD  ○ unbound(?: │|$)')
+# The braille spinner a running agent shows in its state cell.
+SPIN = '[⠋⠙⠹⠸⠼⠴⠦⠧]'
 EXITS = ('Keep on the branch', 'Land after the gate', 'Ship through the board', 'Keep iterating')
 ALLOWED = ('Keep on the branch', 'Keep iterating')
 REFUSED = ('Land after the gate', 'Ship through the board')
@@ -224,23 +227,38 @@ try:
     def send(value): os.write(master, value.encode())
 
     def main_columns():
-        # From 105 columns the rail paints its own tab row on the top line, ending with its ▸ toggle.
-        return screen.columns - 35 if screen.columns >= 105 and screen.lines()[0].endswith('▸') else screen.columns
+        # From 105 columns the sidebar is a rail inside the main view: a `│` column on its left, its first row
+        # (under the tab rule) the tabs `Context Files Plan` ending with the `Ctrl+B ▸` toggle.
+        edge = screen.columns - 35
+        rail = screen.columns >= 105 and any(row[edge] == '│' and ''.join(row[edge:]).rstrip().endswith('▸') for row in screen.cells)
+        return edge if rail else screen.columns
 
-    def main_lines(): return screen.lines(main_columns())
+    def main_lines():
+        # Rows the rail occupies lose its cells; header, tabs, dock, composer, status bar and footer span the full width.
+        edge = main_columns()
+        return [''.join(row[:edge] if edge < screen.columns and row[edge] == '│' else row).rstrip() for row in screen.cells]
     def main_text(): return '\n'.join(main_lines())
     def row_with(*needles):
         return next((line for line in main_lines() if all(needle in line for needle in needles)), None)
     def matches(pattern): return re.search(pattern, main_text(), re.M) is not None
-    def bound(): return any(BOUND.search(line) for line in screen.lines())
+    def status_unbound(): return any(UNBOUND.search(line) for line in screen.lines())
+    def card_row(state, name):
+        # A row of the bordered task card: its `│`, one blank cell, the state glyph, two cells, the name.
+        return matches(r'│ ' + state + r'  ' + re.escape(name) + r'\b')
+    def agent_row(state, name):
+        # A row of the Agents table: one blank cell, the selection bar or a blank, two cells, the state glyph, two cells, the name.
+        return matches(r'^ [▌ ]  ' + state + r'  ' + re.escape(name) + r'\b')
+    def finished(name):
+        # The line a child posts under the task card when it comes back: `✓ <name> finished · <n> file(s) · <report>`.
+        return matches(r'✓ ' + re.escape(name) + r' finished · 1 file · ' + name.upper() + r'_REPORT\b')
     def tab_row(): return row_with('F9', 'F8', 'F7', 'F10')
     def header(): return row_with('build · qa')
     def footer():
         rows = [line for line in main_lines() if line.strip()]
         return rows[-1] if rows else ''
     def composer_title():
-        # The composer's top border: `── Message[ → receiver]` then dashes.
-        return next((line for line in main_lines() if line.lstrip().startswith('──') and 'Message' in line), None)
+        # The composer box's top border: `╭─ Message[ → receiver]` then dashes.
+        return next((line for line in main_lines() if line.lstrip().startswith('╭─') and 'Message' in line), None)
     def receiver(name):
         title = composer_title()
         return title is not None and re.search(r'Message → ' + re.escape(name) + r'(?![\w-])', title) is not None
@@ -277,7 +295,7 @@ try:
             check(refused, f'{size}: exit option "{label}" keeps its row and is marked unavailable')
 
     # Scene 1: ready.
-    until(bound, 'the status bar shows ▌BUILD with the bound dot ●', timeout=60)
+    until(status_unbound, 'the status bar shows the BUILD pill with ○ unbound', timeout=60)
     until(lambda: tab_row() is not None and header() is not None, 'the header with "build · qa" and the tab row')
     save('01-ready-140x46', 'ready')
     check(header() is not None and 'corral / build · qa' in header(), 'header row 1 reads "corral / build · qa"')
@@ -289,7 +307,7 @@ try:
     check(re.search(r'F10\s*Board', tabs) is not None, 'Board sits on F10')
     check(row_with('qa-repo · .worktrees/build-qa', 'exit policy: review required') is not None,
           'header row 2 names the repository, the session worktree and the exit policy')
-    check(bound(), 'the status bar shows the build role bound (▌BUILD ●)')
+    check(status_unbound(), 'the status bar shows the BUILD pill and "○ unbound": a build session has no corral binding')
     check(worktree.is_dir() and git('rev-parse', '--abbrev-ref', 'HEAD', cwd=worktree) == 'build/qa',
           'the entry created the private worktree .worktrees/build-qa on branch build/qa')
 
@@ -299,16 +317,15 @@ try:
     until(lambda: row_with('QA_PARENT_DELEGATE') is not None, 'the delegation prompt drafted in the composer')
     send(KEY['enter'])
     until(lambda: held() == {'alpha', 'beta'} and row_with('task · 2 slices, one worktree') is not None
-          and matches(r'●\s+alpha\b') and matches(r'●\s+beta\b'),
-          'both children parked in their report stream and the task card with a running row for each', timeout=45)
+          and card_row(SPIN, 'alpha') and card_row(SPIN, 'beta'),
+          'both children parked in their report stream and the task card with a running (spinner) row for each', timeout=45)
     save('02-delegation-running-140x46', 'delegation')
     check(row_with('alpha', 'Alpha slice') is not None and row_with('beta', 'Beta slice') is not None,
           'the task card has one row per child with its title')
     check((worktree / 'alpha.txt').read_text() == 'ALPHA_CONTENT\n' and (worktree / 'beta.txt').read_text() == 'BETA_CONTENT\n',
           'each child wrote its own file in the session worktree before reporting')
     send(KEY['f8'])
-    until(lambda: matches(r'helper calls and jobs|host observations') and matches(r'●\s+alpha\b') and matches(r'●\s+beta\b'),
-          'F8 Agents lists alpha and beta as running')
+    until(lambda: agent_row(SPIN, 'alpha') and agent_row(SPIN, 'beta'), 'F8 Agents lists alpha and beta as running (spinner rows of its table)')
     save('02-agents-running-140x46', 'delegation')
     check(main_text().index('alpha') < main_text().index('beta'), 'Agents lists the children in fleet order')
 
@@ -331,11 +348,11 @@ try:
     send(KEY['f9'])
     until(lambda: row_with('task · 2 slices') is not None, 'F9 returns to Chat with the task card')
     os.close(gate); gate = None
-    until(lambda: matches(r'✓\s+alpha\b') and matches(r'✓\s+beta\b') and matches(r'2 done.*2 files')
+    until(lambda: card_row('✓', 'alpha') and card_row('✓', 'beta') and finished('alpha') and finished('beta')
           and row_with('BUILD_INTEGRATED') is not None and 'Idle' in (header() or ''),
-          'both children done, the card totals and the parent reply, header Idle', timeout=45)
+          'both children done in the card, each posted its finished line under it, the parent replied, header Idle', timeout=45)
     save('02-delegation-done-140x46', 'delegation')
-    checks.append('the task card shows ✓ for alpha and beta and the totals "2 done … 2 files"; the parent replied')
+    checks.append('the task card shows ✓ for alpha and beta; each posted "✓ <name> finished · 1 file · <report>" under it; the parent replied')
 
     # Scene 4: Changes lists the children's files with their authors.
     send(KEY['f7'])
@@ -383,11 +400,10 @@ try:
               f'{size} redraw with the header, the tab row and the composer')
         save(f'07-chat-{size}', 'small terminals')
         send(KEY['f8'])
-        until(lambda: matches(r'helper calls and jobs|host observations') and matches(r'✓\s+alpha\b') and matches(r'✓\s+beta\b'),
-              f'{size} Agents lists alpha and beta as done')
+        until(lambda: agent_row('✓', 'alpha') and agent_row('✓', 'beta'), f'{size} Agents lists alpha and beta as done')
         save(f'07-agents-{size}', 'small terminals')
         send(KEY['f9'])
-        until(lambda: not matches(r'helper calls and jobs|host observations') and composer_title() is not None, f'{size} back in Chat')
+        until(lambda: not agent_row('✓', 'alpha') and composer_title() is not None, f'{size} back in Chat')
         send('/finish\r')
         until(lambda: dialog_open() and all(row_with(label) for label in EXITS), f'{size} /finish docks the exit choice with all four options')
         save(f'07-exit-choice-{size}', 'small terminals')
