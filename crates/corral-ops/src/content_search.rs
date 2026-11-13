@@ -8,7 +8,7 @@ use jiff::Timestamp;
 use serde::Serialize;
 
 use crate::Ctx;
-use crate::content_index::{self, Snapshot};
+use crate::content_index::{self, catalog::Catalog};
 
 /// Scope and filters for content search. `None` scope is handled by the legacy task CLI.
 #[derive(Debug, Clone)]
@@ -59,37 +59,19 @@ pub struct ContentHit {
     pub updated: Timestamp,
 }
 
-fn candidates(snapshot: &Snapshot, query: &Query) -> BTreeSet<String> {
-    let mut result: Option<BTreeSet<String>> = None;
-    for (term, _, negative) in query.content_terms() {
-        if negative {
-            continue;
-        }
-        for word in content_index::words(term) {
-            let found = snapshot
-                .postings
-                .iter()
-                .filter(|(token, _)| token.contains(&word))
-                .flat_map(|(_, ids)| ids.iter().cloned())
-                .collect::<BTreeSet<_>>();
-            result = Some(match result {
-                None => found,
-                Some(previous) => previous.intersection(&found).cloned().collect(),
-            });
-        }
-    }
-    result.unwrap_or_else(|| {
-        snapshot
-            .records
-            .iter()
-            .map(|r| r.document.reference.clone())
-            .collect()
-    })
-}
-
 /// Searches the shared extracted-text index, streaming overflow documents when necessary.
 /// The index is a derived cache; tasks, artifact snapshots and events are never modified.
 pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result<Vec<ContentHit>> {
+    match search_content_once(ctx, input, options) {
+        Err(error) if crate::content_index::catalog::is_corrupt(&error) => {
+            crate::content_index::catalog::repair(ctx)?;
+            search_content_once(ctx, input, options)
+        }
+        result => result,
+    }
+}
+
+fn search_content_once(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result<Vec<ContentHit>> {
     ensure!(input.len() <= 4096, "search query exceeds 4096 bytes");
     ensure!(options.limit <= 100, "search limit must be at most 100");
     ensure!(options.context <= 20, "search context must be at most 20");
@@ -111,17 +93,13 @@ pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result
         .as_deref()
         .map(|s| cutoff(s, now))
         .transpose()?;
-    let tasks = ctx.store.artifact_owners()?;
-    let by_id: HashMap<_, _> = tasks.iter().map(|t| (t.id.as_str(), t)).collect();
-    // The scan streams snapshots, so it keeps storage; the index lock comes first (T-659).
+    let _span = corral_core::timing::span("search.content");
+    // Index before storage; both refresh and candidate reads use one store view.
     let _index = content_index::lock(ctx)?;
     let _storage = crate::artifact_storage::storage_lock(ctx)?;
-    let actual_tasks: Vec<_> = tasks
-        .iter()
-        .filter_map(|owner| owner.task().cloned())
-        .collect();
-    let snapshot = content_index::snapshot_locked(ctx, &actual_tasks, options.reindex)?;
-    let candidates = candidates(&snapshot, &query);
+    let (view_ctx, _) = content_index::one_view(ctx)?;
+    let ctx = &view_ctx;
+    let catalog = Catalog::open(ctx, options.reindex)?;
     let pins: BTreeSet<_> = ctx
         .store
         .pins()?
@@ -129,39 +107,63 @@ pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result
         .filter_map(|p| corral_core::PinRef::parse(&p.target).ok())
         .map(|p| p.task().to_string())
         .collect();
-    let idfs: Vec<u64> = query
-        .content_terms()
-        .iter()
-        .map(|(term, _, _)| {
-            let matching = snapshot
-                .postings
-                .iter()
-                .filter(|(word, _)| content_index::words(term).any(|t| word.contains(&t)))
-                .flat_map(|(_, ids)| ids.iter())
-                .collect::<BTreeSet<_>>()
-                .len();
-            1 + 1000 / (1 + u64::try_from(matching).unwrap_or(u64::MAX - 1))
-        })
-        .collect();
+    let idfs = catalog.idfs(&query);
     let mut hits = Vec::new();
-    for record in &snapshot.records {
-        let doc = &record.document;
-        let owner = by_id.get(doc.task.as_str()).copied();
-        let project = owner.and_then(|owner| owner.project.as_ref());
+    // Only the current candidate's owner is retained, never all task histories.
+    let mut owner_id = String::new();
+    let mut owner: Option<corral_core::ArtifactOwner> = None;
+    let mut owner_project = None;
+    // Owner-dependent predicates use ':' or '>'; quoted punctuation can merely disable
+    // this conservative fast path. Bare `pinned` needs only SearchContext, not a Task.
+    let needs_owner = input.contains([':', '>']);
+    catalog.visit(&query, |entry| {
+        let doc = &entry.document;
         if (options.scope != "all" && options.scope != doc.scope)
             || options.task.as_ref().is_some_and(|id| id != &doc.task)
             || options.kind.is_some_and(|kind| kind.as_str() != doc.kind)
             || options.tier.is_some_and(|tier| tier != doc.tier)
             || since.is_some_and(|since| doc.updated < since)
-            || options.project.as_ref().is_some_and(|p| project != Some(p))
-            || (doc.complete && !candidates.contains(&doc.reference))
         {
-            continue;
+            return Ok(());
         }
+        if owner_id != doc.task {
+            owner_project = if doc.task.starts_with("T-") {
+                ctx.store
+                    .head_if_exists(&doc.task)?
+                    .and_then(|head| head.project.clone())
+            } else {
+                None
+            };
+            owner = if !needs_owner {
+                None
+            } else if doc.task.starts_with("T-") {
+                ctx.store
+                    .head_if_exists(&doc.task)?
+                    .map(|_| ctx.store.get(&doc.task).map(Into::into))
+                    .transpose()?
+            } else if doc.task.starts_with("A-") {
+                Some(ctx.store.get_assistant(&doc.task)?.into())
+            } else {
+                None
+            };
+            owner_id.clone_from(&doc.task);
+        }
+        let project = owner_project.as_ref();
+        if options.project.as_ref().is_some_and(|p| project != Some(p)) {
+            return Ok(());
+        }
+        let record = catalog.record(ctx, entry)?;
+        let _scan = corral_core::timing::span(match doc.scope.as_str() {
+            "artifacts" => "search.artifact_scan",
+            "specs" => "search.spec_scan",
+            "reviews" => "search.review_scan",
+            _ => "search.event_scan",
+        });
         if let Some(found) = crate::content_scan::search_record(
             ctx,
-            record,
+            &record,
             owner
+                .as_ref()
                 .map(ContentOwner::from)
                 .unwrap_or(ContentOwner::Workspace),
             &query,
@@ -172,6 +174,7 @@ pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result
             options.context,
             &idfs,
         )? {
+            let _assembly = corral_core::timing::span("search.result_assembly");
             hits.push(ContentHit {
                 reference: doc.reference.clone(),
                 artifact_ref: (doc.scope == "artifacts").then(|| doc.reference.clone()),
@@ -197,7 +200,8 @@ pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result
             });
             hits.truncate(options.limit);
         }
-    }
+        Ok(())
+    })?;
     Ok(hits)
 }
 

@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use corral_core::{ArtifactTier, Event, EventCursor, Store};
 
 use super::{Document, Record, Source, digest};
@@ -47,6 +47,29 @@ pub(super) fn document(event: Event) -> (Document, String) {
         binary: false,
     };
     (document, detail)
+}
+
+/// Project one keyed database row without retaining the event reader's 500-row batch.
+pub(super) fn stored_document(
+    stored: corral_core::backend::StoredEvent,
+) -> Result<Option<(Document, String)>> {
+    if stored.malformed {
+        return Ok(None);
+    }
+    let event = stored.event;
+    Ok(Some(document(Event {
+        seq: stored.seq.0,
+        ts: event.ts,
+        task: event.task,
+        kind: event.kind,
+        actor: event
+            .actor
+            .map(|actor| serde_json::from_value(actor.into()))
+            .transpose()
+            .context("decoding indexed event actor")?,
+        via: event.via,
+        detail: event.detail,
+    })))
 }
 
 pub(super) fn records(store: &Store, records: &mut Vec<Record>) -> Result<()> {

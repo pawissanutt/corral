@@ -14,6 +14,74 @@ pub struct SearchData {
 }
 
 impl SearchData {
+    /// Rank task ids without retaining every task's history. Fuzzy task predicates still
+    /// require each task, so visit one at a time and hydrate only selected output rows later.
+    pub fn search_ids(store: &Store, input: &str, limit: usize) -> Result<Vec<String>> {
+        match Self::search_ids_once(store, input, limit) {
+            Err(error) if crate::content_index::catalog::is_corrupt(&error) => {
+                crate::content_index::catalog::repair(&crate::Ctx::from_store(store.clone()))?;
+                Self::search_ids_once(store, input, limit)
+            }
+            result => result,
+        }
+    }
+
+    fn search_ids_once(store: &Store, input: &str, limit: usize) -> Result<Vec<String>> {
+        let _span = corral_core::timing::span("search.tasks");
+        let query = Query::parse(input, corral_core::clock::now())?;
+        let ctx = crate::Ctx::from_store(store.clone());
+        let _index = crate::content_index::lock(&ctx)?;
+        let _storage = crate::artifact_storage::storage_lock(&ctx)?;
+        let (ctx, _) = crate::content_index::one_view(&ctx)?;
+        let catalog = crate::content_index::catalog::Catalog::open(&ctx, false)?;
+        let ids: Vec<_> = catalog.task_ids().cloned().collect();
+        let finishes = crate::finishes_for(&ctx.store, &ids)?;
+        let pinned: HashSet<_> = ctx
+            .store
+            .pins()?
+            .into_iter()
+            .filter_map(|p| PinRef::parse(&p.target).ok())
+            .map(|p| p.task().to_string())
+            .collect();
+        let mut ranked = Vec::new();
+        {
+            let _scan = corral_core::timing::span("search.task_scan");
+            for id in ids {
+                let task = ctx.store.get(&id)?;
+                let mut extra = finishes
+                    .get(&id)
+                    .and_then(|finish| finish.landed.as_ref())
+                    .map(|landed| {
+                        format!(
+                            "{} {} {}",
+                            landed.sha,
+                            landed.strategy,
+                            landed.strategy_label()
+                        )
+                    })
+                    .unwrap_or_default();
+                extra.push_str(&catalog.task_text(&id)?);
+                if let Some(score) = query.score(
+                    &task,
+                    SearchContext {
+                        pinned: pinned.contains(&id),
+                        extra_text: &extra,
+                    },
+                ) {
+                    ranked.push((id, score, task.updated));
+                }
+            }
+        }
+        let _assembly = corral_core::timing::span("search.result_assembly");
+        ranked.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| b.2.cmp(&a.2))
+                .then_with(|| b.0.cmp(&a.0))
+        });
+        ranked.truncate(limit);
+        Ok(ranked.into_iter().map(|(id, _, _)| id).collect())
+    }
+
     /// Load tasks at every status plus pins and landed history metadata.
     pub fn load(store: &Store) -> Result<Self> {
         let tasks = store.list()?;
@@ -75,11 +143,8 @@ impl SearchData {
 
 /// Search every task with the shared language, returning tasks in relevance order.
 pub fn search_tasks(store: &Store, input: &str) -> Result<Vec<Task>> {
-    let query = Query::parse(input, corral_core::clock::now())?;
-    let data = SearchData::load(store)?;
-    Ok(data
-        .ranked(&query)
+    SearchData::search_ids(store, input, usize::MAX)?
         .into_iter()
-        .map(|i| data.tasks[i].clone())
-        .collect())
+        .map(|id| store.get(&id))
+        .collect()
 }

@@ -41,22 +41,51 @@ decoded source bytes and stops after the final requested line, without reading t
 
 ## Derived index
 
-`.corral/state/content-search.json` is a versioned inverted index with extracted text. It uses existing
-Serde and SHA-256 dependencies rather than introducing SQLite or a search service for a local file
-store. Updates retain unchanged artifact text by SHA-256 across compression; task/review/event text
-is content-hashed. Retention, sync and search refresh the index; artifact add refreshes it unless
-another build holds it, leaving the change to the next sync or search. Task edits are
-picked up by the next refresh. Atomic replacement and locks serialize cache writers and artifact
-retention.
-Deleting the index, changing its version, corruption, or `--reindex` rebuilds it from canonical files.
+The workspace cache root contains two derived indexes, protected by the existing content-index
+lock:
 
-The index caches at most 4096 documents, 256 KiB of text per document, 8 MiB of total text, and
-64 MiB on disk including postings and metadata, preferring recent documents. Overflow documents
-are **not omitted** from content search: their source is streamed on demand with 64 KiB chunks,
-including gzip snapshots, so a hit after the cached prefix remains discoverable. This path is slower
-than cached search but does not load a whole archive into memory. Binary content is not text-indexed;
-its title remains searchable. Purged content is removed from the index rather than resurrected.
-Sources remain read-only; the only writes performed by search are rebuildable state and lock files.
-For enormous source lines, the scanner retains marker flags and a capped actual-match excerpt per
-query term until the newline, rather than retaining the line. Split UTF-8 and marker words are carried
-across chunk boundaries.
+- `content-search.json` retains the existing versioned inverted postings and extracted prefixes.
+  It defines ranking's inverse document frequencies and the supplemental text used by task search.
+  Its limits remain 4096 documents, 256 KiB per document, 8 MiB of text and 64 MiB serialized.
+- `search-catalog/` records complete-source candidate terms for every content scope, including
+  transient logs, compressed artifacts and historical events. Its manifest publishes the store
+  change-feed sequence and event sequence last. A refresh re-derives only changed tasks/session
+  artifacts and appends only new events; unchanged artifact terms are reused by content hash.
+  Task derivation reads heads and search-relevant rows, not full task histories or agent receipts.
+  Completed prefix builds publish that view's refresh cursor too, so an unchanged sync refresh
+  does not rebuild after a canonical reindex.
+
+A warm content query reads the bounded prefix index and streams catalog metadata/terms. It reads
+only candidate source bodies and keyed owner metadata, not every task, event detail or artifact blob.
+Candidates outside the prefix cache still use the same bounded source scanner, so a match after
+the cached prefix remains discoverable. Event candidates use keyed event rows; the store API
+materializes an individual event detail. Artifact and persisted task-text bodies stream in 64 KiB
+chunks, including gzip snapshots. Snippets, ranking, references and scope membership are unchanged.
+The artifact finder reports failures opening required overflow sources even when the term index
+rejects them; missing sources cannot silently preserve stale results. Cached prefix matches do not
+require reopening a source. Content-query candidate streaming errors likewise propagate.
+
+The first query without a catalog, a pruned change feed, or `--reindex` builds the catalog from one
+store view. This cold pass visits search-relevant task rows, event details and previously unindexed
+artifact bodies; it is not hit-proportional. Complete, unchanged extracted prefixes can seed complete
+candidate terms without reopening their artifacts. An explicit reindex reads canonical sources.
+Prefix admission is externally sorted with bounded descriptor buffers rather than collecting
+historical event text in memory. Removing the workspace cache root rebuilds both indexes.
+
+Complete vocabularies are capped at 8192 terms and 128 KiB per document, with individual words
+capped at 8192 bytes. Larger vocabularies/words use a fixed 16 KiB substring rejection filter.
+Long ASCII query terms can still reject unrelated sources; short or Unicode terms and filter
+false positives conservatively stream these overflow documents. Negative-only and metadata-only
+queries can likewise require scanning all eligible source bodies. This fallback bounds memory
+without dropping results. Enormous source lines retain marker flags and capped actual-match
+excerpts, not the entire line; split UTF-8 and markers carry across chunks.
+
+Plain task-result search preserves fuzzy and historical task predicates by evaluating one task at
+a time. It ranks scalar identifiers before reading the requested output rows; JSON rendering also
+loads one selected task at a time. Unlike content queries, this path still reads every task's
+query-visible history, but does not retain the whole task listing in memory.
+
+Retention, sync and artifact attachment continue maintaining the prefix index. Content search and
+the artifact finder follow the catalog before querying it; task edits are visible on the next query.
+Purged content is removed rather than resurrected. All index files are disposable caches: source
+tasks, events and artifact bodies remain read-only.

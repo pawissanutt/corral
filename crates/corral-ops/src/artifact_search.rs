@@ -1,16 +1,15 @@
 //! Literal finder matching over the shared, bounded content snapshot.
-use anyhow::{Context, Result};
-use corral_core::ArtifactOwner;
-use corral_core::query::{Query, SearchContext};
+use anyhow::Result;
+use corral_core::query::{ContentOwner, Query, SearchContext};
 
-use crate::content_index::{self, Snapshot, Source};
+use crate::content_index::{self, Record, Source, catalog::Catalog};
 use crate::{ArtifactRow, Ctx};
 
 /// An artifact finder's content snapshot, refreshed alongside its artifact rows.
 /// Complete bodies stay cached; overflow uses the shared bounded streaming scanner.
 pub struct ArtifactSearch {
-    snapshot: Snapshot,
-    tasks: Vec<ArtifactOwner>,
+    records: Vec<Record>,
+    catalog: Catalog,
 }
 
 impl ArtifactSearch {
@@ -19,16 +18,22 @@ impl ArtifactSearch {
     /// # Errors
     /// Returns an error if tasks, snapshots or the derived cache cannot be read.
     pub fn load(ctx: &Ctx) -> Result<Self> {
-        let tasks = ctx.store.artifact_owners()?;
-        let actual_tasks: Vec<_> = tasks
-            .iter()
-            .filter_map(|owner| owner.task().cloned())
-            .collect();
-        let mut snapshot = content_index::snapshot(ctx, &actual_tasks, false)?;
-        snapshot
-            .records
-            .retain(|record| record.document.scope == "artifacts");
-        Ok(Self { snapshot, tasks })
+        match Self::load_once(ctx) {
+            Err(error) if content_index::catalog::is_corrupt(&error) => {
+                content_index::catalog::repair(ctx)?;
+                Self::load_once(ctx)
+            }
+            result => result,
+        }
+    }
+
+    fn load_once(ctx: &Ctx) -> Result<Self> {
+        let _index = content_index::lock(ctx)?;
+        let _storage = crate::artifact_storage::storage_lock(ctx)?;
+        let (view_ctx, _) = content_index::one_view(ctx)?;
+        let catalog = Catalog::open(&view_ctx, false)?;
+        let records = catalog.artifact_records(&view_ctx)?;
+        Ok(Self { records, catalog })
     }
 
     /// ANDs lowercase literal terms across the row's lowercase metadata and body.
@@ -46,25 +51,34 @@ impl ArtifactSearch {
         if terms.iter().all(|term| metadata.contains(term)) {
             return Ok(true);
         }
-        let Some(record) = self.snapshot.records.iter().find(|record| {
+        let Some(record) = self.records.iter().find(|record| {
             record.document.task == row.task_id
                 && matches!(&record.source, Source::Artifact(a) if a.path == row.artifact.path)
         }) else {
             return Ok(false);
         };
         let text = record.document.text.to_lowercase();
-        for term in terms
+        let body_terms: Vec<_> = terms
             .iter()
-            .filter(|term| !metadata.contains(**term) && !text.contains(**term))
+            .copied()
+            .filter(|term| !metadata.contains(term) && !text.contains(term))
+            .collect();
+        if body_terms.is_empty() {
+            return Ok(true);
+        }
+        if record.document.complete || record.document.binary {
+            return Ok(false);
+        }
+        if !self
+            .catalog
+            .artifact_may_match(&row.artifact, &body_terms)?
         {
-            if record.document.complete || record.document.binary {
-                return Ok(false);
-            }
-            let task = self
-                .tasks
-                .iter()
-                .find(|task| task.id == row.task_id)
-                .context("artifact search task missing from snapshot")?;
+            // Lexical rejection must not conceal a source that can no longer be opened.
+            // Opening does not scan the unrelated body; actual candidates use the scanner.
+            let _reader = crate::artifact_storage::artifact_reader(ctx, &row.artifact)?;
+            return Ok(false);
+        }
+        for term in body_terms {
             // Finder terms are literal, not query syntax. An extra minus negates
             // a leading-minus literal; invert that result after the shared scan.
             let negative = term.starts_with('-');
@@ -74,7 +88,7 @@ impl ArtifactSearch {
             let found = crate::content_scan::search_record(
                 ctx,
                 record,
-                task,
+                ContentOwner::Workspace,
                 &query,
                 SearchContext::default(),
                 0,
