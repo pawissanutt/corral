@@ -26,6 +26,7 @@ export class PanelTerminal implements Terminal {
   private fullscreen = true;
   private started = false;
   private resizeHandler: (() => void) | undefined;
+  private onInput: ((data: string) => void) | undefined;
   private autowrap = false;
 
   constructor(readonly physical: Terminal, private readonly surface: PanelSurface) {}
@@ -45,16 +46,22 @@ export class PanelTerminal implements Terminal {
   start(onInput: (data: string) => void, onResize: () => void): void {
     this.started = true;
     this.resizeHandler = onResize;
-    this.physical.start(data => { if (!this.surface.handleInput(data)) onInput(data); }, () => {
+    this.onInput = onInput;
+    this.physical.start(data => this.replay(data), () => {
       this.surface.layoutChanged();
       onResize();
     });
+  }
+  /** Input as if typed: the panels first, then Pi. Footer and keys-list clicks replay their key this way. */
+  replay(data: string): void {
+    if (!this.surface.handleInput(data)) this.onInput?.(data);
   }
   stop(): void {
     this.started = false;
     this.active = false;
     this.canvas.reset();
     this.resizeHandler = undefined;
+    this.onInput = undefined;
     this.physical.stop();
   }
   drainInput(maxMs?: number, idleMs?: number): Promise<void> { return this.physical.drainInput(maxMs, idleMs); }

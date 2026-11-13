@@ -82,7 +82,8 @@ test("native panels retain real streaming, composing, binding, modal isolation a
     let mark = physical.writes.length;
     physical.resize(80, 34); await physical.until("Keep this unsent draft", mark);
     expect(terminal.columns).toBe(80); expect(host.sessionId()).toBe(bound);
-    physical.send("\x1b[<0;6;32M"); physical.send("\x1b[<0;6;32m");
+    // A click in the draft row: below it are the composer's bottom bar, the status bar and the key hint row.
+    physical.send("\x1b[<0;6;31M"); physical.send("\x1b[<0;6;31m");
     physical.send("\x1b[F"); // Keep the fake-cursor escape outside the draft substring checked on resize.
     if (evidence) writeFileSync(join(evidence, "narrow.ansi"), physical.writes.join(""));
     mark = physical.writes.length;

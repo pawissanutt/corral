@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { codeHost } from "./support/code-host.ts";
-import { activityLines } from "../src/ui/activity-view.ts";
+import { inspectorActivity } from "../src/ui/inspector.ts";
 import type { PanelSnapshot } from "../src/ui/panels-view.ts";
 
 const progress = (revision: number) => ({ revision, spec_revision: "spec", phases: [{ id: "p", label: "Implementation", steps: [
@@ -18,10 +18,12 @@ test("authenticated Code Mode children expose all receipt states and reconcile t
   const panels = fx.host.panels;
   if (!panels) throw new Error("rich fixture must provide native panels");
   const captured: string[] = [];
-  // Receipts render in the Activity view; the plan renders in the side panel.
+  // Receipts are the host receipts and events observations; the plan renders in the sidebar's Plan tab.
   const snapshot = () => (panels as unknown as { options: { snapshot: () => PanelSnapshot | null } }).options.snapshot();
   const render = (tab: "Context" | "Plan") => {
-    const text = stripTerminalSequences((tab === "Plan" ? panels.renderSidebar(110, 200) : activityLines(snapshot(), 0)).join("\n"));
+    panels.sidebar.tab = "plan";
+    const info = snapshot()?.inspector;
+    const text = stripTerminalSequences((tab === "Plan" ? panels.renderSidebar(110, 200) : info ? inspectorActivity(info) : []).join("\n"));
     captured.push(tab, text);
     return text;
   };

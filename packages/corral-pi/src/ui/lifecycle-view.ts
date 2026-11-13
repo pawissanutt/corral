@@ -2,7 +2,7 @@ import { z } from "zod";
 import { Text, matchesKey, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
 import type { InspectorSnapshot } from "./inspector.ts";
-import type { AgentObservation } from "./agent-view.ts";
+import type { AgentObservation } from "./agents-model.ts";
 import { plainLabel } from "./panels-view.ts";
 
 const Label = z.string().max(4096);
@@ -90,9 +90,10 @@ export class LifecycleView implements Component {
       if (index !== undefined) for (let i = 0; i < wrapped.length; i++) this.hits.set(rows.length + i, index);
       rows.push(...wrapped);
     };
-    add(`${this.mode === "graph" ? "Dependencies" : "Lifecycle timeline"} · read-only · j/k/↑/↓ or click inspect · r reconcile`);
+    add(`${this.mode === "graph" ? "Dependencies" : "Lifecycle timeline"} · read-only`);
     add(`${this.identity.task ?? "unbound"} / ${this.identity.run ?? "unbound"} · No queue, move or dispatch controls`);
-    if (this.mode === "timeline") add("c canonical task events · h scoped host/session events · sources never merged or timestamp-sorted");
+    if (this.mode === "timeline") add(this.source === "host" ? "Scoped host/session events · a separate source from canonical task events, never merged or timestamp-sorted"
+      : "Canonical task events · a separate source from host/session events, never merged or timestamp-sorted");
     if (this.mode === "timeline" && this.source === "host") {
       const host = this.host(), page = host?.events;
       add(this.bound() ? "Bound host observations · NOT canonical task settlement" : "STALE / disconnected host observations");
@@ -141,10 +142,10 @@ export class LifecycleView implements Component {
       const agents = this.agents();
       if (!agents) add("Agent/session source unavailable");
       for (const agent of agents?.slice(0, 100) ?? []) add(`${agent.id} ┄agent-parent→ ${agent.parent ?? "host root"} · session ${agent.session} · ${agent.state}`);
-      add("F8 then a: inspect host agent/session details; no parent inferred from conversation order");
+      add("No agent parent is inferred from conversation order");
     } else {
       add(`Source: canonical database events · append sequence (not timestamp-sorted) · end sequence ${data.end}`);
-      add("Bound task/run events and task-wide events only · h opens separate host/session source");
+      add("Bound task/run events and task-wide events only · host/session events are a separate source");
       add(data.event_gap ? "GAP: bounded page / omitted, malformed or oversized events" : "Complete bounded task page at read boundary; other scopes are not included");
       const entry = data.events[this.selected];
       if (entry) {

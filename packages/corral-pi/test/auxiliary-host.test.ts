@@ -64,7 +64,7 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
     const root = workbench.mount(new Text("PARENT_TRANSCRIPT", 0, 0), () => ({ tui, outputPad: 1,
       markdownTheme: sdk.getMarkdownTheme(), markdownTransformers: [], renderers: name => sdk.withBuiltInRenderers(name, undefined) }));
     const screen = () => stripTerminalSequences(renderLayoutFrame(root, 80, 70, () => {}).lines.join("\n"));
-    workbench.openHelpers(); expect(screen()).toContain("no helpers yet");
+    workbench.openAgents(); expect(screen()).toContain("No helper calls");
     for (const stage of ["startup", "reload"]) {
       if (stage === "reload") await host.session.reload();
       fixtureTransport().script([
@@ -85,12 +85,14 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
       const reference = corral.calls().filter(call => call.envelope.payload.usage_kind === "oracle" && call.envelope.payload.action === "prepare").at(-1)?.envelope.payload.request;
       if (typeof reference !== "string") throw new Error("Oracle reference missing");
       const beforeInspection = requestCount;
-      workbench.openHelpers(reference);
+      workbench.openAgent(`helper:${reference}`);
       expect(screen()).toContain("oracle advice"); expect(screen()).toContain("consult only");
       const exploreReference = corral.calls().filter(call => call.envelope.payload.usage_kind === "explore" && call.envelope.payload.action === "prepare").at(-1)?.envelope.payload.request;
       if (typeof exploreReference !== "string") throw new Error("Explore reference missing");
-      workbench.openHelpers(exploreReference); // Selection is sidebar-owned; j/k now scroll the open conversation.
+      workbench.openAgent(`helper:${exploreReference}`);
       expect(screen()).toContain("child findings"); expect(screen()).toContain("research only");
+      // Ctrl+O expands the native tool cards, then folds them again for the next stage.
+      workbench.handleInput("\x0f");
       expect(screen()).toContain("Tool write not found");
       workbench.handleInput("\x0f");
       expect(requestCount).toBe(beforeInspection); // Inspecting never invokes a model or resumes a child.

@@ -26,7 +26,7 @@ export class NativeImageViewer {
     const height = this.viewportHeight;
     const source = this.source;
     if (!source) return [];
-    const title = `${plainLabel(source.filename ?? "Image")} · ${source.dimensions.widthPx}×${source.dimensions.heightPx} · click / Esc close`;
+    const title = `${plainLabel(source.filename ?? "Image")} · ${source.dimensions.widthPx}×${source.dimensions.heightPx}`;
     if (height <= 1) return height ? [PANEL_BG + PANEL_TEXT + pad(title, width) + RESET] : [];
     const size = `${width}x${height}`;
     if (!this.image || size !== this.size) {

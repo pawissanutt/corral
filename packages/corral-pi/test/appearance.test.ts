@@ -12,15 +12,14 @@ test("action catalog retains role restrictions and packaged preferences change r
     const answer = actions.find(a => a.id === "inbox.answer-flow");
     expect(answer?.disabled()).toContain("Role worker cannot answer");
     expect(actions.every(a => a.scope === "worker · demo")).toBeTrue();
-    expect(actions.find(a => a.id === "app.model.select")?.shortcut).toContain("ctrl+l");
+    expect(actions.find(a => a.id === "app.model.select")?.shortcut.toLowerCase()).toContain("ctrl+l");
     expect(actions.some(a => /shell|exec|permission|role\.switch/.test(a.id))).toBeFalse();
-    const before = h.panels.renderSidebar(34, 46);
+    const draftColumn = () => h.screen().find("Keep my draft")?.col ?? -1;
+    const comfortable = draftColumn();
     await actions.find(a => a.id === "density.compact")?.run();
     expect(h.panels.density).toBe("compact");
-    // Same canonical content, fewer blank rows between metadata sections.
-    const compact = h.panels.renderSidebar(34, 46);
-    const row = (lines: readonly string[], text: string) => lines.findIndex(line => line.includes(text));
-    expect(row(compact, "Plan")).toBeLessThanOrEqual(row(before, "Plan"));
+    // Compact density drops the composer's inner padding; the draft stays where it was typed.
+    await h.physical.whenWritten(() => draftColumn() >= 0 && draftColumn() < comfortable, "the compact composer");
     for (const appearance of ["light", "contrast", "dark"]) {
       const choice = h.panels.actions().find(a => a.id === `appearance.${appearance}`);
       expect(choice?.disabled()).toBeUndefined();

@@ -3,11 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { visibleWidth, stripTerminalSequences } from "@earendil-works/pi-tui";
+import { visibleWidth, stripTerminalSequences, Text } from "@earendil-works/pi-tui";
+import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
 import { PanelTerminal, type PanelSurface } from "./panel-terminal.ts";
 import { NativePanels } from "./panels.ts";
 import { box, diffLine, PANEL_WARNING, type PanelSnapshot } from "./panels-view.ts";
-import { composerBar, contextLabel, contextSegment, statusBar } from "./panels-chrome.ts";
+import { contextLabel, contextSegment, statusBar } from "./panels-chrome.ts";
 import { STATUS_BINDING, STATUS_ALERTS } from "./chrome.ts";
 import { parseStatus, readPanelDiff, readPanelFiles } from "./panels-git.ts";
 import { RecordingTerminal } from "../../test/support/panel-terminal.ts";
@@ -118,12 +119,12 @@ test("view data uses measured values and explicit unavailable/empty states, neve
   expect(contextLabel(null)).toBe("Context unavailable");
   expect(contextLabel(snapshot)).toBe("1.2k/10k · 12% context");
 });
-test("model and measured context have one ambient owner, with binding and refusals retained", () => {
+test("the status bar is the one home of session cost and context, with binding and refusals retained", () => {
   for (const width of [40, 52, 80, 105, 140]) {
     const statuses = new Map([[STATUS_BINDING, "● corral g3"], [STATUS_ALERTS, "2 tool denied"]]);
     const bar = statusBar(identity, { ...snapshot, cost: 1.234 }, statuses, width);
-    const screen = stripTerminalSequences([composerBar(snapshot, width), ...bar].join("\n"));
-    expect(screen.match(/example/g)).toHaveLength(1);
+    const screen = stripTerminalSequences(bar.join("\n"));
+    expect(screen).not.toContain("example"); // the model belongs to the composer bar
     expect(screen.match(/12%/g)).toHaveLength(1);
     expect(screen).toMatch(/1\.2k \/ 10k|1k\/10k/);
     expect(screen).toContain("2 tool denied");
@@ -132,7 +133,10 @@ test("model and measured context have one ambient owner, with binding and refusa
     expect(screen).not.toContain("● corral g3");
     if (width >= 80) expect(screen).toContain("WORKER");
     expect(bar.length).toBe(width < 52 ? 2 : 1);
-    for (const line of [composerBar(snapshot, width), ...bar]) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    for (const line of bar) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    const unbound = stripTerminalSequences(statusBar(identity, { ...snapshot, bound: false }, new Map(), width).join("\n"));
+    expect(unbound).toContain("○");
+    if (width >= 105) expect(unbound).toContain("unbound"); else expect(unbound).not.toContain("unbound");
   }
 });
 test("context segment shortens in steps, warns at 80% and stays explicit when unknown", () => {
@@ -172,20 +176,20 @@ for (const [kind, payload] of Object.entries({
     expect(review.files.map(file => file.path)).toEqual([path]);
     review.query = payload;
     expect(review.visible.map(file => file.path)).toEqual([path]);
-    const rows = native.workbench.files();
-    const action = rows.find(row => row.action?.kind === "diff")?.action;
-    expect(action).toEqual({ kind: "diff", path });
+    const files = native.workbench.sideSource().files.list;
+    expect(files.map(file => file.path)).toEqual([path]);
     // Strip only presentation SGR, not arbitrary sequences (which could hide an injection).
     const safe = (lines: readonly string[]) => {
       for (const line of lines) expect(line.replace(/\x1b\[[\d;]*m/g, "")).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
     };
-    safe(rows.map(row => row.text));
+    native.sidebar.tab = "files";
     safe(native.renderSidebar(34, 20));
+    safe(renderLayoutFrame(native.workbench.mount(new Text("transcript", 0, 0)), 80, 24, () => {}).lines);
     terminal.write("\x1b[?1049h");
     expect(physical.writes.join("")).not.toContain(payload);
-    expect(action?.kind).toBe("diff");
-    if (action?.kind !== "diff") throw new Error("missing literal file action");
-    await native.workbench.openFile(action.path);
+    const literal = files[0]?.path;
+    if (literal === undefined) throw new Error("missing literal file path");
+    await native.workbench.openFile(literal);
     expect(review.selected).toBe(path);
     expect(review.patchSnapshot?.path).toBe(path);
     expect(review.patch).toContain("literal path content");

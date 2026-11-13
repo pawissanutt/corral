@@ -3,11 +3,11 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, Text, visibleWidth } from "@earendil-works/pi-tui";
+import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
 import { chooseProject, projectScopes } from "./project-scopes.ts";
 import { NativePanels } from "./panels.ts";
 import { ReviewStore } from "./review-store.ts";
-import { selectionWindow } from "./panels-pager.ts";
 import type { PanelSnapshot } from "./panels-view.ts";
 import { RecordingTerminal } from "../../test/support/panel-terminal.ts";
 
@@ -29,13 +29,6 @@ test("project choices resolve configured paths and include only this assistant's
   expect(await chooseProject(scopes, async () => undefined)).toBeUndefined();
   expect(() => projectScopes({ workspace: "relative", projects: {} })).toThrow();
   expect(() => projectScopes({ workspace: "/workspace", projects: { bad: { path: 2 } } })).toThrow();
-});
-
-test("multi-row files count once in the file pager", () => {
-  const a = { kind: "diff" as const, path: "a.ts" }, b = { kind: "diff" as const, path: "b.ts" };
-  const page = selectionWindow([{ text: "a.ts", action: a }, { text: "Modified +2", action: a },
-    { text: "src/", action: a }, { text: "b.ts", action: b }, { text: "New", action: b }], 3, 3, 0);
-  expect(page.total).toBe(2); expect(page.first).toBe(2); expect(page.rows.some(row => row.action === b)).toBeTrue();
 });
 
 test("picker sanitizes labels without changing paths or confusing duplicate labels", async () => {
@@ -91,26 +84,33 @@ test("project-less assistant shows actionable scope choice, not a misleading cle
   try {
     panels.wrap(new RecordingTerminal());
     await panels.loadFiles();
-    const text = panels.workbench.files().map(row => row.text).join("\n");
-    expect(text).toContain("Workspace changes are hidden"); expect(text).not.toContain("Working tree clean");
-    expect(panels.workbench.files().some(row => row.action?.kind === "scope")).toBeTrue();
     expect(panels.workbench.review.checkedAt).toBeUndefined();
+    expect(panels.workbench.sideSource().files.state).toBe("choose");
+    panels.sidebar.tab = "files";
+    const files = stripTerminalSequences(panels.renderSidebar(34, 26).join("\n"));
+    expect(files).toContain("No project chosen"); expect(files).toContain("Choose project"); expect(files).not.toContain("No changes yet");
+    // The Changes tab reads `?`, never a count of zero.
+    const root = panels.workbench.mount(new Text("transcript", 0, 0));
+    const tabs = stripTerminalSequences(renderLayoutFrame(root, 104, 24, () => {}).lines.join("\n"));
+    expect(tabs).toMatch(/Changes\s+\?/); expect(tabs).not.toMatch(/Changes\s+0/);
+    panels.sidebar.tab = "plan";
     const plan = stripTerminalSequences(panels.renderSidebar(34, 26).join("\n"));
-    expect(plan).toMatch(/Plan\s+0 of 2/); expect(plan).toContain("Implement project-aware panels");
+    expect(plan).toContain("0/2 done"); expect(plan).toContain("Implement project-aware panels");
   } finally { panels.dispose(); }
 });
 
-test("the rail plan marks waiting steps and stays width-bounded without scrolling", () => {
+test("the rail Plan tab marks waiting steps and keeps every row the rail's width", () => {
   const panels = new NativePanels({ identity, cwd: tmpdir(), snapshot: () => snapshot });
   const physical = new RecordingTerminal(); physical.resize(140, 18);
   const terminal = panels.wrap(physical); terminal.start(() => {}, () => {});
   try {
+    panels.sidebar.tab = "plan";
     for (const height of [8, 18]) {
       const lines = panels.renderSidebar(34, height);
       expect(lines).toHaveLength(height);
       for (const line of lines) expect(visibleWidth(line)).toBe(34);
     }
     const text = stripTerminalSequences(panels.renderSidebar(34, 18).join("\n"));
-    expect(text).toContain("Verify"); expect(text).toMatch(/Verify\s+\?/);
+    expect(text).toMatch(/Verify\s+\?/);
   } finally { terminal.stop(); panels.dispose(); }
 });

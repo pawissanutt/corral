@@ -52,16 +52,20 @@ try {
   frame("changes-keyboard", 140, 46);
   frame("changes-narrow", 80, 34);
   panels.handleInput("\x1b[21~"); await panels.workbench.inspection.refresh();
-  let layout = frame("evidence-wide", 140, 46);
-  // Click the real Evidence nav hit region; the existing same-instance transcript is retained.
-  const nav: TuiMouseEvent = { type: "click", button: "left", x: 45, y: 0, screenX: 45, screenY: 0, width: layout.width, height: layout.height, shift: false, alt: false, ctrl: false };
+  frame("evidence-wide", 140, 46);
+  // From Chat, click the real Proof tab; the existing same-instance transcript is retained.
+  panels.handleInput("\x1b[20~");
+  const layout = renderLayoutFrame(root, adapter.columns, 44, () => {});
+  const tabs = stripTerminalSequences(layout.lines[2] ?? ""), x = tabs.indexOf("Proof");
+  if (x < 0) throw new Error("Proof tab not on the tab row");
+  const nav: TuiMouseEvent = { type: "click", button: "left", x, y: 2, screenX: x, screenY: 2, width: layout.width, height: layout.height, shift: false, alt: false, ctrl: false };
   for (const box of getLayoutBoxesAt(layout, nav.screenX, nav.screenY)) {
     if (box.component.handleMouse?.({ ...nav, x: nav.screenX - box.rect.x, y: nav.screenY - box.rect.y })) break;
   }
-  if (panels.workbench.view !== "evidence") throw new Error("Evidence pointer navigation failed");
+  if (panels.workbench.view !== "evidence") throw new Error("Proof pointer navigation failed");
   frame("evidence-narrow", 80, 34);
   panels.workbench.handleInput("\x1b[6~"); frame("evidence-narrow-details", 80, 34);
-  Object.assign(results, { status: "PASS", canonical_reads: reads, checks: ["canonical run inspection", "real committed file list and hunks", "keyboard file selection", "Evidence keyboard/pointer navigation", "140x46 and 80x34 width bounds"] });
+  Object.assign(results, { status: "PASS", canonical_reads: reads, checks: ["canonical run inspection", "real committed file list and hunks", "keyboard file selection", "Proof keyboard/pointer navigation", "140x46 and 80x34 width bounds"] });
   writeFileSync(join(out, "result.json"), JSON.stringify(results, null, 2));
   console.log(JSON.stringify(results, null, 2));
 } finally { adapter.write("\x1b[?1049l"); adapter.stop(); panels.dispose(); }

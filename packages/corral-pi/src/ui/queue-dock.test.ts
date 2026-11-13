@@ -21,7 +21,7 @@ const SHIFT_UP = "\x1b[1;2A";
 
 /** A host whose control really withdraws, removes and reorders, recording every call. */
 function harness(initial: readonly QueuedItem[], options: { readonly control?: boolean; readonly enabled?: boolean;
-  readonly gate?: Promise<void>; readonly refuse?: boolean } = {}) {
+  readonly gate?: Promise<void>; readonly refuse?: boolean; readonly vanish?: boolean } = {}) {
   const state = { items: [...initial], draft: "", calls: [] as string[], notices: [] as { text: string; tone: string }[], composer: 0 };
   const done = async <T>(value: T): Promise<T> => { await options.gate; return value; };
   const control: QueueControl = {
@@ -42,6 +42,9 @@ function harness(initial: readonly QueuedItem[], options: { readonly control?: b
     },
     move: async (key, delta) => {
       state.calls.push(`move ${key} ${delta}`);
+      if (options.refuse) return done(false);
+      // The item was delivered while the move was on its way.
+      if (options.vanish) { state.items = state.items.filter(entry => entry.key !== key); return done(false); }
       const editable = state.items.filter(entry => entry.editable), at = editable.findIndex(entry => entry.key === key);
       const other = editable[at + delta];
       if (at < 0 || !other) return done(false);
@@ -92,7 +95,7 @@ test("edit puts the withdrawn text before the draft and keeps what was typed whi
 
 test("move keeps every item, the selection follows the moved key, and a pending call blocks others", async () => {
   const { gate, release } = gated();
-  const { dock, state } = harness([item("a", "alpha"), item("b", "bravo"), item("c", "charlie", true, "steer")], { gate });
+  const { dock, state } = harness([item("a", "alpha"), item("b", "bravo"), item("c", "charlie")], { gate });
   dock.focusLast();
   expect(dock.handleKey(SHIFT_UP)).toBeTrue();
   expect(dock.busy).toBeTrue();
@@ -109,6 +112,38 @@ test("move keeps every item, the selection follows the moved key, and a pending 
   dock.handleKey("J"); await settle();
   expect(state.items.map(entry => entry.key)).toEqual(["a", "b", "c"]);
   expect(dock.selected).toBe("c");
+});
+
+test("moves that the host always refuses are dim and make no call: across policies, past notices, at the ends", async () => {
+  const items = [item("s1", "steer-one", true, "steer"), item("s2", "steer-two", true, "steer"), item("f1", "follow-one"),
+    item("f2", "follow-two"), item("n", "notice", false), item("f3", "follow-three")];
+  const keyed = harness(items);
+  keyed.dock.focusLast();
+  for (const [key, data] of [["s2", "J"], ["f1", "K"], ["f2", "J"], ["f3", "K"], ["s1", "K"], ["f3", "J"]] as const) {
+    keyed.dock.selected = key;
+    expect(keyed.dock.handleKey(data)).toBeTrue();
+    await settle();
+  }
+  expect(keyed.state.calls).toEqual([]);
+  expect(keyed.state.notices).toEqual([]);
+  keyed.dock.selected = "s1"; keyed.dock.handleKey("J"); await settle();
+  expect(keyed.state.calls).toEqual(["move s1 1"]);
+
+  const clicked = harness(items);
+  for (const [text, glyph] of [["steer-two", "↓"], ["follow-one", "↑"], ["follow-two", "↓"], ["follow-three", "↑"]] as const) {
+    const { x, y } = cell(clicked.dock, 120, text, glyph);
+    clicked.dock.handleMouse(click(x, y)); await settle();
+  }
+  expect(clicked.state.calls).toEqual([]);
+  const { x, y } = cell(clicked.dock, 120, "steer-one", "↓");
+  clicked.dock.handleMouse(click(x, y)); await settle();
+  expect(clicked.state.calls).toEqual(["move s1 1"]);
+
+  // The idle clause describes follow-ups only; a queue holding a steer item does not claim it.
+  const header = (queue: readonly QueuedItem[]) => screen(harness(queue).dock.render(140))[0]!.trimEnd();
+  const followUps = header([item("a", "alpha"), item("b", "bravo")]), mixed = header([item("a", "alpha", true, "steer"), item("b", "bravo")]);
+  expect(followUps.length).toBeGreaterThan(mixed.length);
+  expect(followUps.startsWith(mixed)).toBeTrue();
 });
 
 test("items that are not the owner's never render their text and never reach control", async () => {
@@ -145,6 +180,19 @@ test("a refused call leaves the rows as reported and raises a notice; disabled c
   expect(rows.some(row => row.includes("bravo"))).toBeTrue();
   expect(refused.state.notices).toHaveLength(1);
   expect(refused.state.notices[0]!.tone).toBe("warning");
+
+  // A refused move of an item that is still queued says it cannot move, not that it left.
+  refused.dock.handleKey("K"); await settle();
+  expect(refused.state.calls).toEqual(["remove b", "move b -1"]);
+  expect(refused.state.items.map(entry => entry.key)).toEqual(["a", "b"]);
+  expect(refused.state.notices).toHaveLength(2);
+  expect(refused.state.notices[1]!.tone).toBe("warning");
+  const vanished = harness([item("a", "alpha"), item("b", "bravo")], { vanish: true });
+  vanished.dock.focusLast(); vanished.dock.handleKey("K"); await settle();
+  expect(vanished.state.calls).toEqual(["move b -1"]);
+  expect(vanished.state.notices).toHaveLength(1);
+  expect(refused.state.notices[1]!.text).not.toBe(vanished.state.notices[0]!.text);
+  expect(vanished.state.notices[0]!.text).toBe(refused.state.notices[0]!.text);
   // A refusal while control is enabled does not take the controls away.
   expect(refused.dock.controllable).toBeTrue();
   expect(rows.some(row => row.includes("×"))).toBeTrue();

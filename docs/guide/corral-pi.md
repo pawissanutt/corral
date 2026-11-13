@@ -921,7 +921,7 @@ completion notices. Worker sync still reaps fenced/lost-generation/run-ended job
 unverified groups. Signalling requires the recorded leader and kernel start time; leaderless,
 foreign or reused groups are never claimed.
 
-Activity → Now has distinct **p Peek**, **b Background** and **x Stop** controls. Peek opens
+The agents view (F8, see [native panels](pi-panels.md)) has distinct **p Peek**, **b Background** and **x Stop** controls for a selected job. Peek opens
 current logs immediately. Background releases the current foreground observer without
 changing its deadline. Stop confirms first, then uses the same owned-stop path and configured
 hooks. The adapter rechecks session, generation, capability/loadout and selected job after
@@ -1030,18 +1030,15 @@ and records the change. The setting is read at dispatch and resume, so it applie
 launched after the change.
 
 `[agent] ui` sets how the run pane looks (default `"rich"`). Rich mode now starts the real
-Pi interactive host in fullscreen with a graphite session sidebar and filled composer.
-At fewer than 105 columns the sidebar relocates into a native inspector above the composer;
-the real transcript, editor, bindings, model controls and permission dialogs remain Pi-owned.
-`F6` focuses the inspector, arrows navigate, Enter inspects, Escape returns to composing, and
-`Ctrl+B` switches wide sidebar/inline modes or compacts narrow details. `/panels context`,
-`/panels files`, `/panels agents`, `/panels plan` and `/panels refresh` expose the same real
-state and bounded read-only Git inspection. See [native panels](pi-panels.md) for scope and checks.
-There is no browser or local web server in the production UI. The pane retains its
-two-line header (role, task and run, generation, model, effort and worktree), names the
-terminal tab after the task and role (`T-503 worker`), and adds footer status for the corral
-binding (a filled dot with the generation, such as `● g2`, or the footer text “○ corral unbound”
-when unbound) and, once one happens, a count of refused network calls and denied tools.
+Pi interactive host in fullscreen as the native workbench: header and main view tabs, a
+session sidebar (a rail from 105 columns, a collapsible row above the composer below that),
+a queue dock and a filled composer. The real transcript, editor, bindings, model controls and
+permission dialogs remain Pi-owned. Views, keys, `/panels` targets and checks are described in
+[native panels](pi-panels.md).
+There is no browser or local web server in the production UI. The terminal tab is named
+after the task and role (`T-503 worker`). The workbench status bar shows the corral binding
+as a dot with the generation (`● g2`, or `○` when unbound) and, once one happens, a count of
+refused network calls and denied tools.
 Each `corral_*` call is one line: its short name and the argument that says what it does
 (for an ask, its kind and question, displayed as “corral ask clarification: ...”),
 followed by `✓ key=Q-3` or `✗ rejected  <code>: <reason>`. Expanding tool output

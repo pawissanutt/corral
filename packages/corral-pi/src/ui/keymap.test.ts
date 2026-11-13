@@ -5,7 +5,7 @@ import { chromeTier } from "./header.ts";
 import { contextHints, footerBase, footerRow, keyGroups, type HintState, type KeyContext } from "./keymap.ts";
 
 const CONTEXTS: readonly KeyContext[] = ["composer", "agents", "agent", "changes", "task", "lifecycle", "proof", "artifacts",
-  "inbox", "usage", "sidebar", "queue", "dialog", "palette", "keys", "pager"];
+  "inbox", "usage", "image", "sidebar", "queue", "dialog", "palette", "keys", "pager"];
 const state = (context: KeyContext, overrides: Partial<HintState> = {}): HintState => ({
   context, mode: { taskBound: true, answer: true, lifecycle: true }, streaming: true,
   queue: { items: 3, editable: 2, control: true },

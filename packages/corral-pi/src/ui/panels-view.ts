@@ -2,6 +2,7 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ContextUsage, Theme } from "@earendil-works/pi-coding-agent";
 import type { TodoProgress } from "./todo-widget.ts";
+import type { AgentObservation } from "./agents-model.ts";
 import type { InspectorSnapshot } from "./inspector.ts";
 import type { QueuedItem } from "../host/queue-control.ts";
 import { ansi, tint, PACKAGED, type Appearance } from "./appearance.ts";
@@ -10,7 +11,7 @@ export interface PanelJob { readonly job: string; readonly state: string; readon
 export interface PanelSnapshot {
   readonly inspector?: InspectorSnapshot;
   readonly budget?: unknown;
-  readonly agents?: readonly import("./agent-view.ts").AgentObservation[];
+  readonly agents?: readonly AgentObservation[];
   readonly bound: boolean;
   readonly model: string | null;
   readonly effort: string;
@@ -40,7 +41,6 @@ export interface PanelLine {
   readonly tone?: "text" | "muted" | "accent" | "success" | "warning";
   readonly indent?: number;
   readonly continuationIndent?: number;
-  readonly action?: { readonly kind: "diff"; readonly path: string } | { readonly kind: "files" } | { readonly kind: "scope" } | { readonly kind: "helpers" } | { readonly kind: "helper"; readonly request: string } | { readonly kind: "job"; readonly job: string } | { readonly kind: "history" };
 }
 export let PANEL_BG = ansi(PACKAGED.dark.background, true);
 export let PANEL_TEXT = ansi(PACKAGED.dark.text);

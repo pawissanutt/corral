@@ -1,11 +1,11 @@
 // What each focus context offers, as footer hints and as the F1 keys list. Pi-owned keys come from the
 // configured keybindings, so a changed user binding changes the hint; panel keys are fixed.
-import { getKeybindings, visibleWidth, type Keybinding } from "@earendil-works/pi-tui";
+import { getKeybindings, visibleWidth, type KeyId, type Keybinding } from "@earendil-works/pi-tui";
 import { chromeLine, keyCap, keyCapWidth, type ChromeTier } from "./header.ts";
 import { PANEL_MUTED } from "./panels-view.ts";
 
 export type KeyContext = "composer" | "agents" | "agent" | "changes" | "task" | "lifecycle" | "proof" | "artifacts"
-  | "inbox" | "usage" | "sidebar" | "queue" | "dialog" | "palette" | "keys" | "pager";
+  | "inbox" | "usage" | "image" | "sidebar" | "queue" | "dialog" | "palette" | "keys" | "pager";
 export interface Hint { readonly id: string; readonly key: string; readonly label: string; readonly short?: string; readonly data?: string }
 export interface HintState {
   readonly context: KeyContext;
@@ -77,7 +77,7 @@ export function piKey(id: string): string | undefined {
 // Bindings scoped to Pi's own selectors, where panel keys are inert, never collide with a panel key.
 const SCOPED = ["app.models.", "app.tree.", "tui.select."];
 /** Alt+↓ focuses the queue unless the user bound it to an editor or app action. */
-export function queueFocusKey(): string | undefined {
+export function queueFocusKey(): KeyId | undefined {
   for (const [id, bound] of Object.entries(getKeybindings().getResolvedBindings())) {
     if (SCOPED.some(prefix => id.startsWith(prefix))) continue;
     if ((Array.isArray(bound) ? bound : bound ? [bound] : []).some(key => key.toLowerCase() === "alt+down")) return undefined;
@@ -172,6 +172,8 @@ export function contextHints(state: HintState): Hint[] {
       return pick(ENTER("run"), ESC("close"));
     case "pager":
       return pick(UP_DOWN("scroll", "scroll"), pair("page", "PgUp/PgDn", "\x1b[6~", "page"), ESC("close"));
+    case "image":
+      return pick(ESC("close"), hint("f9", "f9", "chat"));
   }
 }
 
@@ -321,6 +323,7 @@ export function keyGroups(mode: {
   groups.push({ title: "Anywhere", rows: rows(
     row("f2", "Search actions; unavailable ones say why"),
     info("F1", "This list; F1 or esc closes it"),
+    info("esc", "Close an expanded image; a click on it closes it too"),
   ) });
   return groups.filter(group => group.rows.length > 0);
 }
