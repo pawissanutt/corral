@@ -1733,16 +1733,18 @@ host it starts depends on where it runs and its flags:
 
 | Command | Opens |
 |---|---|
-| `corral pi` in a herdr pane inside a workspace | a new [assistant session](assistants.md) in this pane |
+| `corral pi` on a terminal in a herdr pane inside a workspace | the [launcher](assistants.md#the-launcher): an assistant, the PM (continuing its conversation) or a stopped assistant to resume |
+| `corral pi --assistant`, or `corral pi` there without a terminal | a new [assistant session](assistants.md) in this pane |
 | `corral pi --resume A-<n>` | that assistant's next generation in this pane |
 | `corral pi --pm` | a fresh PM conversation in this pane (below) |
 | `corral pi --pm -c` | continue the previous PM conversation in this pane |
 | `corral pi` outside a workspace, or `corral pi --bare` | plain Pi; outside a workspace with a one-line notice |
 
 The launch line names what opened (`assistant A-1 (role assistant) in pane ...`). `--pm`,
-`--resume` and `--over-cap` outside a workspace refuse `not_in_workspace`; `--bare`, `--pm`
-and `--resume` exclude one another. Assistants, their soft cap and their resume are described
-in [assistant sessions](assistants.md).
+`--assistant`, `--resume`, `--task` and `--over-cap` outside a workspace refuse
+`not_in_workspace`; `--bare`, `--pm` and `--resume` exclude one another, and `--assistant`
+excludes all three. Any of these flags, `--task` or `--over-cap` skips the launcher. Assistants,
+their soft cap and their resume are described in [assistant sessions](assistants.md).
 
 **Bound PM in this pane.** `corral pi --pm [--model M] [--provider P] [--effort E]`, run in a
 herdr pane inside a corral workspace, makes that pane the PM pane. corral resolves `pm.agent` through

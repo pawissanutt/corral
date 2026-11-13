@@ -1,8 +1,9 @@
 //! `corral pi`: start the corral-pi host from nothing (T-490), as `pi` starts plain Pi.
 //!
-//! In a workspace `corral pi` opens a new assistant session in the owner's herdr pane and
-//! `--resume A-<n>` continues one there (T-544); both run the host as a child so a clean exit
-//! suspends the session for later resume. `--pm` is the PM's bound mode below, unchanged.
+//! In a workspace `corral pi --assistant` (or the launcher's Assistant row) opens a new assistant
+//! session in the owner's herdr pane and `--resume A-<n>` continues one there (T-544); both run the
+//! host as a child so a clean exit suspends the session for later resume. `--pm` is the PM's bound
+//! mode below, unchanged.
 //!
 //! Bound mode adopts the herdr pane it runs in as the PM pane. It resolves the PM profile through
 //! the `corral pm` and resume checks, opens the next PM generation in that pane (taking over a dead

@@ -104,7 +104,7 @@ While a pane is adopted:
   `pane_adopted` instead of typing into a shell the owner may be using; `corral pi --pm` in that
   pane takes the PM over in-process.
 
-An assistant session (`corral pi`, `corral pi --resume A-<n>`) adopts the owner's pane the same
+An assistant session (`corral pi --assistant`, the launcher's rows, `corral pi --resume A-<n>`) adopts the owner's pane the same
 way: its container records the pane with each generation, corral never closes it or types into
 it, and ending the session asks only the session's own host to stop over its bridge.
 

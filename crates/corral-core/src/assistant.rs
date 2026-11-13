@@ -29,7 +29,7 @@ pub struct AssistantCfg {
     /// The corral-pi profile assistants run; unset means the PM's profile (`pm.agent`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
-    /// Live assistant hosts a plain `corral pi` may reach before it needs `--over-cap`.
+    /// Live assistant hosts `corral pi --assistant` may reach before it needs `--over-cap`.
     pub max_live: u32,
     /// Scratch worktrees the workspace may hold across all sessions.
     pub scratch_max: u32,

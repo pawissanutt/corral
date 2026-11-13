@@ -85,7 +85,8 @@ impl HostAssets {
             _ if self.installed_sha256.is_some() => format!(
                 "host: g{g} runs {ran}, {installed}: its contract and tool list may predate this \
                  corral, whose owner actions below still apply; a new generation loads the \
-                 current ones (`corral pi --resume {id}` once its host stopped, or a new `corral pi`)"
+                 current ones (`corral pi --resume {id}` once its host stopped, or a new \
+                 `corral pi --assistant`)"
             ),
             _ => format!("host: g{g} runs {ran}; {installed}"),
         }

@@ -2,6 +2,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ImageContent } from "@earendil-works/pi-ai";
+import type { QueuedItem } from "./queue-control.ts";
 import { BridgeRefusal, INPUT_MAX_BYTES, type SubmitInput, type SubmitResult } from "../bridge/protocol.ts";
 import { canonicalJson, sha256Hex } from "../tools/corral.ts";
 import { utf8Prefix } from "../roles/assistant/owner-action.ts";
@@ -59,13 +60,16 @@ export class HostQueue {
   private counter = 0;
   private operationCounter = 0;
   private failure: string | undefined;
-  private readonly items = new Map<string, Item>();
+  private readonly entries = new Map<string, Item>();
   private readonly keys = new Map<string, Item>();
   private readonly objects = new WeakMap<AgentMessage, Item>();
   private readonly pending = new Set<Item>();
   private readonly operations = new Map<string, Operation>();
   // The cause applies only in the synchronous remove call: it never spans an await.
   private removal: { op_key: string; actor: "corral" | "pane"; reason: string } | undefined;
+  private moveOperations = 0;
+  private queueDepth = 0;
+  private reordering: { expected?: { action: "remove" | "enqueue"; message: AgentMessage; mode: Mode } } | undefined;
   constructor(private readonly options: HostQueueOptions) {}
 
   bind(session_id: string, bind: string): void {
@@ -83,25 +87,36 @@ export class HostQueue {
       this.record(item, event, event === "started" ? { turn: this.options.turn(true) } : { reason });
     },
     queue: change => {
-      this.healthy();
-      for (const entry of change.entries) {
-        let item = this.tagged(entry.tag);
-        if (change.action === "enqueue") {
-          // Direct extension/custom messages bypass input handlers, but are still journaled.
-          item ??= this.mint(messageText(entry.message), change.mode, "extension");
-          item.mode = change.mode;
-          this.record(item, "queued");
-          item.message = entry.message;
-          this.objects.set(entry.message, item);
-        } else {
-          item ??= this.objects.get(entry.message);
-          if (!item || item.state !== "queued") throw new BridgeRefusal("queue_unknown", "unjournaled queue object; progress fenced");
-          this.record(item, change.action === "drain" ? "started" : "withdrawn",
-            change.action === "drain" ? { turn: this.options.turn(change.nextRun) }
-              : this.removal ?? { actor: change.cause === "pane_restore" ? "pane_restore" : "host", reason: change.cause ?? "clear" });
-          item.message = undefined;
+      if (this.reordering) {
+        const expected = this.reordering.expected;
+        if (!expected || change.action !== expected.action || change.mode !== expected.mode || change.entries.length !== 1
+          || change.entries[0]?.message !== expected.message) {
+          throw new BridgeRefusal("queue_busy", "queue mutation reentered a reorder");
         }
+        return;
       }
+      this.healthy();
+      this.queueDepth++;
+      try {
+        for (const entry of change.entries) {
+          let item = this.tagged(entry.tag);
+          if (change.action === "enqueue") {
+            // Direct extension/custom messages bypass input handlers, but are still journaled.
+            item ??= this.mint(messageText(entry.message), change.mode, "extension");
+            item.mode = change.mode;
+            this.record(item, "queued");
+            item.message = entry.message;
+            this.objects.set(entry.message, item);
+          } else {
+            item ??= this.objects.get(entry.message);
+            if (!item || item.state !== "queued") throw new BridgeRefusal("queue_unknown", "unjournaled queue object; progress fenced");
+            this.record(item, change.action === "drain" ? "started" : "withdrawn",
+              change.action === "drain" ? { turn: this.options.turn(change.nextRun) }
+                : this.removal ?? { actor: change.cause === "pane_restore" ? "pane_restore" : "host", reason: change.cause ?? "clear" });
+            item.message = undefined;
+          }
+        }
+      } finally { this.queueDepth--; }
     },
     restoreInput: tag => {
       const item = this.tagged(tag);
@@ -121,14 +136,14 @@ export class HostQueue {
     const item: Item = { item: `q-g${this.options.generation}-${binding.bind.slice(0, 12)}-${++this.counter}`,
       origin, mode, text, text_sha256: sha256Hex(text), text_bytes: Buffer.byteLength(text),
       ...(images ? { images } : {}), ...(key ? { idempotency_key: key } : {}), ...(supersedes ? { supersedes } : {}) };
-    this.items.set(item.item, item);
+    this.entries.set(item.item, item);
     if (key) this.keys.set(key, item);
     return item;
   }
 
   private tagged(tag: unknown): Item | undefined {
     if (typeof tag !== "object" || tag === null || !("item" in tag) || typeof tag.item !== "string") return undefined;
-    const item = this.items.get(tag.item);
+    const item = this.entries.get(tag.item);
     return item === tag ? item : undefined;
   }
 
@@ -189,6 +204,92 @@ export class HostQueue {
     return { available: true, generation: this.options.generation, items, more };
   }
 
+  /** Delivery order comes from the SDK's exact objects, not journal insertion order. */
+  items(): QueuedItem[] {
+    if (!this.binding || !this.options.current() || !this.options.interactive()) return [];
+    return this.options.session().agent.getQueuedMessages().flatMap(message => {
+      const item = this.objects.get(message);
+      return item?.state === "queued" && item.mode !== "prompt"
+        ? [{ key: item.item, text: item.text, policy: item.mode, editable: item.origin === "pane" }]
+        : [];
+    });
+  }
+
+  private controllable(key: string): Item | undefined {
+    if (this.queueDepth || this.reordering || !this.binding || !this.options.current()
+      || !this.options.interactive() || !this.options.enabled()) return undefined;
+    this.healthy();
+    const item = this.entries.get(key);
+    return item?.origin === "pane" && item.state === "queued" && item.message ? item : undefined;
+  }
+
+  async remove(key: string): Promise<boolean> {
+    if (!this.controllable(key)) return false;
+    return this.mutate(key, `pane-g${this.options.generation}-${++this.operationCounter}`, "pane", "remove").outcome === "withdrawn";
+  }
+
+  /**
+   * The SDK can remove objects and append them, but cannot insert at an index.
+   * Rebuild only an owner-only suffix, synchronously, retaining objects and tags.
+   * A foreign tail blocks a move even when the immediate neighbour is the owner.
+   */
+  async move(key: string, delta: -1 | 1): Promise<boolean> {
+    const item = this.controllable(key);
+    if (!item || this.reordering || (delta !== -1 && delta !== 1)) return false;
+    const session = this.options.session();
+    const group = session.agent.getQueuedMessages().filter(message => this.objects.get(message)?.mode === item.mode);
+    const index = group.indexOf(item.message!);
+    const next = index + delta;
+    if (index < 0 || next < 0 || next >= group.length) return false;
+    const start = Math.min(index, next);
+    const original = group.slice(start);
+    if (original.some(message => this.objects.get(message)?.origin !== "pane")) return false;
+    if (this.operations.size + this.moveOperations >= QUEUE_OPERATIONS_MAX) return false;
+    const reordered = [...original];
+    [reordered[0], reordered[1]] = [reordered[1]!, reordered[0]!];
+    const op_key = `pane-g${this.options.generation}-${++this.operationCounter}`;
+    const before = original.map(message => this.objects.get(message)!.item);
+    const after = reordered.map(message => this.objects.get(message)!.item);
+    const intent = { key, actor: "pane", reason: "move", delta, generation: this.options.generation, ...this.binding, before, after };
+    // Persist before touching any SDK object. Queue hooks below perform no I/O,
+    // and SDK display notifications and public events run only in microtasks.
+    const remove = (message: AgentMessage): void => {
+      this.reordering = { expected: { action: "remove", message, mode: item.mode } };
+      if (!session.removeQueuedMessage(message, "pane_move")) throw new BridgeRefusal("queue_busy", "queue changed during reorder");
+    };
+    const enqueue = (message: AgentMessage): void => {
+      this.reordering = { expected: { action: "enqueue", message, mode: item.mode } };
+      session.agent[item.mode === "steer" ? "steer" : "followUp"](message);
+    };
+    let journaled = false;
+    this.reordering = {};
+    try {
+      this.append(QUEUE_OPERATION_ENTRY, { version: 1, ...intent, op_key, target: key,
+        intent_sha256: sha256Hex(canonicalJson(intent)), outcome: "moved", item: item.item, replayed: false });
+      this.moveOperations++;
+      journaled = true;
+      for (const message of original) remove(message);
+      for (const message of reordered) enqueue(message);
+    } catch (error) {
+      if (!journaled) throw error;
+      // A rejected reentrant hook has not mutated the SDK queue. Restore the
+      // original suffix before returning, including any objects already removed.
+      const remaining = new Set(session.agent.getQueuedMessages());
+      for (const message of original) if (remaining.has(message)) remove(message);
+      for (const message of original) enqueue(message);
+      if (!(error instanceof BridgeRefusal) || error.code !== "queue_busy") throw error;
+      this.append(QUEUE_OPERATION_ENTRY, { version: 1, ...this.binding, generation: this.options.generation,
+        op_key, target: key, actor: "pane", reason: "move_rollback", outcome: "refused" });
+      return false;
+    } finally {
+      this.reordering = undefined;
+    }
+    for (const message of original) this.pending.delete(this.objects.get(message)!);
+    for (const message of reordered) this.pending.add(this.objects.get(message)!);
+    queueMicrotask(() => this.options.emit("queue_operation", { op_key, item: item.item, reason: "move", outcome: "moved" }));
+    return true;
+  }
+
   withdraw(key: string): QueueOutcome {
     this.check();
     return this.mutate(key, `pane-g${this.options.generation}-${++this.operationCounter}`, "pane", "withdraw");
@@ -210,7 +311,7 @@ export class HostQueue {
     if (key.startsWith("q-g") && !key.startsWith(`q-g${this.options.generation}-${this.binding?.bind.slice(0, 12)}-`)) {
       throw new BridgeRefusal("stale_item", "item is not from this host binding");
     }
-    const item = this.items.get(key) ?? (actor === "corral" ? this.keys.get(key) : undefined);
+    const item = this.entries.get(key) ?? (actor === "corral" ? this.keys.get(key) : undefined);
     if (item && item.origin !== (actor === "pane" ? "pane" : "corral-inbox")) {
       throw new BridgeRefusal("foreign_origin", item.origin === "corral-inbox" ? "use corral inbox withdraw for this input" : "input belongs to another origin");
     }
@@ -227,7 +328,7 @@ export class HostQueue {
       if (!prior.result) throw new BridgeRefusal("operation_uncertain", `read operation ${op_key}; do not retry with a fresh key`);
       return { ...prior.result, replayed: true };
     }
-    if (this.operations.size >= QUEUE_OPERATIONS_MAX) throw new BridgeRefusal("op_limit", "generation operation limit reached; replays still work");
+    if (this.operations.size + this.moveOperations >= QUEUE_OPERATIONS_MAX) throw new BridgeRefusal("op_limit", "generation operation limit reached; replays still work");
     const item = this.target(key, actor);
     const operation: Operation = { digest };
     this.operations.set(op_key, operation);
@@ -257,8 +358,16 @@ export class HostQueue {
     }
   }
 
-  /** Withdraw once, then submit a new tail item through native handlers (not the old handler). */
-  async edit(key: string, text: string): Promise<QueueOutcome> {
+  /** One argument pulls an owner item back for editing; replacement callers retain tail admission. */
+  edit(key: string): Promise<string | undefined>;
+  edit(key: string, text: string): Promise<QueueOutcome>;
+  async edit(key: string, text?: string): Promise<QueueOutcome | string | undefined> {
+    if (text === undefined) {
+      const item = this.controllable(key);
+      if (!item) return undefined;
+      const result = this.mutate(key, `pane-g${this.options.generation}-${++this.operationCounter}`, "pane", "edit");
+      return result.outcome === "withdrawn" ? item.text : undefined;
+    }
     this.check();
     if (!text.trim() || Buffer.byteLength(text) > INPUT_MAX_BYTES) throw new BridgeRefusal("bad_input", "replacement must be nonblank and at most 8192 bytes");
     const old = this.target(key, "pane");

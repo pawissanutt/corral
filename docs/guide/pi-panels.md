@@ -7,10 +7,10 @@ The rich `corral pi` host has Conversation, Changes and Activity main views. It 
 ```sh
 scripts/build-pi-host.sh /tmp/corral-pi-host
 corral agent install --from /tmp/corral-pi-host
-corral pi
+corral pi --assistant
 ```
 
-Use a new owner pane/session; existing processes do not hot-reload. Explicit `[agent] assets_dir` overrides still win; `corral agent doctor` reports effective assets. Do not use `--bare` or `--pm` just to preview the UI.
+Use a new owner pane/session; existing processes do not hot-reload. Explicit `[agent] assets_dir` overrides still win; `corral agent doctor` reports effective assets. Plain `corral pi` on a terminal opens the launcher first; `--assistant` skips it. Do not use `--bare` or `--pm` just to preview the UI.
 
 ## Main views and real composer
 

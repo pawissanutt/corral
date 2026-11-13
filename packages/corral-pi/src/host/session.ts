@@ -420,6 +420,11 @@ export class HostSession {
       }) : undefined;
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
       identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
+      queueControl: {
+        edit: key => this.queue.edit(key),
+        remove: key => this.queue.remove(key),
+        move: (key, delta) => this.queue.move(key, delta),
+      },
       ...(options.identity.project && options.guidance?.projectDir && options.guidance.projectDir !== options.client.workspaceRoot
         ? { projectDir: options.guidance.projectDir } : {}),
       readProjects: signal => options.client.projectScopes(signal),
@@ -1780,6 +1785,7 @@ export class HostSession {
           parent: child.parent, kind: `native ${child.kind}`, state: child.state, model: child.model, transcript: !!child.sessionFile && child.parent === this.boundSessionId }))],
       jobs, auxiliary: this.auxiliary?.state() ?? null, helpers: this.auxiliary?.inspections() ?? null,
       steering: session.getSteeringMessages().length, followUps: session.getFollowUpMessages().length,
+      queue: this.queue.items(),
     };
   }
 
