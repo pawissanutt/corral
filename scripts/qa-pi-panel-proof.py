@@ -2,9 +2,9 @@
 """T-687: drive the production host/main.ts panel layout in an owned PTY. Offline fixture I/O only.
 
 Proves, against the real entrypoint, bridge and InteractiveMode: a held streamed reply and real
-tool output update in the panel layout; the bound session/generation survive inspection and
-resize (read back over the generation's own bridge); one composer submission reaches the host
-once; role-restricted actions stay refused. Never targets an owner, PM or worker pane.
+tool output update in the panel layout; the bound session/generation survive the agents view,
+the sidebar and resize (read back over the generation's own bridge); one composer submission
+reaches the host once; role-restricted actions stay refused. Never targets an owner, PM or worker pane.
 """
 import argparse
 import ctypes
@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import selectors
 import shutil
 import signal
@@ -22,6 +23,7 @@ import subprocess
 import tempfile
 import termios
 import time
+import unicodedata
 
 parser = argparse.ArgumentParser()
 parser.add_argument('output', type=Path)
@@ -40,6 +42,82 @@ scenes = []
 resizes = []
 size = dict(columns=140, rows=46)
 candidate = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip()
+INCOMPLETE = re.compile(r'\x1b(?:\[[0-?]*[ -/]*|[\]_P^](?:[^\x07\x1b]|\x1b(?!\\))*\x1b?|[()])?\Z', re.S)
+TOKEN = re.compile(r'\x1b\[([<=>?]?)([\d;:]*)[ -/]*([@-~])|\x1b[\]_P^].*?(?:\x07|\x1b\\)|\x1b[()].|\x1b.|[\x00-\x1f\x7f]|[^\x00-\x1f\x7f\x1b]+', re.S)
+# The status bar's role badge, then the binding dot (● bound, ○ not bound), possibly with styling between.
+BOUND = re.compile(rb'\xe2\x96\x8cWORKER(?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f')
+
+
+class Screen:
+    """Cell model of the alternate-screen frames pi-tui and PanelTerminal emit (absolute moves, erase, text)."""
+
+    def __init__(self, columns, rows):
+        self.columns, self.rows, self.row, self.col, self.saved = columns, rows, 0, 0, (0, 0)
+        self.cells = [[' '] * columns for _ in range(rows)]
+        self.pending = ''
+
+    def resize(self, columns, rows):
+        self.cells = [[(self.cells[r][c] if r < len(self.cells) and c < len(self.cells[r]) else ' ') for c in range(columns)] for r in range(rows)]
+        self.columns, self.rows = columns, rows
+        # The cursor stays inside the new grid until the next frame positions it.
+        self.row, self.col = min(self.row, rows - 1), min(self.col, columns)
+
+    def feed(self, data):
+        data = self.pending + data
+        tail = INCOMPLETE.search(data)  # A PTY read can end inside an escape sequence; finish it next read.
+        self.pending, data = (data[tail.start():], data[:tail.start()]) if tail else ('', data)
+        for match in TOKEN.finditer(data):
+            token = match.group(0)
+            if match.group(3) is not None:
+                self.csi(match.group(1), match.group(2), match.group(3))
+            elif token == '\x1b7': self.saved = (self.row, self.col)
+            elif token == '\x1b8': self.row, self.col = self.saved
+            elif token == '\r': self.col = 0
+            elif token == '\n': self.row = min(self.rows - 1, self.row + 1)
+            elif not token.startswith('\x1b') and not (len(token) == 1 and (ord(token) < 32 or token == '\x7f')): self.print(token)
+
+    def csi(self, prefix, params, final):
+        if prefix: return
+        values = [int(value.split(':')[0] or 0) for value in params.split(';')]
+        first = values[0] if values else 0
+        if final in 'Hf':
+            self.row = max(0, min(self.rows - 1, (first or 1) - 1))
+            self.col = max(0, min(self.columns - 1, ((values[1] if len(values) > 1 else 0) or 1) - 1))
+        elif final == 'K':
+            span = range(self.columns) if first == 2 else range(self.col + 1) if first == 1 else range(self.col, self.columns)
+            for col in span: self.cells[self.row][col] = ' '
+        elif final == 'J' and first in (2, 3):
+            self.cells = [[' '] * self.columns for _ in range(self.rows)]
+
+    def print(self, text):
+        joined = False
+        for char in text:
+            lead = self.col - 1
+            if lead > 0 and self.cells[self.row][lead] == '': lead -= 1  # Zero-width marks join a wide lead cell.
+            if char in '\u200d\ufe0f' or unicodedata.combining(char):
+                joined = joined or char == '\u200d'
+                if lead >= 0: self.cells[self.row][lead] += char
+                continue
+            width = 2 if unicodedata.east_asian_width(char) in 'WF' else 1
+            if joined:  # The joined emoji shares its sequence's existing cell pair.
+                joined = False
+                if lead >= 0: self.cells[self.row][lead] += char
+                continue
+            if self.col + width > self.columns: continue
+            self.cells[self.row][self.col] = char
+            if width == 2: self.cells[self.row][self.col + 1] = ''
+            self.col += width
+
+    def lines(self, end=None): return [''.join(row[:end]).rstrip() for row in self.cells]
+
+    def column(self, row, needle):
+        """The cell column where `needle` starts on `row`, or None."""
+        line = ''.join(self.cells[row])
+        index = line.find(needle)
+        if index < 0: return None
+        return sum(2 if unicodedata.east_asian_width(c) in 'WF' else 0 if (c in '\u200d\ufe0f' or unicodedata.combining(c)) else 1 for c in line[:index])
+
+
 try:
     env = {key: value for key, value in os.environ.items() if not key.startswith(('HERDR_', 'CORRAL_', 'PI_'))}
     env.update(HOME=str(work / 'home'), XDG_CONFIG_HOME=str(work / 'config'), XDG_DATA_HOME=str(work / 'data'),
@@ -67,6 +145,8 @@ try:
         raise RuntimeError('owned fixture event watch unavailable')
     selector.register(master, selectors.EVENT_READ, 'terminal')
     selector.register(watch, selectors.EVENT_READ, 'fixture')
+    screen = Screen(140, 46)
+    decoder = __import__('codecs').getincrementaldecoder('utf-8')('replace')
 
     def setup():
         os.setsid()
@@ -95,7 +175,7 @@ try:
                 elif key.data == 'terminal':
                     try: chunk = os.read(master, 65536)
                     except OSError: chunk = b''
-                    log.extend(chunk)
+                    log.extend(chunk); screen.feed(decoder.decode(chunk))
                     if not chunk and not predicate(): raise AssertionError('Host exited: ' + reason)
                 else:
                     client, reply = key.data
@@ -139,9 +219,27 @@ try:
         resizes.append(dict(offset=len(log), columns=columns, rows=rows))
         size.update(columns=columns, rows=rows)
         fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
+        screen.resize(columns, rows)
         os.kill(host.pid, signal.SIGWINCH)
 
-    until(lambda: text('Bound to Corral') and text('WORKER'), 'production panel host ready')
+    def click(col, row): send(f'\x1b[<0;{col + 1};{row + 1}M\x1b[<0;{col + 1};{row + 1}m'.encode())
+
+    def main_columns():
+        # The rail paints its own tab row on the top line, ending with its ▸ toggle.
+        return screen.columns - 35 if screen.columns >= 105 and screen.lines()[0].endswith('▸') else screen.columns
+
+    def composer_bar():
+        """The composer bar's row with the cells of its model ▾ and effort ↻, read from the rendered row."""
+        for row, line in enumerate(screen.lines(main_columns())):
+            if '▾' in line and '↻' in line: return dict(row=row, model=screen.column(row, '▾'), effort=screen.column(row, '↻'))
+        return None
+
+    def footer_keys():
+        """Words of the footer hint row, the last non-empty row of the main column."""
+        rows = [line for line in screen.lines(main_columns()) if line.strip()]
+        return rows[-1].split() if rows else []
+
+    until(lambda: BOUND.search(log) is not None, 'production panel host bound')
     first = bridge('get_state', 'ready')['result']
     states.append(dict(label='ready', generation=first['generation'], session=first['session'], turn=first['turn']))
     assert first['turn'] == {'current': 0, 'open': False} and first['session']['bound_id'], first
@@ -149,12 +247,16 @@ try:
     mark = len(log); send(b'Pointer draft')
     until(lambda: text('Pointer draft', mark), 'pointer-control draft')
     save_frame('controls-draft', mark)
-    mark = len(log); send(b'\x1b[<0;5;46M\x1b[<0;5;46m')
+    bar = composer_bar()
+    assert bar, 'composer model/effort bar not on screen'
+    mark = len(log); click(bar['model'], bar['row'])
     until(lambda: text('Only showing models from configured providers', mark), 'native model picker by pointer')
     save_frame('model-picker-pointer', mark)
     mark = len(log); send(b'\x1b')
     until(lambda: text('Pointer draft', mark), 'native model picker cancellation preserves draft')
-    mark = len(log); send(b'\x1b[<0;23;46M\x1b[<0;23;46m')
+    until(lambda: composer_bar() is not None, 'composer bar after the picker closes')
+    bar = composer_bar()
+    mark = len(log); click(bar['effort'], bar['row'])
     save_frame('effort-cycle-pointer', mark)
     mark = len(log); resize(80, 34)
     until(lambda: text('Pointer draft', mark), 'effort cycle and narrow relocation retain draft')
@@ -182,13 +284,15 @@ try:
     save_frame('tool-output', mark)
     mark = len(log); send(b'Draft survives')
     until(lambda: text('Draft survives', mark), 'unsent draft during the held stream')
-    mark = len(log); send(b'\x1b[17~\x1b[D\x1b[D')
-    until(lambda: text('generation 1', mark) and text('Working · Bound to Corral', mark), 'Agents inspector on the bound generation')
-    mark = len(log); send(b'\r')
-    until(lambda: text('Agents · Esc close', mark), 'inspector detail overlay')
+    # F8: the agents view during the held stream, then F6 hands the focus to the sidebar and Esc takes it back.
+    mark = len(log); send(b'\x1b[19~')
+    until(lambda: text('helper calls and jobs', mark), 'Agents view on the bound generation')
     save_frame('inspect-agents', mark)
+    mark = len(log); send(b'\x1b[17~')
+    until(lambda: text('←→', mark), 'sidebar focus: its keys in the footer')
     binding('inspecting', True, {'current': 1, 'open': True})
-    mark = len(log); send(b'q')
+    mark = len(log); send(b'\x1b')
+    until(lambda: text('steer', mark), 'Esc leaves the sidebar; the footer offers the composer keys while streaming')
     save_frame('inspect-closed', mark)
     for columns, rows in [(80, 34), (52, 24), (140, 46)]:
         mark = len(log); resize(columns, rows)
@@ -209,56 +313,57 @@ try:
     users = [json.loads(line) for line in sessions[0].read_text().splitlines()] if len(sessions) == 1 else []
     users = [entry for entry in users if entry.get('type') == 'message' and entry['message'].get('role') == 'user']
     assert len(sessions) == 1 and len(users) == 1, (sessions, users)
-    # T-693: owned real-input inspection, never resumes or rebinds the selected agent.
-    mark = len(log); send(b'\x1b[19~')  # F8 existing jobs seam
-    until(lambda: text('Background activity', mark), 'job inspector')
-    save_frame('jobs-read-only', mark)
-    mark = len(log); send(b'a')
-    until(lambda: text('Scoped agents', mark), 'scoped agent inspector')
-    save_frame('scoped-agents-wide', mark)
-    mark = len(log); send(b't')
-    until(lambda: text('Transcript · Esc close', mark), 'bounded existing transcript')
-    save_frame('existing-transcript-wide', mark)
-    binding('existing-transcript', False, {'current': 1, 'open': False})
-    mark = len(log); send(b'q')
-    save_frame('scoped-agents-return', mark)  # Diff rendering need not repaint the unchanged title.
+    # T-693: owned real-input inspection, never resumes or rebinds the session.
+    mark = len(log); send(b'\x1b[19~')
+    until(lambda: text('helper calls and jobs', mark), 'agents view')
+    save_frame('agents-wide', mark)
+    binding('agents-wide', False, {'current': 1, 'open': False})
     mark = len(log); resize(52, 24)
-    until(lambda: text('Scoped agents', mark), 'narrow scoped inspector')
-    save_frame('scoped-agents-narrow', mark)
-    mark = len(log); send(b't')
-    until(lambda: text('Transcript · Esc close', mark), 'narrow transcript input')
-    save_frame('existing-transcript-narrow', mark)
-    binding('narrow-transcript', False, {'current': 1, 'open': False})
-    mark = len(log); send(b'q')
-    save_frame('scoped-agents-narrow-return', mark)
+    until(lambda: text('host observations', mark) and log.endswith(b'\x1b[?2026l'), 'narrow agents view')
+    save_frame('agents-narrow', mark)
+    binding('agents-narrow', False, {'current': 1, 'open': False})
     mark = len(log); send(b'\x1b[20~'); resize(140, 46)
     until(lambda: text('STREAM_PART_TWO', mark), 'original conversation after inspection')
     binding('inspector-return', False, {'current': 1, 'open': False})
     send(b'/fixture-workbench-jobs\r'); send(b'Start owned job inspection.\r')
     until(lambda: len(kinds('turn_ended')) == 2 and any(call['op'] == 'job_monitor' for call in calls()), 'owned job and line monitor started')
     mark = len(log); send(b'\x1b[19~')
-    until(lambda: text('armed locally', mark) and text('BUILD_WAIT', mark), 'actual running job with monitor')
+    until(lambda: text('MONITOR_READY/ armed', mark) and text('BUILD_WAIT', mark), 'actual running job with monitor')
     save_frame('real-job-running', mark)
     mark = len(log)
     with open(work / 'monitor-gate', 'w') as job_gate: job_gate.write('ready\n')
-    until(lambda: text('match observed', mark), 'observed readiness line (not service health)')
+    until(lambda: text('MONITOR_READY/ matched', mark), 'observed readiness line (not service health)')
     save_frame('real-job-line-match', mark)
-    mark = len(log)
+    # Enter on the selected job row opens the bounded output pager; its footer has no F1 until Esc closes it.
+    mark = len(log); send(b'\r')
+    until(lambda: text('retained output', mark) and 'F1' not in footer_keys(), 'Enter opens the bounded output pager')
+    save_frame('real-job-output', mark)
+    send(b'\x1b')
+    until(lambda: 'F1' in footer_keys(), 'Esc closes the output pager')
+    mark = len(log); started = len(kinds('turn_started'))
     with open(work / 'exit-gate', 'w') as job_gate: job_gate.write('done\n')
-    until(lambda: text('j1-1 · exited · exit 7', mark), 'actual nonzero job exit')
+    until(lambda: text('exit 7', mark) and text('exited', mark), 'actual nonzero job exit')
     save_frame('real-job-exited', mark)
-    binding('job-exited', False, {'current': 2, 'open': False})
-    mark = len(log); send(b'\x1b[20~')
-    until(lambda: text('BACKGROUND_STARTED', mark), 'return from jobs to original conversation')
+    # The exit reaches the agent as a completion notice that starts its own turn. Wait until that notice
+    # is shown and every started turn has ended, then read the binding at that stable point.
+    until(lambda: text('j1-1:completion', mark) and len(kinds('turn_started')) > started
+          and len(kinds('turn_started')) == len(kinds('turn_ended')), 'completion notice turn ends and the host is idle')
+    settled = len(kinds('turn_started'))
+    binding('job-exited', False, {'current': settled, 'open': False})
+    # The notice turn already shows Chat; F9 keeps it there.
+    send(b'\x1b[20~')
+    until(lambda: any('BACKGROUND_STARTED' in line for line in screen.lines(main_columns())), 'return from jobs to original conversation')
     mark = len(log); send(b'/fixture-call fixture_forbidden\r'); send(b'Call the fixture sentinel.\r')
-    until(lambda: text('Tool fixture_forbidden not found', mark) and len(kinds('turn_ended')) == 3, 'role guard refusal')
+    until(lambda: text('Tool fixture_forbidden not found', mark) and len(kinds('turn_ended')) == settled + 1, 'role guard refusal')
     assert not text('forbidden tool ran')
     save_frame('forbidden-refused', mark)
     mark = len(log); send(b'/fixture-new-session\r')
     until(lambda: text('a new session is refused', mark), 'bound-session replacement refusal')
     save_frame('replacement-refused', mark)
-    binding('refusals', False, {'current': 3, 'open': False})
-    assert [call['payload']['origin'] for call in kinds('turn_started')] == [{'kind': 'owner_terminal'}] * 3
+    binding('refusals', False, {'current': settled + 1, 'open': False})
+    # Three owner turns from this terminal; every other turn is a job notice, never an owner input.
+    origins = [call['payload'].get('origin') for call in kinds('turn_started')]
+    assert origins.count({'kind': 'owner_terminal'}) == 3 and len(origins) == settled + 1, origins
     assert all(call['identity']['generation'] == 1 for call in calls()) and len([c for c in calls() if c['op'] == 'hello']) == 1
     assert len(sorted((work / 'sessions').rglob('*.jsonl'))) == 1
     send(b'\x15\x04')
@@ -272,12 +377,11 @@ try:
                   checks=['SGR pointer opens native model picker; Escape retains draft', 'SGR pointer cycles supported effort in the same session',
                           'read tool call and held first delta render in the 140-column panel layout', 'stock Ctrl+O expands real tool output',
                           'bridge get_state: same generation and bound/current session while streaming, inspecting and at 80/52/140 columns',
-                          'stale generation refused by the bridge', 'Agents inspector and detail overlay during the held stream',
+                          'stale generation refused by the bridge', 'F8 agents view, then F6 sidebar focus and Esc back, during the held stream',
                           'unsent draft retained through inspection and resize', 'one composer submission: one owner_terminal turn and one user entry',
                           'released stream completes the same turn', 'tool outside the loadout refused', 'bound-session replacement refused',
-                          'scoped agents and jobs via real F8/a/t/q input; bounded existing transcript at 140/52 columns',
-                          'transcript inspection retains binding, generation and turn; no lifecycle controls',
-                          'real owned job: running, armed line monitor, observed match, exit 7 and bounded output',
+                          'agents view by real F8 input at 140/52 columns retains binding, generation and turn; no lifecycle controls',
+                          'real owned job selected in F8: running, armed watch, observed match, exit 7 and the bounded output pager',
                           'one hello, one session file, generation 1 on every control-plane call', 'clean terminal exit'])
     (args.output / 'result.json').write_text(json.dumps(result, indent=2)); print(json.dumps(result, indent=2))
 finally:

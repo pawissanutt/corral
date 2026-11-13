@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import selectors
 import shutil
 import signal
@@ -18,7 +19,7 @@ import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument('output', type=Path)
-parser.add_argument('--activity-only', action='store_true', help='Exercise sidebar selection and jobs without candidate-diff fixtures')
+parser.add_argument('--activity-only', action='store_true', help='Exercise the agents view and jobs without candidate-diff fixtures')
 args = parser.parse_args()
 args.output.mkdir(parents=True, exist_ok=True)
 repo = Path(__file__).resolve().parents[1]
@@ -28,6 +29,10 @@ master = slave = watch = None
 proc = None
 selector = selectors.DefaultSelector()
 log = bytearray()
+# The status bar's role badge, then the binding dot (● bound, ○ not bound), possibly with styling between.
+BOUND = re.compile(rb'\xe2\x96\x8cWORKER(?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f')
+# The Changes comparison chip: the comparison's name, then its ▾.
+CHIP = re.compile(rb'(candidate|since session|working tree|unstaged|staged) \xe2\x96\xbe')
 try:
     env = {key: value for key, value in os.environ.items() if not key.startswith(('HERDR_', 'CORRAL_', 'PI_'))}
     env.update(HOME=str(work / 'home'), XDG_CONFIG_HOME=str(work / 'config'), XDG_DATA_HOME=str(work / 'data'),
@@ -93,8 +98,20 @@ try:
     def resize(columns, rows):
         fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
         os.kill(proc.pid, signal.SIGWINCH)
+    def comparison(name, after):
+        """`c` cycles the Changes comparison until the chip row names `name`; returns the log mark of the last step."""
+        until(lambda: CHIP.search(log, after) is not None, 'Changes comparison chip')
+        shown = [match.group(1).decode() for match in CHIP.finditer(log, after)][-1]
+        for _ in range(5):
+            if shown == name: return after
+            previous, after = shown, len(log)
+            send(b'c')
+            # A chip repainted before `c` lands still names the previous comparison; the first other name is the new one.
+            until(lambda: any(match.group(1).decode() != previous for match in CHIP.finditer(log, after)), 'next comparison after c')
+            shown = next(match.group(1).decode() for match in CHIP.finditer(log, after) if match.group(1).decode() != previous)
+        raise AssertionError('comparison never reached ' + name)
 
-    until(lambda: text('Bound to Corral') and text('WORKER'), 'production workbench ready')
+    until(lambda: BOUND.search(log) is not None, 'production workbench bound')
     send(b'Reply only NATIVE_PTY_OK.\r')
     until(lambda: any(call['payload'].get('kind') == 'turn_ended' for call in calls()), 'native response')
     send(b'Keep native draft')
@@ -102,12 +119,13 @@ try:
     save_frame('conversation')
     if not args.activity_only:
         mark=len(log); send(b'\x1b[18~')
-        until(lambda: text('All uncommitted',mark) and text('quietHours',mark), 'persistent Changes with real diff')
+        mark=comparison('working tree', mark)
+        until(lambda: text('quietHours',mark), 'persistent Changes with real diff')
         save_frame('changes-wide')
         closed=prompt_ends(); send(b'/')
         until(lambda: text('Filter changed paths'), 'native path search')
         mark=len(log); send(b'notification\r')
-        until(lambda: prompt_ends()>closed and text('1 matching') and text('Keep native draft',mark) and log.endswith(b'\x1b[?2026l'), 'filtered change list and restored editor')
+        until(lambda: prompt_ends()>closed and text('/notification',mark) and text('1 file',mark) and text('Keep native draft',mark) and log.endswith(b'\x1b[?2026l'), 'filtered change list and restored editor')
         save_frame('search')
         # External edit should update data without replacing the currently inspected hunk.
         candidate.write_text('export const quietHours = "updated";\n')
@@ -126,26 +144,36 @@ try:
         mark=len(log); resize(52,24)
         until(lambda: text('Keep native draft',mark) and log.endswith(b'\x1b[?2026l'), 'small Changes')
         save_frame('changes-small')
+        # Switch to unstaged at 52 columns: its diff is the same text as the working-tree one, so only the
+        # full repaint of the 52→140 resize shows it again. The diff view titles a hunk by its count, not
+        # by its raw @@ header, so the wait reads the changed line itself.
+        mark=len(log); send(b'\x1b[18~')
+        comparison('unstaged', mark)
         mark=len(log); resize(140,46)
-        until(lambda: text('Keep native draft',mark), 'wide draft continuity')
-        mark=len(log); send(b'\x1b[18~c')
-        until(lambda: text('Unstaged',mark) and text('@@ -1 +1 @@',mark) and log.endswith(b'\x1b[?2026l'), 'loaded explicit unstaged comparison')
+        until(lambda: text('Keep native draft',mark) and text('unstaged ▾',mark) and text('"updated"',mark) and log.endswith(b'\x1b[?2026l'), 'wide draft continuity and the loaded unstaged comparison')
         save_frame('comparison')
     # Return to actual editor and submit one scripted offline provider sequence.
     send(b'\r\x15/fixture-workbench-jobs\r')
     send(b'Start the owned background scenario.\r')
     until(lambda: any(call.get('op')=='job_monitor' or call['payload'].get('on')=='line' for call in calls()), 'line monitor registration')
-    mark=len(log); send(b'\x1b[19~')
-    until(lambda: text('Jobs',mark), 'sidebar job selector')
-    send(b'\r')  # Open the selected job directly; F8 no longer opens a mixed Activity page.
-    until(lambda: text('armed locally',mark) and text('BUILD_WAIT',mark), 'live running job and armed monitor')
+    mark=len(log); send(b'\x1b[19~')  # F8: the agents view; with no helper calls its first entry is the job row.
+    until(lambda: text('Jobs',mark) and text('MONITOR_READY/ armed',mark) and text('BUILD_WAIT',mark), 'job row selected: live output and armed watch')
     save_frame('activity-running')
     with open(work/'monitor-gate','w') as gate: gate.write('ready\n')
-    until(lambda: text('match observed'), 'monitor match observation')
+    until(lambda: text('MONITOR_READY/ matched',mark), 'watch match in the job detail')
     save_frame('activity-matched')
+    mark=len(log); send(b'\r')
+    until(lambda: text('retained output',mark) and text('MONITOR_READY',mark), 'Enter opens the bounded output pager')
+    save_frame('job-output')
+    mark=len(log); send(b'\x1b')
+    # The pager's footer has no F1; the footer of the view beneath it ends with the F1 key cap again.
+    until(lambda: re.search(rb'F1(?![0-9])', log[mark:]) is not None, 'Esc closes the output pager')
+    mark=len(log)
     with open(work/'exit-gate','w') as gate: gate.write('done\n')
-    until(lambda: text('j1-1 · exited · exit 7'), 'actual failed process outcome, not command text')
+    until(lambda: text('exit 7',mark) and text('exited',mark), 'actual failed process outcome, not command text')
     save_frame('activity-exited')
+    # The exit reaches the agent as a completion notice that starts its own turn; let it end before typing.
+    until(lambda: text('j1-1:completion',mark) and len([c for c in calls() if c['payload'].get('kind')=='turn_started']) == len([c for c in calls() if c['payload'].get('kind')=='turn_ended']), 'completion notice turn ends')
     send(b'\x1b[20~')  # Always return to Conversation, independently of composer focus.
     send(b'\x15/fixture-native-confirm\r')
     until(lambda: text('Native permission fixture'), 'permission dialog owns input')
@@ -158,7 +186,7 @@ try:
     if proc.returncode != 0: raise AssertionError('host exit '+str(proc.returncode))
     (args.output/'pty-session.ansi').write_bytes(log)
     result=dict(status='PASS',production_entrypoint='src/host/main.ts',provider='offline fixtures; real owned Git and jobs',
-                checks=['native real composer', 'F8 sidebar selector and Enter opens job output', 'real background job output', 'armed and matched monitor observations', 'exit code 7, not task/gate PASS', 'permission cancellation', 'clean terminal exit']
+                checks=['native real composer', 'F8 agents view selects the job row; Enter opens its output pager', 'real background job output', 'armed and matched watch in the job detail', 'exit code 7, not task/gate PASS', 'permission cancellation', 'clean terminal exit']
                         + ([] if args.activity_only else ['persistent Changes, not modal', 'native path search', 'external refresh preserves hunk until applied', 'hunk reference without autosend', '140→80→52→140 draft retention', 'explicit comparison']))
     (args.output/'result.json').write_text(json.dumps(result,indent=2)); print(json.dumps(result,indent=2))
 finally:

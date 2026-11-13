@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Owned production Pi PTY: real keyboard/mouse history reads over a copied recorded task.
+"""Owned production Pi PTY: real keyboard history reads over a copied recorded task.
 No model calls or owner panes. Only the offline host hello/events use a fake adapter.
 """
 import argparse
@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import selectors
 import shutil
 import signal
@@ -33,6 +34,8 @@ selector = selectors.DefaultSelector()
 master = slave = watch = None
 proc = None
 log = bytearray()
+# The status bar's role badge, then the binding dot (● bound, ○ not bound), possibly with styling between.
+BOUND = re.compile(rb'\xe2\x96\x8cASSISTANT(?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f')
 try:
     env = {key: value for key, value in os.environ.items() if not key.startswith(('HERDR_', 'CORRAL_', 'PI_'))}
     env.update(HOME=str(work/'home'), XDG_CONFIG_HOME=str(work/'config'), XDG_DATA_HOME=str(work/'data'),
@@ -93,13 +96,17 @@ process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ??
     def frame(name):
         until(lambda: log.endswith(b'\x1b[?2026l'), 'complete frame')
         (args.output/(name+'.ansi')).write_bytes(log)
-    until(lambda: text('Bound to Corral') and text('ASSISTANT'), 'production host bound')
+    def history_action(mark):
+        # F2 opens the actions palette; its own filter field leaves the editor draft untouched.
+        send(b'\x1bOQ')
+        until(lambda: text('type to filter actions', mark), 'actions palette')
+        send(b'history\r')
+    until(lambda: BOUND.search(log) is not None, 'production host bound')
     send(b'History must preserve this draft')
     until(lambda: text('History must preserve this draft'), 'native draft')
     mark = len(log)
-    # On the compact main area, History follows Usage, Graph and Timeline.
-    send(b'\x1b[<0;55;1M\x1b[<0;55;1m')
-    until(lambda: text('Tasks / runs', mark), 'mouse opens read-only history')
+    history_action(mark)
+    until(lambda: text('Tasks / runs', mark), 'Browse history action opens read-only history')
     send(b'\r')
     until(lambda: text('Search recorded history', mark), 'search input')
     send(task.encode()+b'\r')
@@ -121,7 +128,7 @@ process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ??
     closed = len((work/'ui-events.jsonl').read_text().splitlines())
     mark = len(log); send(b'\x1b')
     until(lambda: len((work/'ui-events.jsonl').read_text().splitlines()) > closed, 'history overlay closed')
-    mark = len(log); send(b'\x1b[<0;55;1M\x1b[<0;55;1m')
+    mark = len(log); history_action(mark)
     until(lambda: text('Tasks / runs', mark), 'reopen history')
     send(b'\r')
     until(lambda: text('Search recorded history', mark), 'checkpoint history search')
@@ -148,13 +155,14 @@ process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ??
     after = fingerprint()
     assert before == after, 'history changed canonical store'
     calls = [json.loads(json.loads(line)['stdin']) for line in (work/'calls.jsonl').read_text().splitlines()]
-    assert all(call['op'] in ['hello', 'event'] for call in calls)
+    # The assistant host refreshes its planning state read-only after hello; any other operation fails.
+    assert all(call['op'] in ['hello', 'event'] or (call['op'] == 'assistant_plan' and call['payload'].get('action') == 'read') for call in calls)
     assert not any(call['payload'].get('kind') == 'owner_input' for call in calls)
     reads = (work/'history-reads.jsonl').read_text()
     (args.output/'history-reads.jsonl').write_text(reads)
     (args.output/'canonical-hashes.json').write_text(json.dumps(dict(before=before, after=after), indent=2))
     result = dict(status='PASS', source_task=task, source='copied recorded real task, original eligible transcript locators',
-                  provider='none; no model requests', checks=['mouse history navigation', 'keyboard search/select task and run',
+                  provider='none; no model requests', checks=['F2 Browse history action', 'keyboard search/select task and run',
                   'recorded recap provenance', 'transcript next/previous pages', 'native checkpoint/rewind list', 'draft intact at 140 and 52 columns',
                   'canonical store byte-identical', 'no owner-input event or replacement', 'clean private PTY exit'])
     (args.output/'result.json').write_text(json.dumps(result, indent=2)); print(json.dumps(result, indent=2))

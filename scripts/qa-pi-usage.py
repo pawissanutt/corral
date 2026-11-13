@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import selectors
 import shutil
 import signal
@@ -30,6 +31,8 @@ proc = None
 master = slave = None
 log = bytearray()
 scenes, resizes = [], []
+# The status bar's role badge, then the binding dot (● bound, ○ not bound), possibly with styling between.
+BOUND = re.compile(rb'\xe2\x96\x8cWORKER(?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f')
 size = dict(columns=180, rows=38)
 try:
     env = {k: v for k, v in os.environ.items() if not k.startswith(('HERDR_', 'CORRAL_', 'PI_'))}
@@ -53,13 +56,15 @@ try:
     os.close(slave); slave = None; os.close(read_fd)
     os.write(write_fd, json.dumps(launch).encode()); os.close(write_fd)
     selector = selectors.DefaultSelector(); selector.register(master, selectors.EVENT_READ)
+    def seen(text, mark):
+        return text.search(log, mark) is not None if isinstance(text, re.Pattern) else text.encode() in log[mark:]
     def until(text, mark=0):
         deadline = time.monotonic() + 30
-        while text.encode() not in log[mark:]:
+        while not seen(text, mark):
             events = selector.select(max(0, deadline - time.monotonic()))
-            if not events: raise AssertionError('Timeout waiting for ' + text)
+            if not events: raise AssertionError('Timeout waiting for ' + (text.pattern.decode(errors='replace') if isinstance(text, re.Pattern) else text))
             chunk = os.read(master, 65536)
-            if not chunk: raise AssertionError('Host exited before ' + text)
+            if not chunk: raise AssertionError('Host exited before ' + (text.pattern.decode(errors='replace') if isinstance(text, re.Pattern) else text))
             log.extend(chunk)
     def send(data): os.write(master, data)
     def scene(name, text, data=None, resize=None):
@@ -77,7 +82,7 @@ try:
             log.extend(os.read(master, 65536))
         (args.output / (name + '.ansi')).write_bytes(log)
         scenes.append(dict(name=name, offset=mark, bytes=len(log), columns=size['columns'], rows=size['rows'], input_hex=data.hex() if data else None, resize=resize, asserted=text))
-    until('Bound to Corral')
+    until(BOUND)
     # Local fake transport, not a provider: establish a retained conversation and editor draft.
     scene('conversation-before', 'FAKE_TRANSPORT_OK', b'Usage capture conversation\r')
     scene('wide-source-table', 'Measured usage', b'/panels usage\r')
@@ -90,9 +95,10 @@ try:
     scene('compact-budget', 'Budget accounting unavailable', b'\x1b[6~' * 12)
     scene('conversation-return', 'Usage capture conversation', b'\x1b[20~')
     scene('draft-retained', 'RETAINED_USAGE_DRAFT', b'RETAINED_USAGE_DRAFT')
-    # Reopen Usage by its actual native navigation hit target, without consuming the draft.
-    x = sum(map(len, [' Chat ', ' Diff ', ' Jobs ', ' Proof ', ' Inbox '])) + 2
-    scene('draft-in-usage', 'unavailable', f'\x1b[<0;{x};1M\x1b[<0;{x};1m'.encode())
+    # Reopen Usage through the F2 actions palette: its own filter field, so the editor draft stays untouched.
+    scene('draft-usage-action', 'type to filter actions', b'\x1bOQ')
+    scene('draft-usage-query', '', b'usage')
+    scene('draft-in-usage', 'unavailable', b'\r')
     scene('draft-usage-top', 'Measured usage', b'\x1b[5~' * 12)
     scene('draft-return', 'Usage capture conversation', b'\x1b[20~')
     calls = [json.loads(json.loads(line)['stdin']) for line in (work / 'calls.jsonl').read_text().splitlines()]
@@ -106,7 +112,7 @@ try:
     (args.output / 'result.json').write_text(json.dumps(dict(status='PASS', candidate=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip(), initial_size=dict(columns=180, rows=38), resizes=resizes,
         source='actual collector inspection JSON replay; owned production host PTY; fake offline auth/bridge, no live panes',
         checks=['open /panels usage', 'chart on/off retains source table', 'PageDown/PageUp reaches source and budget', 'resize wide to compact',
-                'F9 returns to same conversation', 'pointer reopens Usage and F9 preserves editor draft', 'one offline fixture turn; no paid calls; generation unchanged'], scenes=scenes), indent=2))
+                'F9 returns to same conversation', 'F2 Usage action reopens Usage and F9 preserves editor draft', 'one offline fixture turn; no paid calls; generation unchanged'], scenes=scenes), indent=2))
     print('PASS: owned actual-input usage PTY interactions; no live panes or provider calls')
 finally:
     (args.output / 'pty-session.ansi').write_bytes(log)
