@@ -34,11 +34,12 @@ impl BoardSnapshot {
         Self::load_at(ctx, Timestamp::now())
     }
 
-    /// A full local frame at `now`, computed from scratch.
+    /// A full local frame at `now`, computed from scratch, without the operating text:
+    /// the board view's own loads never show it, and computing it costs a PM workset.
     pub(super) fn load_at(ctx: &Ctx, now: Timestamp) -> Result<Self> {
         Self::load_cached(
             ctx,
-            &mut ClassicCache::new(),
+            &mut ClassicCache::without_operating(),
             ClassicInputs {
                 now,
                 attention: None,
