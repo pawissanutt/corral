@@ -11,8 +11,10 @@ use crate::theme;
 pub(crate) type Progress = Result<PlanProgress, String>;
 
 pub(crate) fn load(ctx: &corral_ops::Ctx, task: &corral_core::Task) -> Option<Progress> {
-    (task.tracker && task.approved_scope.is_some())
-        .then(|| corral_ops::plan_progress(ctx, &task.id).map_err(|error| format!("{error:#}")))
+    (task.tracker && task.approved_scope.is_some()).then(|| {
+        let _span = corral_core::timing::span("plan.tracker.load");
+        corral_ops::plan_progress(ctx, &task.id).map_err(|error| format!("{error:#}"))
+    })
 }
 
 /// Full-facade batch oracle retained for the original shared-board projection test.

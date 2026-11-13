@@ -217,8 +217,10 @@ fn append(
         return Some(after);
     };
     line.push(b'\n');
-    if line.len() < 4096 {
-        // A single O_APPEND write prevents records from concurrent CLI processes interleaving.
+    // A pass record names every span of the interval and passes 4 KiB. One O_APPEND write to
+    // a regular file is not interleaved with other appenders at any size; the bound only
+    // keeps a runaway record out of the log.
+    if line.len() < 64 * 1024 {
         let _ = file.write(&line);
     }
     Some(after)

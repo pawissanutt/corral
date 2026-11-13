@@ -51,6 +51,19 @@ pub(crate) fn branch<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Result<Opt
     }))
 }
 
+/// `refs/heads/<branch>` of `repo`. A pinned pass reads it once for every Plan member and
+/// dependency it qualifies; a ref moves between passes, so no value outlives its pass. A
+/// live store reads it on every call.
+pub(crate) fn branch_head(store: &Store, repo: &Path, branch: &str) -> Result<String> {
+    let rev = format!("refs/heads/{branch}");
+    if !store.is_snapshot() {
+        return corral_git::rev_sha(repo, &rev);
+    }
+    let key = format!("git-branch-head\0{}\0{rev}", repo.display());
+    let head = store.pass_derived(&key, || corral_git::rev_sha(repo, &rev))?;
+    Ok(head.as_ref().clone())
+}
+
 /// Read the exact base a not-yet-initialized target would use, without claiming it.
 /// An initialized target never falls back to main, even if its ref disappeared.
 pub(crate) fn proposed_initial_base(store: &Store, plan: &Task) -> Result<Option<String>> {

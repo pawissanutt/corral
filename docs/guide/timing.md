@@ -19,8 +19,8 @@ directory means recording is off; timing does not create it to check the switch.
 
 Appending stops silently when the file is larger than 16 MiB. Remove or rotate
 `timing.jsonl` to resume. Recording failures never fail commands. Each line is
-under 4 KiB and appended with a single write; a record exceeding that limit is
-omitted. No task content, titles, argument values or free text is recorded.
+appended with a single write; a record of 64 KiB or more is omitted. No task content,
+titles, argument values or free text is recorded.
 
 ## Fields
 

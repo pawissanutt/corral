@@ -5,6 +5,8 @@
 //! ignore settings (config or any `.gitmodules`) cannot affect it. A landed-path fact is
 //! additionally stored only when its diff has no rename and not both an added and a deleted file,
 //! so neither rename settings nor binary attributes (which change rename similarity) affect it.
+//! An ancestry fact is stored only when the first commit is an ancestor of the second: only that
+//! answer proves both commits exist and are connected, so a negative answer is recomputed.
 //! Every other pair is computed directly with the original command on every call. Repositories
 //! where one full SHA can name different history (shallow, grafts, replace refs, reftable) and
 //! paths below a worktree's top level are never memoized; that history state is re-checked on
@@ -35,7 +37,7 @@ use std::sync::{Mutex, OnceLock};
 use anyhow::{Context, Result, bail};
 
 use crate::history::{git_utf8, is_full_oid, nul_records, validate_commit};
-use crate::{changed_paths_between, changed_paths_with_renames, merge_base};
+use crate::{changed_paths_between, changed_paths_with_renames, is_ancestor, merge_base};
 
 /// Bumped whenever the Git command or parsing behind any fact kind changes.
 const SEMANTICS: &str = "4";
@@ -58,6 +60,8 @@ pub(crate) enum Kind {
     MergeBase,
     /// Sorted `git diff --name-only` paths of an unvalidated object pair.
     Landed,
+    /// `merge-base --is-ancestor`; only a positive answer is stored.
+    Ancestor,
 }
 
 /// Options shared by every memoized diff. Each one fixes a behavior Git config, attributes or
@@ -85,6 +89,7 @@ impl Kind {
             Kind::Paths => [&DIFF_FORM[..], &NO_RENAMES[..]].concat(),
             Kind::Renames | Kind::Landed => [&DIFF_FORM[..], &RENAMES[..]].concat(),
             Kind::MergeBase => vec!["merge-base"],
+            Kind::Ancestor => vec!["merge-base", "--is-ancestor"],
         }
     }
 
@@ -94,6 +99,7 @@ impl Kind {
             Kind::Renames => "renames",
             Kind::MergeBase => "merge-base",
             Kind::Landed => "landed",
+            Kind::Ancestor => "ancestor",
         }
     }
 }
@@ -201,6 +207,26 @@ impl Memo {
         let sha = compute()?;
         slot.put(sha.as_bytes());
         Ok(sha)
+    }
+
+    /// Memoized [`is_ancestor`]. Only `true` is stored: it exists only once both commits were
+    /// present and connected, and stable history keeps their ancestry fixed. `false` and
+    /// errors are recomputed on every call.
+    ///
+    /// # Errors
+    /// The same errors as [`is_ancestor`]; memo I/O never fails the call.
+    pub fn is_ancestor(&self, repo: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
+        let Some(slot) = self.slot(repo, Kind::Ancestor, ancestor, descendant) else {
+            return is_ancestor(repo, ancestor, descendant);
+        };
+        if slot.get().as_deref() == Some(b"1".as_slice()) {
+            return Ok(true);
+        }
+        let included = is_ancestor(repo, ancestor, descendant)?;
+        if included {
+            slot.put(b"1");
+        }
+        Ok(included)
     }
 
     /// The sorted, deduplicated paths printed by

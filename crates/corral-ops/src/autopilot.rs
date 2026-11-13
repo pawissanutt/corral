@@ -79,7 +79,11 @@ pub(crate) fn advance_all(
         ..ctx.clone()
     };
     let mut changes = Vec::new();
-    for task in output::review_tasks(&ctx)? {
+    let review = corral_core::timing::span("sync.autopilot_advance_all.review_tasks");
+    let tasks = output::review_tasks(&ctx)?;
+    drop(review);
+    for task in tasks {
+        let _span = corral_core::timing::span("sync.autopilot_advance_all.task");
         let task = ctx.store.head(&task.id)?;
         if !scope.includes(task.project.as_deref()) {
             continue;
@@ -88,8 +92,13 @@ pub(crate) fn advance_all(
             continue;
         }
         // Defer typed markers to advance, which records them under the task lock.
-        if task.infra_wait.is_none()
-            && let Err(error) = output::record_authority(&ctx, &task)
+        let authority = if task.infra_wait.is_none() {
+            let _span = corral_core::timing::span("sync.autopilot_advance_all.authority");
+            output::record_authority(&ctx, &task)
+        } else {
+            Ok(())
+        };
+        if let Err(error) = authority
             && !infra::classified(&error)
         {
             return Err(error);
@@ -111,7 +120,11 @@ pub(crate) fn advance_all(
     }
     // Cowork deliveries and due plan checkpoints span every project.
     if *scope == crate::sync::SyncScope::All {
-        cowork::deliver_pending(&ctx);
+        {
+            let _span = corral_core::timing::span("sync.autopilot_advance_all.cowork");
+            cowork::deliver_pending(&ctx);
+        }
+        let _span = corral_core::timing::span("sync.autopilot_advance_all.checkpoints");
         crate::plan_acceptance::checkpoint::start_due(&ctx);
     }
     Ok(changes)

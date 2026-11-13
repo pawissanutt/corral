@@ -27,10 +27,7 @@ fn destination(ctx: &Ctx, session: &str) -> (bool, bool) {
 /// delivery owns replay suppression; do not re-post or send anything into the owner's pane.
 pub(super) fn deliver_pending(ctx: &Ctx) {
     let sweep = || -> Result<()> {
-        for head in ctx
-            .store
-            .heads(&corral_core::backend::HeadQuery::Open { project: None })?
-        {
+        for head in ctx.store.cached_board()?.heads {
             let Some((session, _)) = head
                 .cowork_run()
                 .and_then(|cowork| cowork.assistant_driver())
