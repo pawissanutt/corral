@@ -73,7 +73,7 @@ These commands only read recorded events; they do not reload settings or create 
 
 Sections: [limits](#limits) · [resources](#resources) · [dispatch](#dispatch) · [projects](#projects) · [defaults](#defaults) · [harnesses](#harnesses) ·
 [profiles](#profiles) · [routing](#routing) · [automation](#automation) · [review](#review) · [sync](#sync) · [ui](#ui) · [board.card](#boardcard) · [viewers](#viewers) ·
-[artifacts](#artifacts) · [storage](#storage) · [load_sandbox](#load_sandbox) · [pm](#pm) · [build](#build) · [herdr](#herdr) · [agents (legacy)](#agents-legacy)
+[artifacts](#artifacts) · [storage](#storage) · [load_sandbox](#load_sandbox) · [search](#search) · [pm](#pm) · [build](#build) · [herdr](#herdr) · [agents (legacy)](#agents-legacy)
 
 ## build
 
@@ -96,6 +96,31 @@ description = "Independent implementation slice"
 The provider must be known to corral and approved for the host. A missing `default`
 profile inherits the parent model and effort. See [build sessions](build-sessions.md)
 for child behavior and exit policy.
+
+## search
+
+The content-search catalog is opt-in and disabled by default. Configure it in the
+workspace's `.corral/corral.toml`:
+
+```toml
+[search]
+catalog = false
+```
+
+Read the effective default or enable the catalog through the validated config commands:
+
+```sh
+corral config get search.catalog
+corral config set search.catalog true
+corral config set search.catalog false
+```
+
+`CORRAL_SEARCH_CATALOG=1` enables the catalog and `CORRAL_SEARCH_CATALOG=0` disables it,
+overriding the configured boolean for that process. Other values leave configuration
+in control. This runtime override does not rewrite the config or change what
+`corral config get` reports. With the catalog disabled, queries use streaming search.
+When enabled, queries use a current published catalog or immediately fall back to
+streaming search while a background worker advances the catalog.
 
 ## limits
 

@@ -40,6 +40,18 @@ impl Default for ContentSearch {
     }
 }
 
+impl ContentSearch {
+    /// Explicit maintenance: resume the complete-source catalog to publication.
+    pub fn build_catalog(ctx: &Ctx, reindex: bool) -> Result<serde_json::Value> {
+        content_index::catalog::build_foreground(ctx, reindex)
+    }
+
+    /// Inspect durable progress without starting or waiting for a worker.
+    pub fn catalog_status(ctx: &Ctx) -> Result<serde_json::Value> {
+        content_index::catalog::status(ctx)
+    }
+}
+
 /// A stable artifact reference, or a task/event reference for non-artifact content.
 #[derive(Debug, Clone, Serialize)]
 pub struct ContentHit {
@@ -63,16 +75,21 @@ pub struct ContentHit {
 /// The index is a derived cache; tasks, artifact snapshots and events are never modified.
 /// A cold or outdated catalog uses query-local fallback data while its builder runs.
 pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result<Vec<ContentHit>> {
-    match search_content_once(ctx, input, options) {
+    match search_content_once(ctx, input, options, false) {
         Err(error) if crate::content_index::catalog::is_corrupt(&error) => {
-            crate::content_index::catalog::repair(ctx)?;
-            search_content_once(ctx, input, options)
+            crate::content_index::catalog::repair(ctx);
+            search_content_once(ctx, input, options, true)
         }
         result => result,
     }
 }
 
-fn search_content_once(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result<Vec<ContentHit>> {
+fn search_content_once(
+    ctx: &Ctx,
+    input: &str,
+    options: &ContentSearch,
+    force_fallback: bool,
+) -> Result<Vec<ContentHit>> {
     ensure!(input.len() <= 4096, "search query exceeds 4096 bytes");
     ensure!(options.limit <= 100, "search limit must be at most 100");
     ensure!(options.context <= 20, "search context must be at most 20");
@@ -95,7 +112,11 @@ fn search_content_once(ctx: &Ctx, input: &str, options: &ContentSearch) -> Resul
         .map(|s| cutoff(s, now))
         .transpose()?;
     let _span = corral_core::timing::span("search.content");
-    let published = Catalog::open(ctx, options.reindex)?;
+    let published = if force_fallback {
+        None
+    } else {
+        Catalog::open(ctx, options.reindex)?
+    };
     let _fallback = published
         .is_none()
         .then(|| corral_core::timing::span("search.fallback"));

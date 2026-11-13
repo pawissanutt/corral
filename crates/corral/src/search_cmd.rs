@@ -6,7 +6,7 @@ use corral_ops::{ContentSearch, Ctx, search_content};
 #[derive(Args)]
 pub struct SearchArgs {
     /// Shared query language: quoted phrases, negation, test:, error:, verdict:
-    #[arg(required_unless_present = "reindex")]
+    #[arg(required_unless_present_any = ["reindex", "catalog_build", "catalog_status"])]
     query: Option<String>,
     /// Content scope; omitted preserves the task-result format
     #[arg(long = "in", value_parser = ["artifacts", "specs", "reviews", "all"])]
@@ -31,11 +31,41 @@ pub struct SearchArgs {
     /// Rebuild the derived index from canonical stored content
     #[arg(long)]
     reindex: bool,
+    /// Resume the opt-in complete-source catalog in the foreground
+    #[arg(long, conflicts_with_all = ["query", "catalog_status"])]
+    catalog_build: bool,
+    /// Show durable catalog progress without starting a builder
+    #[arg(long, conflicts_with_all = ["query", "catalog_build", "reindex"])]
+    catalog_status: bool,
     #[arg(long)]
     json: bool,
 }
 
 pub fn run(ctx: &Ctx, args: SearchArgs) -> Result<()> {
+    if args.catalog_build || args.catalog_status {
+        let status = if args.catalog_build {
+            ContentSearch::build_catalog(ctx, args.reindex)?
+        } else {
+            ContentSearch::catalog_status(ctx)?
+        };
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&status)?);
+        } else {
+            println!("catalog: {}", status["state"].as_str().unwrap_or("unknown"));
+            println!("cache: {}", status["cache_root"].as_str().unwrap_or(""));
+            println!(
+                "progress: {}",
+                status["progress_file"].as_str().unwrap_or("")
+            );
+            if let Some(phase) = status["phase"].as_str() {
+                println!("phase: {phase}");
+            }
+            if let Some(error) = status["last_error"].as_str() {
+                println!("last error: {error}");
+            }
+        }
+        return Ok(());
+    }
     let query = args.query.as_deref().unwrap_or("");
     ensure!(query.len() <= 4096, "search query exceeds 4096 bytes");
     let options = ContentSearch {

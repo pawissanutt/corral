@@ -17,6 +17,10 @@ use super::{
 use crate::Ctx;
 use crate::content_index::{Record, Source};
 
+#[path = "catalog_control.rs"]
+mod control;
+pub(crate) use control::{build_foreground, record_error, status};
+
 #[path = "catalog_worker.rs"]
 mod worker;
 pub(super) use worker::schedule;
@@ -107,6 +111,9 @@ pub(super) fn current(ctx: &Ctx, after: u64) -> Result<bool> {
     let view = ctx.store.view()?;
     if view.seq().0 == after {
         return Ok(true);
+    }
+    if view.seq().0 < after {
+        return Ok(false);
     }
     let page = match view.changes(ChangeSeq(after), FEED_ENTRIES) {
         Ok(page) => page,
