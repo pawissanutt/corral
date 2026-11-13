@@ -32,8 +32,8 @@ log = bytearray()
 scenes = []
 resizes = []
 size = dict(columns=140, rows=46)
-# The status bar: the role pill ` WORKER `, then the binding dot and generation (`● g1` bound, `○` not), styling between.
-BOUND = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* g1\b')
+# Bound role, explicit binding word and full-width generation, allowing ANSI styling.
+BOUND = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* bound(?:\x1b\[[\d;:]*m)* \xc2\xb7 (?:\x1b\[[\d;:]*m)*gen 1\b')
 try:
     env = {k: v for k, v in os.environ.items() if not k.startswith(('HERDR_', 'CORRAL_', 'PI_')) and k not in ('TERM_PROGRAM', 'KITTY_WINDOW_ID')}
     env['PI_IMAGE_PROTOCOL'] = args.graphics
@@ -74,8 +74,9 @@ try:
     os.write(write_fd, json.dumps(launch).encode()); os.close(write_fd)
     selector = selectors.DefaultSelector(); selector.register(master, selectors.EVENT_READ)
     def seen(text, mark):
-        return text.search(log, mark) is not None if isinstance(text, re.Pattern) else text.encode() in log[mark:]
-    def label(text): return text.pattern.decode(errors='replace') if isinstance(text, re.Pattern) else text
+        if isinstance(text, (tuple, list)): return all(seen(part, mark) for part in text)
+        return text.search(log, mark) is not None if isinstance(text, re.Pattern) else text.encode() in re.sub(rb'\x1b\[[\d;:]*m', b'', log[mark:])
+    def label(text): return text.pattern.decode(errors='replace') if isinstance(text, re.Pattern) else str(text)
     def until(text, mark=0):
         deadline = time.monotonic() + 20
         while not seen(text, mark):
@@ -104,7 +105,7 @@ try:
     viewer_log = Path(installed['corral']).parent / 'viewer-calls.jsonl'
     def viewer_calls(): return [json.loads(line) for line in viewer_log.read_text().splitlines()] if viewer_log.exists() else []
     scene('wide-evidence', 'Proof', b'\x1b[21~')
-    scene('wide-artifacts', 'differs from bound HEAD at read', b'a')
+    scene('wide-artifacts', ('‹ Proof · Artifacts', 'registered against HEAD aaaaaaaaaaaa (differs from', 'bound HEAD at read · historical'), b'a')
     assert viewer_calls() == [], 'focus/render must not start a viewer'
     if args.graphics == 'none':
         scene('wide-image-fallback', 'Graphics unavailable in this terminal', b'\r')
@@ -122,12 +123,13 @@ try:
     assert [c[3] for c in viewer_calls()] == ['show'], viewer_calls()
     scene('wide-html-browser', 'Browser requested', b'o')
     assert [(c[3], c[4]) for c in viewer_calls()] == [('show', 'T-001:R1:2222-report.md'), ('serve', 'T-001:R1:4444-page.html')], viewer_calls()
-    scene('wide-other-run', 'Evidence: unknown · run R2 evidence not read', b'j')
-    scene('wide-mark-a', 'Selected for comparison: A T-001:R2:5555-other.md', b'm')
+    scene('wide-other-run', 'unknown · run R2 evidence not read', b'j')
+    scene('wide-mark-a', 'A 5555-other.md', b'm')
     send(b'k'); send(b'k'); send(b'k')
-    scene('wide-mark-b', 'B T-001:R1:2222-report.md', b'm')
-    scene('wide-compare', 'no before/after, candidate order or freshness implied', b'c')
-    scene('compact-compare', 'Title B: 2222-report.md', resize=(52, 30))
+    scene('wide-mark-b', 'B 2222-report.md', b'm')
+    scene('wide-compare', ('A and B in your selection order · no before/after,', 'candidate order or freshness implied'), b'c')
+    scene('compact-compare-top', 'COMPARE', resize=(52, 30))
+    scene('compact-compare', 'Title B     2222-report.md', b'\x1b[6~')
     scene('compact-export-refused', 'Session export refused', b'x')
     (work / 'inspection.json').unlink()
     scene('stale-disconnected-retained', 'STALE / disconnected', b'r')

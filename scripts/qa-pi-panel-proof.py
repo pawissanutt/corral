@@ -44,8 +44,8 @@ size = dict(columns=140, rows=46)
 candidate = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip()
 INCOMPLETE = re.compile(r'\x1b(?:\[[0-?]*[ -/]*|[\]_P^](?:[^\x07\x1b]|\x1b(?!\\))*\x1b?|[()])?\Z', re.S)
 TOKEN = re.compile(r'\x1b\[([<=>?]?)([\d;:]*)[ -/]*([@-~])|\x1b[\]_P^].*?(?:\x07|\x1b\\)|\x1b[()].|\x1b.|[\x00-\x1f\x7f]|[^\x00-\x1f\x7f\x1b]+', re.S)
-# The status bar: the role pill ` WORKER `, then the binding dot and generation (`● g1` bound, `○` not), styling between.
-BOUND = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* g1\b')
+# Bound role, explicit binding word and full-width generation, allowing ANSI styling.
+BOUND = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* bound(?:\x1b\[[\d;:]*m)* \xc2\xb7 (?:\x1b\[[\d;:]*m)*gen 1\b')
 # The Agents view of a session with no helper calls, children or jobs: its empty state (the rail says `no agents or jobs yet`).
 NO_AGENTS = 'No agents yet.'
 # The job's completion notice, drawn as one row: `✗ job j1-1 exited 7 · <size> output`. Ctrl+O, pressed earlier in this
@@ -262,6 +262,7 @@ try:
     save_frame('controls-draft', mark)
     bar = composer_bar()
     assert bar, 'composer model/effort bar not on screen'
+    assert any(' · effort ' in line and ' ↻' in line for line in main_lines()), 'composer labels the effort control beside its model'
     mark = len(log); click(bar['model'], bar['row'])
     until(lambda: text('Only showing models from configured providers', mark), 'native model picker by pointer')
     save_frame('model-picker-pointer', mark)

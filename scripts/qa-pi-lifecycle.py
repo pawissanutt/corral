@@ -31,8 +31,8 @@ log = bytearray()
 scenes = []
 resizes = []
 size = dict(columns=140, rows=46)
-# The status bar: the role pill ` WORKER `, then the binding dot and generation (`● g1` bound, `○` not), styling between.
-BOUND = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* g1\b')
+# Bound role, explicit binding word and full-width generation, allowing ANSI styling.
+BOUND = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* bound(?:\x1b\[[\d;:]*m)* \xc2\xb7 (?:\x1b\[[\d;:]*m)*gen 1\b')
 try:
     env = {k: v for k, v in os.environ.items() if not k.startswith(('HERDR_', 'CORRAL_', 'PI_'))}
     env.update(HOME=str(work / 'home'), XDG_CONFIG_HOME=str(work / 'config'), XDG_DATA_HOME=str(work / 'data'),
@@ -60,7 +60,7 @@ try:
     os.write(write_fd, json.dumps(launch).encode()); os.close(write_fd)
     selector = selectors.DefaultSelector(); selector.register(master, selectors.EVENT_READ)
     def seen(text, mark):
-        return text.search(log, mark) is not None if isinstance(text, re.Pattern) else text.encode() in log[mark:]
+        return text.search(log, mark) is not None if isinstance(text, re.Pattern) else text.encode() in re.sub(rb'\x1b\[[\d;:]*m', b'', log[mark:])
     def label(text): return text.pattern.decode(errors='replace') if isinstance(text, re.Pattern) else text
     def until(text, mark=0):
         deadline = time.monotonic() + 20
@@ -90,20 +90,20 @@ try:
     # F5 focuses Task; its footer offers g (graph) and l (lifecycle events).
     scene('wide-task', 'scroll', b'\x1b[15~')
     scene('wide-graph', '─depends_on→', b'g')
-    scene('wide-selected-prerequisite', 'Inspect canonical task T-002', b'j')
-    scene('wide-selected-missing', 'Inspect canonical task T-999', b'j')
+    scene('wide-selected-prerequisite', 'T-002 ○ backlog', b'j')
+    scene('wide-selected-missing', 'T-999 ! missing', b'j')
     scene('compact-list', 'Dependency list', resize=(52, 30))
-    scene('compact-selected-prerequisite', 'Inspect canonical task T-002', b'k')
+    scene('compact-selected-prerequisite', 'T-002 ○ backlog', b'k')
     scene('compact-task', 'scroll', b'\x1b[15~')
     scene('compact-timeline', 'store:owned-fixture@101', b'l')
     scene('compact-event-selection', 'store:owned-fixture@102', b'j')
-    scene('wide-timeline', 'Lifecycle timeline', resize=(140, 46))
-    scene('wide-session-timeline', 'Inspect session', b'h')
+    scene('wide-timeline', '‹ Task · Events', resize=(140, 46))
+    scene('wide-session-timeline', 'host log · not canonical', b'h')
     scene('wide-session-event-selected', '/ #2', b'j')
-    scene('canonical-source-return', 'canonical database events', b'c')
+    scene('canonical-source-return', 'Canonical task events in append order', b'c')
     # A source outage must preserve rows and say stale, not show an empty successful history.
     (work / 'inspection.json').unlink()
-    scene('stale-disconnected-retained', 'STALE / disconnected', b'r')
+    scene('stale-disconnected-retained', 'STALE · read failed', b'r')
     calls = [json.loads(json.loads(line)['stdin']) for line in (work / 'calls.jsonl').read_text().splitlines()]
     assert not [c for c in calls if c['op'] not in ('hello', 'event')], calls
     assert not [c for c in calls if c['op'] == 'event' and c['payload'].get('kind') == 'turn_started'], calls
