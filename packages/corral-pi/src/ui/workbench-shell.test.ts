@@ -58,13 +58,19 @@ function bindUi(wb: NativeWorkbench, overrides: Partial<ExtensionUIContext> = {}
     getEditorText: () => "", setEditorText() {}, ...overrides } as unknown as ExtensionUIContext);
 }
 
-/** NativePanels installed against a recording terminal and a minimal UI context that captures the dock and footer. */
+/**
+ * NativePanels installed against a recording terminal and a minimal UI context that captures the dock, the footer
+ * and the commands. Like Pi, `custom` raises `ui_prompt_start` when a dialog opens and `ui_prompt_end` when it closes.
+ */
 function shell(columns: number, rows: number, state: () => PanelSnapshot | null, options: Partial<NativePanelsOptions> = {}) {
   const panels = new NativePanels({ identity: worker, cwd: work, snapshot: state, ...options });
   const physical = new RecordingTerminal(); physical.resize(columns, rows);
   const terminal = panels.wrap(physical); terminal.start(() => {}, () => {});
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
-  const pi = { on: (name: string, fn: (event: unknown, ctx: unknown) => unknown) => { handlers.set(name, fn); }, registerCommand() {} } as unknown as ExtensionAPI;
+  const commands = new Map<string, (args: string, ctx: unknown) => Promise<void>>();
+  const pi = { on: (name: string, fn: (event: unknown, ctx: unknown) => unknown) => { handlers.set(name, fn); },
+    registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => Promise<void> }) => { commands.set(name, command.handler); },
+  } as unknown as ExtensionAPI;
   const tui = { terminal: { rows }, requestRender() {} }, theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
   let draft = "", dock: Component | undefined, footer: Component | undefined;
   const customs: Component[] = [];
@@ -77,17 +83,21 @@ function shell(columns: number, rows: number, state: () => PanelSnapshot | null,
     getEditorText: () => draft, setEditorText: (text: string) => { draft = text; },
     custom: (factory: (...args: unknown[]) => Component) => {
       const { promise, resolve } = Promise.withResolvers<unknown>();
-      customs.push(factory(tui, theme, undefined, resolve));
+      handlers.get("ui_prompt_start")?.({}, context);
+      customs.push(factory(tui, theme, undefined, (value: unknown) => { handlers.get("ui_prompt_end")?.({}, context); resolve(value); }));
       return promise;
     },
     confirm: async () => true, input: async () => undefined, select: async () => undefined,
   };
+  const context: { readonly mode: string; readonly ui: unknown } = { mode: "tui", ui };
   panels.install(pi, sdk);
-  handlers.get("session_start")?.({}, { mode: "tui", ui });
+  handlers.get("session_start")?.({}, context);
   if (!dock || !footer) throw new Error("panels did not install their dock and footer");
   const installed = { dock, footer };
   return {
     panels, physical, terminal, customs, ...installed,
+    command: (name: string) => commands.get(name)?.("", context),
+    prompt: (event: "ui_prompt_start" | "ui_prompt_end") => handlers.get(event)?.({}, context),
     draft: () => draft, setDraft: (text: string) => { draft = text; },
     stop() { terminal.stop(); panels.dispose(); },
   };
@@ -204,6 +214,31 @@ test("a footer click replays its key, and the F1 list runs F8", async () => {
       shift: false, alt: false, ctrl: false, clickCount: 1 };
     expect(h.footer.handleMouse?.(click)?.handled).toBeTrue(); await settle();
     expect(h.panels.workbench.view).toBe("conversation");
+  } finally { h.stop(); }
+});
+
+test("the footer lists the keys of what is open: the palette, the keys list, a pager, or a Pi dialog", async () => {
+  const h = shell(140, 46, () => snapshot({ jobs: [job("build", "running")] }), { identity: assistant });
+  const footer = () => stripTerminalSequences(h.footer.render(140).at(-1) ?? "");
+  const close = async () => { h.customs.at(-1)?.handleInput?.(KEY.esc); await settle(); };
+  try {
+    // F2 and /actions open the same palette.
+    void h.command("actions"); await settle();
+    expect(footer()).toMatch(/↑↓\s+select/); expect(footer()).toMatch(/⏎\s+run/); expect(footer()).toMatch(/esc\s+close/);
+    expect(footer()).not.toMatch(/choose|cancel|F1/);
+    await close();
+    expect(h.panels.handleInput(KEY.f1)).toBeTrue(); await settle();
+    expect(footer()).toMatch(/⏎\s+run/); expect(footer()).toMatch(/esc\s+close/); expect(footer()).not.toMatch(/select|choose|F1/);
+    await close();
+    h.panels.workbench.openAgents("job:build");
+    expect(h.panels.handleInput(KEY.enter)).toBeTrue(); await settle();
+    expect(footer()).toMatch(/PgUp\/PgDn\s+page/); expect(footer()).toMatch(/esc\s+close/); expect(footer()).not.toMatch(/choose|F1/);
+    await close();
+    expect(footer()).toMatch(/F1\s+keys/);
+    // A prompt the panels did not open is Pi's dialog.
+    h.prompt("ui_prompt_start");
+    expect(footer()).toMatch(/⏎\s+choose/); expect(footer()).toMatch(/esc\s+cancel/);
+    h.prompt("ui_prompt_end");
   } finally { h.stop(); }
 });
 

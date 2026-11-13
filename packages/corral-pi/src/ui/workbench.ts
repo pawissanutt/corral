@@ -107,6 +107,8 @@ export class NativeWorkbench {
   private changesScroll: ScrollView | undefined;
   private shownChanges: ChangesModel | undefined;
   private readingTranscript = false;
+  /** Read-only pagers (job output, peek, transcript) this workbench has open. */
+  private pagers = 0;
   private transcript: ScrollView | undefined; private transcriptWidth = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
   private debounce: ReturnType<typeof setTimeout> | undefined;
@@ -130,6 +132,13 @@ export class NativeWorkbench {
   get scopeLabel(): string { return this.review.scopeRequired ? "Choose project" : this.projectName ?? this.review.name; }
   /** The panel-originated notice header row 1 shows in place of the state word, if any. */
   get currentNotice(): Notice | undefined { return this.shownNotice; }
+  /** True while a pager or detail sheet the workbench opened is on screen; the footer lists its keys. */
+  get pagerOpen(): boolean { return this.pagers > 0 || this.inboxView.sheetOpen; }
+  /** Runs `show` (a read-only overlay) with the pager marked open. */
+  private async inPager(show: () => Promise<void>): Promise<void> {
+    this.pagers++; this.options.changed();
+    try { await show(); } finally { this.pagers--; this.options.changed(); }
+  }
   constructor(private readonly options: WorkbenchOptions) {
     this.history = new HistoryNavigator(options.readHistory, options.canInteract);
     this.images = new NativeImageViewer(() => options.canInteract(), () => { this.focused = this.images.isOpen || this.view !== "conversation"; options.changed(); });
@@ -262,7 +271,7 @@ export class NativeWorkbench {
       start = lines.findIndex(line => line.includes(query));
       if (start < 0) { this.notice(`No match for ${JSON.stringify(plainLabel(query))} in retained output`); return; }
     }
-    await openOutputPager(ui, `Job ${id} · retained output · ${lines.length} lines`, lines, start);
+    await this.inPager(() => openOutputPager(ui, `Job ${id} · retained output · ${lines.length} lines`, lines, start));
   }
   private async controlJob(job: string, action: "peek" | "background" | "stop"): Promise<void> {
     const ui = this.ui, snapshot = this.options.snapshot(), session = snapshot?.inspector?.session;
@@ -274,7 +283,7 @@ export class NativeWorkbench {
       const result = await this.options.jobControl(target, action);
       if (action === "peek" && typeof result.text === "string") {
         const lines = result.text.split("\n").map(plainLabel);
-        await openOutputPager(ui, "Peek " + plainLabel(job) + " · " + plainLabel(String(result.state)) + " · current logs", lines, lines.length);
+        await this.inPager(() => openOutputPager(ui, "Peek " + plainLabel(job) + " · " + plainLabel(String(result.state)) + " · current logs", lines, lines.length));
       } else this.notice(plainLabel(JSON.stringify(result)), result.state === "denied" || result.state === "outcome_unknown" ? "warning" : "text");
     } catch (error) { this.notice("Command control outcome unknown; inspect before retrying: " + plainLabel(String(error)), "warning"); }
     this.options.changed();
@@ -453,7 +462,7 @@ export class NativeWorkbench {
       const shown = this.view === "agent" ? this.agentKey : this.agentsView.entry()?.row.key;
       if (shown !== key || !this.agentRow(key)?.capabilities.transcript) throw new Error("Agent selection or binding changed during read");
       // Read-only bounded text, never an SDK switchSession/open/resume call.
-      await ui.custom<void>((tui, _theme, _keys, done) => {
+      await this.inPager(() => ui.custom<void>((tui, _theme, _keys, done) => {
         const content = new Text(text.slice(0, 32 * 1024).replace(/[\u0000-\u001f\u007f-\u009f]/g, char => char === "\n" ? char : " "), 0, 0);
         let offset = 0, max = 0;
         return { render: width => {
@@ -465,7 +474,7 @@ export class NativeWorkbench {
             if (matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "pageUp") || matchesKey(data, "pageDown")) offset = Math.max(0, Math.min(max, offset + (matchesKey(data, "up") ? -1 : matchesKey(data, "down") ? 1 : matchesKey(data, "pageUp") ? -10 : 10)));
             tui.requestRender();
           }, invalidate() { content.invalidate(); } };
-      }, { overlay: true, overlayOptions: { width: "90%", maxHeight: "85%", anchor: "center" } });
+      }, { overlay: true, overlayOptions: { width: "90%", maxHeight: "85%", anchor: "center" } }));
     } catch (error) {
       if (!this.scopeAbort.signal.aborted) this.notice(`Transcript unavailable: ${plainLabel(error instanceof Error ? error.message : String(error))}`, "warning");
     } finally { this.readingTranscript = false; this.options.changed(); }

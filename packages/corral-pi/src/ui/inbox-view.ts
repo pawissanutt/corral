@@ -32,6 +32,8 @@ function detail(item: InboxItem, width: number): string[] {
 /** A read-only inspector with a separately opened, revalidated established-answer-flow sheet. */
 export class InboxView implements Component {
   private ui: ExtensionUIContext | undefined; private busy = false; private disposed = false;
+  /** True while the read-only detail sheet is open; the footer then lists the pager's keys. */
+  sheetOpen = false;
   private hits = new Map<number, string>(); readonly rows = new Map<string, number>();
   /** `notice` shows a refusal (closed, stale or out-of-scope item) where the panels show their feedback. */
   constructor(readonly store: DecisionInbox, private readonly role: Role, private readonly project: string,
@@ -128,7 +130,9 @@ export class InboxView implements Component {
       `Scope: ${item.scope} · responsible: ${item.responsible}`, "", item.reason, ...item.detail, "",
       "Inspect: " + item.inspect, "", ...(flow ? [flow] : [item.response ? "An existing answer route is available. Close this sheet, then press a to revalidate and open its instructions."
         : "No answer route: closed, already resolved or inspection-only condition."]), "", "Nothing was sent or authorized."];
-    await ui.custom<void>((tui, _theme, _keys, done) => {
+    this.sheetOpen = true; this.changed();
+    try {
+      await ui.custom<void>((tui, _theme, _keys, done) => {
       let offset = 0, max = 0;
       const scroll = (delta: number) => { offset = Math.max(0, Math.min(max, offset + delta)); tui.requestRender(); };
       return {
@@ -148,7 +152,8 @@ export class InboxView implements Component {
         handleMouse(event) { if (event.type === "wheel") { scroll(event.wheelDelta ?? 0); return { handled: true }; } return undefined; },
         invalidate() {},
       };
-    }, { overlay: true, overlayOptions: { width: "90%", maxHeight: "85%", anchor: "center" } });
+      }, { overlay: true, overlayOptions: { width: "90%", maxHeight: "85%", anchor: "center" } });
+    } finally { this.sheetOpen = false; }
     this.changed();
   }
   invalidate(): void {}

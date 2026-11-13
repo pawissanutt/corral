@@ -68,8 +68,8 @@ export class NativePanels implements PanelSurface {
   private railHits: ReadonlyMap<number, readonly SideHit[]> = new Map();
   /** The drawer was opened by F6 and closes when the sidebar gives up the focus. */
   private drawerByKey = false;
-  /** A panel-owned dialog in place of the editor: its footer shows its own keys. */
-  private overlay: "palette" | "keys" | undefined;
+  /** A dialog or pager the panels opened (Pi raises a prompt for it too): its footer shows its own keys. */
+  private overlay: "palette" | "keys" | "pager" | undefined;
   appearance: Appearance = "dark";
   density: Density = "comfortable";
   private nativeAction: ((id: "app.model.select" | "app.thinking.cycle") => void) | undefined;
@@ -231,10 +231,14 @@ export class NativePanels implements PanelSurface {
     const items = this.options.snapshot()?.queue ?? [];
     return { items: items.length, editable: items.filter(item => item.editable).length, control: this.queue.controllable };
   }
-  /** Whose keys the footer lists: a Pi dialog, a panel dialog, an overlay pager, or the focused surface. */
+  /**
+   * Whose keys the footer lists. What the panels opened comes first, since Pi reports it as a prompt as well;
+   * then a Pi dialog, then another overlay, then the focused surface.
+   */
   private footerContext(): KeyContext {
-    if (this.prompts > 0) return "dialog";
     if (this.overlay) return this.overlay;
+    if (this.workbench.pagerOpen) return "pager";
+    if (this.prompts > 0) return "dialog";
     if (this.hasOverlay?.()) return "pager";
     const focus = this.focus;
     return focus === "main" ? this.workbench.mainContext() : focus;
@@ -461,7 +465,9 @@ export class NativePanels implements PanelSurface {
     const ui = this.ui, info = this.options.snapshot()?.inspector;
     if (!ui) return;
     if (!info) { this.workbench.notice("Host receipts and events unavailable from this host", "warning"); return; }
-    await openOutputPager(ui, "Host receipts and events · observations, not task settlement", inspectorActivity(info).map(plainLabel));
+    this.overlay = "pager"; this.refresh();
+    try { await openOutputPager(ui, "Host receipts and events · observations, not task settlement", inspectorActivity(info).map(plainLabel)); }
+    finally { this.overlay = undefined; this.refresh(); }
   }
   actions(): HostAction[] {
     const identity = this.options.identity, taskBound = !!identity.task;
