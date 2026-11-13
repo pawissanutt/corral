@@ -309,13 +309,15 @@ fn interval_and_landing_schedule_use_request_baseline() {
 }
 
 #[test]
-fn similar_history_supplies_files_missing_from_new_task_spec() {
+fn similar_finished_history_cannot_match_undeclared_file_scope() {
     // Given a completed similar task with a retained diff and a file-scoped lesson.
     let (tmp, ctx) = workspace();
-    let old = ctx
+    let mut old = ctx
         .store
         .create("Fix startup readiness", Some("app"), Status::Done, "")
         .unwrap();
+    old.kind = Some("bug".into());
+    ctx.store.fixture_put_task(&old).unwrap();
     let diff = tmp.path().join("landed.diff");
     std::fs::write(&diff, "--- a/src/startup.rs\n+++ b/src/startup.rs\n").unwrap();
     crate::add_artifact(
@@ -329,13 +331,15 @@ fn similar_history_supplies_files_missing_from_new_task_spec() {
     let mut rule = lesson("L-history");
     rule.scope.files = vec!["src/startup.rs".into()];
     ctx.store.save_lessons("app", &[rule]).unwrap();
-    let task = ctx
+    let mut task = ctx
         .store
         .create("Improve startup readiness", Some("app"), Status::Ready, "")
         .unwrap();
-    // When matching a new task whose title names the area but no file.
+    task.kind = Some("bug".into());
+    // Shared title keywords and kind cannot supply an undeclared file match.
+    assert!(lessons_for(&ctx, &task, None).unwrap().is_empty());
+    task.write_scope = vec!["src/**".into()];
     let matched = lessons_for(&ctx, &task, None).unwrap();
-    // Then retained historical paths provide the file match.
     assert_eq!(matched.len(), 1);
     assert_eq!(matched[0].id, "L-history");
 }
@@ -388,45 +392,6 @@ fn sync_schedule_announces_once_and_rearms_after_the_next_interval() {
     // Then one new generation is announced, with no dispatched task.
     assert_eq!(announcements().len(), 2);
     assert_eq!(ctx.store.list().unwrap().len(), 1);
-}
-
-#[test]
-fn unrelated_completed_tasks_cannot_supply_likely_files_through_shared_clusters() {
-    // Given unrelated completed tasks whose paths share the success:done cluster.
-    let (tmp, ctx) = workspace();
-    for (title, area) in [
-        ("Repair alpha engine", "alpha"),
-        ("Repair beta cache", "beta"),
-    ] {
-        let task = ctx
-            .store
-            .create(title, Some("app"), Status::Done, "")
-            .unwrap();
-        let diff = tmp.path().join(format!("{area}.diff"));
-        std::fs::write(&diff, format!("--- a/src/{area}.rs\n+++ b/src/{area}.rs\n")).unwrap();
-        crate::add_artifact(
-            &ctx,
-            &task.id,
-            &diff,
-            Some(corral_core::ArtifactKind::Diff),
-            None,
-        )
-        .unwrap();
-    }
-    let signals = crate::lesson_signals(&ctx, "app").unwrap();
-    let shared = signals.iter().find(|s| s.key == "success:done").unwrap();
-    assert_eq!(shared.files, ["src/alpha.rs", "src/beta.rs"]);
-    let mut beta = lesson("L-beta");
-    beta.scope.files = vec!["src/beta.rs".into()];
-    ctx.store.save_lessons("app", &[beta]).unwrap();
-    let task = ctx
-        .store
-        .create("Improve alpha engine", Some("app"), Status::Ready, "")
-        .unwrap();
-    // When a task is similar only to the alpha task.
-    let matched = lessons_for(&ctx, &task, None).unwrap();
-    // Then the unrelated beta path cannot select its lesson.
-    assert!(matched.is_empty(), "{matched:?}");
 }
 
 #[test]
@@ -508,56 +473,6 @@ fn failure_schedule_counts_only_escalated_autopilot_transitions() {
         // Then actual escalations count, but ordinary autopilot progress does not.
         assert_eq!(due.len(), expected, "transition {transition}");
     }
-}
-
-#[test]
-fn likely_files_derive_lesson_signals_once_per_read_only_pass() {
-    use corral_core::work::{Work, count};
-    // Given finished history and three tasks similar to it in one project.
-    let (_tmp, ctx) = workspace();
-    history(&ctx);
-    let tasks: Vec<_> = (0..3)
-        .map(|n| {
-            ctx.store
-                .create(
-                    &format!("Fix startup readiness {n}"),
-                    Some("app"),
-                    Status::Ready,
-                    "",
-                )
-                .unwrap()
-        })
-        .collect();
-    ctx.store
-        .create("Startup readiness history", Some("app"), Status::Done, "")
-        .unwrap();
-    let pass = Ctx {
-        store: ctx.store.read_only_snapshot().unwrap(),
-        ..ctx.clone()
-    };
-    let scans = || count(Work::LessonSignalScan);
-    // When a live store and one read-only pass each infer every task's likely files.
-    let lists = count(Work::TaskList);
-    let start = scans();
-    let live: Vec<_> = tasks
-        .iter()
-        .map(|t| likely_files(&ctx, t).unwrap())
-        .collect();
-    let live_scans = scans() - start;
-    let start = scans();
-    let frozen: Vec<_> = tasks
-        .iter()
-        .map(|t| likely_files(&pass, t).unwrap())
-        .collect();
-    // Then the pass derives the project's signals once, with the same answers.
-    assert_eq!(live_scans, 3);
-    assert_eq!(scans() - start, 1);
-    assert_eq!(frozen, live);
-    assert_eq!(
-        count(Work::TaskList),
-        lists,
-        "title inference must not hydrate the board"
-    );
 }
 
 /// The run projection a converted helper takes.

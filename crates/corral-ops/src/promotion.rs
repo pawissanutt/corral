@@ -1,5 +1,4 @@
 //! Read-only, source-backed eligibility and ranking for Idea promotion.
-use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::Result;
@@ -19,9 +18,9 @@ mod tests;
 pub struct PromotionCandidate {
     pub id: String,
     pub why: String,
-    /// IDs of active tasks with intersecting declared or historically inferred paths.
+    /// IDs of active tasks with intersecting declared write scopes.
     pub predicted_conflicts: Vec<String>,
-    /// False when this Idea or any compared active task has no inferable paths.
+    /// False when this Idea or any compared active task has no declared write scope.
     pub overlap_checked: bool,
     /// One-based order, by priority, oldest creation, conflict risk, then ID.
     pub rank: usize,
@@ -35,14 +34,13 @@ pub struct PromotionCandidate {
     /// Every dependency was observed Done.
     pub depends_on: Vec<String>,
     pub write_scope: Vec<String>,
-    pub likely_files: Vec<String>,
     pub compared_tasks: Vec<String>,
     pub unchecked_tasks: Vec<String>,
     pub overlap_evidence: Vec<String>,
 }
 
 /// All eligible Ideas, irrespective of promotion mode or current free capacity.
-/// Reads tasks and bounded historical lesson signals; never mutates board state.
+/// Reads declared task fields; never mutates board state.
 pub fn promotion_shortlist(ctx: &Ctx) -> Result<Vec<PromotionCandidate>> {
     let _span = corral_core::timing::span("promotion.shortlist");
     let snapshot = corral_core::timing::span("promotion.snapshot");
@@ -69,7 +67,7 @@ pub fn promotion_shortlist(ctx: &Ctx) -> Result<Vec<PromotionCandidate>> {
         .heads(&corral_core::backend::HeadQuery::Ids(dependency_ids))?;
     drop(snapshot);
 
-    // An active task's paths are inferred once per shortlist, not once per compared Idea.
+    // Index an active task's declared scopes once per shortlist.
     let mut active_scopes: HashMap<&str, Scopes> = HashMap::new();
     let mut out = Vec::new();
     for task in tasks.iter().filter(|t| t.status == Status::Idea) {
@@ -100,8 +98,7 @@ pub fn promotion_shortlist(ctx: &Ctx) -> Result<Vec<PromotionCandidate>> {
         let Some(acceptance) = acceptance(&task.body) else {
             continue;
         };
-        let likely_files = crate::lessons::likely_files(ctx, task)?;
-        let paths = Scopes::new(task.write_scope.iter().chain(&likely_files));
+        let paths = Scopes::new(&task.write_scope);
         let mut candidate = PromotionCandidate {
             id: task.id.clone(),
             why: String::new(),
@@ -117,7 +114,6 @@ pub fn promotion_shortlist(ctx: &Ctx) -> Result<Vec<PromotionCandidate>> {
             labels: task.labels.clone(),
             depends_on: task.depends_on.clone(),
             write_scope: task.write_scope.clone(),
-            likely_files,
             compared_tasks: vec![],
             unchecked_tasks: vec![],
             overlap_evidence: vec![],
@@ -129,13 +125,9 @@ pub fn promotion_shortlist(ctx: &Ctx) -> Result<Vec<PromotionCandidate>> {
                 && (matches!(t.status, Status::Running | Status::NeedsMe) || t.launch.is_some())
         }) {
             candidate.compared_tasks.push(active.id.clone());
-            let other = match active_scopes.entry(active.id.as_str()) {
-                Entry::Occupied(known) => known.into_mut(),
-                Entry::Vacant(slot) => {
-                    let files = crate::lessons::likely_files(ctx, active)?;
-                    slot.insert(Scopes::new(active.write_scope.iter().chain(&files)))
-                }
-            };
+            let other = active_scopes
+                .entry(active.id.as_str())
+                .or_insert_with(|| Scopes::new(&active.write_scope));
             if paths.is_empty() || other.is_empty() {
                 candidate.overlap_checked = false;
                 candidate.unchecked_tasks.push(active.id.clone());
@@ -151,10 +143,10 @@ pub fn promotion_shortlist(ctx: &Ctx) -> Result<Vec<PromotionCandidate>> {
         candidate.compared_tasks.sort();
         candidate.unchecked_tasks.sort();
         let overlap = if paths.is_empty() {
-            "overlap check skipped: no declared or historically inferable Idea paths".into()
+            "overlap check skipped: no declared Idea write scope".into()
         } else if !candidate.unchecked_tasks.is_empty() {
             format!(
-                "overlap check incomplete: no inferable paths for {}",
+                "overlap check incomplete: no declared write scope for {}",
                 candidate.unchecked_tasks.join(", ")
             )
         } else {
@@ -264,7 +256,7 @@ fn acceptance(body: &str) -> Option<String> {
     (!content.is_empty()).then(|| content.join(" "))
 }
 
-/// One task's declared and inferred paths, split so wildcard-free pairs compare by hash:
+/// One task's declared paths, split so wildcard-free pairs compare by hash:
 /// two scopes without `*` overlap exactly when their `./`-trimmed text is equal.
 struct Scopes {
     literal: HashSet<String>,
@@ -389,8 +381,6 @@ mod derived_rows_tests {
     fn derived_promotion_listing_ignores_terminal_tasks_and_history() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = Ctx::from_store(Store::init(dir.path()).unwrap());
-        // This Idea is ineligible before likely_files. That separately owned FU-3 walk
-        // must not obscure this regression on promotion_shortlist's listing itself.
         let mut idea = ctx
             .store
             .create("Design", Some("app"), Status::Idea, "")

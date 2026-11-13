@@ -836,4 +836,4 @@ cutover, aren't plan dependencies, and are measured where they run:
 |---|---|---|
 | FU-1 | the board usage refresh, linear in active current runs' own records | the own-record pass of `refresh_active_usage` with exact counters |
 | FU-2 | 14 per-command scans of the board or event log that produce a one-task result | per-command counters and wall time; outside every hot budget |
-| FU-3 | `likely_files` and the resource sample on sync ticks, admission, `pm next`, `automation status`, the board frame and worker launch | `work::followup("FU-3", site)` cells held to exact expected work, through `PinnedReadingsProbe` |
+| FU-3 | the resource sample on sync ticks, admission, `pm next`, `automation status`, the board frame and worker launch | `work::followup("FU-3", "sample")` cells held to exact expected work, through `PinnedReadingsProbe` |

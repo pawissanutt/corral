@@ -7,7 +7,7 @@
 //! current-run mutation (sync writing back a stale `agent_state`); cold runs measure each of
 //! those steps in a fresh process on the settled store. Between the base and each larger variant every
 //! unattributed cell is unchanged, the unattributed hydration cell is 0, every inclusive total
-//! is the sum of its cells, FU-3 reads stay within v2 header-only bounds on that variant's rows,
+//! is the sum of its cells, FU-3 samples decode no task documents,
 //! and the usage refresh's own-record cells equal the refreshed runs' own rows exactly. The
 //! mutation commits as one task change on the change feed.
 
@@ -36,7 +36,7 @@ const SETTLE: usize = 3;
 /// not introduce different maintenance work in base and grown passes.
 fn tick(fx: &Fixture) -> String {
     let now = fx.ctx.store.now();
-    corral_ops::lesson_rows::prepare_evaluation(&fx.ctx).unwrap();
+    corral_ops::lesson_rows::prepare_coordination(&fx.ctx).unwrap();
     let synced = corral_ops::sync_at(&fx.ctx, now);
     corral_ops::refresh_active_usage(&fx.ctx.store);
     format!("{synced:?}")
@@ -129,17 +129,6 @@ fn measure_tick(fx: &Fixture, step: &str, m: &mut Measured) {
     let delta = work::snapshot().since(&before);
     let samples = fx.probe.take();
     let key = format!("{step}/{PATH}");
-    let mut exp = exp;
-    if step == "mutation" {
-        // Walks before the tick's own write read the old bytes, walks after it the new.
-        let after = expected(fx);
-        if (after.tasks, after.walk_rows) != (exp.tasks, exp.walk_rows) {
-            m.failures
-                .push(format!("{key}: the tick's write changed the walked rows"));
-        }
-        exp.walk_bytes_after = Some(after.walk_bytes);
-        m.expected.insert(step.to_owned(), exp.clone());
-    }
     if let Err(error) = delta.check_identity() {
         m.failures.push(format!("{key}: {error}"));
     }

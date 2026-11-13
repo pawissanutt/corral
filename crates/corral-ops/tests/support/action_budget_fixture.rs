@@ -629,9 +629,9 @@ pub(super) fn settle(bench: &Bench) {
         }
         bench.ctx.store.pause_operating_policy(false).unwrap();
     }
-    // The derived lesson and approval rows are current inputs: every store follows its feed
-    // to the end before the measured pass, so the pass derives only its own changes.
-    crate::lesson_rows::prepare_evaluation(&bench.ctx).unwrap();
+    // Coordination inputs follow their feed before the measured pass, so the pass
+    // derives only its own schedule and approval changes.
+    crate::lesson_rows::prepare_coordination(&bench.ctx).unwrap();
     bench.probe.take();
 }
 

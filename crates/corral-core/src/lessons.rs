@@ -308,15 +308,14 @@ impl Store {
 /// Unpinned ranking confidence has a 90-day half-life; future timestamps have zero
 /// age. Stored/returned confidence is unchanged. Pins are immune to decay but not
 /// scope restrictions. Contradicted lessons are always excluded, even when pinned.
-/// Tags are case-insensitive whole words/phrases in title/body. File candidates
-/// include likely files, punctuation-delimited text references and write scopes.
+/// Tags are case-insensitive whole words/phrases in title/body. File scopes match
+/// punctuation-delimited title/body paths or overlapping declared write scopes.
 #[must_use]
 pub fn match_lessons<T: crate::TaskFieldsRef + ?Sized>(
     lessons: &[Lesson],
     task: &T,
     profile: Option<&str>,
     harness: Option<&str>,
-    likely_files: &[String],
     limit: usize,
     now: Timestamp,
 ) -> Vec<Lesson> {
@@ -343,11 +342,7 @@ pub fn match_lessons<T: crate::TaskFieldsRef + ?Sized>(
                 && (scope.files.is_empty()
                     || scope.files.iter().any(|glob| {
                         validate_glob(glob).is_ok()
-                            && (likely_files
-                                .iter()
-                                .map(String::as_str)
-                                .chain(paths.iter().copied())
-                                .any(|path| glob_matches(glob, path))
+                            && (paths.iter().any(|path| glob_matches(glob, path))
                                 || task.write_scope().iter().any(|other| {
                                     validate_glob(other).is_ok() && globs_overlap(glob, other)
                                 }))

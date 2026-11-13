@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use corral_core::backend::{PageReq, TaskOrder, TaskQuery};
 use corral_core::work::{self, Counter, HotScope, WorkSnapshot};
 use corral_core::{Lesson, LessonScope, ResourceState, Run, Status, Store, Task};
 use corral_ops::Ctx;
@@ -230,39 +229,6 @@ impl Fixture {
         );
     }
 
-    /// Independent scalar-header oracle; no run, task body or nested history contributes.
-    pub fn title_work(&self) -> (u64, u64) {
-        let headers = self
-            .ctx
-            .store
-            .view()
-            .unwrap()
-            .tasks(
-                &TaskQuery {
-                    project: Some("app".into()),
-                    statuses: Vec::new(),
-                    order: TaskOrder::IdAsc,
-                },
-                PageReq::first(u32::MAX),
-            )
-            .unwrap()
-            .items;
-        assert_eq!(
-            headers.len(),
-            self.tasks
-                .iter()
-                .filter(|t| t.project.as_deref() == Some("app"))
-                .count()
-        );
-        (
-            headers.len() as u64,
-            headers
-                .iter()
-                .map(|h| serde_json::to_vec(h).unwrap().len() as u64)
-                .sum(),
-        )
-    }
-
     pub fn sample_stats(&self) -> u64 {
         let probes = u64::try_from(self.tasks.iter().map(|t| t.runs.len()).sum::<usize>()).unwrap();
         probes
@@ -326,8 +292,7 @@ pub fn measure<T>(call: impl FnOnce() -> T) -> (T, WorkSnapshot) {
     measure_evaluation(call)
 }
 
-/// PM entries prepare cold derivations before entering their own production HotScope.
-/// Capture that evaluation without moving its preparation into a test-owned hot scope.
+/// Capture production evaluations without imposing an additional test-owned hot scope.
 pub fn measure_evaluation<T>(call: impl FnOnce() -> T) -> (T, WorkSnapshot) {
     let before = work::snapshot();
     before.check_identity().unwrap();

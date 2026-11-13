@@ -9,7 +9,7 @@
 //! current-run mutation, an unrelated record write and deletion of the cache root. Between the
 //! base and each larger variant every unattributed cell is unchanged, the unattributed
 //! hydration cell is 0, every inclusive total is the sum of its cells, and FU-3 reads stay
-//! within v2 header-only bounds on that variant's rows. The measured pass's own resource
+//! within the exact resource probe budget. The measured pass's own resource
 //! samples and branch are checked before any counter is compared.
 
 use std::collections::BTreeMap;
@@ -32,7 +32,7 @@ fn evaluate(ctx: &Ctx, pass: impl FnOnce(&Ctx) -> String) -> String {
         store: ctx.store.read_only_snapshot().unwrap(),
         ..ctx.clone()
     };
-    corral_ops::lesson_rows::prepare_evaluation(&snapshot).unwrap();
+    corral_ops::lesson_rows::prepare_coordination(&snapshot).unwrap();
     let _hot = HotScope::enter();
     pass(&snapshot)
 }
