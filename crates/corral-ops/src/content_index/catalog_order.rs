@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::content_index::Document;
 
 #[derive(Serialize, Deserialize)]
-pub(super) struct Descriptor(pub Document, pub String);
+pub(super) struct Descriptor(pub Document, pub String, pub(super) super::IndexedSource);
 
 impl PartialEq for Descriptor {
     fn eq(&self, other: &Self) -> bool {
@@ -50,9 +50,14 @@ impl Order {
         }
     }
 
-    pub fn push(&mut self, document: Document, lexical: String) -> Result<()> {
+    pub fn push(
+        &mut self,
+        document: Document,
+        lexical: String,
+        source: super::IndexedSource,
+    ) -> Result<()> {
         self.bytes += document.reference.len() + document.title.len() + lexical.len() + 512;
-        self.chunk.push(Descriptor(document, lexical));
+        self.chunk.push(Descriptor(document, lexical, source));
         if self.bytes >= 2 * 1024 * 1024 {
             self.flush()?;
         }

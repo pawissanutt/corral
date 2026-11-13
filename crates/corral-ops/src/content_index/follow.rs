@@ -333,7 +333,7 @@ fn current_records(
     }
 }
 
-fn plan_review_record(
+pub(super) fn plan_review_record(
     ident: (&str, &str, jiff::Timestamp),
     plan: &str,
     review: &corral_core::PlanReviewHead,
@@ -353,7 +353,7 @@ fn plan_review_record(
 
 /// The summary and review documents of `run` under `key`, as `content_index::runs` derives
 /// them from a full run, without its nested children.
-fn run_records(
+pub(super) fn run_records(
     ident: (&str, &str, jiff::Timestamp),
     run: &corral_core::RunHead,
     key: &str,

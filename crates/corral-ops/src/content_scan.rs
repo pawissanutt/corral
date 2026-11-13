@@ -271,10 +271,19 @@ pub(crate) fn search_record<'a>(
                 Source::File(path) => {
                     Box::new(std::fs::File::open(path).context("opening indexed source text")?)
                 }
+                Source::FileRange { path, offset, len } => {
+                    use std::io::{Seek, SeekFrom};
+                    let mut file =
+                        std::fs::File::open(path).context("opening packed search text")?;
+                    file.seek(SeekFrom::Start(*offset))
+                        .context("seeking packed search text")?;
+                    Box::new(file.take(*len))
+                }
                 Source::Artifact(artifact) => {
                     #[cfg(test)]
                     crate::content_index::CATALOG_READS.with(|count| count.set(count.get() + 1));
-                    crate::artifact_storage::artifact_reader(ctx, artifact)?
+                    crate::content_index::search_artifact_reader(ctx, &doc.task, artifact)?
+                        .context("artifact was purged while searching")?
                 }
             }
         };

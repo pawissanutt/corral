@@ -16,6 +16,7 @@ pub struct SearchData {
 impl SearchData {
     /// Rank task ids without retaining every task's history. Fuzzy task predicates still
     /// require each task, so visit one at a time and hydrate only selected output rows later.
+    /// Incomplete catalogs use query-local fallback data without waiting for the builder.
     pub fn search_ids(store: &Store, input: &str, limit: usize) -> Result<Vec<String>> {
         match Self::search_ids_once(store, input, limit) {
             Err(error) if crate::content_index::catalog::is_corrupt(&error) => {
@@ -30,10 +31,14 @@ impl SearchData {
         let _span = corral_core::timing::span("search.tasks");
         let query = Query::parse(input, corral_core::clock::now())?;
         let ctx = crate::Ctx::from_store(store.clone());
-        let _index = crate::content_index::lock(&ctx)?;
-        let _storage = crate::artifact_storage::storage_lock(&ctx)?;
-        let (ctx, _) = crate::content_index::one_view(&ctx)?;
-        let catalog = crate::content_index::catalog::Catalog::open(&ctx, false)?;
+        let published = crate::content_index::catalog::Catalog::open(&ctx, false)?;
+        let _fallback = published
+            .is_none()
+            .then(|| corral_core::timing::span("search.fallback"));
+        let catalog = match published {
+            Some(catalog) => catalog,
+            None => crate::content_index::catalog::Catalog::fallback(&ctx, false)?,
+        };
         let ids: Vec<_> = catalog.task_ids().cloned().collect();
         let finishes = crate::finishes_for(&ctx.store, &ids)?;
         let pinned: HashSet<_> = ctx
