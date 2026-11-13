@@ -109,18 +109,49 @@ for this work.
   its own tool, so this is a cost for people and scripts, not for the PM.
 - `$XDG_RUNTIME_DIR/corral/` holds over 2,000 `st-*` directories left by tests.
 
+## Follow-up on November 13 (`26b7f7c0`, `13a859cf`)
+
+Three of the remaining costs were taken on. All measurements below were taken while gates were
+compiling (load 15 to 50), so they are indications, not clean comparisons.
+
+| Change | Result |
+|---|---|
+| The pass lists sandbox containers only when the set of ended launches changes, or five minutes after an empty listing | 0 listings in 3 passes, where every pass listed before (0.8 to 1.0 s each) |
+| The reader keeps the board's read-back warm while a board is connected: it recomputes after a change or at 30 s, starts 10 s apart, and serves an unchanged result for up to 45 s | the board's wait per tick fell from 1.05 s to 0.5 s at load 22; 0.84 s at load 50, where one recomputation takes 3 s |
+| Plan progress shares Plan resolution, dependency shells, approval lookups and changed-task links across trackers in one pinned pass | no measurable change: still about 1.1 s per tick, 5 to 6 ms per prerequisites call |
+
+A first version of the listing memo expired after 60 s, which is also the daemon's slowest pass
+interval, so it rarely applied; `13a859cf` raised it to five minutes.
+
+One test failed once in nine full workspace runs and passed 33 times alone:
+`corral::run_obligations_cli generic_worker_gate_wait_collects_once_across_cli_process_restarts`
+(`receipt.outcome` was null after two sync processes). The cause was not found.
+
 ## What remains
 
 Costs that are still paid on every pass or tick:
 
 | Cost | Where |
 |---|---|
-| `podman ps` on every pass, about 1 s of waiting | `sandbox_cleanup::sweep` |
 | Worktree `git` and preflight for each Review task on every pass, about 1.5 s | `autopilot::advance_all` |
-| Pane inventory and what follows it, about 1 s | `sync.inventory` |
-| Plan progress for each tracker, about 70 ms per tracker and tick, now CPU and not `git` | `corral-tui` `plan::tracker::load` |
-| The board waits about 1 s per tick for the daemon to recompute its read-back, because a tick is rarely within 10 s of the last one | reader cache policy |
+| Pane inventory and what follows it, 0.5 to 1 s | `sync.inventory` |
+| Plan progress, about 1.1 s per board tick: each tracker re-qualifies its members on every tick; which step inside costs the time is not yet located | `corral-ops` `tracker::plan_progress_in`, `tracker_target::prerequisites` |
 | The PM host's reads are computed in its own process | `corral agent call` |
+
+Leads found while measuring:
+
+- **A quiet pass still writes.** In a 96-minute window the change feed held 135 writes of
+  `resources/state`, 135 of `terminal-settlement/state`, 123 of `pm-supervisor/heartbeat` (the PM
+  was stopped) and 136 `clear_condition` entries with no scope, against 23 task updates. Each
+  pass therefore invalidates every result keyed on "nothing changed in the store", including the
+  served readouts. Writing only when the value differs is the precondition for an incremental
+  pass.
+- **`corral search "<query>" --in all`** took 244 s of wall time, 90 s of CPU and 1.7 GB on this
+  store (measured once, at load 7 to 20). The worker prompt tells every worker to run it before an
+  expensive investigation.
+- **Podman is part of the shipped product.** The pass, task cleanup and retry call `podman`, and
+  six shipped prompt and skill files tell workers and reviewers in every project to load-test with
+  `scripts/load-sandbox.sh`, a script that exists only in the corral repository.
 
 Verb inventory for step 3 (156 leaf verbs): 48 read, 52 control (store writes only), 14 need
 `herdr` or launch agents, 15 read the caller's worktree, `git` or files, 27 administer the host.
