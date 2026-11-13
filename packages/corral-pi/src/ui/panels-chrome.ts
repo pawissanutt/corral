@@ -48,10 +48,11 @@ export function contextSegment(snapshot: PanelSnapshot | null, room: number): st
 /**
  * The bottom bar owns only what matters in every view: role and binding, session cost, the context
  * window and alerts. Below 105 columns the `unbound` word drops (the `○` dot stays); below 52 the
- * context takes its own row. Alerts that do not fit wrap, never drop.
+ * context takes its own row. Alerts that do not fit wrap, never drop. `partialCost` marks a cost
+ * that leaves out unknown parts with `+`.
  */
 export function statusBar(identity: HostIdentity, snapshot: PanelSnapshot | null,
-  statuses: ReadonlyMap<string, string>, width: number): string[] {
+  statuses: ReadonlyMap<string, string>, width: number, partialCost = false): string[] {
   const role = identity.role.replaceAll("_", " ").toUpperCase();
   const bound = snapshot?.bound ?? false;
   const dot = bound ? PANEL_SUCCESS + "●" : PANEL_WARNING + "○";
@@ -63,7 +64,7 @@ export function statusBar(identity: HostIdentity, snapshot: PanelSnapshot | null
     .sort(([a], [b]) => Number(b === STATUS_ALERTS) - Number(a === STATUS_ALERTS))
     .map(([, value]) => plainLabel(stripTerminalSequences(value))).filter(Boolean).join(" · ");
   const sep = PANEL_MUTED + " │ ";
-  const cost = snapshot?.cost === undefined ? "" : sep + PANEL_TEXT + "$" + snapshot.cost.toFixed(2);
+  const cost = snapshot?.cost === undefined ? "" : sep + PANEL_TEXT + "$" + snapshot.cost.toFixed(2) + (partialCost ? "+" : "");
   const row = (text: string) => PANEL_BG + pad(" " + text, width) + RESET;
   const wrapped = (text: string) => new Text(text, 0, 0).render(Math.max(1, width - 1)).map(line => row(PANEL_WARNING + line));
   if (width < 52) return [row(badge + cost + (alerts ? sep + PANEL_WARNING + alerts : "")), row(contextSegment(snapshot, width - 1))];

@@ -1,18 +1,21 @@
 import { createHash } from "node:crypto";
-import { basename } from "node:path";
+import { realpathSync } from "node:fs";
+import { basename, relative, resolve } from "node:path";
 import { chooseProject, projectScopes } from "./project-scopes.ts";
 import type { HostIdentity } from "../roles/types.ts";
 import type { JobControl } from "../host/job-controls.ts";
+import { LIVE_CHILD_STATES } from "../build/types.ts";
+import type { BuildPanelState, BuildUi } from "../build/types.ts";
 import { target } from "./chrome.ts";
 import type { ExtensionUIContext, InteractiveChatPresentation } from "@earendil-works/pi-coding-agent";
 import { VStack, ScrollView, Text, getKeybindings, matchesKey, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { anchoredRow } from "./reading-anchor.ts";
 import { NativeImageViewer } from "./image-viewer.ts";
 import { ReviewStore, comparisonLabel, fileStatus, type PatchSnapshot, type ReviewBases } from "./review-store.ts";
-import { ChangesView, changesModel, type ChangesModel } from "./changes-view.ts";
+import { ChangesView, changesModel, type ChangeAuthor, type ChangesModel } from "./changes-view.ts";
 import { LifecycleView } from "./lifecycle-view.ts";
 import { ArtifactView } from "./artifact-view.ts";
-import { agentsModel, isLive, liveCount, statusLabel, type AgentRow, type AgentsModel } from "./agents-model.ts";
+import { agentsModel, isLive, liveCount, statusLabel, type AgentActions, type AgentRow, type AgentsModel } from "./agents-model.ts";
 import { AgentsView, type AgentsAction } from "./agents-view.ts";
 import { AgentConversation } from "./agent-conversation.ts";
 import { HelperChat } from "./helper-chat.ts";
@@ -27,26 +30,30 @@ import { DecisionInbox, inboxIdentity } from "./decision-inbox.ts";
 import { InboxView } from "./inbox-view.ts";
 import { HistoryNavigator, type HistoryRead } from "./history.ts";
 import {
-  changesBadge, headerRows, mainTabs, proofBadge, tabRow, tabSpec, COMPACT_COLUMNS, NOTICE_MS, SHORT_ROWS,
-  type HeaderInput, type Notice, type TabHit, type TabId, type TabSpec,
+  boardBadge, changesBadge, chromeTier, headerFrame, mainTabs, proofBadge, tabRow, tabSpec, COMPACT_COLUMNS, NOTICE_MS, SHORT_ROWS,
+  type HeaderHit, type HeaderInput, type HeaderStatus, type Notice, type TabHit, type TabId, type TabSpec,
 } from "./header.ts";
 import type { HintState, KeyContext } from "./keymap.ts";
+import type { BuildController } from "./build/build-controller.ts";
+import { BoardView, boardDetailLines, type BoardAction } from "./build/board-view.ts";
+import { childIdOf, childKey } from "./build/contract.ts";
+import { childActions, childAuthors, fleetExtras, steerable } from "./build/fleet-rows.ts";
 import type { SideSource } from "./sidebar.ts";
 import { pad, plainLabel, styledPanelLine, PANEL_BLUE, PANEL_TEXT, type PanelSnapshot } from "./panels-view.ts";
 
 export function plainClick(event: TuiMouseEvent): boolean {
   return event.type === "click" && event.button === "left" && !event.shift && !event.alt && !event.ctrl && (event.clickCount ?? 1) === 1;
 }
-export type MainView = "task" | "conversation" | "agents" | "agent" | "changes" | "evidence" | "inbox" | "graph" | "timeline" | "usage" | "artifacts";
+export type MainView = "task" | "conversation" | "agents" | "agent" | "changes" | "evidence" | "inbox" | "graph" | "timeline" | "usage" | "artifacts" | "board";
 /** The tab a view highlights: one agent's conversation highlights Agents, Graph and Timeline highlight Task, Artifacts highlights Proof. */
 const TAB_OF: Readonly<Record<MainView, TabId | undefined>> = {
   task: "task", graph: "task", timeline: "task", conversation: "conversation", agents: "agents", agent: "agents",
-  changes: "changes", evidence: "evidence", artifacts: "evidence", inbox: "inbox", usage: undefined,
+  changes: "changes", evidence: "evidence", artifacts: "evidence", inbox: "inbox", usage: undefined, board: "board",
 };
 /** The footer and F1 context of each view while it has the focus. */
 const CONTEXT_OF: Readonly<Record<MainView, KeyContext>> = {
   task: "task", graph: "lifecycle", timeline: "lifecycle", conversation: "composer", agents: "agents", agent: "agent",
-  changes: "changes", evidence: "proof", artifacts: "artifacts", inbox: "inbox", usage: "usage",
+  changes: "changes", evidence: "proof", artifacts: "artifacts", inbox: "inbox", usage: "usage", board: "board",
 };
 const LETTERS: Readonly<Record<string, string>> = { Conflict: "U", New: "?", Renamed: "R", Deleted: "D", Added: "A", Modified: "M" };
 /**
@@ -55,7 +62,38 @@ const LETTERS: Readonly<Record<string, string>> = { Conflict: "U", New: "?", Ren
  */
 const VIEW_LETTERS: Readonly<Record<MainView, string>> = {
   task: "rgl", conversation: "", agents: "jkstxmpbf/?", agent: "tsxm", changes: "jknpaf/cor", evidence: "jkar?",
-  artifacts: "jkmcoxr", inbox: "jkhar/?", usage: "cr", graph: "jkr", timeline: "jkrhc",
+  artifacts: "jkmcoxr", inbox: "jkhar/?", usage: "cr", graph: "jkr", timeline: "jkrhc", board: "jknpr",
+};
+/** Letters a build session adds: `a` answers a child's question in the agents table and in its conversation. */
+const BUILD_LETTERS: Readonly<Partial<Record<MainView, string>>> = { agents: "a", agent: "a" };
+/** A child conversation's own keys. */
+const CHILD_KEYS: Readonly<Record<string, "answer" | "steer" | "cancel" | "model">> = { a: "answer", s: "steer", x: "cancel", m: "model" };
+
+/** Why this build session cannot file board tasks, or undefined when it can. */
+export function boardUnavailable(state: BuildPanelState | undefined): string | undefined {
+  if (!state) return undefined;
+  if (!state.session.workspaceRoot) return "This session is outside a corral workspace, so it cannot file board tasks.";
+  if (!state.session.project) return "This session has no configured corral project, so it cannot file board tasks.";
+  return undefined;
+}
+/** The exit status that replaces header row 1's state word; pending reads as a prompt only while its dialog is hidden. */
+function exitStatus(phase: BuildPanelState["exit"]["phase"], docked: boolean): HeaderStatus | undefined {
+  const quiet = (long: string, short: string): HeaderStatus => ({ long, short, tone: "muted", clickable: false });
+  switch (phase) {
+    case "pending": return docked ? undefined : { long: "exit choice pending", short: "choose exit", tone: "warning", clickable: true };
+    case "running": return quiet("Working · exit", "exit");
+    case "landing": return quiet("Working · gate", "gate");
+    case "kept": return quiet("Idle · kept on branch", "kept");
+    case "shipped": return quiet("Idle · handed to the board", "on board");
+    case "landed": return quiet("Idle · landed", "landed");
+    case "failed": return { long: "Idle · exit failed", short: "exit failed", tone: "error", clickable: false };
+    case "none": return undefined;
+  }
+}
+const POLICY: Readonly<Record<BuildPanelState["settings"]["exitPolicy"], { readonly long: string; readonly short: string }>> = {
+  gate: { long: "exit policy: gate allowed", short: "exit: gate" },
+  review: { long: "exit policy: review required", short: "exit: review" },
+  none: { long: "no corral exit", short: "exit: none" },
 };
 
 export interface WorkbenchOptions {
@@ -80,6 +118,10 @@ export interface WorkbenchOptions {
   readonly readProjects?: (signal: AbortSignal) => Promise<unknown>;
   readonly canRenderTool?: (name: string) => boolean;
   readonly reviewBases?: ReviewBases;
+  /** A build session's controls; every build surface below is absent without them. */
+  readonly build?: BuildUi;
+  /** Docked dialogs, the message target and conversation entries of a build session. */
+  readonly buildController?: BuildController;
 }
 /** Main-area composition via the packaged SDK's public mainView hook; editor stays SDK-owned. */
 export class NativeWorkbench {
@@ -99,6 +141,12 @@ export class NativeWorkbench {
   private inboxScroll: ScrollView | undefined;
   /** F8: helper calls and jobs, with keyed selection. */
   readonly agentsView: AgentsView;
+  /** F10 in a build session: the board tasks this session filed. */
+  readonly boardView: BoardView | undefined;
+  /** Steer, cancel, model and answer on build child rows. */
+  private readonly childActs: Required<Pick<AgentActions, "steer" | "cancel" | "model" | "answer">> | undefined;
+  /** Resolved Changes roots, so a symlinked path still matches the session worktree. */
+  private readonly realRoots = new Map<string, string>();
   private conversation: AgentConversation | undefined;
   /** The agent whose conversation the `agent` view shows. */
   private agentKey: string | undefined;
@@ -165,6 +213,24 @@ export class NativeWorkbench {
       click: event => options.canInteract() && plainClick(event), focus: () => { this.focusMain(); options.changed(); },
       act: (action, key) => this.agentAction(action, key),
     });
+    const build = options.build, controller = options.buildController;
+    if (build && controller) {
+      this.childActs = childActions({
+        fleet: build.fleet,
+        point: id => { controller.point(id); },
+        question: id => { controller.open("question", id); },
+        confirm: (title, message) => this.ui ? this.ui.confirm(title, message) : Promise.resolve(false),
+        select: (title, choices) => this.ui ? this.ui.select(title, [...choices]) : Promise.resolve(undefined),
+        notice: (text, tone) => this.notice(text, tone),
+      });
+      this.boardView = new BoardView({
+        tasks: () => build.board.tasks(), proposed: () => build.board.proposed(),
+        unavailable: () => boardUnavailable(options.snapshot()?.build),
+        now: () => Date.now(), short: () => this.size(0).rows < SHORT_ROWS,
+        click: event => options.canInteract() && plainClick(event), focus: () => { this.focusMain(); options.changed(); },
+        act: (action, id) => this.boardAction(action, id),
+      });
+    }
   }
   async openHistory(): Promise<void> { if (this.ui) await this.history.open(this.ui); }
   bind(ui: ExtensionUIContext): void { this.ui = ui; this.images.bind(); this.inboxView.bind(ui); void this.task.refresh(); }
@@ -226,9 +292,20 @@ export class NativeWorkbench {
     this.conversation?.restore(key);
     this.setView("agent");
   }
+  /** A build child's conversation; a child that can take a message becomes the composer's receiver. */
+  openChild(id: string): void {
+    const build = this.options.build, child = build?.fleet.snapshot().children.find(entry => entry.id === id);
+    this.openAgent(childKey(id));
+    if (build && child && steerable(child)) build.setTarget(id);
+  }
+  /** F9: Chat, and in a build session the parent receives the message again. */
+  chat(): void {
+    this.setView("conversation");
+    this.options.buildController?.reset();
+  }
   /** A tab click: the same as the tab's key. */
   openTab(id: TabId): void {
-    if (id === "agents") this.openAgents(); else this.setView(id);
+    if (id === "agents") this.openAgents(); else if (id === "conversation") this.chat(); else this.setView(id);
   }
   /** Panel feedback in header row 1 for NOTICE_MS; Pi's own notifications keep their native place. */
   notice(text: string, tone: Notice["tone"] = "text"): void {
@@ -239,19 +316,41 @@ export class NativeWorkbench {
     this.options.changed();
   }
   agentsModel(): AgentsModel {
-    return agentsModel(this.options.snapshot(), Date.now(), { jobControl: !!this.options.jobControl });
+    const snapshot = this.options.snapshot(), now = Date.now(), extra = fleetExtras(snapshot?.build, now);
+    return agentsModel(snapshot, now, { jobControl: !!this.options.jobControl, ...(extra ? { extra } : {}) });
   }
   private agentRow(key: string | undefined): AgentRow | undefined {
     return key === undefined ? undefined : this.agentsModel().agents.find(row => row.key === key);
   }
   private agentAction(action: AgentsAction, key: string): void {
-    if (action === "open") { this.openAgent(key); return; }
+    const child = this.childActs ? childIdOf(key) : undefined;
+    if (action === "open") { if (child !== undefined) this.openChild(child); else this.openAgent(key); return; }
     if (action === "transcript") { void this.openAgentTranscript(key); return; }
+    if (this.childActs && child !== undefined && (action === "steer" || action === "cancel" || action === "model" || action === "answer")) {
+      this.childActs[action](key); return;
+    }
     const job = this.agentsModel().jobs.find(row => row.key === key)?.job;
     if (job === undefined) return;
     if (action === "output" || action === "search") void this.openJobOutput(job, action === "search");
     else if (action === "follow") this.toggleFollow(job);
     else if (action === "peek" || action === "background" || action === "stop") void this.controlJob(job, action);
+  }
+  private boardAction(action: BoardAction, id: string | undefined): void {
+    const build = this.options.build, controller = this.options.buildController;
+    if (!build || !controller) return;
+    if (action === "review") { controller.open("plan"); return; }
+    if (action === "plan") { controller.planDraft(); return; }
+    if (action === "refresh") { this.refreshBoard(); return; }
+    const task = build.board.tasks().find(item => item.id === id), ui = this.ui;
+    if (!task || !ui || !this.options.canInteract()) return;
+    void openOutputPager(ui, `${plainLabel(task.id)} · ${plainLabel(task.title)}`, boardDetailLines(task, Date.now()));
+  }
+  /** Rereads the board status this session filed; a failed read is an error notice. */
+  refreshBoard(): void {
+    const build = this.options.build;
+    if (!build) return;
+    build.board.refresh().then(() => this.options.changed(),
+      error => this.notice(`Board status unavailable: ${plainLabel(error instanceof Error ? error.message : String(error))}`, "error"));
   }
   private toggleFollow(id: string): void {
     const job = this.options.snapshot()?.jobs?.find(item => item.job === id);
@@ -294,8 +393,10 @@ export class NativeWorkbench {
   private pendingInbox(): number {
     return this.inbox.snapshot?.items.filter(item => item.pending).length ?? 0;
   }
-  private headerInput(): HeaderInput {
-    const snapshot = this.options.snapshot(), identity = this.options.identity, r = this.review, pending = this.pendingInbox();
+  private headerInput(width: number): HeaderInput {
+    const snapshot = this.options.snapshot(), controller = this.options.buildController;
+    if (this.options.build && controller && snapshot?.build) return this.buildHeader(snapshot, snapshot.build, controller, width);
+    const identity = this.options.identity, r = this.review, pending = this.pendingInbox();
     const state: HeaderInput["state"] = !snapshot ? "Unavailable" : snapshot.streaming ? "Working" : "Idle";
     const head = taskHeadline(identity, this.task);
     const elsewhere = r.scopeRequired || r.root !== this.launchRoot;
@@ -306,6 +407,31 @@ export class NativeWorkbench {
     return {
       title: target(identity), state, context,
       ...(pending ? { attention: { text: `⚑ ${pending}`, tone: "warning" as const } } : {}),
+      ...(this.shownNotice ? { notice: this.shownNotice } : {}),
+    };
+  }
+  /**
+   * A build session's header: `build · <name>`, the `▲ n needs you` chip, the exit status in place of the
+   * state word, and row 2 with the project, the worktree and the exit policy.
+   */
+  private buildHeader(snapshot: PanelSnapshot, build: BuildPanelState, controller: BuildController, width: number): HeaderInput {
+    const session = build.session, { tiny } = this.compact(width), r = this.review;
+    const live = build.fleet.children.some(child => LIVE_CHILD_STATES.includes(child.state));
+    const asking = controller.questions().length;
+    const docked = controller.dialog()?.key.startsWith("exit:") ?? false;
+    const status = exitStatus(build.exit.phase, docked);
+    const place = session.here ? `checkout (${plainLabel(session.branch ?? "detached")})` : plainLabel(relative(session.repoRoot, session.worktree) || ".");
+    const policy = POLICY[build.settings.exitPolicy];
+    const narrow = chromeTier(this.size(width).columns) === "narrow";
+    const elsewhere = r.scopeRequired || r.root !== this.launchRoot;
+    return {
+      title: `build · ${plainLabel(session.name)}`, state: snapshot.streaming || live ? "Working" : "Idle",
+      context: {
+        left: `${plainLabel(session.project ?? basename(session.repoRoot))} · ${place}`,
+        right: (elsewhere ? `Changes: ${this.scopeLabel} · ` : "") + (narrow ? policy.short : policy.long),
+      },
+      ...(asking ? { attention: { text: tiny ? `▲ ${asking}` : `▲ ${asking} needs you`, tone: "warning" as const } } : {}),
+      ...(status ? { status } : {}),
       ...(this.shownNotice ? { notice: this.shownNotice } : {}),
     };
   }
@@ -320,17 +446,34 @@ export class NativeWorkbench {
         case "changes": return changesBadge({ checked: r.checkedAt !== undefined, files: r.files.length, scopeRequired: r.scopeRequired, error: r.error !== undefined });
         case "evidence": return proofBadge({ gate: data?.gate ?? undefined, review: data?.review ?? undefined, stale: this.inspection.stale, error: this.inspection.error !== undefined });
         case "inbox": return pending ? { text: String(pending), tone: "warning" } : undefined;
+        case "board": {
+          const board = this.options.build?.board, tasks = board?.tasks() ?? [];
+          return boardBadge({ open: tasks.filter(task => task.phase !== "landed").length,
+            alert: tasks.some(task => task.phase === "blocked" || task.phase === "failed"), proposed: board?.proposed() !== undefined });
+        }
       }
     };
     return mainTabs(this.options.identity).map(id => tabSpec(id, badge(id)));
   }
   private chrome(): { readonly header: Component; readonly tabs: Component } {
     let hits: readonly TabHit[] = [];
+    let headerHits: readonly HeaderHit[] = [];
     const header: Component = {
       render: width => {
         // Renders before the transcript, so a paused reader keeps the same passage at a new width.
         this.anchorTranscript(width);
-        return headerRows(this.headerInput(), width, this.compact(width));
+        const frame = headerFrame(this.headerInput(width), width, this.compact(width));
+        headerHits = frame.hits;
+        return frame.lines;
+      },
+      // Build sessions only: the attention chip docks the oldest question, the pending exit status reopens its choice.
+      handleMouse: event => {
+        const controller = this.options.buildController;
+        if (!controller || !this.options.canInteract() || !plainClick(event)) return undefined;
+        const hit = headerHits.find(item => item.row === event.y && event.x >= item.from && event.x < item.to);
+        if (!hit) return undefined;
+        controller.open(hit.id === "attention" ? "question" : "exit");
+        return { handled: true };
       }, invalidate() {},
     };
     const tabs: Component = {
@@ -372,13 +515,14 @@ export class NativeWorkbench {
       focus: () => { this.focusMain(); this.options.changed(); }, step: delta => void this.selectRelative(delta),
       select: path => void this.review.select(path).then(() => { this.acceptPatch(); this.changesScroll?.scrollToStart(); }),
       pickHunk: index => { this.hunk = index; this.options.changed(); }, color: agentColor,
+      ...(this.options.build ? { authors: () => this.changeAuthors() } : {}),
       ...(terminal ? { rows: () => this.size(0).rows } : {}) });
     this.changesScroll = this.changes.diff;
     const chat = new HelperChat(() => this.chatPresentation?.().tui, this.options.cwd, presentation);
     chat.expandTools(this.toolsExpanded);
     this.conversation = new AgentConversation({ row: () => this.agentRow(this.agentKey), chat, color: agentColor, now: () => Date.now(),
       click: event => this.options.canInteract() && plainClick(event), focus: () => { this.focusMain(); this.options.changed(); },
-      back: () => this.openAgents() });
+      back: () => this.openAgents(), ...(this.childActs ? { answer: (key: string) => this.agentAction("answer", key) } : {}) });
     if (this.agentKey !== undefined) this.conversation.restore(this.agentKey);
     this.evidenceScroll = new ScrollView({ render: width => this.renderEvidence(width), handleMouse: event => {
       if (!this.options.canInteract() || !plainClick(event)) return undefined;
@@ -425,6 +569,7 @@ export class NativeWorkbench {
       { component: this.lifecycleScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "graph" || this.view === "timeline" },
       { component: this.artifactScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "artifacts" && !this.images.isOpen },
       { component: this.inboxScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "inbox" },
+      ...(this.boardView ? [{ component: this.boardView.scroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "board" }] : []),
     ]);
   }
   private renderEvidence(width: number): string[] {
@@ -492,8 +637,22 @@ export class NativeWorkbench {
     if (r.current && r.patchPath === r.selected && r.patchComparison === r.comparison && (this.displayedPath !== r.selected || this.displayedRoot !== r.root
       || this.displayedComparison !== comparisonLabel(r.comparison) || !this.lastPatch)) this.acceptPatch();
     this.shownChanges = changesModel(r, { root: this.displayedRoot, path: this.displayedPath, comparison: this.displayedComparison, text: this.lastPatch,
-      head: this.displayedHead, base: this.displayedBase, file: this.displayedFile }, this.scopeLabel, this.hunk, Date.now(), [], this.changes?.filter ?? "all");
+      head: this.displayedHead, base: this.displayedBase, file: this.displayedFile }, this.scopeLabel, this.hunk, Date.now(), this.changeAuthors(), this.changes?.filter ?? "all");
     return this.shownChanges;
+  }
+  /** Build children that edited files, only while Changes reads the session worktree; any other scope has no authors. */
+  private changeAuthors(): ChangeAuthor[] {
+    const state = this.options.snapshot()?.build;
+    if (!this.options.build || !state || this.review.scopeRequired || this.realRoot(this.review.root) !== this.realRoot(state.session.worktree)) return [];
+    return childAuthors(state.fleet);
+  }
+  private realRoot(path: string): string {
+    let real = this.realRoots.get(path);
+    if (real === undefined) {
+      try { real = realpathSync(path); } catch { real = resolve(path); }
+      this.realRoots.set(path, real);
+    }
+    return real;
   }
   /** j/k in Changes: the next or previous file the list shows, so files the author filter hides are skipped. */
   async selectRelative(delta: number): Promise<void> {
@@ -562,21 +721,26 @@ export class NativeWorkbench {
   mainContext(): KeyContext { return this.images.isOpen ? "image" : CONTEXT_OF[this.view]; }
   /** What the footer hints for `context`; the panels own the focus and the queue. */
   hintState(context: KeyContext, queue: HintState["queue"]): HintState {
-    const identity = this.options.identity;
-    const selection = context === "agents" || context === "agent" ? this.agentsView.actions() : undefined;
+    const identity = this.options.identity, build = this.options.build, controller = this.options.buildController;
+    const selection = context === "agents" || context === "agent" ? this.agentsView.actions() : context === "board" ? this.boardView?.actions() : undefined;
+    const target = controller?.target();
     return {
       context, streaming: this.options.snapshot()?.streaming ?? false, queue,
       mode: { taskBound: !!identity.task, answer: identity.role === "pm" || identity.role === "assistant", lifecycle: !!identity.task },
       ...(selection ? { selection } : {}),
       authors: (this.shownChanges?.authors.length ?? 0) > 0, legend: this.legend, history: this.inbox.history,
       ...(this.view === "timeline" ? { timelineSource: this.lifecycle.source } : {}),
+      ...(build && controller ? { build: {
+        ...(target ? { target } : {}), steerable: build.fleet.snapshot().children.some(steerable),
+        proposed: build.board.proposed() !== undefined, choices: controller.dialog()?.options.length ?? 0,
+      } } : {}),
     };
   }
   /** The sidebar's inputs: the agents view's rows, the Changes file list and the plan. */
   sideSource(): SideSource {
-    const snapshot = this.options.snapshot(), model = this.agentsModel(), r = this.review;
+    const snapshot = this.options.snapshot(), model = this.agentsModel(), r = this.review, authors = this.changeAuthors();
     return {
-      agents: model.sources.helpers ? model.agents.map(row => ({
+      agents: model.sources.helpers || this.options.build ? model.agents.map(row => ({
         key: row.key, name: row.name, hue: row.hue, profile: row.profile, glyph: row.status.glyph, tone: row.status.tone, activity: row.activity,
         settled: isLive(row.state) ? undefined : row.state === "done" ? "ok" as const : "failed" as const,
       })) : null,
@@ -589,8 +753,10 @@ export class NativeWorkbench {
         state: r.scopeRequired ? "choose" : r.error !== undefined ? "error" : r.checkedAt === undefined ? "loading" : "ok",
         ...(r.error !== undefined ? { error: r.error } : {}),
         list: r.visible.map(file => {
-          const stat = r.stats.get(file.path);
-          return { path: file.path, letter: LETTERS[fileStatus(file)] ?? "M", added: stat?.added, removed: stat?.removed };
+          const stat = r.stats.get(file.path), who = authors.filter(author => author.paths.has(file.path));
+          // Flagged when an author edited it outside its own files, or when two authors edited it.
+          const flag = who.length ? { who: who.map(author => author.hue), outside: who.length > 1 || who.some(author => author.paths.get(file.path) === true) } : {};
+          return { path: file.path, letter: LETTERS[fileStatus(file)] ?? "M", added: stat?.added, removed: stat?.removed, ...flag };
         }),
       },
       plan: { progress: snapshot?.ledger ?? null, stale: snapshot?.ledgerStale ?? false },
@@ -598,14 +764,38 @@ export class NativeWorkbench {
       color: agentColor,
     };
   }
+  /** The scroll region of a main view, for page keys. */
+  private scrollOf(view: MainView): ScrollView | undefined {
+    switch (view) {
+      case "task": return this.taskScroll;
+      case "usage": return this.usageScroll;
+      case "artifacts": return this.artifactScroll;
+      case "graph": case "timeline": return this.lifecycleScroll;
+      case "agent": return this.conversation?.scroll;
+      case "agents": return this.agentsView.scroll;
+      case "changes": return this.changesScroll;
+      case "evidence": return this.evidenceScroll;
+      case "inbox": return this.inboxScroll;
+      case "board": return this.boardView?.scroll;
+      case "conversation": return undefined;
+    }
+  }
+  /** PgUp/PgDn while a docked dialog holds the keys: the open view scrolls, Chat and an expanded image leave them to Pi. */
+  scrollPage(data: string): boolean {
+    const scroll = this.images.isOpen ? undefined : this.scrollOf(this.view);
+    if (!scroll) return false;
+    scroll.scrollBy(matchesKey(data, "pageUp") ? -12 : 12); this.options.changed();
+    return true;
+  }
   handleInput(data: string): boolean {
     const tabs = mainTabs(this.options.identity);
-    if (matchesKey(data, "f9")) { this.setView("conversation"); return true; }
+    if (matchesKey(data, "f9")) { this.chat(); return true; }
     if (matchesKey(data, "f5") && tabs.includes("task")) { this.setView("task"); return true; }
     if (matchesKey(data, "f7")) { this.setView("changes"); return true; }
     if (matchesKey(data, "f8")) { this.openAgents(); return true; }
     if (matchesKey(data, "f10") && tabs.includes("evidence")) { this.setView("evidence"); return true; }
-    if (matchesKey(data, "f11")) { this.setView("inbox"); return true; }
+    if (matchesKey(data, "f10") && tabs.includes("board")) { this.setView("board"); return true; }
+    if (matchesKey(data, "f11") && tabs.includes("inbox")) { this.setView("inbox"); return true; }
     if (this.images.isOpen && matchesKey(data, "escape")) { this.images.close(); return true; }
     if (!this.focused || this.view === "conversation") return false;
     if (matchesKey(data, "escape")) { this.back(); return true; }
@@ -619,10 +809,14 @@ export class NativeWorkbench {
       const entry = this.agentsView.entry();
       if (data === "t" && entry?.kind === "agent") { void this.openAgentTranscript(entry.row.key); return true; }
     }
+    if (view === "board" && this.boardView?.handleKey(data)) { this.options.changed(); return true; }
     if (view === "agent") {
       if (getKeybindings().matches(data, "app.tools.expand")) {
         this.toolsExpanded = !this.toolsExpanded; this.conversation?.expandTools(this.toolsExpanded); this.options.changed(); return true;
       }
+      // A build child's own keys: answer, steer, cancel and model, each only while its row offers it.
+      const key = this.agentKey, action = this.childActs && key !== undefined && childIdOf(key) !== undefined ? CHILD_KEYS[data] : undefined;
+      if (key !== undefined && action) { if (this.agentsView.actions().includes(action)) this.agentAction(action, key); return true; }
       if (data === "t") { void this.openAgentTranscript(this.agentKey); return true; }
     }
     if (view === "evidence" && data === "a") { this.setView("artifacts"); return true; }
@@ -631,9 +825,7 @@ export class NativeWorkbench {
     if (matchesKey(data, "enter") || matchesKey(data, "tab")) { this.focused = false; this.options.changed(); return true; }
     if ((view === "evidence" || view === "agents" || view === "inbox") && data === "?") { this.legend = !this.legend; this.options.changed(); return true; }
     if (view === "usage" && data === "c") { this.usageChart = !this.usageChart; this.options.changed(); return true; }
-    const scroll = view === "task" ? this.taskScroll : view === "usage" ? this.usageScroll : view === "artifacts" ? this.artifactScroll
-      : view === "graph" || view === "timeline" ? this.lifecycleScroll : view === "agent" ? this.conversation?.scroll
-      : view === "changes" ? this.changesScroll : view === "evidence" ? this.evidenceScroll : view === "inbox" ? this.inboxScroll : undefined;
+    const scroll = this.scrollOf(view);
     if (view === "inbox" && (data === "j" || data === "k" || matchesKey(data, "up") || matchesKey(data, "down"))) {
       this.inbox.move(data === "j" || matchesKey(data, "down") ? 1 : -1);
       const row = this.inbox.current && this.inboxView.rows.get(inboxIdentity(this.inbox.current));
@@ -659,7 +851,7 @@ export class NativeWorkbench {
       if (data === "a") { this.askHunk(); return true; }
       if (data === "f") { this.changes?.cycleFilter(); this.options.changed(); return true; }
     }
-    if (data.length === 1 && VIEW_LETTERS[view].includes(data)) return true; // Defined here, not offered now.
+    if (data.length === 1 && (VIEW_LETTERS[view] + (this.options.build ? BUILD_LETTERS[view] ?? "" : "")).includes(data)) return true; // Defined here, not offered now.
     if (data.startsWith("\x1b")) return false; // Terminal replies/focus events are not typing.
     this.focused = false; return false;
   }
