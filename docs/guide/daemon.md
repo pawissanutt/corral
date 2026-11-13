@@ -70,10 +70,12 @@ Health deltas reflect condition or completed-pass changes, not elapsed-age ticks
 
 ## Served reads
 
-The socket's `read.v1` capability serves PM next/brief readouts and the classic
-board's attention snapshot and operating status. A dedicated reader thread computes
-them without holding up sync. PM next/brief reuse their last document only while
-it is younger than ten seconds and no non-lease store change occurred.
+The socket's `read.v1` capability serves PM next/brief readouts, the workspace PM
+agent's bounded `read_next` / `read_brief` documents, and the classic board's
+attention snapshot and operating status. A dedicated reader thread computes them
+without holding up sync. PM and agent PM documents reuse their last result only
+while it is younger than ten seconds and no non-lease store change occurred;
+agent PM documents are never warmed in the background.
 
 The classic board's read-back stays warm for 120 seconds after its latest request.
 While warm, the reader refreshes it in the background after a non-lease change or
@@ -88,6 +90,12 @@ Readouts contain executable-bound commands and action IDs, so a request must mat
 both the daemon's executable path and build identity; mismatches are refused.
 Clients silently compute locally when the daemon is absent, refuses, times out or
 cannot provide a valid document. PM `--fresh` always computes locally.
+Agent reads retain authentication, live-generation checks, payload validation,
+result-size checks and their ephemeral response receipts in the calling process.
+Neither path persists a read receipt or journal entry. Only the default workspace
+PM scope is served; explicit project scopes, `read_list` (including its pagination
+and filters), and `read_lessons` remain local. Legacy preparation runs in the daemon
+for served documents, and in the caller on fallback, as for CLI PM reads.
 
 
 ## Install and enable
@@ -166,9 +174,11 @@ supervise = true
 ```
 
 `pm.supervise` defaults to false; it permits recovery, not heartbeat and lock
-diagnostics. For a store-owned, available herdr server and a recorded corral-pi PM,
-recovery relaunches a verified dead bound host when unfinished, unobserved inbox
-work exists; replaces a live host whose wake remains unobserved beyond
+diagnostics. The supervisor's heartbeat record is written only when its content changes,
+so its `at` is the last change; `pm brief` health reports `age_secs` from the later of
+that and `<runtime dir>/heartbeat`. For a store-owned, available herdr server and a
+recorded corral-pi PM, recovery relaunches a verified dead bound host when unfinished,
+unobserved inbox work exists; replaces a live host whose wake remains unobserved beyond
 `pm.attention_secs`; and replaces a generation that refused PM input with
 `input_limit` (4,096 keys). The refusal is a definite non-delivery for that
 generation; later passes hold it without another bridge call. Relaunch requeues

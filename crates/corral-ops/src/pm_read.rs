@@ -1,9 +1,11 @@
 //! Shared, read-only PM documents and classic-board operating text.
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{Ctx, PmAction, PmActionKind, PmWorkset};
@@ -255,6 +257,65 @@ pub fn brief(ctx: &Ctx) -> Result<PmReadout> {
         }
         Ok(PmReadout { json, text })
     })
+}
+
+/// The workspace PM agent's bounded next card, independent of its session.
+pub fn agent_next(ctx: &Ctx) -> Result<Value> {
+    let projects = crate::agent::hooks::pm::projects(&ctx.store)?;
+    agent_next_for_projects(ctx, &projects)
+}
+
+/// The workspace PM agent's bounded brief, including its observational digest.
+pub fn agent_brief(ctx: &Ctx) -> Result<Value> {
+    let projects = crate::agent::hooks::pm::projects(&ctx.store)?;
+    agent_brief_for_projects(ctx, crate::agent::hooks::pm::WORKSPACE, &projects)
+}
+
+pub(crate) fn agent_next_for_projects(ctx: &Ctx, projects: &BTreeSet<String>) -> Result<Value> {
+    let next = crate::pm_workset::next_for_projects(ctx, projects)?;
+    crate::agent::ops::pm_bound::bounded_next(&next, corral_core::agent::RESULT_MAX_BYTES)
+}
+
+pub(crate) fn agent_brief_for_projects(
+    ctx: &Ctx,
+    project: &str,
+    projects: &BTreeSet<String>,
+) -> Result<Value> {
+    let next = crate::pm_workset::next_for_projects(ctx, projects)?;
+    let mut counts = BTreeMap::new();
+    let status_counts = ctx
+        .store
+        .view()?
+        .aggregates(&[corral_core::backend::AggregateName::StatusCounts])?
+        .status_counts;
+    for count in status_counts {
+        if count.n > 0 && projects.contains(&count.project) {
+            *counts.entry(count.status).or_insert(0u64) += count.n;
+        }
+    }
+    // Native owners only, with semantic closure and no task-history hydration.
+    let mut heads = ctx.store.unfinished_native_heads()?;
+    heads.retain(|head| head.project.as_ref().is_some_and(|p| projects.contains(p)));
+    heads.sort_by(|a, b| (a.num, &a.id).cmp(&(b.num, &b.id)));
+    let mut pending = Vec::new();
+    for head in heads {
+        pending.extend(crate::questions::recorded_pending_views_ref(&head)?);
+    }
+    let questions: Vec<_> = pending
+        .into_iter()
+        .filter(|q| q.pending)
+        .map(|q| {
+            json!({"task":q.task,"key":q.question.key,
+                "revision":q.question.revision,"kind":q.question.kind,
+                "state":q.effective_state,"blocking":q.question.blocking})
+        })
+        .collect();
+    let brief = crate::agent::ops::pm_bound::bounded_brief(
+        &next,
+        json!({"project":project,"counts":counts,"questions":questions}),
+        corral_core::agent::RESULT_MAX_BYTES,
+    )?;
+    crate::agent::ops::pm_shadow::with_brief_digest(brief, &next)
 }
 
 pub fn board_readback(

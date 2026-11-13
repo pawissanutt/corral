@@ -60,7 +60,7 @@ fn project(action: &PmAction, limit: usize, items: usize, shortlist: usize) -> R
     Ok(value)
 }
 
-pub(super) fn bounded_next(action: &PmAction, budget: usize) -> Result<Value> {
+pub(crate) fn bounded_next(action: &PmAction, budget: usize) -> Result<Value> {
     let mut digest_action;
     let action = if action.question_digest.is_some() {
         digest_action = action.clone();
@@ -99,7 +99,7 @@ pub(super) fn bounded_next(action: &PmAction, budget: usize) -> Result<Value> {
     Err(too_large())
 }
 
-pub(super) fn bounded_brief(action: &PmAction, mut brief: Value, budget: usize) -> Result<Value> {
+pub(crate) fn bounded_brief(action: &PmAction, mut brief: Value, budget: usize) -> Result<Value> {
     let original = serde_json::to_value(action)?;
     brief["next"] = original.clone();
     if size(&brief)? <= budget {
