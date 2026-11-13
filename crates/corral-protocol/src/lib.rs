@@ -2,12 +2,14 @@
 pub mod board;
 pub mod frame;
 pub mod health;
+pub mod read;
 pub mod rpc;
 #[cfg(test)]
 mod schema;
 pub mod subscription;
 
 pub use health::{DaemonState, Health, LoopFacts, PmState, RuntimeHealth, RuntimeState};
+pub use read::{READ, READ_V1};
 use serde::{Deserialize, Serialize};
 
 pub const PROTO_MAJOR: u32 = 1;

@@ -67,6 +67,21 @@ pub(crate) fn run_daemon(
     {
         let _ = client.nudge("board", Some(wait));
     }
+    let served = {
+        let _timing = corral_core::timing::span("board.served");
+        corral_ops::daemon_client::served(
+            &ctx.store,
+            corral_protocol::read::ReadKind::BoardReadback,
+        )
+        .and_then(|bytes| serde_json::from_slice::<corral_ops::pm_read::BoardReadback>(&bytes).ok())
+    };
+    if let Some(readback) = served {
+        return Ok((
+            Vec::new(),
+            crate::attention::from_board(readback.attention),
+            readback.operating,
+        ));
+    }
     let attention = {
         let _timing = corral_core::timing::span("board.attention");
         crate::attention::load_board(ctx, jiff::Timestamp::now())

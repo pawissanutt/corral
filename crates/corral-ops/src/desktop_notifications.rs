@@ -14,6 +14,7 @@ use crate::Ctx;
 const OBSERVATIONS: RecordArea<BTreeMap<String, Status>> = RecordArea::new("desktop-notifications");
 
 pub(crate) fn reconcile(ctx: &Ctx) -> Result<()> {
+    let _span = corral_core::timing::span("sync.desktop_notifications_reconcile");
     let Some(_lock) = ctx.store.try_lock("desktop-notifications")? else {
         return Ok(());
     };

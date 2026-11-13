@@ -84,6 +84,7 @@ fn eligible(task: &Task, now: Timestamp) -> bool {
 /// Queue due occurrences under the same launch and board locks as ordinary dispatch.
 /// Active, failed, review and attention states are never recycled automatically.
 pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
+    let _span = corral_core::timing::span("sync.dashboard_advance");
     let mut changes = Vec::new();
     for task in due_candidates(ctx, now)? {
         match queue_due(ctx, &task.id, now) {

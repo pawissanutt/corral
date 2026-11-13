@@ -68,6 +68,19 @@ until `sub.ack`. Slow subscribers retain only a cursor, never a backlog of rows.
 `welcome.daemon.store` is the store directory path (the workspace root's `.corral`).
 Health deltas reflect condition or completed-pass changes, not elapsed-age ticks.
 
+## Served reads
+
+The socket's `read.v1` capability serves PM next/brief readouts and the classic
+board's attention snapshot and operating status. A dedicated reader thread computes
+them without holding up sync. Each kind reuses its last document only while the
+store change sequence is unchanged and the document is younger than ten seconds.
+The board can reuse the last pass's attention snapshot at the same sequence.
+
+Readouts contain executable-bound commands and action IDs, so a request must match
+both the daemon's executable path and build identity; mismatches are refused.
+Clients silently compute locally when the daemon is absent, refuses, times out or
+cannot provide a valid document. PM `--fresh` always computes locally.
+
 
 ## Install and enable
 

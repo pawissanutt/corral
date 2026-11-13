@@ -228,6 +228,7 @@ fn reconcile_focus(ctx: &Ctx, scope: &SyncScope) -> Result<()> {
 }
 
 pub(crate) fn reconcile(ctx: &Ctx, scope: &SyncScope) -> Result<()> {
+    let _span = corral_core::timing::span("sync.hold_reconcile");
     if let Some(_lock) = ctx.store.try_lock("task-focus")? {
         reconcile_focus(ctx, scope)?;
     }
@@ -254,6 +255,7 @@ fn cancel_held(ctx: &Ctx, scope: &SyncScope) -> Result<()> {
 /// Cancelled explicit worker gates resume even when review autopilot is off. Native requests
 /// have their own receipted queue. Automatic attempts still require current authority.
 pub(crate) fn resume_gates(ctx: &Ctx) -> Result<()> {
+    let _span = corral_core::timing::span("sync.resume_gates");
     let tasks = ctx
         .store
         .heads(&corral_core::backend::HeadQuery::Open { project: None })?;

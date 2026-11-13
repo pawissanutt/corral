@@ -70,6 +70,7 @@ pub(crate) fn advance_all(
     now: Timestamp,
     scope: &crate::sync::SyncScope,
 ) -> Result<Vec<Change>> {
+    let _span = corral_core::timing::span("sync.autopilot_advance_all");
     let _attribution = ctx.store.attribute(corral_core::Actor::Autopilot);
     let mut store = ctx.store.clone();
     store.reload_config_if_changed()?;

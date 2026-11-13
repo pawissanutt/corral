@@ -446,6 +446,7 @@ pub(crate) fn recorded_pane(ctx: &Ctx) -> Result<Option<String>> {
 
 /// The PM pane remembered in the canonical PM record, when herdr still has it.
 pub(crate) fn live_pm_pane(ctx: &Ctx) -> Result<Option<String>> {
+    let _span = corral_core::timing::span("sync.live_pm_pane");
     if let Some(state) = STATE.load(&ctx.store, "state")?
         && ctx.herdr.pane_get(&state.pane_id)?.is_some()
         && live(ctx, &state.pane_id)?

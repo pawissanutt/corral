@@ -17,6 +17,7 @@ sha2.workspace = true
 sha1_smol.workspace = true
 flate2.workspace = true
 tempfile.workspace = true
+unicode-width.workspace = true
 corral-core.workspace = true
 corral-protocol.workspace = true
 corral-herdr.workspace = true

@@ -73,6 +73,7 @@ impl ResourceProbe for FixedResourceProbe {
 
 /// Sample and save a coherent observation while holding the cross-process resource lock.
 pub fn observe(ctx: &Ctx, now: Timestamp) -> Result<ResourceState> {
+    let _span = corral_core::timing::span("sync.observe");
     let lock_path = ctx.store.dir().join("lock/resources.lock");
     let lock = fs::OpenOptions::new()
         .create(true)

@@ -150,6 +150,7 @@ pub(crate) fn reconcile_review_sampled_at(
     now: Timestamp,
     snapshot: crate::pane_liveness::Snapshot<'_>,
 ) -> Result<Option<Change>> {
+    let _span = corral_core::timing::span("sync.reconcile_review_sampled_at");
     let panes = snapshot.panes;
     let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
     let head = ctx.store.head(id)?;

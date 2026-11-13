@@ -15,6 +15,8 @@ pub(crate) struct Shared {
     pub projection: Mutex<Option<Projection>>,
     pub board_subscribers: AtomicUsize,
     pub health_topic: Mutex<(u64, Health)>,
+    pub reader: Mutex<Option<std::sync::mpsc::Sender<crate::reader::Job>>>,
+    pub attention: Mutex<Option<(u64, corral_ops::attention::AttentionBoard)>>,
 }
 
 pub(crate) struct State {
@@ -51,6 +53,8 @@ impl Shared {
             projection: Mutex::new(None),
             board_subscribers: AtomicUsize::new(0),
             health_topic: Mutex::new((0, Health::down())),
+            reader: Mutex::new(None),
+            attention: Mutex::new(None),
             state: Mutex::new(State {
                 stop: false,
                 closed: false,

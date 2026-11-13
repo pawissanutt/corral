@@ -840,6 +840,7 @@ pub enum PluginCmd {
 
 fn main() -> std::process::ExitCode {
     let started = std::time::Instant::now();
+    corral_ops::pm_read::set_build_identity(option_env!("CORRAL_BUILD_SHA").unwrap_or("unknown"));
     let mut verb = String::new();
     let code = main_exit(&mut verb);
     corral_ops::timing::process(started, &verb);

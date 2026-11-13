@@ -626,6 +626,7 @@ fn launch(
 /// Abandon the pending aggregate review whose reviewer returned to its shell (or whose PM is
 /// gone) before its callback, exactly as a failed launch is abandoned.
 pub(crate) fn reconcile_exit(ctx: &Ctx, plan: &Task) -> Result<()> {
+    let _span = corral_core::timing::span("sync.reconcile_exit");
     let Some(attempt) = plan.aggregate_attempts.last() else {
         return Ok(());
     };

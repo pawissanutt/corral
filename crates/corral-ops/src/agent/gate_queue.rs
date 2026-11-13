@@ -168,6 +168,7 @@ pub(crate) fn advance(ctx: &Ctx) -> Result<()> {
 /// board the pass already read: every claim below rechecks its task under the store lock, and a
 /// gate queued after that read is admitted on the next pass.
 pub(crate) fn advance_heads(ctx: &Ctx, tasks: &[corral_core::TaskHead]) -> Result<()> {
+    let _span = corral_core::timing::span("sync.advance_heads");
     let mut queued = Vec::new();
     for task in tasks {
         if task.hold.is_none() {

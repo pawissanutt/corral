@@ -51,6 +51,7 @@ fn continuation(task: &Task) -> Option<Subject<'_>> {
 }
 
 pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
+    let _span = corral_core::timing::span("sync.availability_advance_all");
     let mut changes = Vec::new();
     let mut panes: Option<HashMap<String, PaneInfo>> = None;
     for head in ctx

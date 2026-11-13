@@ -45,6 +45,7 @@ thread_local! {
 /// One listing regardless of historical run count. Never call under an inventory lease.
 /// Contending hook passes skip rather than queue behind an external container runtime.
 pub(crate) fn sweep(ctx: &Ctx) -> Result<()> {
+    let _span = corral_core::timing::span("sync.sandbox_cleanup_sweep");
     #[cfg(test)]
     let bin = PODMAN
         .with(|slot| slot.borrow().clone())

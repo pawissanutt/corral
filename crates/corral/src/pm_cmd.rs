@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use clap::Subcommand;
-use corral_ops::{PmAction, PmWorkset};
+use corral_ops::pm_read::{self, PmReadout};
 use std::path::{Path, PathBuf};
 
 #[derive(Subcommand)]
@@ -58,11 +58,17 @@ pub enum PmCmd {
     Next {
         #[arg(long)]
         json: bool,
+        /// Compute locally instead of using a daemon readout
+        #[arg(long)]
+        fresh: bool,
     },
     /// Compact board state and the next decision, without syncing
     Brief {
         #[arg(long)]
         json: bool,
+        /// Compute locally instead of using a daemon readout
+        #[arg(long)]
+        fresh: bool,
     },
     /// Revalidate a revision-bound action and run the existing authorized executors
     Act {
@@ -107,101 +113,7 @@ pub(crate) fn evaluate<T>(
     ctx: &corral_ops::Ctx,
     pass: impl FnOnce(&corral_ops::Ctx) -> Result<T>,
 ) -> Result<T> {
-    let snapshot = corral_ops::Ctx {
-        store: ctx.store.read_only_snapshot()?,
-        ..ctx.clone()
-    };
-    corral_ops::lesson_rows::prepare_coordination(&snapshot)?;
-    let _hot = corral_core::work::HotScope::enter();
-    let result = pass(&snapshot);
-    if std::env::var_os("CORRAL_WORK_REPORT").is_some_and(|value| !value.is_empty()) {
-        use corral_core::work::{Work, count};
-        let counts: serde_json::Map<_, _> = Work::ALL
-            .iter()
-            .map(|work| (work.name().to_owned(), count(*work).into()))
-            .collect();
-        eprintln!("work: {}", serde_json::Value::Object(counts));
-    }
-    result
-}
-
-/// Formats the shared projection; `pm_next` is exactly `pm_workset(ctx)?.next`.
-fn readback(state: &PmWorkset, automation: &str) -> Result<serde_json::Value> {
-    let mut action = serde_json::to_value(&state.next)?;
-    action["workset"] = serde_json::to_value(state)?;
-    action["automation"] = automation.into();
-    Ok(action)
-}
-
-fn print_workset(state: &PmWorkset) {
-    println!(
-        "{}: {}/{} accepted; {} scoped running; independent work continues: {}",
-        state.status.as_str(),
-        state.progress.accepted,
-        state.progress.total,
-        state.progress.running,
-        state.independent_work_continues,
-    );
-    for decision in &state.decisions {
-        let newly_required = decision.presentation.is_none();
-        println!(
-            "Decision {} ({}): {} [{}]",
-            decision.id,
-            decision.task,
-            decision.action.why,
-            match &decision.presentation {
-                Some(receipt) if receipt.confirmed => "presented; answer pending",
-                Some(_) => "delivery uncertain; answer pending",
-                None => "not yet presented",
-            },
-        );
-        if newly_required {
-            for evidence in &decision.action.evidence {
-                println!("  {evidence}");
-            }
-        }
-    }
-    for blocker in &state.blockers {
-        println!("Blocker: {blocker}");
-    }
-    for item in &state.inbox {
-        println!("Inbox: {} [{}]", item.why, item.evidence.join("; "));
-    }
-}
-
-fn print_action(action: &PmAction) {
-    println!(
-        "{}: {}",
-        action.task.as_deref().unwrap_or("workspace"),
-        action.why
-    );
-    for evidence in &action.evidence {
-        println!("Evidence: {evidence}");
-    }
-    if let Some(digest) = &action.question_digest {
-        for line in corral_ops::question_digest_lines(digest) {
-            println!("{line}");
-        }
-        println!("Verify: {}", action.verify);
-        return;
-    }
-    println!(
-        "Recommended: {}{}",
-        action.recommended,
-        if action.requires_owner {
-            " (owner required)"
-        } else {
-            ""
-        }
-    );
-    println!("Command: {}", action.command);
-    println!("Verify: {}", action.verify);
-    for option in &action.options {
-        println!(
-            "Option {}: {} -> {}",
-            option.id, option.label, option.command
-        );
-    }
+    pm_read::evaluate(ctx, pass)
 }
 
 /// Prints the new generation's pane, why the rotation degraded to a relaunch, or every
@@ -327,29 +239,20 @@ pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Res
                 }
             }
         }
-        Some(PmCmd::Next { json }) => evaluate(&entry.open(start)?, |ctx| {
-            let state = corral_ops::pm_workset(ctx)?;
-            let automation = corral_ops::automation_summary(ctx)?;
-            let _print = corral_core::timing::span("next.print");
-            if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&readback(&state, &automation)?)?
-                );
-            } else {
-                println!("{automation}");
-                print_workset(&state);
-                print_action(&state.next);
-            }
-            Ok(())
-        })?,
+        Some(PmCmd::Next { json, fresh }) => {
+            let ctx = entry.open(start)?;
+            let readout = served(&ctx, corral_protocol::read::ReadKind::PmNext, fresh)
+                .map(Ok)
+                .unwrap_or_else(|| pm_read::next(&ctx))?;
+            print_readout(readout, json)?;
+        }
         Some(PmCmd::Act { action, json }) => {
             let result = corral_ops::pm_act(&entry.open(start)?, &action)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 println!("{:?}: {}", result.outcome, result.workset.status.as_str());
-                print_action(&result.workset.next);
+                print!("{}", pm_read::format_action(&result.workset.next));
             }
         }
         Some(PmCmd::Present {
@@ -371,104 +274,34 @@ pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Res
             println!("Owner answer recorded; task restrictions remain enforced.");
         }
         Some(PmCmd::Inbox { cmd }) => crate::pm_inbox_cmd::run(start, cmd, entry)?,
-        Some(PmCmd::Brief { json }) => evaluate(&entry.open(start)?, |ctx| {
-            let health = corral_ops::pm_health(ctx)?;
-            let setup = {
-                let _timing = corral_core::timing::span("brief.setup");
-                corral_ops::setup_status(&ctx.store)?
-            };
-            // Aggregate rows cover every project and status, including Done and Dropped,
-            // without decoding task heads or their histories.
-            let status_counts = {
-                let _timing = corral_core::timing::span("brief.counts");
-                ctx.store
-                    .view()?
-                    .aggregates(&[corral_core::backend::AggregateName::StatusCounts])?
-                    .status_counts
-            };
-            let (used, limit) = corral_ops::slots(ctx)?;
-            let state = corral_ops::pm_workset(ctx)?;
-            let automation = corral_ops::automation_summary(ctx)?;
-            let now = jiff::Timestamp::now();
-            let due = {
-                let _timing = corral_core::timing::span("brief.lessons");
-                corral_ops::lessons_due(ctx, now)?
-            };
-            let score = |lesson: &corral_core::Lesson| {
-                let age = now.duration_since(lesson.last_seen).as_secs_f64().max(0.0);
-                lesson.confidence
-                    * if lesson.pinned {
-                        1.0
-                    } else {
-                        2.0_f64.powf(-age / (90.0 * 86400.0))
-                    }
-            };
-            let mut lessons = std::collections::BTreeMap::new();
-            {
-                let _timing = corral_core::timing::span("brief.lessons");
-                for project in ctx.store.config.projects.keys() {
-                    let mut selected = ctx.store.lessons(project)?;
-                    selected.retain(|l| !l.contradicted);
-                    selected.sort_by(|a, b| {
-                        b.pinned
-                            .cmp(&a.pinned)
-                            .then_with(|| score(b).total_cmp(&score(a)))
-                            .then_with(|| a.id.cmp(&b.id))
-                    });
-                    selected.truncate(ctx.store.config.lessons.top);
-                    if !selected.is_empty() {
-                        lessons.insert(project.clone(), selected);
-                    }
-                }
-            }
-            let mut counts = std::collections::BTreeMap::new();
-            {
-                let _timing = corral_core::timing::span("brief.counts");
-                for count in status_counts {
-                    if count.n > 0 {
-                        *counts.entry(count.status).or_insert(0u64) += count.n;
-                    }
-                }
-            }
-            let _print = corral_core::timing::span("brief.print");
-            if json {
-                let next = readback(&state, &automation)?;
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "slots": {"used":used,"limit":limit}, "counts":counts, "next":next,
-                        "operating": next["workset"],
-                        "lessons":lessons, "lessons_due":due,
-                        "health":health,
-                        "setup":setup,
-                        "automation":next["automation"],
-                    }))?
-                );
-            } else {
-                println!("{automation}");
-                print_workset(&state);
-                println!("Health: {}", serde_json::to_string(&health)?);
-                println!("Setup: {}", serde_json::to_string(&setup)?);
-                println!(
-                    "Slots: {used}/{limit}; states: {}",
-                    serde_json::to_string(&counts)?
-                );
-                print_action(&state.next);
-                for (project, rules) in lessons {
-                    for rule in rules {
-                        println!("Lesson {project}/{}: {}", rule.id, rule.rule);
-                    }
-                }
-                for schedule in due {
-                    println!(
-                        "Lessons due {}: {}",
-                        schedule.project,
-                        schedule.reasons.join(", ")
-                    );
-                }
-            }
-            Ok(())
-        })?,
+        Some(PmCmd::Brief { json, fresh }) => {
+            let ctx = entry.open(start)?;
+            let readout = served(&ctx, corral_protocol::read::ReadKind::PmBrief, fresh)
+                .map(Ok)
+                .unwrap_or_else(|| pm_read::brief(&ctx))?;
+            print_readout(readout, json)?;
+        }
+    }
+    Ok(())
+}
+
+fn served(
+    ctx: &corral_ops::Ctx,
+    kind: corral_protocol::read::ReadKind,
+    fresh: bool,
+) -> Option<PmReadout> {
+    if fresh || !ctx.store.loop_owned_elsewhere().unwrap_or(true) {
+        return None;
+    }
+    corral_ops::daemon_client::served(&ctx.store, kind)
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+}
+
+fn print_readout(readout: PmReadout, json: bool) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(&readout.json)?);
+    } else {
+        print!("{}", readout.text);
     }
     Ok(())
 }

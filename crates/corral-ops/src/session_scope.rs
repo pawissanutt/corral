@@ -18,6 +18,7 @@ fn run_refs<'a>(run: &'a Run, refs: &mut Vec<&'a HerdrRef>) {
 /// and deliberately silent: plugin events can invoke foreign hooks many times a second.
 /// Within one pass the bounded summary is checked once per selected socket.
 pub(crate) fn owns_inventory(ctx: &Ctx) -> Result<bool> {
+    let _span = corral_core::timing::span("sync.owns_inventory");
     let view = ctx.store.session_view()?;
     owns_summary(ctx, &view)
 }
@@ -36,6 +37,7 @@ pub(crate) fn owns_tasks(ctx: &Ctx, store: &Store, tasks: &[Task]) -> Result<boo
 /// [`owns_tasks`] over the whole board, from its open heads and status counts: a store of one
 /// task checks that task's head, any other store the bounded summary.
 pub(crate) fn owns_board(ctx: &Ctx, store: &Store, board: &Board) -> Result<bool> {
+    let _span = corral_core::timing::span("sync.owns_board");
     let view = store.session_view()?;
     let total: u64 = board.status_counts.iter().map(|c| c.n).sum();
     match board.heads.as_slice() {
@@ -64,6 +66,7 @@ pub(crate) fn owns_board(ctx: &Ctx, store: &Store, board: &Board) -> Result<bool
 /// [`owns_task`] from a head: the summary's and current containers' pane references cover
 /// every pane the task recorded.
 pub(crate) fn owns_head(ctx: &Ctx, head: &TaskHead) -> Result<bool> {
+    let _span = corral_core::timing::span("sync.owns_head");
     let view = ctx.store.session_view()?;
     head_owned(ctx, &view, head)
 }

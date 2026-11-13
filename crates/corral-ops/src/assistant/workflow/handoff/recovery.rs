@@ -50,6 +50,7 @@ pub(super) fn save(store: &Store, journal: &Journal) -> Result<()> {
 }
 
 pub(crate) fn reconcile(ctx: &Ctx) -> Result<()> {
+    let _span = corral_core::timing::span("sync.handoff_recovery_reconcile");
     for row in ctx.store.record_rows(WORK)? {
         let id: String =
             serde_json::from_value(row.doc).context("decode unfinished transfer index")?;

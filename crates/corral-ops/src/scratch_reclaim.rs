@@ -379,6 +379,7 @@ fn report(row: &ScratchRow, error: &anyhow::Error) {
 /// One bounded pass at `now` (see the module documentation). Per-directory failures are
 /// reported and never stop the pass; another process's running pass makes this one a no-op.
 pub fn reclaim_scratch_pass(ctx: &Ctx, now: Timestamp) -> Result<()> {
+    let _span = corral_core::timing::span("sync.reclaim_scratch_pass");
     let Some(_lease) = ctx.store.try_lock(LEASE)? else {
         return Ok(());
     };

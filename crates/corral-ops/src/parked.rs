@@ -193,6 +193,7 @@ pub(crate) fn reacquire(ctx: &Ctx, id: &str) -> Result<bool> {
 /// Candidates come from the pass's task snapshot; each grant re-reads its task under the board
 /// lock, and runs woken later in the pass already tried to re-acquire where they woke.
 pub(crate) fn reacquire_woken(ctx: &Ctx, tasks: &[TaskHead]) -> Result<Vec<Change>> {
+    let _span = corral_core::timing::span("sync.reacquire_woken");
     let mut woken = Vec::new();
     for task in tasks {
         if let Some(slot) = woken_ref(task)? {

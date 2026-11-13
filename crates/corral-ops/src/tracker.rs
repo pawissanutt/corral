@@ -515,6 +515,7 @@ pub(crate) fn reconcile_one(ctx: &Ctx, id: &str) -> Result<Option<Change>> {
 }
 
 pub(crate) fn reconcile(ctx: &Ctx) -> Result<Vec<Change>> {
+    let _span = corral_core::timing::span("sync.tracker_reconcile");
     let mut changes = Vec::new();
     // A Done or Dropped tracker has nothing left to complete.
     for task in ctx

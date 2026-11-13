@@ -93,6 +93,10 @@ and whether independent work continues. `brief` adds slot usage and board counts
 separately from its `operating` scope counts. Bare `corral pm` still opens
 the PM pane.
 
+When a daemon owns the workspace loop, `pm next` and `pm brief` use its readout,
+at most 10 seconds old and never older than the last store change.
+Pass `--fresh` to either command to compute locally instead.
+
 Both readbacks are idempotent and side-effect free: they do not sync the board,
 launch a process in herdr, update a task, write an event, or collect a gate.
 The command includes the exact binary and workspace root. Readback observes

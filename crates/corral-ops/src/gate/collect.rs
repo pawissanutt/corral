@@ -63,6 +63,7 @@ pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
 /// Collects finished gates of nonterminal tasks (called by sync). Legacy gates cannot authorize a pass
 /// and are skipped with one summary diagnostic. Returns the task ids whose gate was recorded.
 pub(crate) fn collect_finished(ctx: &Ctx, now: Timestamp) -> Result<Vec<String>> {
+    let _span = corral_core::timing::span("sync.collect_finished");
     let mut done = Vec::new();
     let mut legacy = 0;
     for task in ctx

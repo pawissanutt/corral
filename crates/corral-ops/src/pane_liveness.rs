@@ -155,6 +155,7 @@ fn issue(ctx: &Ctx) -> Result<Option<Ticket>> {
 /// Empty output cannot distinguish an engine failure from every pane closing.
 /// Only a usable nonempty inventory is evidence for individual missing panes.
 pub(crate) fn inventory(ctx: &Ctx) -> Option<Inventory> {
+    let _span = corral_core::timing::span("sync.pane_liveness_inventory");
     match crate::session_scope::owns_inventory(ctx) {
         Ok(true) => {}
         Ok(false) => return None,

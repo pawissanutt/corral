@@ -6,6 +6,7 @@ use crate::Ctx;
 
 /// The open board's scalar projections; slow per-task work opens its own keyed view.
 pub(super) fn open_heads(ctx: &Ctx) -> Result<Vec<TaskHead>> {
+    let _span = corral_core::timing::span("sync.open_heads");
     ctx.read_step(|read| {
         Ok(read
             .store

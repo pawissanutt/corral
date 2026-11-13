@@ -227,6 +227,7 @@ pub(crate) fn plan_review(
     snapshot: crate::pane_liveness::Snapshot<'_>,
     now: Timestamp,
 ) -> Result<Option<crate::Change>> {
+    let _span = corral_core::timing::span("sync.plan_review");
     let Some(plan) = task.plans.last() else {
         return Ok(None);
     };

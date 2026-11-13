@@ -9,6 +9,9 @@ use anyhow::Context;
 use anyhow::{Result, bail};
 use corral_core::Store;
 use corral_protocol::board::BoardRow;
+use corral_protocol::read::ReadKind;
+#[cfg(unix)]
+use corral_protocol::read::{ReadReply, ReadRequest};
 #[cfg(unix)]
 use corral_protocol::subscription::{SubAck, SubClose, SubDelta, SubOpen, SubReset, Topic};
 #[cfg(unix)]
@@ -57,6 +60,8 @@ pub struct Client {
     stream: UnixStream,
     #[cfg(unix)]
     next_id: u64,
+    #[cfg(unix)]
+    read_capable: bool,
 }
 
 impl Client {
@@ -88,7 +93,11 @@ impl Client {
         stream
             .set_write_timeout(Some(IO_TIMEOUT))
             .context("setting daemon write timeout")?;
-        let mut client = Self { stream, next_id: 0 };
+        let mut client = Self {
+            stream,
+            next_id: 0,
+            read_capable: false,
+        };
         let welcome: Welcome = client.request(
             corral_protocol::HELLO,
             Hello {
@@ -96,7 +105,10 @@ impl Client {
                     major: PROTO_MAJOR,
                     minor: PROTO_MINOR,
                 },
-                caps: vec![corral_protocol::BOARD_V1.into()],
+                caps: vec![
+                    corral_protocol::BOARD_V1.into(),
+                    corral_protocol::read::READ_V1.into(),
+                ],
                 client: ClientInfo {
                     kind: "cli".into(),
                     version: env!("CARGO_PKG_VERSION").into(),
@@ -109,6 +121,10 @@ impl Client {
                 welcome.proto.major
             );
         }
+        client.read_capable = welcome
+            .caps
+            .iter()
+            .any(|cap| cap == corral_protocol::read::READ_V1);
         Ok(Some(client))
     }
 
@@ -149,6 +165,60 @@ impl Client {
     #[cfg(not(unix))]
     pub fn health(&mut self) -> Result<Health> {
         bail!("daemon sockets are unavailable on this platform")
+    }
+
+    /// Read one served JSON document, bounded by 10 s for the reply and 5 s for data.
+    #[cfg(unix)]
+    pub fn read(&mut self, kind: ReadKind) -> Result<Option<Vec<u8>>> {
+        if !self.read_capable {
+            return Ok(None);
+        }
+        let (exe, build) = crate::pm_read::client_identity()?;
+        let outcome: ResponseOutcome<ReadReply> = self.request_outcome(
+            corral_protocol::read::READ,
+            ReadRequest { kind, exe, build },
+            Duration::from_secs(10),
+        )?;
+        let reply = match outcome {
+            ResponseOutcome::Result { result } => result,
+            ResponseOutcome::Error { error } => {
+                use corral_protocol::rpc::ErrorCode;
+                return match error.code {
+                    ErrorCode::Refused
+                    | ErrorCode::Busy
+                    | ErrorCode::Unavailable
+                    | ErrorCode::MethodNotFound
+                    | ErrorCode::Internal => Ok(None),
+                    _ => bail!("daemon {:?}: {}", error.code, error.message),
+                };
+            }
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut document = Vec::new();
+        for _ in 0..reply.frames {
+            let frame = read_frame_until(&mut self.stream, deadline)
+                .context("reading served document")?
+                .context("daemon closed before completing served document")?;
+            if frame.kind != FrameKind::Data || frame.stream != reply.stream {
+                bail!("daemon returned an unexpected served document frame");
+            }
+            let bytes = (document.len() as u64)
+                .checked_add(frame.payload.len() as u64)
+                .context("served document length overflow")?;
+            if bytes > reply.bytes {
+                bail!("served document exceeds announced byte count");
+            }
+            document.extend_from_slice(&frame.payload);
+        }
+        if document.len() as u64 != reply.bytes {
+            bail!("served document does not match announced byte count");
+        }
+        Ok(Some(document))
+    }
+
+    #[cfg(not(unix))]
+    pub fn read(&mut self, _kind: ReadKind) -> Result<Option<Vec<u8>>> {
+        Ok(None)
     }
 
     #[cfg(unix)]
@@ -266,6 +336,19 @@ impl Client {
         params: P,
         timeout: Duration,
     ) -> Result<T> {
+        match self.request_outcome(method, params, timeout)? {
+            ResponseOutcome::Result { result } => Ok(result),
+            ResponseOutcome::Error { error } => bail!("daemon {:?}: {}", error.code, error.message),
+        }
+    }
+
+    #[cfg(unix)]
+    fn request_outcome<P: Serialize, T: DeserializeOwned>(
+        &mut self,
+        method: &str,
+        params: P,
+        timeout: Duration,
+    ) -> Result<ResponseOutcome<T>> {
         let deadline = Instant::now() + timeout;
         self.next_id = self
             .next_id
@@ -300,10 +383,7 @@ impl Client {
         if response.jsonrpc != JSONRPC || response.id != id {
             bail!("daemon returned a mismatched RPC response");
         }
-        match response.outcome {
-            ResponseOutcome::Result { result } => Ok(result),
-            ResponseOutcome::Error { error } => bail!("daemon {:?}: {}", error.code, error.message),
-        }
+        Ok(response.outcome)
     }
 }
 
@@ -416,4 +496,14 @@ pub fn health(store: &Store) -> Health {
         .flatten()
         .and_then(|mut client| client.health().ok())
         .unwrap_or_else(Health::down)
+}
+
+/// Best effort: any daemon or protocol failure falls back to an in-process read.
+pub fn served(store: &Store, kind: ReadKind) -> Option<Vec<u8>> {
+    Client::connect(store)
+        .ok()
+        .flatten()?
+        .read(kind)
+        .ok()
+        .flatten()
 }

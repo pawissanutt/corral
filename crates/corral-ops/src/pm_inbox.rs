@@ -44,6 +44,7 @@ fn notify(ctx: &Ctx, id: &str) {
 /// not yet observed is delivered again (the host keeps one outcome per key), and a healthy
 /// corral-pi PM gets one wake per open item, which the PM wake pass then delivers.
 pub fn sweep(ctx: &Ctx) -> Result<()> {
+    let _span = corral_core::timing::span("sync.pm_inbox_sweep");
     let items = ctx.store.pm_inbox_items()?;
     let mut redeliver = Vec::new();
     for item in &items {
