@@ -220,7 +220,7 @@ export function filterRow(m: ChangesModel, width: number, color: (hue: number) =
 
 export interface ListFrame {
   readonly lines: string[]; readonly hits: ReadonlyMap<number, string>;
-  /** First row of the selected file, or -1; with `selectedSpan` its rows (the file row and any `also edited by` row). */
+  /** First row of the selected file, or -1; with `selectedSpan` its rows (the file row and any flag row). */
   readonly selectedRow: number; readonly selectedSpan: number;
 }
 export interface ListOptions {
@@ -230,8 +230,9 @@ export interface ListOptions {
 }
 /**
  * The flat file list: `▌ M ●● ! src/a/one.rs   +3 −2`, with the status letter, author dots in their hue,
- * `!` and an `also edited by …` row for edits outside an author's own paths. As a side pane it adds the
- * file count and totals above and the other comparisons below.
+ * and `!` plus a flag row when an author edited the file outside its own paths (`also edited by …, outside
+ * its files`) or when two or more authors edited it (`edited by a and b`). As a side pane it adds the file
+ * count and totals above and the other comparisons below.
  */
 export function listLines(m: ChangesModel, width: number, options: ListOptions = {}): ListFrame {
   const lines: string[] = [], hits = new Map<number, string>(); let selectedRow = -1, selectedSpan = 0;
@@ -249,20 +250,25 @@ export function listLines(m: ChangesModel, width: number, options: ListOptions =
     return [[PANEL_MUTED, word.padStart(countWidth) + " "]];
   };
   const shortPaths = stacked && width < SHORT_PATHS;
+  const names = (ids: readonly string[]) => {
+    const labels = ids.map(id => plainLabel(authorOf(m, id)?.label ?? id));
+    return labels.length < 2 ? labels.join("") : labels.slice(0, -1).join(", ") + " and " + labels.at(-1);
+  };
   for (const file of m.files) {
     const selected = file.path === m.selected, tone = WORDS[file.letter]?.[1] ?? "warn", base = selected ? PANEL_SELECTED : PANEL_BG;
     if (selected) selectedRow = lines.length;
     const dots: Seg[] = (file.who ?? []).map(id => { const author = authorOf(m, id); return [author ? color(author.hue) : PANEL_MUTED, "●"] as Seg; });
+    const flag = file.outside?.length ? `also edited by ${names(file.outside)}, outside ${file.outside.length === 1 ? "its" : "their"} files`
+      : (file.who?.length ?? 0) >= 2 ? `edited by ${names(file.who ?? [])}` : undefined;
     const prefix: Seg[] = [[PANEL_BLUE, selected ? "▌" : " "], [PANEL_TEXT, " "], [fg(tone), file.letter], [PANEL_TEXT, " "],
-      ...(dots.length ? [...dots, [PANEL_TEXT, " "] as Seg] : []), ...(file.outside?.length ? [[PANEL_WARNING, "!"] as Seg, [PANEL_TEXT, " "] as Seg] : [])];
+      ...(dots.length ? [...dots, [PANEL_TEXT, " "] as Seg] : []), ...(flag ? [[PANEL_WARNING, "!"] as Seg, [PANEL_TEXT, " "] as Seg] : [])];
     const right = counts(file), room = body - segWidth(prefix) - segWidth(right) - 1;
     const path = plainLabel(shortPaths ? file.path.split("/").slice(-2).join("/") : file.path);
     hits.set(lines.length, file.path);
     push([...prefix, [selected ? BOLD + PANEL_TEXT : PANEL_TEXT, clip(path, room, "tail")]], right, base);
-    if (file.outside?.length) {
-      const names = file.outside.map(id => plainLabel(authorOf(m, id)?.label ?? id)).join(", ");
+    if (flag) {
       hits.set(lines.length, file.path);
-      push([[PANEL_TEXT, " ".repeat(Math.min(segWidth(prefix), Math.max(0, body - 8)))], [PANEL_WARNING, "also edited by " + names]], [], base);
+      push([[PANEL_TEXT, " ".repeat(Math.min(segWidth(prefix), Math.max(0, body - 8)))], [PANEL_WARNING, flag]], [], base);
     }
     if (selected) selectedSpan = lines.length - selectedRow;
   }

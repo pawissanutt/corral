@@ -258,3 +258,18 @@ test("every dock line fits from 30 to 140 columns and long queues stay within ca
   }
   release(); await settle();
 });
+
+test("a receiver is named in the header, which stays within the width at 40 and 120 columns", () => {
+  const items = [item("a", "alpha"), item("b", "bravo")];
+  const host = (receiver?: () => string | undefined) => new QueueDock({
+    items: () => items, control: () => undefined, draft: () => "", setDraft: () => {}, focusComposer: () => {},
+    notice: () => {}, changed: () => {}, ...(receiver ? { receiver } : {}),
+  });
+  const named = host(() => "the parent"), plain = host(), unset = host(() => undefined);
+  expect(screen(named.render(120))[0]).toContain("the parent");
+  expect(screen(plain.render(120))[0]).not.toContain("the parent");
+  expect(screen(unset.render(120))[0]).toEqual(screen(plain.render(120))[0]);
+  for (const width of [40, 120]) {
+    for (const line of named.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+  }
+});

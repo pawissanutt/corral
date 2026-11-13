@@ -7,6 +7,9 @@ import { agentColor } from "./agent-hues.ts";
 import { AGENT_HUES, PACKAGED, type Appearance } from "./appearance.ts";
 import { PANEL_MUTED, type PanelJob, type PanelSnapshot } from "./panels-view.ts";
 import type { HelperInspection } from "../extensions/subagent/inspection.ts";
+import type { BuildPanelState, ChildSnapshot, FleetSnapshot } from "../build/types.ts";
+import { childKey } from "./build/contract.ts";
+import { fleetExtras } from "./build/fleet-rows.ts";
 
 const NOW = 1_000_000;
 function helper(request: string, phase: HelperInspection["phase"], createdAt: number, extra: Partial<HelperInspection> = {}): HelperInspection {
@@ -165,6 +168,87 @@ test("agent hues keep at least 4.5:1 contrast on the panel background and the se
     for (const hue of AGENT_HUES[appearance]) {
       expect(contrast(hue, PACKAGED[appearance].background)).toBeGreaterThanOrEqual(4.5);
       expect(contrast(hue, PACKAGED[appearance].selected)).toBeGreaterThanOrEqual(4.5);
+    }
+  }
+});
+
+function buildChild(id: string, extra: Partial<ChildSnapshot> = {}): ChildSnapshot {
+  return { id, call: "call-1", title: `Deliver ${id}`, brief: `Brief for ${id}`, owns: [`src/${id}/`], after: [], profile: "default",
+    model: "anthropic/model-a", state: "running", createdAt: NOW - 200_000, startedAt: NOW - 190_000, edits: [],
+    usage: { input: 1200, output: 300, turns: 4, cost: 0.12, contextPercent: 41 }, steers: [], pulse: [1, 3, 5, 2], history: "qrrr", messages: [], ...extra };
+}
+const QUESTION = { question: "The wireframe shows two layouts; which one should the picker render?", options: [{ label: "Grid" }, { label: "List" }], askedAt: NOW - 5000 };
+const MOCK_FLEET: FleetSnapshot = { maxParallel: 3, startedAt: NOW - 200_000, children: [
+  buildChild("host-slots", { state: "done", endedAt: NOW - 100_000, history: "qrrrrd", report: "Slots stored per host\nmore",
+    edits: [{ path: "src/host-slots/a.rs", outside: false, at: NOW - 150_000 }, { path: "src/app-store/b.rs", outside: true, at: NOW - 140_000 }] }),
+  buildChild("app-store", { activity: "edit src/app-store/store.rs", steers: ["Keep the store API stable"] }),
+  buildChild("picker-ui", { state: "needs", question: QUESTION, history: "qrrn" }),
+  buildChild("arrival", { state: "queued", after: ["app-store"], startedAt: undefined, history: "qqqq", usage: { input: 0, output: 0, turns: 0 } }),
+]};
+function buildState(fleet: FleetSnapshot): BuildPanelState {
+  return {
+    session: { version: 1, id: "B-1", name: "save-slots", created: "2026-01-01T00:00:00Z", updated: "2026-01-01T00:00:00Z", repoRoot: "/repo",
+      worktree: "/repo/.worktrees/build-save-slots", branch: "build/save-slots", base: null, here: false },
+    settings: { exitPolicy: "gate", maxParallel: fleet.maxParallel, profiles: [] }, fleet, target: "parent", exit: { phase: "none" }, board: [],
+  };
+}
+const buildModel = (fleet = MOCK_FLEET) => agentsModel(fixture, NOW, { extra: fleetExtras(buildState(fleet), NOW) });
+
+test("child rows lead the table in fleet order, with their detail, at 140 and 52 columns and no hint text", () => {
+  for (const width of [140, 52]) {
+    for (const selected of [undefined, ...MOCK_FLEET.children.map(child => childKey(child.id))]) {
+      const rows = plain(renderAgents(buildModel(), selected, width, options()).lines);
+      const at = (needle: string) => rows.findIndex(row => row.includes(needle));
+      expect(at("host-slots")).toBeGreaterThan(0);
+      expect(at("app-store")).toBeGreaterThan(at("host-slots"));
+      expect(at("picker-ui")).toBeGreaterThan(at("app-store"));
+      expect(at("arrival")).toBeGreaterThan(at("picker-ui"));
+      expect(at("explore")).toBeGreaterThan(at("arrival"));
+      expect(at("Timeline")).toBeGreaterThan(at("open conversation"));
+      const text = rows.join("\n");
+      expect(text).not.toMatch(/\b(Enter|Esc|PgUp|PgDn|Ctrl\+|Alt\+|F\d{1,2})\b|j\/k|⏎|press /);
+      if (selected === childKey("picker-ui")) expect(text).toContain("picker render");
+      if (selected === childKey("app-store")) expect(text).toContain("Keep the store API stable");
+    }
+  }
+});
+
+test("helper rows beside child rows still offer no steer, cancel, model or answer", () => {
+  const acted: [AgentsAction, string][] = [];
+  const view = new AgentsView(viewHost(() => buildModel(), acted));
+  view.select("helper:h-3");
+  expect(view.actions()).toEqual(["open"]);
+  for (const key of ["s", "x", "m", "a"]) expect(view.handleKey(key)).toBe(false);
+  expect(acted).toEqual([]);
+});
+
+test("a answers only a child that asks, and the action row offers answer only while it asks", () => {
+  const acted: [AgentsAction, string][] = [];
+  const view = new AgentsView(viewHost(() => buildModel(), acted));
+  view.select(childKey("app-store"));
+  expect(view.handleKey("a")).toBe(false);
+  expect(acted).toEqual([]);
+  view.select(childKey("picker-ui"));
+  expect(view.handleKey("a")).toBe(true);
+  expect(acted).toEqual([["answer", childKey("picker-ui")]]);
+
+  const actionRow = (key: string) => plain(renderAgents(buildModel(), key, 140, options()).lines).find(line => line.includes("open conversation")) ?? "";
+  expect(actionRow(childKey("picker-ui"))).toContain("answer");
+  for (const id of ["host-slots", "app-store", "arrival"]) expect(actionRow(childKey(id))).not.toContain("answer");
+});
+
+test("child rows with long ids, owns and steers stay within the width", () => {
+  const long = "a-very-long-child-identifier-that-overflows-every-column";
+  const fleet: FleetSnapshot = { ...MOCK_FLEET, children: [...MOCK_FLEET.children,
+    buildChild(long, { state: "needs", question: QUESTION, pendingModel: "anthropic/model-with-a-very-long-identifier-name",
+      owns: Array.from({ length: 12 }, (_, index) => `crates/some/deeply/nested/module-${index}/file.rs`),
+      steers: Array.from({ length: 6 }, (_, index) => `Steer number ${index} with a long explanation of what to change next`),
+      edits: [{ path: "outside/the/owned/paths/and/far/away.rs", outside: true, at: NOW }], error: "boom ".repeat(40) })] };
+  for (const width of [34, 52, 80, 112, 140]) {
+    for (const selected of [undefined, childKey(long), childKey("arrival"), childKey("host-slots")]) {
+      for (const short of [false, true]) {
+        for (const line of renderAgents(buildModel(fleet), selected, width, options({ short })).lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      }
     }
   }
 });

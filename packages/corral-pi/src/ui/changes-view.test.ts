@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
-import { ChangesView, LIST_WIDTH, changesModel, diffLines, filterRow, type ChangeAuthor, type ChangesHost, type ChangesModel } from "./changes-view.ts";
+import { ChangesView, LIST_WIDTH, changesModel, diffLines, filterRow, listLines, type ChangeAuthor, type ChangesHost, type ChangesModel } from "./changes-view.ts";
 import { ReviewStore, comparisonLabel } from "./review-store.ts";
 
 const PATCH = [
@@ -146,6 +146,20 @@ test("an author filter shows only that author's files and marks edits outside it
 
     view.cycleFilter(); view.cycleFilter();
     expect(view.filter).toBe("all");
+    // Two authors inside their own paths: the file is flagged in `all`, and each author's filter still narrows to its files.
+    const shared: ChangeAuthor[] = [
+      { id: "slots", label: "host-slots", hue: 0, paths: new Map([["a.txt", false], ["c.txt", false]]) },
+      { id: "ui", label: "picker-ui", hue: 1, paths: new Map([["b.txt", false], ["c.txt", false]]) },
+    ];
+    expect(model("ui", shared).files.map(file => file.path)).toEqual(["b.txt", "c.txt"]);
+    const listed = plain(listLines(model("all", shared), 80, { stacked: true }).lines);
+    const both = listed.findIndex(r => r.includes("c.txt"));
+    expect(listed[both]).toContain("!");
+    expect(listed[both + 1]).toContain("edited by host-slots and picker-ui");
+    expect(listed[both + 1]).not.toContain("also");
+    const alone = listed.findIndex(r => r.includes("a.txt"));
+    expect(listed[alone]).not.toContain("!");
+    expect(listed[alone + 1]).not.toContain("edited by");
     // Hosts that name no authors get no filter row and no author marks.
     expect(model("slots", []).files.map(file => [file.path, file.who, file.outside]))
       .toEqual([["a.txt", undefined, undefined], ["b.txt", undefined, undefined], ["c.txt", undefined, undefined]]);
