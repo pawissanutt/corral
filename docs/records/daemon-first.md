@@ -233,8 +233,15 @@ same frame itself.
 
 `scripts/smoke-daemon-incremental.sh`, against a private daemon on a three-task store: three quiet
 passes with no `git` call and no feed entry; 152 audited step decisions over a burst of commands, a
-configuration change and a commit, with no wrong skip; a board frame showing a moved task 0.17 s
-after the command; full passes while `sync-full-on` exists.
+configuration change and a commit, with no wrong skip; a board frame showing a moved task 0.2 to
+0.6 s after the command; full passes while `sync-full-on` exists; and over 31 s of quiet, 63 frame
+refresh attempts that recomputed the resource gauges twice and attention once, and the PM workset
+never.
+
+The full gate failed on the first complete tree, at the board's work budget, which the ordinary
+test run skips: a board frame computed the PM workset's shortlist on every load (4 `likely_files`
+calls where the budget allows none). The board's own loads now skip the operating text they never
+showed, and the frame reuses the workset until the store or the attention board changes.
 
 It has not run on the real store. It cannot be tried on a copy, because the copied records name
 the real worktrees. The plan is to install it with `sync-full-on` present, compare the board's
@@ -259,6 +266,8 @@ text, run with `sync-audit-on` over real activity, and only then let it skip.
 - Four Pi lane tests fail on `main` without this work.
 - Audit mode had no record of having run until `sync.audit.pass` was added, so "no wrong skip"
   could not be told from "no audit".
+- The work-budget tests are ignored by the workspace test run and executed only by the gate, so
+  three full test runs passed over a regression the gate caught.
 
 ### What remains
 
