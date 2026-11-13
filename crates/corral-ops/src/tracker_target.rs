@@ -26,6 +26,7 @@ pub(super) fn prerequisites(
     plan: &Task,
     task: &Task,
 ) -> Result<Vec<PlanPrerequisite>> {
+    let _span = corral_core::timing::span("plan.prerequisites");
     let target = match plan
         .approved_scope
         .as_ref()
@@ -140,7 +141,7 @@ pub(super) fn prerequisites(
             result.proposed_initial_base = crate::plan_target::proposed_initial_base(store, plan)?;
             let head = match &result.proposed_initial_base {
                 Some(base) => base.clone(),
-                None => match corral_git::rev_sha(&repo, &format!("refs/heads/{target}")) {
+                None => match crate::plan_target::branch_head(store, &repo, target) {
                     Ok(head) => {
                         result.target_head = Some(head.clone());
                         head
@@ -151,7 +152,9 @@ pub(super) fn prerequisites(
                     }
                 },
             };
-            result.satisfied = corral_git::is_ancestor(&repo, sha, &head)
+            // A stored inclusion of two full SHAs cannot change; exclusions are rechecked.
+            result.satisfied = crate::integration::git_memo_of(store)
+                .is_ancestor(&repo, sha, &head)
                 .with_context(|| format!("qualifying prerequisite {id} in {target}"))?;
             if !result.satisfied {
                 result.reason = Some(format!("{id}: accepted work is not included in {target}"));

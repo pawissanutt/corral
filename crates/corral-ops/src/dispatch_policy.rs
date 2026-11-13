@@ -273,26 +273,38 @@ pub(crate) fn advance(
         return Ok(vec![]);
     }
     let mut changes = Vec::new();
-    // Automatic admission considers open Backlog work only.
-    let mut backlog: Vec<_> = Vec::new();
-    for head in ctx
-        .store
-        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
-    {
-        if !scope.includes(head.project.as_deref()) {
-            continue;
+    // Automatic admission considers open Backlog work only. Eligibility is read on one
+    // pinned view, so the operating policy is resolved once rather than once per head.
+    let candidates = corral_core::timing::span("sync.dispatch_policy_advance.candidates");
+    let mut backlog = ctx.read_step(|read| {
+        let mut backlog = Vec::new();
+        for head in read
+            .store
+            .heads(&corral_core::backend::HeadQuery::Open { project: None })?
+        {
+            if !scope.includes(head.project.as_deref()) {
+                continue;
+            }
+            let task = head.to_shell_task()?;
+            if automatic_task(read, &task) {
+                backlog.push(task);
+            }
         }
-        let task = head.to_shell_task()?;
-        if automatic_task(ctx, &task) {
-            backlog.push(task);
-        }
-    }
+        Ok(backlog)
+    })?;
+    drop(candidates);
     crate::queue::sort_candidates(&mut backlog);
     for (index, task) in backlog.iter().enumerate() {
         if free_slots_below(ctx, hard)? == 0 {
             break;
         }
-        match crate::queue::blocked_reason(ctx, &ctx.store, task, false) {
+        // Each candidate's advisory check reads one view taken now, after any admission
+        // above; the claim below rechecks everything under the board lock.
+        let blocked = {
+            let _span = corral_core::timing::span("sync.dispatch_policy_advance.blocked");
+            ctx.read_step(|read| crate::queue::blocked_reason(read, &read.store, task, false))
+        };
+        match blocked {
             Ok(None) if automatic_capacity_reason(&ctx.store, task)?.is_none() => {}
             Ok(_) => continue,
             Err(error) => {

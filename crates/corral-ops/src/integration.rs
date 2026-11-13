@@ -24,6 +24,11 @@ mod tests;
 /// (falling back to `$HOME/.cache`), where workspace-id is the first 16 hex digits of the SHA-256
 /// of the canonical workspace root. Disabled when neither directory is an absolute path.
 pub(crate) fn git_memo(ctx: &Ctx) -> corral_git::Memo {
+    git_memo_of(&ctx.store)
+}
+
+/// [`git_memo`] of `store`'s workspace.
+pub(crate) fn git_memo_of(store: &corral_core::Store) -> corral_git::Memo {
     let absolute = |name| {
         std::env::var_os(name)
             .map(std::path::PathBuf::from)
@@ -34,7 +39,7 @@ pub(crate) fn git_memo(ctx: &Ctx) -> corral_git::Memo {
     else {
         return corral_git::Memo::disabled();
     };
-    let root = ctx.store.root();
+    let root = store.root();
     let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let digest = Sha256::digest(root.as_os_str().as_encoded_bytes());
     let id: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();

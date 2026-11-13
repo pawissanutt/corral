@@ -1,5 +1,6 @@
 //! Reap external load-sandbox containers by the unguessable launch ownership marker.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, ensure};
@@ -65,6 +66,7 @@ fn sweep_with(ctx: &Ctx, podman: &str) -> Result<()> {
     if owners.is_empty() {
         return Ok(());
     }
+    let listing = corral_core::timing::span("sync.sandbox_cleanup_sweep.podman");
     let output = match Command::new(podman)
         .args([
             "ps",
@@ -81,6 +83,7 @@ fn sweep_with(ctx: &Ctx, podman: &str) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error).context("listing sandbox containers"),
     };
+    drop(listing);
     ensure!(
         output.status.success(),
         "listing sandbox containers: {}",
@@ -96,21 +99,28 @@ fn sweep_with(ctx: &Ctx, podman: &str) -> Result<()> {
     let containers: Vec<Container> =
         serde_json::from_slice(&output.stdout).context("parsing sandbox containers")?;
     // Podman may have blocked while a task was resumed. Refresh from disk, not the
-    // inventory snapshot. Markers belong to launches, never titles or task labels.
+    // inventory snapshot. Markers belong to launches, never titles or task labels. Only a
+    // container this sweep could remove needs that refresh.
+    let candidates: Vec<(Container, String)> = containers
+        .into_iter()
+        .filter_map(|container| {
+            let marker = container.labels.get("corral.run-owner")?.clone();
+            (container
+                .labels
+                .get("corral.load-sandbox")
+                .map(String::as_str)
+                == Some("true")
+                && owners.contains(&marker))
+            .then_some((container, marker))
+        })
+        .collect();
+    if candidates.is_empty() {
+        return Ok(());
+    }
     let current = terminal_owners(ctx)?;
     let mut errors = Vec::new();
-    for container in containers {
-        let Some(marker) = container.labels.get("corral.run-owner") else {
-            continue;
-        };
-        if container
-            .labels
-            .get("corral.load-sandbox")
-            .map(String::as_str)
-            != Some("true")
-            || !owners.contains(marker)
-            || !current.contains(marker)
-        {
+    for (container, marker) in candidates {
+        if !current.contains(&marker) {
             continue;
         }
         if let Err(error) = remove_with(podman, &container.id) {
@@ -122,6 +132,7 @@ fn sweep_with(ctx: &Ctx, podman: &str) -> Result<()> {
 }
 
 fn terminal_owners(ctx: &Ctx) -> Result<BTreeSet<String>> {
+    let _span = corral_core::timing::span("sync.sandbox_cleanup_sweep.owners");
     let mut fresh = ctx.clone();
     fresh.store = ctx.store.read_only_snapshot()?;
     let dir = fresh.store.scratch_path("tmp")?.join("launch-exits");
@@ -132,6 +143,10 @@ fn terminal_owners(ctx: &Ctx) -> Result<BTreeSet<String>> {
     };
     let mut eligible = BTreeSet::new();
     let mut protected = BTreeSet::new();
+    // Receipts of one run (its worker, gates and reviewers) share one task and run: on this
+    // pinned view each task head and each run's terminal state is read once.
+    let mut heads = HashMap::new();
+    let mut runs: HashMap<(String, String), bool> = HashMap::new();
     for entry in entries {
         let entry = entry.context("reading sandbox owner entry")?;
         let name = entry.file_name();
@@ -151,12 +166,22 @@ fn terminal_owners(ctx: &Ctx) -> Result<BTreeSet<String>> {
         let mut parts = name.split('-');
         let task = parts.by_ref().take(2).collect::<Vec<_>>().join("-");
         let Some(run) = parts.next() else { continue };
-        let head = fresh.store.head(&task)?;
-        let terminal = matches!(
-            head.status,
-            corral_core::Status::Done | corral_core::Status::Dropped
-        ) && head.launch.is_none()
-            && head.run_head(run)?.is_some();
+        let terminal = match runs.entry((task, run.to_owned())) {
+            Entry::Occupied(known) => *known.get(),
+            Entry::Vacant(slot) => {
+                let (task, run) = slot.key();
+                let head = match heads.entry(task.clone()) {
+                    Entry::Occupied(known) => known.into_mut(),
+                    Entry::Vacant(slot) => slot.insert(fresh.store.head(task)?),
+                };
+                let terminal = matches!(
+                    head.status,
+                    corral_core::Status::Done | corral_core::Status::Dropped
+                ) && head.launch.is_none()
+                    && head.run_head(run)?.is_some();
+                *slot.insert(terminal)
+            }
+        };
         if terminal {
             eligible.insert(marker);
         } else {

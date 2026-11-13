@@ -96,7 +96,22 @@ fn capture_with<T: TaskRef + ?Sized>(
             Err(error) => blockers.push(format!("{id}: {error:#}")),
         }
     }
-    let main = corral_git::rev_sha(&repo, "refs/heads/main")?;
+    // Readiness is advisory: one main read per pinned pass and stored inclusions suffice.
+    // Integrity, which binds an acceptance, reads Git directly.
+    let readiness = matches!(proof, Proof::Readiness);
+    let main = if readiness {
+        crate::plan_target::branch_head(store, &repo, "main")?
+    } else {
+        corral_git::rev_sha(&repo, "refs/heads/main")?
+    };
+    let memo = crate::integration::git_memo_of(store);
+    let included = |ancestor: &str, head: &str| {
+        if readiness {
+            memo.is_ancestor(&repo, ancestor, head)
+        } else {
+            corral_git::is_ancestor(&repo, ancestor, head)
+        }
+    };
     let code = members.iter().any(|member| member.code);
     let (label, head, checkout, dispatch_base) = match &scope.delivery_target {
         PlanDeliveryTarget::Main => ("main".to_string(), main.clone(), None, String::new()),
@@ -108,13 +123,13 @@ fn capture_with<T: TaskRef + ?Sized>(
         }
     };
     if code {
-        if !corral_git::is_ancestor(&repo, &main, &head)? {
+        if !included(&main, &head)? {
             blockers.push(format!(
                 "{label} does not include current main {main}; reconcile main into the Plan branch before verification"
             ));
         }
         for member in members.iter().filter(|member| member.code) {
-            if !corral_git::is_ancestor(&repo, &member.receipt_sha, &head)? {
+            if !included(&member.receipt_sha, &head)? {
                 blockers.push(format!(
                     "{}: accepted work {} is not included in {label}",
                     member.task, member.receipt_sha

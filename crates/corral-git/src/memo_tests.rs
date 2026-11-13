@@ -134,6 +134,21 @@ fn deleted_truncated_and_flipped_memos_recompute_identical_results() {
 }
 
 #[test]
+fn included_ancestry_is_served_without_git_but_exclusion_is_rechecked() {
+    let (tmp, repo) = init();
+    let commits = history(&repo);
+    let (old, new) = (&commits[1], &commits[4]);
+    let memo = Memo::new(tmp.path().join("memo"));
+    assert!(memo.is_ancestor(&repo, old, new).unwrap());
+    assert!(!memo.is_ancestor(&repo, new, old).unwrap());
+    let before = invocations();
+    assert!(memo.is_ancestor(&repo, old, new).unwrap());
+    assert_eq!(invocations(), before, "a stored inclusion needs no git");
+    assert!(!memo.is_ancestor(&repo, new, old).unwrap());
+    assert_eq!(invocations(), before + 1, "an exclusion is never stored");
+}
+
+#[test]
 fn revspecs_short_shas_and_other_repositories_are_never_served() {
     let (tmp, repo) = init();
     let commits = history(&repo);

@@ -30,6 +30,38 @@ fn noop_sweep_reuses_snapshot_without_task_metadata_work() {
 }
 
 #[test]
+fn receipts_of_one_run_read_its_task_head_once() {
+    use corral_core::work::{self, Counter, HotScope};
+    use corral_core::{Status, Store};
+    // Given a finished task whose run left worker, reviewer and gate owner receipts.
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = crate::resources::FixedResourceProbe::ctx(Store::init(tmp.path()).unwrap());
+    let task = ctx
+        .store
+        .create("Finished", None, Status::Done, "")
+        .unwrap();
+    let arm = |attempt: &str| {
+        let receipt = crate::launch_exit::receipt(&ctx, &task.id, attempt).unwrap();
+        crate::launch_exit::arm(&ctx, "true", &receipt).unwrap();
+    };
+    let decodes = || {
+        let _scope = HotScope::enter();
+        let before = work::snapshot();
+        terminal_owners(&ctx).unwrap();
+        work::snapshot()
+            .since(&before)
+            .get(Counter::TaskHeadDecodes)
+    };
+    arm("R1");
+    let one = decodes();
+    arm("R1-review1");
+    arm("R1-gate1");
+    // When the owners are classified, then the shared task is decoded once, not per receipt.
+    assert!(one > 0);
+    assert_eq!(decodes(), one);
+}
+
+#[test]
 fn owner_listing_uses_portable_podman_template() {
     let tmp = tempfile::tempdir().unwrap();
     let ctx =

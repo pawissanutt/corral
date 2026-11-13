@@ -572,11 +572,15 @@ pub(crate) fn start_due(ctx: &Ctx) {
 }
 
 pub(crate) fn start_due_with(ctx: &Ctx, launch: &mut dyn FnMut(&str) -> Result<()>) {
-    // A Done or Dropped Plan has no checkpoint left to take.
-    let open = ctx
-        .store
-        .heads(&corral_core::backend::HeadQuery::Open { project: None })
-        .and_then(|heads| heads.iter().map(|head| head.to_shell_task()).collect());
+    // A Done or Dropped Plan has no checkpoint left to take. Only trackers need a task form.
+    let open = ctx.store.cached_board().and_then(|board| {
+        board
+            .heads
+            .iter()
+            .filter(|head| head.tracker)
+            .map(|head| head.to_shell_task())
+            .collect()
+    });
     let tasks: Vec<corral_core::Task> = match open {
         Ok(tasks) => tasks,
         Err(error) => {

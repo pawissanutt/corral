@@ -16,11 +16,13 @@ const REPAIR_GUIDANCE: &str = "Rerun the gate's repair commands above after each
     not a gate result. Then continue as instructed below; do not start a gate to check each edit.";
 
 /// Report authority transitions once per run, including concurrent sync callers.
-/// The open Review tasks, as heads: autopilot never reads a terminal task.
+/// The open Review tasks, as heads: autopilot never reads a terminal task. The open board is
+/// refreshed incrementally: only heads changed since the previous read are decoded.
 pub(super) fn review_tasks(ctx: &Ctx) -> Result<Vec<TaskHead>> {
     Ok(ctx
         .store
-        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
+        .cached_board()?
+        .heads
         .into_iter()
         .filter(|head| head.status == corral_core::Status::Review && head.hold.is_none())
         .map(TaskHead::detach)
