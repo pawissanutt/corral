@@ -2,7 +2,6 @@
 //! which tasks one pass runs, decided from the inputs that changed since the previous pass or
 //! came due. All state lives in a daemon-owned [`PassMemory`]; an empty memory plans a full pass.
 use std::collections::{BTreeMap, BTreeSet};
-use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -20,7 +19,15 @@ use crate::resources::ResourceState;
 
 #[path = "incremental_rules.rs"]
 mod rules;
-use rules::{Rule, rule};
+use rules::{Rule, rule, tokens_fire};
+
+#[path = "incremental_eval.rs"]
+mod eval;
+use eval::{area_matches, inventory_fingerprint, next_due, step_due, task_dirty, task_tokens};
+
+#[path = "incremental_audit.rs"]
+mod audit;
+use audit::AuditProbe;
 
 /// No later than today's measured quiet cadence (about 27 s).
 pub(crate) const EVERY_SHORT: SignedDuration = SignedDuration::from_secs(20);
@@ -47,18 +54,27 @@ const GLOBAL_TASK_AREAS: [&str; 8] = [
     "review-launch",
 ];
 
-/// Areas only global steps read. A write elsewhere whose key names no task marks every open
-/// task (conservative: an unlisted area costs work, never a skipped decision).
-const TASK_INDEPENDENT_AREAS: [&str; 8] = [
+/// Areas only global steps read (each checked against every per-task callee). A write
+/// elsewhere whose area and key name no task marks every open task (conservative: an unlisted
+/// area costs work, never a skipped decision). `a*` is a prefix.
+const TASK_INDEPENDENT_AREAS: [&str; 11] = [
     "pm-events",
     "pm-event-wakes",
-    "pm-wake-keys-event",
+    "pm-wake-keys-*",
+    "pm-usage-guard",
+    "pm-supervisor",
+    "agent-wait-deadlines",
     "desktop-notifications",
     "digest-schedule",
     "lessons-distill",
     "output-lifecycle",
     "queue-refusals",
 ];
+
+/// PM state that per-task steps read only for tasks that open or wait on the PM (plan, plan
+/// run, plan review, aggregate attempt) or hold unfinished native work (PM receipts, worker
+/// hosts). A write marks only those tasks.
+const PM_AREAS: [&str; 5] = ["pm", "pm-policy", "inbox/pm/*", "agent-pm*", "pm-inbox*"];
 
 /// Cursors and state that only the step writing them reads (`storage_gc::lifecycle`'s
 /// `CURSOR`, `movement`'s `RECORDS`; verified by grep, migration aside). Their writes follow
@@ -122,8 +138,15 @@ pub struct PassReport {
     pub attention: bool,
     /// Earliest due time the planner knows of (task or step), strictly after the pass.
     pub next_due: Option<Timestamp>,
-    /// Audit mode only: steps the rules would have skipped that wrote or returned a Change.
+    /// Audit mode only: steps the rules would have skipped that wrote or returned a Change,
+    /// although no input their rule lists changed during the pass and no cadence covers them.
     pub wrong_skips: Vec<StepId>,
+    /// Audit mode only: such steps whose rule fires on a change made after the pass sampled
+    /// its inputs; the next pass's delta (from the same sample) runs them.
+    pub raced: Vec<StepId>,
+    /// Audit mode only: such steps whose rule's `every` cadence (not yet due) would have run
+    /// them within that bound.
+    pub delayed: Vec<StepId>,
 }
 
 /// Incremental state of the daemon loop. Empty after a restart, so the first pass is full.
@@ -144,6 +167,8 @@ pub struct PassMemory {
     acted_at: BTreeMap<StepId, Timestamp>,
     sticky: BTreeSet<StepId>,
     task_sticky: BTreeSet<String>,
+    /// Tasks with unfinished native work, listed when a [`PM_AREAS`] write needs them.
+    native: BTreeSet<String>,
     tasks: BTreeMap<String, TaskMemo>,
     task_run: BTreeMap<(StepId, String), Timestamp>,
     approved_at: Option<Timestamp>,
@@ -173,6 +198,7 @@ impl Default for PassMemory {
             acted_at: BTreeMap::new(),
             sticky: BTreeSet::new(),
             task_sticky: BTreeSet::new(),
+            native: BTreeSet::new(),
             tasks: BTreeMap::new(),
             task_run: BTreeMap::new(),
             approved_at: None,
@@ -243,7 +269,14 @@ impl PassMemory {
             .map(|tmp| stat_fingerprint(&tmp.join("launch-exits")));
         let launch_changed = launch_exits.is_none() || launch_exits != self.launch_exits;
         self.launch_exits = launch_exits;
-        Ok(self.plan(request, now, &ctx.store.config, feed, git, launch_changed))
+        let mut planner = self.plan(request, now, &ctx.store.config, feed, git, launch_changed);
+        if planner.audit {
+            planner.probe = Some(AuditProbe::new(&ctx.store, planner.tokens.feed.through));
+        }
+        if planner.tokens.pm {
+            planner.memory.native = native_ids(ctx)?;
+        }
+        Ok(planner)
     }
 
     /// The pure decision core of [`Self::begin`]: full-pass reasons and the pass tokens.
@@ -297,7 +330,8 @@ impl PassMemory {
             seen_tasks: BTreeSet::new(),
             evaluated: BTreeSet::new(),
             acted_tasks: BTreeSet::new(),
-            would_skip: BTreeSet::new(),
+            would_skip: BTreeMap::new(),
+            probe: None,
             report: PassReport {
                 full,
                 ..PassReport::default()
@@ -353,6 +387,8 @@ struct Tokens {
     in_pass: bool,
     /// `ANY`: a non-lease change outside [`SELF_AREAS`], or an incomplete classification.
     any: bool,
+    /// A [`PM_AREAS`] write.
+    pm: bool,
     /// Task numbers named by a changed record key (`T-<n>` token).
     keyed: BTreeSet<u64>,
     /// A record area read for every task changed.
@@ -365,16 +401,25 @@ impl Tokens {
     fn new(feed: FeedDelta, git: GitChanges, launch_exits: bool, config_changed: bool) -> Self {
         let mut keyed = BTreeSet::new();
         let mut all_tasks = false;
+        let mut pm = false;
         for (area, keys) in &feed.areas {
             if SELF_AREAS.contains(&area.as_str()) {
                 continue;
             }
+            if PM_AREAS.iter().any(|p| area_matches(p, area)) {
+                pm = true;
+                keyed.extend(keys.iter().flat_map(|key| task_tokens(key)));
+                continue;
+            }
             let global = GLOBAL_TASK_AREAS.iter().any(|p| area_matches(p, area));
-            let independent = TASK_INDEPENDENT_AREAS.contains(&area.as_str());
+            let independent = TASK_INDEPENDENT_AREAS.iter().any(|p| area_matches(p, area));
             for key in keys {
-                let before = keyed.len();
-                keyed.extend(task_tokens(key));
-                all_tasks |= global || (keyed.len() == before && !independent);
+                let mut named = false;
+                for task in task_tokens(key).chain(task_tokens(area)) {
+                    keyed.insert(task);
+                    named = true;
+                }
+                all_tasks |= global || (!named && !independent);
             }
         }
         let any = feed.overflow
@@ -397,6 +442,7 @@ impl Tokens {
             keyed,
             all_tasks,
             any,
+            pm,
             ..Self::default()
         }
     }
@@ -424,7 +470,9 @@ pub(crate) struct Planner<'a> {
     /// Tasks evaluated in this iteration.
     evaluated: BTreeSet<String>,
     acted_tasks: BTreeSet<String>,
-    would_skip: BTreeSet<(StepId, Option<String>)>,
+    /// Audit mode: steps and tasks the rules would have skipped, and why they might act.
+    would_skip: BTreeMap<(StepId, Option<String>), Skip>,
+    probe: Option<AuditProbe>,
     report: PassReport,
 }
 
@@ -443,12 +491,18 @@ impl Planner<'_> {
             });
         }
         self.memory.cursor = Some(feed.through);
+        if let Some(probe) = self.probe.as_mut() {
+            probe.restart(feed.through);
+        }
         self.memory.note_approved(&feed);
         self.memory.inventory_prev = self.tokens.inventory;
         self.settle_tasks();
         let panes = self.tokens.panes.take();
         self.tokens = Tokens::new(feed, GitChanges::default(), false, false);
         self.tokens.panes = panes;
+        if self.tokens.pm {
+            self.memory.native = native_ids(ctx)?;
+        }
         self.dirty.clear();
         Ok(())
     }
@@ -506,27 +560,42 @@ impl Planner<'_> {
 
     /// Every token of `rule` except the git and clock ones, which per-task rules scope.
     fn tokens_fire(&self, step: StepId, rule: &Rule) -> bool {
-        let t = &self.tokens;
-        let feed = &t.feed;
-        (rule.any && t.any)
-            || (rule.tasks && t.tasks_changed())
-            || rule
-                .areas
-                .iter()
-                .any(|p| feed.areas.keys().any(|area| area_matches(p, area)))
-            || rule.events.iter().any(|kind| match *kind {
-                "*" => !feed.event_kinds.is_empty(),
-                kind => feed.event_kinds.contains(kind),
+        tokens_fire(&self.tokens, &*self.memory, step, rule)
+    }
+
+    /// Audit: whether `rule` fires on what changed after the pass sampled its inputs.
+    fn raced(&mut self, step: StepId, rule: &Rule, head: Option<&TaskHead>) -> bool {
+        let Some(probe) = self.probe.as_mut() else {
+            return false;
+        };
+        let memory = &*self.memory;
+        let Some(tokens) = probe.since_sample(&self.tokens, memory.config.as_ref()) else {
+            return false;
+        };
+        tokens_fire(tokens, memory, step, rule)
+            || head.is_some_and(|head| {
+                rule.per_task
+                    && memory
+                        .tasks
+                        .get(&head.id)
+                        .is_some_and(|memo| task_dirty(tokens, memory, memo, &head.id, self.now))
             })
-            || (rule.scratch && feed.scratch)
-            || (rule.lifecycle && feed.lifecycle)
-            || (rule.inventory && (t.inventory || self.memory.inventory_prev))
-            || (rule.resources && t.resources)
-            || (rule.config && t.config_changed)
-            || (rule.launch_exits && t.launch_exits)
-            || (rule.sticky && self.memory.sticky.contains(&step))
-            || (rule.in_pass && t.in_pass)
-            || (rule.gate_running && self.memory.gate_running)
+    }
+
+    /// Audit: why a step or task the rules skip may still act. A listed input changed after
+    /// the sample (raced), or a cadence of the rule would run it within its bound (delayed).
+    fn classify(&mut self, step: StepId, rule: &Rule, head: Option<&TaskHead>) -> Skip {
+        if self.raced(step, rule, head) {
+            return Skip::Raced;
+        }
+        let task_every = head
+            .filter(|_| rule.per_task)
+            .and_then(|head| self.memory.tasks.get(&head.id))
+            .and_then(|memo| memo.due.every);
+        match [rule.every, task_every].into_iter().flatten().min() {
+            Some(every) => Skip::Delayed(every),
+            None => Skip::Unexplained,
+        }
     }
 
     fn task_fires(&mut self, step: StepId, rule: &Rule, head: &TaskHead) -> bool {
@@ -579,7 +648,14 @@ impl Planner<'_> {
         self.fresh.insert(head.id.clone());
     }
 
-    fn record(&mut self, step: StepId, task: Option<&str>, decision: bool, run: bool) {
+    fn record(
+        &mut self,
+        step: StepId,
+        task: Option<&str>,
+        decision: bool,
+        run: bool,
+        skip: Option<Skip>,
+    ) {
         if run {
             self.report.ran += 1;
         } else {
@@ -588,9 +664,10 @@ impl Planner<'_> {
         }
         if self.audit {
             drop(corral_core::timing::span("sync.audit.step"));
-            if !decision {
+            if let Some(skip) = skip.filter(|_| !decision) {
                 drop(corral_core::timing::span("sync.audit.would_skip"));
-                self.would_skip.insert((step, task.map(str::to_owned)));
+                self.would_skip
+                    .insert((step, task.map(str::to_owned)), skip);
             }
         }
     }
@@ -599,11 +676,29 @@ impl Planner<'_> {
     /// the next pass (task `STICKY`).
     fn account(&mut self, step: StepId, task: Option<&str>, effect: Effect) -> bool {
         let acted = effect.wrote || effect.changes > 0;
-        if acted && self.would_skip.contains(&(step, task.map(str::to_owned))) {
+        let key = (step, task.map(str::to_owned));
+        if acted && let Some(skip) = self.would_skip.get(&key).copied() {
             let task = task.map(|t| format!(" task {t}")).unwrap_or_default();
-            eprintln!("corrald sync audit: {step:?}{task} would have been skipped but acted");
-            drop(corral_core::timing::span("sync.audit.wrong_skip"));
-            self.report.wrong_skips.push(step);
+            let head =
+                format!("corrald sync audit: {step:?}{task} would have been skipped but acted");
+            match skip {
+                Skip::Raced => {
+                    eprintln!("{head}; raced: an input its rule lists changed during the pass");
+                    drop(corral_core::timing::span("sync.audit.raced"));
+                    self.report.raced.push(step);
+                }
+                Skip::Delayed(every) => {
+                    let secs = every.as_secs();
+                    eprintln!("{head}; delayed: its every {secs}s cadence would have run it");
+                    drop(corral_core::timing::span("sync.audit.delayed"));
+                    self.report.delayed.push(step);
+                }
+                Skip::Unexplained => {
+                    eprintln!("{head}");
+                    drop(corral_core::timing::span("sync.audit.wrong_skip"));
+                    self.report.wrong_skips.push(step);
+                }
+            }
         }
         self.tokens.in_pass |= acted;
         self.acted_tasks.extend(effect.tasks);
@@ -620,9 +715,13 @@ impl StepGate for Planner<'_> {
         }
         let decision = (self.full.is_none() || self.audit) && self.fires(step, &rule);
         let run = self.full.is_some() || decision;
-        self.record(step, None, decision, run);
+        let skip = (self.audit && !decision).then(|| self.classify(step, &rule, None));
+        self.record(step, None, decision, run, skip);
         if run {
-            self.memory.last_run.insert(step, self.now);
+            // Audit keeps the incremental schedule: only a firing rule restarts its cadence.
+            if decision || !self.audit {
+                self.memory.last_run.insert(step, self.now);
+            }
             self.report.attention |= step == StepId::Attention;
         }
         run
@@ -639,15 +738,18 @@ impl StepGate for Planner<'_> {
                 self.fires(step, &rule)
             };
         let run = self.full.is_some() || decision;
-        self.record(step, Some(&head.id), decision, run);
+        let skip = (self.audit && !decision).then(|| self.classify(step, &rule, Some(head)));
+        self.record(step, Some(&head.id), decision, run, skip);
         if run {
             self.refresh_memo(head);
-            if let Some(memo) = self.memory.tasks.get_mut(&head.id) {
-                memo.last_run = Some(self.now);
+            if decision || !self.audit {
+                if let Some(memo) = self.memory.tasks.get_mut(&head.id) {
+                    memo.last_run = Some(self.now);
+                }
+                self.memory
+                    .task_run
+                    .insert((step, head.id.clone()), self.now);
             }
-            self.memory
-                .task_run
-                .insert((step, head.id.clone()), self.now);
         }
         run
     }
@@ -663,6 +765,20 @@ impl StepGate for Planner<'_> {
         let key = (state.held, state.severe, state.reason.clone());
         self.tokens.resources |= self.memory.resources.as_ref() != Some(&key);
         self.memory.resources = Some(key);
+    }
+
+    fn observe_config(&mut self, config: &Config) {
+        if self.memory.config.as_ref() == Some(config) {
+            return;
+        }
+        if self.memory.config.is_some() {
+            // Edited after the planner's own sample: the rest of the pass is full.
+            self.tokens.config_changed = true;
+            if self.full.is_none() {
+                self.full = Some(FullReason::Config);
+            }
+        }
+        self.memory.config = Some(config.clone());
     }
 
     fn observe_herdr(&mut self, available: bool) {
@@ -730,138 +846,22 @@ impl StepGate for Planner<'_> {
     }
 }
 
-fn task_dirty(
-    tokens: &Tokens,
-    memory: &PassMemory,
-    memo: &TaskMemo,
-    id: &str,
-    now: Timestamp,
-) -> bool {
-    let feed = &tokens.feed;
-    memo.last_run.is_none()
-        || feed.tasks.contains(&memo.num)
-        || feed.task_ids.contains(id)
-        || tokens.keyed.contains(&memo.num.0)
-        || tokens.all_tasks
-        || (tokens.inventory && memo.pane_ref)
-        || tokens
-            .panes
-            .as_ref()
-            .is_some_and(|panes| memo.live_panes.iter().any(|p| !panes.contains(p)))
-        || tokens.git.tasks.contains(id)
-        || memo.due.next(memo.last_run).is_some_and(|at| at <= now)
-        || memory.task_sticky.contains(id)
-        || (memo.dependency_waits && tokens.tasks_changed())
+/// Why audit found a skipped step or task acting; see [`Planner::classify`].
+#[derive(Debug, Clone, Copy)]
+enum Skip {
+    Raced,
+    Delayed(SignedDuration),
+    Unexplained,
 }
 
-/// The earliest clock due of a global step: `every`, settle after acting, the movement quiet
-/// window after the newest approval, and the UTC day boundary. Dues a run already passed are
-/// consumed.
-fn step_due(memory: &PassMemory, step: StepId, rule: &Rule) -> Option<Timestamp> {
-    let last = memory.last_run.get(&step).copied();
-    let open = |at: Timestamp| last.is_none_or(|run| at > run);
-    [
-        rule.every
-            .map(|every| last.map_or(Timestamp::MIN, |run| add(run, every))),
-        rule.settle
-            .and_then(|settle| memory.acted_at.get(&step).map(|at| add(*at, settle)))
-            .filter(|at| open(*at)),
-        rule.approved
-            .and_then(|quiet| memory.approved_at.map(|at| add(at, quiet)))
-            .filter(|at| open(*at)),
-        rule.utc_day
-            .then(|| last.map_or(Some(Timestamp::MIN), next_utc_day))
-            .flatten(),
-    ]
-    .into_iter()
-    .flatten()
-    .min()
-}
-
-/// The minimum of every step and task due strictly after `now`. Overdue entries are not
-/// repeated: their step was not reached this pass, and the paced wait bounds their delay.
-fn next_due(memory: &PassMemory, now: Timestamp) -> Option<Timestamp> {
-    let steps = rules::STEPS.iter().filter_map(|step| {
-        let rule = (memory.rules)(*step);
-        (!rule.per_task)
-            .then(|| step_due(memory, *step, &rule))
-            .flatten()
-    });
-    let task_steps = memory.task_run.iter().filter_map(|((step, _), at)| {
-        let rule = (memory.rules)(*step);
-        rule.per_task
-            .then_some(rule.every.map(|every| add(*at, every)))
-            .flatten()
-    });
-    let tasks = memory
-        .tasks
-        .values()
-        .filter_map(|memo| memo.due.next(memo.last_run));
-    steps
-        .chain(task_steps)
-        .chain(tasks)
-        .filter(|at| *at > now)
-        .min()
-}
-
-fn next_utc_day(at: Timestamp) -> Option<Timestamp> {
-    let utc = jiff::tz::TimeZone::UTC;
-    let tomorrow = at.to_zoned(utc.clone()).date().tomorrow().ok()?;
-    tomorrow.to_zoned(utc).ok().map(|day| day.timestamp())
-}
-
-fn add(at: Timestamp, by: SignedDuration) -> Timestamp {
-    at.saturating_add(by).unwrap_or(Timestamp::MAX)
-}
-
-/// `a*` matches by prefix, anything else exactly.
-fn area_matches(pattern: &str, area: &str) -> bool {
-    match pattern.strip_suffix('*') {
-        Some(prefix) => area.starts_with(prefix),
-        None => area == pattern,
-    }
-}
-
-/// Task numbers of every `T-<digits>` token in a record key (`autopilot-T-042`, `T-7/run`).
-fn task_tokens(key: &str) -> impl Iterator<Item = u64> + '_ {
-    let bytes = key.as_bytes();
-    (0..bytes.len()).filter_map(move |i| {
-        let starts = bytes[i] == b'T'
-            && bytes.get(i + 1) == Some(&b'-')
-            && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric());
-        if !starts {
-            return None;
-        }
-        let digits: &str = {
-            let rest = &key[i + 2..];
-            let end = rest
-                .find(|c: char| !c.is_ascii_digit())
-                .unwrap_or(rest.len());
-            &rest[..end]
-        };
-        digits.parse().ok()
-    })
-}
-
-/// Hash of `(pane_id, workspace_id, agent, status, cwd)` per pane, sorted. Titles churn and
-/// are left out on purpose.
-fn inventory_fingerprint(panes: &[PaneInfo]) -> u64 {
-    let mut rows: Vec<_> = panes
-        .iter()
-        .map(|p| {
-            (
-                &p.pane_id,
-                &p.workspace_id,
-                &p.agent,
-                p.status.as_str(),
-                &p.cwd,
-            )
-        })
-        .collect();
-    rows.sort();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    rows.hash(&mut hasher);
-    hasher.finish()
+fn native_ids(ctx: &Ctx) -> Result<BTreeSet<String>> {
+    Ok(ctx
+        .store
+        .unfinished_native_heads()
+        .context("listing tasks with native work")?
+        .into_iter()
+        .map(|head| head.task.id)
+        .collect())
 }
 
 #[cfg(test)]

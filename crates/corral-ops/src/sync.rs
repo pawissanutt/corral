@@ -200,6 +200,8 @@ fn sync_scoped(
         return Ok(Vec::new());
     }
     fresh.reload_config()?;
+    // The planner compares the config this pass runs with, not its own earlier sample.
+    pass.gate().observe_config(&fresh.store.config);
     let ctx = &fresh;
     if !crate::session_scope::owns_inventory(ctx)? {
         return Ok(Vec::new());

@@ -62,7 +62,7 @@ pub fn run(start: &Path, options: RunOptions) -> Result<Exit> {
         options,
         |ctx, supervisor| pass(ctx, supervisor, &shared, &mut memory, &pacing),
         Arc::clone(&shared),
-        |spent| pacing.get().wait(spent, Timestamp::now()),
+        |spent| pacing.get().wait(spent),
     )
 }
 
@@ -208,30 +208,26 @@ fn measured_pass(
 /// What the loop needs from the pass just finished to pace the next one.
 #[derive(Debug, Clone, Copy, Default)]
 struct Pacing {
-    /// The pass ran no gated step: it only checked its inputs.
+    /// An incremental pass that ran no gated step: it only checked its inputs.
     quiet: bool,
-    /// The earliest time the planner knows a step or task comes due.
-    next_due: Option<Timestamp>,
 }
 
 impl Pacing {
+    /// A full pass is never quiet; a failed pass (no report) is paced like a full one.
     fn of(report: Option<&PassReport>) -> Self {
-        report.map_or_else(Self::default, |report| Self {
-            quiet: report.quiet,
-            next_due: report.next_due,
-        })
+        Self {
+            quiet: report.is_some_and(|report| report.quiet && report.full.is_none()),
+        }
     }
 
-    /// The CPU-proportional wait, shortened to the next due time, never negative.
-    fn wait(self, spent: Duration, now: Timestamp) -> Duration {
-        let paced = if self.quiet {
+    /// The CPU-proportional wait only: `report.next_due` never shortens it. Each pass waits at
+    /// least 19 times its own CPU time, so paced passes stay under about 5% of a core.
+    fn wait(self, spent: Duration) -> Duration {
+        if self.quiet {
             quiet_wait(spent)
         } else {
             periodic_wait(spent)
-        };
-        self.next_due.map_or(paced, |due| {
-            paced.min(Duration::try_from(due.duration_since(now)).unwrap_or(Duration::ZERO))
-        })
+        }
     }
 }
 

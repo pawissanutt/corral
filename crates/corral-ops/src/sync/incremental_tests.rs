@@ -123,10 +123,11 @@ fn feed_areas(area: &str, key: &str) -> FeedDelta {
 
 use super::super::gate::StepId::*;
 
-const ANY_ROWS: [StepId; 11] = [
+const ANY_ROWS: [StepId; 12] = [
     HoldFirst,
     OwnerDelivery,
     PmInbox,
+    AgentHooksPass,
     ResumeGates,
     GateQueue,
     Availability,
@@ -137,16 +138,18 @@ const ANY_ROWS: [StepId; 11] = [
     MaintainDatabase,
 ];
 
-const TASK_ROWS: [StepId; 16] = [
+const TASK_ROWS: [StepId; 18] = [
     DesktopFirst,
     MigrateBacklog,
     TrackerReconcile,
+    ResourcePhase,
     GateCollect,
     ScratchReclaim,
     LifecycleGc,
     SweepInventory,
     ReviewBudget,
     PostLand,
+    HandoffRecovery,
     Movement,
     ReacquireWoken,
     StartQueued,
@@ -220,9 +223,9 @@ fn each_row_fires_on_its_tokens_and_not_otherwise() {
     };
     let expected = set(&[&ANY_ROWS, &[LessonsDue, Movement, PmEvents]]);
     assert_eq!(feed_case(&config, approved), expected);
-    let expected = set(&[&ANY_ROWS, &[PmPolicy, AgentHooksPass, PmEvents]]);
+    let expected = set(&[&ANY_ROWS, &[PmPolicy, PmEvents]]);
     assert_eq!(feed_case(&config, feed_areas("pm", "state")), expected);
-    let expected = set(&[&ANY_ROWS, &[ResourcePhase]]);
+    let expected = set(&[&ANY_ROWS, &[ResourcePhase, StartQueued, DispatchPolicy]]);
     assert_eq!(feed_case(&config, feed_areas("claims", "T-001")), expected);
     let scratch = FeedDelta {
         scratch: true,
@@ -272,7 +275,7 @@ fn each_row_fires_on_its_tokens_and_not_otherwise() {
     };
     let expected = set(&[&[PostLand, StartQueued]]);
     assert_eq!(quiet_case(&config, at(1), repo, false), expected);
-    let expected = set(&[&[SandboxSweep]]);
+    let expected = set(&[&[SandboxSweep, ReviewBudget]]);
     assert_eq!(quiet_case(&config, at(1), none(), true), expected);
     let mut due = set(&[&[
         Digest,
@@ -286,6 +289,7 @@ fn each_row_fires_on_its_tokens_and_not_otherwise() {
         Availability,
         PmEvents,
         Usage,
+        ReviewBudget,
         Supervise,
     ]]);
     assert_eq!(quiet_case(&config, at(20), none(), false), due);
@@ -505,6 +509,41 @@ fn dirty(
 }
 
 #[test]
+fn pm_host_writes_mark_only_the_tasks_that_read_them() {
+    let (_tmp, store, mut heads) = store_heads(2);
+    heads[0].last_plan_run = Some(Box::new(
+        serde_json::from_value(json!({
+            "id": "P1", "profile": "p", "harness": "pi", "spec_revision": "r",
+            "started": t0().to_string(), "output_dir": "/tmp", "rounds": 0,
+            "state": "submitted",
+        }))
+        .unwrap(),
+    ));
+    let warmed = || warm(&store.config, &heads, &[pane("p1")]);
+    for area in [
+        "pm-usage-guard",
+        "pm-supervisor",
+        "pm-wake-keys-wait",
+        "agent-wait-deadlines",
+    ] {
+        let feed = || feed_areas(area, "current");
+        let marked = dirty(&mut warmed(), &store, &heads, at(1), feed());
+        assert_eq!(marked, [false, false], "{area}");
+        let fired = feed_case(&store.config, feed());
+        assert!(fired.is_superset(&set(&[&ANY_ROWS])), "{area}");
+    }
+    // The PM binding is an input of the plan task only.
+    let marked = dirty(
+        &mut warmed(),
+        &store,
+        &heads,
+        at(1),
+        feed_areas("pm", "state"),
+    );
+    assert_eq!(marked, [true, false]);
+}
+
+#[test]
 fn per_task_rule_runs_only_changed_or_due_tasks() {
     let (_tmp, store, heads) = store_heads(2);
     let (a, b) = (&heads[0], &heads[1]);
@@ -646,12 +685,48 @@ fn audit_reports_rule_that_omits_an_input() {
         report.wrong_skips
     };
     assert!(audit(rule).is_empty());
+    // Without its feed input and its cadence, nothing explains the action.
     let omits_feed: fn(StepId) -> Rule = |step| match step {
         PmInbox => Rule {
             any: false,
+            every: None,
             ..rule(step)
         },
         step => rule(step),
     };
     assert_eq!(audit(omits_feed), vec![PmInbox]);
+}
+
+#[test]
+fn audit_tells_races_and_cadences_from_a_missing_input() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = crate::resources::FixedResourceProbe::ctx(Store::init(tmp.path()).unwrap());
+    let mut memory = warm(&ctx.store.config, &[], &[]);
+    memory.rules = |step| match step {
+        LessonsDue => Rule {
+            every: None,
+            ..rule(step)
+        },
+        step => rule(step),
+    };
+    memory.set_audit(true);
+    // The first audited pass catches the cursor up with the store's initial feed.
+    memory
+        .begin(&ctx, PassRequest::Paced, at(1))
+        .unwrap()
+        .finish(at(1));
+    let mut planner = memory.begin(&ctx, PassRequest::Paced, at(2)).unwrap();
+    // When a task is written after the pass sampled its inputs, before steps are decided.
+    ctx.store.create("Raced", None, Status::Ready, "").unwrap();
+    for step in [MigrateBacklog, Digest, LessonsDue] {
+        assert!(planner.run(step));
+        planner.finished(step, wrote());
+    }
+    let report = planner.finish(at(2));
+    // Then a rule listing the task change raced, one whose 20 s cadence is not yet due is
+    // delayed, and one with neither is a wrong skip.
+    assert_eq!(report.full, Some(FullReason::Audit));
+    assert_eq!(report.raced, vec![MigrateBacklog]);
+    assert_eq!(report.delayed, vec![Digest]);
+    assert_eq!(report.wrong_skips, vec![LessonsDue]);
 }
