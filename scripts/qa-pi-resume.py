@@ -32,8 +32,8 @@ log = bytearray()
 scenes = []
 resizes = []
 size = dict(columns=140, rows=46)
-# The status bar's role badge, then the binding dot (● bound, ○ not bound), possibly with styling between.
-BOUND = re.compile(rb'\xe2\x96\x8cASSISTANT(?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f')
+# The status bar: the role pill ` ASSISTANT `, then the binding dot and generation (`● g1` bound, `○` not), styling between.
+BOUND = re.compile(rb' ASSISTANT (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* g1\b')
 SESSIONS = [
     dict(session='A-1', ended=None, live=True, focus='workspace', summary='this conversation', last_activity='2026-11-06T10:00:00Z'),
     dict(session='A-2', ended=None, live=False, focus='workspace', summary='storage spike: compare sqlite page sizes', last_activity='2026-11-06T09:00:00Z'),

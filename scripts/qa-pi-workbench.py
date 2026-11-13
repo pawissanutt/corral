@@ -29,10 +29,13 @@ master = slave = watch = None
 proc = None
 selector = selectors.DefaultSelector()
 log = bytearray()
-# The status bar's role badge, then the binding dot (● bound, ○ not bound), possibly with styling between.
-BOUND = re.compile(rb'\xe2\x96\x8cWORKER(?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f')
-# The Changes comparison chip: the comparison's name, then its ▾.
+# The status bar: the role pill ` WORKER `, then the binding dot and generation (`● g1` bound, `○` not), styling between.
+BOUND = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* g1\b')
+# The Changes comparison row's label: the comparison's name, then its ▾. A task-bound session opens on the committed
+# candidate, whose row always shows (its exact base and head stay on screen); other comparisons name themselves too.
 CHIP = re.compile(rb'(candidate|since session|working tree|unstaged|staged) \xe2\x96\xbe')
+# The Changes list's path-search row: a blank cell, `/` in muted, then the query in the text colour (styling between).
+QUERY = re.compile(rb' (?:\x1b\[[\d;:]*m)*/(?:\x1b\[[\d;:]*m)*notification(?:\x1b\[[\d;:]*m)* ')
 try:
     env = {key: value for key, value in os.environ.items() if not key.startswith(('HERDR_', 'CORRAL_', 'PI_'))}
     env.update(HOME=str(work / 'home'), XDG_CONFIG_HOME=str(work / 'config'), XDG_DATA_HOME=str(work / 'data'),
@@ -98,9 +101,12 @@ try:
     def resize(columns, rows):
         fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
         os.kill(proc.pid, signal.SIGWINCH)
-    def comparison(name, after):
-        """`c` cycles the Changes comparison until the chip row names `name`; returns the log mark of the last step."""
-        until(lambda: CHIP.search(log, after) is not None, 'Changes comparison chip')
+    def comparison(name, after=None):
+        """`c` cycles the Changes comparison until the comparison row names `name`; returns the log mark of the last step.
+        With `after`, the row is drawn after that mark (Changes just opened); without it, the row is already on screen
+        and Pi's differential renderer does not write it again, so the last label drawn so far names the comparison."""
+        if after is None: after = 0
+        else: until(lambda: CHIP.search(log, after) is not None, 'Changes comparison row')
         shown = [match.group(1).decode() for match in CHIP.finditer(log, after)][-1]
         for _ in range(5):
             if shown == name: return after
@@ -118,6 +124,7 @@ try:
     until(lambda: text('Keep native draft'), 'composer draft')
     save_frame('conversation')
     if not args.activity_only:
+        # F7 opens Changes on the committed candidate: its row reads `candidate ▾  <base> → <head> …`.
         mark=len(log); send(b'\x1b[18~')
         mark=comparison('working tree', mark)
         until(lambda: text('quietHours',mark), 'persistent Changes with real diff')
@@ -125,7 +132,7 @@ try:
         closed=prompt_ends(); send(b'/')
         until(lambda: text('Filter changed paths'), 'native path search')
         mark=len(log); send(b'notification\r')
-        until(lambda: prompt_ends()>closed and text('/notification',mark) and text('1 file',mark) and text('Keep native draft',mark) and log.endswith(b'\x1b[?2026l'), 'filtered change list and restored editor')
+        until(lambda: prompt_ends()>closed and QUERY.search(log,mark) is not None and text('notification.ts',mark) and text('Keep native draft',mark) and log.endswith(b'\x1b[?2026l'), 'filtered change list (the /query row, then the matching file) and restored editor')
         save_frame('search')
         # External edit should update data without replacing the currently inspected hunk.
         candidate.write_text('export const quietHours = "updated";\n')
@@ -146,9 +153,10 @@ try:
         save_frame('changes-small')
         # Switch to unstaged at 52 columns: its diff is the same text as the working-tree one, so only the
         # full repaint of the 52→140 resize shows it again. The diff view titles a hunk by its count, not
-        # by its raw @@ header, so the wait reads the changed line itself.
-        mark=len(log); send(b'\x1b[18~')
-        comparison('unstaged', mark)
+        # by its raw @@ header, so the wait reads the changed line itself. Changes already shows the
+        # working-tree row from the 52-column repaint; F7 keeps Changes, and each `c` redraws the row.
+        send(b'\x1b[18~')
+        comparison('unstaged')
         mark=len(log); resize(140,46)
         until(lambda: text('Keep native draft',mark) and text('unstaged ▾',mark) and text('"updated"',mark) and log.endswith(b'\x1b[?2026l'), 'wide draft continuity and the loaded unstaged comparison')
         save_frame('comparison')
