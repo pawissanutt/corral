@@ -73,7 +73,29 @@ These commands only read recorded events; they do not reload settings or create 
 
 Sections: [limits](#limits) · [resources](#resources) · [dispatch](#dispatch) · [projects](#projects) · [defaults](#defaults) · [harnesses](#harnesses) ·
 [profiles](#profiles) · [routing](#routing) · [automation](#automation) · [review](#review) · [sync](#sync) · [ui](#ui) · [board.card](#boardcard) · [viewers](#viewers) ·
-[artifacts](#artifacts) · [storage](#storage) · [load_sandbox](#load_sandbox) · [pm](#pm) · [herdr](#herdr) · [agents (legacy)](#agents-legacy)
+[artifacts](#artifacts) · [storage](#storage) · [load_sandbox](#load_sandbox) · [pm](#pm) · [build](#build) · [herdr](#herdr) · [agents (legacy)](#agents-legacy)
+
+## build
+
+Build sessions use workspace settings for child concurrency and named child profiles.
+`max_parallel` defaults to 3 and must be between 1 and 8. At most 16 profiles may be
+configured. Profile names start with a lowercase letter and contain at most 32 lowercase
+letters, digits or hyphens. Each model is a `provider/id`; `effort` and `description`
+are optional.
+
+```toml
+[build]
+max_parallel = 3
+
+[build.profiles.reviewer]
+model = "anthropic/claude-opus-4-8"
+effort = "high"
+description = "Independent implementation slice"
+```
+
+The provider must be known to corral and approved for the host. A missing `default`
+profile inherits the parent model and effort. See [build sessions](build-sessions.md)
+for child behavior and exit policy.
 
 ## limits
 
@@ -287,6 +309,7 @@ root itself is a repository and no subdirectory is, the root becomes one project
 | `default_profile` | none | Profile for this project's runs (older files call this `default_agent`, still accepted). |
 | `base` | repo's current branch | Branch new runs start from and land on. |
 | `review` | none | Project-level override of the [review](#review) policy. |
+| `build_exit` | `"review"` | Build-session exit policy: `"review"`, `"gate"`, or `"none"`; see [build sessions](build-sessions.md#leaving-the-session). |
 | `dispatch` | inherited | Partial project override of the three [dispatch](#dispatch) policy fields. |
 | `post_land` | empty | Ordered opt-in named argv hooks with explicit cwd, env, timeouts and retry bounds; see [post-land operations](post-land.md). |
 

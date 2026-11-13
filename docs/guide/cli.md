@@ -16,7 +16,7 @@ Commands:
   inbox                   Inspect and durably manage agent inbox messages without delivering them
   attention               Inspect current task conditions and progress without changing state
   agent                   corral-pi agent host: authenticated host calls, launch, install and recovery
-  pi                      Start corral-pi here: the launcher on a terminal, an assistant with --assistant, the PM with --pm, or plain Pi with --bare
+  pi                      Start corral-pi here: the launcher on a terminal, an assistant with --assistant, a build session with --build, the PM with --pm, or plain Pi with --bare
   question                Triage corral-pi agent questions by key and revision: list, show, answer, escalate, cancel, deadline
   automation              Preview, explicitly confirm, or inspect finite operating authority
   selection               Read current selection guidance or save a validated Auto receipt; JSON output
@@ -1254,7 +1254,7 @@ Options:
 ## `corral pi`
 
 ```text
-Start corral-pi here: the launcher on a terminal, an assistant with --assistant, the PM with --pm, or plain Pi with --bare
+Start corral-pi here: the launcher on a terminal, an assistant with --assistant, a build session with --build, the PM with --pm, or plain Pi with --bare
 
 Usage: corral pi [OPTIONS]
 
@@ -1263,8 +1263,11 @@ Options:
       --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
       --pm                   Open the workspace PM in this pane, or take over a dead one
       --assistant            Open an assistant directly, without the launcher
+      --build                Open an untethered build session: parallel agents in one worktree, nothing reaches the board until you choose an exit
+      --here                 Write in the current checkout and branch instead of a new build worktree
+      --name <NAME>          Name the build session; a new worktree is `.worktrees/build-<NAME>` on branch `build/<NAME>`
   -c, --continue             Continue the previous PM conversation instead of starting fresh
-      --resume <A-N>         Resume stopped assistant session A-<n> in this pane, fencing its previous generation (inside an assistant, /resume picks one)
+      --resume <ID>          Resume stopped assistant session A-<n> (fencing its previous generation) or build session B-<id> in this pane (inside an assistant, /resume picks one)
       --over-cap             Open an assistant even when assistant.max_live assistants are already live
       --task <TASK-ID>       Preload bounded read-only context for this task in a new assistant
       --model <MODEL>        Model to run instead of the profile's (bare: Pi's default for the provider)

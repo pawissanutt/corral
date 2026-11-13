@@ -336,3 +336,128 @@ fn list_sessions_reads_host_records_newest_first_and_skips_unresumable_ones() {
     assert_eq!(sessions[1].project, None);
     assert_eq!(sessions[1].exited, None);
 }
+
+#[test]
+fn resume_resolves_the_recorded_repository_instead_of_the_callers_directory() {
+    let mut recorded = fixture();
+    let mut caller = fixture();
+    let data = tempfile::tempdir().unwrap();
+    let unrelated = tempfile::tempdir().unwrap();
+    auth(data.path());
+    for (fx, project, policy, parallel) in [
+        (&mut recorded, "recorded", "gate", 5),
+        (&mut caller, "caller", "none", 2),
+    ] {
+        let config = &mut fx.ctx.store.config;
+        source_assets(config.agent.assets_dir.as_ref().unwrap());
+        config.projects.clear();
+        config.projects.insert(
+            project.into(),
+            serde_json::from_value(json!({"path":"app", "build_exit":policy})).unwrap(),
+        );
+        config.profiles.get_mut("pm-pi").unwrap().model = Some("gpt-6.1-sol".into());
+        config.build.max_parallel = parallel;
+        config
+            .agent
+            .capabilities
+            .set(AgentRole::Assistant, "todo", project == "caller")
+            .unwrap();
+        fx.ctx.store.save_config().unwrap();
+    }
+    let repo = recorded.root().join("app");
+    let id = "B-resume1";
+    let mut record = session_record(id, "2026-11-03T10:00:00.000Z");
+    record["repoRoot"] = json!(repo);
+    record["project"] = json!("recorded");
+    record["workspaceRoot"] = json!(recorded.root());
+    session_file(data.path(), id, &record.to_string());
+    let before = listing(&recorded.root().join(".corral"));
+    let caller_before = listing(&caller.root().join(".corral"));
+    let bun = fake_bun(data.path());
+    let args = BuildArgs {
+        resume: Some(id.into()),
+        ..Default::default()
+    };
+    for (cwd, workspace) in [
+        (caller.root().join("app"), Some(caller.root())),
+        (unrelated.path().to_path_buf(), None),
+    ] {
+        let launch = message(
+            build_command(data.path(), &args, &cwd, Some(bun.clone()), workspace)
+                .unwrap()
+                .1,
+        );
+        assert_eq!(launch["repo_root"], json!(repo));
+        assert_eq!(launch["workspace_root"], json!(recorded.root()));
+        assert_eq!(launch["project"], "recorded");
+        assert_eq!(launch["settings"]["exit_policy"], "gate");
+        assert_eq!(launch["settings"]["max_parallel"], 5);
+        assert_eq!(launch["model"], "gpt-6.1-sol");
+        assert!(
+            !launch["capabilities"]["enabled"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("todo"))
+        );
+    }
+    let launch = message(
+        build_command(
+            data.path(),
+            &BuildArgs::default(),
+            &caller.root().join("app"),
+            Some(bun.clone()),
+            Some(caller.root()),
+        )
+        .unwrap()
+        .1,
+    );
+    assert_eq!(launch["repo_root"], json!(caller.root().join("app")));
+    assert_eq!(launch["project"], "caller");
+    assert_eq!(launch["settings"]["exit_policy"], "none");
+    assert_eq!(launch["settings"]["max_parallel"], 2);
+    let overrides = BuildArgs {
+        model: Some("gpt-override".into()),
+        effort: Some("medium".into()),
+        provider: Some("openai-codex".into()),
+        ..args
+    };
+    let launch = message(
+        build_command(data.path(), &overrides, unrelated.path(), Some(bun), None)
+            .unwrap()
+            .1,
+    );
+    assert_eq!(launch["provider"], "openai-codex");
+    assert_eq!(launch["model"], "gpt-override");
+    assert_eq!(launch["effort"], "medium");
+    assert_eq!(listing(&recorded.root().join(".corral")), before);
+    assert_eq!(listing(&caller.root().join(".corral")), caller_before);
+}
+
+#[test]
+fn resume_refuses_unknown_unreadable_and_missing_repository_records() {
+    let data = tempfile::tempdir().unwrap();
+    let id = "B-missing1";
+    let args = BuildArgs {
+        resume: Some(id.into()),
+        ..Default::default()
+    };
+    let error = build_command(data.path(), &args, data.path(), None, None).unwrap_err();
+    assert_eq!(code(&error), Some("build_session_unknown"));
+    assert!(error.to_string().contains(id));
+    session_file(data.path(), id, "{malformed");
+    let error = build_command(data.path(), &args, data.path(), None, None).unwrap_err();
+    assert_eq!(code(&error), Some("build_session_unknown"));
+    assert!(error.to_string().contains(id));
+    let mut record = session_record(id, "2026-11-03T10:00:00.000Z");
+    let missing = data.path().join("missing-repository");
+    record["repoRoot"] = json!(missing);
+    session_file(data.path(), id, &record.to_string());
+    let error = build_command(data.path(), &args, data.path(), None, None).unwrap_err();
+    assert_eq!(code(&error), Some("build_session_unknown"));
+    assert!(error.to_string().contains(id));
+    assert!(error.to_string().contains(missing.to_str().unwrap()));
+    record["padding"] = json!("x".repeat(SESSION_MAX_BYTES as usize));
+    session_file(data.path(), id, &record.to_string());
+    let error = build_command(data.path(), &args, data.path(), None, None).unwrap_err();
+    assert_eq!(code(&error), Some("build_session_unknown"));
+}
