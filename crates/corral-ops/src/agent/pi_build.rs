@@ -132,6 +132,35 @@ fn model(
     ))
 }
 
+fn workspace_for(path: &Path) -> Result<Option<PathBuf>> {
+    match Store::find_root(path) {
+        Ok(root) => Ok(Some(root)),
+        Err(error) if error.to_string() == "no .corral workspace found (run `corral init`)" => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn resume_session(data_root: &Path, id: &str) -> Result<BuildSessionSummary> {
+    let (_, session) = read_session(&data_root.join("build").join(id)).ok_or_else(|| {
+        refuse(
+            "build_session_unknown",
+            format!("cannot read build session {id}"),
+        )
+    })?;
+    if !session.repo_root.is_dir() {
+        return Err(refuse(
+            "build_session_unknown",
+            format!(
+                "build session {id} repository {} no longer exists",
+                session.repo_root.display()
+            ),
+        ));
+    }
+    Ok(session)
+}
+
 /// Prepares the host and its inherited launch pipe without writing any workspace state.
 #[cfg(unix)]
 pub fn build_command(
@@ -146,9 +175,25 @@ pub fn build_command(
 
     platform()?;
     validate_args(args)?;
-    let repo_root = corral_git::repo_root(cwd)
+    let resumed = args
+        .resume
+        .as_deref()
+        .map(|id| resume_session(data_root, id))
+        .transpose()?;
+    let source = resumed
+        .as_ref()
+        .map(|session| session.repo_root.as_path())
+        .unwrap_or(cwd);
+    let git_root = corral_git::repo_root(source)
         .map_err(|error| refuse("not_a_repository", format!("{error:#}")))?;
+    let repo_root = resumed.map(|session| session.repo_root).unwrap_or(git_root);
+    let workspace = if args.resume.is_some() {
+        workspace_for(&repo_root)?
+    } else {
+        workspace.map(Path::to_path_buf)
+    };
     let workspace = workspace
+        .as_deref()
         .map(std::fs::canonicalize)
         .transpose()
         .context("resolving the workspace root")?;
@@ -314,10 +359,10 @@ pub fn build_command(
 pub fn build(args: &BuildArgs) -> Result<()> {
     use std::os::unix::process::CommandExt;
     let cwd = std::env::current_dir().context("reading the current directory")?;
-    let workspace = match Store::find_root(&cwd) {
-        Ok(root) => Some(root),
-        Err(error) if error.to_string() == "no .corral workspace found (run `corral init`)" => None,
-        Err(error) => return Err(error),
+    let workspace = if args.resume.is_some() {
+        None
+    } else {
+        workspace_for(&cwd)?
     };
     let (mut command, _reader) = build_command(
         &super::install::data_root()?,

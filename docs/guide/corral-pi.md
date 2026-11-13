@@ -1756,6 +1756,7 @@ and `-c`; `--here` and `--name` need `--build` and do not combine with `--resume
 `--build --resume` accepts only a `B-<id>`. The parent agent runs the assistant profile's model
 inside a workspace and the provider's default (`openai-codex` unless `--provider` says otherwise)
 outside one; `--model`, `--provider` and `--effort` replace those for this launch.
+See [build sessions](build-sessions.md) for child agents, owner-controlled exits and board plans.
 
 **Bound PM in this pane.** `corral pi --pm [--model M] [--provider P] [--effort E]`, run in a
 herdr pane inside a corral workspace, makes that pane the PM pane. corral resolves `pm.agent` through
