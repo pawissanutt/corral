@@ -1,5 +1,6 @@
 //! Shared wire contract for the daemon and its clients; independent of store internals.
 pub mod board;
+pub mod cmd;
 pub mod frame;
 pub mod health;
 pub mod read;
