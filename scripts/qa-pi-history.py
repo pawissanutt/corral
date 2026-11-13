@@ -150,7 +150,27 @@ process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ??
     frame('history-narrow-draft')
     send(b'\x15\x04')
     until(lambda: b'\x1b[?1049l' in log, 'terminal restored')
-    proc.wait(timeout=10)
+    def wait_exit(timeout=30):
+        """Keep reading the PTY until the host exits: it still writes after restoring the terminal."""
+        exited = os.pidfd_open(proc.pid)
+        waiting = selectors.DefaultSelector()
+        waiting.register(exited, selectors.EVENT_READ, 'exit')
+        waiting.register(master, selectors.EVENT_READ, 'terminal')
+        deadline = time.monotonic() + timeout
+        try:
+            while proc.poll() is None:
+                remaining = deadline - time.monotonic()
+                events = waiting.select(remaining) if remaining > 0 else []
+                if not events: raise AssertionError('Timed out: host process exit after terminal restoration')
+                for key, _ in events:
+                    if key.data != 'terminal': continue
+                    try: chunk = os.read(master, 65536)
+                    except OSError: chunk = b''
+                    if chunk: log.extend(chunk)
+                    else: waiting.unregister(master)  # EOF/EIO: the host closed its PTY; its exit follows.
+        finally:
+            waiting.close(); os.close(exited)
+    wait_exit()
     assert proc.returncode == 0
     after = fingerprint()
     assert before == after, 'history changed canonical store'

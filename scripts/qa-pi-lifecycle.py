@@ -109,7 +109,27 @@ try:
     assert not [c for c in calls if c['op'] == 'event' and c['payload'].get('kind') == 'turn_started'], calls
     assert all(c['identity']['generation'] == 1 for c in calls)
     scene('return-conversation', 'Chat', b'\x1b[20~')
-    send(b'\x04'); until('\x1b[?1049l'); proc.wait(timeout=10)
+    def wait_exit(timeout=30):
+        """Keep reading the PTY until the host exits: it still writes after restoring the terminal."""
+        exited = os.pidfd_open(proc.pid)
+        waiting = selectors.DefaultSelector()
+        waiting.register(exited, selectors.EVENT_READ, 'exit')
+        waiting.register(master, selectors.EVENT_READ, 'terminal')
+        deadline = time.monotonic() + timeout
+        try:
+            while proc.poll() is None:
+                remaining = deadline - time.monotonic()
+                events = waiting.select(remaining) if remaining > 0 else []
+                if not events: raise AssertionError('Timed out: host process exit after terminal restoration')
+                for key, _ in events:
+                    if key.data != 'terminal': continue
+                    try: chunk = os.read(master, 65536)
+                    except OSError: chunk = b''
+                    if chunk: log.extend(chunk)
+                    else: waiting.unregister(master)  # EOF/EIO: the host closed its PTY; its exit follows.
+        finally:
+            waiting.close(); os.close(exited)
+    send(b'\x04'); until('\x1b[?1049l'); wait_exit()
     assert proc.returncode == 0
     (args.output / 'result.json').write_text(json.dumps(dict(status='PASS', candidate=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=repo, text=True).strip(), initial_size=dict(columns=140, rows=46), resizes=resizes, source='offline canonical read fixture; production host/main.ts and NativeWorkbench',
         checks=['real PTY keyboard input at 140 and 52 columns', 'F5 Task then g opens the graph/list and selects canonical task details', 'Task then l opens the timeline and selects source-identity event details',
