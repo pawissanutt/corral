@@ -150,7 +150,9 @@ fn handling_context_subprocess() {
     let key = std::env::var("ATTENTION_TEST_KEY").unwrap();
     let expected = std::env::var("ATTENTION_TEST_REASON").unwrap();
     let before = ctx.store.list().unwrap();
-    let error = attention::attend(&ctx, &key, "Looking", 1800, "refusal", at(1)).unwrap_err();
+    let invoker = corral_ops::command::Invoker::process();
+    let error =
+        attention::attend(&ctx, &key, "Looking", 1800, "refusal", at(1), &invoker).unwrap_err();
     assert!(error.to_string().contains(&expected), "{error:#}");
     assert_eq!(ctx.store.list().unwrap(), before);
 }

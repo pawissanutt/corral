@@ -1,11 +1,11 @@
 //! Independent agent, gate and unfinished-work accounting over bounded task heads.
 //! Reservations count before execution; scheduling lanes never authorize an operation.
 use corral_core::{CapacityLane, CapacityLimits, CapacityPool, ReviewWork, Status, TaskHead};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub(crate) mod admission;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CapacityUsage {
     pub agents: CapacityPool,
     pub unfinished: CapacityPool,
@@ -218,7 +218,7 @@ pub(crate) fn unfinished(head: &TaskHead) -> bool {
 /// Explicit owner designation before dispatch/enqueue. It changes scheduling, not authority.
 /// Existing lanes are retained by all ordinary launch/retry/review paths.
 pub fn designate_adhoc(ctx: &crate::Ctx, id: &str) -> anyhow::Result<()> {
-    crate::require_automation_owner(&ctx.store)?;
+    crate::require_automation_owner(&ctx.store, &crate::command::Invoker::process())?;
     ctx.store.check_runtime()?;
     anyhow::ensure!(
         ctx.store.config.limits.capacity.is_some(),

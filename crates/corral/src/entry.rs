@@ -6,6 +6,8 @@ use clap::{ArgMatches, parser::ValueSource};
 use corral_core::{Actor, Store};
 use corral_ops::Ctx;
 use corral_ops::assistant::owner_action::ViaAssistant;
+use corral_ops::command::Invoker;
+use corral_protocol::cmd::{ClientKind, Via};
 
 use crate::Cmd;
 use crate::pm_cmd::PmCmd;
@@ -29,11 +31,8 @@ impl std::fmt::Display for AssistantRefused {
 impl std::error::Error for AssistantRefused {}
 
 pub struct Entry {
-    actor: Option<Actor>,
     via: &'static str,
-    assistant: Option<String>,
-    owner_action: Option<ViaAssistant>,
-    planning_safe: bool,
+    invoker: Invoker,
 }
 
 impl Entry {
@@ -41,13 +40,13 @@ impl Entry {
     /// which claims its reservation here, before the command runs.
     pub fn new(cmd: &Cmd, matches: &ArgMatches, start: &Path) -> Result<Self> {
         if let Some(via) = corral_ops::assistant::owner_action::claim_from_env(start)? {
-            return Ok(Self {
-                actor: Some(Actor::Owner),
-                via: "owner_action",
-                assistant: None,
-                owner_action: Some(via),
-                planning_safe: false,
-            });
+            return Ok(Self::build(
+                Some(Actor::Owner),
+                "owner_action",
+                None,
+                Some(via),
+                false,
+            ));
         }
         if let Some(session) = std::env::var_os("CORRAL_ASSISTANT") {
             return Self::assistant(cmd, matches, session);
@@ -82,13 +81,7 @@ impl Entry {
             }
             _ => (actor, "cli"),
         };
-        Ok(Self {
-            actor,
-            via,
-            assistant: None,
-            owner_action: None,
-            planning_safe: false,
-        })
+        Ok(Self::build(actor, via, None, None, false))
     }
 
     /// An assistant shell outranks the PM marker, a run worktree cwd and explicit author flags.
@@ -101,25 +94,58 @@ impl Entry {
         if class::of(cmd, &session) == class::CommandClass::Refused {
             return Err(AssistantRefused(command_path(matches)).into());
         }
-        Ok(Self {
-            actor: Some(Actor::Assistant),
-            via: "assistant",
-            assistant: Some(session),
-            owner_action: None,
-            planning_safe: class::planning_safe(cmd),
-        })
+        let planning_safe = class::planning_safe(cmd);
+        Ok(Self::build(
+            Some(Actor::Assistant),
+            "assistant",
+            Some(session),
+            None,
+            planning_safe,
+        ))
+    }
+
+    /// The caller classification travels in the `Invoker`; `via` keeps the board open path.
+    /// An owner action resolves before `via` is consulted, so its wire `via` is `cli`.
+    fn build(
+        actor: Option<Actor>,
+        via: &'static str,
+        assistant: Option<String>,
+        owner_action: Option<ViaAssistant>,
+        planning_safe: bool,
+    ) -> Self {
+        let wire_via = match via {
+            "hook" => Via::Hook,
+            "pm" => Via::Pm,
+            "tui" => Via::Tui,
+            "assistant" => Via::Assistant,
+            _ => Via::Cli,
+        };
+        let invoker = Invoker::from_process(
+            ClientKind::Cli,
+            actor,
+            wire_via,
+            assistant,
+            planning_safe,
+            owner_action,
+        );
+        Self { via, invoker }
+    }
+
+    /// The caller identity every store opening and routed command applies.
+    pub fn invoker(&self) -> &Invoker {
+        &self.invoker
     }
 
     /// Whether this process executes an assistant's receipted owner action.
     pub fn owner_action(&self) -> bool {
-        self.owner_action.is_some()
+        self.invoker.owner_action.is_some()
     }
 
     pub fn open(&self, start: &Path) -> Result<Ctx> {
         if self.via == "tui" {
             return corral_tui::open(&Store::find_root(start)?);
         }
-        let store = Store::open_with(&Store::find_root(start)?, |store| self.apply(store))?;
+        let store = Store::open_with(&Store::find_root(start)?, |store| self.invoker.apply(store))?;
         Ok(Ctx::from_store(store))
     }
 
@@ -131,69 +157,14 @@ impl Entry {
         edit: impl FnOnce(&Store) -> Result<()>,
     ) -> Result<Ctx> {
         let store = Store::open_with(&Store::find_root(start)?, |store| {
-            self.apply(store)?;
+            self.invoker.apply(store)?;
             edit(store)
         })?;
         Ok(Ctx::from_store(store))
     }
 
     pub fn init(&self, root: &Path) -> Result<Store> {
-        Store::init_with(root, |store| self.apply(store))
-    }
-
-    pub fn apply(&self, store: &Store) -> Result<()> {
-        if let Some(session) = &self.assistant
-            && !self.planning_safe
-        {
-            store.inspect_assistant_container(session, |container, _| {
-                corral_ops::assistant::workflow::boundary::require_ordinary(
-                    store, session, container,
-                )
-            })?;
-        }
-        let (actor, via) = self.resolve(store)?;
-        store.set_attribution(actor, &via)?;
-        if let Some(authority) = &self.owner_action {
-            store.set_attribution_detail("owner_authority", serde_json::to_value(authority)?)?;
-        }
-        Ok(())
-    }
-
-    fn resolve(&self, store: &Store) -> Result<(Actor, String)> {
-        if let Some(authority) = &self.owner_action {
-            return Ok((Actor::Owner, format!("assistant:{}", authority.session)));
-        }
-        if let Some(session) = &self.assistant {
-            return Ok((Actor::Assistant, format!("assistant:{session}")));
-        }
-        if self.via != "cli" {
-            return Ok((self.actor.unwrap_or(Actor::Owner), self.via.into()));
-        }
-        if let Some(run) = run_from_cwd(store, &std::env::current_dir().context("reading cwd")?)? {
-            return Ok((self.actor.unwrap_or(Actor::Agent), format!("run:{run}")));
-        }
-        Ok((self.actor.unwrap_or(Actor::Owner), "cli".into()))
-    }
-
-    /// The PM inbox author this invocation acts as: `owner`, `assistant:A-<n>` or its actor.
-    pub fn inbox_author(&self, store: &Store) -> Result<String> {
-        let (actor, via) = self.resolve(store)?;
-        Ok(match actor {
-            Actor::Assistant => via,
-            _ => self.decision_author(store)?.into(),
-        })
-    }
-
-    pub fn decision_author(&self, store: &Store) -> Result<&'static str> {
-        Ok(match self.resolve(store)?.0 {
-            Actor::Owner => "owner",
-            Actor::Pm => "pm",
-            Actor::Agent => "agent",
-            Actor::Assistant => "assistant",
-            Actor::Autopilot => "autopilot",
-            Actor::Reviewer => "reviewer",
-            Actor::System => "system",
-        })
+        Store::init_with(root, |store| self.invoker.apply(store))
     }
 }
 
@@ -209,31 +180,4 @@ fn command_path(matches: &ArgMatches) -> String {
         current = sub;
     }
     path
-}
-
-fn run_from_cwd(store: &Store, cwd: &Path) -> Result<Option<String>> {
-    // launch.rs/render_command export no run identity. Like infer_project, use
-    // canonical cwd containment, but match the persisted current run's worktree
-    // rather than guessing R1 from a .worktrees/<task> name. This also recognizes
-    // nested directories and retries, and does not mislabel unrelated worktrees.
-    // Launch always uses .worktrees/<task>; avoid enumerating task files for
-    // ordinary shell commands, including while a task is being published.
-    let cwd = cwd.canonicalize().context("resolving current directory")?;
-    if !cwd
-        .components()
-        .any(|component| component.as_os_str() == ".worktrees")
-    {
-        return Ok(None);
-    }
-    Ok(store
-        .view()?
-        .run_worktrees(true)?
-        .into_iter()
-        .filter_map(|run| {
-            let worktree = run.worktree.canonicalize().ok()?;
-            cwd.starts_with(&worktree)
-                .then_some((worktree.components().count(), run.run))
-        })
-        .max_by_key(|(depth, _)| *depth)
-        .map(|(_, id)| id))
 }

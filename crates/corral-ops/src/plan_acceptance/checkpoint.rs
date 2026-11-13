@@ -51,7 +51,7 @@ pub struct PlanCheckpoint {
 }
 
 /// Landings since the last checkpoint, as `corral plan progress` shows them.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointProgress {
     /// `[review] plan_checkpoint_every`; None means checkpoints only on demand.
     pub every: Option<u32>,

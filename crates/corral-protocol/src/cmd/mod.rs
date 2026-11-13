@@ -50,8 +50,14 @@ pub enum Command {
     Run(run::RunCommand),
     Setup(setup::SetupCommand),
     Task(task::TaskCommand),
-    #[serde(other)]
+    /// A family this build does not know; its `args`, if any, are skipped. A plain
+    /// `#[serde(other)]` unit arm of an adjacently tagged enum refuses non-null content.
+    #[serde(other, deserialize_with = "skip_args")]
     Other,
+}
+
+fn skip_args<'de, D: serde::Deserializer<'de>>(args: D) -> Result<(), D::Error> {
+    serde::de::IgnoredAny::deserialize(args).map(|_| ())
 }
 
 impl Command {
@@ -289,4 +295,36 @@ pub struct Caller {
     /// Raw `std::env::current_dir()`; None when unreadable or not UTF-8.
     pub cwd: Option<String>,
     pub env: CallerEnv,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_family_and_unknown_verb_decode_to_other() {
+        let family: Command = serde_json::from_value(serde_json::json!({
+            "family": "future", "args": {"verb": "launch", "id": "T-1"}
+        }))
+        .unwrap();
+        assert_eq!(family, Command::Other);
+        assert!(!family.is_known());
+        let verb: Command = serde_json::from_value(serde_json::json!({
+            "family": "task", "args": {"verb": "teleport", "id": "T-1"}
+        }))
+        .unwrap();
+        assert_eq!(verb, Command::Task(task::TaskCommand::Other));
+        assert!(!verb.is_known());
+        let comment = Command::Task(task::TaskCommand::Comment {
+            id: "T-1".into(),
+            text: "hello".into(),
+            author: "owner".into(),
+            send: false,
+        });
+        let wire = serde_json::to_value(&comment).unwrap();
+        assert_eq!(wire["family"], "task");
+        assert_eq!(wire["args"]["verb"], "comment");
+        assert_eq!(serde_json::from_value::<Command>(wire).unwrap(), comment);
+        assert!(comment.is_known());
+    }
 }

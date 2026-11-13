@@ -4,11 +4,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use corral_core::{
-    CheckpointRecord, CheckpointUpdate, DecisionRequest, ProgressUpdate, ResumeReceipt, Run,
-    RunProgress, StepState, WaitRequest,
-};
-use corral_ops::{Ctx, ResumeTarget};
+use corral_core::{CheckpointRecord, ResumeReceipt, Run, RunProgress, StepState};
+use corral_ops::ResumeTarget;
+use corral_protocol::cmd::{Command, FileInput, run::RunCommand};
 use serde::de::DeserializeOwned;
 
 #[derive(Subcommand)]
@@ -116,18 +114,12 @@ fn parse_lines(text: &str) -> std::result::Result<(usize, usize), String> {
     Ok((a, b))
 }
 
-fn read_input<T: DeserializeOwned>(path: &Path, max: u64) -> Result<T> {
+fn read_input(path: &Path) -> Result<FileInput> {
     let meta = std::fs::symlink_metadata(path)
         .with_context(|| format!("inspecting JSON input {}", path.display()))?;
     if !meta.is_file() {
         bail!(
             "{} must be an ordinary regular JSON file (not a symlink or special file)",
-            path.display()
-        );
-    }
-    if meta.len() > max {
-        bail!(
-            "{} exceeds artifacts.max_bytes ({max} bytes)",
             path.display()
         );
     }
@@ -140,23 +132,14 @@ fn read_input<T: DeserializeOwned>(path: &Path, max: u64) -> Result<T> {
         bail!("{} is not a regular JSON file", path.display());
     }
     let mut bytes = Vec::new();
-    file.by_ref()
-        .take(max)
-        .read_to_end(&mut bytes)
+    file.read_to_end(&mut bytes)
         .with_context(|| format!("reading bounded JSON input {}", path.display()))?;
-    let mut extra = [0];
-    if file
-        .read(&mut extra)
-        .with_context(|| format!("checking JSON input size {}", path.display()))?
-        != 0
-    {
-        bail!(
-            "{} exceeds artifacts.max_bytes ({max} bytes)",
-            path.display()
-        );
-    }
-    serde_json::from_slice(&bytes)
-        .with_context(|| format!("parsing typed JSON input {}", path.display()))
+    let text = String::from_utf8(bytes)
+        .with_context(|| format!("parsing typed JSON input {}", path.display()))?;
+    Ok(FileInput {
+        path: path.display().to_string(),
+        text,
+    })
 }
 
 fn payload<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
@@ -165,8 +148,8 @@ fn payload<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
     serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
-pub fn run(ctx: &Ctx, cmd: RunCmd) -> Result<()> {
-    let now = corral_core::clock::now();
+pub fn run(inv: &crate::invocation::Invocation, cmd: RunCmd) -> Result<()> {
+    let command = |command| inv.submit(Command::Run(command));
     let task = match cmd {
         RunCmd::Inspect {
             id,
@@ -174,6 +157,7 @@ pub fn run(ctx: &Ctx, cmd: RunCmd) -> Result<()> {
             lifecycle,
             artifacts,
         } => {
+            let ctx = inv.ctx()?;
             if artifacts {
                 let text =
                     serde_json::to_string(&corral_ops::artifact_gallery::inspect(ctx, &id, &run)?)?;
@@ -199,19 +183,36 @@ pub fn run(ctx: &Ctx, cmd: RunCmd) -> Result<()> {
             review,
             lines: (a, b),
         } => {
+            let ctx = inv.ctx()?;
             print!(
                 "{}",
                 corral_ops::transcript_page(&ctx.store, &id, &run, review, a, b)?
             );
             return Ok(());
         }
-        RunCmd::Progress(args) => return run_progress(ctx, args, false),
-        RunCmd::Checkpoint(args) => return run_progress(ctx, args, true),
+        RunCmd::Progress(args) => return run_progress(inv, args, false),
+        RunCmd::Checkpoint(args) => return run_progress(inv, args, true),
         RunCmd::Wait { id, file } => {
-            corral_ops::register_wait(ctx, &id, payload::<WaitRequest>(&file)?, now)?
+            let text = std::fs::read_to_string(&file)
+                .with_context(|| format!("reading {}", file.display()))?;
+            return command(RunCommand::Wait {
+                id,
+                file: FileInput {
+                    path: file.display().to_string(),
+                    text,
+                },
+            });
         }
         RunCmd::Decision { id, file } => {
-            corral_ops::register_decision(ctx, &id, payload::<DecisionRequest>(&file)?, now)?
+            let text = std::fs::read_to_string(&file)
+                .with_context(|| format!("reading {}", file.display()))?;
+            return command(RunCommand::Decision {
+                id,
+                file: FileInput {
+                    path: file.display().to_string(),
+                    text,
+                },
+            });
         }
         RunCmd::Resume {
             id,
@@ -219,6 +220,8 @@ pub fn run(ctx: &Ctx, cmd: RunCmd) -> Result<()> {
             decision,
             file,
         } => {
+            let ctx = inv.ctx()?;
+            let now = corral_core::clock::now();
             let target = match (wait.as_deref(), decision.as_deref()) {
                 (Some(wait), None) => ResumeTarget::Wait(wait),
                 (None, Some(decision)) => ResumeTarget::Decision(decision),
@@ -246,19 +249,29 @@ pub fn run(ctx: &Ctx, cmd: RunCmd) -> Result<()> {
     Ok(())
 }
 
-fn run_progress(ctx: &Ctx, args: RunArgs, checkpoint: bool) -> Result<()> {
+fn run_progress(
+    inv: &crate::invocation::Invocation,
+    args: RunArgs,
+    checkpoint: bool,
+) -> Result<()> {
     if let Some(path) = &args.file {
-        let max = ctx.store.config.artifacts.max_bytes;
-        if checkpoint {
-            let input: CheckpointUpdate = read_input(path, max)?;
-            corral_ops::save_checkpoint(ctx, &args.id, &input)
-                .with_context(|| format!("checkpointing {} run {}", args.id, input.run))?;
+        let file = read_input(path)?;
+        let command = if checkpoint {
+            RunCommand::Checkpoint {
+                id: args.id.clone(),
+                file,
+                json: args.json,
+            }
         } else {
-            let input: ProgressUpdate = read_input(path, max)?;
-            corral_ops::update_progress(ctx, &args.id, &input)
-                .with_context(|| format!("updating {} run {}", args.id, input.run))?;
-        }
+            RunCommand::Progress {
+                id: args.id.clone(),
+                file,
+                json: args.json,
+            }
+        };
+        inv.submit(Command::Run(command))?;
     }
+    let ctx = inv.ctx()?;
     let state = corral_ops::progress_readback(ctx, &args.id)
         .with_context(|| format!("reading identity and state for {}", args.id))?;
     if args.json {

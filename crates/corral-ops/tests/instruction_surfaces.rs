@@ -438,6 +438,7 @@ fn surfaces_rendered_for_a_reduced_tier_task_carry_the_tier_commands_and_no_full
             retry: false,
         },
         true,
+        &corral_ops::command::Invoker::process(),
     )
     .unwrap();
     fx.sync();

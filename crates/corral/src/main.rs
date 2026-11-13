@@ -23,6 +23,7 @@ mod hooks_cmd;
 mod idea_cmd;
 mod import_cmd;
 mod inbox_cmd;
+mod invocation;
 mod lessons_cmd;
 mod list_cols;
 mod log_cmd;
@@ -51,6 +52,7 @@ mod skill;
 mod sprint_cmd;
 mod stats;
 mod storage_cmd;
+mod task_cmd;
 mod unstick;
 mod up;
 mod wait_cmd;
@@ -59,6 +61,7 @@ use std::path::PathBuf;
 
 use clap::{FromArgMatches, Parser, Subcommand};
 use corral_core::{CommentAuthor, Origin, TaskDifficulty, TaskKind, TaskSize};
+use corral_ops::command::render::ErrorStyle;
 
 fn parse_comment_author(value: &str) -> Result<CommentAuthor, String> {
     match value {
@@ -925,10 +928,22 @@ fn main_exit(verb: &mut String) -> i32 {
         _ => None,
     };
     let result = corral_core::clock::pin_from_test_env().and_then(|()| cmds::run(cli, &matches));
+    let rendered = result
+        .as_ref()
+        .err()
+        .and_then(|err| err.downcast_ref::<invocation::Rendered>());
+    let rendered_exit = rendered.map(|rendered| rendered.exit);
+    let failure = match rendered {
+        Some(rendered) => rendered.failure.clone(),
+        None => result.as_ref().err().map(|err| format!("{err:#}")),
+    };
     // An owner action's command child records how its command ended before it exits.
-    let failure = result.as_ref().err().map(|err| format!("{err:#}"));
     if let Err(error) = corral_ops::assistant::owner_action::finish(failure.as_deref()) {
         eprintln!("warning: recording the owner action's completion: {error:#}");
+    }
+    if let Some(exit) = rendered_exit {
+        // A routed command's output, including its error, is already written.
+        return exit.into();
     }
     if let Err(err) = result {
         if err.is::<wait_cmd::WaitTimeout>() {
@@ -942,43 +957,27 @@ fn main_exit(verb: &mut String) -> i32 {
             eprintln!("error: {err}");
             return 2;
         }
-        if let Some(command) = repair_json {
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "command": format!("repair {command}"), "error": format!("{err:#}")
-                })
-            );
-        } else if let Some(command) = selection_json {
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "command": format!("selection {command}"),
-                    "error": format!("{err:#}")
-                })
-            );
-        } else if let Some(command) = setup_json {
-            let mut body = serde_json::json!({
-                "command": format!("setup {command}"),
-                "error": format!("{err:#}")
-            });
-            if let Some(problems) = err.downcast_ref::<corral_ops::SetupValidationErrors>() {
-                body["errors"] = serde_json::json!(problems.0);
+        let style = if let Some(command) = repair_json {
+            ErrorStyle::Family {
+                command: format!("repair {command}"),
             }
-            eprintln!("{body}");
+        } else if let Some(command) = selection_json {
+            ErrorStyle::Family {
+                command: format!("selection {command}"),
+            }
+        } else if let Some(command) = setup_json {
+            ErrorStyle::Setup {
+                command: format!("setup {command}"),
+            }
         } else if let Some((command, task)) = run_json {
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "command": format!("run {command}"),
-                    "task": task,
-                    "error": format!("{err:#}"),
-                    "hint": "Read current identity with corral run progress <task-id> --json; reconcile stale input before resubmitting."
-                })
-            );
+            ErrorStyle::Run {
+                command: format!("run {command}"),
+                task,
+            }
         } else {
-            eprintln!("error: {}", corral_herdr::friendly_error(&err));
-        }
+            ErrorStyle::Plain
+        };
+        eprint!("{}", corral_ops::command::render::failure(&style, &err));
         return 1;
     }
     0

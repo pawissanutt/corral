@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
-use corral_core::{CriteriaManifest, EvidenceObservation};
+use corral_core::EvidenceObservation;
 use corral_ops::Ctx;
+use corral_protocol::cmd::{Command, FileInput, run::RunCommand};
 
 #[derive(Subcommand)]
 pub enum CriteriaCmd {
@@ -43,15 +44,21 @@ fn read_json(file: &PathBuf) -> Result<serde_json::Value> {
     serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", file.display()))
 }
 
-pub fn criteria(ctx: &Ctx, cmd: CriteriaCmd) -> Result<()> {
+pub fn criteria(inv: &crate::invocation::Invocation, cmd: CriteriaCmd) -> Result<()> {
     match cmd {
         CriteriaCmd::Register { id, file } => {
-            let manifest: CriteriaManifest =
-                serde_json::from_value(read_json(&file)?).context("parsing criteria manifest")?;
-            let task = corral_ops::register_criteria(ctx, &id, &manifest)?;
-            println!("{}", serde_json::to_string_pretty(&task.completion)?);
+            let text = std::fs::read_to_string(&file)
+                .with_context(|| format!("reading {}", file.display()))?;
+            inv.submit(Command::Run(RunCommand::CriteriaRegister {
+                id,
+                file: FileInput {
+                    path: file.display().to_string(),
+                    text,
+                },
+            }))?;
         }
         CriteriaCmd::List { id, .. } => {
+            let ctx = inv.ctx()?;
             let task = ctx.store.get(&id)?;
             println!(
                 "{}",

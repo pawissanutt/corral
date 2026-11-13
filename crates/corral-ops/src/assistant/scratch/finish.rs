@@ -91,7 +91,7 @@ pub fn session_for(named: Option<&str>) -> Result<String> {
             _ => via.session.clone(),
         },
         OwnerAuthority::Shell => {
-            if crate::automation_controls::agent_entry()
+            if crate::automation_controls::agent_entry(&crate::command::Invoker::process())
                 || std::env::var("CORRAL_PM").as_deref() == Ok("1")
             {
                 bail!("{REFUSED}");
@@ -387,7 +387,7 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
     validate_slug(slug)?;
     let new_lane = opts.new_task_lane(ctx.store.config.limits.capacity.is_some())?;
     if opts.adhoc {
-        crate::require_automation_owner(&ctx.store)?;
+        crate::require_automation_owner(&ctx.store, &crate::command::Invoker::process())?;
         ctx.store.require_capacity_schema()?;
     }
     if opts.intent.is_some()

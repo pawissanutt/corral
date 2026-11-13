@@ -5,29 +5,7 @@ use unicode_width::UnicodeWidthStr;
 /// Slot use (T-053): `"2/3 used: 1 task · 1 review"`. Zero components are left out; review and gate work that
 /// `limits.count_reviews` / `count_gates` keeps off the count is shown but marked `uncounted`.
 pub fn slot_summary(u: &SlotUsage, limits: &Limits) -> String {
-    if let (Some(used), Some(cap)) = (&u.independent, &limits.capacity) {
-        return format!(
-            "agents {}/{} (normal {}/{}) · gates {}/{} · unfinished {}/{} (normal {}/{}) · ad-hoc reserve {}",
-            used.agents.total(),
-            cap.agents,
-            used.agents.normal,
-            cap.normal_agents(),
-            used.gates,
-            cap.gates,
-            used.unfinished.total(),
-            cap.unfinished,
-            used.unfinished.normal,
-            cap.normal_unfinished(),
-            cap.adhoc_reserve
-        );
-    }
-    let parts = slot_parts(u, limits, false);
-    let used = format!("{}/{} used{}", u.total(), limits.running, soft(limits));
-    if parts.is_empty() {
-        used
-    } else {
-        format!("{used}: {}", parts.join(" · "))
-    }
+    corral_ops::command::mode::slot_summary(u, limits)
 }
 
 /// `" (soft target 2)"` while `limits.running_target` holds headroom below the hard limit.

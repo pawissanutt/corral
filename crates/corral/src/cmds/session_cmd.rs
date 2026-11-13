@@ -11,7 +11,7 @@ pub(super) fn hook(root: &Option<PathBuf>, entry: &crate::entry::Entry) {
             return Ok(());
         }
         let ctx = Ctx::open_for_sync(&start)?;
-        entry.apply(&ctx.store)?;
+        entry.invoker().apply(&ctx.store)?;
         coalesced_sync(&ctx)
     });
     if let Err(e) = result {
@@ -80,7 +80,7 @@ pub(super) fn bind(
     entry: &crate::entry::Entry,
 ) -> Result<()> {
     let ctx = Ctx::open_for_sync(&start_dir(root)?)?;
-    entry.apply(&ctx.store)?;
+    entry.invoker().apply(&ctx.store)?;
     let evidence = std::fs::read_to_string(launch_record)
         .with_context(|| format!("reading {}", launch_record.display()))?;
     ctx.store.bind_herdr_session(socket, &evidence)

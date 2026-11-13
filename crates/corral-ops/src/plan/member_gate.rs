@@ -39,7 +39,7 @@ impl OwnerEntry {
     /// The current directory cannot be read.
     pub fn from_env() -> Result<Self> {
         Ok(Self {
-            agent: crate::automation_controls::agent_entry(),
+            agent: crate::automation_controls::agent_entry(&crate::command::Invoker::process()),
             pm: std::env::var("CORRAL_PM").as_deref() == Ok("1"),
             cwd: std::env::current_dir().context("reading member-gate amendment directory")?,
         })
@@ -119,10 +119,29 @@ pub fn plan_member_gate_from(
 }
 
 pub(super) fn read_gate(ctx: &Ctx, path: &Path) -> Result<ScopeGate> {
+    parse_gate(&path.display().to_string(), &read_gate_text(ctx, path)?)
+}
+
+/// Reads a member gate file with the plan file bound and messages.
+pub(super) fn read_gate_text(ctx: &Ctx, path: &Path) -> Result<String> {
     let bytes = super::read_plan(ctx, path)?;
-    let text = std::str::from_utf8(&bytes).context("member gate file must be UTF-8")?;
-    let gate: ScopeGate = serde_yaml_ng::from_str(text)
-        .with_context(|| format!("parsing member gate {}", path.display()))?;
+    Ok(std::str::from_utf8(&bytes)
+        .context("member gate file must be UTF-8")?
+        .to_owned())
+}
+
+/// A member gate whose text the client read; `path` (as typed) is for messages only.
+pub(super) fn gate_from_text(ctx: &Ctx, path: &str, text: &str) -> Result<ScopeGate> {
+    let max = ctx.store.config.artifacts.max_bytes;
+    if u64::try_from(text.len())? > max {
+        anyhow::bail!("plan exceeds artifacts.max_bytes ({max})");
+    }
+    parse_gate(path, text)
+}
+
+fn parse_gate(path: &str, text: &str) -> Result<ScopeGate> {
+    let gate: ScopeGate =
+        serde_yaml_ng::from_str(text).with_context(|| format!("parsing member gate {path}"))?;
     gate.validate()?;
     Ok(gate)
 }

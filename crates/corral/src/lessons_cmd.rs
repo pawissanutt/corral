@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use corral_ops::Ctx;
+use corral_protocol::cmd::{Command, FileInput, knowledge::KnowledgeCommand};
 
 #[derive(Args)]
 pub struct LessonsArgs {
@@ -43,28 +43,44 @@ pub(crate) enum LessonsCmd {
     Due,
 }
 
-fn project(ctx: &Ctx, selected: Option<&str>) -> Result<String> {
-    selected
-        .map(str::to_string)
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .and_then(|cwd| corral_ops::infer_project(ctx, &cwd))
-        })
-        .or_else(|| {
-            (ctx.store.config.projects.len() == 1)
-                .then(|| ctx.store.config.projects.keys().next().cloned())
-                .flatten()
-        })
-        .context("select a project with --project")
-}
-
-pub fn run(ctx: &Ctx, args: LessonsArgs) -> Result<()> {
+pub fn run(inv: &crate::invocation::Invocation, args: LessonsArgs) -> Result<()> {
     if args.task.is_some() && args.cmd.is_some() {
         bail!("--for cannot be combined with a lessons subcommand");
     }
     match args.cmd {
+        Some(LessonsCmd::Distill { profile }) => {
+            return inv.submit(Command::Knowledge(KnowledgeCommand::Distill {
+                project: args.project,
+                profile,
+                json: args.json,
+            }));
+        }
+        Some(LessonsCmd::Apply { file }) => {
+            let text = std::fs::read_to_string(&file)
+                .with_context(|| format!("reading {}", file.display()))?;
+            return inv.submit(Command::Knowledge(KnowledgeCommand::Apply {
+                project: args.project,
+                file: FileInput {
+                    path: file.display().to_string(),
+                    text,
+                },
+            }));
+        }
+        Some(LessonsCmd::Pin { id, unpin }) => {
+            return inv.submit(Command::Knowledge(KnowledgeCommand::Pin {
+                project: args.project,
+                id,
+                unpin,
+            }));
+        }
+        Some(LessonsCmd::Delete { id }) => {
+            return inv.submit(Command::Knowledge(KnowledgeCommand::Delete {
+                project: args.project,
+                id,
+            }));
+        }
         Some(LessonsCmd::Due) => {
+            let ctx = inv.ctx()?;
             let due = corral_ops::lessons_due(ctx, jiff::Timestamp::now())?;
             if args.json {
                 println!("{}", serde_json::to_string_pretty(&due)?);
@@ -82,37 +98,8 @@ pub fn run(ctx: &Ctx, args: LessonsArgs) -> Result<()> {
                 }
             }
         }
-        Some(LessonsCmd::Distill { profile }) => {
-            let project = project(ctx, args.project.as_deref())?;
-            let task = corral_ops::lessons_distill(ctx, &project, profile.as_deref())?;
-            if args.json {
-                let mut value = serde_json::to_value(&task)?;
-                value["body"] = serde_json::Value::String(task.body.clone());
-                value["runs"] = serde_json::to_value(&task.runs)?;
-                println!("{}", serde_json::to_string_pretty(&value)?);
-            } else {
-                println!("{}: {} (filed, not dispatched)", task.id, task.title);
-            }
-        }
-        Some(LessonsCmd::Apply { file }) => {
-            let project = project(ctx, args.project.as_deref())?;
-            let text = std::fs::read_to_string(&file)
-                .with_context(|| format!("reading {}", file.display()))?;
-            let proposal = serde_json::from_str(&text).context("parsing lesson proposal")?;
-            corral_ops::lessons_apply(ctx, &project, &proposal)?;
-            println!("Applied lessons for {project}");
-        }
-        Some(LessonsCmd::Pin { id, unpin }) => {
-            let project = project(ctx, args.project.as_deref())?;
-            ctx.store.pin_lesson(&project, &id, !unpin)?;
-            println!("{} {id}", if unpin { "Unpinned" } else { "Pinned" });
-        }
-        Some(LessonsCmd::Delete { id }) => {
-            let project = project(ctx, args.project.as_deref())?;
-            ctx.store.delete_lesson(&project, &id)?;
-            println!("Deleted {id}");
-        }
         None => {
+            let ctx = inv.ctx()?;
             let lessons = if let Some(id) = args.task {
                 let task = ctx.store.get(&id)?;
                 if args

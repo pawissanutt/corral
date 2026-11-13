@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use corral_core::{ProfileSetupApproval, Store};
+use corral_core::Store;
 use corral_ops::{SetupConnection, SetupInputDraft};
-use serde::{Serialize, de::DeserializeOwned};
+use corral_protocol::cmd::{Command, FileInput, setup::SetupCommand};
+use serde::Serialize;
 
 #[derive(Args)]
 pub struct SetupArgs {
@@ -105,10 +106,15 @@ impl SetupCmd {
     }
 }
 
-pub(crate) fn read_input<T: DeserializeOwned>(path: &Path, max: u64) -> Result<T> {
-    let bytes = read_bytes(path, max)?;
-    serde_json::from_slice(&bytes)
-        .with_context(|| format!("parsing typed JSON input {}", path.display()))
+/// Capture file content before routing; the executor checks the workspace's size cap.
+pub(crate) fn read_command_input(path: &Path) -> Result<FileInput> {
+    let bytes = read_bytes(path, u64::MAX)?;
+    let text = String::from_utf8(bytes)
+        .with_context(|| format!("reading bounded JSON input {}", path.display()))?;
+    Ok(FileInput {
+        path: path.display().to_string(),
+        text,
+    })
 }
 
 /// Reports every structural problem in the file at once, each with its JSON path.
@@ -165,24 +171,19 @@ fn print_json(value: &impl Serialize) -> Result<()> {
     Ok(())
 }
 
-pub fn run(start: &Path, args: SetupArgs) -> Result<()> {
-    if matches!(args.cmd, SetupCmd::Procedure) {
-        return print_json(&serde_json::json!({
+pub fn run(inv: &crate::invocation::Invocation, args: SetupArgs) -> Result<()> {
+    let start = inv.start()?;
+    // Local leaves retain their unobserved, unattributed open. Routed leaves never
+    // call this closure or open the client's store.
+    let open_store = || Store::open_unobserved(&Store::find_root(&start)?);
+    match args.cmd {
+        SetupCmd::Procedure => print_json(&serde_json::json!({
             "version": corral_ops::MODEL_SELECTION_VERSION,
             "procedure": corral_ops::MODEL_SELECTION_PROCEDURE,
-        }));
-    }
-    if matches!(args.cmd, SetupCmd::Template) {
-        print!("{}", corral_ops::SETUP_TEMPLATE);
-        return Ok(());
-    }
-    // Even rejected mutations must not record unrelated raw configuration edits.
-    // Do not construct Ctx/Herdr or use Entry::open on this path.
-    let store = Store::open_unobserved(&Store::find_root(start)?)?;
-    let max = store.config.artifacts.max_bytes;
-    match args.cmd {
-        SetupCmd::Procedure | SetupCmd::Template => {
-            unreachable!("store-free commands returned before opening the store")
+        })),
+        SetupCmd::Template => {
+            print!("{}", corral_ops::SETUP_TEMPLATE);
+            Ok(())
         }
         SetupCmd::Bootstrap {
             harness,
@@ -190,6 +191,7 @@ pub fn run(start: &Path, args: SetupArgs) -> Result<()> {
             effort,
             confirm,
         } => {
+            let store = open_store()?;
             let connection = SetupConnection {
                 harness,
                 model,
@@ -212,55 +214,44 @@ pub fn run(start: &Path, args: SetupArgs) -> Result<()> {
                 }))
             }
         }
-        SetupCmd::Status => print_json(&corral_ops::setup_status(&store)?),
-        SetupCmd::Catalog => print_json(&corral_ops::setup_catalog(&store)?),
+        SetupCmd::Status => print_json(&corral_ops::setup_status(&open_store()?)?),
+        SetupCmd::Catalog => print_json(&corral_ops::setup_catalog(&open_store()?)?),
         SetupCmd::Discover => print_json(&corral_ops::setup_discover(
-            &corral_ops::Ctx::from_store(store),
+            &corral_ops::Ctx::from_store(open_store()?),
         )),
         SetupCmd::Begin { expected_revision } => {
-            print_json(&corral_ops::setup_begin(&store, expected_revision)?)
+            inv.submit(Command::Setup(SetupCommand::Begin { expected_revision }))
         }
         SetupCmd::Answers {
             file,
             expected_revision,
-        } => {
-            let answers = read_input(&file, max)?;
-            print_json(&corral_ops::setup_answers(
-                &store,
-                &answers,
-                expected_revision,
-            )?)
-        }
+        } => inv.submit(Command::Setup(SetupCommand::Answers {
+            file: read_command_input(&file)?,
+            expected_revision,
+        })),
         SetupCmd::Validate { file } => {
-            let input = read_setup_input(&file, max)?;
+            let store = open_store()?;
+            let input = read_setup_input(&file, store.config.artifacts.max_bytes)?;
             print_json(&corral_ops::setup_validate_draft(&store, &input)?)
         }
         SetupCmd::Propose {
             file,
             expected_revision,
-        } => {
-            let input = read_setup_input(&file, max)?;
-            print_json(&corral_ops::setup_propose_draft(
-                &store,
-                &input,
-                expected_revision,
-            )?)
-        }
+        } => inv.submit(Command::Setup(SetupCommand::Propose {
+            file: read_command_input(&file)?,
+            expected_revision,
+        })),
         SetupCmd::Approve {
             file,
             expected_revision,
-        } => {
-            let input: ProfileSetupApproval = read_input(&file, max)?;
-            print_json(&corral_ops::setup_approve(
-                &store,
-                &input,
-                expected_revision,
-            )?)
-        }
-        SetupCmd::Diff => print_json(&corral_ops::setup_diff(&store)?),
-        SetupCmd::Apply => print_json(&corral_ops::setup_apply(&store)?),
+        } => inv.submit(Command::Setup(SetupCommand::Approve {
+            file: read_command_input(&file)?,
+            expected_revision,
+        })),
+        SetupCmd::Diff => print_json(&corral_ops::setup_diff(&open_store()?)?),
+        SetupCmd::Apply => print_json(&corral_ops::setup_apply(&open_store()?)?),
         SetupCmd::Cancel { expected_revision } => {
-            print_json(&corral_ops::setup_cancel(&store, expected_revision)?)
+            inv.submit(Command::Setup(SetupCommand::Cancel { expected_revision }))
         }
     }
 }

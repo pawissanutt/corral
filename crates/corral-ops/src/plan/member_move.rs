@@ -9,7 +9,7 @@ use corral_core::{FULL_TIER, GateResult, PlanDeliveryTarget, ScopeGate, Status, 
 use serde::Serialize;
 
 use super::member_add::check_open_plan;
-use super::member_gate::read_gate;
+use super::member_gate::{gate_from_text, read_gate_text};
 use crate::Ctx;
 
 /// The owner's gate for the moved member in the target Plan, recorded as its member gate.
@@ -43,13 +43,36 @@ pub fn plan_move_member(
     to: &str,
     gate: Option<&MoveGate>,
 ) -> Result<PlanMemberMoved> {
-    let owner_gate = match gate {
+    let gate = match gate {
         Some(gate) => {
-            ensure!(
-                !gate.reason.trim().is_empty(),
-                "a move-member gate needs a reason"
-            );
-            Some((read_gate(ctx, gate.file)?, gate.reason))
+            require_reason(gate.reason)?;
+            let path = gate.file.display().to_string();
+            Some((path, read_gate_text(ctx, gate.file)?, gate.reason))
+        }
+        None => None,
+    };
+    let gate = gate
+        .as_ref()
+        .map(|(path, text, reason)| (path.as_str(), text.as_str(), *reason));
+    plan_move_member_with_gate_text(ctx, from, member, to, gate)
+}
+
+/// [`plan_move_member`] with the gate file already read by the client:
+/// `gate` = (path as typed, for messages; gate file text; reason).
+///
+/// # Errors
+/// As [`plan_move_member`]; gate text above `artifacts.max_bytes` is refused.
+pub fn plan_move_member_with_gate_text(
+    ctx: &Ctx,
+    from: &str,
+    member: &str,
+    to: &str,
+    gate: Option<(&str, &str, &str)>,
+) -> Result<PlanMemberMoved> {
+    let owner_gate = match gate {
+        Some((path, text, reason)) => {
+            require_reason(reason)?;
+            Some((gate_from_text(ctx, path, text)?, reason))
         }
         None => None,
     };
@@ -78,6 +101,14 @@ pub fn plan_move_member(
         from_children: from.children,
         to_children: to.children,
     })
+}
+
+fn require_reason(reason: &str) -> Result<()> {
+    ensure!(
+        !reason.trim().is_empty(),
+        "a move-member gate needs a reason"
+    );
+    Ok(())
 }
 
 /// Existing unstarted tasks remain movable; a task with history must be held and dequeued.

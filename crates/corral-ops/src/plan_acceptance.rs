@@ -6,7 +6,7 @@ use corral_core::{
     EvidenceSource, GateRecord, GateResult, ObservationStatus, Status, Task,
 };
 use jiff::Timestamp;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::Ctx;
@@ -33,7 +33,7 @@ pub use review::{
 const TRACKER_ARTIFACT_RUN: &str = "R0";
 
 /// Aggregate readiness of a Plan with acceptance criteria; absent for plain trackers.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AggregateProgress {
     /// Every required member is accepted and included; verification may start.
     pub ready: bool,

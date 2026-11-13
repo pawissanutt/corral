@@ -54,7 +54,8 @@ impl Fx {
 
     fn tier(&self, a: &Artifact, tier: ArtifactTier) {
         let reference = corral_core::PinRef::of_artifact(&self.task, a).to_string();
-        set_artifact_tier(&self.ctx, &reference, tier).unwrap();
+        let invoker = crate::command::Invoker::process();
+        set_artifact_tier(&self.ctx, &reference, tier, &invoker).unwrap();
     }
 
     fn all(&self) -> Vec<Artifact> {

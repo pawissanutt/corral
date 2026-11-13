@@ -1,4 +1,6 @@
 //! The workspace's single synchronization loop owner.
+#[cfg(unix)]
+mod commands;
 mod health;
 mod projector;
 mod reader;
@@ -112,6 +114,7 @@ fn run_with_state(
             .context("securing daemon socket")?;
         cleanup.projector = Some(projector::start(&ctx, &shared)?);
         reader::start(&ctx, &shared)?;
+        commands::start(&ctx, &shared)?;
         server::start(listener, Arc::clone(&shared), ctx.store.dir())?;
         let transitions = Arc::new(Mutex::new(health::Transitions::new()));
         transitions

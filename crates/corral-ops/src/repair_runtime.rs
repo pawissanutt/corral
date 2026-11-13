@@ -575,8 +575,12 @@ pub fn repair_diagnose(ctx: &Ctx, id: &str) -> Result<RepairLedger> {
     diagnose(ctx, id, false)
 }
 
-pub fn repair_diagnose_owner(ctx: &Ctx, id: &str) -> Result<RepairLedger> {
-    crate::require_automation_owner(&ctx.store)?;
+pub fn repair_diagnose_owner(
+    ctx: &Ctx,
+    id: &str,
+    invoker: &crate::command::Invoker,
+) -> Result<RepairLedger> {
+    crate::require_automation_owner(&ctx.store, invoker)?;
     diagnose(ctx, id, true)
 }
 
@@ -682,8 +686,9 @@ pub fn repair_renew(
     id: &str,
     renewal: corral_core::RepairRenewal,
     policy: corral_core::RepairPolicy,
+    invoker: &crate::command::Invoker,
 ) -> Result<RepairLedger> {
-    crate::require_automation_owner(&ctx.store)?;
+    crate::require_automation_owner(&ctx.store, invoker)?;
     let id = Store::normalize_id(id)?;
     let head = ctx.store.head(&id)?;
     ensure!(

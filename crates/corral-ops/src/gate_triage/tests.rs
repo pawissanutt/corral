@@ -1,6 +1,11 @@
 use super::*;
 use serde_json::json;
 
+/// Diagnosis as this test process's caller, the identity `diagnose` read before.
+fn diagnose(ctx: &Ctx, id: &str, report: GateDiagnosis, owner: bool) -> Result<GateTriage> {
+    super::diagnose(ctx, id, report, owner, &crate::command::Invoker::process())
+}
+
 fn gate(result: &str, head: &str, attempt: &str) -> GateRecord {
     serde_json::from_value(json!({
         "result": result, "sha": head, "at": "2026-01-01T00:00:00Z",

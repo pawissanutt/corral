@@ -31,6 +31,12 @@ use std::os::unix::net::UnixStream;
 mod tests;
 
 #[cfg(unix)]
+#[path = "daemon_client_cmd.rs"]
+mod cmd;
+#[cfg(unix)]
+pub use cmd::{CmdReply, Connected, SubmitReply};
+
+#[cfg(unix)]
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub fn runtime_dir(store: &Store) -> PathBuf {
@@ -62,6 +68,8 @@ pub struct Client {
     next_id: u64,
     #[cfg(unix)]
     read_capable: bool,
+    #[cfg(unix)]
+    cmd_capable: bool,
 }
 
 impl Client {
@@ -86,6 +94,12 @@ impl Client {
                 return Err(error).with_context(|| format!("connecting to {}", socket.display()));
             }
         };
+        Self::handshake(stream, IO_TIMEOUT).map(Some)
+    }
+
+    /// Checks the peer, then says hello within `hello_timeout` and records the capabilities.
+    #[cfg(unix)]
+    fn handshake(stream: UnixStream, hello_timeout: Duration) -> Result<Self> {
         check_peer(&stream)?;
         stream
             .set_read_timeout(Some(IO_TIMEOUT))
@@ -97,8 +111,9 @@ impl Client {
             stream,
             next_id: 0,
             read_capable: false,
+            cmd_capable: false,
         };
-        let welcome: Welcome = client.request(
+        let welcome: Welcome = client.request_with_timeout(
             corral_protocol::HELLO,
             Hello {
                 proto: Proto {
@@ -108,12 +123,14 @@ impl Client {
                 caps: vec![
                     corral_protocol::BOARD_V1.into(),
                     corral_protocol::read::READ_V1.into(),
+                    corral_protocol::cmd::CMD_V1.into(),
                 ],
                 client: ClientInfo {
                     kind: "cli".into(),
                     version: env!("CARGO_PKG_VERSION").into(),
                 },
             },
+            hello_timeout,
         )?;
         if welcome.proto.major != PROTO_MAJOR {
             bail!(
@@ -125,7 +142,11 @@ impl Client {
             .caps
             .iter()
             .any(|cap| cap == corral_protocol::read::READ_V1);
-        Ok(Some(client))
+        client.cmd_capable = welcome
+            .caps
+            .iter()
+            .any(|cap| cap == corral_protocol::cmd::CMD_V1);
+        Ok(client)
     }
 
     #[cfg(not(unix))]
@@ -193,27 +214,46 @@ impl Client {
                 };
             }
         };
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut document = Vec::new();
-        for _ in 0..reply.frames {
-            let frame = read_frame_until(&mut self.stream, deadline)
-                .context("reading served document")?
-                .context("daemon closed before completing served document")?;
-            if frame.kind != FrameKind::Data || frame.stream != reply.stream {
-                bail!("daemon returned an unexpected served document frame");
-            }
-            let bytes = (document.len() as u64)
-                .checked_add(frame.payload.len() as u64)
-                .context("served document length overflow")?;
-            if bytes > reply.bytes {
-                bail!("served document exceeds announced byte count");
-            }
-            document.extend_from_slice(&frame.payload);
-        }
-        if document.len() as u64 != reply.bytes {
-            bail!("served document does not match announced byte count");
-        }
+        let document = self.read_body(
+            reply.stream,
+            reply.bytes,
+            reply.frames,
+            Instant::now() + Duration::from_secs(5),
+            "served document",
+        )?;
         Ok(Some(document))
+    }
+
+    /// Reads exactly `frames` DATA frames on `stream`, `bytes` long in total, by `deadline`.
+    #[cfg(unix)]
+    fn read_body(
+        &mut self,
+        stream: u32,
+        bytes: u64,
+        frames: u32,
+        deadline: Instant,
+        what: &str,
+    ) -> Result<Vec<u8>> {
+        let mut body = Vec::new();
+        for _ in 0..frames {
+            let frame = read_frame_until(&mut self.stream, deadline)
+                .with_context(|| format!("reading {what}"))?
+                .with_context(|| format!("daemon closed before completing {what}"))?;
+            if frame.kind != FrameKind::Data || frame.stream != stream {
+                bail!("daemon returned an unexpected {what} frame");
+            }
+            let read = (body.len() as u64)
+                .checked_add(frame.payload.len() as u64)
+                .with_context(|| format!("{what} length overflow"))?;
+            if read > bytes {
+                bail!("{what} exceeds announced byte count");
+            }
+            body.extend_from_slice(&frame.payload);
+        }
+        if body.len() as u64 != bytes {
+            bail!("{what} does not match announced byte count");
+        }
+        Ok(body)
     }
 
     #[cfg(not(unix))]
@@ -350,6 +390,17 @@ impl Client {
         timeout: Duration,
     ) -> Result<ResponseOutcome<T>> {
         let deadline = Instant::now() + timeout;
+        let (id, payload) = self.encode(method, params)?;
+        self.exchange(id, payload, deadline)
+    }
+
+    /// Numbers and serializes one request; nothing is written.
+    #[cfg(unix)]
+    fn encode<P: Serialize>(
+        &mut self,
+        method: &str,
+        params: P,
+    ) -> Result<(serde_json::Value, Vec<u8>)> {
         self.next_id = self
             .next_id
             .checked_add(1)
@@ -362,6 +413,17 @@ impl Client {
             params,
         };
         let payload = serde_json::to_vec(&request).context("encoding daemon request")?;
+        Ok((id, payload))
+    }
+
+    /// Writes an encoded request and reads its response by `deadline`.
+    #[cfg(unix)]
+    fn exchange<T: DeserializeOwned>(
+        &mut self,
+        id: serde_json::Value,
+        payload: Vec<u8>,
+        deadline: Instant,
+    ) -> Result<ResponseOutcome<T>> {
         write_frame_until(
             &mut self.stream,
             &Frame {
@@ -369,7 +431,7 @@ impl Client {
                 stream: 0,
                 payload,
             },
-            Instant::now() + IO_TIMEOUT,
+            (Instant::now() + IO_TIMEOUT).min(deadline),
         )
         .context("sending daemon request")?;
         let frame = read_frame_until(&mut self.stream, deadline)

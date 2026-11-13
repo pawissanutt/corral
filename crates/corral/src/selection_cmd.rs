@@ -1,9 +1,10 @@
 //! File-only selector operations: no Ctx, terminal engine or provider probes.
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
-use corral_core::{AutoProfileSelection, ProfileRole, Store};
+use corral_core::{ProfileRole, Store};
+use corral_protocol::cmd::{Command, setup::SetupCommand};
 
 #[derive(Args)]
 pub struct SelectionArgs {
@@ -48,10 +49,11 @@ impl SelectionCmd {
     }
 }
 
-pub fn run(start: &Path, args: SelectionArgs) -> Result<()> {
-    let store = Store::open_unobserved(&Store::find_root(start)?)?;
+pub fn run(inv: &crate::invocation::Invocation, args: SelectionArgs) -> Result<()> {
     match args.cmd {
         SelectionCmd::Catalog { id, role } => {
+            // Catalog keeps its unobserved, unattributed local open.
+            let store = Store::open_unobserved(&Store::find_root(&inv.start()?)?)?;
             let role = match role {
                 SelectionRole::Implementation => ProfileRole::Implementation,
                 SelectionRole::Planning => ProfileRole::Planning,
@@ -64,12 +66,9 @@ pub fn run(start: &Path, args: SelectionArgs) -> Result<()> {
             );
         }
         SelectionCmd::Save { file } => {
-            let receipt: AutoProfileSelection =
-                crate::setup_cmd::read_input(&file, store.config.artifacts.max_bytes)?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&corral_ops::selection_save(&store, &receipt)?)?
-            );
+            return inv.submit(Command::Setup(SetupCommand::SelectionSave {
+                file: crate::setup_cmd::read_command_input(&file)?,
+            }));
         }
     }
     Ok(())

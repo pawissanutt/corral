@@ -78,6 +78,19 @@ pub fn pass(dir: &Path, started: Instant, before: &Snapshot) -> Snapshot {
     .unwrap_or_else(snapshot)
 }
 
+/// Emits one daemon-executed command (`name` = `Command::name()`) as a difference of
+/// process-wide counters and returns the sampled endpoint.
+pub fn command(dir: &Path, started: Instant, name: &str, before: &Snapshot) -> Snapshot {
+    append(
+        &crate::daemon_client::runtime_dir_of(dir),
+        "command",
+        name,
+        started.elapsed(),
+        before,
+    )
+    .unwrap_or_else(snapshot)
+}
+
 fn ms(nanos: u64) -> f64 {
     nanos as f64 / 1_000_000.0
 }

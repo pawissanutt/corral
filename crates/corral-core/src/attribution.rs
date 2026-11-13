@@ -94,6 +94,18 @@ impl Store {
             .map_err(|_| anyhow!("store attribution detail is already set"))
     }
 
+    /// Clone sharing the database, with a fresh unset attribution context: a long-lived
+    /// handle serves many callers, each setting its own default once. Keeps `pinned_now`.
+    pub fn reattributed(&self) -> Store {
+        let context = AttributionContext::default();
+        if let Some(at) = self.attribution.pinned_now.get() {
+            let _ = context.pinned_now.set(*at);
+        }
+        let mut store = self.clone();
+        store.attribution = Arc::new(context);
+        store
+    }
+
     /// Overrides the actor for operations on this thread, restoring it on drop.
     pub fn attribute(&self, actor: Actor) -> AttributionGuard {
         let scope = Rc::new(Scope {

@@ -13,7 +13,7 @@ use serde_json::Value;
 use super::operation::OpKind;
 use crate::blob_ref::BlobHash;
 
-/// Position in the change feed: strictly increasing, one per committed operation.
+/// Position in the change feed: strictly increasing, one per committed operation that writes.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
 )]

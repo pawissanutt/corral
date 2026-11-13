@@ -58,8 +58,8 @@ pub fn eligible(task: &Task) -> Result<()> {
 }
 
 /// Owner entry point for the CLI and the board.
-pub fn waive(ctx: &Ctx, id: &str, reason: &str) -> Result<()> {
-    crate::automation_controls::require_automation_owner(&ctx.store)?;
+pub fn waive(ctx: &Ctx, id: &str, reason: &str, invoker: &crate::command::Invoker) -> Result<()> {
+    crate::automation_controls::require_automation_owner(&ctx.store, invoker)?;
     apply(&ctx.store, id, reason)
 }
 

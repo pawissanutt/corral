@@ -88,7 +88,8 @@ fn red_base_is_proven_without_repair_charge_and_candidate_is_gated_again_after_b
         }),
         retry: false,
     };
-    gate_triage::diagnose(&ctx, &task.id, report.clone(), true).unwrap();
+    let invoker = corral_ops::command::Invoker::process();
+    gate_triage::diagnose(&ctx, &task.id, report.clone(), true, &invoker).unwrap();
     corral_ops::sync(&ctx).unwrap();
     assert_eq!(ctx.store.get(&task.id).unwrap().rounds, 0);
     std::fs::write(repo.join("base-fixed"), "base repaired\n").unwrap();
@@ -102,6 +103,7 @@ fn red_base_is_proven_without_repair_charge_and_candidate_is_gated_again_after_b
             ..report
         },
         true,
+        &invoker,
     )
     .unwrap();
     corral_ops::sync(&ctx).unwrap();

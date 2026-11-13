@@ -1,13 +1,12 @@
 //! `corral pm inbox`: durable requests from assistants and the owner to the PM, each with a
 //! recorded outcome (T-544 pm-inbox). Posting and withdrawing act as the caller; claiming and
 //! resolving are the PM's.
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
-use corral_core::pm_inbox::{
-    self, ItemKind, ItemState, NewPmItem, PmInboxItem, RequestedAction, Resolution, name,
-};
+use corral_core::pm_inbox::{self, ItemState, PmInboxItem, name};
+use corral_protocol::cmd::{Command, pm::PmCommand};
 
 #[derive(Subcommand)]
 pub enum PmInboxCmd {
@@ -160,9 +159,7 @@ fn show(item: &PmInboxItem) {
     }
 }
 
-pub fn run(start: &Path, cmd: PmInboxCmd, entry: &crate::entry::Entry) -> Result<()> {
-    let ctx = entry.open(start)?;
-    let store = &ctx.store;
+pub fn run(inv: &crate::invocation::Invocation, cmd: PmInboxCmd) -> Result<()> {
     match cmd {
         PmInboxCmd::Post {
             kind,
@@ -182,37 +179,21 @@ pub fn run(start: &Path, cmd: PmInboxCmd, entry: &crate::entry::Entry) -> Result
                 })
                 .transpose()?
                 .unwrap_or_default();
-            let (item, created) = store.pm_inbox_post(NewPmItem {
-                from: entry.inbox_author(store)?,
-                kind: pm_inbox::parse::<ItemKind>(
-                    "--kind",
-                    &kind,
-                    "action_request, question, handoff, routing",
-                )?,
+            inv.submit(Command::Pm(PmCommand::InboxPost {
+                kind,
                 subject,
                 body,
                 refs,
-                requested_action: action.as_deref().map(RequestedAction::parse).transpose()?,
-                owner_words: quote.map(|quote| pm_inbox::owner_words(quote, input)),
+                action,
+                quote,
+                input,
                 key,
-            })?;
-            if json {
-                print(&item, true, "")?;
-            } else if created {
-                println!(
-                    "{} posted (revision 0); follow it with `corral pm inbox show {}`",
-                    item.id, item.id
-                );
-            } else {
-                println!(
-                    "{} already posted with this key ({}, revision {})",
-                    item.id,
-                    name(&item.state),
-                    item.revision
-                );
-            }
+                json,
+            }))?;
         }
         PmInboxCmd::List { state, all, json } => {
+            let ctx = inv.ctx()?;
+            let store = &ctx.store;
             let state = state
                 .map(|s| {
                     pm_inbox::parse::<ItemState>(
@@ -245,6 +226,8 @@ pub fn run(start: &Path, cmd: PmInboxCmd, entry: &crate::entry::Entry) -> Result
             }
         }
         PmInboxCmd::Show { id, json } => {
+            let ctx = inv.ctx()?;
+            let store = &ctx.store;
             let item = store.pm_inbox_item(&id)?;
             if json {
                 print(&item, true, "")?;
@@ -256,11 +239,11 @@ pub fn run(start: &Path, cmd: PmInboxCmd, entry: &crate::entry::Entry) -> Result
             id,
             expected_revision,
             json,
-        } => print(
-            &store.pm_inbox_claim(&id, expected_revision, None)?,
+        } => inv.submit(Command::Pm(PmCommand::InboxClaim {
+            id,
+            expected_revision,
             json,
-            "claimed",
-        )?,
+        }))?,
         PmInboxCmd::Resolve {
             id,
             expected_revision,
@@ -269,19 +252,14 @@ pub fn run(start: &Path, cmd: PmInboxCmd, entry: &crate::entry::Entry) -> Result
             refs,
             json,
         } => {
-            let resolution = pm_inbox::parse::<Resolution>(
-                "--outcome",
-                &outcome,
-                "done, declined, escalated_to_owner",
-            )?;
-            let item = corral_ops::pm_inbox::resolve(
-                &ctx,
-                &id,
+            inv.submit(Command::Pm(PmCommand::InboxResolve {
+                id,
                 expected_revision,
-                (resolution, &text, refs),
-                None,
-            )?;
-            print(&item, json, &format!("resolved {}", name(&resolution)))?;
+                outcome,
+                text,
+                refs,
+                json,
+            }))?;
         }
         PmInboxCmd::Withdraw {
             id,
@@ -289,9 +267,12 @@ pub fn run(start: &Path, cmd: PmInboxCmd, entry: &crate::entry::Entry) -> Result
             reason,
             json,
         } => {
-            let by = entry.inbox_author(store)?;
-            let item = store.pm_inbox_withdraw(&id, expected_revision, &by, &reason)?;
-            print(&item, json, "withdrawn")?;
+            inv.submit(Command::Pm(PmCommand::InboxWithdraw {
+                id,
+                expected_revision,
+                reason,
+                json,
+            }))?;
         }
     }
     Ok(())

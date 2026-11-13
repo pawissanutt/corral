@@ -17,7 +17,10 @@ pub fn require_entry(ctx: &Ctx) -> Result<()> {
         matches!(owner_action::authority(), OwnerAuthority::Shell),
         "handoff_unavailable: assistant-origin entry needs an authenticated named-action/choice consumer"
     );
-    crate::automation_controls::require_automation_owner(&ctx.store)
+    crate::automation_controls::require_automation_owner(
+        &ctx.store,
+        &crate::command::Invoker::process(),
+    )
 }
 
 /// Bootstrap only a legacy ordinary source, never a planning-to-execution transition.
@@ -104,7 +107,10 @@ pub(crate) fn instruction(ctx: &Ctx, _session: &str, text: &str) -> Result<Instr
         matches!(owner_action::authority(), OwnerAuthority::Shell),
         "handoff_unavailable: assistant-origin transfer needs an authenticated named-action/choice consumer; ordinary finish confirmation is insufficient"
     );
-    crate::automation_controls::require_automation_owner(&ctx.store)?;
+    crate::automation_controls::require_automation_owner(
+        &ctx.store,
+        &crate::command::Invoker::process(),
+    )?;
     Ok(Instruction::Shell {
         text: text.into(),
         at: corral_core::clock::now(),
@@ -120,7 +126,10 @@ pub(crate) fn require_completion_owner(ctx: &Ctx) -> Result<()> {
         matches!(owner_action::authority(), OwnerAuthority::Shell),
         "completion_unavailable: renewed returned-scope intent needs the guarded owner entry or an authenticated current-scope native consumer"
     );
-    crate::automation_controls::require_automation_owner(&ctx.store)
+    crate::automation_controls::require_automation_owner(
+        &ctx.store,
+        &crate::command::Invoker::process(),
+    )
 }
 
 pub(crate) fn completion_instruction(ctx: &Ctx, text: &str) -> Result<Instruction> {

@@ -1,8 +1,10 @@
 //! Caller-attributed PM context notes.
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Args, Subcommand};
-use corral_core::agent::pm_notes::{self, NoteAuthor, NoteKind, NoteMutation, PmNotes};
-use std::path::Path;
+use corral_core::agent::pm_notes;
+use corral_protocol::cmd::{Command, pm::PmCommand};
+
+use crate::invocation::Invocation;
 
 #[derive(Args)]
 pub struct Fields {
@@ -49,63 +51,45 @@ pub enum PmNotesCmd {
     },
 }
 
-fn mutate(
-    ctx: &corral_ops::Ctx,
-    entry: &crate::entry::Entry,
-    expected_revision: Option<u64>,
-    mutation: NoteMutation,
-) -> Result<PmNotes> {
-    // Match owner parks: environment markers and run cwd are attribution, not
-    // authenticated identity. A caller that clears its markers can evade this guard.
-    corral_ops::attention::guard(ctx)?;
-    let author = match entry.decision_author(&ctx.store)? {
-        "owner" => NoteAuthor::Owner,
-        "pm" | "agent" | "assistant" | "reviewer" => NoteAuthor::Pm,
-        _ => anyhow::bail!("unidentified caller: PM notes mutation refused"),
-    };
-    pm_notes::apply(&ctx.store, "workspace", expected_revision, author, mutation)
-}
-
-pub fn run(start: &Path, cmd: PmNotesCmd, entry: &crate::entry::Entry) -> Result<()> {
-    let ctx = entry.open(start)?;
+pub fn run(inv: &Invocation, cmd: PmNotesCmd) -> Result<()> {
     let (notes, json) = match cmd {
-        PmNotesCmd::List { json } => (pm_notes::load(&ctx.store, "workspace")?, json),
+        PmNotesCmd::List { json } => {
+            let ctx = inv.ctx()?;
+            (pm_notes::load(&ctx.store, "workspace")?, json)
+        }
         PmNotesCmd::Add { kind, fields } => {
-            let kind: NoteKind = serde_json::from_value(serde_json::Value::String(kind))
-                .context("kind must be instruction, deferral, hypothesis or commitment")?;
-            let mutation = NoteMutation::Add {
+            return inv.submit(Command::Pm(PmCommand::NotesAdd {
                 kind,
                 text: fields.text,
                 provenance: fields.provenance,
                 reason: fields.reason,
                 resume_when: fields.resume_when,
-            };
-            (
-                mutate(&ctx, entry, fields.expect_revision, mutation)?,
-                fields.json,
-            )
+                expect_revision: fields.expect_revision,
+                json: fields.json,
+            }));
         }
         PmNotesCmd::Supersede { id, fields } => {
-            let mutation = NoteMutation::Supersede {
+            return inv.submit(Command::Pm(PmCommand::NotesSupersede {
                 id,
                 text: fields.text,
                 provenance: fields.provenance,
                 reason: fields.reason,
                 resume_when: fields.resume_when,
-            };
-            (
-                mutate(&ctx, entry, fields.expect_revision, mutation)?,
-                fields.json,
-            )
+                expect_revision: fields.expect_revision,
+                json: fields.json,
+            }));
         }
         PmNotesCmd::Remove {
             id,
             expect_revision,
             json,
-        } => (
-            mutate(&ctx, entry, expect_revision, NoteMutation::Remove { id })?,
-            json,
-        ),
+        } => {
+            return inv.submit(Command::Pm(PmCommand::NotesRemove {
+                id,
+                expect_revision,
+                json,
+            }));
+        }
     };
     if json {
         println!("{}", serde_json::to_string_pretty(&notes)?);

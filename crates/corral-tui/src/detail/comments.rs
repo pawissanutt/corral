@@ -1,6 +1,11 @@
 //! Persistent owner/PM thread and the owner comment composer.
 use corral_core::{CommentAuthor, Status, Task};
 use corral_ops::Ctx;
+use corral_ops::command::{
+    CmdState, Command, Invoker,
+    route::{Patience, submit_with},
+};
+use corral_protocol::cmd::task::TaskCommand;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
@@ -134,13 +139,25 @@ impl DetailView {
                         "Type a comment first",
                     ));
                 }
-                match corral_ops::comment(
-                    ctx,
-                    &self.task.id,
-                    &composer.input.text,
-                    CommentAuthor::Owner,
-                    composer.send,
-                ) {
+                let outcome = submit_with(
+                    ctx.store.root(),
+                    &Invoker::board(),
+                    Command::Task(TaskCommand::Comment {
+                        id: self.task.id.clone(),
+                        text: composer.input.text.clone(),
+                        author: "owner".to_owned(),
+                        send: composer.send,
+                    }),
+                    Patience::Interactive,
+                );
+                let result = if outcome.state == CmdState::Done {
+                    ctx.store.get(&self.task.id)
+                } else {
+                    Err(anyhow::anyhow!(
+                        outcome.error.map_or(outcome.stderr, |error| error.message)
+                    ))
+                };
+                match result {
                     Ok(task) => {
                         self.task = task;
                         self.comment = None;

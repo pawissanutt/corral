@@ -63,7 +63,8 @@ fn session_retention_pins_follow_and_revival() {
     let revived = add_session_artifact(&ctx, "A-1", &path, None, None).unwrap();
     assert_eq!(revived.path, second.path);
     assert!(revived.purged_at.is_none());
-    set_artifact_tier(&ctx, "A-1:output.log", ArtifactTier::Keep).unwrap();
+    let invoker = corral_ops::command::Invoker::process();
+    set_artifact_tier(&ctx, "A-1:output.log", ArtifactTier::Keep, &invoker).unwrap();
     assert!(artifact_gc(&ctx, false).unwrap().actions.is_empty());
     assert_eq!(ctx.store.get_assistant("A-1").unwrap().artifacts.len(), 2);
     assert_eq!(storage_stats(&ctx).unwrap().tasks[0].task_id, "A-1");

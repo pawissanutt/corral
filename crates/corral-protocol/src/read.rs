@@ -13,6 +13,7 @@ pub enum ReadKind {
     AgentPmBrief,
     AgentPmNext,
     BoardReadback,
+    ClassicFrame,
     #[serde(other)]
     Other,
 }

@@ -6,11 +6,13 @@ use serde_json::json;
 
 use crate::Ctx;
 use crate::attention::Neighborhood;
+use crate::command::Invoker;
 
 #[cfg(test)]
 #[path = "park_tests.rs"]
 mod tests;
 
+#[allow(clippy::too_many_arguments)]
 pub fn park(
     ctx: &Ctx,
     id: &str,
@@ -19,9 +21,10 @@ pub fn park(
     resume_action: &str,
     review_by_secs: u64,
     now: Timestamp,
+    invoker: &Invoker,
 ) -> Result<Park> {
-    crate::attention::guard(ctx)?;
-    let by = if std::env::var("CORRAL_PM").as_deref() == Ok("1") {
+    crate::attention::guard(ctx, invoker)?;
+    let by = if invoker.pm_marker() {
         Responsible::Pm
     } else {
         Responsible::Owner
@@ -138,9 +141,9 @@ fn write_park(ctx: &Ctx, id: &str, mut park: Park, in_scope: Option<InScope<'_>>
     Ok(park)
 }
 
-pub fn unpark(ctx: &Ctx, id: &str, expected_revision: u64) -> Result<()> {
-    crate::attention::guard(ctx)?;
-    let by = if std::env::var("CORRAL_PM").as_deref() == Ok("1") {
+pub fn unpark(ctx: &Ctx, id: &str, expected_revision: u64, invoker: &Invoker) -> Result<()> {
+    crate::attention::guard(ctx, invoker)?;
+    let by = if invoker.pm_marker() {
         Responsible::Pm
     } else {
         Responsible::Owner

@@ -1,7 +1,9 @@
 use anyhow::bail;
 use anyhow::{Context, Result};
-use corral_core::{Origin, Status, Store, TaskDifficulty, TaskKind, TaskSize};
+use corral_core::{Origin, Status, TaskDifficulty, TaskKind, TaskSize};
 use corral_ops::Ctx;
+
+use crate::invocation::Invocation;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct EditDraft {
@@ -43,7 +45,7 @@ pub fn parse_origin(value: &str) -> Result<Origin, String> {
 
 #[expect(clippy::too_many_arguments, reason = "Existing new-task CLI options")]
 pub fn new_task(
-    ctx: &Ctx,
+    inv: &Invocation,
     title: &[String],
     project: Option<&str>,
     status: Status,
@@ -59,6 +61,7 @@ pub fn new_task(
     design: bool,
     labels: &[String],
 ) -> Result<()> {
+    use corral_protocol::cmd::{Command, task::TaskCommand};
     let body = match (body_file, body) {
         (Some(f), _) => {
             std::fs::read_to_string(f).with_context(|| format!("reading {}", f.display()))?
@@ -66,38 +69,25 @@ pub fn new_task(
         (None, Some(b)) => b.to_string(),
         (None, None) => String::new(),
     };
-    let deps = depends
-        .iter()
-        .map(|d| Store::normalize_id(d))
-        .collect::<Result<Vec<_>>>()?;
-    let cwd = std::env::current_dir().context("reading the current directory")?;
-    let task = corral_ops::new_task_initialized(
-        ctx,
-        &title.join(" "),
-        project,
-        &cwd,
-        status,
-        &body,
-        |t| {
-            t.origin = Some(origin);
-            t.profile = profile;
-            t.depends_on = deps;
-            if let Some(p) = priority {
-                t.priority = p.to_ascii_uppercase();
-            }
-            t.kind = kind.map(|kind| kind.to_string());
-            t.size = size;
-            t.difficulty = difficulty;
-            t.design = design;
-            t.labels = labels.to_vec();
-            Ok(())
-        },
-    )?;
-    println!("{}", task.id);
-    Ok(())
+    inv.submit(Command::Task(TaskCommand::New {
+        title: title.to_vec(),
+        origin: origin.as_str().into(),
+        project: project.map(str::to_owned),
+        status: status.label().to_ascii_lowercase(),
+        body,
+        profile,
+        depends: depends.to_vec(),
+        priority,
+        kind: kind.map(|v| v.to_string()),
+        size: size.map(|v| v.to_string()),
+        difficulty: difficulty.map(|v| v.to_string()),
+        design,
+        labels: labels.to_vec(),
+    }))
 }
 
-pub fn run(ctx: &Ctx, args: IdeaArgs) -> Result<()> {
+pub fn run(inv: &Invocation, args: IdeaArgs) -> Result<()> {
+    use corral_protocol::cmd::{Command, task::TaskCommand};
     let body = args
         .body_file
         .as_ref()
@@ -105,20 +95,14 @@ pub fn run(ctx: &Ctx, args: IdeaArgs) -> Result<()> {
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))
         })
         .transpose()?;
-    let task = corral_ops::decide_idea(
-        ctx,
-        &args.id,
-        &args.action,
-        &args.reason,
-        corral_ops::IdeaDecisionOptions {
-            into: args.into.as_deref(),
-            body: body.as_deref(),
-            owner_ok: args.owner_ok,
-            actor: &args.author,
-        },
-    )?;
-    println!("{}: {} ({})", task.id, args.action, task.status.label());
-    Ok(())
+    inv.submit(Command::Task(TaskCommand::Idea {
+        id: args.id,
+        action: args.action,
+        reason: args.reason,
+        into: args.into,
+        body,
+        owner_ok: args.owner_ok,
+    }))
 }
 
 /// Edit a scratch copy so the common store boundary can reject an unapproved reduction. The

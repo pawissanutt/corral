@@ -236,7 +236,7 @@ fn gc(ctx: &Ctx, dry_run: bool, transcripts_only: bool) -> Result<GcReport> {
     } else {
         Some(storage_exclusive(ctx)?)
     };
-    crate::assistant_artifacts::check_owner(None)?;
+    crate::assistant_artifacts::check_owner(None, &crate::command::Invoker::process())?;
     let tasks = ctx.store.artifact_owners()?;
     let actual_tasks: Vec<_> = tasks
         .iter()

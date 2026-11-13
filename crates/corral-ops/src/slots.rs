@@ -1,11 +1,11 @@
 use anyhow::Result;
 use corral_core::{GateResult, Limits, ReviewWork, Status, Store, Task};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
 
 /// Component counts are visible even when excluded by an explicit counting switch.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SlotUsage {
     /// Independent scheduler counters when opted in; legacy components remain available.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -20,7 +20,7 @@ pub struct SlotUsage {
     pub parked: usize,
     count_reviews: bool,
     count_gates: bool,
-    #[serde(skip)]
+    #[serde(default)]
     shared_gates: usize,
 }
 

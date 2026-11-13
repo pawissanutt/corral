@@ -143,6 +143,7 @@ pub fn attend_child() {
                 var("EVAL_NEXT").parse().unwrap(),
                 &var("EVAL_REQUEST"),
                 at(var("EVAL_AT").parse().unwrap()),
+                &corral_ops::command::Invoker::process(),
             )
             .unwrap();
             println!("EVAL_REVISION={}", handling.revision);
@@ -161,12 +162,18 @@ pub fn attend_child() {
                 "Inspect retained work before resuming",
                 86400,
                 at(var("EVAL_AT").parse().unwrap()),
+                &corral_ops::command::Invoker::process(),
             )
             .unwrap();
         }
         "unpark" => {
-            corral_ops::park::unpark(&ctx, &var("EVAL_KEY"), var("EVAL_NEXT").parse().unwrap())
-                .unwrap();
+            corral_ops::park::unpark(
+                &ctx,
+                &var("EVAL_KEY"),
+                var("EVAL_NEXT").parse().unwrap(),
+                &corral_ops::command::Invoker::process(),
+            )
+            .unwrap();
         }
         other => panic!("unknown op {other}"),
     }

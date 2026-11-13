@@ -1,6 +1,11 @@
 use anyhow::Result;
-use corral_core::Status;
+use corral_core::{Status, Store};
 use corral_ops::Ctx;
+#[cfg(test)]
+use corral_ops::command::Invoker;
+use corral_protocol::cmd::{Command, attention::AttentionCommand};
+
+use crate::invocation::Invocation;
 
 #[derive(clap::Args)]
 pub struct AttentionArgs {
@@ -59,51 +64,81 @@ pub enum AttentionCmd {
     },
 }
 
-pub fn run(ctx: &Ctx, args: AttentionArgs) -> Result<()> {
-    match &args.cmd {
-        Some(AttentionCmd::Park {
+pub fn run(inv: &Invocation, mut args: AttentionArgs) -> Result<()> {
+    if let Some(command) = routed(&mut args) {
+        return inv.submit(command);
+    }
+    // Attention opens unobserved; only an owner action's command child applies attribution.
+    let store = Store::open_unobserved(&Store::find_root(&inv.start()?)?)?;
+    let invoker = inv.entry().invoker();
+    if inv.entry().owner_action() {
+        invoker.apply(&store)?;
+    }
+    execute_local(&Ctx::from_store(store), args)
+}
+
+fn routed(args: &mut AttentionArgs) -> Option<Command> {
+    let command = match args.cmd.take()? {
+        AttentionCmd::Attend {
+            key,
+            note,
+            next_check,
+            request,
+        } => AttentionCommand::Attend {
+            key,
+            note,
+            next_check,
+            request,
+            json: args.json,
+        },
+        AttentionCmd::Park {
             id,
             reason,
             resume_when,
             resume_action,
             review_by,
-        }) => {
-            let park = corral_ops::park::park(
-                ctx,
-                id,
-                reason,
-                resume_when,
-                resume_action,
-                *review_by,
-                jiff::Timestamp::now(),
-            )?;
-            if args.json {
-                println!("{}", serde_json::to_string_pretty(&park)?);
-            } else {
-                println!(
-                    "{id}: parked by {} at revision {}, review by {}",
-                    park.by.label(),
-                    park.revision,
-                    park.review_by
-                );
-            }
-            return Ok(());
-        }
-        Some(AttentionCmd::Unpark {
+        } => AttentionCommand::Park {
+            id,
+            reason,
+            resume_when: resume_when
+                .into_iter()
+                .map(|check| check.description)
+                .collect(),
+            resume_action,
+            review_by,
+            json: args.json,
+        },
+        AttentionCmd::Unpark {
             id,
             expected_revision,
-        }) => {
-            corral_ops::park::unpark(ctx, id, *expected_revision)?;
-            if args.json {
-                println!(
-                    "{}",
-                    serde_json::json!({"task": id, "unparked": expected_revision})
-                );
-            } else {
-                println!("{id}: unparked revision {expected_revision}");
-            }
-            return Ok(());
+        } => AttentionCommand::Unpark {
+            id,
+            expected_revision,
+            json: args.json,
+        },
+        local => {
+            args.cmd = Some(local);
+            return None;
         }
+    };
+    Some(Command::Attention(command))
+}
+
+#[cfg(test)]
+fn execute(ctx: &Ctx, invoker: &Invoker, mut args: AttentionArgs) -> Result<()> {
+    if let Some(command) = routed(&mut args) {
+        let outcome = corral_ops::command::execute_in(ctx.clone(), invoker, command);
+        print!("{}", outcome.stdout);
+        if let Some(error) = outcome.error {
+            anyhow::bail!("{}", error.message);
+        }
+        return Ok(());
+    }
+    execute_local(ctx, args)
+}
+
+fn execute_local(ctx: &Ctx, args: AttentionArgs) -> Result<()> {
+    match &args.cmd {
         Some(AttentionCmd::Stats { since }) => {
             let end = jiff::Timestamp::now();
             let start = end.checked_sub(jiff::SignedDuration::from_secs(i64::try_from(*since)?))?;
@@ -141,27 +176,12 @@ pub fn run(ctx: &Ctx, args: AttentionArgs) -> Result<()> {
             }
             return Ok(());
         }
-        Some(AttentionCmd::List | AttentionCmd::Attend { .. }) | None => {}
-    }
-    if let Some(AttentionCmd::Attend {
-        key,
-        note,
-        next_check,
-        request,
-    }) = args.cmd
-    {
-        let now = jiff::Timestamp::now();
-        let request = request.unwrap_or_else(|| format!("attend-{now}"));
-        let handling = corral_ops::attention::attend(ctx, &key, &note, next_check, &request, now)?;
-        if args.json {
-            println!("{}", serde_json::to_string_pretty(&handling)?);
-        } else {
-            println!(
-                "{key}: handling revision {}, next check {}",
-                handling.revision, handling.next_check
-            );
+        Some(AttentionCmd::List) | None => {}
+        Some(
+            AttentionCmd::Attend { .. } | AttentionCmd::Park { .. } | AttentionCmd::Unpark { .. },
+        ) => {
+            anyhow::bail!("attention mutation must be submitted through the command router");
         }
-        return Ok(());
     }
     let now = jiff::Timestamp::now();
     let mut board = if args.all {
@@ -474,7 +494,7 @@ mod tests {
         else {
             panic!("expected attention")
         };
-        let result = run(&ctx, args);
+        let result = execute(&ctx, &test_invoker(), args);
         if matches!(role.as_str(), "worker" | "reviewer") {
             assert!(result.unwrap_err().to_string().contains("worker_context"));
         } else {
@@ -558,7 +578,19 @@ mod tests {
         else {
             panic!("expected attention")
         };
-        run(&ctx, args).unwrap();
+        execute(&ctx, &test_invoker(), args).unwrap();
         assert_eq!(ctx.store.list().unwrap(), before);
+    }
+
+    /// The process caller, as an ordinary CLI entry without author flags classifies it.
+    fn test_invoker() -> corral_ops::command::Invoker {
+        corral_ops::command::Invoker::from_process(
+            corral_protocol::cmd::ClientKind::Cli,
+            None,
+            corral_protocol::cmd::Via::Cli,
+            None,
+            false,
+            None,
+        )
     }
 }

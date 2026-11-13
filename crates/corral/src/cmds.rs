@@ -1,4 +1,3 @@
-pub(crate) mod dispatch_status;
 mod reply_cmd;
 pub(crate) mod route;
 mod session_cmd;
@@ -170,7 +169,7 @@ pub(crate) fn start_dir(root: &Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
-fn parse_status(s: &str) -> Result<Status> {
+pub(crate) fn parse_status(s: &str) -> Result<Status> {
     Status::parse(s).ok_or_else(|| {
         anyhow!(
             "unknown status '{s}' (idea, backlog, ready, running, blocked, review, done, dropped)"
@@ -351,25 +350,19 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
     }
     let entry = crate::entry::Entry::new(&cmd, matches, &start_dir(&root)?)?;
     let open = |root: &Option<PathBuf>| entry.open(&start_dir(root)?);
+    let inv = crate::invocation::Invocation::new(&entry, &root);
     match cmd {
-        Cmd::Mode(args) => crate::mode_cmd::run(open(&root)?, args),
-        Cmd::Inbox(args) => crate::inbox_cmd::run(&open(&root)?.store, args),
-        Cmd::Attention(args) => {
-            let root = corral_core::Store::find_root(&start_dir(&root)?)?;
-            let store = corral_core::Store::open_unobserved(&root)?;
-            if entry.owner_action() {
-                entry.apply(&store)?;
-            }
-            crate::attention_cmd::run(&Ctx::from_store(store), args)
-        }
+        Cmd::Mode(args) => crate::mode_cmd::run(&inv, args),
+        Cmd::Inbox(args) => crate::inbox_cmd::run(&inv, args),
+        Cmd::Attention(args) => crate::attention_cmd::run(&inv, args),
         Cmd::Agent(args) => crate::agent_cmd::run(&start_dir(&root)?, args, &entry),
         Cmd::Pi(args) => crate::pi_cmd::run(&start_dir(&root)?, args, &entry),
-        Cmd::Assistant(args) => crate::assistant_cmd::run(&open(&root)?, args),
-        Cmd::Question(args) => crate::question_cmd::run(&open(&root)?, args),
-        Cmd::Automation(args) => crate::automation_cmd::run(&open(&root)?, args),
-        Cmd::Selection(args) => crate::selection_cmd::run(&start_dir(&root)?, args),
-        Cmd::Setup(args) => crate::setup_cmd::run(&start_dir(&root)?, args),
-        Cmd::Repair(args) => crate::repair_cmd::run(&start_dir(&root)?, args, &entry),
+        Cmd::Assistant(args) => crate::assistant_cmd::run(&inv, args),
+        Cmd::Question(args) => crate::question_cmd::run(&inv, args),
+        Cmd::Automation(args) => crate::automation_cmd::run(&open(&root)?, entry.invoker(), args),
+        Cmd::Selection(args) => crate::selection_cmd::run(&inv, args),
+        Cmd::Setup(args) => crate::setup_cmd::run(&inv, args),
+        Cmd::Repair(args) => crate::repair_cmd::run(&inv, args),
         Cmd::Recover(args) => crate::recover_cmd::run(&start_dir(&root)?, args),
         Cmd::Up { session, yes } => crate::up::run(&start_dir(&root)?, session, yes, &entry),
         Cmd::Doctor { fix, json } => crate::doctor::run(&start_dir(&root)?, fix, json, &entry),
@@ -381,11 +374,11 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             Ok(())
         }
         Cmd::Hooks { cmd } => crate::hooks_cmd::run(&open(&root)?, cmd),
-        Cmd::Run { cmd } => crate::run_cmd::run(&open(&root)?, cmd),
-        Cmd::Plan { cmd } => crate::plan_cmd::run(&open(&root)?, cmd),
+        Cmd::Run { cmd } => crate::run_cmd::run(&inv, cmd),
+        Cmd::Plan { cmd } => crate::plan_cmd::run(&inv, cmd),
         Cmd::Annotation(args) => crate::annotation_cmd::run(&start_dir(&root)?, &entry, args),
-        Cmd::Lessons(args) => crate::lessons_cmd::run(&open(&root)?, args),
-        Cmd::Memory(args) => crate::memory_cmd::run(&open(&root)?, &entry, args),
+        Cmd::Lessons(args) => crate::lessons_cmd::run(&inv, args),
+        Cmd::Memory(args) => crate::memory_cmd::run(&inv, args),
         Cmd::Init => init(&root, &entry),
         Cmd::Import(args) => crate::import_cmd::run(&root, args, &entry),
         Cmd::Export { what } => crate::export_cmd::run(&open(&root)?, what),
@@ -406,11 +399,6 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             );
             Ok(())
         }
-        Cmd::Idea(mut args) => {
-            let ctx = open(&root)?;
-            args.author = entry.decision_author(&ctx.store)?.into();
-            crate::idea_cmd::run(&ctx, args)
-        }
         Cmd::Hook => {
             session_cmd::hook(&root, &entry);
             Ok(())
@@ -419,48 +407,16 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             socket,
             launch_record,
         } => session_cmd::bind(&root, &socket, &launch_record, &entry),
-        Cmd::New {
-            origin,
-            title,
-            project,
-            idea,
-            ready,
-            body,
-            body_file,
-            profile,
-            depends,
-            priority,
-            kind,
-            size,
-            difficulty,
-            design,
-            labels,
-        } => {
-            let status = if idea {
-                Status::Idea
-            } else if ready {
-                Status::Ready
-            } else {
-                Status::Backlog
-            };
-            crate::idea_cmd::new_task(
-                &open(&root)?,
-                &title,
-                project.as_deref(),
-                status,
-                body.as_deref(),
-                body_file.as_deref(),
-                profile,
-                &depends,
-                priority,
-                kind,
-                size,
-                difficulty,
-                origin,
-                design,
-                &labels,
-            )
-        }
+        cmd @ (Cmd::New { .. }
+        | Cmd::Comment { .. }
+        | Cmd::Move { .. }
+        | Cmd::Idea(_)
+        | Cmd::Route { .. }
+        | Cmd::Hold { .. }
+        | Cmd::Release { .. }
+        | Cmd::WaiveReview { .. }
+        | Cmd::Focus { .. }
+        | Cmd::RecoverInfrastructure { .. }) => crate::task_cmd::run(&inv, cmd),
         Cmd::List {
             view: true, json, ..
         } => task_output::list_view(&start_dir(&root)?, json),
@@ -512,65 +468,8 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
                 show(&ctx, &id, json)
             }
         }
-        Cmd::Comment {
-            id,
-            text,
-            author,
-            send,
-        } => {
-            let task = corral_ops::comment(&open(&root)?, &id, &text, author, send)?;
-            println!("{} commented", task.id);
-            Ok(())
-        }
-        Cmd::Move {
-            id,
-            status,
-            force,
-            owner_ok,
-            reason,
-            author: _,
-        } => {
-            let ctx = open(&root)?;
-            let to = parse_status(&status)?;
-            let t = corral_ops::move_task_with_decision(
-                &ctx,
-                &id,
-                to,
-                force,
-                reason.as_deref(),
-                entry.decision_author(&ctx.store)?,
-                owner_ok,
-            )?;
-            println!("{} -> {}", t.id, t.status.label());
-            Ok(())
-        }
         Cmd::Edit { id, owner_ok } => crate::idea_cmd::edit(&open(&root)?, &id, owner_ok),
-        Cmd::Route {
-            id,
-            set_reviewer,
-            clear_reviewer,
-            profile,
-            json,
-        } => {
-            let ctx = open(&root)?;
-            if set_reviewer.is_some() || clear_reviewer {
-                corral_ops::reviewer_set(&ctx, &id, set_reviewer.as_deref())?;
-            }
-            route::explain(&ctx, &id, &profile.choice(), json)
-        }
-        Cmd::Hold { id, reason } => corral_ops::hold::hold(&open(&root)?, &id, reason.as_deref()),
-        Cmd::Release { id } => corral_ops::hold::release(&open(&root)?, &id),
-        Cmd::WaiveReview { id, reason } => {
-            corral_ops::review_waiver::waive(&open(&root)?, &id, &reason)?;
-            println!(
-                "{id}: review waived; it lands once its gate passes, marked landed without review"
-            );
-            Ok(())
-        }
-        Cmd::Focus { id, all, clear: _ } => {
-            corral_ops::hold::focus(&open(&root)?, id.as_deref(), all)
-        }
-        Cmd::Queue { cmd } => crate::queue::run(&open(&root)?, cmd),
+        Cmd::Queue { cmd } => crate::queue::run(&inv, cmd),
         Cmd::Dispatch {
             id,
             adhoc,
@@ -632,14 +531,9 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             Ok(())
         }
         Cmd::Gate { id, wait, force } => gate(&open(&root)?, &id, wait, force),
-        Cmd::Criteria { cmd } => crate::completion_cmd::criteria(&open(&root)?, cmd),
+        Cmd::Criteria { cmd } => crate::completion_cmd::criteria(&inv, cmd),
         Cmd::Evidence { cmd } => crate::completion_cmd::evidence(&open(&root)?, cmd),
         Cmd::ReviewRun { id, reviewer } => review_run(&open(&root)?, &id, reviewer.as_deref()),
-        Cmd::RecoverInfrastructure { id } => {
-            corral_ops::recover_infrastructure(&open(&root)?, &id)?;
-            println!("{id} returned to Review; autopilot will resume it on sync");
-            Ok(())
-        }
         Cmd::Verdict {
             id,
             verdict: v,
@@ -657,15 +551,15 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             (attempt.as_deref(), &evidence),
             stronger,
         ),
-        Cmd::Artifact { cmd } => crate::artifact_cmd::run(&open(&root)?, cmd),
+        Cmd::Artifact { cmd } => crate::artifact_cmd::run(&inv, cmd),
         Cmd::Pin {
             target,
             label,
             follow_latest,
-        } => pins::pin(&open(&root)?, &target, label.as_deref(), follow_latest),
-        Cmd::Unpin { target } => pins::unpin(&open(&root)?, &target),
+        } => pins::pin(&inv, &target, label.as_deref(), follow_latest),
+        Cmd::Unpin { target } => pins::unpin(&inv, &target),
         Cmd::Pins { json } => pins::list(&open(&root)?, json),
-        Cmd::Dashboard { cmd } => crate::dashboard_cmd::run(&open(&root)?, cmd),
+        Cmd::Dashboard { cmd } => crate::dashboard_cmd::run(&inv, cmd),
         Cmd::Open { target } => pins::open(&open(&root)?, &target),
         Cmd::Review { id, diff } => review(&open(&root)?, &id, diff),
         Cmd::Approve {
@@ -712,7 +606,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
                 &id,
                 keep_branch,
                 reason.as_deref(),
-                entry.decision_author(&ctx.store)?,
+                entry.invoker().decision_author(&ctx.store)?,
             )?;
             println!("{} -> {}", t.id, t.status.label());
             Ok(())
@@ -739,7 +633,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
         }
         Cmd::Sync {} => {
             let ctx = Ctx::open_for_sync(&start_dir(&root)?)?;
-            entry.apply(&ctx.store)?;
+            entry.invoker().apply(&ctx.store)?;
             if ctx.store.loop_owned_elsewhere()? {
                 let completed = corral_ops::daemon_client::Client::connect(&ctx.store)
                     .and_then(|client| match client {
@@ -763,8 +657,8 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             }
         }
         Cmd::Daemon { cmd } => crate::daemon_cmd::run(&start_dir(&root)?, cmd, &entry),
-        Cmd::Autopilot { action, json } => crate::mode_cmd::legacy(open(&root)?, &action, json),
-        Cmd::Pm { cmd } => crate::pm_cmd::run(&start_dir(&root)?, cmd, &entry),
+        Cmd::Autopilot { action, json } => crate::mode_cmd::legacy(&inv, &action, json),
+        Cmd::Pm { cmd } => crate::pm_cmd::run(&inv, cmd),
         Cmd::FocusBoard => crate::up::focus_board(&open(&root)?),
         Cmd::Board { no_mouse } => tui(open(&root)?, Mode::Board, no_mouse),
         Cmd::Capture { cwd, no_mouse } => {

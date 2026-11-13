@@ -61,7 +61,7 @@ impl<'a> Topics<'a> {
                 self.shared.changed.notify_all();
             }
             Topic::Health => self.health = subscriber,
-            Topic::Other => bail!("unsupported topic"),
+            Topic::Classic | Topic::Other => bail!("unsupported topic"),
         }
         Ok(())
     }
@@ -70,7 +70,7 @@ impl<'a> Topics<'a> {
         let subscriber = match ack.topic {
             Topic::Board => self.board.as_mut(),
             Topic::Health => self.health.as_mut(),
-            Topic::Other => None,
+            Topic::Classic | Topic::Other => None,
         }
         .context("topic is not open")?;
         ensure!(
@@ -91,7 +91,7 @@ impl<'a> Topics<'a> {
                 }
             }
             Topic::Health => self.health = None,
-            Topic::Other => {}
+            Topic::Classic | Topic::Other => {}
         }
     }
 
@@ -124,7 +124,7 @@ impl<'a> Topics<'a> {
         let subscriber = match topic {
             Topic::Board => self.board.as_mut(),
             Topic::Health => self.health.as_mut(),
-            Topic::Other => None,
+            Topic::Classic | Topic::Other => None,
         };
         let Some(subscriber) = subscriber.filter(|subscriber| !subscriber.in_flight) else {
             return Ok(None);
@@ -224,7 +224,7 @@ impl<'a> Topics<'a> {
                 subscriber.in_flight = true;
                 Ok(Some(frame))
             }
-            Topic::Other => bail!("unsupported topic"),
+            Topic::Classic | Topic::Other => bail!("unsupported topic"),
         }
     }
 }

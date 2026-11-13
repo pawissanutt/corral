@@ -23,8 +23,10 @@ mod autopilot;
 pub use autopilot::recover_infrastructure;
 mod availability;
 pub mod boardview;
+pub mod classic;
 mod cleanup;
 mod cleanup_worktree;
+pub mod command;
 mod comments;
 mod completion;
 mod content_index;
@@ -40,6 +42,7 @@ mod digest;
 mod dispatch;
 mod dispatch_policy;
 mod escalation;
+pub mod feed_delta;
 mod repair_cycle;
 #[doc(hidden)]
 pub mod repair_migration;
@@ -53,6 +56,7 @@ mod gate_probe;
 mod gate_script;
 mod gate_tier;
 pub mod gate_triage;
+pub mod git_watch;
 mod harness;
 mod history;
 pub mod hold;
@@ -260,7 +264,9 @@ pub use plan::member_add::{PlanMemberAdded, plan_add_member};
 pub use plan::member_gate::plan_member_gate_from;
 pub use plan::member_gate::{MemberGateOutcome, MemberGateRequest, OwnerEntry, plan_member_gate};
 #[doc(hidden)]
-pub use plan::member_move::{MoveGate, PlanMemberMoved, plan_move_member};
+pub use plan::member_move::{
+    MoveGate, PlanMemberMoved, plan_move_member, plan_move_member_with_gate_text,
+};
 pub use plan::{approved_plan, plan_policy_set, plan_spec_revision, plan_submit};
 pub use plan_lifecycle::plan_cancel;
 pub use plan_review::{

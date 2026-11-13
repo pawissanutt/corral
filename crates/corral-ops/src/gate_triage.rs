@@ -240,10 +240,12 @@ pub(crate) fn route(store: &Store, id: &str, gate: &GateRecord) -> Result<Route>
     })
 }
 
-fn require_driver(task: &impl corral_core::TaskRef, owner: bool) -> Result<()> {
-    if let crate::assistant::owner_action::OwnerAuthority::ViaAssistant(via) =
-        crate::assistant::owner_action::authority()
-    {
+fn require_driver(
+    task: &impl corral_core::TaskRef,
+    owner: bool,
+    invoker: &crate::command::Invoker,
+) -> Result<()> {
+    if let Some(via) = invoker.owner_action.as_ref() {
         ensure!(
             !owner
                 && task
@@ -258,17 +260,23 @@ fn require_driver(task: &impl corral_core::TaskRef, owner: bool) -> Result<()> {
 
 /// Record diagnosis and queue the next existing pipeline stage. No worker, reviewer or gate
 /// is launched here. The caller's normal diagnosis authority and every live stop still apply.
-pub fn diagnose(ctx: &Ctx, id: &str, report: GateDiagnosis, owner: bool) -> Result<GateTriage> {
+pub fn diagnose(
+    ctx: &Ctx,
+    id: &str,
+    report: GateDiagnosis,
+    owner: bool,
+    invoker: &crate::command::Invoker,
+) -> Result<GateTriage> {
     let id = Store::normalize_id(id)?;
     if owner {
-        crate::require_automation_owner(&ctx.store)?;
+        crate::require_automation_owner(&ctx.store, invoker)?;
     }
     let _pilot = ctx
         .store
         .try_lock(&format!("autopilot-{id}"))?
         .context("autopilot is advancing this task")?;
     let head = ctx.store.head(&id)?;
-    require_driver(&head, owner)?;
+    require_driver(&head, owner, invoker)?;
     crate::operating::require_diagnosis(&ctx.store, &head, owner)?;
     ensure!(
         !report.explanation.trim().is_empty() && !report.evidence.is_empty(),
@@ -377,7 +385,7 @@ pub fn diagnose(ctx: &Ctx, id: &str, report: GateDiagnosis, owner: bool) -> Resu
             .push(verification::digest(&serde_json::to_vec(&report)?));
     }
     ctx.store.dispatch_update_head(&id, |store, current| {
-        require_driver(&*current, owner)?;
+        require_driver(&*current, owner, invoker)?;
         crate::operating::require_diagnosis(store, &*current, owner)?;
         ensure!(
             current.current_run_head()?.as_deref() == Some(&run),

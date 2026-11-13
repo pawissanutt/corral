@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use corral_core::{Config, OperatingAuthority, OperatingPreview, OperatingSelection};
 use corral_ops::Ctx;
+use corral_ops::command::Invoker;
 
 #[derive(Args)]
 pub struct AutomationArgs {
@@ -64,6 +65,28 @@ pub(crate) struct SelectionArgs {
 }
 
 impl SelectionArgs {
+    pub(crate) fn into_command(
+        self,
+        confirm: String,
+        json: bool,
+    ) -> corral_protocol::cmd::mode::ModeCommand {
+        corral_protocol::cmd::mode::ModeCommand::Autopilot {
+            projects: self.projects,
+            include_new: self.include_new,
+            expires_after_days: self.expires_after_days,
+            max_new_tasks: self.max_new_tasks,
+            tasks: self.tasks,
+            exclusions: self.exclusions,
+            plan_scopes: self.plan_scopes,
+            dispatch: self.dispatch,
+            accept: self.accept,
+            plan_accept: self.plan_accept,
+            aggregate_accept: self.aggregate_accept,
+            confirm,
+            json,
+        }
+    }
+
     pub(crate) fn resolve(self) -> Result<OperatingSelection> {
         let mut plan_scopes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for scope in self.plan_scopes {
@@ -94,33 +117,38 @@ impl SelectionArgs {
     }
 }
 
-pub fn run(ctx: &Ctx, args: AutomationArgs) -> Result<()> {
+pub fn run(ctx: &Ctx, invoker: &Invoker, args: AutomationArgs) -> Result<()> {
     match args.cmd {
         AutomationCmd::Status => {
             crate::pm_cmd::evaluate(ctx, |snapshot| crate::mode_cmd::status(snapshot, false))?;
         }
         AutomationCmd::Preview(selection) => {
             let preview = corral_ops::automation_preview(&ctx.store, &selection.resolve()?)?;
-            println!("{}", serde_json::to_string_pretty(&preview)?);
-            println!("Exact confirmation digest: {}", preview.id);
-            println!("Stored grant digest: {}", preview.grant_digest);
+            let mut out = corral_ops::command::Output::default();
+            let result = corral_ops::command::mode::print_automation_preview(&preview, &mut out);
+            print!("{}", out.stdout);
+            result?;
         }
         AutomationCmd::Confirm { selection, digest } => {
-            corral_ops::require_automation_owner(&ctx.store)?;
+            corral_ops::require_automation_owner(&ctx.store, invoker)?;
             let preview = corral_ops::automation_preview(&ctx.store, &selection.resolve()?)?;
             ensure!(
                 digest == preview.id,
                 "preview changed; run automation preview again"
             );
             crate::mode_cmd::print_preview(&preview)?;
-            confirm_terminal(ctx, &preview)?;
+            confirm_terminal(ctx, invoker, &preview)?;
         }
     }
     Ok(())
 }
 
-pub(crate) fn confirm_terminal(ctx: &Ctx, preview: &OperatingPreview) -> Result<Option<Config>> {
-    corral_ops::require_automation_owner(&ctx.store)?;
+pub(crate) fn confirm_terminal(
+    ctx: &Ctx,
+    invoker: &Invoker,
+    preview: &OperatingPreview,
+) -> Result<Option<Config>> {
+    corral_ops::require_automation_owner(&ctx.store, invoker)?;
     ensure!(
         std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
         "owner confirmation requires an interactive terminal; use mode autopilot --confirm <preview-id> for explicit nonterminal confirmation"
@@ -142,7 +170,7 @@ pub(crate) fn confirm_terminal(ctx: &Ctx, preview: &OperatingPreview) -> Result<
         println!("Cancelled; no grant written.");
         return Ok(None);
     }
-    let config = corral_ops::automation_confirm(&ctx.store, preview, digest)?;
+    let config = corral_ops::automation_confirm(&ctx.store, preview, digest, invoker)?;
     println!("Confirmed {}", preview.id);
     Ok(Some(config))
 }

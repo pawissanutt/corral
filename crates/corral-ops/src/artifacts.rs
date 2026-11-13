@@ -176,7 +176,7 @@ fn add_artifact_inner(
     frozen: Option<&[u8]>,
 ) -> Result<(Artifact, Option<RequestReceipt>)> {
     if !matches!(target, Target::Promotion) {
-        crate::assistant_artifacts::check_owner(None)?;
+        crate::assistant_artifacts::check_owner(None, &crate::command::Invoker::process())?;
     }
     let _output_consumer = crate::storage_gc::outputs::protect_artifact_source(ctx, path)?;
     let meta = std::fs::metadata(path)

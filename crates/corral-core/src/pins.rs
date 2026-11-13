@@ -124,7 +124,7 @@ impl fmt::Display for PinRef {
 }
 
 /// What a pin points at right now.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PinTarget {
     Task {
         id: String,

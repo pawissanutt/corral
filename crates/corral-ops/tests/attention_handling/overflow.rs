@@ -297,6 +297,7 @@ fn owner_episodes_subprocess() {
                 if key == overflow { 60 } else { 86400 },
                 "same-request",
                 at(start + 1),
+                &corral_ops::command::Invoker::process(),
             )
             .unwrap();
         }
