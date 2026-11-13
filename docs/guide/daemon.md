@@ -103,11 +103,24 @@ touch "$(dirname "$(corral daemon socket)")/sync-audit-on"
 rm "$(dirname "$(corral daemon socket)")/sync-audit-on"
 ```
 
-With timing on, each pass record counts audit findings in span `sync.audit.wrong_skip`
-(`n` is the number of wrong skips in that pass). It should stay absent or zero; any
-finding names a rule that misses an input, so report the printed step and task. Spans
-`sync.quiet` and `sync.full` appear once in the record of each quiet or full pass, and
-`sync.skip` counts the steps and tasks a pass skipped.
+With timing on, each pass record shows what the planner did, as span counts (`n`):
+
+| Span | `n` in one pass record |
+|---|---|
+| `sync.quiet` | 1 when the pass ran no gated step |
+| `sync.skip` | steps and tasks the pass skipped |
+| `sync.full` | 1 when the pass was full |
+| `sync.full.<reason>` | 1 for the reason of a full pass: `start`, `owner` (a `cli`/`board` nudge), `switch` (`sync-full-on`), `periodic`, `config`, `session`, `herdr`, `feed_gap`, `clock_jump` or `audit` |
+| `sync.audit.pass` | 1 when the pass was audited |
+| `sync.audit.step` | steps and tasks the audited pass decided |
+| `sync.audit.would_skip` | of those, the ones the rules would have skipped |
+| `sync.audit.wrong_skip` | of those, the ones that acted anyway |
+
+An audited pass is one whose only reason to be full is `sync-audit-on`; a pass that is
+full for another reason (start, nudge, periodic, ...) is not audited. `sync.audit.pass`
+proves audit ran, and `sync.audit.would_skip` that it had something to check.
+`sync.audit.wrong_skip` should stay absent or zero; any finding names a rule that misses
+an input, so report the printed step and task.
 
 ## Projected board
 

@@ -74,11 +74,16 @@ pub enum PassRequest {
     Full(FullReason),
 }
 
-/// Why a pass ran every step and every task.
+/// Why a pass ran every step and every task. With timing on, each full pass counts once in
+/// span `sync.full` and once in `sync.full.<reason>` ([`FullReason::span`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum FullReason {
+    /// Empty memory: the daemon's first pass.
     Start,
+    /// An explicit refresh: a `cli` or `board` nudge.
     Owner,
+    /// The `sync-full-on` switch file.
+    Switch,
     Periodic,
     Config,
     Session,
@@ -86,6 +91,24 @@ pub enum FullReason {
     FeedGap,
     ClockJump,
     Audit,
+}
+
+impl FullReason {
+    /// The timing span counted once per full pass with this reason.
+    pub fn span(self) -> &'static str {
+        match self {
+            Self::Start => "sync.full.start",
+            Self::Owner => "sync.full.owner",
+            Self::Switch => "sync.full.switch",
+            Self::Periodic => "sync.full.periodic",
+            Self::Config => "sync.full.config",
+            Self::Session => "sync.full.session",
+            Self::Herdr => "sync.full.herdr",
+            Self::FeedGap => "sync.full.feed_gap",
+            Self::ClockJump => "sync.full.clock_jump",
+            Self::Audit => "sync.full.audit",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -449,8 +472,14 @@ impl Planner<'_> {
         }
         memory.last_now = Some(self.now);
         self.report.full = self.full;
-        if self.report.full.is_some() {
+        if let Some(reason) = self.full {
             drop(corral_core::timing::span("sync.full"));
+            drop(corral_core::timing::span(reason.span()));
+        }
+        if self.audit {
+            // A positive record per audited pass: zero wrong skips is then distinguishable
+            // from audit never running.
+            drop(corral_core::timing::span("sync.audit.pass"));
         }
         self.report.quiet = self.report.ran == 0;
         if self.report.quiet {
@@ -557,8 +586,12 @@ impl Planner<'_> {
             self.report.skipped += 1;
             drop(corral_core::timing::span("sync.skip"));
         }
-        if self.audit && !decision {
-            self.would_skip.insert((step, task.map(str::to_owned)));
+        if self.audit {
+            drop(corral_core::timing::span("sync.audit.step"));
+            if !decision {
+                drop(corral_core::timing::span("sync.audit.would_skip"));
+                self.would_skip.insert((step, task.map(str::to_owned)));
+            }
         }
     }
 

@@ -117,8 +117,11 @@ fn cli_nudge_forces_full_pass() {
     let taken = shared.take_request();
     assert_eq!(taken, (false, true));
     assert_eq!(pass_request(taken, false), PassRequest::Nudged);
-    // The `sync-full-on` switch makes any pass full.
-    assert_eq!(pass_request(taken, true), full);
+    // The `sync-full-on` switch makes any pass full, under its own reason.
+    assert_eq!(
+        pass_request(taken, true),
+        PassRequest::Full(FullReason::Switch)
+    );
 }
 
 #[cfg(unix)]
