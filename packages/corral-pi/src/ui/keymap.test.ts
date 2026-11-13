@@ -119,11 +119,17 @@ test("a answer is offered only when the selected child asks", () => {
   }
 });
 
-test("the board offers review and plan hints only when the view offers them", () => {
+test("the board offers review, plan and task hints only when the view offers them", () => {
   const keys = (selection: string[]) => contextHints(state("board", { build: BUILD, selection })).map(hint => hint.key);
   expect(keys(["review", "details", "plan", "refresh"])).toEqual(["↑↓", "p", "⏎", "n", "r", "esc"]);
   expect(keys(["details"])).not.toContain("p");
   expect(keys(["details"])).not.toContain("n");
+  // No task on the board: no task keys, only what still acts.
+  expect(keys(["plan", "refresh"])).toEqual(["n", "r", "esc"]);
+  // Outside a workspace with nothing filed: neither task keys nor planning.
+  expect(keys([])).toEqual(["esc"]);
+  const row = stripTerminalSequences(footerRow(contextHints(state("board", { build: BUILD, selection: [] })), chromeTier(140), 140, footerBase("board")).line);
+  expect(row).not.toContain("↑↓"); expect(row).toMatch(/F2\s+actions/); expect(row).toMatch(/F1\s+keys/);
 });
 
 test("binding alt+t to an editor action removes Alt+T from the hints and the keys list", () => {

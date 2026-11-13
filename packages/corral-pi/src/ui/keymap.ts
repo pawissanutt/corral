@@ -145,9 +145,9 @@ function composerHints(state: HintState): (Hint | undefined)[] {
     : [piHint("tui.input.submit", "submit", "send"), to, ...queueHints(state)];
 }
 function boardHints(state: HintState): (Hint | false | undefined)[] {
-  // Without the view's offered actions, a task is assumed selected and the board reachable.
+  // Without the view's offered actions, a task is assumed selected and the board reachable. Task keys need a task.
   const offered = new Set(state.selection ?? ["details", "refresh", ...(state.build?.proposed ? ["review"] : [])]);
-  return [UP_DOWN("task", "task"), offered.has("review") && letter("p", "review plan", "plan"), offered.has("details") && ENTER("details"),
+  return [offered.has("details") && UP_DOWN("task", "task"), offered.has("review") && letter("p", "review plan", "plan"), offered.has("details") && ENTER("details"),
     offered.has("plan") && letter("n", "plan tasks", "plan"), offered.has("refresh") && letter("r", "refresh"), ESC("chat")];
 }
 function queueHints(state: HintState): (Hint | undefined)[] {

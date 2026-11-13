@@ -22,6 +22,8 @@ generated unless supplied; a supplied name has 1 to 40 lowercase letters, digits
 and cannot start with a hyphen. An existing worktree path or branch refuses creation.
 `--here` uses the repository checkout and its current branch, including a detached HEAD,
 instead. Resume uses the recorded worktree and transcript; it refuses if either is missing.
+It refuses with `build_resume_refused` if the recorded worktree now belongs to a different
+Git repository, or if a separate worktree has a different checked-out branch or detached HEAD.
 `--here` and `--name` cannot accompany resume.
 
 The session record and local data live under the corral-pi data root at `build/B-<id>/`,
@@ -36,7 +38,8 @@ must be a corral-pi profile with a model and known provider. Outside a workspace
 provider is `openai-codex` and its default model is `gpt-6.1-sol`; the Anthropic and Bedrock
 defaults are respectively `claude-opus-4-8` and
 `us.anthropic.claude-sonnet-4-5-20250929-v1:0`. `--model`, `--provider` and `--effort`
-override the launch selection. Launch checks assets and credentials. Among explicit refusals,
+override the launch selection. A workspace profile selecting Amazon Bedrock uses the configured
+AWS binding, as in other launches. Launch checks assets and credentials. Among explicit refusals,
 `not_a_repository` means no Git repository, `assistant_profile` means the workspace profile
 cannot supply a corral-pi model or provider, `usage_error` covers invalid arguments or build
 settings, `assets_unavailable` and `build_unavailable` indicate missing host assets, and
@@ -67,15 +70,22 @@ do not inherit the conversation. Ownership should be disjoint from other childre
 parent's concurrent edits. Edit and write calls outside a nonempty ownership set are recorded
 and flagged, not blocked. An empty ownership set has no explicit ownership restriction.
 Children may read, edit, write, run shell commands and ask the owner a blocking question with
-two to four options. They cannot delegate or run Git write commands. The parent integrates
-their reports and checks the combined result; cancellation does not undo edits.
+two to four options. They cannot delegate. Their Git commands in `bash`, `job_start` and
+other local tools taking a command use an allowlist: `status`, `diff`, `log`, `show`, `blame`,
+`grep`, `ls-files`, `rev-parse` and `cat-file`; read-only forms of `branch`, `tag`,
+`worktree list`, `stash list`, `remote` and `config` are also allowed. Unknown verbs,
+unsupported options and mutating listing variants are refused with “Build children cannot run
+Git write commands”. The guard inspects compound commands and quoted arguments, including
+nested shell commands. The parent integrates their reports and checks the combined result;
+cancellation does not undo edits.
 
 A call can start up to 12 children. `build.max_parallel` limits running children, default 3,
 within 1 to 8. Ready children start in FIFO order; `after` dependencies wait for successful
 completion and a failed or cancelled prerequisite cancels dependents. The `task` call waits
-for all children it starts and returns reports, edits, usage and failures. Child IDs must be
-unique within the session. The parent can use `agent_message` to steer a live child and
-`agent_cancel` to cancel a queued or running child.
+for all children it starts and returns reports, edits, usage and failures. For a cancelled
+running child, it returns only after the child has stopped, with its last report and usage.
+Child IDs must be unique within the session. The parent can use `agent_message` to steer a
+live child and `agent_cancel` to cancel a queued or running child.
 
 Named profiles select a child model, optionally with effort and a description:
 
@@ -112,9 +122,11 @@ project, ship and land are unavailable.
 | Ship | Submits a task for gate and independent review. | Fast-forwards a new scratch to the committed build candidate. |
 | Land | Submits a task, waives independent review as owner, and waits for the required gate and landing. | Fast-forwards a new scratch to the committed build candidate; corral handles landing. |
 
-Ship and land also require a clean worktree and at least one commit beyond the recorded base.
-For `--here`, a detached HEAD or the project's integration branch cannot be shipped; failure
-to read the integration branch also prevents submission. The branch summary must be available.
+Before a task is submitted, ship and land require a clean worktree and at least one commit
+beyond the recorded base. Branch checks use the branch checked out at exit time, not the
+branch recorded at launch. For `--here`, a detached HEAD or the project's integration branch
+cannot be shipped; failure to read the integration branch also prevents submission. The branch
+summary must be available.
 
 For ship, the host runs these commands in order, substituting the actual project, session,
 slug, base, title and candidate commit:
@@ -136,7 +148,10 @@ corral show <task> --json
 
 The host polls task status until landing or failure. If a command, gate or subsequent status
 check fails, it reports the failure; any assistant session, scratch or task already created
-remains available for manual continuation. The build worktree is not automatically removed.
+remains available for manual continuation. Exit progress records the completed step. After a
+restart, a land whose waiver or sync failed remains failed with its reason; an interrupted
+step is also reported as failed. Choosing Land again continues from the missing step without
+creating a second task. The build worktree is not automatically removed.
 
 ## Board fan-out
 
@@ -154,10 +169,12 @@ gating, reviewing, blocked, failed and landed. `/board` refreshes the session's 
 Edit and write refuse destinations outside the session worktree and any `.git`, `.corral` or
 `.worktrees` component inside it, including symlink destinations. Shell refusals include direct
 writes under `.corral`, input to another herdr pane, worktree removal and branch deletion.
-These are accident guards, not a shell security boundary; the contract forbids bypassing a
-write refusal through bash, MCP or another tool. Children additionally have fixed Git-write
-refusals. The model can propose an exit or board plan but cannot authorize one: only an owner
-choice causes the host to run the corresponding commands. For those owner commands the host
+The parent and children may run only allowlisted read-only corral commands through `bash` or
+`job_start`; a refused board-changing command names `/board` for an owner-confirmed board plan
+and `/finish` for the owner's exit choice. These are accident guards, not a shell security
+boundary; the contract forbids bypassing a write refusal through bash, MCP or another tool.
+The model can propose an exit or board plan but cannot authorize one: only an owner choice
+causes the host to run the corresponding commands. For those owner commands the host
 removes `AI_AGENT`, `PI_CODING_AGENT`, `CORRAL_ASSISTANT` and `CORRAL_PM` from the subprocess
 environment.
 

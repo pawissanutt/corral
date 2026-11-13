@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Type } from "typebox";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { BuildContext, ChildSpec } from "../src/build/types.ts";
 import { FleetRuntime } from "../src/extensions/fleet/runtime.ts";
-import type { ChildHandle, ChildHooks, ChildRunner } from "../src/extensions/fleet/child.ts";
+import { createSdkRunner, type ChildHandle, type ChildHooks, type ChildRunner } from "../src/extensions/fleet/child.ts";
 import { resolveModel, resolveProfiles } from "../src/extensions/fleet/profiles.ts";
 
 class FakeRunner implements ChildRunner {
@@ -11,6 +15,7 @@ class FakeRunner implements ChildRunner {
   readonly children = new Map<string, { hooks: ChildHooks; signal: AbortSignal; finish: (result: { report: string; failed?: string }) => void; steers: string[]; models: string[] }>();
   active = 0;
   peak = 0;
+  finishOnAbort = true;
   run(spec: ChildSpec, _model: unknown, hooks: ChildHooks, signal: AbortSignal): ChildHandle {
     this.order.push(spec.id); this.active++; this.peak = Math.max(this.peak, this.active);
     const done = Promise.withResolvers<{ report: string; failed?: string }>();
@@ -22,9 +27,9 @@ class FakeRunner implements ChildRunner {
       ended = true; this.active--; done.resolve(result);
     };
     this.children.set(spec.id, { hooks, signal, finish, steers, models });
-    signal.addEventListener("abort", () => finish({ report: "cancelled", failed: "cancelled" }), { once: true });
-    if (signal.aborted) finish({ report: "cancelled", failed: "cancelled" });
-    return { done: done.promise, usage: () => ({ input: 10, output: 20, turns: 1 }),
+    signal.addEventListener("abort", () => { if (this.finishOnAbort) finish({ report: "cancelled", failed: "cancelled" }); }, { once: true });
+    if (signal.aborted && this.finishOnAbort) finish({ report: "cancelled", failed: "cancelled" });
+    return { done: done.promise, usage: () => ({ input: ended ? 100 : 10, output: ended ? 200 : 20, turns: 1 }),
       async steer(text) { steers.push(text); }, async setModel(provider, model) { models.push(`${provider}/${model}`); return "deferred"; } };
   }
   finish(id: string, failed?: string): void { this.children.get(id)!.finish({ report: `Report from ${id}`, failed }); }
@@ -194,4 +199,106 @@ test("profile resolution adds the parent default but preserves an explicit defau
   expect(resolveModel(undefined, profiles, ["approved"])).toEqual({ profile: "default", provider: "approved", model: "parent", effort: "high" });
   expect(resolveModel("approved/family/model", profiles, ["approved"]).model).toBe("family/model");
   expect(resolveProfiles({ ...settings, profiles: [{ name: "default", model: "approved/chosen" }] }, { provider: "approved", model: "parent" })).toEqual([{ name: "default", model: "approved/chosen" }]);
+});
+
+type GuardEvent = { toolName: string; input: Record<string, unknown>; parentToolCallId?: string };
+type Guard = (event: GuardEvent) => { block: boolean; reason: string } | undefined;
+
+/** Capture the actual child extension guard without a provider or real SDK session. */
+async function childGuard(): Promise<Guard> {
+  const dir = mkdtempSync(join(tmpdir(), "fleet-guard-"));
+  let guard: Guard | undefined;
+  const { context, runtime } = fixture();
+  const fakeSdk = {
+    CURRENT_SESSION_VERSION: 3,
+    SettingsManager: { inMemory: () => ({}) },
+    SessionManager: { open: () => ({}) },
+    async createAgentSessionServices(options: { resourceLoaderOptions: { extensionFactories: ((api: ExtensionAPI) => void)[] } }) {
+      const api = { registerTool() {}, on(name: string, handler: unknown) { if (name === "tool_call") guard = handler as Guard; } };
+      for (const extension of options.resourceLoaderOptions.extensionFactories) extension(api as unknown as ExtensionAPI);
+      return {};
+    },
+    async createAgentSessionFromServices() {
+      return { session: { messages: [], subscribe: () => () => {}, async bindExtensions() {}, async prompt() {},
+        getLastAssistantText: () => "", getSessionStats: () => ({ tokens: { input: 0, output: 0 }, cost: 0 }),
+        getContextUsage: () => undefined, dispose() {} } };
+    },
+  } as unknown as typeof Sdk;
+  const localTools: ToolDefinition[] = ["job_start", "shell_command"].map(name => ({
+    name, label: name, description: "Run a command", parameters: Type.Object({ command: Type.String() }),
+    async execute() { throw new Error("Guard tests never execute tools"); },
+  }));
+  try {
+    const runner = createSdkRunner({ sdk: fakeSdk, models: { getModel: () => ({}) } as unknown as ModelRuntime,
+      context: { ...context, dir }, agentDir: dir, localTools,
+      shellRefusal: command => command.includes(".corral") ? "Reserved .corral path" : undefined });
+    const handle = runner.run(spec("guard"), { profile: "default", provider: "approved", model: "parent" },
+      { onEvent() {}, onToolStart() {}, onTurn() {}, async ask() { return ""; } }, new AbortController().signal);
+    const result = await handle.done;
+    expect(result.failed).toBeUndefined();
+    expect(guard).toBeDefined();
+    return guard!;
+  } finally { await runtime.close(); rmSync(dir, { recursive: true, force: true }); }
+}
+
+test("child shell checks cover background jobs and other command tools", async () => {
+  const guard = await childGuard();
+  for (const toolName of ["bash", "job_start", "shell_command"]) {
+    expect(guard({ toolName, input: { command: "git reset --hard" } })?.block).toBe(true);
+    expect(guard({ toolName, input: { command: "printf bad > .corral/state" } })?.reason).toBe("Reserved .corral path");
+    expect(guard({ toolName, input: { command: "git status --short" } })).toBeUndefined();
+  }
+});
+
+test("child Git guard allows only read-only commands and listing forms", async () => {
+  const guard = await childGuard();
+  const allowed = ["status --short", "diff -- src", "log -3", "show HEAD", "blame src/a.ts", "grep pattern", "ls-files", "rev-parse HEAD", "cat-file -p HEAD",
+    "branch", "branch --list feature", "branch -av", "tag", "tag --list v*", "remote", "remote -v", "remote show -n origin", "stash list", "worktree list --porcelain",
+    "config --get user.name", "config --list"];
+  for (const command of allowed) expect(guard({ toolName: "bash", input: { command: `git ${command}` } })).toBeUndefined();
+  const refused = ["clean -fd", "restore .", "apply patch", "add .", "update-ref refs/heads/main HEAD", "checkout -- src/a.ts", "stash", "stash pop",
+    "commit", "push", "fetch", "branch feature", "branch -d feature", "branch --list --delete feature", "tag v1", "tag -d v1", "tag --list --delete v1",
+    "remote add origin url", "remote update", "remote show origin", "worktree add ../other", "config user.name x", "config --get --unset user.name",
+    "config --list --edit", "diff --output=out", "log --output out", "cat-file --filters HEAD:src/a", "grep --open-files-in-pager pattern"];
+  for (const command of refused) expect(guard({ toolName: "bash", input: { command: `git ${command}` } })?.reason).toBe("Build children cannot run Git write commands");
+});
+
+test("child Git guard retains quoted global-option values and checks compound commands", async () => {
+  const guard = await childGuard();
+  for (const command of [
+    'git -C "/work/my repo" reset --hard', "git -C '/work/my repo' reset --hard", "git -C /work/my\\ repo reset --hard",
+    'git --work-tree="/work/my repo" --git-dir "/work/my repo/.git" reset --hard',
+    'git -c "core.quotePath=false" --namespace="my space" reset --hard',
+    "git status && git clean -fd", "git status || git reset --hard", "git status; git add .", "git status | git apply",
+    "git status\ngit restore .", "(git reset --hard)", "echo $(git reset --hard)", 'echo "$(git reset --hard)"',
+    'git -C "/work/my repo reset --hard', "git status && git 'unterminated",
+  ]) expect(guard({ toolName: "bash", input: { command } })?.block).toBe(true);
+  for (const command of ['git -C "/work/my repo" status', "git -C '/work/my repo' diff", "git -C /work/my\\ repo log",
+    'git --git-dir="/work/my repo/.git" --work-tree "/work/my repo" status', 'git -c "core.quotePath=false" --namespace "my space" log',
+    "git status && git diff; git log | cat", 'echo "$(git -C "/work/my repo" status)"', "git grep git", "git log --grep git"]) {
+    expect(guard({ toolName: "bash", input: { command } })).toBeUndefined();
+  }
+});
+
+test("cancelling a running child waits for its final report and usage without an owner error", async () => {
+  const { runtime, runner } = fixture(2);
+  runner.finishOnAbort = false;
+  let returned = false;
+  const call = runtime.start("cancelled-call", [spec("stopping")]).then(children => { returned = true; return children; });
+  const other = runtime.start("other-call", [spec("other")]);
+  try {
+    expect(runtime.cancel("stopping")).toBe(true);
+    expect(runner.children.get("stopping")!.signal.aborted).toBe(true);
+    expect(runtime.snapshot().children[0]!.state).toBe("cancelled");
+    expect(runtime.snapshot().children[0]!.error).toBeUndefined();
+    await flush();
+    expect(returned).toBe(false);
+    expect(runner.children.get("other")!.signal.aborted).toBe(false);
+    runner.children.get("stopping")!.finish({ report: "Final cleanup report", failed: "aborted" });
+    const [stopped] = await call;
+    expect(stopped!.state).toBe("cancelled");
+    expect(stopped!.error).toBeUndefined();
+    expect(stopped!.report).toBe("Final cleanup report");
+    expect(stopped!.usage).toEqual({ input: 100, output: 200, turns: 1 });
+  } finally { runner.finish("stopping"); runner.finish("other"); await Promise.all([call, other]); await runtime.close(); }
 });

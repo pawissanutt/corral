@@ -59,6 +59,19 @@ writeFileSync(path, source.replace(marker, `${marker}
           const answer = await ctx.ui.confirm("Native permission fixture", "Cancel this isolated test.");
           ctx.ui.notify(answer ? "NATIVE_ALLOWED" : "NATIVE_CANCELLED");
         },
+      });
+      // Spliced into extend(), like the commands above, so it cannot add static imports to the copied module.
+      pi.registerCommand("fixture-script", {
+        description: "Owned offline provider steps read from a JSON file; a step's hold parks it after its first chunk",
+        handler: async (args) => {
+          const { appendFileSync, readFileSync } = await import("node:fs");
+          const { readFile } = await import("node:fs/promises");
+          const steps = JSON.parse(readFileSync(args.trim(), "utf8"));
+          transport().script(steps.map(({ hold, ...step }) => hold ? { ...step, afterFirstChunk: async () => {
+            appendFileSync(hold.mark, hold.label + "\\n");
+            await readFile(hold.gate);
+          } } : step));
+        },
       });`));
 for (const name of ["run", "sessions", "home", "config", "data", "state", "cache"]) mkdirSync(join(work, name), { recursive: true });
 process.stdout.write(JSON.stringify({ assets: assets.dir, corral: corral.path }));

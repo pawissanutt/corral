@@ -14,7 +14,7 @@ import type {
 } from "../../build/types.ts";
 import { NOTICE_MS } from "../header.ts";
 import { keyData } from "../keymap.ts";
-import { NativePanels } from "../panels.ts";
+import { NativePanels, type NativePanelsOptions } from "../panels.ts";
 import type { PanelSnapshot } from "../panels-view.ts";
 import type { MainView } from "../workbench.ts";
 import { RecordingTerminal } from "../../../test/support/panel-terminal.ts";
@@ -57,7 +57,7 @@ const asking = (id: string, askedAt: number) => child(id, "needs", {
 });
 
 /** A BuildUi over plain state: tests change the state, then `fire()` notifies the panels as the host does. */
-function fakeBuild(worktree: string) {
+function fakeBuild(worktree: string, base = "a") {
   const s = {
     children: [] as ChildSnapshot[], target: "parent", exit: { phase: "none" } as ExitState, tasks: [] as BoardTaskStatus[],
     steer: true, calls: [] as string[], listeners: new Set<() => void>(),
@@ -87,7 +87,7 @@ function fakeBuild(worktree: string) {
     setTarget: target => { s.target = target === "parent" || live(target) ? target : "parent"; },
   };
   const session: BuildSessionRecord = { version: 1, id: "B-1", name: "save-slots", created: "", updated: "", repoRoot: work, worktree,
-    branch: "build/save-slots", base: "a", here: false, project: "mitiplay", workspaceRoot: work };
+    branch: "build/save-slots", base, here: false, project: "mitiplay", workspaceRoot: work };
   const state = (): BuildPanelState => ({ session, settings: { exitPolicy: "gate", maxParallel: 3, profiles: [] },
     fleet: ui.fleet.snapshot(), target: s.target, exit: s.exit, board: s.tasks });
   return { s, ui, state, fire: () => { for (const listener of [...s.listeners]) listener(); } };
@@ -110,8 +110,8 @@ interface ShellEditor extends Component {
 }
 
 /** NativePanels of a build session on a recording terminal, with the real composer subclass and a minimal UI context. */
-function shell(columns: number, rows: number, build: Build, extra: Partial<PanelSnapshot> = {}, cwd = work) {
-  const panels = new NativePanels({ identity, cwd, snapshot: () => snapshot(build, extra), build: build.ui });
+function shell(columns: number, rows: number, build: Build, extra: Partial<PanelSnapshot> = {}, options: Partial<NativePanelsOptions> = {}) {
+  const panels = new NativePanels({ identity, cwd: work, snapshot: () => snapshot(build, extra), build: build.ui, ...options });
   const physical = new RecordingTerminal(); physical.resize(columns, rows);
   const terminal = panels.wrap(physical); terminal.start(() => {}, () => {});
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
@@ -276,29 +276,49 @@ test("x on a child row asks before cancelling, and m sets the chosen profile", a
   } finally { h.stop(); }
 });
 
-test("the Changes author filter shows only while Changes reads the build worktree", async () => {
-  const repo = join(work, "repo");
-  mkdirSync(join(repo, "src"), { recursive: true });
-  writeFileSync(join(repo, "src", "a.ts"), "one\n");
-  const git = (...args: string[]) => execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", ...args], { cwd: repo, stdio: "ignore" });
-  git("init", "-q"); git("add", "."); git("commit", "-q", "-m", "init");
-  writeFileSync(join(repo, "src", "a.ts"), "two\n");
-  const edited = (worktree: string) => {
-    const build = fakeBuild(worktree);
-    build.s.children = [child("picker-ui", "done", { edits: [{ path: "src/a.ts", outside: false, at: NOW }] })];
-    return build;
-  };
-  for (const [worktree, shown] of [[repo, true], [join(work, "elsewhere"), false]] as const) {
-    const h = shell(140, 46, edited(worktree), {}, repo);
-    try {
-      await h.panels.loadFiles();
-      expect(h.panels.handleInput(KEY.f7)).toBeTrue();
-      await h.panels.loadFiles(); await settle();
-      const screen = plain(h.frame().lines);
-      expect(screen).toContain("src/a.ts");
-      if (shown) expect(screen).toContain("picker-ui"); else expect(screen).not.toContain("picker-ui");
-    } finally { h.stop(); }
-  }
+/** A Git repository with one commit (returned as `base`), then `commits` committed and `edits` left uncommitted. */
+function repository(name: string, files: readonly string[], commits: readonly string[], edits: readonly string[]): { readonly path: string; readonly base: string } {
+  const path = join(work, name);
+  mkdirSync(path, { recursive: true });
+  const git = (...args: string[]) => execFileSync("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", ...args], { cwd: path, encoding: "utf8" });
+  for (const file of files) writeFileSync(join(path, file), "one\n");
+  git("init", "-q"); git("add", "."); git("commit", "-q", "-m", "base");
+  const base = git("rev-parse", "HEAD").trim();
+  for (const file of commits) writeFileSync(join(path, file), "committed\n");
+  if (commits.length) { git("add", "."); git("commit", "-q", "-m", "child work"); }
+  for (const file of edits) writeFileSync(join(path, file), "edited\n");
+  return { path, base };
+}
+
+test("a build session's Changes reads its worktree from the start: what the session changed, with authors and no project choice", async () => {
+  // The child committed beta.txt and left alpha.txt edited: both show only against the commit the session started from.
+  const repo = repository("session-repo", ["alpha.txt", "beta.txt"], ["beta.txt"], ["alpha.txt"]);
+  const other = repository("other-repo", ["alpha.txt"], [], ["alpha.txt"]);
+  const build = fakeBuild(repo.path, repo.base);
+  build.s.children = [
+    child("alpha", "done", { edits: [{ path: "alpha.txt", outside: false, at: NOW }] }),
+    child("beta", "done", { edits: [{ path: "beta.txt", outside: false, at: NOW }] }),
+  ];
+  // A projects reader is what gives assistant sessions their project choice; a build session never takes it.
+  const h = shell(140, 46, build, {}, { cwd: repo.path, readProjects: async () => ({ workspace: work, projects: {}, session: null }) });
+  try {
+    expect(h.panels.workbench.review.scopeRequired).toBeFalse();
+    await h.panels.loadFiles();
+    expect(h.panels.handleInput(KEY.f7)).toBeTrue();
+    await h.panels.loadFiles(); await settle();
+    const frame = h.frame(), screen = plain(frame.lines);
+    expect(screen).toContain("alpha.txt"); expect(screen).toContain("beta.txt");
+    expect(screen).toMatch(/all 2 · alpha 1 · beta 1/);
+    expect(screen).not.toContain("Choose a project"); expect(screen).not.toContain("Choose project");
+    expect(stripTerminalSequences(frame.lines[1] ?? "")).not.toContain("Changes:");
+    h.panels.sidebar.tab = "files";
+    expect(plain(h.panels.renderSidebar(34, 46))).toContain("beta.txt");
+    // Another repository chosen for Changes has no authors.
+    await h.panels.workbench.review.setRepository(other.path);
+    await h.panels.loadFiles(); await settle();
+    const elsewhere = plain(h.frame().lines);
+    expect(elsewhere).toContain("alpha.txt"); expect(elsewhere).not.toMatch(/all \d+ · alpha/);
+  } finally { h.stop(); }
 });
 
 test("every build surface fits 140x46, 80x24, 80x14 and 52x24 with a docked dialog and a queued item; the receiver stays at 52", () => {

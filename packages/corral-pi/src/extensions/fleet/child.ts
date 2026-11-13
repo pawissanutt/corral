@@ -44,20 +44,158 @@ const SYSTEM = "You are a write-capable build agent working one slice in a workt
   + "Do not overwrite other agents' work. No Git writes and no delegation. "
   + "Finish with a short report of what changed, what was checked with each command and result, and what was not checked.";
 
-// Inspect command words, including quoted shell bodies, without executing shell expansion.
-function gitWrite(command: string): boolean {
-  const words = command.replace(/\\\n/g, "").replace(/["']/g, "").replace(/\\([^\s])/g, "$1").split(/\s+|[;&|()<>`]/).filter(Boolean);
-  for (let i = 0; i < words.length; i++) {
-    if (!/(^|\/)git$/.test(words[i]!)) continue;
-    let j = i + 1;
-    while (words[j]?.startsWith("-")) {
-      const option = words[j++]!;
-      if (["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"].includes(option)) j++;
-      if (option === "--") break;
+/** Tokenize shell words without expanding them, retaining nested command substitutions separately. */
+function shellCommands(source: string): string[][] | undefined {
+  const commands: string[][] = [];
+  let at = 0;
+  const parse = (stop?: ")" | "`"): boolean => {
+    let words: string[] = [];
+    let word = "";
+    let active = false;
+    let quote: "'" | '"' | undefined;
+    const flushWord = () => { if (active) words.push(word); word = ""; active = false; };
+    const flushCommand = () => { flushWord(); if (words.length) commands.push(words); words = []; };
+    while (at < source.length) {
+      const char = source[at++]!;
+      if (quote === "'") {
+        if (char === "'") quote = undefined; else word += char;
+        continue;
+      }
+      if (char === "\\") {
+        const next = source[at++];
+        if (next === undefined) return false;
+        if (next !== "\n") {
+          word += quote === '"' && !['$', '`', '"', "\\"].includes(next) ? `\\${next}` : next;
+          active = true;
+        }
+        continue;
+      }
+      if (char === "$" && source[at] === "(") {
+        at++;
+        if (!parse(")")) return false;
+        word += "$()"; active = true;
+        continue;
+      }
+      if (char === "`" && !(stop === "`" && quote === undefined)) {
+        if (!parse("`")) return false;
+        word += "``"; active = true;
+        continue;
+      }
+      if (quote === '"') {
+        if (char === '"') quote = undefined; else word += char;
+        continue;
+      }
+      if (char === stop) { flushCommand(); return true; }
+      if (char === "'" || char === '"') { quote = char; active = true; continue; }
+      if (char === "(") {
+        flushCommand();
+        if (!parse(")")) return false;
+        continue;
+      }
+      if (char === ")") return false;
+      if (char === "#" && !active) { while (at < source.length && source[at] !== "\n") at++; continue; }
+      if (char === "\n" || ";|&<>".includes(char)) { flushCommand(); continue; }
+      if (/\s/.test(char)) { flushWord(); continue; }
+      word += char; active = true;
     }
-    const verb = words[j];
-    if (verb && ["commit", "checkout", "switch", "stash", "reset", "rebase", "merge", "cherry-pick", "worktree", "push"].includes(verb)) return true;
-    if (verb === "branch" && words.slice(j + 1).some(word => /^-[a-zA-Z]*[dD]/.test(word) || word === "--delete")) return true;
+    if (quote || stop) return false;
+    flushCommand();
+    return true;
+  };
+  return parse() ? commands : undefined;
+}
+
+const READ_ONLY_GIT: Record<string, true> = { status: true, diff: true, log: true, show: true, blame: true, grep: true, "ls-files": true, "rev-parse": true, "cat-file": true };
+const GIT_VALUE_OPTIONS = ["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"];
+const GIT_GLOBAL_FLAGS = ["--no-pager", "--paginate", "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs", "--no-optional-locks", "--no-replace-objects", "--bare", "--no-lazy-fetch"];
+
+function listingArgs(args: readonly string[], kind: "branch" | "tag"): boolean {
+  const patterns = args.includes("--list");
+  const flags = ["--list", "--ignore-case", "--column", "--no-column", "--color", "--no-color", ...(kind === "branch" ? ["--all", "--remotes", "--verbose", "--show-current", "--no-abbrev"] : [])];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--") return patterns;
+    if (!arg.startsWith("-")) { if (!patterns) return false; continue; }
+    if (flags.includes(arg) || (kind === "branch" && /^-[arv]+$/.test(arg)) || /^--(?:color|column)=/.test(arg)) continue;
+    if (/^--(?:format|sort|points-at)=/.test(arg)) continue;
+    if (["--format", "--sort", "--points-at"].includes(arg)) { if (args[++i] === undefined) return false; continue; }
+    if (/^--(?:no-)?(?:contains|merged)(?:=|$)/.test(arg)) {
+      if (!arg.includes("=") && args[i + 1] !== undefined && !args[i + 1]!.startsWith("-")) i++;
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+/** Fail closed for unknown verbs, global options and mutating variants of listing commands. */
+function readOnlyGit(words: readonly string[]): boolean {
+  let at = 0;
+  while (words[at]?.startsWith("-")) {
+    const option = words[at++]!;
+    if (GIT_VALUE_OPTIONS.includes(option)) { if (words[at++] === undefined) return false; continue; }
+    if (GIT_VALUE_OPTIONS.some(name => option.startsWith(`${name}=`))
+      || /^-(?:C|c).+/.test(option) || GIT_GLOBAL_FLAGS.includes(option)) continue;
+    if (["--version", "-v", "--help", "-h"].includes(option)) return at === words.length;
+    if (option === "--") break;
+    return false;
+  }
+  const verb = words[at++];
+  if (!verb) return false;
+  const args = words.slice(at);
+  // These switches turn otherwise observational commands into file writes or executable filters.
+  const options = args.slice(0, args.indexOf("--") < 0 ? args.length : args.indexOf("--"));
+  if (options.some(arg => /^--(?:output|ext-diff|textconv|filters)(?:=|$)/.test(arg)
+    || (verb === "grep" && (/^--open-files-in-pager(?:=|$)/.test(arg) || /^-[^-]*O/.test(arg))))) return false;
+  if (Object.hasOwn(READ_ONLY_GIT, verb)) return true;
+  if (verb === "branch" || verb === "tag") return listingArgs(args, verb);
+  if (verb === "worktree") return args[0] === "list" && args.slice(1).every(arg => ["--porcelain", "--verbose", "-v", "-z"].includes(arg));
+  if (verb === "stash") return args[0] === "list";
+  if (verb === "remote") {
+    const remote = args.filter(arg => arg !== "-v" && arg !== "--verbose");
+    if (!remote.length) return true;
+    if (remote[0] === "show") return remote.includes("-n") && remote.slice(1).every(arg => arg === "-n" || !arg.startsWith("-"));
+    return remote[0] === "get-url" && remote.slice(1).every(arg => ["--all", "--push"].includes(arg) || !arg.startsWith("-"));
+  }
+  if (verb === "config") {
+    const list = args.includes("--list");
+    const get = args.includes("--get");
+    if (list === get) return false;
+    let keys = 0;
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i]!;
+      if (!arg.startsWith("-")) { keys++; continue; }
+      if (["--get", "--list", "--global", "--system", "--local", "--worktree", "--includes", "--no-includes", "--show-origin", "--show-scope", "--null", "-z", "--name-only"].includes(arg)) continue;
+      if (/^--(?:file|type)=/.test(arg)) continue;
+      if (["--file", "-f", "--type"].includes(arg)) { if (args[++i] === undefined) return false; continue; }
+      return false;
+    }
+    return get ? keys === 1 : keys === 0;
+  }
+  return false;
+}
+
+function gitWrite(command: string, depth = 0): boolean {
+  if (depth > 16) return true;
+  const commands = shellCommands(command);
+  if (!commands) return /(?:^|[^a-zA-Z0-9_-])git(?:$|[^a-zA-Z0-9_-])/.test(command);
+  for (const words of commands) {
+    let at = 0;
+    // These shell prefixes do not change which executable follows them.
+    while (words[at] && (/^[a-zA-Z_][a-zA-Z0-9_]*=/.test(words[at]!) || ["!", "{", "if", "then", "elif", "else", "do"].includes(words[at]!))) at++;
+    while (["env", "command", "builtin", "exec", "sudo", "nohup"].includes(words[at]?.split("/").at(-1) ?? "")) {
+      at++;
+      while (words[at]?.startsWith("-")) {
+        const option = words[at++]!;
+        if (["-u", "--unset", "-C", "--chdir", "-g", "--group", "--user"].includes(option)) at++;
+        if (option === "--") break;
+      }
+      while (words[at] && /^[a-zA-Z_][a-zA-Z0-9_]*=/.test(words[at]!)) at++;
+    }
+    const executable = words[at] ?? "";
+    if (/(^|\/)git$/.test(executable) && !readOnlyGit(words.slice(at + 1))) return true;
+    if (/(^|\/)(?:ba|da|k|z)?sh$/.test(executable) && /^-[^-]*c/.test(words[at + 1] ?? "")
+      && gitWrite(words[at + 2] ?? "", depth + 1)) return true;
   }
   return false;
 }
@@ -117,9 +255,10 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
               const path = event.input.path;
               if (typeof path !== "string") reason = "Build writes require a path";
               else { const decision = classifyBuildWrite(path, cwd); if (!decision.allowed) reason = decision.reason; }
-            } else if (event.toolName === "bash") {
-              const command = event.input.command;
-              reason = typeof command !== "string" ? "Bash requires a command" : options.shellRefusal?.(command) ?? (gitWrite(command) ? "Build children cannot run Git write commands" : undefined);
+            } else if (event.toolName === "bash" || event.toolName === "job_start" || Object.hasOwn(event.input, "command")) {
+              // Local command tools, including background jobs, share the same child boundary.
+              const command = (event.input as Record<string, unknown>).command;
+              reason = typeof command !== "string" ? "Shell tools require a command" : options.shellRefusal?.(command) ?? (gitWrite(command) ? "Build children cannot run Git write commands" : undefined);
             }
             if (reason) return { block: true, reason };
             // SDK tool_execution_start precedes its blocking hook, so count starts only here.

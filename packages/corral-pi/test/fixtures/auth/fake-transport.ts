@@ -17,6 +17,11 @@ export interface FakeStep {
   /** Awaited after the first chunk is sent, so a partially streamed reply can be observed. */
   readonly afterFirstChunk?: () => Promise<void>;
   readonly toolCalls?: readonly FakeToolCall[];
+  /**
+   * Taken only by a request whose last user text contains this, so concurrent sessions sharing the
+   * transport (a build parent and its children) each get their own steps. Unmatched steps keep their order.
+   */
+  readonly match?: string;
 }
 
 export interface FakeTransport {
@@ -80,14 +85,17 @@ export function fakeCodexTransport(): FakeTransport {
   const send: Fetch = async (_input, init) => {
     const sequence = ++requests;
     const body = requestBody(init);
-    prompts.push(lastUserText(body));
+    const prompt = lastUserText(body);
+    prompts.push(prompt);
     if (failNext) {
       failNext = false;
       failures++;
       return new Response(JSON.stringify({ error: { type: "server_error", message: "fake transport injected failure" } }),
         { status: 503, headers: { "content-type": "application/json" } });
     }
-    const step = queue.shift() ?? { text: /Reply only ([A-Z_]+)\./.exec(lastUserText(body))?.[1] ?? "FAKE_TRANSPORT_OK" };
+    const index = queue.findIndex((entry) => entry.match === undefined || prompt.includes(entry.match));
+    const step = (index < 0 ? undefined : queue.splice(index, 1)[0])
+      ?? { text: /Reply only ([A-Z_]+)\./.exec(prompt)?.[1] ?? "FAKE_TRANSPORT_OK" };
     const hold = holdNext;
     holdNext = false;
     const id = `resp_fake_${sequence}`;

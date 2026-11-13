@@ -202,7 +202,8 @@ export class NativeWorkbench {
       await this.inspection.refresh();
       if (this.inspection.stale || !this.inspection.current) throw new Error(this.inspection.error ?? "Canonical candidate unavailable; r to reconcile");
       return this.inspection.current;
-    } : undefined, !!options.readProjects && !options.identity.task && !options.projectDir, !!options.projectDir, options.reviewBases);
+    } : undefined, !!options.readProjects && !options.identity.task && !options.projectDir && !options.build, !!options.projectDir || !!options.build,
+      options.build ? this.buildBases(options.reviewBases) : options.reviewBases);
     this.launchRoot = this.review.root;
     this.inbox = new DecisionInbox(options.readInbox, options.changed);
     this.inboxView = new InboxView(this.inbox, options.identity.role, options.identity.project, options.canInteract, options.changed,
@@ -232,8 +233,25 @@ export class NativeWorkbench {
       });
     }
   }
+  /** A build session's `since session` base is the commit the session started from, while Changes reads its worktree. */
+  private buildBases(persisted: ReviewBases | undefined): ReviewBases {
+    const local = new Map<string, string>();
+    return {
+      get: root => {
+        const state = this.options.snapshot()?.build, base = state?.session.base;
+        if (state && base && /^[a-f0-9]{40,64}$/.test(base) && this.realRoot(root) === this.realRoot(state.session.worktree)) return base;
+        return persisted ? persisted.get(root) : local.get(root);
+      },
+      set: (root, head) => { if (persisted) persisted.set(root, head); else local.set(root, head); },
+    };
+  }
   async openHistory(): Promise<void> { if (this.ui) await this.history.open(this.ui); }
-  bind(ui: ExtensionUIContext): void { this.ui = ui; this.images.bind(); this.inboxView.bind(ui); void this.task.refresh(); }
+  bind(ui: ExtensionUIContext): void {
+    this.ui = ui; this.images.bind(); this.inboxView.bind(ui); void this.task.refresh();
+    // A build session launches in its worktree; should the session record name another directory, Changes follows the record.
+    const worktree = this.options.build ? this.options.snapshot()?.build?.session.worktree : undefined;
+    if (worktree !== undefined && this.realRoot(worktree) !== this.realRoot(this.review.root)) void this.review.setRepository(worktree);
+  }
   invalidateFiles(): void {
     this.inspection.invalidate();
     clearTimeout(this.debounce);
@@ -423,7 +441,7 @@ export class NativeWorkbench {
     const place = session.here ? `checkout (${plainLabel(session.branch ?? "detached")})` : plainLabel(relative(session.repoRoot, session.worktree) || ".");
     const policy = POLICY[build.settings.exitPolicy];
     const narrow = chromeTier(this.size(width).columns) === "narrow";
-    const elsewhere = r.scopeRequired || r.root !== this.launchRoot;
+    const elsewhere = r.scopeRequired || this.realRoot(r.root) !== this.realRoot(session.worktree);
     return {
       title: `build · ${plainLabel(session.name)}`, state: snapshot.streaming || live ? "Working" : "Idle",
       context: {

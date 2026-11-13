@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { BuildSummary, ExitOption, ExitState } from "../../build/types.ts";
 import { agentColor } from "../agent-hues.ts";
+import { buildEntryRenderer, exitEntry } from "./build-entries.ts";
 import { resultCardLines } from "./result-card.ts";
 
 const NOW = 3_000_000;
@@ -49,11 +50,24 @@ test("a card that is not the latest says it was superseded and shows no live pro
   expect(latest).toContain("T-962");
 });
 
-test("a failed exit shows its error detail with a cross", () => {
-  const exit: ExitState = { phase: "failed", record: { choice: "ship", at: "t" }, detail: "The gate failed for T-962: just check" };
+test("a failed exit without a record shows its error detail with a cross on the card", () => {
+  const exit: ExitState = { phase: "failed", detail: "The gate failed for T-962: just check" };
   const line = card({ summary: summary(), exit }).text.find(row => row.includes("The gate failed"));
   expect(line).toBeDefined();
   expect(line?.startsWith("✗")).toBeTrue();
+});
+
+test("a settled exit shows its choice and outcome once across the card and its entry, a running exit stays on the card", () => {
+  const kept: ExitState = { phase: "kept", record: { choice: "keep", at: "t" }, detail: "The worktree and branch are kept without a corral task." };
+  const entry = exitEntry({ choice: "keep", label: "Keep on the branch", detail: "d" }, kept);
+  const drawn = buildEntryRenderer(() => undefined)({ role: "custom", ...entry, timestamp: NOW }, { expanded: false, outputPad: 1 } as never, undefined as never);
+  const both = [...card({ summary: summary(), exit: kept }).text, ...(drawn?.render(100) ?? []).map(line => stripTerminalSequences(line))];
+  expect(both.filter(line => line.includes("you chose"))).toHaveLength(1);
+  expect(both.filter(line => line.includes("kept without a corral task"))).toHaveLength(1);
+  const running: ExitState = { phase: "running", record: { choice: "land", at: "t" }, detail: "Submitting the branch." };
+  const live = card({ summary: summary(), exit: running }).text.join("\n");
+  expect(live).toContain("you chose");
+  expect(live).toContain("● Submitting the branch.");
 });
 
 test("slice rows and the pending exit row are clickable, and every line fits", () => {

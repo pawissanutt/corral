@@ -124,6 +124,30 @@ test("options take one row from 84 columns, two below, and drop the detail when 
   expect(text(narrow)).not.toContain("mitiplay");
 });
 
+test("the top and bottom borders are exactly the dialog's width and keep their corners", () => {
+  const LONG: ChoiceDialog = { ...EXIT, key: "long", title: "How should this leave the build session? 界界界 · done",
+    meta: "qa-repo · outside a corral workspace · 3 agents still running 界界界 and a very long project label" };
+  const QA: ChoiceDialog = { ...EXIT, key: "qa", meta: "qa-repo · outside a corral workspace" };
+  for (const dialog of [EXIT, LONG, QA, QUESTION]) {
+    for (const short of [false, true]) {
+      for (let width = 8; width <= 160; width++) {
+        const lines = choiceLines(dialog, 0, width, 14, short).lines, rows = screen(lines);
+        for (const line of lines) expect(visibleWidth(line)).toBe(width);
+        expect(rows[0]!.startsWith("╭─")).toBeTrue();
+        expect(rows[0]!.endsWith("─╮")).toBeTrue();
+        for (const row of rows.slice(1)) expect(row.endsWith("│") || row.endsWith("╯")).toBeTrue();
+      }
+    }
+  }
+  // With the sidebar rail at 140 columns the dock is 105 wide: the whole label fits and the corner closes the row.
+  const top = screen(choiceLines(QA, 0, 105, 14, false).lines)[0]!;
+  expect(top).toContain("qa-repo · outside a corral workspace");
+  // When the label cannot fit whole it is shortened with an ellipsis before it is dropped.
+  const clipped = screen(choiceLines(LONG, 0, 120, 14, false).lines)[0]!;
+  expect(clipped).toContain("qa-repo");
+  expect(clipped).toContain("…");
+});
+
 test("clicking an option row picks the same option as its digit", () => {
   for (const width of [60, 120]) {
     for (let option = 0; option < EXIT.options.length; option++) {

@@ -22,18 +22,21 @@ export interface FinishEntryDetails { readonly id: string }
 
 /**
  * A card drawn from live data on every render. `draw` returns the lines and the rows a click acts on; a plain
- * left click on such a row calls `act` with its hit.
+ * left click on such a row calls `act` with its hit. `inset` cells are kept free on both sides, as Pi's tool box
+ * does with its output padding; conversation entries get the full row and pass that padding here.
  */
 export class BuildCard<T> implements Component {
   private hits: ReadonlyMap<number, T> = new Map();
   constructor(
     private readonly draw: (width: number) => { readonly lines: string[]; readonly hits?: ReadonlyMap<number, T> },
     private readonly act?: (hit: T) => void,
+    private readonly inset = 0,
   ) {}
   render(width: number): string[] {
-    const { lines, hits } = this.draw(Math.max(1, width));
+    const pad = Math.max(0, Math.min(this.inset, Math.floor((width - 1) / 2)));
+    const { lines, hits } = this.draw(Math.max(1, width - pad * 2));
     this.hits = hits ?? new Map();
-    return lines;
+    return pad ? lines.map(line => " ".repeat(pad) + line) : lines;
   }
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     if (!this.act || event.type !== "click" || event.button !== "left" || event.shift || event.alt || event.ctrl) return undefined;
@@ -55,7 +58,7 @@ export function finishLive(cards: BuildCardSource | undefined, id: string): bool
   return latest === undefined || latest === id;
 }
 /** The result card of exit card `id`, drawn from live data. Clicks open a slice's conversation or the pending exit choice. */
-export function resultCard(source: () => BuildCardSource | undefined, id: string, note?: string): BuildCard<ResultHit> {
+export function resultCard(source: () => BuildCardSource | undefined, id: string, note?: string, inset = 0): BuildCard<ResultHit> {
   return new BuildCard<ResultHit>(width => {
     const cards = source(), state = cards?.state(), live = finishLive(cards, id);
     return resultCardLines({
@@ -66,7 +69,7 @@ export function resultCard(source: () => BuildCardSource | undefined, id: string
     const cards = source();
     if (hit.child) cards?.openChild(hit.child);
     else if (hit.exit) cards?.exit();
-  });
+  }, inset);
 }
 
 function sentence(text: string): string {
@@ -133,19 +136,21 @@ function boardLines(details: BoardEntryDetails, width: number): string[] {
 }
 /** Renders exit and board entries as one `you chose …` row plus one outcome row; finish entries as the live result card. */
 export function buildEntryRenderer(source: () => BuildCardSource | undefined): MessageRenderer {
-  return message => {
+  return (message, options) => {
     const details = typeof message.details === "object" && message.details !== null ? message.details as Record<string, unknown> : undefined;
     if (!details) return undefined;
+    // Pi hands a custom renderer the full row; the inset matches the output padding of tool cards and messages.
+    const inset = Math.max(0, options.outputPad);
     switch (message.customType) {
       case BUILD_EXIT_ENTRY:
         if (typeof details["choice"] !== "string" || typeof details["phase"] !== "string") return undefined;
-        return new BuildCard(width => ({ lines: exitLines(details as unknown as ExitEntryDetails, width) }));
+        return new BuildCard(width => ({ lines: exitLines(details as unknown as ExitEntryDetails, width) }), undefined, inset);
       case BUILD_BOARD_ENTRY:
         if (!Array.isArray(details["filed"])) return undefined;
-        return new BuildCard(width => ({ lines: boardLines(details as unknown as BoardEntryDetails, width) }));
+        return new BuildCard(width => ({ lines: boardLines(details as unknown as BoardEntryDetails, width) }), undefined, inset);
       case BUILD_FINISH_ENTRY: {
         const id = details["id"];
-        return typeof id === "string" ? resultCard(source, id) : undefined;
+        return typeof id === "string" ? resultCard(source, id, undefined, inset) : undefined;
       }
       default:
         return undefined;

@@ -61,3 +61,46 @@ test("build shell refusals preserve fixed assistant rules and protect worktrees 
     expect([command, buildShellRefusal(command)]).toEqual([command, undefined]);
   }
 });
+
+test("model shells cannot file board work or choose an exit through any corral invocation", () => {
+  for (const command of [
+    "corral --root /workspace import plan.md --origin owner --json",
+    "corral --root='/workspace with spaces' new 'Unconfirmed work'",
+    "corral list && corral queue add T-1",
+    "corral show T-1 || /usr/bin/corral approve T-1",
+    "corral log T-1; ./target/debug/corral move T-1 ready",
+    "printf plan | corral import plan.md --origin owner",
+    "corral list\ncorral assistant scratch finish demo --title change",
+    "printf '%s' \"$(corral --root /workspace import plan.md --origin owner)\"",
+    "printf '%s' \"$(printf '%s' \"$(corral new nested)\")\"",
+    "env -u AI_AGENT CORRAL_PM=0 /usr/bin/corral import plan.md --origin owner",
+    "command -- corral import plan.md --origin owner",
+    "exec -a owner ./target/debug/corral import plan.md --origin owner",
+    "bash -lc 'corral list; corral import plan.md --origin owner'",
+    "eval 'corral import plan.md --origin owner'",
+    "corral search --reindex example",
+    "corral route T-1 --clear-reviewer",
+    "corral attention park T-1",
+    "corral unknown-extension",
+    "corral",
+  ]) {
+    const refusal = buildShellRefusal(command);
+    expect([command, typeof refusal]).toEqual([command, "string"]);
+    expect(refusal).toContain("/board");
+    expect(refusal).toContain("/finish");
+  }
+  for (const command of [
+    "corral --root '/workspace with spaces' show T-1 --json",
+    "env -u AI_AGENT command corral --root=/workspace list --json",
+    "corral log T-1 | cat",
+    "printf '%s' \"$(/usr/bin/corral show T-1 --json)\"",
+    "corral list && corral review T-1 --diff",
+    "corral stats; corral pins; corral build-identity",
+    "corral help import; corral --help; corral --version",
+    "printf '%s' 'corral import plan.md --origin owner'",
+    "echo '$(corral new example)'",
+    "# corral import plan.md\ncorral list",
+  ]) {
+    expect([command, buildShellRefusal(command)]).toEqual([command, undefined]);
+  }
+});

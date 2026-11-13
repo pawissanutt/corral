@@ -99,6 +99,11 @@ export function resultCardLines(input: {
     return { lines, hits };
   }
   const choice = exit.record?.choice;
+  // A settled exit with a record is posted as its own conversation entry (`you chose …` plus the outcome), so the
+  // card leaves both to it. Running and landing exits, and a failure without a record, stay on the card.
+  const settled = choice !== undefined && (exit.phase === "kept" || exit.phase === "shipped" || exit.phase === "landed"
+    || exit.phase === "failed" || (exit.phase === "none" && choice === "iterate"));
+  if (settled) return { lines, hits };
   if (choice) {
     const label = input.options.find(option => option.choice === choice)?.label ?? EXIT_LABELS[choice];
     lines.push(cardLine(PANEL_MUTED + "you chose " + PANEL_TEXT + plainLabel(label), width));
