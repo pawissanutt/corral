@@ -170,8 +170,8 @@ fn expired_empty_listing_rechecks_for_late_containers() {
     {
         let mut memos = SWEEP_MEMOS.lock().unwrap();
         let memo = memos.get_mut(ctx.store.dir()).unwrap();
-        assert!(!memo.reusable(&memo.owners, memo.listed + Duration::from_secs(60)));
-        memo.listed = Instant::now() - Duration::from_secs(61);
+        assert!(!memo.reusable(&memo.owners, memo.listed + RECHECK));
+        memo.listed = Instant::now() - RECHECK - Duration::from_secs(1);
     }
     sweep_with(&ctx, shim.to_str().unwrap()).unwrap();
     assert_eq!(std::fs::read_to_string(log).unwrap(), "listed\nlisted\n");
