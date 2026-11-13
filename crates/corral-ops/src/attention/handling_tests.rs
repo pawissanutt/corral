@@ -4,7 +4,18 @@ use std::collections::BTreeSet;
 use super::*;
 use corral_core::attention::{AttentionLedger, MAX_ATTENTION_LEDGER_BYTES};
 use corral_core::{Status, Task};
-use handling::attend_authorized as attend;
+/// Handling as this test process's caller, the identity `attend_authorized` read before.
+fn attend(
+    ctx: &crate::Ctx,
+    key: &str,
+    note: &str,
+    next_check_secs: u64,
+    request: &str,
+    now: jiff::Timestamp,
+) -> anyhow::Result<corral_core::attention::AttentionHandling> {
+    let invoker = crate::command::Invoker::process();
+    handling::attend_authorized(ctx, key, note, next_check_secs, request, now, &invoker)
+}
 use handling::{CRASH, CrashPoint, reconcile};
 use serde_json::json;
 

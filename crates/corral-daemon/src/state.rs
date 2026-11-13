@@ -17,6 +17,9 @@ pub(crate) struct Shared {
     pub health_topic: Mutex<(u64, Health)>,
     pub reader: Mutex<Option<std::sync::mpsc::Sender<crate::reader::Job>>>,
     pub attention: Mutex<Option<(u64, corral_ops::attention::AttentionBoard)>>,
+    /// The command service once `commands::start` ran; `None` answers `unavailable`.
+    #[cfg(unix)]
+    pub commands: Mutex<Option<std::sync::Arc<crate::commands::Service>>>,
 }
 
 pub(crate) struct State {
@@ -45,6 +48,10 @@ pub(crate) struct State {
     pub runtime: RuntimeState,
     pub pm: PmState,
     pub supervised: bool,
+    /// A `cli` or `board` nudge asked for a full pass; taken by the next pass.
+    pub full_requested: bool,
+    /// Any nudge arrived since the last pass took the request.
+    pub nudged: bool,
 }
 
 impl Shared {
@@ -55,6 +62,8 @@ impl Shared {
             health_topic: Mutex::new((0, Health::down())),
             reader: Mutex::new(None),
             attention: Mutex::new(None),
+            #[cfg(unix)]
+            commands: Mutex::new(None),
             state: Mutex::new(State {
                 stop: false,
                 closed: false,
@@ -81,6 +90,8 @@ impl Shared {
                 runtime: RuntimeState::Unreachable,
                 pm: PmState::Absent,
                 supervised: supervised(),
+                full_requested: false,
+                nudged: false,
             }),
             changed: Condvar::new(),
         }
@@ -142,6 +153,13 @@ impl Shared {
         self.changed.notify_all();
     }
 
+    /// Asks the projector for another fold (a command wrote the store); requests no pass.
+    pub fn wake_projection(&self) {
+        let mut state = self.lock();
+        state.projection_wake = state.projection_wake.wrapping_add(1);
+        self.changed.notify_all();
+    }
+
     pub fn request_nudge(&self) -> u64 {
         let mut state = self.lock();
         let target = state.started_seq.saturating_add(1);
@@ -170,8 +188,27 @@ impl Shared {
         }
     }
 
-    pub fn nudge(&self, wait: Option<Duration>) -> NudgeAck {
+    /// Requests a pass for `source`: `cli` and `board` ask for a full pass; every source
+    /// marks the pass as nudged.
+    pub fn nudge_from(&self, source: &str, wait: Option<Duration>) -> NudgeAck {
+        {
+            let mut state = self.lock();
+            state.nudged = true;
+            if matches!(source, "cli" | "board") {
+                state.full_requested = true;
+            }
+        }
         self.wait_nudge(self.request_nudge(), wait)
+    }
+
+    /// Takes the pending request flags: (full pass requested, nudged).
+    #[allow(dead_code, reason = "used by the incremental loop, unit A4")]
+    pub fn take_request(&self) -> (bool, bool) {
+        let mut state = self.lock();
+        (
+            std::mem::take(&mut state.full_requested),
+            std::mem::take(&mut state.nudged),
+        )
     }
 
     pub fn fail_server(&self, error: String) {

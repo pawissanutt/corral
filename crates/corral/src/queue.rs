@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Subcommand;
-use corral_ops::Ctx;
+use corral_protocol::cmd::{Command, queue::QueueCommand};
 
 use crate::ProfileArgs;
 
@@ -35,7 +35,7 @@ pub enum QueueCmd {
     },
 }
 
-pub fn run(ctx: &Ctx, command: QueueCmd) -> Result<()> {
+pub fn run(inv: &crate::invocation::Invocation, command: QueueCmd) -> Result<()> {
     match command {
         QueueCmd::Add {
             id,
@@ -43,34 +43,29 @@ pub fn run(ctx: &Ctx, command: QueueCmd) -> Result<()> {
             base,
             headless,
         } => {
-            let opts = profile.dispatch_opts(headless, base, true);
-            let task = corral_ops::enqueue(ctx, &id, &opts)?;
-            println!("{} Ready queued (enqueue only)", task.id);
+            inv.submit(Command::Queue(QueueCommand::Add {
+                id,
+                profile: profile.profile,
+                model: profile.model,
+                effort: profile.effort,
+                base,
+                headless,
+            }))?;
         }
         QueueCmd::Remove { id } => {
-            let task = corral_ops::dequeue(ctx, &id)?;
-            println!("{} Backlog (dequeued)", task.id);
+            inv.submit(Command::Queue(QueueCommand::Remove { id }))?;
         }
         QueueCmd::Pause => {
-            corral_ops::dispatch_pause(ctx, true)?;
-            println!(
-                "coding admission paused only; `corral mode pause` pauses all automatic actions"
-            );
+            inv.submit(Command::Queue(QueueCommand::Pause {}))?;
         }
         QueueCmd::Resume => {
-            corral_ops::dispatch_pause(ctx, false)?;
-            println!(
-                "coding admission resumed only; operating pause and scoped authority are unchanged"
-            );
+            inv.submit(Command::Queue(QueueCommand::Resume {}))?;
         }
         QueueCmd::Admit { project, off } => {
-            corral_ops::admit_ready(ctx, &project, !off)?;
-            println!(
-                "{project}: Ready admission {}",
-                if off { "off" } else { "on" }
-            );
+            inv.submit(Command::Queue(QueueCommand::Admit { project, off }))?;
         }
         QueueCmd::List { json } => {
+            let ctx = inv.ctx()?;
             let entries = corral_ops::dispatch_queue(ctx)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&entries)?);

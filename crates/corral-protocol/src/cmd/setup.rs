@@ -2,9 +2,32 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+use super::FileInput;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "verb", rename_all = "kebab-case")]
 pub enum SetupCommand {
+    Begin {
+        expected_revision: u64,
+    },
+    Answers {
+        file: FileInput,
+        expected_revision: u64,
+    },
+    Propose {
+        file: FileInput,
+        expected_revision: u64,
+    },
+    Approve {
+        file: FileInput,
+        expected_revision: u64,
+    },
+    Cancel {
+        expected_revision: u64,
+    },
+    SelectionSave {
+        file: FileInput,
+    },
     #[serde(other)]
     Other,
 }
@@ -12,6 +35,12 @@ pub enum SetupCommand {
 impl SetupCommand {
     pub fn verb(&self) -> &'static str {
         match self {
+            Self::Begin { .. } => "begin",
+            Self::Answers { .. } => "answers",
+            Self::Propose { .. } => "propose",
+            Self::Approve { .. } => "approve",
+            Self::Cancel { .. } => "cancel",
+            Self::SelectionSave { .. } => "selection-save",
             Self::Other => "other",
         }
     }

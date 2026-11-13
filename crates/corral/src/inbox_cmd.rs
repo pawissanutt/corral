@@ -3,8 +3,11 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result, ensure};
 use clap::{Args, Subcommand};
-use corral_core::Store;
-use corral_core::inbox::{Inbox, InboxEntry, Recipient, Recovery, SendOutcome, TerminalState};
+use corral_core::inbox::{Inbox, InboxEntry, Recipient, SendOutcome};
+use corral_protocol::cmd::Command;
+use corral_protocol::cmd::inbox::InboxCommand;
+
+use crate::invocation::Invocation;
 
 #[derive(Clone, Debug)]
 pub struct MessageId {
@@ -112,42 +115,6 @@ pub(crate) struct MarkArgs {
     reason: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Caller {
-    Owner,
-    Pm,
-    Agent,
-}
-
-fn caller(store: &Store) -> Result<Caller> {
-    // An assistant shell is never the PM, even when it inherits CORRAL_PM.
-    if std::env::var_os("CORRAL_ASSISTANT").is_some() {
-        return Ok(Caller::Agent);
-    }
-    if std::env::var("CORRAL_PM").as_deref() == Ok("1") {
-        return Ok(Caller::Pm);
-    }
-    if corral_ops::agent_entry() {
-        return Ok(Caller::Agent);
-    }
-    let cwd = std::env::current_dir()
-        .context("reading inbox command directory")?
-        .canonicalize()
-        .context("resolving inbox command directory")?;
-    for task in store.list()? {
-        for run in &task.runs {
-            if run
-                .worktree
-                .canonicalize()
-                .is_ok_and(|worktree| cwd.starts_with(worktree))
-            {
-                return Ok(Caller::Agent);
-            }
-        }
-    }
-    Ok(Caller::Owner)
-}
-
 fn status(entry: &InboxEntry) -> Cow<'static, str> {
     if entry.observed.is_some() {
         "observed".into()
@@ -193,9 +160,10 @@ fn print_entry(entry: &InboxEntry) {
     );
 }
 
-pub fn run(store: &Store, args: InboxArgs) -> Result<()> {
+pub fn run(inv: &Invocation, args: InboxArgs) -> Result<()> {
     match args.cmd {
         None => {
+            let store = &inv.ctx()?.store;
             let recipients = match args.recipient {
                 Some(recipient) => vec![recipient],
                 None => Inbox::keys(store)?
@@ -227,6 +195,7 @@ pub fn run(store: &Store, args: InboxArgs) -> Result<()> {
             }
         }
         Some(InboxCmd::Show { id }) => {
+            let store = &inv.ctx()?.store;
             let entry = Inbox::new(store, id.recipient)?.entry(id.seq)?;
             if args.json {
                 let mut value = serde_json::to_value(&entry)?;
@@ -250,21 +219,17 @@ pub fn run(store: &Store, args: InboxArgs) -> Result<()> {
             }
         }
         Some(InboxCmd::Flush { key }) => {
-            let inbox = Inbox::new(store, key)?;
-            inbox.request_flush()?;
-            println!("{} flush requested", inbox.key());
+            return inv.submit(Command::Inbox(InboxCommand::Flush { key: key.key()? }));
         }
         Some(InboxCmd::Retry { id }) => {
-            ensure!(
-                caller(store)? != Caller::Agent,
-                "retry_refused: disallowed_context: workers and reviewers cannot re-post inbox messages; ask the PM or the owner"
-            );
-            let message = corral_ops::delivery::retry(store, &id.recipient, id.seq)?;
-            println!("{}", message.id);
+            return inv.submit(Command::Inbox(InboxCommand::Retry {
+                id: format!("{}#{}", id.recipient.key()?, id.seq),
+            }));
         }
         Some(InboxCmd::InspectRetry { id }) => {
+            let store = &inv.ctx()?.store;
             ensure!(
-                caller(store)? != Caller::Agent,
+                !inv.entry().invoker().inbox_is_agent(store)?,
                 "inspect_refused: disallowed_context: ask the PM or the owner to inspect retry evidence"
             );
             let inspection = Inbox::new(store, id.recipient)?.inspect_retry(id.seq)?;
@@ -281,74 +246,28 @@ pub fn run(store: &Store, args: InboxArgs) -> Result<()> {
             }
         }
         Some(InboxCmd::IndexOwner { key, limit }) => {
-            ensure!(
-                caller(store)? != Caller::Agent,
-                "index_refused: disallowed_context: ask the PM or the owner to index this inbox"
-            );
-            let inbox = Inbox::new(store, key)?;
-            let header = inbox.index_owner(usize::from(limit))?;
-            if args.json {
-                println!("{}", serde_json::to_string_pretty(&header)?);
-            } else {
-                println!(
-                    "{} retained {}/16; indexing {}",
-                    inbox.key(),
-                    header.len(),
-                    if header.legacy_debt.is_some() {
-                        "pending"
-                    } else {
-                        "complete"
-                    }
-                );
-                if let Some(debt) = header.legacy_debt {
-                    println!(
-                        "{:?}: next {} through {}; run `corral inbox index-owner {} --limit 64` after capacity is available",
-                        debt.phase,
-                        debt.next_seq,
-                        debt.end_seq,
-                        inbox.key()
-                    );
-                }
-            }
+            return inv.submit(Command::Inbox(InboxCommand::IndexOwner {
+                key: key.key()?,
+                limit,
+                json: args.json,
+            }));
         }
         Some(InboxCmd::Recover(recover)) => {
-            let action = if recover.action.resend {
-                Recovery::Resend
-            } else if recover.action.abandon {
-                Recovery::Abandon
-            } else if recover.action.submit {
-                Recovery::Submit
-            } else {
-                Recovery::Discard
-            };
-            ensure!(
-                caller(store)? == Caller::Owner,
-                "recover_refused: owner_only: only the owner may recover an open envelope, not a PM, worker or reviewer"
-            );
-            let inbox = Inbox::new(store, recover.key)?;
-            inbox.recover(action)?;
-            println!("{} recovery recorded", inbox.key());
+            return inv.submit(Command::Inbox(InboxCommand::Recover {
+                key: recover.key.key()?,
+                resend: recover.action.resend,
+                abandon: recover.action.abandon,
+                submit: recover.action.submit,
+                discard: recover.action.discard,
+            }));
         }
         Some(InboxCmd::Mark(mark)) => {
-            ensure!(!mark.reason.trim().is_empty(), "mark requires a reason");
-            let inbox = Inbox::new(store, mark.id.recipient)?;
-            let changed = if mark.action.observed {
-                inbox.mark_observed(mark.id.seq, &mark.reason)?
-            } else {
-                let _deliver = inbox.delivery_lock()?;
-                inbox.mark_terminal(
-                    mark.id.seq,
-                    TerminalState::Cancelled,
-                    &mark.reason,
-                    "manual",
-                )?
-            };
-            println!(
-                "{}#{} {}",
-                inbox.key(),
-                mark.id.seq,
-                if changed { "marked" } else { "unchanged" }
-            );
+            return inv.submit(Command::Inbox(InboxCommand::Mark {
+                id: format!("{}#{}", mark.id.recipient.key()?, mark.id.seq),
+                observed: mark.action.observed,
+                cancel: mark.action.cancel,
+                reason: mark.reason,
+            }));
         }
     }
     Ok(())
@@ -356,7 +275,8 @@ pub fn run(store: &Store, args: InboxArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use corral_core::Store;
+    use corral_ops::command::Invoker;
 
     #[test]
     fn assistant_shell_is_an_agent_caller_even_with_the_pm_marker() {
@@ -393,6 +313,14 @@ mod tests {
             return;
         };
         let store = Store::open(std::path::Path::new(&root)).unwrap();
-        assert_eq!(caller(&store).unwrap(), Caller::Agent);
+        let invoker = Invoker::from_process(
+            corral_protocol::cmd::ClientKind::Cli,
+            None,
+            corral_protocol::cmd::Via::Cli,
+            None,
+            false,
+            None,
+        );
+        assert!(invoker.inbox_is_agent(&store).unwrap());
     }
 }

@@ -208,7 +208,7 @@ pub fn run(start: &Path, entry: &crate::entry::Entry, args: AnnotationArgs) -> R
     args.cmd.preflight()?;
     // No observation/config event writes on reads, replays or refused mutations.
     let store = Store::open_unobserved(&Store::find_root(start)?)?;
-    entry.apply(&store)?;
+    entry.invoker().apply(&store)?;
     if args.cmd.mutates() {
         // Canonical attribution rejects PMs/run callers before reading note files.
         // Service admission repeats under the task lease, including before replay.

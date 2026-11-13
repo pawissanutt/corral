@@ -2,8 +2,10 @@
 
 `corrald` is the always-on sync loop for one workspace, run through `corral daemon`.
 It reconciles runs, advances autopilot, refreshes usage, maintains the database and
-runs PM recovery. It is not the only store writer: ordinary CLI commands still
-read and write the store directly, including while the daemon is unavailable.
+runs PM recovery. It is not the only store writer: owner and agent commands run
+through the daemon when it can take them, and in the calling process otherwise
+(see [Commands through the daemon](#commands-through-the-daemon)); the remaining
+CLI commands still read and write the store directly.
 
 A kernel-held lease allows only one loop owner. A fence at the sync entry point
 prevents other processes from running a competing pass. A crash releases the lease;
@@ -97,6 +99,49 @@ PM scope is served; explicit project scopes, `read_list` (including its paginati
 and filters), and `read_lessons` remain local. Legacy preparation runs in the daemon
 for served documents, and in the caller on fallback, as for CLI PM reads.
 
+## Commands through the daemon
+
+Store-writing owner and agent commands (`comment`, `move`, `question answer`,
+`queue add`, `inbox mark` and the rest of the `cmd.v1` verb table) are submitted to the
+daemon, which runs them on one of two command workers and replies with exactly the
+output and exit status the command prints in the calling process. PM shells and the
+classic board's moves, comments and review waivers take the same path. Verbs that open
+an editor, ask on the terminal, launch or focus panes, use Git worktrees, or depend on
+the caller's herdr pane stay in the calling process, as do reads.
+
+A command runs in the calling process only when the daemon provably did not accept it:
+
+- `CORRAL_DAEMON_COMMANDS=0` is set, the command carries a claimed owner action, or
+  the clock is pinned for a test;
+- no daemon answers (socket missing, connection refused, connect timeout), hello fails,
+  or the daemon does not offer `cmd.v1`;
+- the request exceeds one 60 KiB control frame;
+- the daemon refuses it (`refused`, including a different executable or build,
+  `busy`, `expired`, `method_not_found` or `unavailable`);
+- the answer was lost and a follow-up `cmd.result` recorded the id as abandoned, so a
+  late copy of the submit is refused.
+
+Once the submit is written and the daemon did not refuse it, the command never runs a
+second time locally. Invalid parameters are reported as
+`error: daemon rejected command: <message>` (exit 1).
+
+Waits are bounded. A CLI submit expires 120 seconds after it is issued; while the
+command runs, the client re-queries the same connection in waits of at most 25 seconds.
+After a lost connection it reconnects for at most 30 seconds and asks for the result
+again. If no result arrives before the submit expires, it prints
+`error: corrald accepted command <id> but its result is unknown; inspect the task before retrying`
+and exits 1. The board allows two seconds to connect, expires its submits after ten
+seconds and waits at most five seconds in total; it then reports
+`corrald is still running command <id>; check the task before repeating`.
+
+Two switches turn routing off: `CORRAL_DAEMON_COMMANDS=0` in the caller's environment
+keeps that process's commands local, and `[daemon] commands = false` in
+`.corral/corral.toml` makes the daemon refuse every command, so all clients run them
+locally. Routing prints nothing on the command's output. When a reachable daemon could
+not take a command, the client records it in `<runtime dir>/command-fallback.json` and
+`corral daemon status` (text form) adds the line
+`commands: last local fallback <command> (<reason>) at <time>`. A missing daemon, the
+environment switch, owner actions and pinned clocks are not recorded.
 
 ## Install and enable
 

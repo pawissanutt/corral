@@ -10,6 +10,7 @@ use crate::board::{BoardCursor, BoardDelta};
 pub enum Topic {
     Health,
     Board,
+    Classic,
     #[serde(other)]
     Other,
 }
@@ -40,6 +41,10 @@ pub enum SubDelta {
         left: Vec<String>,
         cursor: BoardCursor,
         more: bool,
+    },
+    Classic {
+        #[serde(flatten)]
+        notice: crate::classic::ClassicNotice,
     },
     #[serde(other)]
     Other,

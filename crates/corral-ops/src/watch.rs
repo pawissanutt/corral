@@ -30,6 +30,19 @@ pub enum ProgressState {
     Interrupted,
 }
 
+impl ProgressState {
+    /// The serde (snake_case) name, which stage displays show verbatim.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+            Self::Interrupted => "interrupted",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandProgress {
     pub command: String,

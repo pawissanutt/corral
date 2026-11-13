@@ -5,21 +5,27 @@ use corral_core::{Pin, PinRef, PinTarget, pin_position};
 use corral_ops::Ctx;
 use serde_json::{Value, json};
 
-pub fn pin(ctx: &Ctx, target: &str, label: Option<&str>, follow_latest: bool) -> Result<()> {
-    let (n, pin) = ctx.store.pin(target, label, follow_latest)?;
-    let follow = if pin.follow.is_some() {
-        " (follows latest)"
-    } else {
-        ""
-    };
-    println!("pinned #{n} {}{follow}", pin.target);
-    Ok(())
+pub fn pin(
+    inv: &crate::invocation::Invocation,
+    target: &str,
+    label: Option<&str>,
+    follow_latest: bool,
+) -> Result<()> {
+    inv.submit(corral_protocol::cmd::Command::Meta(
+        corral_protocol::cmd::meta::MetaCommand::Pin {
+            target: target.to_owned(),
+            label: label.map(str::to_owned),
+            follow_latest,
+        },
+    ))
 }
 
-pub fn unpin(ctx: &Ctx, query: &str) -> Result<()> {
-    let pin = ctx.store.unpin(query)?;
-    println!("unpinned {}", pin.target);
-    Ok(())
+pub fn unpin(inv: &crate::invocation::Invocation, query: &str) -> Result<()> {
+    inv.submit(corral_protocol::cmd::Command::Meta(
+        corral_protocol::cmd::meta::MetaCommand::Unpin {
+            query: query.to_owned(),
+        },
+    ))
 }
 
 fn pin_json(n: usize, pin: &Pin, target: &PinTarget) -> Value {

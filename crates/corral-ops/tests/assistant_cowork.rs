@@ -349,7 +349,9 @@ fn owner_waived_finish_passes_gate_and_lands_without_a_reviewer() {
         },
     )
     .unwrap();
-    corral_ops::review_waiver::waive(&fx.ctx, &finished.task, "owner inspected the fix").unwrap();
+    let invoker = corral_ops::command::Invoker::process();
+    corral_ops::review_waiver::waive(&fx.ctx, &finished.task, "owner inspected the fix", &invoker)
+        .unwrap();
     let submitted = fx.ctx.store.get(&finished.task).unwrap();
     assert!(submitted.current_run().unwrap().gate.is_none());
 

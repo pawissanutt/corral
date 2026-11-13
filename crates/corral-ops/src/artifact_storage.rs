@@ -730,11 +730,16 @@ pub(crate) fn source_layout(source: &str) -> Option<PathBuf> {
 }
 
 /// Changes the explicit tier without changing a snapshot or its stable reference.
-pub fn set_artifact_tier(ctx: &Ctx, reference: &str, tier: ArtifactTier) -> Result<Artifact> {
+pub fn set_artifact_tier(
+    ctx: &Ctx,
+    reference: &str,
+    tier: ArtifactTier,
+    invoker: &crate::command::Invoker,
+) -> Result<Artifact> {
     let _lock = storage_lock(ctx)?;
     let artifact = resolve_artifact(ctx, reference)?;
     let task = task_of(&artifact.path).context("artifact task not found")?;
-    crate::assistant_artifacts::check_owner(Some(task))?;
+    crate::assistant_artifacts::check_owner(Some(task), invoker)?;
     if task.starts_with("A-") {
         return crate::assistant_artifacts::update(ctx, task, &artifact.path, |artifact| {
             artifact.tier_override = Some(tier)

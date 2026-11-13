@@ -5,7 +5,7 @@ use corral_ops::{Ctx, DispatchOpts, DispatchOutcome};
 use crate::ProfileArgs;
 
 impl ProfileArgs {
-    pub(super) fn choice(self) -> ProfileChoice {
+    pub(crate) fn choice(self) -> ProfileChoice {
         ProfileChoice {
             profile: self.profile,
             model: self.model,
@@ -74,7 +74,7 @@ pub(super) fn retry(ctx: &Ctx, id: &str, run: Option<&str>, choice: &ProfileChoi
     Ok(())
 }
 
-pub(super) fn explain(ctx: &Ctx, id: &str, choice: &ProfileChoice, json: bool) -> Result<()> {
+pub(crate) fn explain(ctx: &Ctx, id: &str, choice: &ProfileChoice, json: bool) -> Result<()> {
     explain_plan(ctx, id, choice, json, false)
 }
 

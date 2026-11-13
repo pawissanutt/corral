@@ -4,32 +4,24 @@ use std::path::Path;
 use anyhow::{Context, Result, ensure};
 use corral_core::{OperatingPreview, OperatingSelection, Store};
 
-/// Whether this process runs in an agent or assistant shell (`AI_AGENT`, `PI_CODING_AGENT` or
+use crate::command::Invoker;
+
+/// Whether the caller runs in an agent or assistant shell (`AI_AGENT`, `PI_CODING_AGENT` or
 /// `CORRAL_ASSISTANT`). Owner guards refuse every such entry, whatever attribution flags say,
-/// unless the process claimed a receipted owner action (`OwnerAuthority::ViaAssistant`).
-pub fn agent_entry() -> bool {
-    if owner_action_claimed() {
-        return false;
-    }
-    ["AI_AGENT", "PI_CODING_AGENT", "CORRAL_ASSISTANT"]
-        .iter()
-        .any(|key| std::env::var_os(key).is_some())
+/// unless the caller claimed a receipted owner action (`OwnerAuthority::ViaAssistant`).
+pub fn agent_entry(invoker: &Invoker) -> bool {
+    invoker.agent_entry()
 }
 
 /// Reject agent, assistant and PM entry points independently of caller-supplied attribution.
 /// Like other local owner controls, this trusts the owner's OS session, not a CLI flag.
-pub fn require_automation_owner(store: &Store) -> Result<()> {
-    let agent = agent_entry();
-    let pm = !owner_action_claimed() && std::env::var("CORRAL_PM").as_deref() == Ok("1");
-    let cwd = std::env::current_dir().context("reading automation control directory")?;
+pub fn require_automation_owner(store: &Store, invoker: &Invoker) -> Result<()> {
+    let agent = agent_entry(invoker);
+    let pm = invoker.owner_action.is_none() && invoker.pm_marker();
+    let cwd = invoker
+        .cwd()
+        .context("reading automation control directory")?;
     require_owner_entry(store, &cwd, agent, pm)
-}
-
-fn owner_action_claimed() -> bool {
-    matches!(
-        crate::assistant::owner_action::authority(),
-        crate::assistant::owner_action::OwnerAuthority::ViaAssistant(_)
-    )
 }
 
 pub(crate) fn require_owner_entry(store: &Store, cwd: &Path, agent: bool, pm: bool) -> Result<()> {
@@ -94,8 +86,9 @@ pub fn automation_confirm(
     store: &Store,
     preview: &OperatingPreview,
     owner_digest: &str,
+    invoker: &Invoker,
 ) -> Result<corral_core::Config> {
-    require_automation_owner(store)?;
+    require_automation_owner(store, invoker)?;
     ensure!(
         owner_digest == preview.id,
         "confirmation digest does not match the exact preview"
@@ -169,8 +162,9 @@ mod tests {
             return;
         };
         let store = Store::open(Path::new(&root)).unwrap();
-        assert!(agent_entry());
-        assert!(require_automation_owner(&store).is_err());
+        let invoker = Invoker::process();
+        assert!(agent_entry(&invoker));
+        assert!(require_automation_owner(&store, &invoker).is_err());
         let entry = crate::plan::member_gate::OwnerEntry::from_env().unwrap();
         assert!(entry.agent && !entry.pm);
         assert!(require_owner_entry(&store, &entry.cwd, entry.agent, entry.pm).is_err());

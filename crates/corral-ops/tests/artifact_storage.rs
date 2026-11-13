@@ -273,7 +273,9 @@ fn purge_leaves_resolvable_metadata_and_a_readable_stub() {
     let f = Fixture::new(RetentionAction::Purge);
     let task = f.task();
     let a = f.add(&task, "old.html", &vec![b'X'; 2000], ArtifactKind::Report);
-    set_artifact_tier(&f.ctx, &Fixture::reference(&task, &a), ArtifactTier::Normal).unwrap();
+    let invoker = corral_ops::command::Invoker::process();
+    let reference = Fixture::reference(&task, &a);
+    set_artifact_tier(&f.ctx, &reference, ArtifactTier::Normal, &invoker).unwrap();
     let reference = Fixture::reference(&task, &a);
     // When content is purged.
     artifact_gc(&f.ctx, false).unwrap();
@@ -440,6 +442,7 @@ fn tier_selection_and_explicit_override_are_honored() {
         &f.ctx,
         &Fixture::reference(&task, &keep),
         ArtifactTier::Keep,
+        &corral_ops::command::Invoker::process(),
     )
     .unwrap();
     assert_eq!(changed.tier(), ArtifactTier::Keep);
@@ -463,6 +466,7 @@ fn newer_diff_supersedes_only_inferred_same_run_diff() {
         &f.ctx,
         &Fixture::reference(&task, &keep),
         ArtifactTier::Keep,
+        &corral_ops::command::Invoker::process(),
     )
     .unwrap();
     let first = f.add(&task, "first.diff", b"first diff", ArtifactKind::Diff);
@@ -496,6 +500,7 @@ fn materialized_reports_keep_nested_relative_assets_and_extensions() {
         &f.ctx,
         &Fixture::reference(&task, &html),
         ArtifactTier::Normal,
+        &corral_ops::command::Invoker::process(),
     )
     .unwrap();
     artifact_gc(&f.ctx, false).unwrap();
@@ -535,6 +540,7 @@ fn compressed_images_and_binary_files_get_decoded_preview_paths() {
         &f.ctx,
         &Fixture::reference(&task, &image),
         ArtifactTier::Normal,
+        &corral_ops::command::Invoker::process(),
     )
     .unwrap();
     artifact_gc(&f.ctx, false).unwrap();

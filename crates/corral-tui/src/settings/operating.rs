@@ -458,7 +458,10 @@ impl SettingsView {
                 Key::Assist => ctx.store.assist_operating_policy()?,
                 Key::Pause => ctx.store.pause_operating_policy(true)?,
                 Key::Resume => {
-                    corral_ops::require_automation_owner(&ctx.store)?;
+                    corral_ops::require_automation_owner(
+                        &ctx.store,
+                        &corral_ops::command::Invoker::board(),
+                    )?;
                     ctx.store.pause_operating_policy(false)?
                 }
                 _ => return Ok(()),
@@ -485,7 +488,10 @@ impl SettingsView {
                 !self.dirty(),
                 "save or discard other settings before previewing authority"
             );
-            corral_ops::require_automation_owner(&ctx.store)?;
+            corral_ops::require_automation_owner(
+                &ctx.store,
+                &corral_ops::command::Invoker::board(),
+            )?;
             corral_ops::automation_preview(&ctx.store, &self.operating.selection)
         })();
         match result {
@@ -527,7 +533,8 @@ impl SettingsView {
                 let Some(preview) = &self.operating.preview else {
                     return Action::None;
                 };
-                match corral_ops::automation_confirm(&ctx.store, preview, &preview.id) {
+                let invoker = corral_ops::command::Invoker::board();
+                match corral_ops::automation_confirm(&ctx.store, preview, &preview.id, &invoker) {
                     Ok(config) => {
                         self.base = config.clone();
                         self.draft = config;

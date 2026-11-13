@@ -1,10 +1,9 @@
 //! `corral question`: PM and owner operations on corral-pi agent questions, by key and revision.
 //! `answer --owner` and `deadline` are absent from every Pi role loadout.
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
-use corral_core::agent::QuestionKind;
-use corral_ops::Ctx;
-use corral_ops::questions::{self, Actor, AnswerInput, Applied, GroupAnswer, QuestionView};
+use corral_ops::questions::{self, QuestionView};
+use corral_protocol::cmd::{Command, question::QuestionCommand};
 
 #[derive(Args)]
 pub struct QuestionArgs {
@@ -18,17 +17,6 @@ pub(crate) enum Kind {
     TechnicalChoice,
     Permission,
     OwnerOnly,
-}
-
-impl From<Kind> for QuestionKind {
-    fn from(kind: Kind) -> Self {
-        match kind {
-            Kind::Clarification => QuestionKind::Clarification,
-            Kind::TechnicalChoice => QuestionKind::TechnicalChoice,
-            Kind::Permission => QuestionKind::Permission,
-            Kind::OwnerOnly => QuestionKind::OwnerOnly,
-        }
-    }
 }
 
 #[derive(Subcommand)]
@@ -138,34 +126,6 @@ pub(crate) enum QuestionCmd {
     },
 }
 
-fn actor(owner: bool) -> Actor<'static> {
-    if owner { Actor::Owner } else { Actor::Pm(None) }
-}
-
-fn print_applied(applied: &Applied, json: bool) -> Result<()> {
-    let Some(outcome) = applied.outcome() else {
-        anyhow::bail!("the CLI never replays a host request");
-    };
-    print_outcome(outcome, json)
-}
-
-fn print_outcome(outcome: &questions::Outcome, json: bool) -> Result<()> {
-    if json {
-        println!("{}", serde_json::to_string_pretty(outcome)?);
-    } else {
-        let message = outcome
-            .message_id
-            .as_deref()
-            .map(|id| format!("; message {id}"))
-            .unwrap_or_default();
-        println!(
-            "{} {:?} (revision {}){message}; delivery {}",
-            outcome.key, outcome.state, outcome.revision, outcome.delivery
-        );
-    }
-    Ok(())
-}
-
 fn print_view(view: &QuestionView) {
     let q = &view.question;
     let closure = view
@@ -188,9 +148,10 @@ fn print_view(view: &QuestionView) {
     );
 }
 
-pub fn run(ctx: &Ctx, args: QuestionArgs) -> Result<()> {
+pub fn run(inv: &crate::invocation::Invocation, args: QuestionArgs) -> Result<()> {
     match args.cmd {
         QuestionCmd::List { task, all, json } => {
+            let ctx = inv.ctx()?;
             let views = questions::list(ctx, task.as_deref(), all)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&views)?);
@@ -202,6 +163,7 @@ pub fn run(ctx: &Ctx, args: QuestionArgs) -> Result<()> {
             Ok(())
         }
         QuestionCmd::Show { key, json } => {
+            let ctx = inv.ctx()?;
             let view = questions::show(ctx, &key)?;
             // A grouped question shows every member in full, each with its own key and revision.
             let members = match view.question.group {
@@ -237,18 +199,16 @@ pub fn run(ctx: &Ctx, args: QuestionArgs) -> Result<()> {
             scope_note,
             owner,
             json,
-        } => {
-            let input = AnswerInput {
-                text,
-                option,
-                basis_refs: basis,
-                scope_note,
-            };
-            print_applied(
-                &questions::answer(ctx, &key, rev, actor(owner), input)?,
-                json,
-            )
-        }
+        } => inv.submit(Command::Question(QuestionCommand::Answer {
+            key,
+            rev,
+            text,
+            option,
+            basis,
+            scope_note,
+            owner,
+            json,
+        })),
         QuestionCmd::AnswerGroup {
             key,
             answers,
@@ -257,70 +217,61 @@ pub fn run(ctx: &Ctx, args: QuestionArgs) -> Result<()> {
             scope_note,
             owner,
             json,
-        } => {
-            let answers: Vec<GroupAnswer> = match answers {
-                Some(raw) => serde_json::from_str(&raw)
-                    .context("--answers is not a JSON array of {key, rev, text?, option?}")?,
-                None => questions::group(ctx, &key)?
-                    .into_iter()
-                    .filter(|view| view.pending)
-                    .map(|view| GroupAnswer {
-                        key: view.question.key,
-                        rev: view.question.revision,
-                        text: None,
-                        option: None,
-                    })
-                    .collect(),
-            };
-            let shared = AnswerInput {
-                text,
-                option: None,
-                basis_refs: basis,
-                scope_note,
-            };
-            let applied = questions::answer_group(ctx, &key, actor(owner), &shared, &answers)?;
-            for outcome in &applied.outcomes {
-                print_outcome(outcome, json)?;
-            }
-            Ok(())
-        }
+        } => inv.submit(Command::Question(QuestionCommand::AnswerGroup {
+            key,
+            answers,
+            text,
+            basis,
+            scope_note,
+            owner,
+            json,
+        })),
         QuestionCmd::Escalate {
             key,
             rev,
             note,
             kind,
             json,
-        } => {
-            let kind = kind.map(QuestionKind::from);
-            print_applied(
-                &questions::escalate(ctx, &key, rev, actor(false), note, kind)?,
-                json,
-            )
-        }
+        } => inv.submit(Command::Question(QuestionCommand::Escalate {
+            key,
+            rev,
+            note,
+            kind: kind.map(|kind| {
+                match kind {
+                    Kind::Clarification => "clarification",
+                    Kind::TechnicalChoice => "technical_choice",
+                    Kind::Permission => "permission",
+                    Kind::OwnerOnly => "owner_only",
+                }
+                .to_owned()
+            }),
+            json,
+        })),
         QuestionCmd::Cancel {
             key,
             rev,
             reason,
             owner,
             json,
-        } => print_applied(
-            &questions::cancel(ctx, &key, rev, actor(owner), &reason)?,
+        } => inv.submit(Command::Question(QuestionCommand::Cancel {
+            key,
+            rev,
+            reason,
+            owner,
             json,
-        ),
+        })),
         QuestionCmd::Deadline {
             key,
             rev,
             at,
             instruction,
             json,
-        } => {
-            let at: jiff::Timestamp = at
-                .parse()
-                .with_context(|| format!("--at {at:?} is not an RFC 3339 timestamp"))?;
-            print_applied(
-                &questions::deadline(ctx, &key, rev, at, &instruction)?,
-                json,
-            )
-        }
+        } => inv.submit(Command::Question(QuestionCommand::Deadline {
+            key,
+            rev,
+            at,
+            instruction,
+            json,
+        })),
     }
 }

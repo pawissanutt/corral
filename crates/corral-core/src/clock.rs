@@ -62,6 +62,19 @@ pub(crate) fn pinned() -> Option<Timestamp> {
     PINNED.get()
 }
 
+/// Whether this thread's stamps come from a pinned or test clock rather than the process clock.
+/// Another process (the daemon) cannot share that clock, so such callers execute locally.
+pub fn is_pinned() -> bool {
+    if pinned().is_some() {
+        return true;
+    }
+    #[cfg(feature = "test-clock")]
+    if TEST_CLOCK.with(|clock| clock.borrow().is_some()) {
+        return true;
+    }
+    false
+}
+
 /// Pins a CLI fixture's main-thread clock across subprocesses. The environment input is
 /// compiled only with `test-clock`, which production dependencies never enable.
 #[doc(hidden)]

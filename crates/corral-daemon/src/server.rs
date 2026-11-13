@@ -110,8 +110,8 @@ pub(super) fn accept_error(shared: &Shared, error: std::io::Error) {
     }
 }
 
-fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) -> Result<()> {
-    check_peer(&stream)?;
+pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) -> Result<()> {
+    let peer_uid = check_peer(&stream)?;
     stream
         .set_read_timeout(Some(IO_TIMEOUT))
         .context("setting client read timeout")?;
@@ -202,7 +202,11 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) -> Result<()>
                             caps: hello
                                 .caps
                                 .into_iter()
-                                .filter(|cap| cap == wire::BOARD_V1 || cap == wire::READ_V1)
+                                .filter(|cap| {
+                                    cap == wire::BOARD_V1
+                                        || cap == wire::READ_V1
+                                        || cap == wire::cmd::CMD_V1
+                                })
                                 .collect(),
                             daemon: wire::DaemonInfo {
                                 version: env!("CARGO_PKG_VERSION").into(),
@@ -244,7 +248,7 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) -> Result<()>
             wire::NUDGE => match serde_json::from_value::<wire::Nudge>(params) {
                 Ok(nudge) => {
                     let wait = nudge.wait_ms.map(|ms| Duration::from_millis(u64::from(ms)));
-                    reply(&mut stream, id, shared.nudge(wait))?;
+                    reply(&mut stream, id, shared.nudge_from(&nudge.source, wait))?;
                 }
                 Err(_) => error(
                     &mut stream,
@@ -263,6 +267,30 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) -> Result<()>
                     "invalid read",
                 )?,
             },
+            wire::cmd::CMD_SUBMIT => match serde_json::from_value::<wire::cmd::CmdSubmit>(params) {
+                Ok(submit) => {
+                    crate::commands::serve_submit(&mut stream, &shared, id, peer_uid, submit)?
+                }
+                Err(_) => error(
+                    &mut stream,
+                    id,
+                    rpc::ErrorCode::InvalidParams,
+                    "invalid cmd.submit",
+                )?,
+            },
+            wire::cmd::CMD_RESULT => {
+                match serde_json::from_value::<wire::cmd::CmdResultQuery>(params) {
+                    Ok(query) => {
+                        crate::commands::serve_result(&mut stream, &shared, id, peer_uid, query)?
+                    }
+                    Err(_) => error(
+                        &mut stream,
+                        id,
+                        rpc::ErrorCode::InvalidParams,
+                        "invalid cmd.result",
+                    )?,
+                }
+            }
             wire::SUB_OPEN => match serde_json::from_value::<wire::subscription::SubOpen>(params) {
                 Ok(open) => match topics.open(open) {
                     Ok(()) => reply(&mut stream, id, ())?,
@@ -446,7 +474,7 @@ fn send(stream: &mut UnixStream, value: &impl Serialize) -> Result<()> {
     .context("writing daemon response")
 }
 
-fn reply(stream: &mut UnixStream, id: Value, result: impl Serialize) -> Result<()> {
+pub(crate) fn reply(stream: &mut UnixStream, id: Value, result: impl Serialize) -> Result<()> {
     send(
         stream,
         &rpc::Response {
@@ -457,7 +485,12 @@ fn reply(stream: &mut UnixStream, id: Value, result: impl Serialize) -> Result<(
     )
 }
 
-fn error(stream: &mut UnixStream, id: Value, code: rpc::ErrorCode, message: &str) -> Result<()> {
+pub(crate) fn error(
+    stream: &mut UnixStream,
+    id: Value,
+    code: rpc::ErrorCode,
+    message: &str,
+) -> Result<()> {
     let response: rpc::Response<Value> = rpc::Response {
         jsonrpc: rpc::JSONRPC.into(),
         id,
@@ -485,19 +518,20 @@ fn bye(stream: &mut UnixStream, shared: &Shared) -> Result<()> {
     )
 }
 
+/// The verified peer uid: always this daemon's own uid.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn check_peer(stream: &UnixStream) -> Result<()> {
+fn check_peer(stream: &UnixStream) -> Result<u32> {
     let peer =
         rustix::net::sockopt::socket_peercred(stream).context("reading client peer credentials")?;
     ensure!(
         peer.uid == rustix::process::getuid(),
         "client peer uid does not match this user"
     );
-    Ok(())
+    Ok(peer.uid.as_raw())
 }
 
 #[cfg(target_os = "macos")]
-fn check_peer(stream: &UnixStream) -> Result<()> {
+fn check_peer(stream: &UnixStream) -> Result<u32> {
     use std::os::fd::AsRawFd;
     unsafe extern "C" {
         fn getpeereid(fd: i32, uid: *mut u32, gid: *mut u32) -> i32;
@@ -511,11 +545,11 @@ fn check_peer(stream: &UnixStream) -> Result<()> {
         uid == rustix::process::getuid().as_raw(),
         "client peer uid does not match this user"
     );
-    Ok(())
+    Ok(uid)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
-fn check_peer(_stream: &UnixStream) -> Result<()> {
+fn check_peer(_stream: &UnixStream) -> Result<u32> {
     anyhow::bail!("client peer credentials are unavailable on this platform")
 }
 

@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::Subcommand;
-use corral_ops::Ctx;
 use jiff::Timestamp;
 
 #[derive(Debug, Subcommand)]
@@ -25,20 +24,28 @@ pub enum DashboardCmd {
     Remove { id: String },
 }
 
-pub fn run(ctx: &Ctx, cmd: DashboardCmd) -> Result<()> {
-    let task = match cmd {
+pub fn run(inv: &crate::invocation::Invocation, cmd: DashboardCmd) -> Result<()> {
+    use corral_protocol::cmd::{Command, meta::MetaCommand};
+    let command = match cmd {
         DashboardCmd::Set {
             id,
             interval_secs,
             next_due,
             authorize_dispatch,
-        } => {
-            corral_ops::dashboard::configure(ctx, &id, interval_secs, next_due, authorize_dispatch)?
+        } => MetaCommand::DashboardSet {
+            id,
+            interval_secs,
+            next_due: next_due.to_string(),
+            authorize_dispatch,
+        },
+        DashboardCmd::Show { id } => {
+            let ctx = inv.ctx()?;
+            let task = ctx.store.get(&id)?;
+            println!("{}", serde_json::to_string_pretty(&task.dashboard)?);
+            return Ok(());
         }
-        DashboardCmd::Show { id } => ctx.store.get(&id)?,
-        DashboardCmd::Pause { id } => corral_ops::dashboard::disable(ctx, &id, false)?,
-        DashboardCmd::Remove { id } => corral_ops::dashboard::disable(ctx, &id, true)?,
+        DashboardCmd::Pause { id } => MetaCommand::DashboardPause { id },
+        DashboardCmd::Remove { id } => MetaCommand::DashboardRemove { id },
     };
-    println!("{}", serde_json::to_string_pretty(&task.dashboard)?);
-    Ok(())
+    inv.submit(Command::Meta(command))
 }

@@ -1,7 +1,7 @@
 //! Trackers aggregate child completion; they never launch agent work.
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::{ApprovedScope, PlanAcceptance, PlanDeliveryTarget, Status, Store, Task};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, OnceLock};
@@ -16,7 +16,7 @@ pub use target::PlanPrerequisite;
 pub(crate) use target::{approval, check_dispatch_base, target_blocker};
 
 /// Mutually exclusive work buckets; acceptance does not imply target inclusion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanWorkState {
     Accepted,
@@ -27,7 +27,7 @@ pub enum PlanWorkState {
 }
 
 /// Counts always retain every required member, including dropped work.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlanWorkCounts {
     pub accepted: usize,
     pub running: usize,
@@ -37,7 +37,7 @@ pub struct PlanWorkCounts {
 }
 
 /// One normal task and its current readiness, not a separate scheduler entry.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanWork {
     pub task: String,
     pub title: String,
@@ -49,14 +49,14 @@ pub struct PlanWork {
 }
 
 /// Mapping is coverage only, never evidence that an aggregate scenario passed.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanCoverage {
     pub acceptance: PlanAcceptance,
     pub tasks: Vec<String>,
 }
 
 /// Shared, read-only tracker projection for CLI and board consumers.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanProgress {
     pub task: String,
     pub status: Status,
@@ -205,6 +205,14 @@ pub fn plan_board(ctx: &Ctx) -> Result<Store> {
     } else {
         Store::open_unobserved(ctx.store.root())?.read_only_snapshot()
     }
+}
+
+/// The tasks a tracker's progress is derived from: the tracker, its parents, its design
+/// task, its members and their transitive dependencies (the cached projection's scopes).
+/// A change to any other task cannot change the projection; re-deriving on a newer view
+/// also picks up membership edges added by tasks outside the previous set.
+pub fn progress_inputs(ctx: &Ctx, id: &str) -> Result<BTreeSet<String>> {
+    Ok(projection(ctx, id)?.0.scopes)
 }
 
 /// [`plan_progress`] over a [`plan_board`] shared by every tracker of one refresh.

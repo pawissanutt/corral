@@ -27,6 +27,7 @@ fn investigate(fx: &Fx, id: &str, reason: &str) {
             retry: true,
         },
         true,
+        &corral_ops::command::Invoker::process(),
     )
     .unwrap();
 }

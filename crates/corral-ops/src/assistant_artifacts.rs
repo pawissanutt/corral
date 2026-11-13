@@ -6,15 +6,12 @@ use corral_core::{Artifact, ArtifactKind};
 use sha2::{Digest, Sha256};
 
 use crate::Ctx;
+use crate::command::Invoker;
 
-pub(crate) fn check_owner(session: Option<&str>) -> Result<()> {
+pub(crate) fn check_owner(session: Option<&str>, invoker: &Invoker) -> Result<()> {
     // A claimed owner action is the owner's command: its run artifacts are the owner's.
-    let owner_action = matches!(
-        crate::assistant::owner_action::authority(),
-        crate::assistant::owner_action::OwnerAuthority::ViaAssistant(_)
-    );
-    if !owner_action
-        && let Some(caller) = std::env::var_os("CORRAL_ASSISTANT")
+    if invoker.owner_action.is_none()
+        && let Some(caller) = &invoker.caller.env.corral_assistant
         && session.is_none_or(|id| caller != id)
     {
         bail!(
@@ -32,7 +29,7 @@ pub fn add_session_artifact(
     kind: Option<ArtifactKind>,
     title: Option<&str>,
 ) -> Result<Artifact> {
-    check_owner(Some(session))?;
+    check_owner(Some(session), &Invoker::process())?;
     corral_core::assistant::validate_id(session)?;
     let current = ctx.store.get_assistant(session)?;
     let _output_consumer = crate::storage_gc::outputs::protect_artifact_source(ctx, path)?;

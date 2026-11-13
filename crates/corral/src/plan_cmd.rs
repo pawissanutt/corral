@@ -1,9 +1,11 @@
+use std::io::Read;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::Subcommand;
 use corral_core::Verdict;
-use corral_ops::{Ctx, PlanVerdict};
+use corral_ops::PlanVerdict;
+use corral_protocol::cmd::{Command, FileInput, plan::PlanCommand};
 
 #[derive(Subcommand)]
 pub enum PlanCmd {
@@ -180,9 +182,10 @@ pub enum PlanCmd {
     },
 }
 
-pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
+pub fn run(inv: &crate::invocation::Invocation, cmd: PlanCmd) -> Result<()> {
     match cmd {
         PlanCmd::Progress { id, json } => {
+            let ctx = inv.ctx()?;
             let progress = corral_ops::plan_progress(ctx, &id)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&progress)?);
@@ -286,6 +289,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             }
         }
         PlanCmd::Recovery { id, json } => {
+            let ctx = inv.ctx()?;
             let recovery = corral_ops::plan_recovery_inventory(ctx, &id)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&recovery)?);
@@ -310,6 +314,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             }
         }
         PlanCmd::Verify { id, json } => {
+            let ctx = inv.ctx()?;
             let attempt = corral_ops::plan_verify(ctx, &id)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&attempt)?);
@@ -335,6 +340,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             automatic,
             json,
         } => {
+            let ctx = inv.ctx()?;
             let attempt = if automatic {
                 corral_ops::plan_checkpoint_automatic(ctx, &id)?
             } else {
@@ -364,6 +370,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             }
         }
         PlanCmd::Evidence { id, file, json } => {
+            let ctx = inv.ctx()?;
             let text = std::fs::read_to_string(&file)
                 .with_context(|| format!("reading {}", file.display()))?;
             let observation =
@@ -381,6 +388,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             }
         }
         PlanCmd::AggregateReview { id, attempt, json } => {
+            let ctx = inv.ctx()?;
             let review = corral_ops::plan_aggregate_review(ctx, &id, &attempt)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&review)?);
@@ -400,6 +408,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             evidence,
             json,
         } => {
+            let ctx = inv.ctx()?;
             let notes = std::fs::read_to_string(&notes_file)
                 .with_context(|| format!("reading {}", notes_file.display()))?;
             let Some(verdict) = Verdict::parse(&verdict) else {
@@ -433,6 +442,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             automatic,
             json,
         } => {
+            let ctx = inv.ctx()?;
             let acceptance = corral_ops::plan_accept(ctx, &id, &attempt, automatic)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&acceptance)?);
@@ -455,27 +465,15 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             reason,
             json,
         } => {
-            let head = ctx.store.head(&id)?;
-            let task = if head.tracker && head.approved_scope.is_some() {
-                corral_ops::move_task_with_decision(
-                    ctx,
-                    &id,
-                    corral_core::Status::Dropped,
-                    false,
-                    reason.as_deref(),
-                    "owner",
-                    owner_ok,
-                )?
-            } else {
-                corral_ops::plan_cancel(ctx, &id)?
-            };
-            if json {
-                println!("{}", serde_json::to_string_pretty(&task)?);
-            } else {
-                println!("{id}: plan cancelled; history and execution resources retained");
-            }
+            inv.submit(Command::Plan(PlanCommand::Cancel {
+                id,
+                owner_ok,
+                reason,
+                json,
+            }))?;
         }
         PlanCmd::Submit { id, path, json } => {
+            let ctx = inv.ctx()?;
             let record = corral_ops::plan_submit(ctx, &id, &path)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&record)?);
@@ -487,6 +485,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             }
         }
         PlanCmd::Show { id, json } => {
+            let ctx = inv.ctx()?;
             let task = ctx.store.get(&id)?;
             let recoveries = corral_ops::recovery::recover_history(ctx, &id)?;
             if json {
@@ -543,6 +542,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             }
         }
         PlanCmd::Review { id, reviewer, json } => {
+            let ctx = inv.ctx()?;
             let record = corral_ops::plan_review(ctx, &id, reviewer.as_deref())?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&record)?);
@@ -563,6 +563,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             evidence,
             json,
         } => {
+            let ctx = inv.ctx()?;
             if !owner && attempt.is_none() {
                 bail!("plan verdict requires --owner or --attempt");
             }
@@ -602,17 +603,11 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             member,
             json,
         } => {
-            let added = corral_ops::plan_add_member(ctx, &tracker, &member)?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&added)?);
-            } else {
-                println!(
-                    "{} added to {}; members: {}",
-                    added.member,
-                    added.tracker,
-                    added.children.join(", ")
-                );
-            }
+            inv.submit(Command::Plan(PlanCommand::AddMember {
+                tracker,
+                member,
+                json,
+            }))?;
         }
         PlanCmd::MoveMember {
             tracker,
@@ -622,25 +617,33 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             reason,
             json,
         } => {
-            let gate = gate_file.as_deref().map(|file| corral_ops::MoveGate {
-                file,
-                reason: reason.as_deref().unwrap_or_default(),
-            });
-            let moved = corral_ops::plan_move_member(ctx, &tracker, &member, &to, gate.as_ref())?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&moved)?);
-            } else {
-                println!(
-                    "{} moved from {} to {}; {} members: {}; {} members: {}",
-                    moved.member,
-                    moved.from,
-                    moved.to,
-                    moved.from,
-                    moved.from_children.join(", "),
-                    moved.to,
-                    moved.to_children.join(", ")
-                );
-            }
+            let gate_file = gate_file
+                .map(|file| {
+                    let mut input = std::fs::File::open(&file)
+                        .with_context(|| format!("opening plan {}", file.display()))?;
+                    if !input.metadata().context("reading plan metadata")?.is_file() {
+                        bail!("plan {} must be a regular file", file.display());
+                    }
+                    let mut bytes = Vec::new();
+                    input
+                        .read_to_end(&mut bytes)
+                        .with_context(|| format!("reading plan {}", file.display()))?;
+                    let text =
+                        String::from_utf8(bytes).context("member gate file must be UTF-8")?;
+                    Ok::<_, anyhow::Error>(FileInput {
+                        path: file.display().to_string(),
+                        text,
+                    })
+                })
+                .transpose()?;
+            inv.submit(Command::Plan(PlanCommand::MoveMember {
+                tracker,
+                member,
+                to,
+                gate_file,
+                reason,
+                json,
+            }))?;
         }
         PlanCmd::MemberGate {
             member,
@@ -650,6 +653,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             tracker,
             json,
         } => {
+            let ctx = inv.ctx()?;
             let outcome = corral_ops::plan_member_gate(
                 ctx,
                 &corral_ops::MemberGateRequest {
@@ -679,14 +683,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             }
         }
         PlanCmd::Policy { id, policy } => {
-            let required = match policy.as_str() {
-                "required" => Some(true),
-                "off" => Some(false),
-                "inherit" => None,
-                _ => bail!("invalid plan policy"),
-            };
-            let task = corral_ops::plan_policy_set(ctx, &id, required)?;
-            println!("{}", serde_json::to_string_pretty(&task)?);
+            inv.submit(Command::Plan(PlanCommand::Policy { id, policy }))?;
         }
     }
     Ok(())

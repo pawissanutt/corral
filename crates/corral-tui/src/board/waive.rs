@@ -1,6 +1,11 @@
 //! Owner confirmation for landing one co-work finish after its gate without independent review.
 use corral_core::Task;
 use corral_ops::Ctx;
+use corral_ops::command::{
+    CmdState, Command, Invoker,
+    route::{Patience, submit_with},
+};
+use corral_protocol::cmd::task::TaskCommand;
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use ratatui::layout::Rect;
@@ -73,16 +78,25 @@ impl View for ConfirmWaive {
         match key.code {
             KeyCode::Esc => Action::Back,
             KeyCode::Enter => {
-                match corral_ops::review_waiver::waive(ctx, &self.id, &self.reason.text) {
-                    Ok(()) => Action::BackWithToast(Toast::new(
+                let outcome = submit_with(
+                    ctx.store.root(),
+                    &Invoker::board(),
+                    Command::Task(TaskCommand::WaiveReview {
+                        id: self.id.clone(),
+                        reason: self.reason.text.clone(),
+                    }),
+                    Patience::Interactive,
+                );
+                match outcome.state {
+                    CmdState::Done => Action::BackWithToast(Toast::new(
                         Tone::Warn,
                         format!("{} review waived", self.id),
                         "lands once its gate passes, marked landed without review",
                     )),
-                    Err(error) => Action::Toast(Toast::new(
+                    _ => Action::Toast(Toast::new(
                         Tone::Bad,
                         format!("Waive review for {} failed", self.id),
-                        format!("{error:#}"),
+                        outcome.error.map_or(outcome.stderr, |error| error.message),
                     )),
                 }
             }

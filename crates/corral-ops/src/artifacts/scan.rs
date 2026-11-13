@@ -40,7 +40,7 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
     if paths.is_empty() {
         return Ok(Vec::new());
     }
-    crate::assistant_artifacts::check_owner(None)?;
+    crate::assistant_artifacts::check_owner(None, &crate::command::Invoker::process())?;
     let storage = crate::artifact_storage::storage_lock(ctx)?;
     let mut extracted = std::collections::BTreeMap::new();
     let mut extracted_bytes = 0;

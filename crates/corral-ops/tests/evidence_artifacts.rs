@@ -408,7 +408,8 @@ fn keyed_work(grow: usize) -> (Counted, Counted, u64, Vec<String>) {
     let read = work::snapshot();
     let added = add_artifact(&f.ctx, &active, &gate_log, Some(ArtifactKind::Log), None).unwrap();
     let added_ref = Fixture::reference(&active, &added);
-    let tiered = set_artifact_tier(&f.ctx, &added_ref, ArtifactTier::Keep).unwrap();
+    let invoker = corral_ops::command::Invoker::process();
+    let tiered = set_artifact_tier(&f.ctx, &added_ref, ArtifactTier::Keep, &invoker).unwrap();
     drop(scope);
     let wrote = work::snapshot();
     let writes = counters(&read, &wrote)

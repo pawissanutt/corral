@@ -1,7 +1,7 @@
 //! Thin typed adapter. Preview/lookup are read-only; apply has no noninteractive bypass.
 use anyhow::{Result, ensure};
 use clap::{Args, Subcommand};
-use corral_ops::{Ctx, assistant::workflow::effect_recovery as recovery};
+use corral_ops::assistant::workflow::effect_recovery as recovery;
 
 #[derive(Args)]
 pub struct EffectsArgs {
@@ -62,7 +62,8 @@ pub enum EffectsCmd {
         admission: String,
     },
 }
-pub fn run(ctx: &Ctx, args: EffectsArgs) -> Result<()> {
+pub fn run(inv: &crate::invocation::Invocation, args: EffectsArgs) -> Result<()> {
+    let ctx = inv.ctx()?;
     let value = match args.cmd {
         EffectsCmd::Preview(target) => {
             serde_json::to_value(recovery::preview(&ctx.store, &target.request())?)?

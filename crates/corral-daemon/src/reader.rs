@@ -9,7 +9,7 @@ use corral_core::{
     backend::{ChangeScope, ChangeSeq, ReadView},
 };
 use corral_ops::{Ctx, attention::AttentionBoard};
-use corral_protocol::read::ReadKind;
+use corral_protocol::{cmd::COMMANDS_AREA, read::ReadKind};
 
 use crate::state::Shared;
 
@@ -186,7 +186,7 @@ where
             ReadKind::AgentPmBrief => "reader.agent_pm_brief",
             ReadKind::AgentPmNext => "reader.agent_pm_next",
             ReadKind::BoardReadback => "reader.board",
-            ReadKind::Other => bail!("unknown read kind"),
+            ReadKind::ClassicFrame | ReadKind::Other => bail!("unknown read kind"),
         };
         self.refresh(ctx, shared, kind, view, label)
     }
@@ -303,9 +303,10 @@ pub(crate) fn unchanged(view: &dyn ReadView, after: u64) -> bool {
             if entry.seq <= cursor
                 || entry.seq > current
                 || entry.scopes.is_empty()
-                || entry.scopes.iter().any(
-                    |scope| !matches!(scope, ChangeScope::Record { area, .. } if area == LEASE_AREA),
-                )
+                || entry.scopes.iter().any(|scope| {
+                    !matches!(scope, ChangeScope::Record { area, .. }
+                        if area == LEASE_AREA || area == COMMANDS_AREA)
+                })
             {
                 return false;
             }
@@ -356,7 +357,7 @@ fn compute(ctx: &Ctx, kind: ReadKind, attention: Option<AttentionBoard>) -> Resu
             serde_json::to_vec(&corral_ops::pm_read::board_readback(ctx, attention)?)
                 .context("encoding board read-back")
         }
-        ReadKind::Other => bail!("unknown read kind"),
+        ReadKind::ClassicFrame | ReadKind::Other => bail!("unknown read kind"),
     }
 }
 

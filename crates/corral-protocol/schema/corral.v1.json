@@ -1,6 +1,247 @@
 {
   "components": {
     "schemas": {
+      "ActorName": {
+        "description": "Mirrors `corral_core::Actor` serde names.",
+        "enum": [
+          "owner",
+          "pm",
+          "agent",
+          "assistant",
+          "autopilot",
+          "reviewer",
+          "system",
+          "other"
+        ],
+        "type": "string"
+      },
+      "AssistantCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "focus": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "herdr_socket": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "pane": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "profile": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "create",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "profile",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "file": {
+                "$ref": "#/components/schemas/FileInput"
+              },
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "summary",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "file",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "all": {
+                "type": "boolean"
+              },
+              "grant": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "permissions-revoke",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "all",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "AttentionCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "json": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "string"
+              },
+              "next_check": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "note": {
+                "type": "string"
+              },
+              "request": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verb": {
+                "const": "attend",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "key",
+              "note",
+              "next_check",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "resume_action": {
+                "type": "string"
+              },
+              "resume_when": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "review_by": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "verb": {
+                "const": "park",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "reason",
+              "resume_when",
+              "resume_action",
+              "review_by",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expected_revision": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "unpark",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "expected_revision",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "BoardAgent": {
         "properties": {
           "machine": {
@@ -217,6 +458,161 @@
         ],
         "type": "object"
       },
+      "Caller": {
+        "properties": {
+          "actor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActorName"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`Entry::actor`: explicit `--author/--origin`, hook/pm/tui defaults."
+          },
+          "assistant": {
+            "description": "Validated `CORRAL_ASSISTANT` session id when `via = assistant`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client": {
+            "$ref": "#/components/schemas/ClientKind"
+          },
+          "cwd": {
+            "description": "Raw `std::env::current_dir()`; None when unreadable or not UTF-8.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "env": {
+            "$ref": "#/components/schemas/CallerEnv"
+          },
+          "planning_safe": {
+            "type": "boolean"
+          },
+          "principal": {
+            "$ref": "#/components/schemas/Principal",
+            "default": {
+              "kind": "unverified"
+            }
+          },
+          "via": {
+            "$ref": "#/components/schemas/Via"
+          }
+        },
+        "required": [
+          "client",
+          "via",
+          "planning_safe",
+          "env"
+        ],
+        "type": "object"
+      },
+      "CallerEnv": {
+        "description": "Caller-identity variables, `None` = unset. Values are `to_string_lossy` of `var_os`.",
+        "properties": {
+          "ai_agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "corral_agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "corral_agent_bootstrap": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "corral_agent_task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "corral_assistant": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "corral_herdr_session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "corral_pm": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "corral_reviewer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "corral_task": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "herdr_env": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "herdr_session": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "herdr_socket_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pi_coding_agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ClientBuild": {
+        "properties": {
+          "build": {
+            "description": "The client's build identity (what `corral build-identity` prints).",
+            "type": "string"
+          },
+          "exe": {
+            "description": "Absolute path of the client's executable.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "exe",
+          "build"
+        ],
+        "type": "object"
+      },
       "ClientInfo": {
         "properties": {
           "kind": {
@@ -231,6 +627,409 @@
           "version"
         ],
         "type": "object"
+      },
+      "ClientKind": {
+        "enum": [
+          "cli",
+          "board",
+          "pm_host",
+          "app",
+          "other"
+        ],
+        "type": "string"
+      },
+      "CmdError": {
+        "properties": {
+          "code": {
+            "description": "Leading `snake_case:` message token, else `conflict`, `busy` or `failed`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "The error formatted with its full context chain (`format!(\"{err:#}\")`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "CmdResult": {
+        "properties": {
+          "cmd_id": {
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CmdError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exit": {
+            "description": "Process exit status the CLI uses: 0 for `done`, 1 otherwise.",
+            "format": "uint8",
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OutputBody"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "None for `running`, `unknown`, `abandoned`, and replays without retained output."
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "state": {
+            "$ref": "#/components/schemas/CmdState"
+          }
+        },
+        "required": [
+          "cmd_id",
+          "state",
+          "exit",
+          "replayed"
+        ],
+        "type": "object"
+      },
+      "CmdResultQuery": {
+        "properties": {
+          "abandon_if_absent": {
+            "description": "For an absent id, write an abandoned tombstone that refuses late submits.",
+            "type": "boolean"
+          },
+          "cmd_id": {
+            "type": "string"
+          },
+          "wait_ms": {
+            "description": "Wait for an in-flight command, at most 25_000.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cmd_id",
+          "wait_ms",
+          "abandon_if_absent"
+        ],
+        "type": "object"
+      },
+      "CmdState": {
+        "enum": [
+          "done",
+          "failed",
+          "conflict",
+          "busy",
+          "running",
+          "unknown",
+          "abandoned",
+          "other"
+        ],
+        "type": "string"
+      },
+      "CmdSubmit": {
+        "properties": {
+          "caller": {
+            "$ref": "#/components/schemas/Caller"
+          },
+          "client_build": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClientBuild"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Required from local CLI clients; must equal the daemon's (`pm_read::client_identity`)."
+          },
+          "cmd_id": {
+            "type": "string"
+          },
+          "command": {
+            "$ref": "#/components/schemas/Command"
+          },
+          "expect": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expect"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "expires_at": {
+            "description": "RFC 3339; CLI: issued_at + 120 s.",
+            "type": "string"
+          },
+          "issued_at": {
+            "description": "RFC 3339.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "cmd_id",
+          "caller",
+          "issued_at",
+          "expires_at",
+          "command"
+        ],
+        "type": "object"
+      },
+      "Command": {
+        "oneOf": [
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/AssistantCommand"
+              },
+              "family": {
+                "const": "assistant",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/AttentionCommand"
+              },
+              "family": {
+                "const": "attention",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/InboxCommand"
+              },
+              "family": {
+                "const": "inbox",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/KnowledgeCommand"
+              },
+              "family": {
+                "const": "knowledge",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/MetaCommand"
+              },
+              "family": {
+                "const": "meta",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/ModeCommand"
+              },
+              "family": {
+                "const": "mode",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/PlanCommand"
+              },
+              "family": {
+                "const": "plan",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/PmCommand"
+              },
+              "family": {
+                "const": "pm",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/QuestionCommand"
+              },
+              "family": {
+                "const": "question",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/QueueCommand"
+              },
+              "family": {
+                "const": "queue",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/RepairCommand"
+              },
+              "family": {
+                "const": "repair",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/RunCommand"
+              },
+              "family": {
+                "const": "run",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/SetupCommand"
+              },
+              "family": {
+                "const": "setup",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/TaskCommand"
+              },
+              "family": {
+                "const": "task",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family",
+              "args"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A family this build does not know; its `args`, if any, are skipped. A plain\n`#[serde(other)]` unit arm of an adjacently tagged enum refuses non-null content.",
+            "properties": {
+              "family": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "family"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "CostBasis": {
         "enum": [
@@ -306,6 +1105,60 @@
           "other"
         ],
         "type": "string"
+      },
+      "Expect": {
+        "oneOf": [
+          {
+            "description": "Refuse with `conflict` unless `corral_core::owner_revision(task)` still equals `revision`.",
+            "properties": {
+              "kind": {
+                "const": "task_revision",
+                "type": "string"
+              },
+              "revision": {
+                "type": "string"
+              },
+              "task": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "task",
+              "revision"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "FileInput": {
+        "description": "A file named on the command line, read by the client before routing.",
+        "properties": {
+          "path": {
+            "description": "Path as typed (`Path::display()`), for messages only.",
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "text"
+        ],
+        "type": "object"
       },
       "Frame": {
         "properties": {
@@ -410,6 +1263,325 @@
         ],
         "type": "object"
       },
+      "InboxCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "json": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "string"
+              },
+              "limit": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "verb": {
+                "const": "index-owner",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "key",
+              "limit",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "abandon": {
+                "type": "boolean"
+              },
+              "discard": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "string"
+              },
+              "resend": {
+                "type": "boolean"
+              },
+              "submit": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "recover",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "key",
+              "resend",
+              "abandon",
+              "submit",
+              "discard"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "cancel": {
+                "type": "boolean"
+              },
+              "id": {
+                "type": "string"
+              },
+              "observed": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "mark",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "observed",
+              "cancel",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "flush",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "key"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "retry",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "KnowledgeCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "json": {
+                "type": "boolean"
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "project": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verb": {
+                "const": "distill",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "file": {
+                "$ref": "#/components/schemas/FileInput"
+              },
+              "project": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verb": {
+                "const": "apply",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "file"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "project": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "unpin": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "pin",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "unpin"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "project": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verb": {
+                "const": "delete",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "create": {
+                "type": "boolean"
+              },
+              "expected_hash": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "file": {
+                "$ref": "#/components/schemas/FileInput"
+              },
+              "id": {
+                "type": "string"
+              },
+              "key": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "scope": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "put",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "scope",
+              "id",
+              "file",
+              "create"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expected_hash": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "key": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "scope": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "remove",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "scope",
+              "id",
+              "expected_hash"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "LoopFacts": {
         "properties": {
           "age_secs": {
@@ -445,6 +1617,314 @@
           "pass_seq"
         ],
         "type": "object"
+      },
+      "MetaCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "follow_latest": {
+                "type": "boolean"
+              },
+              "label": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "target": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "pin",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "target",
+              "follow_latest"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "query": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "unpin",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "query"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "authorize_dispatch": {
+                "type": "boolean"
+              },
+              "id": {
+                "type": "string"
+              },
+              "interval_secs": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "next_due": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "dashboard-set",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "interval_secs",
+              "next_due",
+              "authorize_dispatch"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "dashboard-pause",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "dashboard-remove",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "reference": {
+                "type": "string"
+              },
+              "tier": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "artifact-set-tier",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "reference",
+              "tier"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ModeCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "verb": {
+                "const": "assist",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "pause",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "resume",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "off": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "turbo",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "off"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "accept": {
+                "type": "boolean"
+              },
+              "aggregate_accept": {
+                "type": "boolean"
+              },
+              "confirm": {
+                "type": "string"
+              },
+              "dispatch": {
+                "type": "boolean"
+              },
+              "exclusions": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "expires_after_days": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "include_new": {
+                "type": "boolean"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "max_new_tasks": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "plan_accept": {
+                "type": "boolean"
+              },
+              "plan_scopes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "projects": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "tasks": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "verb": {
+                "const": "autopilot",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "projects",
+              "include_new",
+              "tasks",
+              "exclusions",
+              "plan_scopes",
+              "dispatch",
+              "accept",
+              "plan_accept",
+              "aggregate_accept",
+              "confirm",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "json": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "off",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "Notification": {
         "properties": {
@@ -500,8 +1980,528 @@
         ],
         "type": "object"
       },
+      "OutputBody": {
+        "description": "Exactly `frames` DATA frames follow on `stream`: one UTF-8 JSON `CmdOutput`, `bytes` long.",
+        "properties": {
+          "bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "frames": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stream": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stream",
+          "bytes",
+          "frames"
+        ],
+        "type": "object"
+      },
       "Ping": {
         "type": "object"
+      },
+      "PlanCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "owner_ok": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verb": {
+                "const": "cancel",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "owner_ok",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "json": {
+                "type": "boolean"
+              },
+              "member": {
+                "type": "string"
+              },
+              "tracker": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "add-member",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "tracker",
+              "member",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "gate_file": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/FileInput"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "member": {
+                "type": "string"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "to": {
+                "type": "string"
+              },
+              "tracker": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "move-member",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "tracker",
+              "member",
+              "to",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "policy": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "policy",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "policy"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "PmCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "json": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "guard-resume",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "confirmed": {
+                "type": "boolean"
+              },
+              "decision": {
+                "type": "string"
+              },
+              "delivery": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "present",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "decision",
+              "delivery",
+              "confirmed"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "answer": {
+                "type": "string"
+              },
+              "decision": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "resolve",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "decision",
+              "answer"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "body": {
+                "type": "string"
+              },
+              "input": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string"
+              },
+              "quote": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "refs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "inbox-post",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "kind",
+              "subject",
+              "body",
+              "refs",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expected_revision": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "inbox-claim",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "expected_revision",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expected_revision": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "outcome": {
+                "type": "string"
+              },
+              "refs": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "text": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "inbox-resolve",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "expected_revision",
+              "outcome",
+              "text",
+              "refs",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expected_revision": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "inbox-withdraw",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "expected_revision",
+              "reason",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expect_revision": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "provenance": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "resume_when": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "notes-add",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "kind",
+              "text",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expect_revision": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "provenance": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "resume_when": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "notes-supersede",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "text",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expect_revision": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "notes-remove",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "PmState": {
         "enum": [
@@ -514,6 +2514,70 @@
       },
       "Pong": {
         "type": "object"
+      },
+      "Principal": {
+        "oneOf": [
+          {
+            "description": "What clients send; the daemon replaces it from the transport.",
+            "properties": {
+              "kind": {
+                "const": "unverified",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "local_user",
+                "type": "string"
+              },
+              "uid": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "kind",
+              "uid"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Reserved for paired devices; refused on the Unix socket.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "device",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "Proto": {
         "properties": {
@@ -533,6 +2597,348 @@
           "minor"
         ],
         "type": "object"
+      },
+      "QuestionCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "basis": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "string"
+              },
+              "option": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "owner": {
+                "type": "boolean"
+              },
+              "rev": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "scope_note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "answer",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "key",
+              "rev",
+              "text",
+              "basis",
+              "owner",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "answers": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "basis": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "boolean"
+              },
+              "scope_note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "answer-group",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "key",
+              "text",
+              "basis",
+              "owner",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "json": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "string"
+              },
+              "kind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "rev": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "verb": {
+                "const": "escalate",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "key",
+              "rev",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "json": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "rev": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "verb": {
+                "const": "cancel",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "key",
+              "rev",
+              "reason",
+              "owner",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "at": {
+                "type": "string"
+              },
+              "instruction": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "key": {
+                "type": "string"
+              },
+              "rev": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "verb": {
+                "const": "deadline",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "key",
+              "rev",
+              "at",
+              "instruction",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "QueueCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "base": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "effort": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "headless": {
+                "type": "boolean"
+              },
+              "id": {
+                "type": "string"
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verb": {
+                "const": "add",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "headless"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "remove",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "pause",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "resume",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "off": {
+                "type": "boolean"
+              },
+              "project": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "admit",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "project",
+              "off"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "RailGlyph": {
         "enum": [
@@ -576,6 +2982,7 @@
           "agent_pm_brief",
           "agent_pm_next",
           "board_readback",
+          "classic_frame",
           "other"
         ],
         "type": "string"
@@ -644,6 +3051,126 @@
         ],
         "type": "object"
       },
+      "RepairCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "file": {
+                "$ref": "#/components/schemas/FileInput"
+              },
+              "id": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "triage",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "file",
+              "owner"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "file": {
+                "$ref": "#/components/schemas/FileInput"
+              },
+              "id": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "finding",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "file"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "diagnose",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "owner"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "file": {
+                "$ref": "#/components/schemas/FileInput"
+              },
+              "id": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "diagnosed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "file"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "file": {
+                "$ref": "#/components/schemas/FileInput"
+              },
+              "id": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "renew",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "file"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "Request": {
         "properties": {
           "id": true,
@@ -699,6 +3226,130 @@
         ],
         "type": "object"
       },
+      "RunCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "file": {
+                "$ref": "#/components/schemas/FileInput"
+              },
+              "id": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "wait",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "file"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "file": {
+                "$ref": "#/components/schemas/FileInput"
+              },
+              "id": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "decision",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "file"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "file": {
+                "$ref": "#/components/schemas/FileInput"
+              },
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "progress",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "file",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "file": {
+                "$ref": "#/components/schemas/FileInput"
+              },
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "verb": {
+                "const": "checkpoint",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "file",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "file": {
+                "$ref": "#/components/schemas/FileInput"
+              },
+              "id": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "criteria-register",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "file"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "RuntimeHealth": {
         "properties": {
           "kind": {
@@ -721,6 +3372,140 @@
           "other"
         ],
         "type": "string"
+      },
+      "SetupCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "expected_revision": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "verb": {
+                "const": "begin",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "expected_revision"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expected_revision": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "file": {
+                "$ref": "#/components/schemas/FileInput"
+              },
+              "verb": {
+                "const": "answers",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "file",
+              "expected_revision"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expected_revision": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "file": {
+                "$ref": "#/components/schemas/FileInput"
+              },
+              "verb": {
+                "const": "propose",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "file",
+              "expected_revision"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expected_revision": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "file": {
+                "$ref": "#/components/schemas/FileInput"
+              },
+              "verb": {
+                "const": "approve",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "file",
+              "expected_revision"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "expected_revision": {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "verb": {
+                "const": "cancel",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "expected_revision"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "file": {
+                "$ref": "#/components/schemas/FileInput"
+              },
+              "verb": {
+                "const": "selection-save",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "file"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "Stop": {
         "properties": {
@@ -846,6 +3631,45 @@
             "type": "object"
           },
           {
+            "description": "Pushed on topic `classic` when the daemon's frame revision passes the subscriber's cursor.",
+            "properties": {
+              "as_of": {
+                "description": "RFC 3339 time of the recompute that produced `rev`.",
+                "type": "string"
+              },
+              "epoch": {
+                "description": "This daemon process's frame series; any other value means resubscribe.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "rev": {
+                "description": "Strictly increasing within `epoch`; bumps only when frame content changed.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "seq": {
+                "description": "Store change sequence the frame was checked through.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "topic": {
+                "const": "classic",
+                "type": "string"
+              }
+            },
+            "required": [
+              "topic",
+              "epoch",
+              "rev",
+              "seq",
+              "as_of"
+            ],
+            "type": "object"
+          },
+          {
             "properties": {
               "topic": {
                 "const": "other",
@@ -914,10 +3738,371 @@
         ],
         "type": "object"
       },
+      "TaskCommand": {
+        "oneOf": [
+          {
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "depends": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "design": {
+                "type": "boolean"
+              },
+              "difficulty": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "labels": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "origin": {
+                "type": "string"
+              },
+              "priority": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "project": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "size": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string"
+              },
+              "title": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "verb": {
+                "const": "new",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "title",
+              "origin",
+              "status",
+              "body",
+              "depends",
+              "design",
+              "labels"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "author": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "send": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "comment",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "text",
+              "author",
+              "send"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "force": {
+                "type": "boolean"
+              },
+              "id": {
+                "type": "string"
+              },
+              "owner_ok": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "move",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "status",
+              "force",
+              "owner_ok"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "body": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "into": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "owner_ok": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "idea",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "action",
+              "reason",
+              "owner_ok"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "clear_reviewer": {
+                "type": "boolean"
+              },
+              "effort": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "json": {
+                "type": "boolean"
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "profile": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "set_reviewer": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verb": {
+                "const": "route",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "clear_reviewer",
+              "json"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verb": {
+                "const": "hold",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "release",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "waive-review",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "all": {
+                "type": "boolean"
+              },
+              "id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verb": {
+                "const": "focus",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "all"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "verb": {
+                "const": "recover-infrastructure",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "verb": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "verb"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "Topic": {
         "enum": [
           "health",
           "board",
+          "classic",
+          "other"
+        ],
+        "type": "string"
+      },
+      "Via": {
+        "description": "`Entry::via` today, minus `owner_action` (owner-action children never route).",
+        "enum": [
+          "cli",
+          "pm",
+          "hook",
+          "tui",
+          "assistant",
+          "app",
           "other"
         ],
         "type": "string"
@@ -1245,6 +4430,164 @@
       ]
     },
     {
+      "name": "cmd.submit",
+      "params": [
+        {
+          "name": "caller",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Caller"
+          }
+        },
+        {
+          "name": "client_build",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClientBuild"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Required from local CLI clients; must equal the daemon's (`pm_read::client_identity`)."
+          }
+        },
+        {
+          "name": "cmd_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "command",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Command"
+          }
+        },
+        {
+          "name": "expect",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expect"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        {
+          "name": "expires_at",
+          "required": true,
+          "schema": {
+            "description": "RFC 3339; CLI: issued_at + 120 s.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "issued_at",
+          "required": true,
+          "schema": {
+            "description": "RFC 3339.",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/CmdResult"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/CmdSubmit"
+      },
+      "x-wire-errors": [
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "busy",
+          "message": "busy"
+        },
+        {
+          "code": "expired",
+          "message": "expired"
+        },
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        }
+      ]
+    },
+    {
+      "name": "cmd.result",
+      "params": [
+        {
+          "name": "abandon_if_absent",
+          "required": true,
+          "schema": {
+            "description": "For an absent id, write an abandoned tombstone that refuses late submits.",
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "cmd_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "wait_ms",
+          "required": true,
+          "schema": {
+            "description": "Wait for an in-flight command, at most 25_000.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/CmdResult"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/CmdResultQuery"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        }
+      ]
+    },
+    {
       "name": "sub.open",
       "params": [
         {
@@ -1298,6 +4641,17 @@
       "name": "sub.delta",
       "params": [
         {
+          "name": "as_of",
+          "required": false,
+          "schema": {
+            "description": "RFC 3339 time of the recompute that produced `rev`.",
+            "type": "string"
+          },
+          "x-required-in": [
+            2
+          ]
+        },
+        {
           "name": "cursor",
           "required": false,
           "schema": {
@@ -1312,13 +4666,24 @@
           "name": "epoch",
           "required": false,
           "schema": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "description": "This daemon process's frame series; any other value means resubscribe.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              }
+            ]
           },
           "x-required-in": [
             0,
-            1
+            1,
+            2
           ]
         },
         {
@@ -1347,6 +4712,19 @@
           ]
         },
         {
+          "name": "rev",
+          "required": false,
+          "schema": {
+            "description": "Strictly increasing within `epoch`; bumps only when frame content changed.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "x-required-in": [
+            2
+          ]
+        },
+        {
           "name": "rows",
           "required": false,
           "schema": {
@@ -1372,6 +4750,19 @@
           ]
         },
         {
+          "name": "seq",
+          "required": false,
+          "schema": {
+            "description": "Store change sequence the frame was checked through.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "x-required-in": [
+            2
+          ]
+        },
+        {
           "name": "topic",
           "required": true,
           "schema": {
@@ -1382,6 +4773,10 @@
               },
               {
                 "const": "health",
+                "type": "string"
+              },
+              {
+                "const": "classic",
                 "type": "string"
               },
               {

@@ -33,7 +33,16 @@ impl std::str::FromStr for LineRange {
     }
 }
 
-pub fn run(ctx: &Ctx, cmd: ArtifactCmd) -> Result<()> {
+pub fn run(inv: &crate::invocation::Invocation, cmd: ArtifactCmd) -> Result<()> {
+    let cmd = match cmd {
+        ArtifactCmd::SetTier { reference, tier } => {
+            return inv.submit(corral_protocol::cmd::Command::Meta(
+                corral_protocol::cmd::meta::MetaCommand::ArtifactSetTier { reference, tier },
+            ));
+        }
+        cmd => cmd,
+    };
+    let ctx = inv.ctx()?;
     match cmd {
         ArtifactCmd::Add {
             id,
@@ -84,9 +93,9 @@ pub fn run(ctx: &Ctx, cmd: ArtifactCmd) -> Result<()> {
             idle_secs,
         } => serve(ctx, reference, task, !no_open, stop, daemon, idle_secs)?,
         ArtifactCmd::SetTier { reference, tier } => {
-            let tier = ArtifactTier::parse(&tier).context("unknown artifact tier")?;
-            let a = corral_ops::set_artifact_tier(ctx, &reference, tier)?;
-            println!("{} {}", a.path, a.tier().as_str());
+            return inv.submit(corral_protocol::cmd::Command::Meta(
+                corral_protocol::cmd::meta::MetaCommand::ArtifactSetTier { reference, tier },
+            ));
         }
         ArtifactCmd::Gc { dry_run, yes, json } => {
             if !dry_run && !yes {

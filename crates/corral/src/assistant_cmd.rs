@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use corral_core::{CoworkReview, TaskKind, TaskSize};
 use corral_ops::Ctx;
+use corral_protocol::cmd::{Command, FileInput, assistant::AssistantCommand};
 
 #[derive(Args)]
 pub struct AssistantArgs {
@@ -207,10 +208,10 @@ fn status(ended: bool, live: bool) -> &'static str {
     }
 }
 
-pub fn run(ctx: &Ctx, args: AssistantArgs) -> Result<()> {
+pub fn run(inv: &crate::invocation::Invocation, args: AssistantArgs) -> Result<()> {
     match args.cmd {
-        AssistantCmd::Handoff(args) => crate::assistant_handoff_cmd::run(ctx, args)?,
-        AssistantCmd::Effects(args) => crate::assistant_effects_cmd::run(ctx, args)?,
+        AssistantCmd::Handoff(args) => crate::assistant_handoff_cmd::run(inv.ctx()?, args)?,
+        AssistantCmd::Effects(args) => crate::assistant_effects_cmd::run(inv, args)?,
         AssistantCmd::Create {
             profile,
             focus,
@@ -218,19 +219,16 @@ pub fn run(ctx: &Ctx, args: AssistantArgs) -> Result<()> {
             herdr_socket,
             json,
         } => {
-            let session = ctx.store.create_assistant(
-                &profile,
-                focus.as_deref(),
-                pane.as_deref(),
+            return inv.submit(Command::Assistant(AssistantCommand::Create {
+                profile,
+                focus,
+                pane,
                 herdr_socket,
-            )?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&session)?);
-            } else {
-                println!("{}", session.id);
-            }
+                json,
+            }));
         }
         AssistantCmd::List { json } => {
+            let ctx = inv.ctx()?;
             let rows = corral_ops::assistant_stats(&ctx.store, None)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&rows)?);
@@ -251,6 +249,7 @@ pub fn run(ctx: &Ctx, args: AssistantArgs) -> Result<()> {
             }
         }
         AssistantCmd::Show { id, json, host } => {
+            let ctx = inv.ctx()?;
             let session = ctx.store.get_assistant(&id)?;
             let (container, workflow) =
                 ctx.store.inspect_assistant_container(&id, |container, _| {
@@ -313,6 +312,7 @@ pub fn run(ctx: &Ctx, args: AssistantArgs) -> Result<()> {
             }
         }
         AssistantCmd::End { id, json } => {
+            let ctx = inv.ctx()?;
             let session = corral_ops::agent::pi::end_assistant(ctx, &id)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&session)?);
@@ -323,24 +323,17 @@ pub fn run(ctx: &Ctx, args: AssistantArgs) -> Result<()> {
         AssistantCmd::Summary { id, file, json } => {
             let body = std::fs::read_to_string(&file)
                 .with_context(|| format!("reading {}", file.display()))?;
-            let session = ctx.store.update_assistant(&id, |session| {
-                session.summary = body.lines().next().unwrap_or("").to_owned();
-                session.body = body;
-                Ok(())
-            })?;
-            ctx.store.log_event(
-                None,
-                "assistant_summary",
-                serde_json::json!({"session": id}),
-            )?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&session)?);
-            } else {
-                println!("{} summary saved", session.id);
-            }
+            return inv.submit(Command::Assistant(AssistantCommand::Summary {
+                id,
+                file: FileInput {
+                    path: file.display().to_string(),
+                    text: body,
+                },
+                json,
+            }));
         }
-        AssistantCmd::Scratch(args) => scratch(ctx, args.cmd)?,
-        AssistantCmd::Permissions(args) => permissions(ctx, args)?,
+        AssistantCmd::Scratch(args) => scratch(inv.ctx()?, args.cmd)?,
+        AssistantCmd::Permissions(args) => permissions(inv, args)?,
     }
     Ok(())
 }
@@ -375,7 +368,7 @@ fn print_settings(label: &str, settings: Option<&corral_ops::assistant::permissi
     }
 }
 
-fn permissions(ctx: &Ctx, args: PermissionsArgs) -> Result<()> {
+fn permissions(inv: &crate::invocation::Invocation, args: PermissionsArgs) -> Result<()> {
     use corral_ops::assistant::permissions as ops;
     if let Some(PermissionsCmd::Revoke {
         id,
@@ -384,22 +377,14 @@ fn permissions(ctx: &Ctx, args: PermissionsArgs) -> Result<()> {
         json,
     }) = args.cmd
     {
-        let grant = if all { None } else { grant };
-        let by = std::env::var("CORRAL_ASSISTANT").unwrap_or_else(|_| "owner".into());
-        let done = ops::revoke(&ctx.store, &id, grant.as_deref(), &by)?;
-        if let Some(warning) = &done.warning {
-            eprintln!("{warning}");
-        }
-        if json {
-            return print_json(&done);
-        }
-        if done.revoked.is_empty() {
-            println!("{id}: no active write grant to revoke");
-        } else {
-            println!("{id}: revoked {} (by {by})", done.revoked.join(", "));
-        }
-        return Ok(());
+        return inv.submit(Command::Assistant(AssistantCommand::PermissionsRevoke {
+            id,
+            grant,
+            all,
+            json,
+        }));
     }
+    let ctx = inv.ctx()?;
     let id = args
         .id
         .context("name the session: corral assistant permissions A-<n>")?;

@@ -1,5 +1,10 @@
 //! Board keyboard actions.
 use super::*;
+use corral_ops::command::{
+    CmdState, Command, Invoker,
+    route::{Patience, submit_with},
+};
+use corral_protocol::cmd::task::TaskCommand;
 
 impl BoardView {
     /// What the board returns after its open overlay handled an input: Back closes the overlay.
@@ -32,15 +37,27 @@ impl BoardView {
             _ => return Action::Toast(Toast::new(Tone::Warn, "Not a manual move", MOVE_RULE)),
         };
         let id = t.id.clone();
-        match corral_ops::move_task(ctx, &id, target, false) {
-            Ok(_) => {
+        let outcome = submit_with(
+            ctx.store.root(),
+            &Invoker::board(),
+            Command::Task(TaskCommand::Move {
+                id: id.clone(),
+                status: target.as_str().to_owned(),
+                force: false,
+                owner_ok: false,
+                reason: None,
+            }),
+            Patience::Interactive,
+        );
+        match outcome.state {
+            CmdState::Done => {
                 self.refresh(ctx);
                 Action::None
             }
-            Err(e) => Action::Toast(Toast::new(
+            _ => Action::Toast(Toast::new(
                 Tone::Bad,
                 format!("Move {id} failed"),
-                format!("{e:#}"),
+                outcome.error.map_or(outcome.stderr, |error| error.message),
             )),
         }
     }

@@ -36,6 +36,7 @@ impl Fx {
                 retry: false,
             },
             true,
+            &corral_ops::command::Invoker::process(),
         )
         .unwrap();
     }

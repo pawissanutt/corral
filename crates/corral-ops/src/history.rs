@@ -8,10 +8,10 @@ use corral_core::Event;
 use corral_core::backend::{EventQuery, HeadQuery, PageReq};
 use corral_core::{Status, Store, Task};
 use jiff::Timestamp;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The commit an approval landed and how (`fast_forward`, `rebase` or `keep_branch`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Landed {
     pub sha: String,
     pub strategy: String,
@@ -34,7 +34,7 @@ impl Landed {
 }
 
 /// When a Done or Dropped task finished, and for an approved task what landed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Finish {
     pub at: Timestamp,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -368,7 +368,7 @@ fn pending_question_is_presented_once_while_a_repaired_chain_lands_across_restar
         attempt:failed.identity.unwrap().attempt, class:corral_ops::gate_triage::FailureClass::Candidate,
         explanation:"Required candidate file is absent; attribute before the existing code-repair authorization".into(),
         evidence:vec![artifact.path], baseline:None, retry:false,
-    }, true).unwrap();
+    }, true, &corral_ops::command::Invoker::process()).unwrap();
     for _ in 0..3 {
         pm_pass(&fx, &mut presented);
     }

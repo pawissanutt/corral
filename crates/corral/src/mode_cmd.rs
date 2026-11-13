@@ -2,12 +2,13 @@
 use std::io::IsTerminal;
 
 use anyhow::Result;
-use anyhow::ensure;
 use clap::{Args, Subcommand};
-use corral_core::{OperatingMode, OperatingPreview};
-use corral_ops::Ctx;
+use corral_core::OperatingPreview;
+use corral_ops::{Ctx, command::Output};
+use corral_protocol::cmd::{Command, mode::ModeCommand};
 
 use crate::automation_cmd::SelectionArgs;
+use crate::invocation::Invocation;
 
 #[derive(Args)]
 pub struct ModeArgs {
@@ -47,250 +48,76 @@ pub(crate) enum ModeCmd {
 }
 
 pub(crate) fn status(ctx: &Ctx, json: bool) -> Result<()> {
-    let workset = corral_ops::pm_workset(ctx)?;
-    let effective = ctx.store.effective_operating_policy()?;
-    let config = ctx.store.config_layers()?.config()?;
-    if json {
-        let mut value = serde_json::to_value(&workset)?;
-        value["effective"] = serde_json::to_value(&effective)?;
-        value["policy"] = serde_json::to_value(&config.automation)?;
-        value["approval"] = serde_json::to_value(ctx.store.operating_state()?.approval)?;
-        println!("{}", serde_json::to_string_pretty(&value)?);
-        return Ok(());
-    }
-    println!(
-        "Mode: {}{}",
-        match workset.mode {
-            OperatingMode::Assist => "Assist",
-            OperatingMode::Autopilot => "Autopilot",
-        },
-        if workset.paused { " (paused)" } else { "" }
-    );
-    if config.automation.turbo {
-        println!(
-            "Turbo: on (owner-only acceptance and round limits ignored; `corral mode turbo --off` stops it)"
-        );
-    }
-    println!(
-        "{}: {}/{} accepted; {} scoped running; independent work continues: {}",
-        workset.status.as_str(),
-        workset.progress.accepted,
-        workset.progress.total,
-        workset.progress.running,
-        workset.independent_work_continues,
-    );
-    println!("Policy revision: {}", workset.policy_revision);
-    println!(
-        "Grant: {}",
-        effective.authorization.as_deref().unwrap_or("none")
-    );
-    println!(
-        "Configured authority (subject to effective refusals): dispatch={}, accept={}, plan_accept={}, aggregate_accept={}",
-        config.automation.authority.dispatch,
-        config.automation.authority.accept,
-        config.automation.authority.plan_accept,
-        config.automation.authority.aggregate_accept,
-    );
-    for (id, member) in &config.automation.scope.tasks {
-        println!(
-            "Scope {id}: {} ({})",
-            member.project,
-            member.repository.display()
-        );
-        if let Some(task) = effective.tasks.get(id) {
-            for (action, reasons) in &task.refusals {
-                println!("  {action:?}: {}", reasons.join("; "));
-            }
-        }
-    }
-    for project in config.automation.scope.projects.keys() {
-        println!(
-            "Project {project}: unfinished and new tasks{}",
-            project_limits(&config.automation.scope)
-        );
-    }
-    for excluded in &config.automation.scope.exclusions {
-        println!("Excluded: {excluded}");
-    }
-    for decision in &workset.decisions {
-        println!(
-            "Decision {} ({}): {}",
-            decision.id, decision.task, decision.action.why
-        );
-    }
-    for wait in &workset.waits {
-        println!(
-            "Waiting {}: {}",
-            wait.task.as_deref().unwrap_or("workspace"),
-            wait.why
-        );
-    }
-    for blocker in &workset.blockers {
-        println!("Blocker: {blocker}");
-    }
-    if workset.paused {
-        println!("No new automatic actions; running work and receipt collection continue.");
-    }
-    crate::cmds::dispatch_status::print(ctx)?;
-    Ok(())
-}
-
-fn project_limits(scope: &corral_core::OperatingScope) -> String {
-    let mut limits = String::new();
-    if let Some(days) = scope.expires_after_days {
-        limits.push_str(&format!("; grant ends {days} days after confirmation"));
-    }
-    if let Some(max) = scope.max_new_tasks {
-        limits.push_str(&format!("; at most {max} new tasks"));
-    }
-    limits
+    let mut out = Output::default();
+    let result = corral_ops::command::mode::status(ctx, json, &mut out);
+    print!("{}", out.stdout);
+    result
 }
 
 pub(crate) fn print_preview(preview: &OperatingPreview) -> Result<()> {
-    if preview.policy.scope.projects.is_empty() {
-        println!("Autopilot preview: finite current tasks, never future backlog.");
-    }
-    for project in preview.policy.scope.projects.keys() {
-        println!(
-            "Project {project}: every unfinished task, including tasks filed later{}",
-            project_limits(&preview.policy.scope)
-        );
-    }
-    for (id, constraints) in &preview.constraints {
-        if !preview.policy.scope.tasks.contains_key(id) {
-            println!(
-                "{id}: covered through its project; {}",
-                constraints.lifecycle.as_str()
-            );
-        }
-    }
-    for (id, member) in &preview.policy.scope.tasks {
-        println!("{id} @ {}: {}", member.project, member.repository.display());
-        let constraints = &preview.constraints[id];
-        println!(
-            "  Owner-only acceptance: {}; owner-only plan acceptance: {}",
-            constraints.owner_acceptance, constraints.owner_plan_acceptance,
-        );
-        println!(
-            "  State: {}; dispatch hold: {}; cancelled plan: {}; decisions: {}",
-            constraints.lifecycle.as_str(),
-            constraints.dispatch_hold,
-            constraints.cancelled_plan,
-            constraints.pending_decisions.len(),
-        );
-        let review = &constraints.review;
-        println!("  Gates: {}", serde_json::to_string(&review.gate)?);
-        println!(
-            "  Reviewer: {:?}; cross-family required: {}",
-            review.reviewer,
-            review.cross_family_required(),
-        );
-        println!(
-            "  Limits: {} repair rounds; source: {:?}",
-            review.max_rounds, review.size_limits,
-        );
-        println!(
-            "  Owner paths: {}",
-            serde_json::to_string(&review.owner_paths)?
-        );
-    }
-    for plan in &preview.policy.scope.plans {
-        println!(
-            "Reviewed plan {}@{} scopes: {}",
-            plan.task,
-            plan.revision,
-            plan.scopes.keys().cloned().collect::<Vec<_>>().join(", "),
-        );
-    }
-    println!(
-        "Exclusions: {}",
-        serde_json::to_string(&preview.policy.scope.exclusions)?
-    );
-    println!(
-        "Delegated authority: dispatch={}, accept={}, plan_accept={}, aggregate_accept={}",
-        preview.policy.authority.dispatch,
-        preview.policy.authority.accept,
-        preview.policy.authority.plan_accept,
-        preview.policy.authority.aggregate_accept,
-    );
-    println!("Existing verification, owner restrictions and resource limits still apply.");
-    println!("Exact confirmation digest:\n{}", preview.id);
-    println!("Stored grant digest:\n{}", preview.grant_digest);
-    Ok(())
+    let mut out = Output::default();
+    let result = corral_ops::command::mode::print_preview(preview, &mut out);
+    print!("{}", out.stdout);
+    result
 }
 
-pub fn run(mut ctx: Ctx, args: ModeArgs) -> Result<()> {
-    match args.cmd {
-        ModeCmd::Status { json } => return status(&ctx, json),
-        ModeCmd::Assist => ctx.store.config = ctx.store.assist_operating_policy()?,
-        ModeCmd::Pause => ctx.store.config = ctx.store.pause_operating_policy(true)?,
-        ModeCmd::Turbo { off } => {
-            if !off {
-                corral_ops::require_automation_owner(&ctx.store)?;
-            }
-            ctx.store.config = ctx.store.turbo_operating_policy(!off)?;
-        }
-        ModeCmd::Resume => {
-            corral_ops::require_automation_owner(&ctx.store)?;
-            ctx.store.config = ctx.store.pause_operating_policy(false)?;
+pub fn run(inv: &Invocation, args: ModeArgs) -> Result<()> {
+    let (selection, json) = match args.cmd {
+        ModeCmd::Status { json } => return status(inv.ctx()?, json),
+        ModeCmd::Assist => return inv.submit(Command::Mode(ModeCommand::Assist {})),
+        ModeCmd::Pause => return inv.submit(Command::Mode(ModeCommand::Pause {})),
+        ModeCmd::Resume => return inv.submit(Command::Mode(ModeCommand::Resume {})),
+        ModeCmd::Turbo { off } => return inv.submit(Command::Mode(ModeCommand::Turbo { off })),
+        ModeCmd::Autopilot {
+            selection,
+            confirm: Some(confirm),
+            json,
+        } => {
+            return inv.submit(Command::Mode(selection.into_command(confirm, json)));
         }
         ModeCmd::Autopilot {
             selection,
-            confirm,
+            confirm: None,
             json,
-        } => {
-            let preview = corral_ops::automation_preview(&ctx.store, &selection.resolve()?)?;
-            if let Some(digest) = confirm {
-                ensure!(
-                    digest == preview.id,
-                    "preview changed; review a fresh mode autopilot preview"
-                );
-                ctx.store.config = corral_ops::automation_confirm(&ctx.store, &preview, &digest)?;
-                if json {
-                    return status(&ctx, true);
-                }
-            } else {
-                if json {
-                    println!("{}", serde_json::to_string_pretty(&preview)?);
-                } else {
-                    print_preview(&preview)?;
-                }
-                if json || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-                    if !json {
-                        println!(
-                            "No grant written. Review this preview, then repeat with --confirm {}",
-                            preview.id
-                        );
-                    }
-                    return Ok(());
-                }
-                let Some(config) = crate::automation_cmd::confirm_terminal(&ctx, &preview)? else {
-                    return Ok(());
-                };
-                ctx.store.config = config;
-            }
-        }
+        } => (selection, json),
+    };
+    // Terminal confirmation replaces this handle's config, so keep an owned clone.
+    let mut ctx = inv.ctx()?.clone();
+    let invoker = inv.entry().invoker();
+    let preview = corral_ops::automation_preview(&ctx.store, &selection.resolve()?)?;
+    if json {
+        let mut out = Output::default();
+        out.json_pretty(&preview)?;
+        print!("{}", out.stdout);
+    } else {
+        print_preview(&preview)?;
     }
+    if json || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        if !json {
+            println!(
+                "No grant written. Review this preview, then repeat with --confirm {}",
+                preview.id
+            );
+        }
+        return Ok(());
+    }
+    let Some(config) = crate::automation_cmd::confirm_terminal(&ctx, invoker, &preview)? else {
+        return Ok(());
+    };
+    ctx.store.config = config;
     status(&ctx, false)
 }
 
-pub(crate) fn legacy(mut ctx: Ctx, action: &str, json: bool) -> Result<()> {
-    match action {
-        "off" => {
-            ctx.store.config = ctx.store.pause_operating_policy(true)?;
-            if !json {
-                println!(
-                    "Workspace Autopilot paused across dispatch, review, repair and acceptance."
-                );
-            }
-        }
-        "on" if !json => {
-            println!(
-                "No grant written. Use `corral mode autopilot --project <project> --dispatch` \
-                 to preview an exact finite scope and confirm it; review-only automation is no longer a control."
-            );
-        }
-        _ => {}
+pub(crate) fn legacy(inv: &Invocation, action: &str, json: bool) -> Result<()> {
+    if action == "off" {
+        return inv.submit(Command::Mode(ModeCommand::Off { json }));
     }
-    status(&ctx, json)
+    let ctx = inv.ctx()?;
+    if action == "on" && !json {
+        println!(
+            "No grant written. Use `corral mode autopilot --project <project> --dispatch` \
+             to preview an exact finite scope and confirm it; review-only automation is no longer a control."
+        );
+    }
+    status(ctx, json)
 }

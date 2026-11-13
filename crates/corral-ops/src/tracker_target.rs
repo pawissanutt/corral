@@ -1,10 +1,10 @@
 //! Target qualification uses existing acceptance events and actual Git ancestry.
 use anyhow::{Context, Result, bail};
 use corral_core::{PlanDeliveryTarget, Status, Store, Task};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Acceptance and inclusion are separate facts about a prerequisite.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanPrerequisite {
     pub task: String,
     pub status: Status,

@@ -1,7 +1,9 @@
 use anyhow::{Result, bail};
 use clap::Subcommand;
 use corral_ops::pm_read::{self, PmReadout};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use crate::invocation::Invocation;
 
 #[derive(Subcommand)]
 pub enum PmCmd {
@@ -171,26 +173,22 @@ fn rotate(ctx: &corral_ops::Ctx, reason: &str, force: bool, json: bool) -> Resul
     }
 }
 
-pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Result<()> {
+/// Each arm opens the store through `inv` only when it needs it, as before.
+pub fn run(inv: &Invocation, cmd: Option<PmCmd>) -> Result<()> {
     match cmd {
-        Some(PmCmd::Notes { cmd }) => crate::pm_notes_cmd::run(start, cmd, entry)?,
+        Some(PmCmd::Notes { cmd }) => crate::pm_notes_cmd::run(inv, cmd)?,
         Some(PmCmd::GuardResume { json }) => {
-            let resumed = corral_ops::pm_guard_resume(&entry.open(start)?)?;
-            if json {
-                println!("{}", serde_json::to_string(&resumed)?);
-            } else if resumed {
-                println!("PM usage guard resumed");
-            } else {
-                println!("PM usage guard was not paused");
-            }
+            inv.submit(corral_protocol::cmd::Command::Pm(
+                corral_protocol::cmd::pm::PmCommand::GuardResume { json },
+            ))?;
         }
-        None => println!("PM pane {}", corral_ops::open_pm(&entry.open(start)?)?),
+        None => println!("PM pane {}", corral_ops::open_pm(inv.ctx()?)?),
         Some(PmCmd::Relaunch {
             replace,
             reason,
             json,
         }) => {
-            let pane = corral_ops::relaunch_pm(&entry.open(start)?, &reason, replace)?;
+            let pane = corral_ops::relaunch_pm(inv.ctx()?, &reason, replace)?;
             if json {
                 println!(
                     "{}",
@@ -204,8 +202,8 @@ pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Res
             reason,
             force,
             json,
-        }) => rotate(&entry.open(start)?, &reason, force, json)?,
-        Some(PmCmd::Shadow { cmd }) => crate::pm_shadow_cmd::run(start, cmd, entry)?,
+        }) => rotate(inv.ctx()?, &reason, force, json)?,
+        Some(PmCmd::Shadow { cmd }) => crate::pm_shadow_cmd::run(&inv.start()?, cmd, inv.entry())?,
         Some(PmCmd::Bench {
             events,
             cases,
@@ -240,14 +238,14 @@ pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Res
             }
         }
         Some(PmCmd::Next { json, fresh }) => {
-            let ctx = entry.open(start)?;
-            let readout = served(&ctx, corral_protocol::read::ReadKind::PmNext, fresh)
+            let ctx = inv.ctx()?;
+            let readout = served(ctx, corral_protocol::read::ReadKind::PmNext, fresh)
                 .map(Ok)
-                .unwrap_or_else(|| pm_read::next(&ctx))?;
+                .unwrap_or_else(|| pm_read::next(ctx))?;
             print_readout(readout, json)?;
         }
         Some(PmCmd::Act { action, json }) => {
-            let result = corral_ops::pm_act(&entry.open(start)?, &action)?;
+            let result = corral_ops::pm_act(inv.ctx()?, &action)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
@@ -260,25 +258,25 @@ pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Res
             delivery,
             confirmed,
         }) => {
-            corral_ops::pm_present(
-                &entry.open(start)?,
-                &decision,
-                &delivery,
-                confirmed,
-                jiff::Timestamp::now(),
-            )?;
-            println!("Presentation recorded; owner decision remains pending.");
+            inv.submit(corral_protocol::cmd::Command::Pm(
+                corral_protocol::cmd::pm::PmCommand::Present {
+                    decision,
+                    delivery,
+                    confirmed,
+                },
+            ))?;
         }
         Some(PmCmd::Resolve { decision, answer }) => {
-            corral_ops::pm_resolve(&entry.open(start)?, &decision, &answer)?;
-            println!("Owner answer recorded; task restrictions remain enforced.");
+            inv.submit(corral_protocol::cmd::Command::Pm(
+                corral_protocol::cmd::pm::PmCommand::Resolve { decision, answer },
+            ))?;
         }
-        Some(PmCmd::Inbox { cmd }) => crate::pm_inbox_cmd::run(start, cmd, entry)?,
+        Some(PmCmd::Inbox { cmd }) => crate::pm_inbox_cmd::run(inv, cmd)?,
         Some(PmCmd::Brief { json, fresh }) => {
-            let ctx = entry.open(start)?;
-            let readout = served(&ctx, corral_protocol::read::ReadKind::PmBrief, fresh)
+            let ctx = inv.ctx()?;
+            let readout = served(ctx, corral_protocol::read::ReadKind::PmBrief, fresh)
                 .map(Ok)
-                .unwrap_or_else(|| pm_read::brief(&ctx))?;
+                .unwrap_or_else(|| pm_read::brief(ctx))?;
             print_readout(readout, json)?;
         }
     }

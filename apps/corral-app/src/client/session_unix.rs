@@ -240,7 +240,7 @@ impl Session {
                         }
                         (Topic::Health, cursor)
                     }
-                    SubDelta::Other => return Ok(()),
+                    SubDelta::Classic { .. } | SubDelta::Other => return Ok(()),
                 };
                 self.send(
                     wire::SUB_ACK,
@@ -258,7 +258,7 @@ impl Session {
                         self.open(Topic::Board)?;
                     }
                     Topic::Health => self.open(Topic::Health)?,
-                    Topic::Other => {}
+                    Topic::Classic | Topic::Other => {}
                 }
             }
             _ => {}

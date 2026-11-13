@@ -60,6 +60,9 @@ pub fn run(start: &Path, cmd: DaemonCmd, entry: &crate::entry::Entry) -> Result<
                 );
             } else {
                 println!("{}", health.line());
+                if let Some(line) = corral_ops::command::route::fallback_line(store.dir()) {
+                    println!("{line}");
+                }
             }
             std::process::exit(health_code(&health));
         }
@@ -104,8 +107,8 @@ pub fn run(start: &Path, cmd: DaemonCmd, entry: &crate::entry::Entry) -> Result<
 fn owner_store(start: &Path, entry: &crate::entry::Entry) -> Result<Store> {
     // Check authority before observing config edits or running store migrations.
     let store = Store::open_unobserved(&Store::find_root(start)?)?;
-    corral_ops::require_automation_owner(&store)?;
-    entry.apply(&store)?;
+    corral_ops::require_automation_owner(&store, entry.invoker())?;
+    entry.invoker().apply(&store)?;
     Ok(store)
 }
 

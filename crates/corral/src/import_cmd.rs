@@ -33,7 +33,7 @@ pub fn run(root: &Option<PathBuf>, args: ImportArgs, entry: &crate::entry::Entry
     // Ordinary opens observe config edits, creating state and locks even for a preview.
     let ctx = if args.dry_run {
         let store = Store::open_unobserved(&root)?;
-        entry.apply(&store)?;
+        entry.invoker().apply(&store)?;
         Ctx::from_store(store)
     } else {
         entry.open(&root)?

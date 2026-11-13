@@ -330,7 +330,8 @@ fn current_generation(lease: &PmRecoveryLease) -> Result<u32> {
 }
 
 fn managed_entry() -> bool {
-    crate::automation_controls::agent_entry() || std::env::var("CORRAL_PM").as_deref() == Ok("1")
+    crate::automation_controls::agent_entry(&crate::command::Invoker::process())
+        || std::env::var("CORRAL_PM").as_deref() == Ok("1")
 }
 
 /// Every blocker of generation `n`, and the Pi session ID of the conversation a rotation

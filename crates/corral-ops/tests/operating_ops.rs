@@ -119,6 +119,7 @@ fn finite_dependency_chain_uses_bounded_repair_independent_review_and_verified_l
             retry: false,
         },
         true,
+        &corral_ops::command::Invoker::process(),
     )
     .unwrap();
     corral_ops::sync_at(&fx.fresh(), now()).unwrap();

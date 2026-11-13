@@ -102,6 +102,7 @@ fn attend_subprocess() {
         u64::try_from(value.next_check.duration_since(value.at).as_secs()).unwrap(),
         &value.request,
         value.at,
+        &corral_ops::command::Invoker::process(),
     )
     .map_err(|error| error.to_string());
     println!("ATTEND_RESULT={}", serde_json::to_string(&result).unwrap());

@@ -118,6 +118,7 @@ fn authorized_handling_subprocess() {
         1800,
         "real-attend",
         super::at(1),
+        &corral_ops::command::Invoker::process(),
     )
     .unwrap();
 }

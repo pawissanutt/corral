@@ -10,7 +10,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
 use super::outbox::{self, Wakes};
-use crate::{Ctx, owner_notice};
+use crate::{Ctx, command::Invoker, owner_notice};
 
 /// Reconcile from one fresh post-mutation listing; no event-history reads or transport retries.
 pub fn reconcile(ctx: &Ctx, now: Timestamp, pm_live: Option<bool>) -> Result<()> {
@@ -442,21 +442,13 @@ fn transition(
 }
 
 /// Context guard is shared by the CLI and operation; handling never grants execution authority.
-pub fn guard(ctx: &Ctx) -> Result<()> {
-    let managed = [
-        "AI_AGENT",
-        "PI_CODING_AGENT",
-        "CORRAL_AGENT",
-        "CORRAL_REVIEWER",
-        "CORRAL_AGENT_TASK",
-    ]
-    .iter()
-    .any(|key| std::env::var_os(key).is_some());
+pub fn guard(ctx: &Ctx, invoker: &Invoker) -> Result<()> {
     ensure!(
-        !managed || std::env::var("CORRAL_PM").as_deref() == Ok("1"),
+        !invoker.managed_marker() || invoker.pm_marker(),
         "worker_context: attention handling is PM/owner only"
     );
-    let cwd = std::env::current_dir()
+    let cwd = invoker
+        .cwd()
         .context("reading attention caller cwd")?
         .canonicalize()
         .context("resolving attention caller cwd")?;
@@ -481,9 +473,10 @@ pub fn attend(
     next_check_secs: u64,
     request: &str,
     now: Timestamp,
+    invoker: &Invoker,
 ) -> Result<AttentionHandling> {
-    guard(ctx)?;
-    attend_authorized(ctx, key, note, next_check_secs, request, now)
+    guard(ctx, invoker)?;
+    attend_authorized(ctx, key, note, next_check_secs, request, now, invoker)
 }
 
 pub(super) fn attend_authorized(
@@ -493,8 +486,9 @@ pub(super) fn attend_authorized(
     next_check_secs: u64,
     request: &str,
     now: Timestamp,
+    invoker: &Invoker,
 ) -> Result<AttentionHandling> {
-    let by = if std::env::var("CORRAL_PM").as_deref() == Ok("1") {
+    let by = if invoker.pm_marker() {
         Responsible::Pm
     } else {
         Responsible::Owner

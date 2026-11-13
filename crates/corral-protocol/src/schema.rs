@@ -114,6 +114,25 @@ fn document() -> Value {
                 rpc::ErrorCode::Unavailable,
             ],
         ),
+        method::<cmd::CmdSubmit, cmd::CmdResult>(
+            &mut generator,
+            cmd::CMD_SUBMIT,
+            false,
+            &[
+                rpc::ErrorCode::Refused,
+                rpc::ErrorCode::Busy,
+                rpc::ErrorCode::Expired,
+                rpc::ErrorCode::InvalidParams,
+                rpc::ErrorCode::Unauthenticated,
+                rpc::ErrorCode::Unavailable,
+            ],
+        ),
+        method::<cmd::CmdResultQuery, cmd::CmdResult>(
+            &mut generator,
+            cmd::CMD_RESULT,
+            false,
+            &[rpc::ErrorCode::InvalidParams, rpc::ErrorCode::Unavailable],
+        ),
         method::<SubOpen, ()>(&mut generator, SUB_OPEN, false, &common),
         method::<SubDelta, ()>(&mut generator, SUB_DELTA, true, &[]),
         method::<SubReset, ()>(&mut generator, SUB_RESET, true, &[]),
@@ -166,15 +185,30 @@ fn sub_delta_catalog_preserves_union_parameters_and_requiredness() {
         .iter()
         .map(|param| param["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["cursor", "epoch", "left", "more", "rows", "topic"]);
-    let topic = params
-        .iter()
-        .find(|param| param["name"] == "topic")
-        .unwrap();
+    assert_eq!(
+        names,
+        [
+            "as_of", "cursor", "epoch", "left", "more", "rev", "rows", "seq", "topic"
+        ]
+    );
+    let param = |name: &str| params.iter().find(|param| param["name"] == name).unwrap();
+    let topic = param("topic");
     assert_eq!(topic["required"], true);
-    assert_eq!(topic["schema"]["anyOf"].as_array().unwrap().len(), 3);
-    let rows = params.iter().find(|param| param["name"] == "rows").unwrap();
+    // Branches: 0 board, 1 health, 2 classic, 3 other.
+    assert_eq!(topic["schema"]["anyOf"].as_array().unwrap().len(), 4);
+    let rows = param("rows");
     assert_eq!(rows["required"], false);
     assert_eq!(rows["x-required-in"], json!([0, 1]));
     assert_eq!(rows["schema"]["anyOf"].as_array().unwrap().len(), 2);
+    for name in ["cursor", "left", "more"] {
+        assert_eq!(param(name)["required"], false, "{name}");
+        assert_eq!(param(name)["x-required-in"], json!([0, 1]), "{name}");
+    }
+    let epoch = param("epoch");
+    assert_eq!(epoch["required"], false);
+    assert_eq!(epoch["x-required-in"], json!([0, 1, 2]));
+    for name in ["rev", "seq", "as_of"] {
+        assert_eq!(param(name)["required"], false, "{name}");
+        assert_eq!(param(name)["x-required-in"], json!([2]), "{name}");
+    }
 }

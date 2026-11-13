@@ -1,5 +1,6 @@
 //! Shared wire contract for the daemon and its clients; independent of store internals.
 pub mod board;
+pub mod classic;
 pub mod cmd;
 pub mod frame;
 pub mod health;
@@ -9,6 +10,7 @@ pub mod rpc;
 mod schema;
 pub mod subscription;
 
+pub use classic::CLASSIC_V1;
 pub use health::{DaemonState, Health, LoopFacts, PmState, RuntimeHealth, RuntimeState};
 pub use read::{READ, READ_V1};
 use serde::{Deserialize, Serialize};
