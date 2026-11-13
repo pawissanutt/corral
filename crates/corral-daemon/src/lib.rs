@@ -237,8 +237,10 @@ impl Pacing {
 
 /// A `cli`/`board` nudge or the `sync-full-on` switch asks for a full pass.
 fn pass_request((full, nudged): (bool, bool), forced: bool) -> PassRequest {
-    if full || forced {
+    if full {
         PassRequest::Full(FullReason::Owner)
+    } else if forced {
+        PassRequest::Full(FullReason::Switch)
     } else if nudged {
         PassRequest::Nudged
     } else {
