@@ -65,6 +65,7 @@ pub(super) fn cases() -> Vec<Case> {
                 OpKind::AppendEvents,
                 OpKind::Claim,
                 OpKind::PutRecords,
+                OpKind::ObserveCondition,
                 OpKind::ClearCondition,
             ],
             run: change_feed,
@@ -302,6 +303,19 @@ fn claim_race(make: MakeFixture<'_>) -> Result<()> {
     ensure_integrity(&fx)
 }
 
+/// What one commit in `change_feed` must do to the feed.
+#[derive(Clone, Copy, Debug)]
+enum Expect {
+    /// Refused: no entry.
+    Refused,
+    /// Wrote: exactly one entry, at the returned seq.
+    Writes,
+    /// Applied with a no-op outcome: no entry, and the returned seq is the current one.
+    NoOp,
+}
+
+/// Every commit that writes appends exactly one entry; a refused commit or one whose outcome
+/// is a no-op (a clear without an open run) appends none.
 fn change_feed(make: MakeFixture<'_>) -> Result<()> {
     let fx = make();
     let now = fx.clock.now();
@@ -310,54 +324,65 @@ fn change_feed(make: MakeFixture<'_>) -> Result<()> {
     committed.push((snapshot(fx.backend.as_ref())?.seq, OpKind::CreateTask));
     let mut stale = change(&fx, num)?;
     stale.expected_rev += 5;
-    let ops: Vec<(Operation, bool)> = vec![
+    let clear = || {
+        Operation::ClearCondition(ClearCondition {
+            task: "T-001".to_owned(),
+            kind: "queued".to_owned(),
+            at: now,
+            actor: None,
+            via: None,
+        })
+    };
+    let ops: Vec<(Operation, Expect)> = vec![
         (
             Operation::UpdateTask(UpdateTask {
                 change: stale,
                 form: UpdateForm::Head,
             }),
-            false,
+            Expect::Refused,
         ),
         (
             Operation::AppendEvents(AppendEvents {
                 events: vec![event(&fx, None, "note", json!({}))],
                 reservations: Vec::new(),
             }),
-            true,
+            Expect::Writes,
         ),
-        (claim(&fx, "x", "a"), true),
-        (claim(&fx, "x", "b"), false),
+        (claim(&fx, "x", "a"), Expect::Writes),
+        (claim(&fx, "x", "b"), Expect::Refused),
         (
             put_records(
                 vec![record("pm", "k", Some(5), Some(json!({})), now)],
                 Vec::new(),
             ),
-            false,
+            Expect::Refused,
         ),
         (
             put_records(
                 vec![record("pm", "k", None, Some(json!({})), now)],
                 Vec::new(),
             ),
-            true,
+            Expect::Writes,
         ),
-        (
-            Operation::ClearCondition(ClearCondition {
-                task: "T-001".to_owned(),
-                kind: "queued".to_owned(),
-                at: now,
-                actor: None,
-                via: None,
-            }),
-            true,
-        ),
+        (observe(&fx, "queued", json!({})), Expect::Writes),
+        (clear(), Expect::Writes),
+        (clear(), Expect::NoOp),
     ];
-    for (op, ok) in ops {
+    for (op, expect) in ops {
         let kind = op.kind();
-        match (fx.backend.apply(op), ok) {
-            (Ok(done), true) => committed.push((done.seq, kind)),
-            (Err(_), false) => {}
-            (result, _) => bail!("{kind:?}: unexpected {result:?}"),
+        let before = snapshot(fx.backend.as_ref())?.seq;
+        match (fx.backend.apply(op), expect) {
+            (Ok(done), Expect::Writes) => committed.push((done.seq, kind)),
+            (Ok(done), Expect::NoOp) => {
+                let after = snapshot(fx.backend.as_ref())?.seq;
+                ensure!(
+                    done.seq == before && after == before,
+                    "{kind:?} no-op moved the feed from {before:?} to {after:?}, returned {:?}",
+                    done.seq
+                );
+            }
+            (Err(_), Expect::Refused) => {}
+            (result, _) => bail!("{kind:?}: expected {expect:?}, got {result:?}"),
         }
     }
     let mut update = change(&fx, num)?;

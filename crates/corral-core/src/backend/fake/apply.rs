@@ -39,6 +39,18 @@ pub(super) fn run(
     };
     let outcome = tx.dispatch(op)?;
     tx.release_reservations()?;
+    if no_op(&outcome) {
+        // Nothing was written: no change entry, so feed followers see no change.
+        let seq = tx.state.seq;
+        return Ok((
+            tx.state,
+            Committed {
+                seq,
+                outcome,
+                events: tx.events,
+            },
+        ));
+    }
     let seq = ChangeSeq(tx.state.seq.0 + 1);
     tx.state.seq = seq;
     let entry = ChangeEntry {
@@ -57,6 +69,16 @@ pub(super) fn run(
             events: tx.events,
         },
     ))
+}
+
+/// Outcomes that write nothing and therefore append no change entry: clearing a condition
+/// that is not open, and a blob reservation refused while the blob is being deleted. Keep in
+/// step with the SQLite backend's `no_op`.
+fn no_op(outcome: &Outcome) -> bool {
+    matches!(
+        outcome,
+        Outcome::Condition(ConditionOutcome::NotOpen) | Outcome::Reserved(ReserveOutcome::Busy)
+    )
 }
 
 pub(super) fn require(condition: bool, message: impl FnOnce() -> String) -> Applied<()> {

@@ -3,8 +3,13 @@
 //! messages, must be visited once more after its task ends. The set follows the change feed
 //! from a persisted cursor, so a pass reads only the tasks changed since the last one plus the
 //! few still owing; a pruned feed or a new store falls back to one scan of the terminal tasks.
+//! Only task changes add candidates, so entries without a task scope never move the persisted
+//! cursor (until it lags `MAX_LAG` entries): this process remembers how far it followed
+//! instead, and a quiet pass writes nothing.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
+use std::sync::{Mutex, PoisonError};
 
 use anyhow::Result;
 use corral_core::backend::{ChangeScope, ChangeSeq, FeedError, PageReq, TaskOrder, TaskQuery};
@@ -15,8 +20,15 @@ use serde::{Deserialize, Serialize};
 use crate::Ctx;
 
 const AREA: &str = "terminal-settlement";
+/// How far the persisted cursor may trail the feed over entries without a task scope, so a
+/// process without this one's memory (a hook, a restarted daemon) reads a bounded tail.
+const MAX_LAG: u64 = 4096;
 
-#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+/// Per store directory: the persisted state this process last saw and the feed position it
+/// followed from it. Valid only while the persisted state is unchanged.
+static FOLLOWED: Mutex<BTreeMap<PathBuf, (State, u64)>> = Mutex::new(BTreeMap::new());
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 struct State {
     /// Zero-padded, so the record's size does not follow the feed's length.
     #[serde(with = "padded")]
@@ -156,34 +168,40 @@ pub(crate) fn recover(ctx: &Ctx) -> Result<()> {
 }
 
 /// Terminal heads that still owe settlement: the persisted set plus every task changed after
-/// the cursor. The set and cursor are saved for the next pass when they change.
+/// the cursor. The set and cursor are saved when the set changes, a task changed, the feed
+/// could not be followed, or the cursor lags `MAX_LAG` entries; otherwise this process only
+/// remembers how far it followed.
 pub(crate) fn terminal_heads(ctx: &Ctx) -> Result<Vec<TaskHead>> {
+    let _span = corral_core::timing::span("sync.settlement_heads");
     // Hooks in separate processes share this cursor. Hold the derivation lease from
     // the first read through the version-checked save, not just around publication.
     // It is released before callers reconcile recipients or make external calls.
     let _lease = crate::approvals::lock(&ctx.store, AREA)?;
     let saved: State = ctx.store.record(AREA, "state")?.unwrap_or_default();
+    let key = ctx.store.dir().to_path_buf();
+    let followed = FOLLOWED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&key)
+        .filter(|(state, _)| *state == saved)
+        .map(|(_, followed)| *followed);
     let mut candidates = saved.tasks.clone();
     let view = ctx.store.view()?;
     let seq = view.seq();
-    // Whether the feed moved for anything but this set's own saves.
-    let mut foreign = saved.cursor.is_none();
+    // Whether the persisted cursor must move: a task changed, or the feed was not followed.
+    let mut moved = saved.cursor.is_none();
     match saved.cursor {
         Some(cursor) => {
-            let mut after = ChangeSeq(cursor);
+            let mut after = ChangeSeq(followed.map_or(cursor, |followed| followed.max(cursor)));
             loop {
                 match view.changes(after, 256) {
                     Ok(page) => {
                         for entry in &page.entries {
                             after = entry.seq;
                             for scope in &entry.scopes {
-                                match scope {
-                                    ChangeScope::Task { num, .. } => {
-                                        candidates.insert(Store::normalize_id(&num.0.to_string())?);
-                                        foreign = true;
-                                    }
-                                    ChangeScope::Record { area, .. } if area == AREA => {}
-                                    _ => foreign = true,
+                                if let ChangeScope::Task { num, .. } = scope {
+                                    candidates.insert(Store::normalize_id(&num.0.to_string())?);
+                                    moved = true;
                                 }
                             }
                         }
@@ -193,7 +211,7 @@ pub(crate) fn terminal_heads(ctx: &Ctx) -> Result<Vec<TaskHead>> {
                     }
                     Err(FeedError::Gap { .. }) => {
                         candidates.extend(terminal_ids(&ctx.store)?);
-                        foreign = true;
+                        moved = true;
                         break;
                     }
                     Err(error) => return Err(error.into()),
@@ -214,8 +232,10 @@ pub(crate) fn terminal_heads(ctx: &Ctx) -> Result<Vec<TaskHead>> {
             heads.push(head);
         }
     }
-    // Only this set's own saves since the cursor: re-saving would only move the feed again.
-    if foreign || tasks != saved.tasks {
+    let lagging = saved
+        .cursor
+        .is_some_and(|cursor| seq.0.saturating_sub(cursor) >= MAX_LAG);
+    let current = if moved || lagging || tasks != saved.tasks {
         let state = State {
             cursor: Some(seq.0),
             tasks,
@@ -223,6 +243,17 @@ pub(crate) fn terminal_heads(ctx: &Ctx) -> Result<Vec<TaskHead>> {
         if state != saved {
             ctx.store.save_record(AREA, "state", &state)?;
         }
-    }
+        state
+    } else {
+        saved
+    };
+    FOLLOWED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(key, (current, seq.0));
     Ok(heads)
 }
+
+#[cfg(test)]
+#[path = "settling_tests.rs"]
+mod tests;

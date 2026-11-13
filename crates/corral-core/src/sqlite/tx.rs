@@ -1,6 +1,7 @@
 //! The write path: one `BEGIN IMMEDIATE` transaction per operation. This module holds the
-//! dispatch, the shared task write, events, blob references, reservations, status counts and
-//! the change entry; the logic follows the reference fake so both pass one conformance suite.
+//! dispatch, the shared task write, events, blob references, reservations and status counts;
+//! the change entry is in `tx_storage`. The logic follows the reference fake so both pass
+//! one conformance suite.
 
 use std::collections::BTreeSet;
 
@@ -44,7 +45,7 @@ pub(super) struct Tx<'a> {
     pub(super) db: &'a Connection,
     pub(super) now: Timestamp,
     hooks: &'a super::Hooks,
-    scopes: BTreeSet<ChangeScope>,
+    pub(super) scopes: BTreeSet<ChangeScope>,
     events: Vec<EventSeq>,
     reservations: Vec<ReservationUse>,
 }
@@ -66,22 +67,7 @@ pub(super) fn run(
     };
     let outcome = tx.dispatch(op)?;
     tx.release_reservations()?;
-    let seq = ChangeSeq(load::meta_u64(db, "change_seq").or_io()? + 1);
-    db.execute(
-        "INSERT INTO changes(seq, at, op) VALUES (?1, ?2, ?3)",
-        rusqlite::params![int(seq.0).or_io()?, ts(now), name(&kind).or_io()?],
-    )?;
-    for scope in &tx.scopes {
-        db.execute(
-            "INSERT INTO change_scopes(seq, kind, key) VALUES (?1, ?2, ?3)",
-            rusqlite::params![int(seq.0).or_io()?, scope_kind(scope), json(scope).or_io()?],
-        )?;
-    }
-    db.execute(
-        "UPDATE meta SET value = ?1 WHERE key = 'change_seq'",
-        rusqlite::params![seq.0.to_string()],
-    )?;
-    tx.hit("change entry")?;
+    let seq = tx.change_entry(kind, &outcome)?;
     Ok(Committed {
         seq,
         outcome,

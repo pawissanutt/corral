@@ -113,18 +113,21 @@ fn contended_inventory_collects_its_gate_receipt_with_no_unattributed_hydration_
             fx.ctx.store.events_of(Some(&id), &["gate"]).unwrap().len(),
             1
         );
-        let state: crate::resources::ResourceState =
+        // A healthy pass persists no latch: absent reads as unlatched; present must say so.
+        let stored: Option<crate::resources::ResourceState> =
             corral_core::records::RecordArea::new("resources")
                 .load(&fx.ctx.store, "state")
-                .unwrap()
                 .unwrap();
-        assert!(!state.held && state.reason.is_none());
+        assert!(stored.is_none_or(|state| !state.held && state.reason.is_none()));
         let delta = work::snapshot().since(&before);
         drop(hot);
         assert!(probe.samples() > 0);
         assert_eq!(delta.followup_calls("FU-3", "sample"), probe.samples());
         assert_eq!(delta.unattributed_hydrations(), 0, "{:?}", delta.sites);
         delta.check_identity().unwrap();
+        // Re-derived outside the measured scope, after the sample count is checked.
+        let state = crate::resources::read_status(&fx.ctx).unwrap();
+        assert!(!state.held && state.reason.is_none());
         results.push(Counter::ALL.map(|c| delta.get(c)));
     }
     assert_eq!(results[0], results[1]);

@@ -85,6 +85,10 @@ pub(crate) fn push_events(ctx: &Ctx, herdr_available: bool) -> Result<()> {
     Ok(())
 }
 
+/// An unchanged cursor is not rewritten, so a quiet pass appends nothing to the change feed.
 fn save_cursor(ctx: &Ctx, cursor: &EventCursor) -> Result<()> {
+    if STATE.load(&ctx.store, "state")?.as_ref() == Some(cursor) {
+        return Ok(());
+    }
     STATE.save(&ctx.store, "state", cursor)
 }

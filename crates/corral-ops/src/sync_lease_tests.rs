@@ -121,3 +121,82 @@ esac
     drop(legacy_pass);
     assert!(owner.own_loop().unwrap());
 }
+
+/// A quiet daemon pass leaves nothing in the change feed but read leases.
+#[cfg(unix)]
+mod quiet_pass {
+    use super::*;
+    use corral_core::Store;
+    use corral_core::backend::{ChangeScope, ChangeSeq};
+    use corral_herdr::Herdr;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// One daemon pass: the sync, then the supervisor that `corral daemon run` follows it with.
+    fn pass(ctx: &Ctx) {
+        sync_with_attention(ctx).unwrap();
+        crate::pm_supervisor::supervise(ctx).unwrap();
+    }
+
+    /// Every change entry after `after` that is not only read-lease bookkeeping.
+    fn writes_since(ctx: &Ctx, after: ChangeSeq) -> Vec<String> {
+        let view = ctx.store.view().unwrap();
+        let mut cursor = after;
+        let mut writes = Vec::new();
+        loop {
+            let page = view.changes(cursor, 256).unwrap();
+            for entry in &page.entries {
+                cursor = entry.seq;
+                let lease_only = !entry.scopes.is_empty()
+                    && entry.scopes.iter().all(
+                        |scope| matches!(scope, ChangeScope::Record { area, .. } if area == "leases"),
+                    );
+                if !lease_only {
+                    writes.push(format!("{:?} {:?}", entry.op, entry.scopes));
+                }
+            }
+            if !page.more {
+                return writes;
+            }
+        }
+    }
+
+    #[test]
+    fn consecutive_quiet_passes_append_only_lease_records() {
+        // Given an idle store: one finished task, a reachable herdr with an unowned pane.
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("herdr");
+        std::fs::write(&bin, r#"#!/bin/sh
+if [ "$1" = "--session" ]; then shift 2; fi
+case "$1 $2" in
+  "workspace list") echo '{"result":{"workspaces":[]}}' ;;
+  "pane list") echo '{"result":{"panes":[{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","agent":"fixture","agent_status":"idle"}]}}' ;;
+  "pane process-info") echo '{"result":{"process_info":{"shell_pid":10,"foreground_processes":[]}}}' ;;
+  "pane read") echo 'idle' ;;
+  "notification show") echo '{"result":{}}' ;;
+  *) exit 1 ;;
+esac
+"#).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let store = Store::init(dir.path()).unwrap();
+        store.create("Finished", None, Status::Done, "").unwrap();
+        let mut ctx = Ctx {
+            store,
+            herdr: Herdr::with_bin(bin, Some("corral-test".into())),
+            resource_probe: crate::resources::FixedResourceProbe::arc(),
+        };
+        for supervise in [false, true] {
+            ctx.store.config.pm.supervise = supervise;
+            ctx.store.save_config().unwrap();
+            pass(&ctx);
+            // When the next pass finds nothing changed.
+            let before = ctx.store.view().unwrap().seq();
+            pass(&ctx);
+            // Then it appended nothing but read leases.
+            let writes = writes_since(&ctx, before);
+            assert!(
+                writes.is_empty(),
+                "quiet pass (supervise={supervise}) wrote: {writes:#?}"
+            );
+        }
+    }
+}
