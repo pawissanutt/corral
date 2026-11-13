@@ -3,9 +3,9 @@ import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionUIContext, InteractiveChatPresentation } from "@earendil-works/pi-coding-agent";
 import { decodeKittyPrintable, isKeyRelease, matchesKey, TuiAltScreen, visibleWidth, type Component, type Terminal, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
-import type { BuildUi } from "../build/types.ts";
+import type { BuildUi, FleetControl } from "../build/types.ts";
 import { PanelTerminal, PANEL_BREAKPOINT, PANEL_WIDTH, RAIL_MIN, RAIL_MAX, MIN_MAIN, type PanelSurface } from "./panel-terminal.ts";
-import { NativeWorkbench, plainClick, type MainView } from "./workbench.ts";
+import { NativeWorkbench, boardUnavailable, plainClick, type MainView } from "./workbench.ts";
 import type { HistoryRead } from "./history.ts";
 import type { ReviewBases } from "./review-store.ts";
 import type { JobControl } from "../host/job-controls.ts";
@@ -14,17 +14,22 @@ import { panelTheme } from "./panels-theme.ts";
 import { type Appearance, type Density, PACKAGED } from "./appearance.ts";
 import { ActionPalette, type HostAction } from "./action-palette.ts";
 import { setCanvasAppearance } from "./panel-canvas.ts";
-import { setAgentHueAppearance } from "./agent-hues.ts";
+import { agentColor, setAgentHueAppearance } from "./agent-hues.ts";
 import { statusBar } from "./panels-chrome.ts";
 import { composerBar, composerTitle, type ComposerHit } from "./composer-chrome.ts";
 import { chromeTier, COMPACT_COLUMNS, SHORT_ROWS } from "./header.ts";
-import { contextHints, footerBase, footerRow, keyGroups, keyLabel, piKey, queueFocusKey, type FooterHit, type HintState, type KeyContext } from "./keymap.ts";
+import { contextHints, footerBase, footerRow, keyGroups, keyLabel, piKey, queueFocusKey, targetKey, type FooterHit, type HintState, type KeyContext } from "./keymap.ts";
 import { KeysList } from "./keys-list.ts";
 import { QueueDock } from "./queue-dock.ts";
 import { Sidebar, type SideHit, type SideTarget } from "./sidebar.ts";
 import { inspectorActivity } from "./inspector.ts";
 import { openOutputPager } from "./job-detail.ts";
 import { pad, plainLabel, setPanelAppearance, PANEL_MUTED, type PanelSnapshot } from "./panels-view.ts";
+import { BuildController } from "./build/build-controller.ts";
+import { BUILD_BOARD_ENTRY, BUILD_EXIT_ENTRY, BUILD_FINISH_ENTRY, buildEntryRenderer, type BuildEntry } from "./build/build-entries.ts";
+import { choiceRows } from "./build/choice-dock.ts";
+import { childIdOf, type BuildCardSource } from "./build/contract.ts";
+import { steerable } from "./build/fleet-rows.ts";
 
 export interface NativePanelsOptions {
   readonly build?: BuildUi;
@@ -46,18 +51,43 @@ export interface NativePanelsOptions {
   readonly readProjects?: (signal: AbortSignal) => Promise<unknown>;
   readonly canRenderTool?: (name: string) => boolean;
   readonly reviewBases?: ReviewBases;
+  /** The host's delivery of composer text to the current child target; false when the child or the session cannot take it. */
+  readonly deliverBuildInput?: (text: string) => Promise<boolean>;
 }
 /** `/panels <target>` names for main views; history, receipts, project, refresh and toggle are actions. */
 const PANEL_VIEWS: Readonly<Record<string, MainView>> = {
   chat: "conversation", files: "changes", changes: "changes", agents: "agents", activity: "agents", jobs: "agents", helpers: "agents",
-  usage: "usage", evidence: "evidence", proof: "evidence", inbox: "inbox", task: "task", graph: "graph", timeline: "timeline",
+  usage: "usage", evidence: "evidence", proof: "evidence", inbox: "inbox", task: "task", graph: "graph", timeline: "timeline", board: "board",
 };
 /** Views that read the bound task; sessions without one do not offer them. */
 const TASK_VIEWS: Readonly<Partial<Record<MainView, true>>> = { task: true, evidence: true, graph: true, timeline: true };
 const PANEL_TARGETS = "chat, agents, changes, task, proof, inbox, usage, graph, timeline, history, receipts, project, refresh or toggle";
 
-/** Where keys go when no Pi dialog or overlay is open: Pi's editor, the main view, the sidebar or the queue. */
-export type PanelFocus = "composer" | "main" | "sidebar" | "queue";
+/** Where keys go when no Pi dialog or overlay is open: Pi's editor, the main view, the sidebar, the queue or a docked build dialog. */
+export type PanelFocus = "composer" | "main" | "sidebar" | "queue" | "choice";
+
+/** The session's build controls, with a steer to the current target delivered through the host, which refuses it once the session closes or unbinds. */
+function routedBuild(build: BuildUi, deliver: ((text: string) => Promise<boolean>) | undefined): BuildUi {
+  if (!deliver) return build;
+  const fleet = build.fleet;
+  const routed: FleetControl = {
+    snapshot: () => fleet.snapshot(),
+    steer: (id, text) => id === build.target() ? deliver(text) : fleet.steer(id, text),
+    cancel: id => fleet.cancel(id), setModel: (id, model) => fleet.setModel(id, model), answer: (id, text) => fleet.answer(id, text),
+    models: () => fleet.models(), profiles: () => fleet.profiles(), subscribe: listener => fleet.subscribe(listener),
+  };
+  return { fleet: routed, exit: build.exit, board: build.board, target: () => build.target(), setTarget: target => build.setTarget(target) };
+}
+/** Session cost with every child's known cost; `partial` when the parent's or a child's cost that ran is unknown. */
+function buildCost(snapshot: PanelSnapshot | null): { readonly total: number; readonly partial: boolean } | undefined {
+  const children = snapshot?.build?.fleet.children ?? [];
+  const priced = children.filter(child => child.usage.cost !== undefined);
+  if (!snapshot || (snapshot.cost === undefined && !priced.length)) return undefined;
+  return {
+    total: (snapshot.cost ?? 0) + priced.reduce((sum, child) => sum + (child.usage.cost ?? 0), 0),
+    partial: snapshot.cost === undefined || children.some(child => child.usage.cost === undefined && child.usage.turns > 0),
+  };
+}
 
 export class NativePanels implements PanelSurface {
   readonly workbench: NativeWorkbench;
@@ -86,19 +116,40 @@ export class NativePanels implements PanelSurface {
   private pointerOrigin: "main" | "sidebar" | undefined;
   private queued = false;
   private disposed = false;
+  /** A build session's docked dialogs, message target and conversation entries; absent in every other role. */
+  readonly build: BuildController | undefined;
+  private readonly unsubscribeBuild: readonly (() => void)[] = [];
+  private pi: ExtensionAPI | undefined;
+  /** Entries the controller posted before Pi was installed. */
+  private readonly posts: BuildEntry<unknown>[] = [];
 
   constructor(private readonly options: NativePanelsOptions) {
     this.sidebar = new Sidebar(() => this.refresh());
+    const build = options.build ? routedBuild(options.build, options.deliverBuildInput) : undefined;
+    this.build = build ? new BuildController({
+      ui: build, state: () => this.options.snapshot()?.build, streaming: () => this.options.snapshot()?.streaming ?? false,
+      overlay: () => !this.canInteract, draft: () => this.ui?.getEditorText() ?? "", setDraft: text => this.ui?.setEditorText(text),
+      focusComposer: () => this.focusComposer(), focusDock: () => this.focusChoice(),
+      notice: (text, tone) => this.workbench.notice(text, tone), post: entry => this.post(entry),
+      showBoard: () => { this.workbench.setView("board"); }, openChild: id => this.workbench.openChild(id),
+      color: agentColor, now: () => Date.now(), changed: () => this.refresh(),
+    }) : undefined;
     this.queue = new QueueDock({
       items: () => this.options.snapshot()?.queue ?? [], control: () => this.options.queueControl,
       draft: () => this.ui?.getEditorText() ?? "", setDraft: text => this.ui?.setEditorText(text),
       focusComposer: () => this.focusComposer(), notice: (text, tone) => this.workbench.notice(text, tone),
       changed: () => this.refresh(),
+      // Children never take queued input, so with any child the queue names the parent as its receiver.
+      ...(build ? { receiver: () => this.options.snapshot()?.build?.fleet.children.length ? "the parent" : undefined } : {}),
     });
-    this.workbench = new NativeWorkbench({ ...options,
+    this.workbench = new NativeWorkbench({ ...options, ...(build && this.build ? { build, buildController: this.build } : {}),
       terminal: () => this.terminal ? { columns: this.terminal.physical.columns, rows: this.terminal.rows } : undefined,
-      onFocusMain: () => { this.sidebar.focused = false; this.queue.focused = false; this.closeKeyDrawer(); },
+      onFocusMain: () => { this.sidebar.focused = false; this.queue.focused = false; this.blurDock(); this.closeKeyDrawer(); },
       canInteract: () => this.canInteract && !this.activeSelection?.(), changed: () => this.refresh() });
+    if (build) {
+      const sync = () => { this.build?.sync(); this.refresh(); };
+      this.unsubscribeBuild = [build.fleet.subscribe(sync), build.exit.subscribe(sync), build.board.subscribe(sync)];
+    }
   }
   mainView(transcript: Component, presentation?: () => InteractiveChatPresentation): Component { return this.workbench.mount(transcript, presentation); }
   wrap(physical: Terminal): PanelTerminal {
@@ -112,6 +163,7 @@ export class NativePanels implements PanelSurface {
   }
   /** The logical focus: Pi's editor always holds the TUI focus; the panels route keys by this. */
   get focus(): PanelFocus {
+    if (this.build?.dock.focused && this.build.dialog()) return "choice";
     return this.queue.focused ? "queue" : this.sidebar.focused ? "sidebar" : this.workbench.focused ? "main" : "composer";
   }
   layoutChanged(): void { this.refresh(); }
@@ -127,8 +179,10 @@ export class NativePanels implements PanelSurface {
   }
   dispose(): void {
     this.disposed = true;
+    for (const unsubscribe of this.unsubscribeBuild) unsubscribe();
+    this.build?.dispose();
     this.workbench.dispose();
-    this.ui = undefined;
+    this.ui = undefined; this.pi = undefined;
     this.requestRender = undefined;
     this.editorFocused = undefined;
     this.hasOverlay = undefined; this.activeSelection = undefined;
@@ -145,8 +199,14 @@ export class NativePanels implements PanelSurface {
     if (!this.drawerByKey) return;
     this.drawerByKey = false; this.sidebar.drawer = false;
   }
-  /** Back to Pi's editor: the main view, the sidebar and the queue give up the focus. */
+  /** Back to Pi's editor: the main view, the sidebar, the queue and a docked dialog give up the focus. */
   focusComposer(): void {
+    this.sidebar.focused = false; this.queue.focused = false; this.workbench.focused = false; this.blurDock();
+    this.closeKeyDrawer(); this.refresh();
+  }
+  private blurDock(): void { if (this.build) this.build.dock.focused = false; }
+  /** A docked build dialog takes the keys; it already marked itself focused. */
+  private focusChoice(): void {
     this.sidebar.focused = false; this.queue.focused = false; this.workbench.focused = false;
     this.closeKeyDrawer(); this.refresh();
   }
@@ -154,7 +214,7 @@ export class NativePanels implements PanelSurface {
   private sidebarKey(): void {
     if (this.sidebar.focused) this.sidebar.nextTab();
     else {
-      this.queue.focused = false; this.workbench.focused = false; this.sidebar.focused = true;
+      this.queue.focused = false; this.workbench.focused = false; this.blurDock(); this.sidebar.focused = true;
       if (!this.wide && !this.sidebar.drawer) { this.sidebar.drawer = true; this.drawerByKey = true; }
     }
     this.refresh();
@@ -162,7 +222,7 @@ export class NativePanels implements PanelSurface {
   /** Alt+↓: the queue takes the focus with the last editable item selected; false when nothing is editable. */
   private focusQueue(): boolean {
     if (!this.queue.focusLast()) return false;
-    this.sidebar.focused = false; this.workbench.focused = false; this.closeKeyDrawer(); this.refresh();
+    this.sidebar.focused = false; this.workbench.focused = false; this.blurDock(); this.closeKeyDrawer(); this.refresh();
     return true;
   }
   /** Ctrl+B: where the rail fits it hides or returns; elsewhere the collapsed row opens or closes its drawer. */
@@ -179,7 +239,11 @@ export class NativePanels implements PanelSurface {
     this.refresh();
   }
   private openSideTarget(target: SideTarget): void {
-    if (target.kind === "agent" || target.kind === "job") this.workbench.openAgents(target.key);
+    // A build child waiting for an answer docks its question; every other agent opens in the agents view.
+    const id = this.build && target.kind === "agent" ? childIdOf(target.key) : undefined;
+    const asking = id !== undefined && this.options.snapshot()?.build?.fleet.children.some(child => child.id === id && child.state === "needs");
+    if (id !== undefined && asking) this.build?.open("question", id);
+    else if (target.kind === "agent" || target.kind === "job") this.workbench.openAgents(target.key);
     else if (target.kind === "file") void this.workbench.openFile(target.path);
     else if (target.kind === "scope") void this.workbench.repository();
     else if (this.options.identity.task) this.workbench.setView("task");
@@ -197,37 +261,56 @@ export class NativePanels implements PanelSurface {
     const target = this.sidebar.click(hit, this.workbench.sideSource());
     if (target) this.openSideTarget(target);
   }
-  /** The collapsed sidebar row or its drawer (only without a rail), then the queue: one widget above the editor. */
+  /**
+   * One widget above the editor: a docked build dialog, else the collapsed sidebar row or its drawer (only
+   * without a rail), then the queue.
+   */
   private dock(): Component {
-    let sideRows = 0;
+    let choiceRowsShown = 0, sideRows = 0;
     let sideHits: ReadonlyMap<number, readonly SideHit[]> = new Map();
     return {
       render: width => {
         const rows = this.terminal?.rows ?? 24;
         this.queue.setCapacity(rows);
+        const queue = this.queue.render(width);
+        let choice: string[] = [];
+        if (this.build?.dialog()) {
+          this.build.dock.setLimit(choiceRows(rows, this.chromeRows(width, rows, queue.length)), rows < SHORT_ROWS);
+          choice = this.build.dock.render(width);
+        }
         let side: readonly string[] = [];
         sideHits = new Map();
-        if (!this.wide) {
+        if (!this.wide && !choice.length) {
           const source = this.workbench.sideSource();
           const frame = this.sidebar.drawer ? this.sidebar.drawerFrame(source, width, rows)
             : this.sidebar.row(source, width, chromeTier(this.terminal?.physical.columns ?? width) === "tiny");
           side = frame.lines; sideHits = frame.hits;
         }
-        sideRows = side.length;
-        return [...side, ...this.queue.render(width)];
+        choiceRowsShown = choice.length; sideRows = side.length;
+        return [...choice, ...side, ...queue];
       },
       handleMouse: event => {
-        if (event.y < sideRows) {
-          if (this.canInteract && plainClick(event)) this.sideClick(sideHits.get(event.y)?.find(hit => event.x >= hit.from && event.x < hit.to), false);
+        if (event.y < choiceRowsShown) return this.canInteract ? this.build?.dock.handleMouse(event) : { handled: true };
+        const y = event.y - choiceRowsShown;
+        if (y < sideRows) {
+          if (this.canInteract && plainClick(event)) this.sideClick(sideHits.get(y)?.find(hit => event.x >= hit.from && event.x < hit.to), false);
           return { handled: true };
         }
         if (!this.canInteract) return undefined;
-        const result = this.queue.handleMouse({ ...event, y: event.y - sideRows });
-        if (this.queue.focused) { this.sidebar.focused = false; this.workbench.focused = false; this.closeKeyDrawer(); this.refresh(); }
+        const result = this.queue.handleMouse({ ...event, y: y - sideRows });
+        if (this.queue.focused) { this.sidebar.focused = false; this.workbench.focused = false; this.blurDock(); this.closeKeyDrawer(); this.refresh(); }
         return result;
       },
       invalidate() {},
     };
+  }
+  /**
+   * Rows the rest of the screen keeps while a dialog is docked: header (one row when short or tiny), tabs,
+   * the composer's three rows, the status bar (two rows below 52 columns), the footer and the queue.
+   */
+  private chromeRows(width: number, rows: number, queueRows: number): number {
+    const header = rows < SHORT_ROWS || (this.terminal?.physical.columns ?? width) < COMPACT_COLUMNS ? 1 : 2;
+    return header + 1 + 3 + (width < 52 ? 2 : 1) + 1 + queueRows;
   }
   private queueState(): HintState["queue"] {
     const items = this.options.snapshot()?.queue ?? [];
@@ -283,12 +366,20 @@ export class NativePanels implements PanelSurface {
     }
     if (this.drag && matchesKey(data, "escape")) { const start = this.drag.start; this.drag = undefined; this.resizeRail(start); this.refresh(); return true; }
     if (!this.canInteract || mouse) return false;
+    // A docked build dialog is modal for keys: page keys scroll the open view and Ctrl+C stays Pi's.
+    if (this.focus === "choice") {
+      if (this.build?.dock.handleKey(data)) return true;
+      if (matchesKey(data, "pageUp") || matchesKey(data, "pageDown")) return this.workbench.scrollPage(data);
+      return !matchesKey(data, "ctrl+c");
+    }
     if (matchesKey(data, "f1")) { void this.showKeys(); return true; }
     if (matchesKey(data, "f6")) { this.sidebarKey(); return true; }
     if (matchesKey(data, "ctrl+b")) { this.toggleSidebar(); return true; }
     if (this.wide && (matchesKey(data, "alt+,") || matchesKey(data, "alt+."))) {
       this.resizeRail((this.terminal?.railWidth ?? this.sidebarWidth) + (matchesKey(data, "alt+.") ? 2 : -2)); return true;
     }
+    const receiverKey = this.build ? targetKey() : undefined;
+    if (receiverKey && matchesKey(data, receiverKey)) { this.build?.cycleTarget(); return true; }
     const focusKey = queueFocusKey();
     if (focusKey && matchesKey(data, focusKey) && this.focusQueue()) return true;
     if (this.queue.focused) {
@@ -314,6 +405,15 @@ export class NativePanels implements PanelSurface {
   }
   install(pi: ExtensionAPI, sdk: typeof Sdk): void {
     this.themeCtor = sdk.Theme;
+    this.pi = pi;
+    if (this.build) {
+      const entries = buildEntryRenderer(() => this.build);
+      for (const type of [BUILD_EXIT_ENTRY, BUILD_BOARD_ENTRY, BUILD_FINISH_ENTRY]) pi.registerMessageRenderer(type, entries);
+      // The latest `build_finish` call's card shows live exit progress; older cards read as superseded.
+      pi.on("tool_execution_start", event => {
+        if (event.toolName === "build_finish" && event.parentToolCallId === undefined) this.build?.noteFinish(event.toolCallId);
+      });
+    }
     pi.on("ui_prompt_start", () => { this.prompts++; this.refresh(); });
     pi.on("ui_prompt_end", () => { this.prompts = Math.max(0, this.prompts - 1); this.refresh(); });
     pi.on("session_start", (_event, ctx) => {
@@ -334,6 +434,17 @@ export class NativePanels implements PanelSurface {
             if (owner.canInteract && matchesKey(data, "f2")) { void owner.palette(); return; }
             // The dequeue binding pulls the owner's last queued input back above the draft.
             if (keys.getKeys("app.message.dequeue").some(key => matchesKey(data, key)) && owner.editQueued()) return;
+            // A child receives Enter; `/` commands always reach Pi, so `/finish` works with any receiver.
+            const build = owner.build;
+            if (build?.target() && !this.isShowingAutocomplete()) {
+              const text = this.getText();
+              if (keys.getKeys("tui.input.submit").some(key => matchesKey(data, key)) && text.trim() && !text.trimStart().startsWith("/")) {
+                void build.submit(text); return;
+              }
+              if (keys.getKeys("app.message.followUp").some(key => matchesKey(data, key))) {
+                owner.workbench.notice("Only the parent takes queued follow-ups", "warning"); return;
+              }
+            }
             // A message sent from another view returns to Chat, so its reply and any refusal notice show.
             if (owner.workbench.view !== "conversation" && this.getText().trim()
                 && keys.getKeys("tui.input.submit").some(key => matchesKey(data, key))) {
@@ -343,8 +454,9 @@ export class NativePanels implements PanelSurface {
           }
           protected renderTopBorder(width: number, hidden: number): string {
             if (hidden) return super.renderTopBorder(width, hidden);
-            const tiny = (owner.terminal?.physical.columns ?? width) < COMPACT_COLUMNS;
-            const label = pad(` ${tiny ? "Message" : composerTitle(owner.options.snapshot())} `, Math.max(0, width - 3)).trimEnd();
+            // The receiver stays at every width (it decides where Enter goes); the input disposition goes first.
+            const tiny = (owner.terminal?.physical.columns ?? width) < COMPACT_COLUMNS, target = owner.build?.composerTarget();
+            const label = pad(` ${composerTitle(tiny ? null : owner.options.snapshot(), target)} `, Math.max(0, width - 3)).trimEnd();
             return PANEL_MUTED + "──" + label + "─".repeat(Math.max(0, width - visibleWidth(label) - 2));
           }
           protected renderBottomBorder(width: number, hidden: number): string {
@@ -393,7 +505,9 @@ export class NativePanels implements PanelSurface {
         return {
           // The status bar, then one row of the focused surface's keys ending with F1.
           render: width => {
-            const status = statusBar(this.options.identity, this.options.snapshot(), data.getExtensionStatuses(), width);
+            const snapshot = this.options.snapshot(), cost = this.build ? buildCost(snapshot) : undefined;
+            const status = statusBar(this.options.identity, cost && snapshot ? { ...snapshot, cost: cost.total } : snapshot,
+              data.getExtensionStatuses(), width, cost?.partial ?? false);
             const context = this.footerContext();
             const row = footerRow(contextHints(this.workbench.hintState(context, this.queueState())),
               chromeTier(this.terminal?.physical.columns ?? width), width, footerBase(context));
@@ -410,6 +524,8 @@ export class NativePanels implements PanelSurface {
         };
       });
       void this.loadFiles();
+      for (const entry of this.posts.splice(0)) pi.sendMessage(entry, { triggerTurn: false });
+      this.build?.sync();
       this.refresh();
     });
     // Input from any source (editor, bridge submit_input, extensions) shows its turn in Chat.
@@ -447,6 +563,27 @@ export class NativePanels implements PanelSurface {
     void this.queue.editLast();
     return true;
   }
+  /** The cards' live source for the build tool renderers and conversation entries; undefined outside build. */
+  buildCards(): BuildCardSource | undefined { return this.build; }
+  /**
+   * `/finish`: the controller opens the exit choice, posts its result card and docks the dialog. False when the
+   * interactive panels are not running, so the host opens the exit itself.
+   */
+  finish(): boolean {
+    if (!this.build || !this.ui || this.disposed) return false;
+    this.build.openFinish();
+    return true;
+  }
+  /** `/board`: the Board view, when the interactive panels are running. */
+  showBoard(): void {
+    if (!this.build || !this.ui || this.disposed) return;
+    this.workbench.setView("board");
+  }
+  /** Conversation entries join without starting a turn; while the parent streams Pi adds them after its turn. */
+  private post(entry: BuildEntry<unknown>): void {
+    if (this.pi && this.ui) this.pi.sendMessage(entry, { triggerTurn: false });
+    else this.posts.push(entry);
+  }
   private async panelCommand(args: string): Promise<void> {
     const value = args.trim().toLowerCase();
     if (value === "history") { await this.workbench.openHistory(); return; }
@@ -454,9 +591,9 @@ export class NativePanels implements PanelSurface {
     if (value === "project") { await this.workbench.repository(); this.refresh(); return; }
     if (value === "refresh") { await this.workbench.inspection.refresh(true); await this.loadFiles(); if (this.workbench.view === "inbox") await this.workbench.inbox.refresh(); return; }
     if (value === "toggle") { this.toggleSidebar(); return; }
-    const view = PANEL_VIEWS[value];
+    const view = value === "board" && !this.build ? undefined : PANEL_VIEWS[value];
     if (view && (!TASK_VIEWS[view] || this.options.identity.task)) {
-      if (view === "agents") this.workbench.openAgents(); else this.workbench.setView(view);
+      if (view === "agents") this.workbench.openAgents(); else if (view === "conversation") this.workbench.chat(); else this.workbench.setView(view);
       this.refresh(); return;
     }
     if (view) { this.ui?.notify(`/panels ${value}: this session has no bound task`, "warning"); return; }
@@ -485,7 +622,7 @@ export class NativePanels implements PanelSurface {
       panel("agents", "Agents: helper calls and jobs", "F8"),
       panel("changes", "Changes", "F7"),
       ...(taskBound ? [panel("task", "Task", "F5"), panel("proof", "Proof", "F10")] : []),
-      panel("inbox", "Inbox", "F11"),
+      ...(this.build ? this.buildActions(action, ready) : [panel("inbox", "Inbox", "F11")]),
       panel("usage", "Usage"),
       panel("history", "Browse history"),
       ...(taskBound ? [panel("graph", "Lifecycle graph"), panel("timeline", "Lifecycle events")] : []),
@@ -524,6 +661,25 @@ export class NativePanels implements PanelSurface {
       }));
     return items;
   }
+  /** F2 in a build session: Board, the message receiver, open questions, Finish and board planning, each with its unavailable reason. */
+  private buildActions(action: (id: string, label: string, shortcut: string, run: HostAction["run"], disabled?: () => string | undefined) => HostAction,
+    ready: () => string | undefined): HostAction[] {
+    const build = this.build, ui = this.options.build;
+    if (!build || !ui) return [];
+    const receiver = targetKey(), unavailable = () => ready() ?? boardUnavailable(this.options.snapshot()?.build);
+    return [
+      action("/panels board", "Open board", "F10", () => this.panelCommand("board")),
+      action("build.target", "Change who receives the message", receiver ? keyLabel(receiver) : "", () => build.cycleTarget(),
+        () => ready() ?? (ui.fleet.snapshot().children.some(steerable) ? undefined : "no agent is running")),
+      ...build.questions().map(child => action(`build.answer.${child.id}`, `Answer ${plainLabel(child.id)}'s question`, "",
+        () => { build.open("question", child.id); })),
+      action("build.finish", "Finish: choose how this leaves the session", "", () => { build.openFinish(); }, () => ready() ?? build.finishUnavailable()),
+      action("build.plan.review", "Review the proposed board plan", "", () => { build.open("plan"); },
+        () => ready() ?? (ui.board.proposed() ? undefined : "no plan is waiting")),
+      action("build.plan.draft", "Plan board tasks from this conversation", "", () => build.planDraft(), unavailable),
+      action("build.board.refresh", "Refresh board status", "", () => ui.board.refresh(), unavailable),
+    ];
+  }
   private themeCtor: typeof Sdk.Theme | undefined;
   private updateDensity: (() => void) | undefined;
   private async palette(): Promise<void> {
@@ -547,7 +703,8 @@ export class NativePanels implements PanelSurface {
     if (!ui || !this.canInteract) return;
     const identity = this.options.identity;
     const groups = keyGroups({ taskBound: !!identity.task, answer: identity.role === "pm" || identity.role === "assistant",
-      jobs: this.options.snapshot()?.jobs != null, queueControl: this.queue.controllable, lifecycle: !!identity.task });
+      jobs: this.options.snapshot()?.jobs != null, queueControl: this.queue.controllable, lifecycle: !!identity.task,
+      ...(this.build ? { build: true } : {}) });
     this.overlay = "keys"; this.refresh();
     let data: string | undefined;
     try {

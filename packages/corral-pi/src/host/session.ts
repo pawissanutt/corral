@@ -46,6 +46,7 @@ import { persistedBases } from "../ui/review-store.ts";
 import type { PanelJob, PanelSnapshot } from "../ui/panels-view.ts";
 import { InspectorActivity } from "../ui/inspector.ts";
 import { corralRenderers } from "../ui/render.ts";
+import { buildToolRenderers } from "../ui/build/tool-renderers.ts";
 import { TodoLedger, installTodo } from "../ui/todo.ts";
 import { type DueContinuation, RequestContext, continuationText } from "./request.ts";
 import type { HostCapabilities, UiMode } from "./config.ts";
@@ -437,7 +438,7 @@ export class HostSession {
     }) : undefined;
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
       identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
-      ...(this.buildControls ? { build: this.buildControls.ui } : {}),
+      ...(this.buildControls ? { build: this.buildControls.ui, deliverBuildInput: (text: string) => this.deliverBuildInput(text) } : {}),
       queueControl: {
         enabled: () => this.queue.controlEnabled,
         edit: key => this.queue.edit(key),
@@ -1180,7 +1181,10 @@ export class HostSession {
         if (event.reason !== "reload") { this.unsubscribePanels?.(); this.panels?.dispose(); }
       });
     }
-    for (const tool of this.localTools) pi.registerTool(tool);
+    for (const tool of this.localTools) {
+      const cards = rich && this.buildControls?.tools.includes(tool) ? buildToolRenderers(tool.name, () => this.panels?.buildCards()) : undefined;
+      pi.registerTool(cards ? { ...tool, ...cards } : tool);
+    }
     // One execution check for model-issued and nested calls; a Code Mode child it refuses is
     // reported as denied with no effect.
     pi.on("tool_call", async (event) => {
@@ -1260,8 +1264,8 @@ export class HostSession {
     pi.on("session_before_fork", (_event, ctx) => refuse("forking the session", ctx.ui));
     if (this.buildControls) {
       const { exit, board } = this.buildControls;
-      pi.registerCommand("finish", { description: "Choose what happens to this build branch", handler: async () => { exit.open(); } });
-      pi.registerCommand("board", { description: "Refresh this build session's board tasks", handler: async () => { await board.refresh(); } });
+      pi.registerCommand("finish", { description: "Choose what happens to this build branch", handler: async () => { if (!this.panels?.finish()) exit.open(); } });
+      pi.registerCommand("board", { description: "Refresh this build session's board tasks", handler: async () => { await board.refresh(); this.panels?.showBoard(); } });
     }
     if (this.exportable()) {
       pi.registerCommand(EXPORT_COMMAND, {
