@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { COMPACT_COLUMNS, SHORT_ROWS } from "../src/ui/header.ts";
 import { EventLog } from "../src/bridge/events.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
@@ -14,9 +14,8 @@ import { writeFakeCorral } from "./support/fake-corral.ts";
 import { startPanelHost, type PanelHost } from "./support/panel-host.ts";
 import { nextEvent, within } from "./support/wait.ts";
 
-// T-688: stable reading, focus and compact paging in the production panel shell (real host, editor and transcript).
-const KEY = { f6: "\x1b[17~", esc: "\x1b", pageUp: "\x1b[5~", pageDown: "\x1b[6~", top: "\x1b[1;5H", bottom: "\x1b[1;5F",
-  down: "\x1b[B", left: "\x1b[D", right: "\x1b[C", ctrlB: "\x02" };
+// T-688: stable reading and focus in the production panel shell (real host, editor and transcript).
+const KEY = { pageUp: "\x1b[5~", pageDown: "\x1b[6~", top: "\x1b[1;5H", bottom: "\x1b[1;5F", ctrlB: "\x02" };
 const GRAPHEMES = "界面 👩‍💻 café ｗｉｄｅ";
 const paragraph = (index: number) => {
   const id = `P${String(index).padStart(2, "0")}`;
@@ -31,10 +30,13 @@ function rows(h: PanelHost): string[] {
   const screen = h.screen(), main = mainColumns(h);
   return Array.from({ length: screen.rows }, (_, row) => screen.slice(row, 0, main));
 }
-/** The paragraph a reader sees at the top of the transcript: the first non-blank row below the 2-row view bar. */
+/**
+ * The paragraph a reader sees at the top of the transcript: the first non-blank row below the
+ * header and tab rows. The header has one row on short or compact terminals and two otherwise.
+ */
 function readingAnchor(h: PanelHost): number {
   const lines = rows(h);
-  let top = 2;
+  let top = (h.physical.rows < SHORT_ROWS || h.physical.columns < COMPACT_COLUMNS ? 1 : 2) + 1;
   while (top < lines.length && !lines[top]?.trim()) top++;
   for (let row = top; row < lines.length; row++) {
     const marker = /P(\d\d)(E| )/.exec(lines[row] ?? "");
@@ -51,22 +53,8 @@ function expectIntact(h: PanelHost): void {
   const screen = h.screen();
   expect(screen.overflow).toBe(0);
   if (!h.panels.wide) return;
-  for (let row = 0; row < screen.rows; row++) {
-    // The separator column never carries main-pane text.
-    expect(screen.slice(row, 105, 106)).toBe(" ");
-    expect(" ▌").toContain(screen.slice(row, 106, 107)); // nav rows: blank or the current-view marker
-  }
-}
-function pager(h: PanelHost): { row: number; first: number; total: number; previous: number; next: number } | undefined {
-  const screen = h.screen();
-  for (let row = 0; row < screen.rows; row++) {
-    const line = screen.slice(row, 0, screen.columns);
-    const match = /‹ (\d+)(?:–\d+)?\/(\d+) ›/.exec(line);
-    if (!match) continue;
-    const previous = visibleWidth(line.slice(0, match.index));
-    return { row, first: Number(match[1]), total: Number(match[2]), previous, next: previous + visibleWidth(match[0]) - 1 };
-  }
-  return undefined;
+  // The separator column never carries main-pane text.
+  for (let row = 0; row < screen.rows; row++) expect(screen.slice(row, 105, 106)).toBe(" ");
 }
 const click = (h: PanelHost, col: number, row: number) => {
   h.physical.send(`\x1b[<0;${col + 1};${row + 1}M`); h.physical.send(`\x1b[<0;${col + 1};${row + 1}m`);

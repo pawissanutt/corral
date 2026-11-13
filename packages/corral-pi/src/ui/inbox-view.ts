@@ -4,20 +4,13 @@ import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Text, matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { Role } from "../roles/types.ts";
 import { DecisionInbox, inboxIdentity, type InboxItem } from "./decision-inbox.ts";
-import { ago, bold, chip, chipRows, clock, field, hintRow, listRow, sectionRule, toneColor, wrap, type Tone } from "./panel-parts.ts";
+import { ago, bold, chip, chipRows, clock, field, listRow, sectionRule, toneColor, wrap, type Tone } from "./panel-parts.ts";
 import { splitRow } from "./panels-chrome.ts";
 import { box, pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_MUTED, PANEL_RULE, PANEL_TEXT, PANEL_WARNING, RESET } from "./panels-view.ts";
 import { LIST_WIDTH, SPLIT_MIN } from "./proof-view.ts";
 
 const fit = (text: string, width: number) => stripTerminalSequences(truncateToWidth(plainLabel(text), Math.max(0, width), "…"));
 const stateOf = (item: InboxItem): readonly [glyph: string, tone: Tone] => item.pending ? ["⚑", "warn"] : ["·", "none"];
-
-/** Key hints for the bottom row, shortening from full labels to bare keys before anything is cut. */
-export function inboxHint(width: number, history: boolean, legend: boolean): string {
-  return hintRow([["j/k", "item", "item"], ["Enter", "inspect", "inspect"], ["a", "answer flow (not sent)", "answer"],
-    ["h", history ? "pending only" : "history", history ? "pending" : "history"], ["/", "filter", "filter"], ["r", "reread", "reread"],
-    ["?", legend ? "hide legend" : "legend", legend ? "hide" : "legend"]], width);
-}
 
 function detail(item: InboxItem, width: number): string[] {
   const [glyph, tone] = stateOf(item);
@@ -40,9 +33,11 @@ function detail(item: InboxItem, width: number): string[] {
 export class InboxView implements Component {
   private ui: ExtensionUIContext | undefined; private busy = false; private disposed = false;
   private hits = new Map<number, string>(); readonly rows = new Map<string, number>();
+  /** `notice` shows a refusal (closed, stale or out-of-scope item) where the panels show their feedback. */
   constructor(readonly store: DecisionInbox, private readonly role: Role, private readonly project: string,
     private readonly canInteract: () => boolean, private readonly changed: () => void,
-    private readonly focus: () => void, private readonly legend: () => boolean = () => false) {}
+    private readonly focus: () => void, private readonly legend: () => boolean = () => false,
+    private readonly notice: (text: string) => void = () => {}) {}
   bind(ui: ExtensionUIContext): void { this.ui = ui; }
   render(width: number): string[] {
     const lines: string[] = []; this.hits.clear(); this.rows.clear();
@@ -124,7 +119,7 @@ export class InboxView implements Component {
       const flow = answerFlow ? await this.store.answerFlow(captured, this.role, this.project) : undefined;
       if (this.disposed) return;
       await this.sheet(ui, captured, flow);
-    } catch (error) { if (!this.disposed) ui.notify(plainLabel(error instanceof Error ? error.message : String(error)), "warning"); }
+    } catch (error) { if (!this.disposed) this.notice(plainLabel(error instanceof Error ? error.message : String(error))); }
     finally { this.busy = false; }
   }
   private async sheet(ui: ExtensionUIContext, item: InboxItem, flow?: string): Promise<void> {
@@ -140,8 +135,8 @@ export class InboxView implements Component {
         render(width) {
           const height = Math.max(5, Math.floor(tui.terminal.rows * 0.8));
           const rows = source.flatMap(line => new Text(line.replace(/[\u0000-\u001f\u007f-\u009f]/g, " "), 0, 0).render(Math.max(1, width - 4)));
-          max = Math.max(0, rows.length - height + 3); offset = Math.min(offset, max);
-          return box(flow ? "Established answer flow · NOT SENT" : "Decision inspection · READ ONLY", [...rows.slice(offset, offset + height - 3), "↑/↓ PgUp/PgDn scroll · Esc close"], width, height, true);
+          max = Math.max(0, rows.length - height + 2); offset = Math.min(offset, max);
+          return box(flow ? "Established answer flow · NOT SENT" : "Decision inspection · READ ONLY", rows.slice(offset, offset + height - 2), width, height, true);
         },
         handleInput(data) {
           if (matchesKey(data, "escape") || data === "q") { done(); return; }

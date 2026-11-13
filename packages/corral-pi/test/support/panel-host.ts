@@ -7,6 +7,7 @@ import { loadModules } from "../../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../../src/host/restrict.ts";
 import { HostSession, authContext } from "../../src/host/session.ts";
 import { CorralClient, sha256Hex } from "../../src/tools/corral.ts";
+import type { CapabilitySet } from "../../src/roles/types.ts";
 import type { NativePanels } from "../../src/ui/panels.ts";
 import { buildFixtureInstall } from "./fixture-install.ts";
 import { writeFakeCorral } from "./fake-corral.ts";
@@ -33,7 +34,8 @@ export interface PanelHost {
 }
 
 /** Real HostSession + InteractiveMode + editor through PanelTerminal; only provider/control-plane I/O is faked. */
-export async function startPanelHost(extend?: (...args: Parameters<Extend>) => void): Promise<PanelHost> {
+export async function startPanelHost(extend?: (...args: Parameters<Extend>) => void,
+  options: { readonly capabilities?: CapabilitySet } = {}): Promise<PanelHost> {
   const work = mkdtempSync(join(tmpdir(), "corral-panel-shell-")), assets = buildFixtureInstall();
   const oldFetch = globalThis.fetch, oldState = process.env.PI_CODING_AGENT_DIR;
   let host: HostSession | undefined;
@@ -56,6 +58,7 @@ export async function startPanelHost(extend?: (...args: Parameters<Extend>) => v
     const corral = writeFakeCorral(work);
     const client = new CorralClient({ corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "" });
     host = await HostSession.create({ sdk, identity, cwd: work, agentDir: join(work, "agent"), model: "gpt-6.1-sol", modules, client, events, network,
+      ...(options.capabilities ? { capabilities: options.capabilities } : {}),
       sessionManager: sdk.SessionManager.create(work, join(work, "sessions")) });
     await host.hello("n".repeat(64), "fixture-pane", sha256Hex("c".repeat(64)));
     const panels = host.panels;

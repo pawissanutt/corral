@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { ReviewStore, sessionFiles, fileStatus } from "./review-store.ts";
 import { readPanelFiles, readPanelDiff, parseNumstat } from "./panels-git.ts";
-import { activityLines } from "./activity-view.ts";
 import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
 import { Text, stripTerminalSequences, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { createChatViewport } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/chat-viewport.js";
@@ -20,7 +19,7 @@ test("public SDK body seam switches main views while retaining the actual transc
     expect(supplied).toBe(viewport.transcript);
     const screen = () => stripTerminalSequences(renderLayoutFrame(viewport.root, 80, 24, () => {}).lines.join("\n"));
     expect(screen()).toContain("REAL_TRANSCRIPT"); expect(screen()).toContain("REAL_EDITOR_DRAFT");
-    wb.setView("activity"); expect(screen()).toContain("snapshot disconnected"); expect(screen()).not.toContain("REAL_TRANSCRIPT"); expect(screen()).toContain("REAL_EDITOR_DRAFT");
+    wb.setView("agents"); expect(screen()).toContain("unavailable from this host"); expect(screen()).not.toContain("REAL_TRANSCRIPT"); expect(screen()).toContain("REAL_EDITOR_DRAFT");
     wb.setView("conversation"); expect(screen()).toContain("REAL_TRANSCRIPT");
   } finally { wb.dispose(); }
 });
@@ -119,16 +118,4 @@ test("numstat retains binary/rename identities without fabricated numeric zero",
   expect(rows.get("src/a.ts")).toEqual({ added: 2, removed: 3 });
   expect(rows.get("image.png")).toEqual({ added: null, removed: null });
   expect(rows.get("new.ts")).toEqual({ added: 1, removed: 0 });
-});
-test("activity is explicit about unavailable data and local monitor observations, not canonical success", () => {
-  expect(activityLines(null, 0).join("\n")).toContain("unavailable");
-  const snapshot: PanelSnapshot = { bound: true, model: "fixture", effort: "high", streaming: false, context: undefined, tokens: 0,
-    tools: [], contextFiles: [], skills: [], ledger: null, ledgerStale: false, steering: 0, followUps: 0, auxiliary: null,
-    jobs: [{ job: "j1-1", state: "running", detail: { job: "j1-1", command: "build", state: "running", startedAt: 1000, endedAt: undefined,
-      exitCode: null, signal: null, groupClear: false, bytes: 30, truncated: false, tail: "READY\n", monitorAttempts: 2,
-      watches: [{ wait: "w1", pattern: "READY", armed: true, matched: "READY", reportQueued: true, deadline: new Date(5000).toISOString() }] } }] };
-  const text = activityLines(snapshot, 0, 3000).join("\n");
-  expect(text).toContain("2s elapsed"); expect(text).toContain("match observed"); expect(text).toContain("settlement unknown");
-  expect(text).toContain("2 attempts (not active-wait count)"); expect(text).not.toContain("100%");
-  expect(activityLines({ ...snapshot, jobs: null }, 0).join("\n")).toContain("runtime unavailable");
 });

@@ -465,7 +465,7 @@ index 6fc6016..502e70c 100644
      terminal?: Terminal;
 +    /** Optional body composition; retains the original transcript and fixed input dock. */
 +    mainView?: (transcript: Component, presentation: () => InteractiveChatPresentation) => Component;
-+    /** Count-only pending input; never restore external notices into the owner's editor. */
++    /** Pi shows no queued input and never restores it into the owner's editor; the host owns the queue. */
 +    readOnlyQueue?: boolean;
 +}
 +/** Live, presentation-only chat surface owned by this same interactive mode. */
@@ -545,21 +545,16 @@ index d4e4b09..0ee0a45 100644
          const compactionSteering = this.compactionQueuedMessages
              .filter((msg) => msg.mode === "steer")
              .map((msg) => msg.text);
-@@ -4010,6 +4023,13 @@ export class InteractiveMode {
+@@ -4010,6 +4023,8 @@ export class InteractiveMode {
              this.pendingMessagesContainer.addChild(component);
          }
          const { steering: steeringMessages, followUp: followUpMessages } = this.getAllQueuedMessages();
-+        if (this.options.readOnlyQueue) {
-+            if (steeringMessages.length || followUpMessages.length) {
-+                this.pendingMessagesContainer.addChild(new TruncatedText(theme.fg("dim",
-+                    `${steeringMessages.length} steering · ${followUpMessages.length} follow-ups · queued, not execution`), 1, 0));
-+            }
-+            return;
-+        }
++        // The host lists queued input itself, so the pending area stays empty.
++        if (this.options.readOnlyQueue) return;
          if (steeringMessages.length > 0 || followUpMessages.length > 0) {
              this.pendingMessagesContainer.addChild(new Spacer(1));
              for (const message of steeringMessages) {
-@@ -4026,6 +4046,13 @@ export class InteractiveMode {
+@@ -4026,6 +4041,13 @@ export class InteractiveMode {
          }
      }
      restoreQueuedMessagesToEditor(options) {
@@ -573,12 +568,12 @@ index d4e4b09..0ee0a45 100644
          const { steering, followUp } = this.clearAllQueues();
          const allQueued = [...steering, ...followUp];
          if (allQueued.length === 0) {
-@@ -5919,7 +5946,7 @@ export class InteractiveMode {
+@@ -5919,7 +5941,7 @@ export class InteractiveMode {
  | \`${externalEditor}\` | Edit message in external editor |
  | \`${copyMessage}\` | Copy selection or last assistant message |
  | \`${followUp}\` | Queue follow-up message |
 -| \`${dequeue}\` | Restore queued messages |
-+${this.options.readOnlyQueue ? "| Queue | Read-only counts; no edit, cancel or reorder |" : `| \`${dequeue}\` | Restore queued messages |`}
++${this.options.readOnlyQueue ? "| Queue | Listed and edited by the host, not here |" : `| \`${dequeue}\` | Restore queued messages |`}
  | \`${pasteImage}\` | Paste files on macOS, images, or text from clipboard |
  | \`/\` | Slash commands |
  | \`!\` | Run bash command |

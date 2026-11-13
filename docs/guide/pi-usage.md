@@ -1,6 +1,6 @@
 # Pi usage inspection
 
-Open **Usage** in the main navigation or `/panels usage`. This is read-only and stays
+Open **Usage** from F2 actions or `/panels usage` (see [native panels](pi-panels.md)). This is read-only and stays
 bound to the launched task/run even when the Files repository changes. F9 returns to
 the same conversation; the editor is not replaced. Scroll with arrows, paging or wheel.
 `r` rereads canonical stored accounting; it does not run a collector or contact a provider.

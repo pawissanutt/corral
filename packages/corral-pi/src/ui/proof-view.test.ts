@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { InspectionStore, type Inspection } from "./inspection.ts";
-import { proofHint, renderProof, proofSplit, LIST_WIDTH } from "./proof-view.ts";
+import { renderProof, proofSplit, LIST_WIDTH } from "./proof-view.ts";
 import { proofItems } from "./proof-parts.ts";
 import { PANEL_SELECTED } from "./panels-view.ts";
 
@@ -69,7 +69,6 @@ test("Proof sections open in the detail pane and invalid proof stays inline", as
   expect(open).toContain("▾ Review findings"); expect(open).toContain("~ changes"); expect(open).toContain("Historical finding");
   const invalid = proofSplit(store, 1, 140, false, new Set()).lines.map(strip).join("\n");
   expect(invalid).toContain("! evidence_missing:C2"); expect(invalid).toContain("· missing");
-  expect(visibleWidth(proofHint(52, false))).toBe(52);
   for (const width of [52, 80]) {
     const narrow = renderProof(store, 1, width, false, new Set());
     const rows = narrow.lines.map(strip);
@@ -82,7 +81,6 @@ test("Proof sections open in the detail pane and invalid proof stays inline", as
   const section = renderProof(store, 2, 80, false, new Set(["findings"])).lines.map(strip);
   expect(section.find(row => row.includes("‹"))).toMatch(/^ ‹ MORE 1\/3 › ▾ Review findings/);
   expect(section).toContain("  Historical finding");
-  expect(strip(proofHint(52, false)).trim()).toBe("j/k Enter F7 ?");
   store.dispose();
 });
 

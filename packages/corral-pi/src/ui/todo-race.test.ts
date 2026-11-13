@@ -41,6 +41,7 @@ for (const [name, outcome] of [
     const panels = new NativePanels({ identity, cwd: ".", snapshot });
     const terminal = new RecordingTerminal();
     panels.wrap(terminal).start(() => {}, () => {});
+    panels.sidebar.tab = "plan";
     const captured: string[] = [];
     const render = (label: string) => {
       terminal.resize(140, 24);

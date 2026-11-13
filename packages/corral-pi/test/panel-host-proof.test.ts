@@ -93,11 +93,11 @@ test("panel layout streams a held reply and tool output, keeps one binding throu
     expect(count("turn_ended")).toBe(0);
     expect(binding().turn).toEqual({ current: 1, open: true });
 
-    // Inspection while the reply is held: Activity, then Conversation again.
+    // Inspection while the reply is held: Agents, then Chat again.
     mark = physical.writes.length;
     physical.send("\x1b[19~");
-    expect(panels.workbench.view).toBe("activity");
-    await physical.until("Message main conversation", mark); // the composer title while Activity is shown
+    expect(panels.workbench.view).toBe("agents");
+    await physical.untilVisible("helper calls and jobs", mark); // the agents view replaces the transcript
     mark = physical.writes.length;
     physical.send("\x1b[20~");
     expect(panels.workbench.view).toBe("conversation");

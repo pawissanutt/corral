@@ -18,6 +18,7 @@ const TIGHT_COLUMNS = 84;
 const POLICY_CELLS = 6;
 const OFF = "Queue control is off in this session";
 const GONE = "That input already left the queue";
+const STUCK = "That input cannot move there";
 
 /** Item rows the dock may use: 5, 3 below 28 terminal rows, 2 below 20. */
 export function queueCapacity(rows: number): number {
@@ -32,6 +33,15 @@ function fit(text: string, width: number): string {
   if (width <= 0) return "";
   const out = visibleWidth(text) > width ? truncateToWidth(text, width - 1, "").replaceAll(RESET, "") + "…" : text;
   return out + " ".repeat(Math.max(0, width - visibleWidth(out)));
+}
+
+/**
+ * The host moves an item only by swapping it with the listed item next to it, and only when that
+ * neighbour is the owner's and has the same policy: steer and follow-up items never cross.
+ */
+function movable(items: readonly QueuedItem[], key: string, delta: -1 | 1): boolean {
+  const at = items.findIndex(item => item.key === key), self = items[at], other = items[at + delta];
+  return at >= 0 && !!self?.editable && !!other?.editable && other.policy === self.policy;
 }
 
 export class QueueDock implements Component {
@@ -95,9 +105,9 @@ export class QueueDock implements Component {
     if (current !== undefined && current < this.offset) this.offset = current;
     else if (current !== undefined && current >= this.offset + shown) this.offset = current - shown + 1;
     this.offset = Math.max(0, Math.min(this.offset, editable.length - shown));
-    const lines = [this.header(items.length, editable.length - shown, tight, width)];
+    const lines = [this.header(items, editable.length - shown, tight, width)];
     for (let at = this.offset; at < this.offset + shown; at++) {
-      lines.push(this.row(editable[at]!, at, editable.length, tight, width, lines.length));
+      lines.push(this.row(editable[at]!, at, items, tight, width, lines.length));
     }
     const notices = items.length - editable.length;
     if (notices) {
@@ -161,7 +171,7 @@ export class QueueDock implements Component {
   private async operate(key: string, op: QueueOp): Promise<boolean> {
     if (this.busy) return false;
     const editable = this.editable(), at = editable.findIndex(item => item.key === key);
-    if (at < 0 || (typeof op === "number" && !editable[at + op])) return false;
+    if (at < 0 || (typeof op === "number" && !movable(this.host.items(), key, op))) return false;
     const control = this.host.control();
     if (!control?.enabled()) { this.host.notice(OFF, "warning"); return false; }
     const next = editable[at + 1]?.key ?? editable[at - 1]?.key;
@@ -184,28 +194,34 @@ export class QueueDock implements Component {
       this.host.notice("Removed queued input · not sent", "text");
     } else if (result === true) {
       this.selected = key;
+    } else if (!control.enabled()) {
+      this.host.notice(OFF, "warning");
     } else {
-      this.host.notice(control.enabled() ? GONE : OFF, "warning");
+      const listed = this.editable().some(item => item.key === key);
+      this.host.notice(typeof op === "number" && listed ? STUCK : GONE, "warning");
     }
     this.host.changed();
     return result !== undefined && result !== false;
   }
 
-  private header(total: number, hidden: number, tight: boolean, width: number): string {
+  private header(items: readonly QueuedItem[], hidden: number, tight: boolean, width: number): string {
     const inner = Math.max(0, width - 4);
     const more = hidden > 0 && `+${hidden} more`.length + 2 < inner ? `+${hidden} more` : "";
-    const lead = tight ? `QUEUE · ${total}` : `QUEUE · ${total} waiting · each runs when the agent is next idle`;
+    // Steer items reach the running turn at its next step, so the idle clause holds only for follow-ups.
+    const idle = items.every(item => item.policy === "follow_up") ? " · each runs when the agent is next idle" : "";
+    const lead = tight ? `QUEUE · ${items.length}` : `QUEUE · ${items.length} waiting${idle}`;
     return "  " + PANEL_MUTED + fit(lead, inner - (more ? more.length + 2 : 0)) + (more ? "  " + more : "") + "  " + RESET;
   }
 
   /** `▌ n  steer  text … edit  ↑  ↓  ×`; hit ranges are measured while the row is drawn. */
-  private row(item: QueuedItem, at: number, count: number, tight: boolean, width: number, line: number): string {
+  private row(item: QueuedItem, at: number, items: readonly QueuedItem[], tight: boolean, width: number, line: number): string {
     const selected = this.focused && item.key === this.selected;
     const indexCells = tight ? 2 : 3, gap = tight ? 1 : 2;
+    const up = movable(items, item.key, -1), down = movable(items, item.key, 1);
     const parts: readonly { readonly glyph: string; readonly op: QueueOp; readonly enabled: boolean; readonly color: string }[] = [
       { glyph: tight ? "✎" : "edit", op: "edit", enabled: true, color: PANEL_BLUE },
-      { glyph: "↑", op: -1, enabled: at > 0, color: at > 0 ? PANEL_TEXT : PANEL_MUTED },
-      { glyph: "↓", op: 1, enabled: at < count - 1, color: at < count - 1 ? PANEL_TEXT : PANEL_MUTED },
+      { glyph: "↑", op: -1, enabled: up, color: up ? PANEL_TEXT : PANEL_MUTED },
+      { glyph: "↓", op: 1, enabled: down, color: down ? PANEL_TEXT : PANEL_MUTED },
       { glyph: "×", op: "remove", enabled: true, color: PANEL_ERROR },
     ];
     const controlCells = parts.reduce((sum, part) => sum + visibleWidth(part.glyph), 0) + gap * (parts.length - 1);

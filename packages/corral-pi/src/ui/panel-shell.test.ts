@@ -2,8 +2,8 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { stripTerminalSequences, Text, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
+import { stripTerminalSequences, Text, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { getLayoutBoxesAt, renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
 import { NativePanels } from "./panels.ts";
 import { anchoredRow } from "./reading-anchor.ts";
 import type { PanelSnapshot } from "./panels-view.ts";
@@ -18,7 +18,6 @@ const snapshot: PanelSnapshot = {
 };
 const work = mkdtempSync(join(tmpdir(), "corral-panel-shell-unit-"));
 afterAll(() => rmSync(work, { recursive: true, force: true }));
-const KEY = { f6: "\x1b[17~", esc: "\x1b", down: "\x1b[B", pageUp: "\x1b[5~", pageDown: "\x1b[6~", bottom: "\x1b[1;5F", top: "\x1b[1;5H", ctrlB: "\x02" };
 
 function panels(columns: number, rows: number) {
   const native = new NativePanels({ identity, cwd: work, snapshot: () => snapshot });
@@ -27,21 +26,25 @@ function panels(columns: number, rows: number) {
   return { native, physical };
 }
 const plain = (lines: readonly string[]) => lines.map(line => stripTerminalSequences(line));
-function pagerOf(line: string): { first: number; total: number; from: number; to: number } | undefined {
-  const text = stripTerminalSequences(line), match = /‹ (\d+)(?:–\d+)?\/(\d+) ›/.exec(text);
-  if (!match) return undefined;
-  const from = visibleWidth(text.slice(0, match.index));
-  return { first: Number(match[1]), total: Number(match[2]), from, to: from + visibleWidth(match[0]) };
+/** A plain left click at frame cell (x, y), delivered the way the layout routes it. */
+function press(root: Component, width: number, height: number, x: number, y: number): void {
+  const frame = renderLayoutFrame(root, width, height, () => {});
+  const event: TuiMouseEvent = { type: "click", button: "left", x, y, screenX: x, screenY: y, width, height, shift: false, alt: false, ctrl: false, clickCount: 1 };
+  for (const box of getLayoutBoxesAt(frame, x, y)) {
+    if (box.component.handleMouse?.({ ...event, x: x - box.rect.x, y: y - box.rect.y, width: box.rect.width, height: box.rect.height })) return;
+  }
 }
-const click = (x: number, y: number): TuiMouseEvent => ({ type: "click", button: "left", x, y, screenX: x, screenY: y, width: 80, height: 1, shift: false, alt: false, ctrl: false });
 
 test("a non-Git launch directory reads as an explicit, readable unavailable state", async () => {
   const { native } = panels(140, 46);
   await native.loadFiles();
   expect(native.workbench.review.error).toBe("Not a Git repository");
-  const changes = native.workbench.files().map(row => row.text).join("\n");
-  expect(changes).toContain("Not a Git repository"); expect(changes).not.toContain("Command failed");
-  expect(plain(native.renderSidebar(34, 46)).find(line => line.includes("Changes"))).toContain("!");
+  native.sidebar.tab = "files";
+  const files = plain(native.renderSidebar(34, 46)).join("\n");
+  expect(files).toContain("Git unavailable"); expect(files).toContain("Not a Git repository"); expect(files).not.toContain("Command failed");
+  const root = native.workbench.mount(new Text("transcript", 0, 0));
+  const tabs = plain(renderLayoutFrame(root, 105, 46, () => {}).lines).find(line => line.includes("F7"));
+  expect(tabs).toMatch(/Changes\s+!/);
   native.dispose();
 });
 
@@ -60,30 +63,27 @@ test("re-wrapped transcripts keep the reader on the same block and depth, includ
   expect(anchoredRow(["a", "", "b"], 2, ["a", "b"])).toBe(1);
 });
 
-test("the main view bar keeps its focused hints and click targets at the minimum width", () => {
+test("the tab row opens Agents and Changes by click at the minimum width, with no sub-row and no hint text", () => {
   const { native } = panels(52, 24);
   const root = native.workbench.mount(new Text("transcript", 0, 0));
   native.workbench.setView("changes");
   for (const width of [34, 52, 104]) {
-    const bar = stripTerminalSequences(renderLayoutFrame(root, width, 24, () => {}).lines[0] ?? "");
-    expect(visibleWidth(bar)).toBeLessThanOrEqual(width);
-    expect(bar).toContain("Esc");
-    expect(bar).toContain("Enter");
-    expect(bar).not.toContain("…");
-    const click = (row: string, y: number, label: string): TuiMouseEvent => ({ type: "click", button: "left", x: row.indexOf(label) + 1, y,
-      screenX: row.indexOf(label) + 1, screenY: y, width, height: 24, shift: false, alt: false, ctrl: false, clickCount: 1 });
-    root.handleMouse?.(click(bar, 0, width < 64 ? " U " : " Usage "));
-    expect(native.workbench.view).toBe("usage");
-    root.handleMouse?.(click(bar, 0, width < 64 ? " A " : " Activity "));
-    expect(native.workbench.view).toBe("activity");
-    // Graph and Timeline are Activity sub-tabs on the second row.
-    const sub = stripTerminalSequences(renderLayoutFrame(root, width, 24, () => {}).lines[1] ?? "");
-    expect(visibleWidth(sub)).toBeLessThanOrEqual(width);
-    root.handleMouse?.(click(sub, 1, " Graph "));
-    expect(native.workbench.view).toBe("graph");
-    root.handleMouse?.(click(sub, 1, " Timeline "));
-    expect(native.workbench.view).toBe("timeline");
-    native.workbench.setView("changes");
+    const lines = plain(renderLayoutFrame(root, width, 24, () => {}).lines);
+    const y = lines.findIndex(line => line.includes("F9"));
+    const row = lines[y] ?? "";
+    expect(y).toBeGreaterThanOrEqual(0);
+    expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+    expect(row).not.toMatch(/\bEsc\b|\bEnter\b|esc chat/);
+    expect(lines.join("\n")).not.toMatch(/\bGraph\b|\bTimeline\b|\bActivity\b|\bUsage\b/);
+    // Only the open tab keeps its label at the narrowest widths, so positions are read after each click.
+    const at = (key: string) => {
+      const current = plain(renderLayoutFrame(root, width, 24, () => {}).lines)[y] ?? "";
+      return visibleWidth(current.slice(0, current.indexOf(key))) + 1;
+    };
+    press(root, width, 24, at("F8"), y);
+    expect(native.workbench.view).toBe("agents");
+    press(root, width, 24, at("F7"), y);
+    expect(native.workbench.view).toBe("changes");
   }
   native.dispose();
 });

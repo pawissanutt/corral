@@ -1,8 +1,7 @@
-// One owner per ambient datum: model in the composer; role, context window and alerts in the bottom bar.
-import { basename } from "node:path";
+// One owner per ambient datum: role, binding, session cost, context window and alerts in the status bar.
 import { stripTerminalSequences, visibleWidth, Text } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
-import { STATUS_BINDING, STATUS_ALERTS, target } from "./chrome.ts";
+import { STATUS_BINDING, STATUS_ALERTS } from "./chrome.ts";
 import {
   pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_MUTED, PANEL_TEXT, PANEL_RULE, PANEL_SUCCESS, PANEL_WARNING, PANEL_ERROR, RESET,
   type PanelSnapshot,
@@ -18,46 +17,6 @@ export function contextLabel(snapshot: PanelSnapshot | null): string {
   if (usage?.tokens == null) return "Context unavailable";
   const compact = (n: number) => n >= 1000 ? `${Number((n / 1000).toFixed(1))}k` : String(n);
   return `${compact(usage.tokens)}/${compact(usage.contextWindow)} · ${usage.percent == null ? "context usage unknown" : Math.round(usage.percent) + "% context"}`;
-}
-export function panelHeader(identity: HostIdentity, cwd: string, branch: string | null,
-  snapshot: PanelSnapshot | null, width: number): string[] {
-  return [
-    PANEL_BG + splitRow(PANEL_BLUE + "corral / " + plainLabel(target(identity)),
-      PANEL_MUTED + (!snapshot ? "Unavailable" : snapshot.streaming ? "Working" : "Idle"), width) + RESET,
-    PANEL_BG + PANEL_MUTED + pad(`${identity.role.replaceAll("_", " ").toUpperCase()} · g${identity.generation} · ` +
-      (snapshot?.bound ? "Bound to Corral · " : "Unbound · ") +
-      plainLabel(basename(cwd)) + (branch ? ` (${plainLabel(branch)})` : ""), width) + RESET,
-  ];
-}
-interface ComposerHit { readonly from: number; readonly to: number }
-export function composerLayout(snapshot: PanelSnapshot | null, width: number, hidden = 0, sendHint?: string): {
-  readonly line: string; readonly model?: ComposerHit; readonly effort?: ComposerHit;
-} {
-  const full = snapshot?.model;
-  const model = full ? plainLabel(full.slice(full.indexOf("/") + 1)) + " ▾" : "Model unavailable";
-  const effort = snapshot ? ` · ${plainLabel(snapshot.effort)}${snapshot.effortAvailable ? " ↻" : ""}` : "";
-  const hint = hidden > 0 ? `↓ ${hidden} more` : sendHint ?? (snapshot?.streaming ? "Enter steer" : "Enter send");
-  const room = Math.max(0, width - 6 - visibleWidth(hint) - visibleWidth(effort));
-  const label = pad(model, Math.min(room, visibleWidth(model))).trimEnd();
-  const modelEnd = 2 + visibleWidth(label), effortEnd = modelEnd + visibleWidth(effort);
-  return {
-    line: PANEL_MUTED + "  " + PANEL_TEXT + splitRow(label + PANEL_MUTED + effort,
-      PANEL_MUTED + hint, Math.max(0, width - 4)) + PANEL_MUTED + "  ",
-    ...(full && label ? { model: { from: 2, to: modelEnd } } : {}),
-    ...(snapshot?.effortAvailable && effortEnd < width - 2 ? { effort: { from: modelEnd, to: effortEnd } } : {}),
-  };
-}
-export function composerBar(snapshot: PanelSnapshot | null, width: number, hidden = 0): string {
-  return composerLayout(snapshot, width, hidden).line;
-}
-export function composerTitle(snapshot: PanelSnapshot | null): string {
-  const input = snapshot?.input;
-  if (!input) return "Message";
-  const meaning = input.disposition === "pending" ? "admission unknown"
-    : input.disposition === "queued" ? `${input.policy ?? "input"}; not execution`
-    : input.disposition === "started" ? "not completion"
-    : input.disposition === "handled" ? "consumed; not execution" : input.reason ?? "not admitted";
-  return `Last typed input: ${input.disposition} · ${plainLabel(meaning)}`;
 }
 const compact1 = (n: number) => n >= 1000 ? `${Number((n / 1000).toFixed(1))}k` : String(n);
 const compact0 = (n: number) => n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
@@ -88,7 +47,8 @@ export function contextSegment(snapshot: PanelSnapshot | null, room: number): st
 }
 /**
  * The bottom bar owns only what matters in every view: role and binding, session cost, the context
- * window and alerts. Below 52 columns the context takes its own row; alerts that do not fit wrap, never drop.
+ * window and alerts. Below 105 columns the `unbound` word drops (the `○` dot stays); below 52 the
+ * context takes its own row. Alerts that do not fit wrap, never drop.
  */
 export function statusBar(identity: HostIdentity, snapshot: PanelSnapshot | null,
   statuses: ReadonlyMap<string, string>, width: number): string[] {
@@ -96,7 +56,7 @@ export function statusBar(identity: HostIdentity, snapshot: PanelSnapshot | null
   const bound = snapshot?.bound ?? false;
   const dot = bound ? PANEL_SUCCESS + "●" : PANEL_WARNING + "○";
   const badge = width >= 80
-    ? "\x1b[1m" + PANEL_BLUE + "▌" + role + "\x1b[22m " + dot + PANEL_MUTED + ` g${identity.generation}` + (bound ? "" : PANEL_WARNING + " unbound")
+    ? "\x1b[1m" + PANEL_BLUE + "▌" + role + "\x1b[22m " + dot + PANEL_MUTED + ` g${identity.generation}` + (bound || width < 105 ? "" : PANEL_WARNING + " unbound")
     : "\x1b[1m" + PANEL_BLUE + "▌" + (role[0] ?? "") + "\x1b[22m " + dot;
   // Binding is the dot; every other status (refusals first) is kept.
   const alerts = [...statuses].filter(([key]) => key !== STATUS_BINDING)

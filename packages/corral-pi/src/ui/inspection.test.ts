@@ -186,8 +186,8 @@ test("Evidence keyboard/pointer navigation survives narrow/wide rendering and pr
     wb.handleInput("j"); expect(stripTerminalSequences(lines(140).join("\n"))).toMatch(/^▌ C2 /m);
     wb.handleInput("k"); expect(stripTerminalSequences(lines(52).join("\n"))).toMatch(/^ ‹ C1 1\/2 › /m);
     const wide = lines(140).map(row => stripTerminalSequences(row));
-    expect(wide.at(-1)).toMatch(/^ {2}j\/k criterion .*Enter expand section/);
-    expect(wide.slice(0, -1).some(row => row.includes("j/k criterion"))).toBe(false);
+    // Key hints live in the footer, never in the Proof content.
+    expect(wide.some(row => row.includes("j/k criterion"))).toBe(false);
     const line = wide.findIndex(row => row.startsWith("  C2 "));
     const event: TuiMouseEvent = { type: "click", button: "left", x: 1, y: line, screenX: 1, screenY: line, width: 140, height: 200, shift: false, alt: false, ctrl: false };
     const frame = renderLayoutFrame(root, 140, 200, () => {});

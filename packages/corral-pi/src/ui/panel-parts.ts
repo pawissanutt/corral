@@ -1,11 +1,11 @@
 // Shared drawing vocabulary for the read-only inspection views (Proof, Inbox): chips, section rules,
-// list rows with the selection bar, label/value fields, short times and the pinned key-hint row.
+// list rows with the selection bar, label/value fields and short times. Key hints live in the footer.
 // Colours are the packaged PANEL_* tokens; colour is never the only signal.
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { splitRow } from "./panels-chrome.ts";
 import {
-  pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_RULE, PANEL_SELECTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_TINT,
-  PANEL_WARNING, RESET,
+  pad, plainLabel, PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_RULE, PANEL_SELECTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_TINT,
+  PANEL_WARNING,
 } from "./panels-view.ts";
 
 export type Tone = "ok" | "bad" | "warn" | "none";
@@ -44,13 +44,6 @@ export function field(label: string, value: string, width: number, labelWidth: n
 export function listRow(left: string, right: string, selected: boolean, width: number): string {
   const body = splitRow(left, right, width - 3);
   return selected ? `${PANEL_SELECTED}${PANEL_BLUE}▌${PANEL_TEXT} ${body} ${BG_END}` : `  ${body} `;
-}
-/** The pinned bottom hint row: full labels, then brief labels, then bare keys, so every key stays listed. */
-export function hintRow(hints: readonly (readonly [key: string, full: string, brief: string])[], width: number): string {
-  const forms = [hints.map(([key, full]) => `${key} ${full}`).join(" · "), hints.map(([key, , brief]) => `${key} ${brief}`).join(" · "),
-    hints.map(([key]) => key).join(" ")];
-  const text = forms.find(form => visibleWidth(form) + 2 <= width) ?? forms[forms.length - 1] ?? "";
-  return `${PANEL_BG}${PANEL_MUTED}${pad("  " + text, width)}${RESET}`;
 }
 
 export function ago(at: number, now: number): string | undefined {

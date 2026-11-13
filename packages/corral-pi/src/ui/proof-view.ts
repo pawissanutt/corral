@@ -6,7 +6,7 @@ import type { Inspection, InspectionStore } from "./inspection.ts";
 import { box, pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, PANEL_RULE, PANEL_SELECTED, PANEL_WARNING, PANEL_ERROR, RESET } from "./panels-view.ts";
 import { splitRow } from "./panels-chrome.ts";
 import { glyphs, ladder, proofItems, sectionCount, SECTION_LABEL, short, stepChips, topChips, type Criterion, type ProofItem, type SectionId } from "./proof-parts.ts";
-import { ago, bold, chip, chipRows, clock, field, hintRow, listRow as paneRow, sectionRule, toneColor, wrap } from "./panel-parts.ts";
+import { ago, bold, chip, chipRows, clock, field, listRow as paneRow, sectionRule, toneColor, wrap } from "./panel-parts.ts";
 
 /** Main-area width at which Proof splits into list + detail; below it a one-line picker is used. */
 export const SPLIT_MIN = 105;
@@ -15,14 +15,6 @@ export const LIST_WIDTH = 42;
 export interface ProofFrame { readonly lines: string[]; readonly hits: Map<number, number>; readonly wide: boolean }
 
 const plainFit = (text: string, width: number) => stripTerminalSequences(truncateToWidth(plainLabel(text), Math.max(0, width), "…"));
-
-const HINTS: readonly (readonly [key: string, full: string, brief: string])[] = [
-  ["j/k", "criterion", "criterion"], ["Enter", "expand section / open artifact", "expand / open artifact"], ["F7", "changes", "changes"],
-];
-/** Key hints for the bottom row, shortening from full labels to bare keys before anything is cut. */
-export function proofHint(width: number, legend: boolean): string {
-  return hintRow([...HINTS, ["?", legend ? "hide legend" : "what I T R A mean", legend ? "hide" : "legend"]], width);
-}
 
 const listRow = (left: string, right: string, selected: boolean) => paneRow(left, right, selected, LIST_WIDTH);
 const tagOf = (c: Criterion) => c.required ? (c.live ? "req·live" : "req") : "opt";
