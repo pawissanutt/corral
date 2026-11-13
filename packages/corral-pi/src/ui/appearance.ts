@@ -1,6 +1,8 @@
 // Session-local host preferences. No filesystem/resource lookup, and no authority-bearing state.
 export type Appearance = "dark" | "light" | "contrast";
 export type Density = "comfortable" | "compact";
+/** `still` replaces the spinner with a steady `●` and redraws once a second, so elapsed times still advance. */
+export type Motion = "animate" | "still";
 /**
  * The packaged palettes. `background` is the one surface of the whole screen; `raised` (cards' header rows,
  * popups, toasts), `key` (key caps), `dialog` (a docked dialog's header row), `bubble` (user messages) and

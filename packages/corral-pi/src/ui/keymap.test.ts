@@ -63,9 +63,11 @@ test("the edit-queued hint appears only with an editable item and queue control"
   expect(contextHints(state("composer", { streaming: false })).find(hint => hint.id === "dequeue")?.label).toBe("edit queued");
 });
 
-test("while a turn runs the composer footer reads steer, queue, target, edit queued, then stop, as key caps", () => {
+test("while a turn runs the composer footer reads steer, stop, queue, target, then edit queued, as key caps", () => {
   const ids = contextHints(state("composer", { build: BUILD })).map(hint => hint.id);
-  expect(ids.slice(0, 5)).toEqual(["submit", "followUp", "target", "dequeue", "interrupt"]);
+  expect(ids.slice(0, 5)).toEqual(["submit", "interrupt", "followUp", "target", "dequeue"]);
+  // Stop survives the narrowest footers, with a queued item and a build receiver.
+  for (const width of [46, 61]) expect(footerRow(contextHints(state("composer", { build: BUILD })), chromeTier(width), width, true).hits.map(hit => hit.hint.id)).toContain("interrupt");
   // The narrow tier keeps four: `edit queued` is one of them.
   const narrow = footerRow(contextHints(state("composer", { build: BUILD })), "narrow", 92, true);
   expect(narrow.hits.map(hit => hit.hint.id)).toContain("dequeue");
@@ -84,6 +86,21 @@ test("as many hints as fit show at any width; F1 reads keys when none was droppe
   expect(label(46)).toBe("more"); expect(ids(46).length).toBeGreaterThan(1);
   const one = [contextHints(state("composer", { streaming: false, queue: { items: 0, editable: 0, control: true } }))[0]!];
   expect(footerRow(one, "narrow", 92, true).hits.map(hit => hit.hint.label)).toEqual(["send", "keys"]);
+});
+
+test("in Chat the composer footer names the tool-output key last, before F2 and F1, and drops it first when narrow", () => {
+  const ids = (width: number, streaming: boolean) => footerRow(contextHints(state("composer", { chat: true, streaming, build: BUILD })), chromeTier(width), width, true)
+    .hits.map(hit => hit.hint.id);
+  for (const streaming of [false, true]) {
+    const wide = ids(185, streaming);
+    expect(wide.slice(-3)).toEqual(["tools", "f2", "f1"]);
+    expect(ids(46, streaming)).not.toContain("tools");
+  }
+  const hint = contextHints(state("composer", { chat: true })).find(item => item.id === "tools");
+  expect(hint).toMatchObject({ key: "Ctrl+O", label: "expand" });
+  expect(contextHints(state("composer")).some(item => item.id === "tools")).toBeFalse();
+  const message = keyGroups({ taskBound: false, answer: false, jobs: true, queueControl: true, lifecycle: false }).find(group => group.title === "Message")!;
+  expect(message.rows.some(row => row.label === "Expand or collapse tool output")).toBeTrue();
 });
 
 type Build = NonNullable<HintState["build"]>;

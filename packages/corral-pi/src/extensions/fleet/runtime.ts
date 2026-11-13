@@ -185,7 +185,9 @@ export class FleetRuntime implements FleetControl {
             if (!live(entry)) return;
             entry.history.observe(entry.spec.id, event);
             if (event.type === "tool" && (event.phase === "completed" || event.phase === "error")) entry.value.activity = undefined;
-            this.refreshUsage(entry); this.touch(entry);
+            // Text deltas change the preview, not persisted token or context usage.
+            if (event.type === "assistant_end" || event.type === "tool") this.refreshUsage(entry);
+            this.touch(entry);
           },
           onToolStart: (name, args) => {
             if (!live(entry)) return;

@@ -198,7 +198,8 @@ test("below the rail: a rule, then the collapsed row with summaries and [Ctrl+B]
   const narrow = bar.row(s, 92, false, 40), lines = plain(narrow);
   expect(lines).toHaveLength(2);
   expect(lines[0]).toBe("─".repeat(92));
-  expect(lines[1]!.trimStart().startsWith("Context 3 running · 1 waiting  Files  Plan 1/7")).toBeTrue();
+  // Something runs, so the Context summary leads with the spinner.
+  expect(lines[1]!.trimStart()).toMatch(new RegExp("^" + SPIN.source + " Context 3 running · 1 waiting  Files  Plan 1/7"));
   expect(lines[1]!.trimEnd()).toMatch(/Ctrl\+B  ▴$/);
   // Hits move down with their row: a tab label opens the drawer on that tab.
   const plan = (narrow.hits.get(1) ?? []).find(hit => hit.tab === "plan")!;
@@ -206,7 +207,7 @@ test("below the rail: a rule, then the collapsed row with summaries and [Ctrl+B]
   bar.click(plan, s);
   expect(bar.drawer).toBeTrue(); expect(bar.tab).toBe("plan");
   const tiny = plain(new Sidebar(() => {}).row(s, 46, true, 40));
-  expect(tiny[1]!.trimStart().startsWith("Context 3  Files  Plan 1/7")).toBeTrue();
+  expect(tiny[1]!.trimStart()).toMatch(new RegExp("^" + SPIN.source + " Context 3  Files  Plan 1/7"));
   expect(tiny[1]).not.toContain("Ctrl"); expect(tiny[1]!.trimEnd().endsWith("▴")).toBeTrue();
   // Under 16 rows the rule goes first.
   expect(new Sidebar(() => {}).row(s, 92, false, 14).lines).toHaveLength(1);

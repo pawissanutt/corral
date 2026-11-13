@@ -42,7 +42,11 @@ test("the prompt is the native user bubble with its own label, replies are nativ
     expect(visibleWidth(actual[prompted.length] ?? "")).toBe(visibleWidth(prompted[0] ?? ""));
     const assistant = nativeAssistant.render(width);
     expect(actual.slice(prompted.length + 1, prompted.length + 1 + assistant.length)).toEqual(assistant);
-    expect(plain(actual.slice(prompted.length + 1 + assistant.length))).toEqual(["", " ✓ read sample.ts"]);
+    const toolRows = plain(actual.slice(prompted.length + 1 + assistant.length));
+    expect(toolRows[0]).toBe("");
+    expect(toolRows.slice(1).length).toBe(1);
+    expect(toolRows[1]?.trim().startsWith("✓ read")).toBeTrue();
+    if (width >= 80) expect(toolRows[1]).toContain("sample.ts");
     expect(actual.every(line => visibleWidth(line) <= width)).toBe(true);
     // Expanding tools reuses the native card rather than a flattened copy.
     chat.expandTools(true); nativeTool.setExpanded(true);
@@ -113,7 +117,7 @@ test("a tool line opens its native card by pointer, stays open across refreshes,
   expect(stripTerminalSequences(refreshed.join("\n"))).toContain("export { answer }");
   const header = plain(refreshed).findIndex(line => line.trim().startsWith("read sample.ts"));
   expect(chat.handleMouse(click(header, refreshed.length))?.handled).toBe(true);
-  expect(plain(chat.renderHelper(entry, 80)).some(line => line.trim() === "✓ read sample.ts")).toBeTrue();
+  expect(plain(chat.renderHelper(entry, 80)).some(line => line.trim().startsWith("✓ read sample.ts"))).toBeTrue();
   expect(JSON.stringify(entry)).toBe(before);
 });
 
@@ -127,6 +131,30 @@ test("incomplete argument JSON uses native generic rendering, never a built-in r
   chat.expandTools(true);
   expect(stripTerminalSequences(chat.renderHelper(incomplete, 80).join("\n"))).toContain("truncated");
   expect(resolved).toBe(0);
+});
+
+test("a child's call whose arguments still stream reads as writing, and one call id stays one row as it completes", () => {
+  const chat = new HelperChat(() => undefined, "/tmp");
+  const streaming = { ...fixture(), phase: "running" as const, messages: [{ id: "w", kind: "tool" as const, tool: "write", phase: "requested" as const,
+    text: "", arguments: '{"path":"notes.md","content":"first\\nsec', argsComplete: false }] };
+  const writing = plain(chat.renderHelper(streaming, 80)).filter(line => line.includes("write"));
+  expect(writing.length).toBe(1);
+  expect(writing[0]).toContain("writing");
+  expect(writing[0]).toContain("notes.md");
+  const complete = { ...streaming, messages: [{ ...streaming.messages[0]!, phase: "completed" as const, text: "Successfully wrote to notes.md",
+    arguments: JSON.stringify({ path: "notes.md", content: "first\nsecond" }), argsComplete: true }] };
+  const rows = plain(chat.renderHelper(complete, 80)).filter(line => line.includes("write"));
+  expect(rows.length).toBe(1);
+  expect(rows[0]?.trim().startsWith("✓ write notes.md")).toBeTrue();
+});
+
+test("a child's Code Mode call reads as the tools it calls, not its source", () => {
+  const chat = new HelperChat(() => undefined, "/tmp");
+  const entry = { ...fixture(), messages: [{ id: "c", kind: "tool" as const, tool: "codemode", phase: "completed" as const, text: "ok",
+    arguments: JSON.stringify({ code: "const a = await tools.read({ path: 'x' }); await tools.bash({ command: 'ls' }); await tools.read({ path: 'y' });" }) }] };
+  const row = plain(chat.renderHelper(entry, 80)).find(line => line.trim().startsWith("✓ code")) ?? "";
+  expect(row).toContain("read, bash");
+  expect(row).not.toContain("await");
 });
 
 test("data controls are sanitized before Markdown and tool argument rendering; native ANSI remains intact", () => {

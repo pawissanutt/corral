@@ -137,7 +137,7 @@ function shell(columns: number, rows: number, build: Build, extra: Partial<Panel
   const answers = { confirm: false, select: undefined as string | undefined };
   const ui = {
     theme: { getColorMode: () => "truecolor", fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text },
-    setTheme() {}, setHeader() {}, notify() {}, setWorkingVisible() {},
+    setTheme() {}, setHeader() {}, notify() {}, setWorkingVisible() {}, setHiddenThinkingLabel() {},
     setEditorComponent: (factory: (tui: unknown, theme: unknown, keys: unknown) => ShellEditor) => {
       editor = factory(tui, editorTheme, BINDINGS);
       editor.focused = true;

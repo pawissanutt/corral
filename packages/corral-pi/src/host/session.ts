@@ -45,8 +45,8 @@ import { NativePanels } from "../ui/panels.ts";
 import { persistedBases } from "../ui/review-store.ts";
 import type { PanelJob, PanelSnapshot } from "../ui/panels-view.ts";
 import { InspectorActivity } from "../ui/inspector.ts";
-import { corralRenderers } from "../ui/render.ts";
 import { buildToolRenderers } from "../ui/build/tool-renderers.ts";
+import { installToolRenderers, type ToolRenderDeps } from "../ui/tool-rendering.ts";
 import { TodoLedger, installTodo } from "../ui/todo.ts";
 import { type DueContinuation, RequestContext, continuationText } from "./request.ts";
 import type { HostCapabilities, UiMode } from "./config.ts";
@@ -563,7 +563,9 @@ export class HostSession {
     this.code = options.capabilities?.enabled.includes("codemode") ? new CodeRuntime({
       generation: options.identity.generation,
       emit: (kind, data) => { options.events.emit(kind, data); },
-      journal: (data) => { this.session.sessionManager.appendCustomEntry(CODE_CALL_ENTRY, data); },
+      journal: (data, customType = CODE_CALL_ENTRY) => { this.session.sessionManager.appendCustomEntry(customType, data); },
+      history: () => options.sessionManager.getEntries().flatMap(entry =>
+        entry.type === "custom" && (entry.customType === "corral_code_cell" || entry.customType === CODE_CALL_ENTRY) ? [entry.data] : []),
       // A detached cell's one notice enters like bridge input: journaled delivery, its own turn origin.
       notify: async (key, text) => {
         const sent = await this.submit({ text, busyPolicy: "follow_up", idempotencyKey: key, origin: "code-cell" }, key);
@@ -1165,7 +1167,7 @@ export class HostSession {
           ? { confirm: (command: string, context: ConfirmUi, requestId: string) =>
             this.confirmOwnerAction(command, context, requestId) } : {}),
       });
-      pi.registerTool(rich ? { ...tool, ...corralRenderers(tool.name) } : tool);
+      pi.registerTool(tool);
     }
     if (rich) {
       installChrome(pi, {
@@ -1175,6 +1177,14 @@ export class HostSession {
       if (this.ledger) installTodo(pi, this.ledger, this.request === undefined,
         () => !!this.options.identity.task && (this.panels?.wide ?? false));
       this.panels?.install(pi, this.options.sdk);
+      // Every other tool call is one kit row; build cards and corral operations keep their renderers.
+      const panels = this.panels;
+      const openView: ToolRenderDeps["openView"] = panels ? (view, select) => panels.openView(view, select) : undefined;
+      installToolRenderers(pi, {
+        cwd: this.options.cwd, ticker: () => this.panels?.ticker, corralSpecs: specs,
+        job: id => this.jobs?.inspection().find(job => job.job === id),
+        code: () => this.code, ledger: () => this.ledger, ...(openView ? { openView } : {}),
+      });
       const unsubscribe = this.ledger?.onChange(() => this.panels?.refresh());
       pi.on("session_shutdown", (event) => {
         unsubscribe?.();

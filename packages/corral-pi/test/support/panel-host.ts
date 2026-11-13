@@ -9,6 +9,7 @@ import { HostSession, authContext } from "../../src/host/session.ts";
 import { CorralClient, sha256Hex } from "../../src/tools/corral.ts";
 import type { CapabilitySet } from "../../src/roles/types.ts";
 import type { NativePanels } from "../../src/ui/panels.ts";
+import { presentHostNotice } from "../../src/ui/host-notices.ts";
 import { buildFixtureInstall } from "./fixture-install.ts";
 import { writeFakeCorral } from "./fake-corral.ts";
 import { RecordingTerminal } from "./panel-terminal.ts";
@@ -67,7 +68,8 @@ export async function startPanelHost(extend?: (...args: Parameters<Extend>) => v
     let transcript: Component | undefined;
     let chatPresentation: PanelHost["chatPresentation"] | undefined;
     mode = new sdk.InteractiveMode(host.runtime, { terminal, tuiMode: "fullscreen", readOnlyQueue: true, verbose: false,
-      mainView: (view, presentation) => { transcript = view; chatPresentation = presentation; return panels.mainView(view, presentation); } });
+      mainView: (view, presentation) => { transcript = view; chatPresentation = presentation; return panels.mainView(view, presentation); },
+      userPresentation: presentHostNotice });
     await mode.init(); host.markAttached("interactive");
     void mode.run().catch(error => { throw error; });
     await physical.untilVisible("WORKER  ● g1"); // the status bar's role pill and bound dot

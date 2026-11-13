@@ -40,7 +40,7 @@ import { childIdOf, childKey } from "./build/contract.ts";
 import { childActions, childAuthors, fleetExtras, steerable } from "./build/fleet-rows.ts";
 import type { SideSource } from "./sidebar.ts";
 import { pad, plainLabel, styledPanelLine, PANEL_BG, PANEL_BLUE, PANEL_LINE, PANEL_TEXT, type PanelSnapshot } from "./panels-view.ts";
-import { rule, VIEW_INSET } from "./frame.ts";
+import { rule, spinner, VIEW_INSET } from "./frame.ts";
 
 /** Below this many terminal rows the rule under the tab row goes first. */
 export const RULE_ROWS = 16;
@@ -172,6 +172,10 @@ export interface WorkbenchOptions {
   readonly buildController?: BuildController;
   /** The sidebar as a rail beside the main view; without it the main view takes the full width. */
   readonly rail?: RailSource;
+  /** While the agent works: the header state word's spinner and the turn's elapsed time (activity.ts). */
+  readonly mark?: () => HeaderInput["mark"];
+  /** Told each frame whether any helper, child or job runs, so the shared clock keeps their spinners and times moving. */
+  readonly live?: (live: boolean) => void;
 }
 /** Main-area composition via the packaged SDK's public mainView hook; editor stays SDK-owned. */
 export class NativeWorkbench {
@@ -474,9 +478,11 @@ export class NativeWorkbench {
       left: `${identity.project || "workspace"} · ${basename(this.options.cwd)}${!elsewhere && r.branch !== "unknown" ? ` (${r.branch})` : ""}`,
       ...(elsewhere ? { right: `Changes: ${this.scopeLabel}` } : {}),
     };
+    const mark = this.options.mark?.();
     return {
       title: target(identity), state, context,
       ...(pending ? { attention: { text: `⚑ ${pending}`, tone: "warning" as const } } : {}),
+      ...(mark ? { mark } : {}),
     };
   }
   /**
@@ -484,7 +490,7 @@ export class NativeWorkbench {
    * state word, and row 2 with the project, the worktree and the exit policy.
    */
   private buildHeader(snapshot: PanelSnapshot, build: BuildPanelState, controller: BuildController, width: number): HeaderInput {
-    const session = build.session, { tiny } = this.compact(width), r = this.review;
+    const session = build.session, { tiny } = this.compact(width), r = this.review, mark = this.options.mark?.();
     const live = build.fleet.children.some(child => LIVE_CHILD_STATES.includes(child.state));
     const asking = controller.questions().length;
     const docked = controller.dialog()?.key.startsWith("exit:") ?? false;
@@ -501,6 +507,8 @@ export class NativeWorkbench {
       },
       ...(asking ? { attention: { text: tiny ? `▲ ${asking}` : `▲ ${asking} needs you`, tone: "warning" as const } } : {}),
       ...(status ? { status } : {}),
+      // Children at work while the parent is idle still spin the state word, without a turn time.
+      ...(mark ? { mark } : live ? { mark: { glyph: PANEL_BLUE + spinner(Date.now()) } } : {}),
     };
   }
   private tabSpecs(): TabSpec[] {
@@ -529,6 +537,7 @@ export class NativeWorkbench {
       render: width => {
         // Renders before the transcript, so a paused reader keeps the same passage at a new width.
         this.anchorTranscript(this.mainWidth(width));
+        this.options.live?.(liveCount(this.agentsModel()) > 0);
         const frame = headerFrame(this.headerInput(width), width, this.compact(width));
         headerHits = frame.hits; this.headerRows = frame.lines.length;
         return frame.lines;
@@ -819,7 +828,7 @@ export class NativeWorkbench {
     const selection = context === "agents" || context === "agent" ? this.agentsView.actions() : context === "board" ? this.boardView?.actions() : undefined;
     const target = controller?.target();
     return {
-      context, streaming: this.options.snapshot()?.streaming ?? false, queue,
+      context, streaming: this.options.snapshot()?.streaming ?? false, queue, chat: this.view === "conversation" && !this.images.isOpen,
       mode: { taskBound: !!identity.task, answer: identity.role === "pm" || identity.role === "assistant", lifecycle: !!identity.task },
       ...(selection ? { selection } : {}),
       authors: (this.shownChanges?.authors.length ?? 0) > 0, legend: this.legend, history: this.inbox.history,

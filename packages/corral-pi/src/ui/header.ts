@@ -37,6 +37,8 @@ export interface HeaderInput {
   readonly context?: { readonly left: string; readonly right?: string };
   /** Replaces the state word; a notice still wins for its duration. */
   readonly status?: HeaderStatus;
+  /** While the agent works: a styled one-cell glyph before the state word or status (the spinner), and the turn's elapsed time. */
+  readonly mark?: { readonly glyph: string; readonly elapsed?: string };
 }
 /** Columns of header row `row` that a click acts on: the attention chip, or a clickable status. */
 export interface HeaderHit { readonly row: number; readonly from: number; readonly to: number; readonly id: "attention" | "status" }
@@ -227,10 +229,12 @@ export function headerFrame(input: HeaderInput, width: number, options: { readon
   const chipWidth = visibleWidth(chipText), chipGap = chipText ? 1 : 0;
   const keep = Math.min(visibleWidth(label), TITLE_KEEP);
   const status = input.notice || !input.status ? undefined : input.status;
+  const mark = input.notice ? undefined : input.mark, markWidth = mark ? visibleWidth(mark.glyph) + 1 : 0;
   const small = options.tiny || width < RAIL_COLUMNS;
-  const statusText = input.notice ? plainLabel(input.notice.text) : !status ? (small ? input.state.toLowerCase() : input.state)
-    : !small && chipWidth + chipGap + visibleWidth(plainLabel(status.long)) + 2 + keep <= inner ? plainLabel(status.long) : plainLabel(status.short);
-  const state = (input.notice ? toneColor(input.notice.tone) : status ? toneColor(status.tone) : PANEL_MUTED) + statusText;
+  const word = (small ? input.state.toLowerCase() : input.state) + (mark?.elapsed && !options.tiny ? " · " + mark.elapsed : "");
+  const statusText = input.notice ? plainLabel(input.notice.text) : !status ? word
+    : !small && chipWidth + chipGap + markWidth + visibleWidth(plainLabel(status.long)) + 2 + keep <= inner ? plainLabel(status.long) : plainLabel(status.short);
+  const state = (mark ? mark.glyph + " " : "") + (input.notice ? toneColor(input.notice.tone) : status ? toneColor(status.tone) : PANEL_MUTED) + statusText;
   const chip = input.attention
     ? toneColor(input.attention.tone) + "\x1b[7m\x1b[1m" + chipText + "\x1b[22m\x1b[27m" + PANEL_BG + " "
     : "";
@@ -239,14 +243,14 @@ export function headerFrame(input: HeaderInput, width: number, options: { readon
     lines.push(chromeLine(" " + PANEL_MUTED + splitRow(plainLabel(input.context.left), plainLabel(input.context.right ?? ""), inner), width));
   }
   // splitRow right-aligns the chip and status within `inner`, after the row's one-cell left inset.
-  const right = chipWidth + chipGap + visibleWidth(statusText), end = 1 + inner, start = end - Math.min(inner, right);
+  const right = chipWidth + chipGap + markWidth + visibleWidth(statusText), end = 1 + inner, start = end - Math.min(inner, right);
   const hits: HeaderHit[] = [];
   const add = (id: HeaderHit["id"], from: number, size: number) => {
     const to = Math.min(end, from + size);
     if (from < to) hits.push({ row: 0, from, to, id });
   };
   if (input.attention) add("attention", start, chipWidth);
-  if (status?.clickable) add("status", start + chipWidth + chipGap, visibleWidth(statusText));
+  if (status?.clickable) add("status", start + chipWidth + chipGap + markWidth, visibleWidth(statusText));
   return { lines, hits };
 }
 

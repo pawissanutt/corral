@@ -11,7 +11,11 @@ import { type CodeRuntime, DEFAULT_WAIT_MS, MAX_WAIT_MS } from "../extensions/co
 export const CODEMODE_TOOL = "codemode";
 
 const DESCRIPTION = [
-  "Run a JavaScript cell in this session's persistent Corral kernel to batch, chain and filter tool calls.",
+  "Prefer a direct tool call for one independent operation. For several independent calls whose results you would",
+  "print unchanged, issue parallel direct tool calls in one turn; they run concurrently. Use direct tools for edits,",
+  "writes and other state changes unless a later step in the same cell depends on their result.",
+  "Use a JavaScript cell in this session's persistent Corral kernel to chain dependent calls, filter or summarise",
+  "large results before they reach your context, loop over many items, compute, or reuse variables from earlier cells.",
   "Top-level const/let/function/class declarations persist into later cells; reset, cancelling a running cell, its",
   "timeout, a reload or a host restart discard them (the result says so). Globals: tools.<name>(args) returns a",
   "Promise of the tool's result: Corral tools resolve to their canonical receipt object (check .state; refusals",
@@ -52,14 +56,14 @@ function answer(reports: readonly CellReport[], fallback: string) {
 export function codemodeTool(runtime: CodeRuntime, callable: (names: readonly string[]) => string[]): ToolDefinition {
   return {
     name: CODEMODE_TOOL, label: "Code Mode", exposure: "model-only", description: DESCRIPTION, parameters: Parameters,
-    promptSnippet: "Run JavaScript cells that call other tools on a persistent kernel",
+    promptSnippet: "Prefer direct tools for one independent operation, independent results printed unchanged (parallel direct calls in one turn run concurrently), and edits, writes or other state changes unless a later step in the same cell depends on the result. Use cells for dependent chains, filtering or summarising large results before they reach context, loops over many items, computation, or earlier-cell variables.",
     prepareLoadout: (loadout) => {
       const names = callable(loadout.callable.map((tool) => tool.name).filter((name) => name !== CODEMODE_TOOL));
       // The legacy launch alias stays callable, but new scripts should use bash({ wait_ms: 0 }).
       const advertised = names.includes("bash") ? names.filter(name => name !== "job_start") : names;
       return { descriptions: { [CODEMODE_TOOL]: `${DESCRIPTION}\nCallable as tools.<name>: ${advertised.join(", ") || "none"}.` } };
     },
-    async execute(toolCallId, params: Params, signal, _update, ctx) {
+    async execute(toolCallId, params: Params, signal, update, ctx) {
       if (params.cancel !== undefined) {
         if (params.code !== undefined || params.reset) {
           return { content: [{ type: "text", text: "cancel takes no code or reset" }], details: { cells: [] }, isError: true };
@@ -71,7 +75,15 @@ export function codemodeTool(runtime: CodeRuntime, callable: (names: readonly st
       }
       const lost = params.reset ? await runtime.reset() : [];
       if (params.code === undefined) return answer(lost, "Kernel reset: every variable was discarded.");
-      return answer([...lost, await runtime.run(toolCallId, params.code, ctx, signal, params.wait_ms ?? DEFAULT_WAIT_MS)], "");
+      const release = runtime.watch(toolCallId, () => {
+        const report = runtime.snapshot(toolCallId);
+        if (report) update?.({ content: [], details: { cells: [report] } });
+      });
+      try {
+        return answer([...lost, await runtime.run(toolCallId, params.code, ctx, signal, params.wait_ms ?? DEFAULT_WAIT_MS)], "");
+      } finally {
+        release();
+      }
     },
   };
 }

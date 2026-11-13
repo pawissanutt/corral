@@ -79,6 +79,8 @@ export function claudeEnvironment(
   env.CLAUDE_CODE_OAUTH_TOKEN = token;
   env.CLAUDE_CONFIG_DIR = configDir;
   env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
+  // Claude Code only requests fine-grained tool input streaming with this flag; otherwise values arrive whole.
+  env.CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING = "1";
   // Each query is fresh: the preset's Git snapshot would precede replay and invalidate it after
   // edits/commits. Corral's role contract and Git skill own the workflow; tools supply live state.
   env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS = "1";
@@ -112,6 +114,7 @@ export function streamClaudeSdk(
   void (async () => {
     const output = emptyOutput(model);
     const blocks: Parameters<typeof applyStreamEvent>[0]["blocks"] = [];
+    const argumentsStreams: Parameters<typeof applyStreamEvent>[0]["argumentsStreams"] = new Map();
     let query: Query | undefined;
     let closed = false;
     let aborted = false;
@@ -194,7 +197,7 @@ export function streamClaudeSdk(
           sawStreamEvent = true;
           const event = message.event as StreamEvent;
           if (event.type === "message_start") usageReported = hasPromptUsage(event.message.usage) || usageReported;
-          applyStreamEvent({ model, output, blocks, stream, customToolNameToPi: tools.customToolNameToPi }, event);
+          applyStreamEvent({ model, output, blocks, argumentsStreams, stream, customToolNameToPi: tools.customToolNameToPi }, event);
         } else if (message.type === "result" && message.subtype === "success") {
           succeeded = true;
           // A terminal result never downgrades a tool-use turn, or Pi would not run the calls.

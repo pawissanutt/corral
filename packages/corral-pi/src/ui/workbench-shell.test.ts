@@ -76,7 +76,7 @@ function shell(columns: number, rows: number, state: () => PanelSnapshot | null,
   let draft = "", dock: Component | undefined, footer: Component | undefined;
   const customs: Component[] = [];
   const ui = {
-    theme: { getColorMode: () => "truecolor" }, setTheme() {}, setEditorComponent() {}, setHeader() {}, notify() {}, setWorkingVisible() {},
+    theme: { getColorMode: () => "truecolor" }, setTheme() {}, setEditorComponent() {}, setHeader() {}, notify() {}, setWorkingVisible() {}, setHiddenThinkingLabel() {},
     setWidget: (_key: string, factory: (tui: unknown, theme: unknown) => Component) => { dock = factory(tui, theme); },
     setFooter: (factory: (tui: unknown, theme: unknown, data: unknown) => Component) => {
       footer = factory(tui, theme, { onBranchChange: () => () => {}, getExtensionStatuses: () => new Map() });

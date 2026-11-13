@@ -1,105 +1,14 @@
 import { expect, test } from "bun:test";
 
-import { type AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { Theme } from "@earendil-works/pi-coding-agent";
 
 import { EventLog } from "../bridge/events.ts";
-import type { CorralReceipt } from "../tools/corral.ts";
 import {
   type Alerts, alertsStatus, bindingStatus, countAlert, headerLines, target, titleText,
 } from "./chrome.ts";
 import { DRACULA, draculaTheme } from "./dracula.ts";
-import { corralRenderers, renderCallText, renderResultText } from "./render.ts";
 
-const theme = {
-  fg: (color: string, text: string) => `<${color}>${text}</>`,
-  bold: (text: string) => `*${text}*`,
-};
 const plain = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
-
-function receipt(state: CorralReceipt["state"], result: unknown, extra: Partial<CorralReceipt> = {}): AgentToolResult<unknown> {
-  const details: CorralReceipt = { version: 1, request_id: "rq-1", op: "ask", state, result, ...extra };
-  return { content: [{ type: "text", text: JSON.stringify({ state, result }) }], details };
-}
-
-test("a corral call renders as its short name and the one argument that says what it does", () => {
-  expect(renderCallText("corral_ask", { kind: "technical_choice", text: "Use\n v0.3.0?", blocking: true }, plain))
-    .toBe("corral ask technical_choice: Use v0.3.0?");
-  expect(renderCallText("corral_question_answer", { key: "Q-2", rev: 1, text: "Yes" }, plain))
-    .toBe("corral question answer Yes");
-  expect(renderCallText("corral_progress", { update: { phases: [], summary: "orient done" } }, plain))
-    .toBe("corral progress orient done");
-  expect(renderCallText("corral_gate", {}, plain)).toBe("corral gate");
-  expect(renderCallText("corral_done", { summary: "x".repeat(200) }, plain).length).toBeLessThanOrEqual(120);
-});
-
-test("task read cards distinguish exact questions, sections, continuation and failures", () => {
-  expect(renderCallText("corral_show", { task: "T-337", section: "questions", key: "T-337/R1/Q16", limit: 4096 }, plain))
-    .toBe("corral show T-337 · Question T-337/R1/Q16 · from 0, ≤4096 chars");
-  expect(renderCallText("corral_show", { task: "T-337" }, plain)).toBe("corral show T-337 · Overview");
-  expect(renderCallText("corral_show", { task: "T-337", section: "spec", offset: 4096 }, plain))
-    .toContain("Spec · from 4096");
-  const page = { section: "questions", revision: 3, offset: 0, end_offset: 4096, total_chars: 5000,
-    next_offset: 4096, truncated: true, content_json: "x".repeat(4096) };
-  expect(renderResultText(receipt("committed", page), false, false, plain))
-    .toBe("✓ questions · 0–4096/5000 chars · next=4096 · rev=3");
-  expect(renderResultText(receipt("committed", { ...page, offset: 4096, end_offset: 5000, next_offset: null }), false, false, plain))
-    .toContain("4096–5000/5000 chars · complete");
-  expect(renderResultText(receipt("committed", page), true, false, plain)).toContain(page.content_json);
-  expect(renderResultText(receipt("rejected", { code: "bad_request", reason: "question key not found in this task" }), false, false, plain))
-    .toContain("✗ rejected  bad_request: question key not found");
-});
-
-test("a receipt renders as one line: its state and the result fields worth reading", () => {
-  expect(renderResultText(receipt("committed", { key: "Q-3", rev: 0, tier: "quick" }), false, false, plain))
-    .toBe("✓ key=Q-3 · tier=quick");
-  expect(renderResultText(receipt("committed", {}, { replayed: true }), false, false, plain)).toBe("↺ replayed");
-  expect(renderResultText(receipt("rejected", { code: "gate_not_current", reason: "rebase first" }), false, false, theme))
-    .toBe("<error>✗ rejected  gate_not_current: rebase first</>");
-  expect(renderResultText(receipt("uncertain", { code: "gate_start_uncertain" }), false, false, plain))
-    .toBe("◷ uncertain gate_start_uncertain");
-});
-
-test("todo renders its operation and step with the canonical receipt revision", () => {
-  expect(renderCallText("corral_todo", { op: "done", step: "implement" }, plain)).toBe("corral todo done implement");
-  const result = receipt("committed", { revision: 3, progress: { revision: 3, spec_revision: 1, phases: [] } }, { op: "todo" });
-  expect(renderResultText(result, false, false, plain)).toBe("✓ revision=3");
-  const renderers = corralRenderers("corral_todo");
-  const context = { isError: false, isPartial: false, outputPad: 0, args: { op: "done", step: "implement" } } as Parameters<NonNullable<typeof renderers.renderResult>>[3];
-  const component = renderers.renderResult?.(result, { expanded: false, isPartial: false }, plain as never, context);
-  expect(component?.render(80)).toEqual(["✓ corral todo done implement · revision=3"]);
-});
-
-test("a call without a receipt shows its error, and only the expanded view shows the raw result", () => {
-  const failed: AgentToolResult<unknown> = { content: [{ type: "text", text: "call_timeout: exceeded" }], details: undefined };
-  expect(renderResultText(failed, false, true, plain)).toBe("✗ call_timeout: exceeded");
-  const collapsed = renderResultText(receipt("committed", { key: "Q-1" }), false, false, plain);
-  const expanded = renderResultText(receipt("committed", { key: "Q-1" }), true, false, plain);
-  expect(collapsed.split("\n")).toHaveLength(1);
-  expect(expanded).toContain('"key": "Q-1"');
-});
-
-test("a corral call is one self-framed tool line: the spinner while it runs, then the receipt's glyph and fields", () => {
-  const renderers = corralRenderers("corral_ask");
-  expect(renderers.renderShell).toBe("self");
-  const args = { kind: "clarification", text: "a ".repeat(100) };
-  // The line keeps Pi's output padding free on both sides itself.
-  const running = { isError: false, isPartial: true, outputPad: 1, args } as Parameters<NonNullable<typeof renderers.renderResult>>[3];
-  const call = (renderers.renderCall?.(args, plain as never, running as never).render(40) ?? []).map(line => stripTerminalSequences(line));
-  expect(call).toHaveLength(1);
-  expect(call[0]).toMatch(/^ [⠋⠙⠹⠸⠼⠴⠦⠧] corral ask clarification: a a/);
-  expect(visibleWidth(call[0] ?? "")).toBeLessThanOrEqual(39);
-  const done = { ...running, isPartial: false };
-  expect(renderers.renderCall?.(args, plain as never, done as never).render(40)).toEqual([]);
-  const result = (renderers.renderResult?.(receipt("committed", { key: "Q-9" }), { expanded: false, isPartial: false }, plain as never, done).render(40) ?? [])
-    .map(line => stripTerminalSequences(line));
-  expect(result).toHaveLength(1);
-  expect(result[0]).toMatch(/^ ✓ corral ask clarification: a a/);
-  expect(visibleWidth(result[0] ?? "")).toBeLessThanOrEqual(39);
-  const short = renderers.renderResult?.(receipt("committed", { key: "Q-9" }), { expanded: false, isPartial: false }, plain as never,
-    { ...done, args: { kind: "clarification", text: "Which slot?" } }).render(80);
-  expect(short).toEqual([" ✓ corral ask clarification: Which slot? · key=Q-9"]);
-});
 
 test("the header names the role, the run and the model; the title is short", () => {
   const worker = { store: "s", project: "corral", role: "worker" as const, task: "T-503", run: "R1", generation: 2 };

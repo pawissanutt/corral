@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentToolUpdateCallback, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { callKey, nestedChild } from "../codemode/child.ts";
@@ -45,9 +45,9 @@ export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands):
         + "Use job_output for a nonblocking log peek; job_wait to await one job or the next result. In Code Mode, the default awaits actual completion; explicit wait_ms:0 backgrounds immediately.",
       parameters: Type.Object({ command: Type.String({ minLength: 1, maxLength: 4096 }),
         timeout: Type.Optional(Type.Number({ minimum: 1 })), wait_ms: waitBudget }),
-      async execute(id: string, params: { command: string; timeout?: number; wait_ms?: number }, signal?: AbortSignal) {
+      async execute(id: string, params: { command: string; timeout?: number; wait_ms?: number }, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback<unknown>) {
         return guarded("bash", id, () => commands.run(params.command, callKey("bash", id), {
-          ...params, ...(signal ? { signal } : {}), nested: nestedChild("bash", id) !== undefined }), true, true);
+          ...params, ...(signal ? { signal } : {}), ...(onUpdate ? { onUpdate } : {}), nested: nestedChild("bash", id) !== undefined }), true, true);
       },
     } satisfies ToolDefinition] : []),
     {
@@ -81,8 +81,8 @@ export function jobTools(jobs: JobRuntime, monitor = true, commands?: Commands):
       description: "Await one owned job, or omit job for the next unconsumed completion. Return immediately if none exist. "
         + "wait_ms (default 60000) limits observation only: expiry or cancellation never kills work. Completed output remains readable; no polling is needed.",
       parameters: Type.Object({ job: Type.Optional(Type.String()), wait_ms: waitBudget }),
-      async execute(id: string, params: { job?: string; wait_ms?: number }, signal?: AbortSignal) {
-        return guarded("job_wait", id, () => commands.wait(params.job, params.wait_ms, signal), true);
+      async execute(id: string, params: { job?: string; wait_ms?: number }, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback<unknown>) {
+        return guarded("job_wait", id, () => commands.wait(params.job, params.wait_ms, signal, onUpdate), true);
       },
     } satisfies ToolDefinition] : []),
     {

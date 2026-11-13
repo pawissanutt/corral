@@ -1,8 +1,52 @@
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentToolUpdateCallback, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
-import type { AuxiliaryRuntime } from "./runtime.ts";
+import type { AuxiliaryKind, AuxiliaryRuntime } from "./runtime.ts";
 import type { ResearchOptions } from "./research.ts";
+import type { HelperInspection } from "./inspection.ts";
+
+function childProgress(runtime: AuxiliaryRuntime, kind: AuxiliaryKind, id: string, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback<unknown>): () => void {
+  if (!onUpdate || signal?.aborted) return () => {};
+  const turns = new Set<string>(), tools = new Set<string>();
+  let latest = "";
+  let pending: HelperInspection | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let emittedAt: number | undefined;
+  let last = "";
+  let stopped = false;
+  const emit = () => {
+    clearTimeout(timer);
+    timer = undefined;
+    if (stopped || pending?.phase !== "running" || !latest) return;
+    const key = JSON.stringify([latest, turns.size, tools.size]);
+    if (key === last) return;
+    last = key;
+    emittedAt = Date.now();
+    try { onUpdate({ content: [{ type: "text", text: latest }], details: { progress: { turns: turns.size, tools: tools.size } } }); }
+    catch {}
+  };
+  const unsubscribe = runtime.watch(kind, id, inspection => {
+    if (stopped) return;
+    for (const message of inspection.messages) {
+      (message.kind === "tool" ? tools : turns).add(message.id);
+    }
+    latest = inspection.latestActivity ?? latest;
+    pending = inspection;
+    if (inspection.phase !== "running") return;
+    const delay = emittedAt === undefined ? 0 : Math.max(0, emittedAt + 250 - Date.now());
+    if (!delay) emit();
+    else if (!timer) timer = setTimeout(emit, delay);
+  });
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    clearTimeout(timer);
+    unsubscribe();
+    signal?.removeEventListener("abort", stop);
+  };
+  signal?.addEventListener("abort", stop, { once: true });
+  return stop;
+}
 
 const researchSchema = Type.Object({
   prompt: Type.String({ minLength: 1, maxLength: 32768, description: "One bounded question and the evidence/output needed. Children do not inherit the conversation." }),
@@ -24,16 +68,17 @@ export function exploreTool(runtime: AuxiliaryRuntime): ToolDefinition {
     promptSnippet: "Delegate independent code or documentation research with cited, bounded findings",
     promptGuidelines: [
       "Use explore for substantial independent research that would otherwise fill your context with search output, not trivial one-file lookups.",
-      "For broad research, split explore into two or three non-overlapping questions and run them concurrently (codemode Promise.all when available). Keep useful separate work for yourself; do not duplicate child searches while waiting.",
+      "For broad research, split explore into two or three non-overlapping questions and run independent explore calls concurrently as parallel direct tool calls in one turn; use a Code Mode cell only when you also need to filter, combine or summarise their results. Keep useful separate work for yourself; do not duplicate child searches while waiting.",
       "Give explore a question, relevant constraints, starting points and expected evidence. Select profile docs for official/version-specific documentation, code for execution paths. Do not assume children inherit your conversation or project instructions.",
       "Collect and reconcile explore findings before claiming completion. Check partial/failed status and coverage; verify important citations. Research helpers are not independent Corral reviewers and grant no board authority.",
     ],
     parameters: researchSchema,
-    async execute(id, params: { prompt: string } & ResearchOptions, signal) {
+    async execute(id, params: { prompt: string } & ResearchOptions, signal, onUpdate) {
       const { prompt, ...research } = params;
       const size = [prompt, research.scope, research.starting_points, research.constraints].reduce((n, text) => n + (text?.length ?? 0), 0);
       if (size > 32768) throw new Error("Research question and context must total at most 32,768 characters");
-      const result = await runtime.run("explore", id, prompt, signal, research);
+      const stop = childProgress(runtime, "explore", id, signal, onUpdate);
+      const result = await runtime.run("explore", id, prompt, signal, research).finally(stop);
       const status = result.report?.status ?? (result.outcome === "completed" ? "completed" : "partial");
       const header = [`Research ${status}; stop: ${result.report?.stopReason ?? result.outcome}.`,
         `Request: ${result.request}; generation: ${result.generation}.`,
@@ -57,7 +102,7 @@ export function expertTool(runtime: AuxiliaryRuntime): ToolDefinition {
       context: Type.Optional(Type.String({ maxLength: 8192 })),
       paths: Type.Optional(Type.Array(Type.String(), { maxItems: 16 })),
     }, { additionalProperties: false }),
-    async execute(id, params: { question: string; context?: string; paths?: string[] }, signal) {
+    async execute(id, params: { question: string; context?: string; paths?: string[] }, signal, onUpdate) {
       if (!params.question.trim() || Buffer.byteLength(params.question) > 4096
         || Buffer.byteLength(params.context ?? "") > 8192 || (params.paths?.length ?? 0) > 16) {
         throw new Error("Expert needs a question of 1-4096 bytes, context of at most 8192 bytes and at most 16 path hints");
@@ -68,7 +113,8 @@ export function expertTool(runtime: AuxiliaryRuntime): ToolDefinition {
         + "Do not write, invoke shell commands, delegate or take board effects.\n"
         + JSON.stringify({ question: params.question, ...(params.context === undefined ? {} : { context: params.context }),
           ...(params.paths === undefined ? {} : { paths: params.paths }) });
-      const result = await runtime.run("expert", id, prompt, signal);
+      const stop = childProgress(runtime, "expert", id, signal, onUpdate);
+      const result = await runtime.run("expert", id, prompt, signal).finally(stop);
       if (!result.model || result.turns === undefined) throw new Error("Expert session did not report its model and turn count");
       return { content: [{ type: "text", text: result.text }],
         details: { model: result.model, turns: result.turns, truncated: result.truncated },

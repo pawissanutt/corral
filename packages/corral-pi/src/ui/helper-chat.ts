@@ -1,7 +1,9 @@
 // One agent's conversation as the mock's `childHTML` draws it: the prompt as the transcript's own user bubble
 // with this conversation's label in place of `you`, the replies through Pi's AssistantMessageComponent, and each
-// tool call on one line (`✓ read src/a.ts`). A tool line opens into Pi's native ToolExecutionComponent card by
-// pointer, and every tool does while tools are expanded. Only bounded, sanitized display data reaches the renderers.
+// tool call on one row drawn by the same presenters as the main transcript (`✓ read src/a.ts · 2 lines`). A tool
+// row opens into Pi's native ToolExecutionComponent card by pointer, and every tool does while tools are expanded.
+// Only bounded, sanitized display data reaches the renderers.
+import { parseStreamingJson } from "@earendil-works/pi-ai";
 import {
   AssistantMessageComponent, ToolExecutionComponent, UserMessageComponent, getMarkdownTheme, type MarkdownTransformer, type ToolRenderers,
 } from "@earendil-works/pi-coding-agent";
@@ -11,9 +13,10 @@ import {
 } from "@earendil-works/pi-tui";
 import type { HelperMessage } from "../extensions/subagent/inspection.ts";
 import type { ConversationSource } from "./agents-model.ts";
-import { spinner } from "./frame.ts";
 import { userLabel } from "./panels-theme.ts";
-import { plainLabel, PANEL_BLUE, PANEL_BUBBLE, PANEL_ERROR, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT } from "./panels-view.ts";
+import { plainLabel, PANEL_BUBBLE, PANEL_MUTED, PANEL_TEXT } from "./panels-view.ts";
+import { presenterFor, type ToolRenderDeps } from "./tool-rendering.ts";
+import { baseState, firstLine, presentCall, resultText, rowLine, type CallInput, type Presenter, type RowModel } from "./tool-row.ts";
 
 export interface HelperChatStyle {
   readonly outputPad: 0 | 1;
@@ -40,13 +43,22 @@ function safeValue(value: unknown, depth = 0): unknown {
   }
   return value;
 }
-function toolArgs(text: string | undefined): { readonly value: unknown; readonly complete: boolean } {
-  if (text === undefined) return { value: {}, complete: false };
+/**
+ * A tool message's arguments for its native card. `native`: an object the tool's renderers can draw, complete or
+ * still streaming; `generic`: retention clipped the JSON, so only the generic card may show the preview.
+ */
+function toolArgs(message: HelperMessage): { readonly value: Record<string, unknown>; readonly complete: boolean; readonly mode: "native" | "generic" } {
+  const text = message.arguments;
+  if (text === undefined) return { value: {}, complete: false, mode: "native" };
+  if (message.argsComplete === false) return { value: record(safeValue(parseStreamingJson(text))), complete: false, mode: "native" };
   try {
     const parsed: unknown = JSON.parse(text);
-    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-      ? { value: safeValue(parsed), complete: true } : { value: { preview: helperText(text) }, complete: false };
-  } catch { return { value: { preview: helperText(text), note: "arguments truncated or unavailable" }, complete: false }; }
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) return { value: record(safeValue(parsed)), complete: true, mode: "native" };
+    return { value: { preview: helperText(text) }, complete: false, mode: "generic" };
+  } catch { return { value: { preview: helperText(text), note: "arguments truncated or unavailable" }, complete: false, mode: "generic" }; }
+}
+function record(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value)) : {};
 }
 function argumentRecord(text: string | undefined): Readonly<Record<string, unknown>> | undefined {
   if (text === undefined) return undefined;
@@ -100,16 +112,52 @@ function bubbleRows(lines: readonly string[], width: number, pad: number): strin
 export function bubble(label: string, text: string, width: number, notes: readonly string[] = []): string[] {
   return bubbleRows([PANEL_MUTED + label + " " + PANEL_TEXT + text, ...notes.map(note => PANEL_MUTED + note)], width, 1);
 }
-/** One tool call on one line: its state (the spinner while the agent runs it), its name in accent and what it touches. */
-function toolLine(message: HelperMessage, live: boolean, now: number, phase: number, width: number): string {
-  const state = message.phase === "completed" ? PANEL_SUCCESS + "✓" : message.phase === "error" ? PANEL_ERROR + "✗"
-    : live ? PANEL_BLUE + spinner(now, phase) : PANEL_MUTED + "○";
-  const target = toolTarget(message);
-  return truncateToWidth(" " + state + " " + PANEL_BLUE + plainLabel(helperText(message.tool ?? "tool")) + (target ? " " + PANEL_TEXT + target : "") + PANEL_TEXT,
-    width, "…") + RESET;
+/** The call-site hint of a Code Mode script: the tools it calls, in order of first use (`read, bash`). */
+function callSites(code: string): string {
+  const names = [...code.matchAll(/\btools\.([A-Za-z_$][\w$]*)\s*\(/g)].map(match => match[1]!);
+  return [...new Set(names)].join(", ");
+}
+/** A child's tool message as the presenters' call: its arguments as far as they streamed, and its result so far. */
+function helperCall(message: HelperMessage, cwd: string): CallInput {
+  const args = toolArgs(message), name = helperText(message.tool ?? "tool");
+  const text = helperText(message.text);
+  const settled = message.phase === "completed" || message.phase === "error";
+  const partial = !settled && message.partial === true && text !== "";
+  // Retention may clip a finished call's JSON: the row still names what the call touched, from the readable prefix.
+  const value = args.mode === "generic" && message.arguments !== undefined ? record(safeValue(parseStreamingJson(message.arguments))) : args.value;
+  return {
+    name, args: value, argsComplete: args.complete || (args.mode === "generic" && message.argsComplete !== false),
+    executionStarted: message.phase !== undefined && message.phase !== "requested",
+    ...(settled || partial ? { result: { content: [{ type: "text" as const, text }], details: undefined } } : {}),
+    partial, isError: message.phase === "error", expanded: false, cwd, toolCallId: message.id,
+  };
+}
+/**
+ * What a child's rows may read of host state: only the session cwd. A child's jobs, Code Mode cells and todo ledger
+ * are its own, not this host's, so the presenters draw them from the call alone.
+ */
+function childDeps(cwd: string): ToolRenderDeps {
+  return { cwd, ticker: () => undefined, job: () => undefined, code: () => undefined, ledger: () => undefined, corralSpecs: [] };
+}
+/** The row of a child's tool call: the same presenter as the main transcript; a Code Mode cell reads as the tools it calls. */
+function helperRow(message: HelperMessage, live: boolean, cwd: string): RowModel {
+  const call = helperCall(message, cwd);
+  const present: Presenter = call.name === "codemode" ? codeRow : presenterFor(call.name, childDeps(cwd));
+  const model = presentCall(present, call);
+  // A conversation that stopped leaves its unfinished calls waiting, never spinning.
+  return !live && (model.state === "writing" || model.state === "running") ? { ...model, state: "waiting" } : model;
+}
+/** A child's Code Mode call as `code · read, bash`: the tools its script calls, never the script. */
+function codeRow(call: CallInput): RowModel {
+  const sites = callSites(typeof call.args.code === "string" ? call.args.code : ""), state = baseState(call);
+  const reason = state === "failed" ? firstLine(resultText(call.result)) : "";
+  return { state, verb: "code", ...(reason ? { outcome: reason } : sites ? { outcome: sites } : {}) };
 }
 
-interface Cached { readonly component: AssistantMessageComponent | ToolExecutionComponent; key: string; readonly argsComplete?: boolean }
+interface Cached {
+  readonly component: AssistantMessageComponent | ToolExecutionComponent; key: string;
+  readonly mode?: "native" | "generic"; readonly argsComplete?: boolean;
+}
 /** A rendered stretch of rows: a native component, or the one-line form of the tool call `tool`. */
 interface Hit { readonly start: number; readonly end: number; readonly component?: Component; readonly tool?: string }
 
@@ -154,9 +202,9 @@ export class HelperChat {
     const retained = new Set<string>();
     const messages: readonly HelperMessage[] = helper.result !== undefined && !helper.messages.some(message => message.kind === "assistant" && (message.textBlocks?.join("") ?? message.text).trim() === helper.result)
       ? [...helper.messages, { id: "returned-result", kind: "assistant", text: helper.result, stopReason: "pending" }] : helper.messages;
-    messages.forEach((message, index) => {
+    messages.forEach(message => {
       retained.add(message.id);
-      const key = JSON.stringify([message.text, message.textBlocks, message.arguments, message.phase, message.stopReason, message.errorMessage, message.hasToolCalls]);
+      const key = JSON.stringify([message.text, message.textBlocks, message.arguments, message.argsComplete, message.partial, message.phase, message.stopReason, message.errorMessage, message.hasToolCalls]);
       let cached = this.cached.get(message.id);
       if (message.kind === "assistant") {
         const component = cached?.component instanceof AssistantMessageComponent ? cached.component
@@ -172,24 +220,26 @@ export class HelperChat {
       if (!tui) {
         if (!lastLine) rows.push("");
         this.hits.push({ start: rows.length, end: rows.length + 1, tool: message.id });
-        rows.push(toolLine(message, live, now, index, width)); lastLine = true;
+        rows.push(" " + rowLine(helperRow(message, live, this.cwd), Math.max(1, width - 1), now)); lastLine = true;
         return;
       }
-      const args = toolArgs(message.arguments);
-      const reused = cached?.component instanceof ToolExecutionComponent && cached.argsComplete === args.complete;
+      // One card per call id: it is rebuilt only when the arguments stop being readable, never because they completed.
+      const args = toolArgs(message);
+      const reused = cached?.component instanceof ToolExecutionComponent && cached.mode === args.mode;
       const component = reused && cached?.component instanceof ToolExecutionComponent ? cached.component
         : new ToolExecutionComponent(helperText(message.tool ?? "unavailable"), message.id, args.value,
-          { showImages: false, outputPad: style.outputPad }, args.complete ? style.renderers(message.tool ?? "") : undefined, tui, this.cwd);
+          { showImages: false, outputPad: style.outputPad }, args.mode === "native" ? style.renderers(message.tool ?? "") : undefined, tui, this.cwd);
       if (!reused) component.setExpanded(true);
-      if (!cached || cached.key !== key || cached.argsComplete !== args.complete) {
+      if (!cached || cached.key !== key || !reused) {
         component.updateArgs(args.value);
-        if (args.complete) component.setArgsComplete();
-        if (message.phase !== "requested") component.markExecutionStarted();
+        if (args.complete && !(reused && cached?.argsComplete)) component.setArgsComplete();
+        if (message.phase !== undefined && message.phase !== "requested") component.markExecutionStarted();
         if (message.phase === "completed" || message.phase === "error") component.updateResult({
           content: [{ type: "text", text: helperText(message.text) }], isError: message.phase === "error",
         });
+        else if (message.partial === true && message.text !== "") component.updateResult({ content: [{ type: "text", text: helperText(message.text) }], isError: false }, true);
       }
-      cached = { component, key, argsComplete: args.complete };
+      cached = { component, key, mode: args.mode, argsComplete: args.complete };
       this.cached.set(message.id, cached); append(component, message.id); lastLine = false;
     });
     for (const id of this.cached.keys()) if (!retained.has(id)) this.cached.delete(id);

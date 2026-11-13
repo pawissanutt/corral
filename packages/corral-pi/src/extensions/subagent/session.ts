@@ -7,28 +7,107 @@ import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works
 import { resourceLoaderOptions, restrictedSettings } from "../../host/restrict.ts";
 import { executionRefusal, exploreLoadout } from "../../roles/common/execution.ts";
 import type { AuxiliaryResult, Invocation } from "./runtime.ts";
-import type { HelperEvent } from "./inspection.ts";
+import { HELPER_TEXT_LIMIT, type HelperEvent } from "./inspection.ts";
 import { researchBudget, researchPrompt, researchResult, type ResearchReport } from "./research.ts";
 import { reviewSnapshots } from "./review-snapshot.ts";
 
+// Each observer belongs to one child. Weak keys release its throttle state with the observer.
+const helperUpdates = new WeakMap<(event: HelperEvent) => void, Map<string, number>>();
+
+/** Serialize only a bounded JSON prefix, clipping strings before escaping them. */
+function helperArguments(value: unknown): string {
+  let text = "";
+  const append = (part: string) => { text += part.slice(0, HELPER_TEXT_LIMIT - text.length); };
+  const string = (part: string) => append(JSON.stringify(part.slice(0, HELPER_TEXT_LIMIT - text.length)));
+  const visit = (part: unknown, depth: number): void => {
+    if (text.length >= HELPER_TEXT_LIMIT) return;
+    if (typeof part === "string") { string(part); return; }
+    if (part === null || typeof part !== "object") { append(JSON.stringify(part) ?? "null"); return; }
+    if (depth > 16) { string("[nested value omitted]"); return; }
+    if (Array.isArray(part)) {
+      append("[");
+      for (let index = 0; index < part.length && text.length < HELPER_TEXT_LIMIT; index++) {
+        if (index) append(",");
+        visit(part[index], depth + 1);
+      }
+      append("]");
+    } else {
+      append("{");
+      let first = true;
+      for (const key in part) {
+        if (text.length >= HELPER_TEXT_LIMIT) break;
+        if (!Object.hasOwn(part, key)) continue;
+        const item: unknown = (part as Record<string, unknown>)[key];
+        if (item === undefined || typeof item === "function" || typeof item === "symbol") continue;
+        if (!first) append(",");
+        first = false;
+        string(key); append(":"); visit(item, depth + 1);
+      }
+      append("}");
+    }
+  };
+  visit(value, 0);
+  return text;
+}
+
+/** Project text only, without copying an unbounded result or exposing tool details. */
+function helperResultText(result: unknown, tail = false): string {
+  if (!result || typeof result !== "object" || !("content" in result) || !Array.isArray(result.content)) return "";
+  let text = "";
+  let found = false;
+  for (let step = 0; step < result.content.length && text.length < HELPER_TEXT_LIMIT; step++) {
+    const block: unknown = result.content[tail ? result.content.length - step - 1 : step];
+    if (!block || typeof block !== "object" || !("type" in block) || block.type !== "text" || !("text" in block) || typeof block.text !== "string") continue;
+    const remaining = HELPER_TEXT_LIMIT - text.length;
+    const separator = found ? "\n" : "";
+    text = tail ? block.text.slice(-remaining) + separator + text : text + separator + block.text.slice(0, remaining);
+    text = tail ? text.slice(-HELPER_TEXT_LIMIT) : text.slice(0, HELPER_TEXT_LIMIT);
+    found = true;
+  }
+  return text;
+}
+
 /** Project only visible response text and tool activity; never forward thinking or signatures. */
-export function observeHelperEvent(event: Sdk.AgentSessionEvent, emit: (event: HelperEvent) => void): void {
-  try { projectHelperEvent(event, emit); }
+export function observeHelperEvent(event: Sdk.AgentSessionEvent, emit: (event: HelperEvent) => void, now: () => number = Date.now): void {
+  let updates = helperUpdates.get(emit);
+  if (!updates) { updates = new Map(); helperUpdates.set(emit, updates); }
+  const ready = (id: string): boolean => {
+    const at = now();
+    const previous = updates.get(id);
+    if (previous !== undefined && at - previous < 100) return false;
+    updates.set(id, at);
+    return true;
+  };
+  try { projectHelperEvent(event, emit, ready, updates); }
   catch (error) {
     // A projection/UI failure is not a provider failure and cannot abort a billable child.
     try { emit({ type: "inspection_error", text: `Activity projection unavailable: ${error instanceof Error ? error.message : String(error)}` }); }
     catch { /* The observer itself is broken; execution and canonical accounting must continue. */ }
   }
 }
-function projectHelperEvent(event: Sdk.AgentSessionEvent, emit: (event: HelperEvent) => void): void {
+function projectHelperEvent(event: Sdk.AgentSessionEvent, emit: (event: HelperEvent) => void,
+  ready: (id: string) => boolean, updates: Map<string, number>): void {
   if (event.type === "message_start" && event.message.role === "assistant") emit({ type: "assistant_start" });
   else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
     const blocks = event.assistantMessageEvent.partial.content.filter(block => block.type === "text").map(block => block.text);
     emit({ type: "assistant_delta", text: event.assistantMessageEvent.delta, ...(blocks.length > 1 ? { textBlocks: blocks } : {}) });
+  } else if (event.type === "message_update"
+    && (event.assistantMessageEvent.type === "toolcall_start" || event.assistantMessageEvent.type === "toolcall_delta")) {
+    const update = event.assistantMessageEvent;
+    const block = update.partial.content[update.contentIndex];
+    if (block?.type === "toolCall" && ready(block.id)) {
+      emit({ type: "tool", id: block.id, name: block.name, phase: "requested", arguments: helperArguments(block.arguments), argsComplete: false });
+    }
   } else if (event.type === "tool_execution_start") {
+    updates.delete(event.toolCallId);
     emit({ type: "tool", id: event.toolCallId, name: event.toolName, phase: "running" });
+  } else if (event.type === "tool_execution_update") {
+    if (ready(event.toolCallId)) emit({ type: "tool", id: event.toolCallId, name: event.toolName, phase: "running",
+      text: helperResultText(event.partialResult, true), partial: true });
   } else if (event.type === "tool_execution_end") {
-    emit({ type: "tool", id: event.toolCallId, name: event.toolName, phase: event.isError ? "error" : "completed" });
+    updates.delete(event.toolCallId);
+    emit({ type: "tool", id: event.toolCallId, name: event.toolName, phase: event.isError ? "error" : "completed",
+      text: helperResultText(event.result), partial: false });
   } else if (event.type === "message_end") {
     const message = event.message;
     if (message.role === "assistant") {
@@ -36,12 +115,13 @@ function projectHelperEvent(event: Sdk.AgentSessionEvent, emit: (event: HelperEv
       emit({ type: "assistant_end", text: blocks.join("\n"), ...(blocks.length > 1 ? { textBlocks: blocks } : {}), errorMessage: message.errorMessage,
         stopReason: message.stopReason, hasToolCalls: message.content.some(block => block.type === "toolCall") });
       for (const block of message.content) if (block.type === "toolCall") {
-        emit({ type: "tool", id: block.id, name: block.name, phase: "requested", arguments: JSON.stringify(block.arguments) });
+        updates.delete(block.id);
+        emit({ type: "tool", id: block.id, name: block.name, phase: "requested", arguments: helperArguments(block.arguments), argsComplete: true });
       }
       if (message.stopReason === "error" || message.stopReason === "aborted") emit({ type: "error", text: message.errorMessage ?? "Helper response interrupted." });
     } else if (message.role === "toolResult") {
       emit({ type: "tool", id: message.toolCallId, name: message.toolName, phase: message.isError ? "error" : "completed",
-        text: message.content.filter(block => block.type === "text").map(block => block.text).join("\n") });
+        text: helperResultText(message), partial: false });
     }
   }
 }

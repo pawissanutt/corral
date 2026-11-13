@@ -2,7 +2,7 @@
 // billable work; an interrupted request is uncertain, never silently charged as zero.
 import { createHash } from "node:crypto";
 import type { AuxiliarySettings } from "./settings.ts";
-import { AuxiliaryHistory, type HelperEvent } from "./inspection.ts";
+import { AuxiliaryHistory, type HelperEvent, type HelperInspection } from "./inspection.ts";
 import { researchBudget, type ResearchOptions, type ResearchReport } from "./research.ts";
 
 export type AuxiliaryKind = "explore" | "oracle" | "web_search" | "shadow" | "expert";
@@ -114,8 +114,19 @@ export class AuxiliaryRuntime {
     this.expert = new Slots(options.settings.expert?.max_parallel ?? 1);
     this.history = new AuxiliaryHistory(options.changed);
   }
+  /** Observe only this parent tool call, including when subscribed before it starts. */
+  watch(kind: AuxiliaryKind, id: string, changed: (inspection: HelperInspection) => void): () => void {
+    const request = this.requestKey(kind, id);
+    return this.history.subscribe(() => {
+      const inspection = this.history.snapshot().find(entry => entry.request === request);
+      if (inspection) changed(inspection);
+    });
+  }
+  private requestKey(kind: AuxiliaryKind, id: string): string {
+    return createHash("sha256").update(JSON.stringify([this.options.sessionId(), this.options.generation, kind, id])).digest("hex");
+  }
   run(kind: AuxiliaryKind, id: string, prompt: string, signal?: AbortSignal, research?: ResearchOptions, shadowOptions?: readonly string[]) {
-    const key = createHash("sha256").update(JSON.stringify([this.options.sessionId(), this.options.generation, kind, id])).digest("hex");
+    const key = this.requestKey(kind, id);
     const previous = this.requests.get(key);
     if (previous) return previous;
     const request = this.perform(kind, key, prompt, signal, research, undefined, shadowOptions);
@@ -249,7 +260,8 @@ export class AuxiliaryRuntime {
   /** Fence/close is permanent. Ordinary turn cancellation uses each tool's operation signal. */
   async close(): Promise<void> {
     this.stopped = true;
-    await this.cancelAll();
+    try { await this.cancelAll(); }
+    finally { this.history.dispose(); }
   }
   async cancelAll(): Promise<void> {
     for (const controller of this.controllers) controller.abort(new Error("parent cancelled/reloaded/fenced"));
