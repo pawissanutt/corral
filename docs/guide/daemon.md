@@ -88,8 +88,23 @@ paced passes use at most about 5% of a core; anything due is served by the next 
 A nudge starts the next pass at once. Expect one extra "echo" pass after any pass that
 wrote: it sees those writes, reruns the affected steps once and settles.
 
-Two switch files beside the daemon socket change this, checked at the start of every
-pass like the timing switch ([timing guide](timing.md)); no restart is needed:
+The pass mode is set persistently by `[daemon] pass` in `.corral/corral.toml`
+(`"incremental"`, the default, `"audit"` or `"full"`; see
+[configuration](configuration.md#daemon)). The daemon reads it from the config it reloads
+every pass, so an edit applies from the next pass, survives restarts and reinstalls, and
+needs no restart:
+
+```toml
+[daemon]
+pass = "audit"
+```
+
+Two switch files beside the daemon socket can make the mode more conservative for a
+running daemon without a config edit, never less: the effective mode is the most
+conservative of the setting and the files (full > audit > incremental). They live in the
+runtime directory, so a reboot removes them. They are checked at the start of every pass
+like the timing switch ([timing guide](timing.md)); no restart is needed. `"full"` behaves
+as `sync-full-on`, `"audit"` as `sync-audit-on`:
 
 - `sync-full-on` turns skipping off: every pass is full. Use it to rule out the
   incremental planner when something reacts late, or as a rollback switch.
@@ -107,7 +122,9 @@ pass like the timing switch ([timing guide](timing.md)); no restart is needed:
     (a process, a file, a herdr pane), and the step's cadence would have run it at most
     N seconds later.
 
-  If both files exist, `sync-full-on` wins and nothing is audited.
+  If both files exist, `sync-full-on` wins and nothing is audited. `corral daemon status`
+  prints `sync passes: <mode> (<source>)` while the effective mode is not `incremental`,
+  naming `[daemon] pass` or the switch file that set it.
 
 ```sh
 touch "$(dirname "$(corral daemon socket)")/sync-audit-on"
@@ -121,7 +138,7 @@ With timing on, each pass record shows what the planner did, as span counts (`n`
 | `sync.quiet` | 1 when the pass ran no gated step |
 | `sync.skip` | steps and tasks the pass skipped |
 | `sync.full` | 1 when the pass was full |
-| `sync.full.<reason>` | 1 for the reason of a full pass: `start`, `owner` (a `cli`/`board` nudge), `switch` (`sync-full-on`), `periodic`, `config`, `session`, `herdr`, `feed_gap`, `clock_jump` or `audit` |
+| `sync.full.<reason>` | 1 for the reason of a full pass: `start`, `owner` (a `cli`/`board` nudge), `switch` (`sync-full-on` or `pass = "full"`), `periodic`, `config`, `session`, `herdr`, `feed_gap`, `clock_jump` or `audit` (`sync-audit-on` or `pass = "audit"`) |
 | `sync.audit.pass` | 1 when the pass was audited |
 | `sync.audit.step` | steps and tasks the audited pass decided |
 | `sync.audit.would_skip` | of those, the ones the rules would have skipped |
@@ -129,7 +146,7 @@ With timing on, each pass record shows what the planner did, as span counts (`n`
 | `sync.audit.delayed` | of those, the ones that acted on an input only their `every N` cadence covers |
 | `sync.audit.wrong_skip` | of those, the ones that acted with no listed input changed and no cadence covering them |
 
-An audited pass is one whose only reason to be full is `sync-audit-on`; a pass that is
+An audited pass is one whose only reason to be full is audit mode; a pass that is
 full for another reason (start, nudge, periodic, ...) is not audited. `sync.audit.pass`
 proves audit ran, and `sync.audit.would_skip` that it had something to check.
 `sync.audit.raced` is expected while other processes write, and `sync.audit.delayed` while

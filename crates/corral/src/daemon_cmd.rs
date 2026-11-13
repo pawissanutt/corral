@@ -63,6 +63,9 @@ pub fn run(start: &Path, cmd: DaemonCmd, entry: &crate::entry::Entry) -> Result<
                 if let Some(line) = corral_ops::command::route::fallback_line(store.dir()) {
                     println!("{line}");
                 }
+                if let Some(line) = corral_daemon::pass_mode_line(&store) {
+                    println!("{line}");
+                }
             }
             std::process::exit(health_code(&health));
         }

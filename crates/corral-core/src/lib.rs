@@ -38,7 +38,7 @@ pub use cowork::{
     CompletionDriver, CompletionIntent, CompletionScope, Cowork, CoworkReview, ReviewWaiver,
 };
 mod daemon_cfg;
-pub use daemon_cfg::DaemonCfg;
+pub use daemon_cfg::{DaemonCfg, DaemonPass};
 pub mod dashboard;
 mod dispatch_config;
 mod edited;
