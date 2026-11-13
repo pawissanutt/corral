@@ -127,7 +127,7 @@ One test failed once in nine full workspace runs and passed 33 times alone:
 `corral::run_obligations_cli generic_worker_gate_wait_collects_once_across_cli_process_restarts`
 (`receipt.outcome` was null after two sync processes). The cause was not found.
 
-## What remains
+## What remained after the follow-up
 
 Costs that are still paid on every pass or tick:
 
@@ -158,3 +158,113 @@ Verb inventory for step 3 (156 leaf verbs): 48 read, 52 control (store writes on
 Roughly two thirds of the control verbs already call a `corral-ops` function; the rest have their
 logic in the CLI crate. The hardest to route through a daemon are `gate`, `done`, `verdict`,
 `approve`, `review`, `artifact add` and `evidence record`, which read the worker's worktree.
+
+## Second round on November 13: six items
+
+| Item | State | Checked on the real store |
+|---|---|---|
+| 1. A quiet pass writes nothing to the change feed (`96e91d19`) | on `main`, installed | yes |
+| 2. Podman behind `[load_sandbox] enabled`, default off (`65d98937`) | on `main`, installed | the setting is on for this workspace only, whose repository owns `scripts/load-sandbox.sh` |
+| 3. `corral search --in all` (`17d028cd`, `e1cbcde9`) | on `main`; the streaming search is installed, the catalog is behind `[search] catalog`, default off | yes, both paths |
+| 4. The PM agent's own reads served by the daemon (`fe1bfdd5`) | on `main`, installed | no: the PM was stopped throughout |
+| 5. Commands through the daemon (`9f9bf3f2`): 79 control verbs | on `main`, installed, switched off here with `[daemon] commands = false` | no |
+| 6. Incremental pass and daemon-computed classic board frame | branch `incremental-on-main`, not installed | no |
+
+### Item 1: quiet pass
+
+In the 28 minutes after the install the feed held 11 entries other than read leases: six
+`main-movement` records, one `pm-supervisor` record, two events and two lifecycle entries. None of
+the four kinds listed under "A quiet pass still writes" appeared; that window had held 529 of them
+in 96 minutes. A full pass on this build still takes 1.8 s (median of five): 37 `git` calls and
+eight `herdr` calls per pass, which item 6 removes from a quiet pass.
+
+### Item 3: search
+
+The first attempt (`31c707cc`) built its catalog inside one pinned read. On this store (31,592
+artifacts, 179,819 events) the read outlived the store's 600 s view limit, so every `--in all`
+query failed with `read view expired`, and it held the artifact-storage lock while it ran, which
+made the daemon report `degraded`. Its tests used stores of a few dozen documents.
+
+What replaced it, measured with release builds. "Copy" is a private copy of the store; all runs
+shared the machine with test suites.
+
+| Path | Where | Wall | CPU | Peak memory | Output |
+|---|---|---|---|---|---|
+| Before this round | live | 61 to 92 s | 63 to 68 s | 1.75 to 2.1 GB | reference |
+| Streaming search (`17d028cd`, installed) | live | 134 s | 95 s | 108 MB | identical |
+| Streaming search | copy, three queries | 97 to 423 s | 84 to 146 s | 94 to 109 MB | identical |
+| Streaming search, tasks only | copy | 20 s | 10 s | 175 MB | identical |
+| Catalog ready (`e1cbcde9`) | copy | 15.6 s and 27.1 s | 15 s and 26 s | 74 MB | identical |
+| Catalog ready | live | 38 s | 29 s | 72 MB | identical |
+
+So the installed search no longer fails and no longer needs 2 GB, but it is slower than the
+search before this round. Only the catalog makes it faster, and the catalog is off by default.
+
+Catalog cost: the first build took 708 s on the copy (killed with `SIGKILL` after 150 s, then
+resumed to the end) and 546 s on the live store (148 s of CPU, 138 MB), and leaves 4.7 GB of
+derived files under the cache directory for the live store. The daemon reported healthy in all 13
+samples taken during the last 4.3 minutes of the live build; the first five minutes were not
+sampled. With the catalog ready a query spends its time scanning the candidate artifacts (584 and
+2,757 of them for the two queries above), so its cost follows the number of documents that contain
+the terms. How long the catalog takes to catch up after new writes is not measured.
+
+### Item 5: commands
+
+`cmd.submit` and `cmd.result` (capability `cmd.v1`) carry 79 control verbs to the daemon, which
+runs the same `corral_ops::command` code a local run uses and journals each command. A client
+runs a command itself only when the command provably never reached the daemon.
+`scripts/smoke-daemon-commands.sh` checks replay, conflict, fallback and attribution against a
+private daemon. Staying local: `edit`, automation confirmations, `recover`, annotation writes,
+assistant handoff, `agent call`, `board drop`, and every verb that reads a worktree, the runtime
+or the host.
+
+Known gaps: a routed command sees the daemon's `PATH`, `HOME` and personal configuration layer,
+not the caller's; `lessons distill` checks the owner without a caller record.
+
+### Item 6: incremental pass and pushed board
+
+The daemon keeps what each step of the pass depends on (store change scopes, pane inventory, `git`
+movement by file stats, admission state, configuration, and due times) and skips a step whose
+inputs did not change. A pass is full at start, on a nudge from the CLI or a board, on a change of
+configuration, session or `herdr`, on a feed gap or clock jump, and every 600 s. Every other
+caller of the pass still runs it in full. The classic board's frame is computed by the daemon,
+announced on topic `classic` and read as `classic_frame`; a board without a daemon computes the
+same frame itself.
+
+`scripts/smoke-daemon-incremental.sh`, against a private daemon on a three-task store: three quiet
+passes with no `git` call and no feed entry; 152 audited step decisions over a burst of commands, a
+configuration change and a commit, with no wrong skip; a board frame showing a moved task 0.17 s
+after the command; full passes while `sync-full-on` exists.
+
+It has not run on the real store. It cannot be tried on a copy, because the copied records name
+the real worktrees. The plan is to install it with `sync-full-on` present, compare the board's
+text, run with `sync-audit-on` over real activity, and only then let it skip.
+
+### What went wrong
+
+- The failing search build was installed on the working machine twice: by this work (03:34 to
+  03:46 UTC, rolled back), and again at 04:43 UTC when another session fast-forwarded `main` and
+  installed from it. `main` is the install source, so a commit there is a release.
+- The first report said a cold search took as long as a warm one. It had compared two empty
+  output files; no search had completed.
+- Rules adopted since: a read verb runs against a private copy of the real store, and its output
+  is compared with the installed binary's, before it reaches `main`; what cannot run on a copy
+  goes in behind a switch that keeps the old behaviour.
+
+### Found on the way
+
+- `corral sync` can fail with `PM load backfill input changed: T-001`: the backfill reads its
+  input outside a pinned view and is not retried (`observe_load_checks.rs`). It failed one test
+  (`automation_live`) in two of about twelve full runs under load and passed alone.
+- Four Pi lane tests fail on `main` without this work.
+- Audit mode had no record of having run until `sync.audit.pass` was added, so "no wrong skip"
+  could not be told from "no audit".
+
+### What remains
+
+| Open | Needs |
+|---|---|
+| Item 6 on the real store | the staged install above |
+| Item 5 switched on | a canary on the live store, then the config line |
+| Catalog switched on | a measurement of catch-up after writes; 4.7 GB of cache |
+| Items 4 and the cost of a PM turn | a running PM |
