@@ -11,6 +11,15 @@ mod overlap;
 #[path = "lesson_rows_preparation_tests.rs"]
 mod preparation;
 
+fn prepare(ctx: &Ctx) -> Result<()> {
+    prepared(ctx).map(|_| ())
+}
+
+fn prepare_evaluation(ctx: &Ctx) -> Result<()> {
+    prepare(ctx)?;
+    crate::approvals::prepare(ctx)
+}
+
 fn ts(second: i64) -> Timestamp {
     Timestamp::from_second(1_790_812_800 + second).unwrap()
 }

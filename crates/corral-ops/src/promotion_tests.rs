@@ -1,5 +1,5 @@
 use super::*;
-use corral_core::{ArtifactKind, Store, Task};
+use corral_core::{Store, Task};
 use serde_json::json;
 
 fn workspace() -> (tempfile::TempDir, Ctx) {
@@ -218,73 +218,6 @@ fn ranks_priority_then_age_then_conflict_risk_then_id() {
 }
 
 #[test]
-fn one_shortlist_derives_each_projects_lesson_signals_once() {
-    use corral_core::work::{Work, count};
-    // Given history similar to three Ideas and to an active task of the same project.
-    let (_tmp, ctx) = workspace();
-    ctx.store
-        .create("Repair alpha engine", Some("app"), Status::Done, "")
-        .unwrap();
-    for n in 0..3 {
-        idea(&ctx, &format!("Improve alpha engine {n}"));
-    }
-    ctx.store
-        .create("Tune alpha engine", Some("app"), Status::Running, "")
-        .unwrap();
-    // When the live board is shortlisted once (T-547).
-    let start = count(Work::LessonSignalScan);
-    let candidates = promotion_shortlist(&ctx).unwrap();
-    // Then every candidate and active comparison shares one derivation of the history.
-    assert_eq!(candidates.len(), 3);
-    assert_eq!(count(Work::LessonSignalScan) - start, 1);
-}
-
-#[test]
-fn reuses_historical_files_without_requiring_any_saved_lessons() {
-    let (tmp, ctx) = workspace();
-    let history = ctx
-        .store
-        .create("Repair alpha engine", Some("app"), Status::Done, "")
-        .unwrap();
-    let diff = tmp.path().join("history.diff");
-    std::fs::write(&diff, "--- a/src/alpha.rs\n+++ b/src/alpha.rs\n").unwrap();
-    crate::add_artifact(&ctx, &history.id, &diff, Some(ArtifactKind::Diff), None).unwrap();
-    let task = idea(&ctx, "Improve alpha engine");
-    let active = ctx
-        .store
-        .create("Worker", Some("app"), Status::NeedsMe, "")
-        .unwrap();
-    ctx.store
-        .update(&active.id, |t| {
-            t.write_scope = vec!["docs/**".into()];
-            Ok(())
-        })
-        .unwrap();
-    let other = ctx
-        .store
-        .create("Unscoped worker", Some("app"), Status::Running, "")
-        .unwrap();
-    let tasks = ctx.store.list().unwrap();
-    let events = ctx.store.events().unwrap();
-    let first = promotion_shortlist(&ctx).unwrap();
-    assert_eq!(first, promotion_shortlist(&ctx).unwrap());
-    assert_eq!(first[0].id, task.id);
-    assert_eq!(first[0].likely_files, ["src/alpha.rs"]);
-    assert!(first[0].predicted_conflicts.is_empty());
-    assert!(!first[0].overlap_checked);
-    assert_eq!(first[0].unchecked_tasks, [other.id]);
-    assert_eq!(ctx.store.list().unwrap(), tasks);
-    assert_eq!(ctx.store.events().unwrap(), events);
-    ctx.store
-        .update(&active.id, |t| {
-            t.write_scope = vec!["src/*.rs".into()];
-            Ok(())
-        })
-        .unwrap();
-    assert!(promotion_shortlist(&ctx).unwrap().is_empty());
-}
-
-#[test]
 fn wildcard_intersections_are_not_literal_path_matches() {
     for (a, b, expected) in [
         ("src/**/*.rs", "src/shared/*", true),
@@ -323,29 +256,6 @@ fn indexed_scopes_overlap_exactly_when_some_path_pair_does() {
             assert_eq!(indexed, pairwise, "{a:?} {b:?}");
         }
     }
-}
-
-#[test]
-fn shortlist_infers_an_active_tasks_files_once_not_once_per_idea() {
-    use corral_core::work::{self, HotScope};
-    // Given two eligible Ideas and one active task of their project.
-    let (_tmp, ctx) = workspace();
-    for n in 0..2 {
-        idea(&ctx, &format!("Idea {n}"));
-    }
-    ctx.store
-        .create("Worker", Some("app"), Status::Running, "")
-        .unwrap();
-    // When the board is shortlisted once.
-    let _scope = HotScope::enter();
-    let before = work::snapshot();
-    let candidates = promotion_shortlist(&ctx).unwrap();
-    let calls = work::snapshot()
-        .since(&before)
-        .followup_calls("FU-3", "likely_files");
-    // Then each Idea and the active task infer their paths once.
-    assert_eq!(candidates.len(), 2);
-    assert_eq!(calls, 3);
 }
 
 #[test]

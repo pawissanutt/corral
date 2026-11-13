@@ -324,8 +324,6 @@ pub(super) fn mask_clock_ids(text: &str) -> String {
 pub(super) struct Measured {
     pub(super) cells: Cells,
     pub(super) output: String,
-    before: Option<Walk>,
-    after: Option<Walk>,
     /// The emitted (rows, bytes) each prompt section reads on this store.
     sections: BTreeMap<String, (u64, u64)>,
     /// Each emitted section's expected rendering, from the full task's stored rows.
@@ -396,7 +394,7 @@ pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
             .insert((*section).to_owned(), section_cells(bench, section));
     }
     let entry = entry(kind, bench);
-    let (before, volumes) = walk(bench);
+    let (_, volumes) = walk(bench);
     let effects = submitted(bench, kind);
     let effects_before = super::action_budget_checks::effects(bench);
     bench.probe.take();
@@ -420,7 +418,7 @@ pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
     );
     let samples = bench.probe.take();
     let live = bench.probe.take_live();
-    let (after, after_volumes) = walk(bench);
+    let (_, after_volumes) = walk(bench);
     m.references = super::action_budget_prompts::references(bench, kind);
     let effects = submitted(bench, kind) - effects;
     let effect = effect_failures(
@@ -479,8 +477,7 @@ pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
     }
     m.cells = flatten(&delta, herdr, git);
     let walks: Vec<Walk> = samples.iter().map(|(_, walk)| *walk).collect();
-    m.failures
-        .extend(followup_failures(&m.cells, &before, &after, &walks, live));
+    m.failures.extend(followup_failures(&m.cells, &walks, live));
     // A message id's sequence suffix (`T-#_R##10` once normalized).
     m.output = mask_counter(
         &normalize(&format!(
@@ -489,8 +486,6 @@ pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
         )),
         "##",
     );
-    m.before = Some(before);
-    m.after = Some(after);
     m
 }
 

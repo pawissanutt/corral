@@ -11,12 +11,9 @@ use super::action_budget_fixture::{Bench, Kind};
 
 pub(super) type Cells = BTreeMap<String, u64>;
 
-/// The independent project-title and historical-location inputs of the FU-3 sites.
+/// The independent historical-location inputs of the FU-3 resource sample.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) struct Walk {
-    pub(super) tasks: u64,
-    pub(super) rows: u64,
-    pub(super) bytes: u64,
     /// One existence probe per coding run of every task, plus the walk-only paths'
     /// `existing_parent` probes and free-space queries.
     pub(super) stats: u64,
@@ -60,25 +57,6 @@ pub(super) fn walk(bench: &Bench) -> (Walk, BTreeSet<PathBuf>) {
 
 pub(super) fn store_walk(store: &corral_core::Store) -> (Walk, BTreeSet<PathBuf>) {
     let tasks = store.list().unwrap();
-    use corral_core::backend::{PageReq, TaskOrder, TaskQuery};
-    let headers = store
-        .view()
-        .unwrap()
-        .tasks(
-            &TaskQuery {
-                project: Some("app".into()),
-                statuses: Vec::new(),
-                order: TaskOrder::IdAsc,
-            },
-            PageReq::first(u32::MAX),
-        )
-        .unwrap()
-        .items;
-    let rows = headers.len() as u64;
-    let bytes = headers
-        .iter()
-        .map(|h| serde_json::to_vec(h).unwrap().len() as u64)
-        .sum();
     let fixed = fixed_volumes(store);
     let mut volumes = fixed.clone();
     for run in tasks.iter().flat_map(|t| &t.runs) {
@@ -90,9 +68,6 @@ pub(super) fn store_walk(store: &corral_core::Store) -> (Walk, BTreeSet<PathBuf>
     let runs: u64 = tasks.iter().map(|t| t.runs.len() as u64).sum();
     let walk_only: u64 = volumes.difference(&fixed).map(|p| path_stats(p)).sum();
     let walk = Walk {
-        tasks: 0, // neither site hydrates tasks
-        rows,
-        bytes,
         stats: runs + walk_only,
     };
     (walk, volumes)
@@ -315,61 +290,35 @@ pub(super) fn preconditions(
     failures
 }
 
-/// Every FU-3 cell against its expected work: each call walks the store as it stood before or
-/// after the pass's own write.
-pub(super) fn followup_failures(
-    cells: &Cells,
-    before: &Walk,
-    after: &Walk,
-    samples: &[Walk],
-    live_samples: u64,
-) -> Vec<String> {
+/// Every FU-3 resource cell against the store inventory at the time it was sampled.
+pub(super) fn followup_failures(cells: &Cells, samples: &[Walk], live_samples: u64) -> Vec<String> {
     let mut failures = Vec::new();
     let get = |cell: &str| cells.get(cell).copied().unwrap_or(0);
-    let sampled = samples
-        .iter()
-        .fold((0, 0, 0, 0), |a, w| (0, 0, 0, a.3 + w.stats));
-    for site in ["likely_files", "sample"] {
-        let calls = get(&format!("calls.FU-3.{site}"));
-        let cell = |counter: &str| get(&format!("{counter}.followup.FU-3.{site}"));
-        let rows: u64 = Counter::DECODES.iter().map(|c| cell(c.name())).sum();
-        let observed = (
-            cell("full_task_hydrations"),
-            rows,
-            cell("decoded_doc_bytes"),
-            cell("file_stats"),
-        );
-        let stats = |_: &Walk| 0;
-        let fits = (site == "sample" && observed == sampled)
-            || (site != "sample")
-                && (0..=calls).any(|k| {
-                    let mix = |a: u64, b: u64| k * a + (calls - k) * b;
-                    observed
-                        == (
-                            0,
-                            mix(before.rows, after.rows),
-                            mix(before.bytes, after.bytes),
-                            mix(stats(before), stats(after)),
-                        )
-                });
-        if !fits {
-            failures.push(format!(
-                "FU-3 {site}: (hydrations, rows, bytes, stats) = {observed:?} over {calls} calls, \
-                 expected each call's walk {before:?} or {after:?}"
-            ));
-        }
-        if cell("processes") != 0 {
-            failures.push(format!("FU-3 {site}: processes = {}", cell("processes")));
-        }
-        // A sample on a live store opens one view; one on a pass snapshot lists through the
-        // snapshot's view. Likely files read on views the pass already holds.
-        let views = cell("views_opened");
-        let want = if site == "sample" { live_samples } else { 0 };
-        if views != want {
-            failures.push(format!(
-                "FU-3 {site}: views = {views} over {calls} calls, expected {want}"
-            ));
-        }
+    let sampled = (0, 0, 0, samples.iter().map(|w| w.stats).sum::<u64>());
+    let calls = get("calls.FU-3.sample");
+    let cell = |counter: &str| get(&format!("{counter}.followup.FU-3.sample"));
+    let rows: u64 = Counter::DECODES.iter().map(|c| cell(c.name())).sum();
+    let observed = (
+        cell("full_task_hydrations"),
+        rows,
+        cell("decoded_doc_bytes"),
+        cell("file_stats"),
+    );
+    if observed != sampled {
+        failures.push(format!(
+            "FU-3 sample: (hydrations, rows, bytes, stats) = {observed:?} over {calls} calls, \
+             expected the sampled inventory {sampled:?}"
+        ));
+    }
+    if cell("processes") != 0 {
+        failures.push(format!("FU-3 sample: processes = {}", cell("processes")));
+    }
+    // A sample on a live store opens one view; a pass snapshot reuses its view.
+    let views = cell("views_opened");
+    if views != live_samples {
+        failures.push(format!(
+            "FU-3 sample: views = {views} over {calls} calls, expected {live_samples}"
+        ));
     }
     failures
 }

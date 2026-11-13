@@ -260,33 +260,32 @@ fn scopes_require_every_dimension_and_allow_alternatives() {
     };
 
     // When matching all dimensions, then the lesson is included.
-    let matching = |task: &Task, profile, harness, files: &[String]| {
+    let matching = |task: &Task, profile, harness| {
         match_lessons(
             std::slice::from_ref(&value),
             task,
             profile,
             harness,
-            files,
             5,
             at(1),
         )
     };
     assert_eq!(
-        matching(&task, Some("careful"), Some("omo"), &[]),
+        matching(&task, Some("careful"), Some("omo")),
         [value.clone()]
     );
     // Removing any required dimension excludes it.
-    assert!(matching(&task, None, Some("omo"), &[]).is_empty());
-    assert!(matching(&task, Some("careful"), None, &[]).is_empty());
+    assert!(matching(&task, None, Some("omo")).is_empty());
+    assert!(matching(&task, Some("careful"), None).is_empty());
     task.kind = None;
-    assert!(matching(&task, Some("careful"), Some("omo"), &[]).is_empty());
+    assert!(matching(&task, Some("careful"), Some("omo")).is_empty());
     task.kind = Some("bug".into());
     task.title = "Fix atomically written files".into();
-    assert!(matching(&task, Some("careful"), Some("omo"), &[]).is_empty());
+    assert!(matching(&task, Some("careful"), Some("omo")).is_empty());
 }
 
 #[test]
-fn files_match_likely_paths_and_overlapping_write_globs() {
+fn files_match_overlapping_write_globs() {
     // Given a scoped lesson without text path references.
     let dir = tempdir().unwrap();
     let store = Store::init(dir.path()).unwrap();
@@ -294,21 +293,15 @@ fn files_match_likely_paths_and_overlapping_write_globs() {
     let mut value = lesson("a");
     value.scope.files = vec!["src/**/cache*.rs".into()];
     let values = [value];
-    let matching =
-        |task: &Task, files: &[String]| match_lessons(&values, task, None, None, files, 5, at(1));
+    let matching = |task: &Task| match_lessons(&values, task, None, None, 5, at(1));
 
-    // When candidates or write globs intersect the lesson, then it matches.
-    assert_eq!(matching(&task, &["src/cache.rs".into()]).len(), 1);
-    assert_eq!(
-        matching(&task, &["src/nested/cache_test.rs".into()]).len(),
-        1
-    );
+    // When declared write globs intersect the lesson, then it matches.
     for glob in ["src/**", "src/*test.rs", "src/nested/**/cache.rs"] {
         task.write_scope = vec![glob.into()];
-        assert_eq!(matching(&task, &[]).len(), 1, "{glob}");
+        assert_eq!(matching(&task).len(), 1, "{glob}");
     }
     task.write_scope = vec!["docs/**".into()];
-    assert!(matching(&task, &[]).is_empty());
+    assert!(matching(&task).is_empty());
 }
 
 #[test]
@@ -333,7 +326,7 @@ fn ranking_is_pinned_then_decayed_confidence_then_id_and_limited() {
     let values = [old, z, contradicted, a, pin];
 
     // When ranked at exactly one half-life after the old lesson.
-    let matched = match_lessons(&values, &task, None, None, &[], 4, at(91));
+    let matched = match_lessons(&values, &task, None, None, 4, at(91));
 
     // Then pins win, age decays confidence, ties use ID, contradictions disappear.
     assert_eq!(
@@ -341,10 +334,10 @@ fn ranking_is_pinned_then_decayed_confidence_then_id_and_limited() {
         ["pin", "a", "z", "old"]
     );
     assert_eq!(
-        match_lessons(&values, &task, None, None, &[], 2, at(91)).len(),
+        match_lessons(&values, &task, None, None, 2, at(91)).len(),
         2
     );
-    assert!(match_lessons(&values, &task, None, None, &[], 0, at(91)).is_empty());
+    assert!(match_lessons(&values, &task, None, None, 0, at(91)).is_empty());
     assert!((matched[3].confidence - 1.0).abs() < f64::EPSILON);
 }
 

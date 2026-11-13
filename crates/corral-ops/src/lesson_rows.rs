@@ -1,5 +1,5 @@
-//! Feed-maintained lesson rows. Production evaluation entries prepare these rows before
-//! entering HotScope; readers on a pinned evaluation only read their project's output.
+//! Feed-maintained lesson rows. Only explicit distillation prepares historical signals.
+//! Coordination prepares scheduling outputs before HotScope, without artifact or Git reads.
 //! Task metadata and scheduling counters are keyed by task, never one board-sized document.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -154,13 +154,8 @@ fn source(ctx: &Ctx, head: &TaskHead) -> Result<Source> {
     Ok(Source { task, usage })
 }
 
-/// Initialize/recover and follow relevant changes before opening an evaluation's HotScope.
-pub fn prepare(ctx: &Ctx) -> Result<()> {
-    prepared(ctx).map(|_| ())
-}
-
-/// Coordination reads scheduling facts, not artifact signals or landed-file Git diffs.
-/// Its independent feed cursor cannot consume invalidations owed to a later signal preview.
+/// Prepare due-serving scheduling facts, not artifact signals or landed-file Git diffs.
+/// Its independent feed cursor cannot consume invalidations owed to a later distillation.
 pub fn prepare_coordination(ctx: &Ctx) -> Result<()> {
     schedule_prepared(ctx)?;
     crate::approvals::prepare(ctx)
@@ -180,8 +175,7 @@ fn prepared(ctx: &Ctx) -> Result<Arc<Prepared>> {
     })
 }
 
-/// Explicit previews can name unconfigured projects. Capture only that selected output,
-/// before HotScope, rather than carrying every historical project in each evaluation.
+/// Distillation can name unconfigured projects. Capture the selected output before HotScope.
 pub(crate) fn prepare_signals(ctx: &Ctx, project: &str) -> Result<Arc<Vec<LessonSignal>>> {
     ctx.store
         .pass_derived(&format!("lesson-signals-v3:{project}"), || {
@@ -193,12 +187,6 @@ pub(crate) fn prepare_signals(ctx: &Ctx, project: &str) -> Result<Arc<Vec<Lesson
             let mut rows = follow::prepare_locked(ctx, &[project.to_owned()].into())?;
             Ok(rows.signals.remove(project).unwrap_or_default())
         })
-}
-
-/// Prepare both derivations at production evaluation boundaries.
-pub fn prepare_evaluation(ctx: &Ctx) -> Result<()> {
-    prepare(ctx)?;
-    crate::approvals::prepare(ctx)
 }
 
 /// Historical full-SHA ranges only, through the existing Phase 0 memo. Paths survive
@@ -237,10 +225,6 @@ pub(crate) fn landed_files(ctx: &Ctx, project: &str, event: &Event) -> Result<Ve
     files.dedup();
     files.truncate(64);
     Ok(files)
-}
-
-pub(crate) fn signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
-    Ok(prepare_signals(ctx, project)?.as_ref().clone())
 }
 
 pub(crate) fn due(ctx: &Ctx, project: &str) -> Result<DueRow> {
