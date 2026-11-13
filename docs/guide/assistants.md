@@ -24,7 +24,8 @@ as `ui.keys.assistant` and `ui.keys.assistants`. Co-work cards and history rows 
 ## Opening an assistant: `corral pi`
 
 ```sh
-corral pi                      # in a herdr pane inside a workspace: a new assistant here
+corral pi                      # on a terminal in a workspace: the launcher (below)
+corral pi --assistant          # a new assistant here, without the launcher
 corral pi --over-cap           # one more than assistant.max_live
 corral pi --resume A-1         # A-1's next generation, in this pane
 corral pi --task T-42          # new assistant with read-only task context
@@ -32,12 +33,13 @@ corral pi --pm                 # the PM instead (see the corral-pi guide)
 corral pi --bare               # plain Pi; also what `corral pi` does outside a workspace
 ```
 
-`corral pi` in a herdr pane inside a corral workspace allocates the next session, opens its
-generation 1 in that pane and runs the corral-pi host there with the `assistant` role. The
-launch line names the session (`corral pi: assistant A-1 (role assistant) in pane ...`). A
-second `corral pi` in another pane opens `A-2` with its own record. The pane stays the
-owner's: corral never closes it or types into it ([session ownership](../session-ownership.md)).
-`--model`, `--provider` and `--effort` replace the profile's values for this launch.
+`corral pi --assistant` in a herdr pane inside a corral workspace allocates the next session,
+opens its generation 1 in that pane and runs the corral-pi host there with the `assistant`
+role. The launch line names the session (`corral pi: assistant A-1 (role assistant) in pane
+...`). A second `corral pi --assistant` in another pane opens `A-2` with its own record. The
+pane stays the owner's: corral never closes it or types into it
+([session ownership](../session-ownership.md)). `--model`, `--provider` and `--effort`
+replace the profile's values for this launch.
 
 The profile is `assistant.agent`, or the PM's `pm.agent` when that is unset. It must be
 corral-pi and name a model (`assistant_profile` otherwise), and it passes the same asset,
@@ -45,8 +47,28 @@ vendor and login preflight as any corral-pi launch. The assistant needs no appro
 scope: it is not bound to a project and has no board authority of its own.
 
 Outside a workspace, `corral pi` prints a one-line notice that no corral workspace was found
-and starts plain Pi; `--pm`, `--resume`, `--task` and `--over-cap` there refuse
+and starts plain Pi; `--pm`, `--assistant`, `--resume`, `--task` and `--over-cap` there refuse
 `not_in_workspace`.
+
+### The launcher
+
+Plain `corral pi` in a workspace, with stdin and stdout both on a terminal, asks what to open:
+
+- **Start**: **Assistant** (key `a`) opens a new assistant as `--assistant` does; **PM** (key
+  `p`) opens the PM and continues its previous conversation, as `--pm -c` does.
+- **Resume**: the eight most recently active stopped assistants, the sessions
+  `corral pi --resume` accepts (open, with no running host), newest first. Each row shows
+  `A-<n>`, its summary (or its task focus), its project and how long ago it was last active.
+
+`↑↓` or `j`/`k` select a row, `⏎` opens it, a row's key opens that row directly, and `q`, `Esc`
+or `Ctrl+C` leave without opening anything (exit status 0, no message). A click selects a row,
+a click on the selected row opens it, and each key in the footer can be clicked. Below 76
+columns each row folds to two lines. `--model`, `--provider` and `--effort` given with plain
+`corral pi` apply to whichever row opens.
+
+Any of `--assistant`, `--pm`, `--resume`, `--task`, `--over-cap` or `--bare` skips the launcher.
+Without a terminal (a script or a pipe), plain `corral pi` opens an assistant as
+`--assistant` does, so scripts that start an assistant should pass `--assistant`.
 
 ### Admission
 
@@ -884,7 +906,7 @@ generations opened before this was recorded). `corral assistant show A-1` sets i
 installed digest, for the owner and for the assistant's own shell:
 
 ```text
-host: g1 runs unrecorded assets, installed 7288f337d172: its contract and tool list may predate this corral, whose owner actions below still apply; a new generation loads the current ones (`corral pi --resume A-1` once its host stopped, or a new `corral pi`)
+host: g1 runs unrecorded assets, installed 7288f337d172: its contract and tool list may predate this corral, whose owner actions below still apply; a new generation loads the current ones (`corral pi --resume A-1` once its host stopped, or a new `corral pi --assistant`)
 owner actions: approve, verdict, review_run, dispatch, queue, unqueue, move, park, unpark, revert, plan_accept, plan_verdict, plan_review, plan_member_gate, plan_add_member, plan_move_member, discard, finish, config_set, mode
 ```
 

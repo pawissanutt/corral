@@ -16,7 +16,7 @@ Commands:
   inbox                   Inspect and durably manage agent inbox messages without delivering them
   attention               Inspect current task conditions and progress without changing state
   agent                   corral-pi agent host: authenticated host calls, launch, install and recovery
-  pi                      Start corral-pi here: an assistant in this herdr pane, the PM with --pm, or plain Pi with --bare
+  pi                      Start corral-pi here: the launcher on a terminal, an assistant with --assistant, the PM with --pm, or plain Pi with --bare
   question                Triage corral-pi agent questions by key and revision: list, show, answer, escalate, cancel, deadline
   automation              Preview, explicitly confirm, or inspect finite operating authority
   selection               Read current selection guidance or save a validated Auto receipt; JSON output
@@ -1254,14 +1254,15 @@ Options:
 ## `corral pi`
 
 ```text
-Start corral-pi here: an assistant in this herdr pane, the PM with --pm, or plain Pi with --bare
+Start corral-pi here: the launcher on a terminal, an assistant with --assistant, the PM with --pm, or plain Pi with --bare
 
 Usage: corral pi [OPTIONS]
 
 Options:
       --bare                 Plain unbound Pi in the current directory: no store, binding or corral tools
       --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --pm                   Open the workspace PM in this pane, or take over a dead one (plain `corral pi` opens an assistant)
+      --pm                   Open the workspace PM in this pane, or take over a dead one
+      --assistant            Open an assistant directly, without the launcher
   -c, --continue             Continue the previous PM conversation instead of starting fresh
       --resume <A-N>         Resume stopped assistant session A-<n> in this pane, fencing its previous generation (inside an assistant, /resume picks one)
       --over-cap             Open an assistant even when assistant.max_live assistants are already live
@@ -3331,10 +3332,11 @@ Check storage integrity, report or reclaim storage by class, and take verified b
 Usage: corral storage [OPTIONS] <COMMAND>
 
 Commands:
-  check   Verify database integrity and that every live blob decodes to its hash; exits 1 on a problem
-  gc      Report storage by class with bytes (--dry-run changes nothing) or reclaim it (--yes)
-  backup  Copy the database and every live blob into DIR/.corral under a storage lease, each blob verified against its hash; the copy opens with `corral --root DIR`
-  help    Print this message or the help of the given subcommand(s)
+  check    Verify database integrity and that every live blob decodes to its hash; exits 1 on a problem
+  gc       Report storage by class with bytes (--dry-run changes nothing) or reclaim it (--yes)
+  outputs  Inspect or reclaim only explicitly declared private rebuildable outputs of inactive tasks
+  backup   Copy the database and every live blob into DIR/.corral under a storage lease, each blob verified against its hash; the copy opens with `corral --root DIR`
+  help     Print this message or the help of the given subcommand(s)
 
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
@@ -3365,6 +3367,21 @@ Options:
       --dry-run      Report what would be reclaimed and why the rest stays; change nothing
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
       --yes          Remove clean finished worktrees (branches kept), reclaimable scratch, terminal agent sessions after promoting their transcripts, legacy build output and unreferenced blobs past the grace period; one audited event per deletion
+      --json
+  -h, --help         Print help
+```
+
+### `corral storage outputs`
+
+```text
+Inspect or reclaim only explicitly declared private rebuildable outputs of inactive tasks
+
+Usage: corral storage outputs [OPTIONS]
+
+Options:
+      --dry-run
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --yes
       --json
   -h, --help         Print help
 ```
@@ -4264,6 +4281,7 @@ Usage: corral daemon [OPTIONS] <COMMAND>
 Commands:
   run      Run the workspace sync daemon in the foreground
   status   Read daemon health (exit 0 healthy, 1 degraded, 2 down)
+  socket   Print the workspace daemon socket path without connecting
   nudge    Request a pass (exit 2 if no daemon answers)
   stop     Stop the daemon after its current pass
   install  Write a service definition without enabling or starting it
@@ -4296,6 +4314,18 @@ Usage: corral daemon status [OPTIONS]
 
 Options:
       --json         Print the health snapshot as JSON
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral daemon socket`
+
+```text
+Print the workspace daemon socket path without connecting
+
+Usage: corral daemon socket [OPTIONS]
+
+Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -4630,6 +4660,7 @@ Usage: corral pm next [OPTIONS]
 Options:
       --json
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --fresh        Compute locally instead of using a daemon readout
   -h, --help         Print help
 ```
 
@@ -4643,6 +4674,7 @@ Usage: corral pm brief [OPTIONS]
 Options:
       --json
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --fresh        Compute locally instead of using a daemon readout
   -h, --help         Print help
 ```
 

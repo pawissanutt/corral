@@ -3,6 +3,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ContextUsage, Theme } from "@earendil-works/pi-coding-agent";
 import type { TodoProgress } from "./todo-widget.ts";
 import type { InspectorSnapshot } from "./inspector.ts";
+import type { QueuedItem } from "../host/queue-control.ts";
 import { ansi, tint, PACKAGED, type Appearance } from "./appearance.ts";
 
 export interface PanelJob { readonly job: string; readonly state: string; readonly detail?: import("../extensions/jobs/runtime.ts").JobInspection }
@@ -30,6 +31,7 @@ export interface PanelSnapshot {
   readonly helpers?: readonly import("../extensions/subagent/inspection.ts").HelperInspection[] | null;
   readonly steering: number;
   readonly followUps: number;
+  readonly queue?: readonly QueuedItem[];
 }
 export interface PanelFile { readonly path: string; readonly status: string; readonly originalPath?: string }
 export interface PanelLine {

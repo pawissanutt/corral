@@ -134,3 +134,135 @@ test("journal failure fences consumption and removal; handled/rejected remain di
     } finally { manager.appendCustomEntry = append; }
   } finally { await fx.close(); }
 });
+
+test("owner queue lists and reorders exact follow-up objects while a turn is running", async () => {
+  const fx = await codeHost("worker", { catalog: 10, enabled: ["queue_control"] });
+  fx.host.markAttached("interactive");
+  try {
+    const running = fx.turn([{ toolCalls: [{ callId: "queue-order", name: "fixture_hold", arguments: { name: "queue-order" } }] },
+      { text: "after tool" }, { text: "first delivered" }, { text: "third delivered" }, { text: "second delivered" }]);
+    await fx.holds.get("queue-order").started;
+    for (const text of ["queue first", "queue second", "queue third"]) await fx.host.session.followUp(text);
+    const items = fx.host.queue.items();
+    expect(items.map(item => [item.text, item.policy, item.editable])).toEqual([
+      ["queue first", "follow_up", true], ["queue second", "follow_up", true], ["queue third", "follow_up", true],
+    ]);
+    const objects = fx.host.session.agent.getQueuedMessages();
+    expect(await fx.host.queue.move(items[2]!.key, -1)).toBeTrue();
+    expect(fx.host.queue.items().map(item => item.key)).toEqual([items[0]!.key, items[2]!.key, items[1]!.key]);
+    const reordered = fx.host.session.agent.getQueuedMessages();
+    expect(reordered).toHaveLength(3);
+    expect(reordered[0]).toBe(objects[0]);
+    expect(reordered[1]).toBe(objects[2]);
+    expect(reordered[2]).toBe(objects[1]);
+    expect(fx.host.session.getFollowUpMessages()).toEqual(["queue first", "queue third", "queue second"]);
+    expect(ledger(fx, QUEUE_OPERATION_ENTRY).at(-1)).toMatchObject({
+      reason: "move", target: items[2]!.key, outcome: "moved",
+      before: [items[1]!.key, items[2]!.key], after: [items[2]!.key, items[1]!.key],
+    });
+    fx.holds.get("queue-order").release("continue");
+    await running;
+    const delivered = fx.host.session.messages.filter(message => message.role === "user")
+      .map(message => typeof message.content === "string" ? message.content
+        : message.content.filter(part => part.type === "text").map(part => part.text).join(""))
+      .filter(text => text.startsWith("queue "));
+    expect(delivered).toEqual(["queue first", "queue third", "queue second"]);
+    expect(fx.host.queue.items()).toEqual([]);
+    expect(await fx.host.queue.move(items[2]!.key, -1)).toBeFalse();
+  } finally { await fx.close(); }
+});
+
+test("a drain reentering the move journal cannot consume a partially rebuilt queue", async () => {
+  const fx = await codeHost("worker", { catalog: 10, enabled: ["queue_control"] });
+  fx.host.markAttached("interactive");
+  try {
+    await fx.turn([{ text: "seed for reentrant continue" }]);
+    for (const text of ["race first", "race second", "race third"]) await fx.host.session.followUp(text);
+    const items = fx.host.queue.items();
+    const manager = fx.host.session.sessionManager;
+    const append = manager.appendCustomEntry.bind(manager);
+    let drain: Promise<unknown> | undefined;
+    manager.appendCustomEntry = (...args) => {
+      const result = append(...args);
+      const data = args[1];
+      if (args[0] === QUEUE_OPERATION_ENTRY && typeof data === "object" && data !== null && "reason" in data && data.reason === "move") {
+        drain = fx.host.session.agent.continue().then(() => undefined, error => error);
+      }
+      return result;
+    };
+    try {
+      expect(await fx.host.queue.move(items[2]!.key, -1)).toBeTrue();
+      expect((await drain) instanceof Error).toBeTrue();
+      expect(String(await drain)).toContain("queue_busy");
+    } finally { manager.appendCustomEntry = append; }
+    expect(fx.host.queue.items().map(item => item.key)).toEqual([items[0]!.key, items[2]!.key, items[1]!.key]);
+    let duringDrain: Promise<boolean> | undefined;
+    manager.appendCustomEntry = (...args) => {
+      const result = append(...args);
+      const data = args[1];
+      if (!duringDrain && args[0] === QUEUE_ENTRY && typeof data === "object" && data !== null
+        && "event" in data && data.event === "started") {
+        duringDrain = fx.host.queue.move(items[1]!.key, -1);
+      }
+      return result;
+    };
+    fixtureTransport().script([{ text: "first" }, { text: "third" }, { text: "second" }]);
+    try {
+      await fx.host.session.agent.continue();
+      expect(await duringDrain).toBeFalse();
+    } finally { manager.appendCustomEntry = append; }
+    const delivered = fx.host.session.messages.filter(message => message.role === "user")
+      .map(message => typeof message.content === "string" ? message.content
+        : message.content.filter(part => part.type === "text").map(part => part.text).join(""))
+      .filter(text => text.startsWith("race "));
+    expect(delivered).toEqual(["race first", "race third", "race second"]);
+    expect(fx.host.queue.items()).toEqual([]);
+  } finally { await fx.close(); }
+});
+
+test("owner pull-to-edit and removal preserve foreign queue entries and their barriers", async () => {
+  const fx = await codeHost("worker", { catalog: 10, enabled: ["queue_control"] });
+  fx.host.markAttached("interactive");
+  try {
+    await fx.host.session.followUp("owner first");
+    await fx.host.session.followUp("owner second");
+    await fx.host.session.followUp("extension notice", undefined, { source: "extension" });
+    await fx.host.session.followUp("owner last");
+    const [first, second, foreign, last] = fx.host.queue.items();
+    expect(foreign).toMatchObject({ text: "extension notice", editable: false });
+    expect(await fx.host.queue.remove(foreign!.key)).toBeFalse();
+    expect(await fx.host.queue.edit(foreign!.key)).toBeUndefined();
+    expect(await fx.host.queue.move(foreign!.key, 1)).toBeFalse();
+    expect(await fx.host.queue.move(last!.key, -1)).toBeFalse();
+    // Appending cannot implement insertion ahead of an untouched foreign tail.
+    expect(await fx.host.queue.move(second!.key, -1)).toBeFalse();
+    expect(await fx.host.queue.edit(second!.key)).toBe("owner second");
+    expect(fx.host.queue.items().map(item => item.key)).toEqual([first!.key, foreign!.key, last!.key]);
+    expect(fx.host.session.getFollowUpMessages()).toEqual(["owner first", "extension notice", "owner last"]);
+    expect(ledger(fx).filter(entry => entry.item === second!.key).at(-1)).toMatchObject({
+      event: "withdrawn", actor: "pane", reason: "edit",
+    });
+    expect(await fx.host.queue.remove(first!.key)).toBeTrue();
+    expect(await fx.host.queue.remove(first!.key)).toBeFalse();
+    expect(fx.host.queue.items().map(item => item.key)).toEqual([foreign!.key, last!.key]);
+  } finally { await fx.close(); }
+});
+
+test("interactive queue listing remains available behind both queue-control capability gates", async () => {
+  for (const capabilities of [{ catalog: 9, enabled: ["queue_control"] }, { catalog: 10, enabled: [] }]) {
+    const fx = await codeHost("worker", capabilities);
+    fx.host.markAttached("interactive");
+    try {
+      await fx.host.session.followUp("read-only first");
+      await fx.host.session.followUp("read-only second");
+      const items = fx.host.queue.items();
+      expect(items.map(item => item.text)).toEqual(["read-only first", "read-only second"]);
+      expect(await fx.host.queue.move(items[1]!.key, -1)).toBeFalse();
+      expect(await fx.host.queue.edit(items[0]!.key)).toBeUndefined();
+      expect(await fx.host.queue.remove(items[0]!.key)).toBeFalse();
+      expect(fx.host.queue.items()).toEqual(items);
+      expect(fx.host.session.getFollowUpMessages()).toEqual(["read-only first", "read-only second"]);
+      expect(ledger(fx, QUEUE_OPERATION_ENTRY)).toEqual([]);
+    } finally { await fx.close(); }
+  }
+});

@@ -336,7 +336,7 @@ pub fn resume(ctx: &Ctx, id: &str, pane: &str, overrides: &Overrides) -> Result<
     if let Some(ended) = session.ended {
         return Err(refuse(
             "assistant_ended",
-            format!("{id} ended at {ended}; `corral pi` opens a new assistant"),
+            format!("{id} ended at {ended}; `corral pi --assistant` opens a new assistant"),
         ));
     }
     pane_known(ctx, pane)?;

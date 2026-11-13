@@ -9,6 +9,7 @@ import { navRows, navSections, renderNav, type NavSource } from "./nav-panel.ts"
 import type { HistoryRead } from "./history.ts";
 import type { ReviewBases } from "./review-store.ts";
 import type { JobControl } from "../host/job-controls.ts";
+import type { QueueControl } from "../host/queue-control.ts";
 import { panelTheme } from "./panels-theme.ts";
 import { type Appearance, type Density, PACKAGED } from "./appearance.ts";
 import { ActionPalette, type HostAction } from "./action-palette.ts";
@@ -26,6 +27,7 @@ export interface NativePanelsOptions {
   readonly exportSession?: () => Promise<string>;
   readonly readTranscript?: (id: string) => Promise<string>;
   readonly jobControl?: JobControl;
+  readonly queueControl?: QueueControl;
   readonly readTask?: () => Promise<unknown>;
   readonly snapshot: () => PanelSnapshot | null;
   readonly readInbox?: (signal: AbortSignal) => Promise<unknown>;

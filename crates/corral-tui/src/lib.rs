@@ -17,6 +17,9 @@ pub(crate) mod guide;
 pub mod history;
 pub mod hit;
 mod keymap;
+pub mod launcher;
+#[cfg(test)]
+mod launcher_tests;
 pub mod nav;
 pub(crate) mod obligations;
 pub mod overlays;

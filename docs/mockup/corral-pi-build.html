@@ -1,0 +1,1042 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>corral pi build mode - TUI mock</title>
+<style>
+:root{color-scheme:dark;--page:#0f1115;--bg:#191b20;--raised:#20232b;--text:#e0e3e9;--muted:#9ba2b0;--accent:#83a8ef;--rule:#767e90;--line:#353a47;
+  --ok:#9ac7a3;--warn:#e3bd7c;--err:#e699a3;--sel:#2c3548;--head:#bd93f9;--code:#a9dcb4;--key:#262b37;
+  --mono:ui-monospace,"JetBrains Mono","SF Mono",Menlo,Consolas,"DejaVu Sans Mono","Liberation Mono",monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans",sans-serif}
+*{box-sizing:border-box}
+::selection{background:#3b4a6b;color:#fff}
+body{margin:0;padding:20px 24px 40px;background:var(--page);color:var(--text);font:14px/1.5 var(--sans)}
+h1{font-size:17px;font-weight:650;margin:0 0 2px;letter-spacing:-.01em}
+.lede{margin:0 0 14px;color:var(--muted);max-width:76ch}
+.strip{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:0 0 8px}
+.strip b{font-size:12px;color:var(--muted);font-weight:600;margin:0 2px 0 10px}
+.strip b:first-child{margin-left:0}
+.strip button{font:12.5px var(--sans);padding:5px 10px;border-radius:6px;border:1px solid var(--line);background:var(--raised);color:var(--text);cursor:pointer}
+.strip button:hover{border-color:var(--accent)}
+.strip button:focus-visible,.col:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.strip button.on{border-color:var(--accent);color:var(--accent)}
+.strip button.sim{border-style:dashed}
+.sizeinfo{font:12.5px var(--mono);color:var(--muted);margin-left:10px}
+.sizeinfo b{all:unset;color:var(--text);font-weight:700}
+/* the stage stands for the whole terminal window; the pane is one tile of it */
+.stage{--f:1;display:flex;gap:10px;height:800px;margin-top:4px}
+.col{display:flex;flex-direction:column;gap:10px;width:calc(var(--f)*100%);min-width:300px;max-width:100%;flex:0 0 auto;resize:horizontal;overflow:hidden;outline:none;border-radius:8px}
+.stage.full .col{resize:none}
+.ghost{flex:1;min-width:0;border:1px dashed var(--line);border-radius:8px;display:grid;place-items:center;color:#8891a3;font:12.5px var(--mono);overflow:hidden;white-space:nowrap}
+.stage.full>.ghost,.col>.ghost{display:none}
+.stage.half .col>.ghost{display:grid}
+.term{flex:0 0 auto;width:100%;height:100%;background:var(--bg);color:var(--text);font:13px/1.5 var(--mono);font-variant-numeric:tabular-nums;
+  display:grid;grid-template-rows:auto auto minmax(0,1fr) auto auto auto auto auto;position:relative;overflow:hidden;border:1px solid var(--line);border-radius:8px;caret-color:var(--accent)}
+.stage.half .term{height:calc(50% - 5px)}
+.term *{scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+#probe{position:absolute;visibility:hidden;white-space:pre;left:0;top:0}
+.mu{color:var(--muted)}.ac{color:var(--accent)}.ok{color:var(--ok)}.wa{color:var(--warn)}.er{color:var(--err)}.b{font-weight:700}.r{text-align:right}
+.el{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.pl{white-space:pre}
+[data-a],[data-k]{cursor:pointer}
+kbd{font:inherit;color:var(--accent);background:var(--key);padding:0 .6ch;border-radius:3px}
+code{font:inherit;color:var(--code)}
+.spin::before{content:'⠋';animation:spin .9s steps(1,end) infinite;animation-delay:var(--sd,0ms)}
+@keyframes spin{0%{content:'⠋'}12%{content:'⠙'}25%{content:'⠹'}37%{content:'⠸'}50%{content:'⠼'}62%{content:'⠴'}75%{content:'⠦'}87%{content:'⠧'}}
+.chipb{background:var(--accent);color:#10131a;font-weight:700;padding:0 1ch;border-radius:3px}
+.chipw{background:var(--warn);color:#1d1608;font-weight:700;padding:0 1ch;border-radius:3px}
+.head{padding:5px 12px 0;white-space:nowrap}
+.head .row{display:flex;justify-content:space-between;gap:16px;min-width:0}
+.tabs{display:flex;gap:4px;align-items:center;padding:4px 12px 5px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden}
+.tabs .tab{padding:0 6px;color:var(--muted)}
+.tabs .tab.on{color:var(--text);font-weight:700;text-decoration:underline;text-decoration-color:var(--accent);text-underline-offset:5px;text-decoration-thickness:2px}
+.tabs .tab.on kbd{background:var(--accent);color:#10131a}
+.tabs .cnt{background:var(--sel);color:var(--text);padding:0 .6ch;border-radius:3px;font-weight:400}
+.tabs .sep{color:var(--line)}
+.tabs .sp{flex:1}
+.term[data-tier=tiny] .tabs{gap:0;padding-left:8px;padding-right:8px}
+.term[data-tier=tiny] .tabs .tab{padding:0 3px}
+.body{display:grid;grid-template-columns:minmax(0,1fr);min-height:0}
+.side{display:none;border-left:1px solid var(--line);padding:6px 0;overflow:auto;min-height:0}
+.term[data-side="1"] .body{grid-template-columns:minmax(0,1fr) 34ch}
+.term[data-side="1"] .side{display:block}
+.term[data-view=launch] .composer,.term[data-view=launch] .dock,.term[data-view=launch] .tabs{display:none}
+.mainwrap{position:relative;min-height:0;min-width:0;display:flex}
+.main{flex:1;min-width:0;padding:8px 14px;overflow:auto;outline:none}
+.term[data-tier=tiny] .main{padding:6px 10px}
+.bar{color:transparent}
+.sel>.bar{color:var(--accent)}
+/* sidebar: a rail when the pane is wide enough, one navigation row above the composer when it is not */
+.rtabs{display:flex;gap:10px;padding:0 10px 4px;white-space:nowrap;overflow:hidden}
+.rtabs .on{color:var(--accent);font-weight:700;text-decoration:underline;text-underline-offset:4px}
+.rtabs .sp{flex:1}
+.sb h4{margin:8px 10px 0;font:inherit;color:var(--muted);white-space:nowrap}
+.sb h4:first-child{margin-top:0}
+.sb .it{display:grid;grid-template-columns:1ch 2ch minmax(0,1fr) auto;column-gap:0;padding:0 10px 0 0;white-space:nowrap}
+.sb .it.sel{background:var(--sel)}
+.sb .it .sub{grid-column:3/5;color:var(--muted)}
+.sb .none{padding:0 10px 0 3ch;color:var(--muted)}
+.inl{padding:0 12px;border-top:1px solid var(--line)}
+.inl:empty{display:none}
+.inl .rtabs{padding:2px 0 0;gap:2ch}
+.drawer{max-height:calc(10lh + 10px);overflow:auto;margin:2px -10px 0 -2px;padding-bottom:4px}
+.term[data-short="1"] .drawer{max-height:5lh}
+/* transcript */
+.msg{margin:0 0 10px;max-width:96ch}
+.msg.user{background:#23262f;padding:4px 10px;border-radius:6px}
+.msg.user .who{color:var(--muted)}
+.note{margin:0 0 4px}
+.blk{border:1px solid var(--line);border-radius:6px;margin:0 0 10px;max-width:108ch;overflow:hidden}
+.blk>.bt{padding:1px 10px;background:var(--raised);display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line);white-space:nowrap}
+.blk>.bb{padding:4px 10px}
+.empty{color:var(--muted);max-width:70ch;padding-top:6px}
+.empty b{color:var(--text)}
+.tr{display:grid;column-gap:2ch;white-space:nowrap;padding:0 1ch 0 0}
+.tr.th{color:var(--muted)}
+.tr.sel{background:var(--sel)}
+.tr .l2{display:flex;justify-content:space-between;gap:2ch;color:var(--muted);min-width:0}
+.mini.full .tr{grid-template-columns:1ch 11ch minmax(0,1fr) 28ch 10ch}
+.mini.med .tr{grid-template-columns:1ch 11ch minmax(0,1fr) 9ch 10ch}
+.mini.min .tr{grid-template-columns:1ch 11ch minmax(0,1fr) 9ch}
+.fleet.full .tr{grid-template-columns:1ch 1ch 11ch 27ch 9ch 6ch 4ch 5ch 14ch minmax(0,1fr)}
+.fleet.med .tr{grid-template-columns:1ch 1ch 11ch minmax(0,1fr) 9ch 6ch}
+.fleet.min .tr{grid-template-columns:1ch 1ch minmax(0,1fr) 9ch 6ch}
+.fleet .l2{grid-column:3/-1}
+.board.full .tr{grid-template-columns:1ch 6ch minmax(0,40ch) 10ch 22ch minmax(0,1fr)}
+.board.med .tr{grid-template-columns:1ch 6ch 10ch minmax(0,1fr)}
+.board.min .tr{grid-template-columns:1ch 6ch minmax(0,1fr)}
+.board .l2{grid-column:2/-1}
+.sres .tr{grid-template-columns:11ch 9ch auto;justify-content:start}
+.plan.full .tr{grid-template-columns:6ch minmax(0,46ch) 12ch 10ch minmax(0,1fr)}
+.plan.med .tr{grid-template-columns:6ch minmax(0,1fr) 22ch}
+.plan.min .tr{grid-template-columns:6ch minmax(0,1fr)}
+.detail{border-top:1px solid var(--line);margin-top:10px;padding-top:8px}
+.detail h5{margin:0;font:inherit;color:var(--head);font-weight:700}
+.btns{display:flex;gap:6px 14px;margin-top:6px;flex-wrap:wrap}
+.btn.off{color:var(--muted);cursor:default}
+.tool{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tool .tn{color:var(--accent)}
+.tl .tlr{display:grid;grid-template-columns:11ch minmax(0,1fr);column-gap:1ch;white-space:nowrap;overflow:hidden}
+.tl.bare .tlr{grid-template-columns:1ch minmax(0,1fr)}
+.tl .tq{color:#596072}
+/* changes */
+.chg{display:grid;grid-template-columns:46ch minmax(0,1fr);height:100%;min-height:0}
+.chg .files{border-right:1px solid var(--line);padding-right:8px;overflow:auto;min-height:0}
+.chg .diff{padding-left:12px;overflow:auto;white-space:pre;min-height:0}
+.chg.one{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr)}
+.chg.one .files{border-right:0;border-bottom:1px solid var(--line);padding:0 0 4px;max-height:9lh}
+.chg.one .diff{padding:4px 0 0}
+.chips{display:flex;flex-wrap:wrap;gap:2px 12px;margin-bottom:6px}
+.chip{color:var(--c,var(--muted));opacity:.75}
+.chip.on{opacity:1;font-weight:700;text-decoration:underline;text-underline-offset:4px}
+.f{display:grid;grid-template-columns:1ch auto minmax(0,1fr) auto;column-gap:1ch;white-space:nowrap}
+.f.sel{background:var(--sel)}
+.diff .ln{color:#8f98ab;display:inline-block;width:4ch;text-align:right;margin-right:1ch;user-select:none}
+.d-add{background:#1f2e27;color:#bfe3c6;display:block}
+.d-del{background:#33232a;color:#efb9c1;display:block}
+.d-hunk{background:#222a3b;color:var(--accent);display:block}
+.d-ctx{display:block;color:var(--muted)}
+/* dock: dialogs and queue */
+.dock{padding:0 12px;overflow:auto}
+.dlg{border:1px solid var(--accent);border-radius:6px;margin:6px 0 4px;overflow:hidden;animation:rise .18s cubic-bezier(.16,1,.3,1)}
+@keyframes rise{from{transform:translateY(6px);opacity:.4}}
+.dlg .dt{display:flex;justify-content:space-between;gap:16px;padding:2px 10px;background:#222a3b}
+.dlg .db{padding:4px 10px 0}
+.dlg .opts{padding:2px 0 4px}
+.opt{display:grid;grid-template-columns:1ch 2ch 26ch minmax(0,1fr);padding:0 10px 0 0;white-space:nowrap}
+.opt.two{grid-template-columns:1ch 2ch minmax(0,1fr);white-space:normal}
+.opt.two .od{grid-column:3}
+.opt.sel{background:var(--sel)}
+.queue{margin:6px 0 2px}
+.queue .q{display:grid;grid-template-columns:3ch 14ch minmax(0,1fr) auto;white-space:nowrap}
+.queue .q.tight{grid-template-columns:2ch minmax(0,1fr) auto}
+.queue .q .ctl{display:flex;gap:10px;padding-left:2ch}
+.composer{margin:10px 12px 6px;border:1px solid var(--line);border-radius:6px;position:relative;padding:5px 10px 2px}
+.term[data-focus=composer] .composer{border-color:var(--accent)}
+.ctitle{position:absolute;top:-10px;left:8px;background:var(--bg);padding:0 6px;white-space:nowrap}
+.cline{display:flex;gap:1ch}
+.cline input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--text);font:inherit;padding:0}
+.cline input::placeholder{color:#8f97a6}
+.cbar{display:flex;justify-content:space-between;gap:2ch;color:var(--muted);white-space:nowrap;overflow:hidden}
+.term[data-short="1"] .cbar{display:none}
+.term[data-short="1"] .composer{margin-top:9px;margin-bottom:3px;padding-bottom:4px}
+.term[data-short="1"][data-dialog="1"] .composer{display:none}
+.status{padding:0 12px;white-space:nowrap;overflow:hidden}
+.status .srow{display:flex;overflow:hidden}
+.status .sep{color:var(--line);padding:0 1ch}
+.foot{display:flex;gap:16px;padding:3px 12px 5px;color:var(--muted);white-space:nowrap;overflow:hidden;border-top:1px solid var(--line)}
+.term[data-tier=tiny] .foot{gap:10px;padding-left:8px;padding-right:8px}
+/* popups */
+.backdrop{position:absolute;inset:0;background:rgba(10,12,16,.6);display:flex;align-items:flex-start;justify-content:center;padding:12% 2ch 2ch;z-index:5}
+.term[data-short="1"] .backdrop{padding-top:8px}
+.pop{background:var(--raised);border:1px solid var(--rule);border-radius:6px;width:min(78ch,100%);max-height:100%;overflow:auto;padding:6px 0 8px}
+.pop .pt{display:flex;justify-content:space-between;gap:2ch;padding:0 12px 4px;border-bottom:1px solid var(--line);margin-bottom:4px;white-space:nowrap}
+.pop .pr{display:grid;grid-template-columns:1ch minmax(0,1fr) auto;column-gap:1ch;padding:0 12px 0 0}
+.pop .pr.sel{background:var(--sel)}
+.pop .pr.off{color:var(--muted)}
+.pop .grp{padding:6px 12px 0 2ch;color:var(--head);font-weight:700}
+.pop .kr{display:grid;grid-template-columns:2ch 11ch minmax(0,1fr);padding:1px 12px 1px 0}
+.toast{position:absolute;top:8px;right:14px;z-index:4;pointer-events:none;max-width:calc(100% - 28px)}
+.toast .tin{display:block;background:var(--raised);border:1px solid var(--rule);border-radius:6px;padding:2px 10px;animation:slide .22s cubic-bezier(.16,1,.3,1)}
+@keyframes slide{from{transform:translateX(10px);opacity:.3}}
+@media (prefers-reduced-motion:reduce){.dlg,.toast .tin{animation:none}.spin::before{animation:none;content:'●'}}
+/* launch */
+.launch{max-width:104ch;margin:22px auto 0}
+.term[data-short="1"] .launch,.term[data-tier=tiny] .launch{margin-top:2px}
+.launch h2{font:inherit;font-weight:700;color:var(--accent);margin:0 0 12px}
+.launch h3{font:inherit;color:var(--muted);margin:12px 0 2px}
+.launch .lr{display:grid;grid-template-columns:1ch 11ch minmax(0,1fr) auto;column-gap:1ch;white-space:nowrap}
+.launch .lr.two{grid-template-columns:1ch minmax(0,1fr) auto;white-space:normal;margin-bottom:2px}
+.launch .lr.two .ld{grid-column:2/-1}
+.launch .lr.sel{background:var(--sel)}
+.launch .lopt{margin-top:16px;display:grid;grid-template-columns:10ch minmax(0,1fr);row-gap:2px}
+/* notes and gallery, outside the terminal */
+.notes{margin-top:16px;max-width:88ch}
+.notes h2{font-size:14px;font-weight:650;margin:0 0 6px}
+.notes ul{margin:0;padding:0;list-style:none}
+.notes li{display:grid;grid-template-columns:62px 1fr;gap:10px;padding:3px 0;color:#c9ced8}
+.notes .tag{font:600 11px/20px var(--sans);text-transform:uppercase;letter-spacing:.06em}
+.notes .tag.new{color:var(--ok)}.notes .tag.today{color:var(--muted)}.notes .tag.risk{color:var(--warn)}
+.notes code{font:12.5px var(--mono);color:var(--code)}
+.notes kbd{font:12.5px var(--mono)}
+.gallery{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:12px 10px;margin-top:6px}
+.gallery figure{margin:0;min-width:0}
+.gallery figcaption{font:12.5px var(--mono);color:var(--muted);margin-bottom:4px}
+.gallery figcaption b{color:var(--text)}
+.gallery iframe{display:block;width:100%;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+body.embed{padding:0;overflow:hidden}
+body.embed>:not(.stage){display:none}
+body.embed .stage{height:100vh;margin:0}
+body.embed .col{width:100%;resize:none;border-radius:0;min-width:0}
+body.embed .term{border:0;border-radius:0}
+</style>
+</head>
+<body>
+<h1>corral pi: build mode</h1>
+<p class="lede">Interactive mock of the proposed untethered build host. Click the terminal and drive it with the keys in its footer, or use the scene buttons. Change the pane size, or drag the pane's bottom-right corner, and the layout re-flows. Data is simulated; nothing here is implemented.</p>
+<div class="strip" id="strip">
+  <b>Scenes</b>
+  <button type="button" data-s="launch">Launch</button>
+  <button type="button" data-s="chat">Fan-out</button>
+  <button type="button" data-s="fleet">Fleet</button>
+  <button type="button" data-s="child">One agent</button>
+  <button type="button" data-s="changes">Changes</button>
+  <button type="button" data-s="queue">Input queue</button>
+  <button type="button" data-s="finish">Finish</button>
+  <button type="button" data-s="board">Board fan-out</button>
+  <button type="button" data-s="keys">Keys</button>
+  <b>Simulate</b>
+  <button type="button" class="sim" data-s="pause" id="pauseBtn">Pause</button>
+  <button type="button" class="sim" data-s="ask">An agent asks</button>
+  <button type="button" class="sim" data-s="skip">Skip to finished</button>
+  <button type="button" class="sim" data-s="reset">Reset</button>
+</div>
+<div class="strip" id="sizes">
+  <b>Pane width</b>
+  <button type="button" data-f="1" class="on">Full</button>
+  <button type="button" data-f="0.5">1/2</button>
+  <button type="button" data-f="0.3333">1/3</button>
+  <button type="button" data-f="0.25">1/4</button>
+  <b>Height</b>
+  <button type="button" data-hh="1" class="on">Full</button>
+  <button type="button" data-hh="0.5">1/2</button>
+  <b>&nbsp;</b>
+  <button type="button" id="galleryBtn">Compare sizes</button>
+  <span class="sizeinfo" id="sizeinfo"></span>
+</div>
+<div class="stage full" id="stage">
+  <div class="col" id="wrap" tabindex="0" aria-label="Interactive terminal mock of corral pi build mode">
+    <div class="term" id="term">
+      <span id="probe">0000000000</span>
+      <div class="head" id="head"></div>
+      <div class="tabs" id="tabs"></div>
+      <div class="body"><div class="mainwrap"><div class="main" id="main"></div><div class="toast" id="toast" role="status"></div></div><div class="side" id="side"></div></div>
+      <div class="inl" id="inl"></div>
+      <div class="dock" id="dock"></div>
+      <div class="composer" id="composer">
+        <div class="ctitle" id="ctitle"></div>
+        <div class="cline"><span class="ac">›</span><input id="draft" autocomplete="off" spellcheck="false" aria-label="Message"></div>
+        <div class="cbar" id="cbar"></div>
+      </div>
+      <div class="status" id="status"></div>
+      <div class="foot" id="foot"></div>
+      <div id="pop"></div>
+    </div>
+    <div class="ghost">another pane</div>
+  </div>
+  <div class="ghost">other panes</div>
+</div>
+<div class="gallery" id="gallery" hidden></div>
+<section class="notes" id="notes"></section>
+<noscript><p>This mock needs scripts to render the terminal.</p></noscript>
+<script>
+const STEP=5,TICK_MS=650,CAP=3,SLOTS=2;
+const Q=new URLSearchParams(location.search),EMBED=Q.has('embed');
+const DEMO='Add a save-slot picker to the arrival screen: list slots from the host, create, delete and resume.';
+const MODELS=['gpt-6.1-sol','gpt-6.1-terra','claude-opus-5.5','claude-fable-5.2'];
+const EFFORT=['low','medium','high','xhigh'];
+const KIDS=[
+ {id:'explore',c:'#8fa3c7',kind:'explore',profile:'scout',model:'gpt-6.1-terra',dur:38,rate:.0011,grow:0,after:[],owns:[],
+  brief:'Where does the arrival screen load its state, and how does the app reach the host? Cite files.',
+  acts:['grep "arrival" app/src','read app/src/arrival/Arrival.tsx','read app/src/api/client.ts','grep "fn router" crates/host/src'],
+  done:'read-only · 4 files cited',
+  report:'Arrival loads through useArrival() at app/src/arrival/Arrival.tsx:41 and reaches the host through request() at app/src/api/client.ts:18. Routes are registered at crates/host/src/routes.rs:27. No slot concept exists yet.'},
+ {id:'host-slots',c:'#b9a0f5',profile:'deep',model:'gpt-6.1-sol',dur:200,rate:.0046,grow:1.5,after:[],
+  owns:['crates/host/src/slots.rs','crates/host/src/routes.rs'],
+  brief:'Host: list, create and delete save slots. Manifest writes are atomic (write, fsync, rename). Loopback only; no new listener.',
+  acts:['read crates/host/src/routes.rs','grep "atomic_write" crates/host/src','edit crates/host/src/slots.rs','bash cargo check -p host','edit crates/host/src/routes.rs','edit crates/host/src/slots.rs','bash cargo test -p host slots'],
+  done:'2 files · cargo test slots 9 passed',
+  report:'Added slots.rs with list/create/delete over an atomically replaced manifest, and three routes under /slots. cargo test -p host slots: 9 passed. Not checked: behaviour when the data directory is read-only.'},
+ {id:'app-store',c:'#7fd4e8',profile:'quick',model:'gpt-6.1-terra',dur:60,rate:.0012,grow:2.4,after:[],
+  owns:['app/src/api/slots.ts','app/src/state/slots.ts','app/src/api/client.ts'],
+  brief:'App: typed client for /slots and a store exposing slots, create, remove and resume. Follow the existing request() helper.',
+  acts:['read app/src/api/client.ts','edit app/src/api/slots.ts','edit app/src/state/slots.ts','edit app/src/api/client.ts','bash pnpm --dir app tsc --noEmit'],
+  done:'3 files · tsc clean',
+  report:'Added api/slots.ts and state/slots.ts; exported the DELETE helper from api/client.ts. tsc --noEmit is clean.'},
+ {id:'picker-ui',c:'#f08fc0',profile:'frontend',model:'claude-opus-5.5',dur:150,rate:.0071,grow:1.9,after:[],
+  owns:['app/src/arrival/SlotPicker.tsx','app/src/arrival/Arrival.tsx'],
+  brief:'App: SlotPicker on the arrival screen per docs/wireframes/arrival. Keyboard reachable. Use the store named slots; do not call the host directly.',
+  acts:['read docs/wireframes/arrival.md','read app/src/arrival/Arrival.tsx','edit app/src/arrival/SlotPicker.tsx','edit app/src/arrival/Arrival.tsx','edit app/src/api/client.ts','edit app/src/arrival/SlotPicker.tsx','bash pnpm --dir app tsc --noEmit'],
+  done:'2 files + 1 outside its set · tsc clean',
+  report:'SlotPicker renders the list with create, delete and resume, wired into Arrival. I also touched app/src/api/client.ts (a type export), which belongs to app-store. tsc --noEmit is clean. Not checked: a browser run.'},
+ {id:'tests',c:'#f2a97e',profile:'quick',model:'gpt-6.1-terra',dur:90,rate:.0012,grow:2.1,after:['host-slots','app-store'],
+  owns:['crates/host/tests/slots.rs','app/src/state/slots.test.ts'],
+  brief:'Tests: route tests for /slots (create, duplicate name, delete missing) and store tests against a fake client.',
+  acts:['read crates/host/src/slots.rs','edit crates/host/tests/slots.rs','bash cargo test -p host --test slots','edit app/src/state/slots.test.ts','bash pnpm --dir app vitest run slots'],
+  done:'2 files · 14 + 6 passed',
+  report:'Added 5 route tests and 6 store tests. cargo test --test slots: 5 passed (14 with unit tests). vitest slots: 6 passed.'},
+];
+/* The plan: what each slice delivers. */
+const TITLE={explore:'Scout arrival and host routes','host-slots':'Host slot endpoints','app-store':'Client and store','picker-ui':'SlotPicker on arrival',tests:'Route and store tests'};
+const FILES=[
+ {p:'crates/host/src/slots.rs',by:[['host-slots',.3]],add:148,del:0},
+ {p:'crates/host/src/routes.rs',by:[['host-slots',.6]],add:22,del:3},
+ {p:'app/src/api/slots.ts',by:[['app-store',.25]],add:46,del:0},
+ {p:'app/src/state/slots.ts',by:[['app-store',.5]],add:61,del:0},
+ {p:'app/src/api/client.ts',by:[['app-store',.7],['picker-ui',.62]],add:9,del:2},
+ {p:'app/src/arrival/SlotPicker.tsx',by:[['picker-ui',.35]],add:97,del:0},
+ {p:'app/src/arrival/Arrival.tsx',by:[['picker-ui',.5]],add:14,del:6},
+ {p:'crates/host/tests/slots.rs',by:[['tests',.3]],add:88,del:0},
+ {p:'app/src/state/slots.test.ts',by:[['tests',.7]],add:54,del:0},
+];
+const DIFF={
+ 'crates/host/src/slots.rs':['@@ new file','+pub struct Slot { pub id: SlotId, pub name: String, pub updated: Timestamp }','+','+pub fn create(dir: &Path, name: &str) -> Result<Slot> {','+    let mut manifest = load(dir)?;','+    ensure!(!manifest.has(name), "slot name already exists");','+    let slot = Slot::new(name);','+    manifest.slots.push(slot.clone());','+    write_atomic(&dir.join(MANIFEST), &manifest)?;','+    Ok(slot)','+}'],
+ 'app/src/api/client.ts':['@@ -16,7 +16,9 @@',' export async function request<T>(path: string, init?: RequestInit): Promise<T> {','-  const res = await fetch(base + path, init);','+  const res = await fetch(base + path, { ...defaults, ...init });','   if (!res.ok) throw new HostError(res.status, await res.text());','   return res.json();',' }','@@ -31,3 +33,7 @@','+export const del = (path: string) => request<void>(path, { method: "DELETE" });','+','+// picker-ui','+export type { HostError };'],
+ 'app/src/arrival/SlotPicker.tsx':['@@ new file','+export function SlotPicker() {','+  const { slots, create, remove, resume } = useSlots();','+  return (','+    <ul className="slots" role="listbox" aria-label="Save slots">','+      {slots.map(slot => (','+        <SlotRow key={slot.id} slot={slot} onResume={resume} onDelete={remove} />','+      ))}','+      <li><Button onClick={() => create()}>New slot</Button></li>','+    </ul>','+  );','+}'],
+};
+const CHECKS=[{cmd:'pnpm --dir app tsc --noEmit',dur:15,res:'clean'},{cmd:'cargo test -p host slots',dur:25,res:'14 passed'}];
+const EXITS=[
+ {id:'keep',label:'Keep on the branch',desc:'build/save-slots stays in its worktree; nothing is filed or merged'},
+ {id:'gate',label:'Land after the gate',desc:'runs just check on the rebased branch, then fast-forwards main; no review'},
+ {id:'board',label:'Ship through the board',desc:'creates one task in Review from this branch: gate, independent review, land'},
+ {id:'iterate',label:'Keep iterating',desc:'stay in the session; this choice comes back when you say done'},
+];
+const ASK={kid:'picker-ui',q:'The wireframe has no empty state. With zero slots, what should the arrival screen show?',
+ opts:[['Show a “New game” action','the picker renders one row that creates the first slot'],['Hide the picker','arrival looks as it does today until a slot exists'],['Let picker-ui decide','it picks one and says which in its report']]};
+const PLAN=[
+ {id:'T-971',title:'Slot manifest: versioned schema and migration',kind:'backend m',profile:'deep',dep:[],dur:150,act:'edit crates/host/src/manifest.rs'},
+ {id:'T-972',title:'Host: witness-scoped slot export',kind:'backend m',profile:'deep',dep:['T-971'],dur:170,act:'bash cargo nextest -p host export'},
+ {id:'T-973',title:'App: slot management screen',kind:'frontend m',profile:'frontend',dep:[],dur:210,act:'edit app/src/slots/Manage.tsx'},
+ {id:'T-974',title:'App: import and export flow',kind:'frontend s',profile:'frontend',dep:['T-972','T-973'],dur:120,act:'edit app/src/slots/Transfer.tsx'},
+ {id:'T-975',title:'Docs: save-slot architecture note',kind:'docs s',profile:'writing',dep:[],dur:70,act:'edit docs/ARCHITECTURE.md'},
+];
+const LAUNCH=[
+ {sec:'Start'},
+ {id:'build',name:'Build',desc:'untethered · parallel agents · nothing reaches the board until you ship',k:'b'},
+ {id:'assistant',name:'Assistant',desc:'board-aware · scratch worktrees · owner actions on your instruction',k:'a'},
+ {id:'pm',name:'PM',desc:'workspace coordinator · continues the previous conversation',k:'p'},
+ {sec:'Resume'},
+ {id:'r1',name:'build',desc:'checkout-copy · mitiplay · 4 agents · 12 files changed · 23m ago'},
+ {id:'r2',name:'A-31',desc:'Cache spike · corral · scratch spike-cache · 2h ago'},
+ {id:'r3',name:'A-29',desc:'Arrival layout notes · mitiplay · suspended yesterday'},
+];
+const WHERE=['new worktree  .worktrees/build-<name>','here  the current checkout and branch'];
+const TIERS={
+ wide:'conversation and the 34-column sidebar; tables show every column (Ctrl+B collapses the sidebar)',
+ mid:'conversation and the 34-column sidebar (Ctrl+B collapses it)',
+ narrow:'under 105 columns the sidebar folds to one row above the composer; Ctrl+B opens it as a drawer',
+ tiny:'compact: sidebar row above the composer, rows fold to two lines, footer keeps the essentials'};
+const NOTES={
+ launch:['Launch',[['new','One launcher instead of flags. <code>corral pi</code> asks what to open and lists what can be resumed, whatever kind of session it was.'],['new','Build is a third kind of session: no assistant record, no scratch record, no task. It writes to a plain Git worktree it creates, or to the checkout if you choose "here".'],['today','<code>corral pi</code>, <code>--pm</code>, <code>--pm -c</code>, <code>--resume A-&lt;n&gt;</code>, <code>--bare</code>, <code>--over-cap</code>; three of them exclude one another, and bare has only seven tools.']]],
+ chat:['Fan-out in the conversation',[['new','The parent splits the request and starts write-capable agents. Each gets a brief, a profile and a set of files it owns. They share one worktree.'],['new','The task block in the conversation is the live list of slices: state, what each delivers, profile and time. Nothing sits above the tabs.'],['new','The sidebar keeps its three tabs. Context lists the agents still at work with their current step, then running jobs, then one line of completed names. Plan is the session ledger, including the steps no agent owns.'],['today','The sidebar already folds this way: a 34-column rail from 105 columns, one navigation row below that, <kbd>Ctrl+B</kbd> to switch. In the mock <kbd>F6</kbd> only changes the tab; today it moves focus into the sidebar.'],['today','<code>explore</code> only: read-only, one-shot, one model, 120 s by default. Nothing that writes runs in parallel.']]],
+ fleet:['Fleet',[['new','One table answers "who is doing what, for how long, at what cost". <kbd>F8</kbd> focuses it; arrows select; Enter opens that agent\'s conversation.'],['new','The timeline shows when each agent waited, ran, asked and finished. A dotted run is a wait, so a dependency such as tests waiting for host-slots is visible.'],['new','<kbd>s</kbd> points the composer at the selected agent, <kbd>x</kbd> cancels it, <kbd>m</kbd> changes its model for the next request.'],['today','F8 lists helpers and jobs, but a helper cannot be steered, cancelled alone or given a different model.']]],
+ child:['One agent',[['new','The agent\'s own conversation replaces the reading area. The composer target switches to it, so Enter steers this agent and not the parent.'],['new','The brief states what the agent owns and what it cannot do: no board access, no nested agents.'],['today','Helper conversations are read-only; follow-up to a child is not provided.']]],
+ changes:['Changes',[['new','Filter the diff by agent. Each file carries the colour of who touched it. A file edited by two agents is marked, and so is an edit outside the set of files an agent was given.'],['new','Below about 90 columns the file list stacks above the diff instead of beside it.'],['risk','A shared worktree makes overlap possible. The mock flags it and leaves the decision to you; it does not block the edit.'],['today','Changes shows the working tree as one diff with no author.']]],
+ queue:['Input queue',[['new','Queued input is visible above the composer. Each item can be edited, reordered or removed, and names who receives it.'],['new','The composer always shows its target and what Enter will do: send, steer, or steer one agent. <kbd>Alt+T</kbd> changes the target.'],['today','The composer reports counts only; "queued input has no edit, cancel or reorder controls" (pi-panels guide).']]],
+ finish:['Finish',[['new','One result card: time and cost per slice, the size of the change, anything flagged and what was not checked. Then one choice, in the same dialog style as every other question.'],['new','The exits come from the project\'s policy. mitiplay allows landing on the gate alone. A project set to review would show option 2 as unavailable and say why.'],['new','"Ship through the board" is the only point where corral records anything. The session itself stays untethered.'],['today','Scratch, commit, <code>finish</code>, task, gate, mandatory independent review, land. Review can be waived only by the owner, one run at a time.']]],
+ board:['Board fan-out',[['new','A plan becomes N tasks with dependency edges in one confirmed action. The preview is what <code>corral import --dry-run</code> returns; nothing is written before you confirm.'],['new','Board (<kbd>F10</kbd>) follows the runs this session filed: waiting on a dependency or a slot, running, in gate, in review, landed.'],['new','Your confirmation starts exactly the listed tasks. It is not a standing grant.'],['today','File each task, set dependencies, queue or dispatch each one, then watch the board in another pane.']]],
+ keys:['Keys and actions',[['new','The footer always shows the keys that work right now, and each hint is clickable. A narrow pane keeps the most relevant ones and <kbd>F1</kbd>.'],['new','<kbd>F1</kbd> lists everything; <kbd>F2</kbd> searches actions and says why one is unavailable.'],['today','F2 and <code>/actions</code> exist; the footer does not list keys, and F6 to F11 have to be remembered.']]],
+};
+
+const $=id=>document.getElementById(id),draft=$('draft'),term=$('term');
+const h=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtT=s=>s<60?s+'s':Math.floor(s/60)+'m'+String(s%60).padStart(2,'0')+'s';
+const money=c=>'$'+c.toFixed(2);
+let S,kids,toastTimer;
+/* Layout facts, measured from the pane: T chrome tier, D main-area density, MC/DC columns of main and dock. */
+let COLS=0,ROWS=0,T='mid',SHORT=false,MC=80,DC=100,D='med';
+const small=()=>T==='narrow'||T==='tiny',tiny=()=>T==='tiny';
+const kid=id=>kids.find(k=>k.id===id);
+const prog=k=>k.st==='done'?1:k.el/k.dur;
+const count=st=>kids.filter(k=>k.st===st).length;
+const active=()=>kids.filter(k=>k.st==='running'||k.st==='needs').length;
+const totalCost=()=>.18+S.clock*.0009+kids.reduce((n,k)=>n+k.cost,0);
+const seen=f=>f.by.filter(([id,at])=>kid(id).el>0&&prog(kid(id))>=at).map(b=>b[0]);
+const liveFiles=()=>FILES.map(f=>({...f,who:seen(f)})).filter(f=>f.who.length);
+const outside=f=>f.who.filter(id=>!kid(id).owns.includes(f.p));
+const nm=k=>`<span class="b" style="color:${k.c}">${k.id}</span>`;
+const BARS=' ▁▂▃▄▅▆▇';
+const pulse=(k,n)=>k.pulse.slice(-n).map(v=>BARS[v]).join('').padStart(n,' ');
+/* The sidebar follows today's workbench: a 34-column rail from 105 columns, one navigation row above the composer
+   below that. Ctrl+B collapses the rail to that row, or opens the row into a compact drawer. */
+const isLive=k=>['running','needs','queued'].includes(k.st);
+const hasSide=()=>S.view!=='launch';
+const railOn=()=>hasSide()&&!small()&&S.side!==false;
+const drawerOn=()=>hasSide()&&!railOn()&&S.drawer;
+
+function reset(){
+  kids=KIDS.map(k=>{const done=k.kind==='explore';return {...k,st:done?'done':'queued',el:done?k.dur:0,cost:done?k.rate*k.dur:0,ctx:done?22:6,steers:[],hist:'',pulse:[]};});
+  S={view:'launch',last:'',overlay:null,di:0,focus:'list',phase:'idle',clock:0,tl:0,sel:1,target:'parent',queue:[],qid:1,log:[],filter:'all',file:0,
+     launch:{row:1,where:0},playing:true,jobs:[],board:null,bsel:0,pq:'',pi:0,model:0,effort:2,side:null,rail:'context',drawer:false,toast:'',quiet:false};
+  draft.value='';
+}
+function toast(text){
+  if(S.quiet)return;
+  S.toast=text;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{S.toast='';render();},3200);
+}
+function begin(text){
+  S.phase='running';S.view='chat';S.focus='composer';S.clock=S.tl=40;
+  for(const k of kids)k.hist=(k.kind?'r':' ').repeat(8);
+  S.log=[{k:'user',text},
+   {k:'asst',html:'Scouted first, then split into four slices. They share one worktree, <code>.worktrees/build-save-slots</code>. Each slice owns its files; an edit outside them is flagged, not blocked. <code>tests</code> waits for the two slices it depends on.'},
+   {k:'fleet'}];
+}
+function beat(k){
+  const a=k.acts[Math.min(k.acts.length-1,Math.floor(prog(k)*k.acts.length))].split(' ')[0];
+  const base={read:2,grep:3,edit:5,bash:7}[a]||3,j=(k.el/STEP*7+k.id.length*3)%3-1;
+  return Math.max(1,Math.min(7,base+j));
+}
+function step(){
+  if(S.phase==='running'){
+    S.clock+=STEP;S.tl=S.clock;
+    for(const k of kids){
+      if(k.st==='queued'){
+        if(k.after.some(a=>kid(a).st==='cancelled')){k.st='cancelled';S.log.push({k:'note',tone:'wa',text:`! ${k.id} skipped: a slice it depends on was cancelled`});}
+        else if(active()<CAP&&k.after.every(a=>kid(a).st==='done'))k.st='running';
+      }else if(k.st==='running'){
+        k.el+=STEP;k.cost+=k.rate*STEP;k.ctx=Math.min(88,k.ctx+k.grow);k.pulse.push(beat(k));
+        if(k.el>=k.dur){k.el=k.dur;k.st='done';S.log.push({k:'note',tone:'ok',text:`✓ ${k.id} finished · ${k.done}`});}
+      }else if(k.st==='needs')k.pulse.push(0);
+      k.hist+={queued:'q',running:'r',needs:'n',done:'d',cancelled:'c'}[k.st];
+    }
+    if(kids.every(k=>k.st==='done'||k.st==='cancelled')){
+      S.phase='checks';const e={k:'jobs',title:'Checks',jobs:CHECKS.map(c=>({...c,el:0,st:'queued'}))};S.jobs=e.jobs;
+      S.log.push({k:'asst',html:'All slices are back. Running the two checks that cover what changed.'},e);
+    }
+  }else if(S.phase==='checks'||S.phase==='gating'){
+    S.clock+=STEP;
+    const j=S.jobs.find(j=>j.st!=='done');
+    if(j){j.st='running';j.el+=STEP;if(j.el>=j.dur){j.el=j.dur;j.st='done';}}
+    if(S.jobs.every(j=>j.st==='done')){
+      if(S.phase==='checks'){S.phase='done';S.log.push({k:'result'});openDialog('exit',1);}
+      else{S.phase='landed';S.log.push({k:'note',tone:'ok',text:'✓ Landed on main at 3f2a9c1 · worktree removed · branch build/save-slots deleted'});toast('Landed on main');}
+    }
+  }
+  if(S.board)boardStep();
+}
+function advance(n){S.quiet=true;for(let i=0;i<n;i++)step();S.quiet=false;}
+function finishNow(){
+  if(['open','kept','landed','shipped'].includes(S.phase)){S.phase='done';openDialog('exit',1);return;}
+  if(kid(ASK.kid).st==='needs')answer(2);
+  S.quiet=true;for(let i=0;i<400&&S.phase!=='done';i++)step();S.quiet=false;
+}
+function openDialog(name,di){S.overlay=name;S.di=di||0;S.focus='dialog';}
+function closeOverlay(){S.overlay=null;S.focus=S.view==='launch'?'list':'composer';}
+function chooseExit(i){
+  const c=EXITS[i];closeOverlay();S.log.push({k:'user',text:c.label,choice:true});
+  if(c.id==='keep'){S.phase='kept';S.log.push({k:'note',tone:'mu',text:'Kept on build/save-slots in .worktrees/build-save-slots · nothing filed · resume it from the launcher'});}
+  if(c.id==='gate'){S.phase='gating';const e={k:'jobs',title:'Gate',jobs:[{cmd:'just check',res:'passed · fmt, clippy, nextest, app typecheck and tests',dur:45,el:0,st:'queued'}]};S.jobs=e.jobs;
+    S.log.push({k:'asst',html:'mitiplay allows landing on the gate alone. Rebased onto main (no conflicts); running the gate on that commit.'},e);}
+  if(c.id==='board'){S.phase='shipped';ensureBoard();S.board.tasks.unshift({id:'T-962',title:'Save-slot picker on arrival',kind:'frontend m',profile:'this session',dep:[],st:'gating',el:200,dur:200,g:0,r:0,act:''});
+    S.log.push({k:'note',tone:'ok',text:'✓ T-962 created in Review from build/save-slots · gate queued · independent review required'},{k:'note',tone:'mu',text:'This session stays untethered. Follow the task under Board (F10) or on the corral board.'});}
+  if(c.id==='iterate'){S.phase='open';S.log.push({k:'note',tone:'mu',text:'Session stays open. The exit choice comes back when you say done, or from F2 → Finish.'});}
+}
+function simAsk(){
+  const k=kid(ASK.kid);
+  if(S.phase==='idle'){begin(DEMO);advance(8);}
+  if(k.st==='needs'){openDialog('ask',0);return;}
+  if(k.st!=='running'){toast('picker-ui is not running. Reset to replay this.');return;}
+  k.st='needs';S.view=S.view==='launch'?'chat':S.view;openDialog('ask',0);
+}
+function answer(i){
+  const k=kid(ASK.kid);closeOverlay();k.st='running';k.steers.push('Answer: '+ASK.opts[i][0]);S.toast='';
+  S.log.push({k:'note',tone:'wa',text:`▲ ${k.id} asked: ${ASK.q}`});
+  S.log.push({k:'note',tone:'ac',text:`→ ${k.id}: ${ASK.opts[i][0]}`});
+}
+function ensureBoard(){if(!S.board)S.board={tasks:[]};}
+function planBoard(){
+  if(S.phase==='idle'){begin(DEMO);advance(8);}
+  S.view='chat';
+  S.log.push({k:'user',text:'Export and import of slots is too big for this session. Put it on the board.'},
+   {k:'asst',html:'Five tasks, three dependency edges. This is the preview from <code>corral import --dry-run</code>; nothing is written yet.'});
+  openDialog('boardplan',0);
+}
+function fileBoard(i){
+  closeOverlay();
+  if(i===2){S.log.push({k:'note',tone:'mu',text:'Nothing filed. Say what to change in the plan.'});return;}
+  ensureBoard();for(const p of PLAN)if(!S.board.tasks.some(t=>t.id===p.id))S.board.tasks.push({...p,st:i===0?'ready':'backlog',el:0,g:0,r:0});
+  S.log.push({k:'user',text:i===0?'File and start':'File only',choice:true},
+   {k:'note',tone:'ok',text:i===0?'✓ Filed T-971 to T-975 with 3 dependency edges · started under your confirmation for these 5 tasks · 2 slots':'✓ Filed T-971 to T-975 in Backlog with 3 dependency edges · nothing started'});
+  S.view='board';S.focus='list';
+}
+function boardStep(){
+  const B=S.board.tasks,landed=id=>(B.find(t=>t.id===id)||{}).st==='landed';
+  for(const t of B){
+    if(t.st==='ready'){if(t.dep.every(landed)&&B.filter(x=>x.st==='running').length<SLOTS)t.st='running';}
+    else if(t.st==='running'){t.el+=STEP;if(t.el>=t.dur)t.st='gating';}
+    else if(t.st==='gating'){t.g+=STEP;if(t.g>=25)t.st='reviewing';}
+    else if(t.st==='reviewing'){t.r+=STEP;if(t.r>=40){t.st='landed';toast(t.id+' landed');}}
+  }
+}
+function enqueue(text,target){S.queue.push({id:S.qid++,text,target});}
+function send(){
+  const v=draft.value.trim();if(!v)return;draft.value='';
+  if(S.phase==='idle'){begin(v);return;}
+  if(S.target==='parent'){
+    S.log.push({k:'user',text:v});
+    S.log.push({k:'note',tone:'mu',text:S.phase==='running'?'Steer received · applied at the parent\'s next tool boundary · agents keep running':'Received'});
+  }else{const k=kid(S.target);k.steers.push(v);S.log.push({k:'note',tone:'ac',text:`→ ${k.id} steered: “${v}”`});}
+}
+
+/* ---------- rendering ---------- */
+const SPIN='<span class="spin"></span>';
+function kst(k){
+  switch(k.st){
+    case 'running':return[SPIN,'ac',fmtT(k.el)];
+    case 'needs':return['▲','wa','needs you'];
+    case 'done':return['✓','ok',fmtT(k.el)];
+    case 'cancelled':return['✗','er','cancelled'];
+    default:return['○','mu','waiting'];
+  }
+}
+function kact(k){
+  if(k.st==='running')return k.acts[Math.min(k.acts.length-1,Math.floor(prog(k)*k.acts.length))];
+  if(k.st==='needs')return 'waiting for your answer';
+  if(k.st==='done')return k.done;
+  if(k.st==='cancelled')return 'stopped';
+  {const w=k.after.find(a=>kid(a).st!=='done');return w?'waits for '+w:'waits for a free slot';}
+}
+const nfiles=k=>liveFiles().filter(f=>f.who.includes(k.id)).length;
+function headHTML(){
+  if(S.view==='launch')return `<div class="row"><span class="ac b">corral / pi</span><span class="mu el">~/miti-workspace/mitiplay</span></div>`;
+  const need=count('needs'),pend=S.phase==='open'||S.phase==='done'&&!S.overlay;
+  const long={idle:'Idle',running:'Working',checks:'Working · checks',done:'Idle',open:'Idle',kept:'Idle · kept on branch',gating:'Working · gate',landed:'Idle · landed',shipped:'Idle · handed to the board'}[S.phase];
+  const brief={idle:'idle',running:'working',checks:'checks',done:'idle',open:'idle',kept:'kept',gating:'gate',landed:'landed',shipped:'on board'}[S.phase];
+  let o=`<div class="row"><span class="ac b el">${tiny()?'build · save-slots':'corral / build · save-slots'}</span><span>${need&&S.overlay!=='ask'?`<span class="chipw" data-a="reask">▲ ${need}${tiny()?'':' needs you'}</span> `:''}${pend?`<span class="wa" data-a="finish">${small()?'choose exit':'exit choice pending'}</span>`:`<span class="mu">${small()?brief:long}</span>`}</span></div>`;
+  if(!SHORT&&!tiny())o+=`<div class="row mu"><span class="el">mitiplay · .worktrees/build-save-slots</span><span>${T==='narrow'?'exit: gate':'exit policy: gate allowed'}</span></div>`;
+  return o;
+}
+function tabsHTML(){
+  const cur=S.view==='child'?'fleet':S.view,n=S.board?S.board.tasks.filter(t=>t.st!=='landed').length:0;
+  // Below 50 columns only the open view keeps its name; the others stay reachable by key and click.
+  const tab=(v,label,k,cnt)=>`<span class="tab${cur===v?' on':''}" data-k="${k}"><kbd>${k}</kbd>${COLS<50&&cur!==v?'':' '+label}${cnt&&!tiny()?` <span class="cnt">${cnt}</span>`:''}</span>`;
+  const sep=tiny()?'':'<span class="sep">│</span>';
+  return tab('chat','Chat','F9')+sep+tab('fleet','Fleet','F8')+sep+tab('changes',tiny()?'Diff':'Changes','F7',liveFiles().length)+sep+tab('board','Board','F10',n);
+}
+function toolLine(a,st){
+  const i=a.indexOf(' '),g=st==='ok'?'<span class="ok">✓</span>':`<span class="ac">${SPIN}</span>`;
+  return `<div class="tool">${g} <span class="tn">${h(a.slice(0,i))}</span> ${h(a.slice(i+1))}</div>`;
+}
+/* The task block is the one live list of slices in the conversation: state and time live here, not above the tabs. */
+function planBlock(){
+  const W=kids.filter(k=>!k.kind);
+  return `<div class="blk"><div class="bt"><span><span class="ac">task</span> · ${W.length} slices${D==='min'?'':', one worktree'}</span></div><div class="bb mini ${D}">`
+   +W.map(k=>{const[g,c,w]=kst(k);return `<div class="tr" data-a="${k.st==='needs'?'reask':'open'}" data-v="${kids.indexOf(k)}"><span class="${c}">${g}</span>${nm(k)}<span class="el">${TITLE[k.id]}</span>${D==='min'?'':`<span class="mu el">${k.profile}${D==='full'?' · '+k.model:''}</span>`}<span class="r ${c==='ac'?'mu':c}">${w}</span></div>`;}).join('')
+   +`</div></div>`;
+}
+function jobsBlock(e){
+  return `<div class="blk"><div class="bt"><span><span class="ac">bash</span> · ${e.title}</span></div><div class="bb">`
+   +e.jobs.map(j=>{const g=j.st==='done'?['✓','ok',j.res]:j.st==='running'?[SPIN,'ac','running '+fmtT(j.el)]:['○','mu','queued'];return `<div class="el"><span class="${g[1]}">${g[0]}</span> ${h(j.cmd)} <span class="mu">· ${g[2]}</span></div>`;}).join('')+`</div></div>`;
+}
+function resultBlock(){
+  const F=liveFiles(),add=F.reduce((n,f)=>n+f.add,0),del=F.reduce((n,f)=>n+f.del,0),ov=F.filter(f=>outside(f).length);
+  const W=kids.filter(k=>!k.kind),done=W.filter(k=>k.st==='done').length;
+  return `<div class="blk"><div class="bt"><span class="b el">Build finished · ${done}/${W.length} slices · ${fmtT(S.tl)}</span></div><div class="bb">`
+   +`<div class="sres">${W.map(k=>{const[g,c]=kst(k);return `<div class="tr" data-a="open" data-v="${kids.indexOf(k)}">${nm(k)}<span class="${c}">${g} ${k.st==='done'?fmtT(k.el):k.st}</span><span>${money(k.cost)}</span></div>`;}).join('')}</div>`
+   +`<div style="margin-top:4px">${F.length} files <span class="ok">+${add}</span> <span class="er">−${del}</span> on build/save-slots, 1 commit per slice</div>`
+   +(ov.length?`<div class="wa">! ${ov.map(f=>`${f.p} was also edited by ${outside(f).join(', ')}, outside its files`).join('; ')}</div>`:'')
+   +`<div class="mu">Not checked: the full gate (just check), a browser run of the arrival screen.</div></div></div>`;
+}
+function chatHTML(){
+  if(S.phase==='idle')return `<div class="empty"><p><b>Build session, unbound.</b> Describe what to build and press Enter.</p><p>Independent slices run in parallel in one worktree, each on the profile that fits it. Nothing is filed on the board until you choose an exit.</p><p>The demo request is already in the composer.</p></div>`;
+  return S.log.map(e=>{
+    if(e.k==='user')return `<div class="msg user"><span class="who">${e.choice?'you chose':'you'}</span> ${h(e.text)}</div>`;
+    if(e.k==='asst')return `<div class="msg">${e.html}</div>`;
+    if(e.k==='note')return `<div class="note ${e.tone}">${h(e.text)}</div>`;
+    if(e.k==='fleet')return planBlock();
+    if(e.k==='jobs')return jobsBlock(e);
+    if(e.k==='result')return resultBlock();
+    return '';
+  }).join('');
+}
+/* One row per agent: ┄ waited, ━ ran (its colour), ━ amber asked, ✓ finished. */
+function tlBar(k,W){
+  const H=k.hist,n=H.length,cols=Math.min(W,n);let out='',prev=null,run='',marked=false;
+  const flush=()=>{if(run)out+=prev==='r'?`<span style="color:${k.c}">${run}</span>`:`<span class="${{n:'wa',q:'tq',d:'ok',c:'er'}[prev]||''}">${run}</span>`;run='';};
+  for(let j=0;j<cols;j++){
+    let s=H[Math.floor(j*n/cols)],ch=s==='r'||s==='n'?'━':s==='q'?'┄':' ';
+    if(s==='d'||s==='c'){if(marked){s=' ';}else{ch=s==='d'?'✓':'✗';marked=true;}}
+    if(s!==prev){flush();prev=s;}run+=ch;
+  }
+  flush();return out;
+}
+function timelineHTML(W,names){
+  if(!kids[0].hist)return '';
+  const cols=Math.min(W,kids[0].hist.length),end=fmtT(S.tl);
+  return `<div class="tl${names?'':' bare'}">`+kids.map((k,i)=>`<div class="tlr" data-a="open" data-v="${i}">${names?`<span class="el" style="color:${k.c}">${k.id}</span>`:`<span style="color:${k.c}">●</span>`}<span class="pl">${tlBar(k,W)}</span></div>`).join('')
+   +`<div class="tlr mu"><span></span><span class="pl">${'0s'.padEnd(Math.max(3,cols-end.length))}${cols>end.length+3?end:''}</span></div></div>`;
+}
+function fleetHTML(){
+  const k=kids[S.sel],live=['running','needs','queued'].includes(k.st);
+  const row=(x,i)=>{
+    const[g,c,w]=kst(x),a=`<div class="tr${i===S.sel?' sel':''}" data-a="sel" data-v="${i}"><span class="bar">▌</span><span class="${c}">${g}</span>${nm(x)}`,p=x.st==='running'||x.st==='needs'?pulse(x,D==='full'?14:12):'';
+    if(D==='full')return a+`<span class="mu el">${x.profile} · ${x.model}</span><span class="r ${c==='ac'?'':c}">${w}</span><span class="r">${money(x.cost)}</span><span class="r">${Math.round(x.ctx)}%</span><span class="r">${x.kind?'–':nfiles(x)}</span><span class="pl" style="color:${x.c}">${p}</span><span class="mu el">${h(kact(x))}</span></div>`;
+    return a+(D==='med'?`<span class="mu el">${x.profile} · ${x.model}</span>`:'')+`<span class="r ${c==='ac'?'':c}">${w}</span><span class="r">${money(x.cost)}</span><span class="l2"><span class="el">${h(kact(x))}</span>${D==='med'?`<span class="pl" style="color:${x.c}">${p}</span>`:''}</span></div>`;
+  };
+  let o=`<div class="fleet ${D}">`+(D==='full'?`<div class="tr th"><span></span><span></span><span>agent</span><span>profile · model</span><span class="r">time</span><span class="r">cost</span><span class="r">ctx</span><span class="r">files</span><span>activity</span><span>now</span></div>`:'')+kids.map(row).join('')+`</div>`
+   +`<div class="detail"><h5>${nm(k)} <span style="font-weight:400;color:var(--text)">${TITLE[k.id]}</span></h5>`
+   +`<div class="mu">Owns: ${k.owns.length?k.owns.join(', '):'nothing (read-only)'}${k.after.length?' · starts after '+k.after.join(', '):''}</div>`
+   +(k.steers.length?`<div class="ac">Steered: ${k.steers.map(h).join(' · ')}</div>`:'')
+   +`<div class="btns"><span class="btn" data-k="Enter"><kbd>⏎</kbd> open conversation</span><span class="btn${live?'':' off'}" ${live?'data-k="s"':''}><kbd>s</kbd> steer</span><span class="btn${live?'':' off'}" ${live?'data-k="x"':''}><kbd>x</kbd> cancel</span><span class="btn${live?'':' off'}" ${live?'data-k="m"':''}><kbd>m</kbd> model</span></div></div>`;
+  return o+`<div class="detail"><h5>Timeline <span class="mu" style="font-weight:400">· up to ${CAP} at once</span></h5>${timelineHTML(Math.max(10,Math.min(96,MC-(D==='min'?3:14))),D!=='min')}</div>`;
+}
+function childHTML(){
+  const k=kids[S.sel],[g,c,w]=kst(k),n=Math.floor(prog(k)*k.acts.length);
+  let o=`<div class="note" style="display:flex;flex-wrap:wrap;gap:0 1ch"><span data-k="Escape" class="ac">‹ fleet</span>${nm(k)}<span class="mu">${k.profile} · ${k.model}</span><span class="${c}">${g} ${w}</span><span class="mu">${money(k.cost)} · ctx ${Math.round(k.ctx)}%</span>${k.st==='running'?`<span class="pl" style="color:${k.c}">${pulse(k,12)}</span>`:''}</div>`
+   +`<div class="msg user" style="margin-top:8px"><span class="who">brief from parent</span> ${h(k.brief)}<div class="mu">Owns: ${k.owns.length?k.owns.join(', '):'nothing (read-only)'} · no board access · no nested agents</div></div>`;
+  if(k.st==='queued')return o+`<div class="mu">Not started: ${kact(k)}.</div>`;
+  o+=k.acts.slice(0,n).map(a=>toolLine(a,'ok')).join('');
+  if(k.st==='running')o+=toolLine(kact(k),'run');
+  o+=k.steers.map(s=>`<div class="msg user" style="margin-top:8px"><span class="who">you → ${k.id}</span> ${h(s)}</div>`).join('');
+  if(k.st==='needs')o+=`<div class="note wa" style="margin-top:8px" data-a="reask">▲ ${h(ASK.q)} <span class="mu">· answer in the dialog</span></div>`;
+  if(k.st==='done')o+=`<div class="msg" style="margin-top:8px">${h(k.report)}</div>`;
+  if(k.st==='cancelled')o+=`<div class="note er" style="margin-top:8px">✗ Cancelled by you. Its edits so far stay in the worktree.</div>`;
+  return o;
+}
+function changesHTML(){
+  const all=liveFiles();
+  if(!all.length)return `<div class="empty"><p><b>No changes yet.</b> Files appear here as agents edit them, in the colour of who touched them.</p></div>`;
+  const F=all.filter(f=>S.filter==='all'||f.who.includes(S.filter));
+  S.file=Math.max(0,Math.min(S.file,F.length-1));
+  const writers=kids.filter(k=>!k.kind&&all.some(f=>f.who.includes(k.id))),two=MC>=90;
+  const chips=`<div class="chips"><span class="chip${S.filter==='all'?' on':''}" style="--c:var(--text)" data-a="filter" data-v="all">all ${all.length}</span>`+writers.map(k=>`<span class="chip${S.filter===k.id?' on':''}" style="--c:${k.c}" data-a="filter" data-v="${k.id}">${k.id} ${all.filter(f=>f.who.includes(k.id)).length}</span>`).join('')+`</div>`;
+  const path=p=>MC<60?p.split('/').slice(-2).join('/'):p;
+  const list=F.map((f,i)=>{const o=outside(f);return `<div class="f${i===S.file?' sel':''}" data-a="file" data-v="${i}"><span class="bar">▌</span><span>${f.who.map(id=>`<span style="color:${kid(id).c}">●</span>`).join('')}</span><span class="el">${o.length?'<span class="wa">!</span> ':''}${h(path(f.p))}</span><span><span class="ok">+${f.add}</span> <span class="er">−${f.del}</span></span></div>`+(o.length?`<div class="wa el" style="padding-left:4ch">also edited by ${o.join(', ')}</div>`:'');}).join('');
+  const f=F[S.file];let diff='';
+  if(f){
+    const lines=DIFF[f.p]||['@@ '+(f.del?'modified':'new file'),...Array.from({length:Math.min(9,Math.max(3,Math.round(f.add/12)))},(_,i)=>'+  // '+f.who[0]+' · line '+(i+1)+' of '+f.add)];
+    let ln=0;
+    diff=`<div><span class="b">${h(path(f.p))}</span> ${f.who.map(id=>`<span style="color:${kid(id).c}">● ${id}</span>`).join(' ')}</div>`+lines.map(l=>l[0]==='@'?`<span class="d-hunk">${h(l)}</span>`:`<span class="${l[0]==='+'?'d-add':l[0]==='-'?'d-del':'d-ctx'}"><span class="ln">${l[0]==='-'?'':++ln}</span>${h(l)||' '}</span>`).join('');
+  }
+  return `<div class="chg ${two?'two':'one'}"><div class="files">${chips}${list||'<div class="mu">This agent has not changed a file yet.</div>'}</div><div class="diff">${diff}</div></div>`;
+}
+function bst(t,B){
+  const landed=id=>(B.find(x=>x.id===id)||{}).st==='landed';
+  switch(t.st){
+    case 'backlog':return['○','mu','backlog','filed, not started'];
+    case 'ready':{const w=t.dep.filter(d=>!landed(d));return['○','mu','ready',w.length?'waits '+w.join(', '):'waits for a slot'];}
+    case 'running':return[SPIN,'ac','running',`${fmtT(t.el)} · ${t.act}`];
+    case 'gating':return[SPIN,'ac','gate','just check on the candidate'];
+    case 'reviewing':return[SPIN,'ac','review','independent review · implementation-review'];
+    default:return['✓','ok','landed','on main'];
+  }
+}
+function boardHTML(){
+  if(!S.board)return `<div class="empty"><p><b>Nothing from this session is on the board.</b></p><p>A finished build can ship through the board, or a larger plan can be split into tasks that run there under corral's gate and review.</p><p><span class="ac" data-a="planboard">Plan board tasks from this conversation…</span></p></div>`;
+  const B=S.board.tasks;S.bsel=Math.max(0,Math.min(S.bsel,B.length-1));
+  const run=B.filter(t=>t.st==='running').length,rev=B.filter(t=>t.st==='gating'||t.st==='reviewing').length,land=B.filter(t=>t.st==='landed').length;
+  const row=(t,i)=>{
+    const[g,c,st,now]=bst(t,B),a=`<div class="tr${i===S.bsel?' sel':''}" data-a="bsel" data-v="${i}"><span class="bar">▌</span><span class="b">${t.id}</span>`;
+    if(D==='full')return a+`<span class="el">${h(t.title)}</span><span class="${c}">${g} ${st}</span><span class="mu">${t.kind} · ${t.profile}</span><span class="mu el">${h(now)}</span></div>`;
+    return a+`<span class="${c}">${g} ${st}</span>${D==='med'?`<span class="mu el">${h(now)}</span>`:''}<span class="l2"><span class="el" style="color:var(--text)">${h(t.title)}</span></span></div>`;
+  };
+  return `<div class="mu el" style="margin-bottom:4px">${D==='min'?'':'From this session · '}${run}/${SLOTS} slots · ${rev} in gate or review · ${land}/${B.length} landed</div>`
+   +`<div class="board ${D}">`+(D==='full'?`<div class="tr th"><span></span><span>task</span><span>title</span><span>stage</span><span>profile</span><span>now</span></div>`:'')+B.map(row).join('')
+   +`</div><div class="btns"><span class="btn" data-a="nomock"><kbd>⏎</kbd> open task</span><span class="btn" data-a="nomock"><kbd>a</kbd> jump to its pane</span><span class="btn" data-a="nomock"><kbd>o</kbd> open the corral board</span></div>`;
+}
+function launchHTML(){
+  const two=MC<76;let o=`<div class="launch"><h2>What do you want to open?</h2>`;
+  LAUNCH.forEach((r,i)=>{
+    if(r.sec){o+=`<h3>${r.sec}</h3>`;return;}
+    o+=`<div class="lr${two?' two':''}${i===S.launch.row?' sel':''}" data-a="lrow" data-v="${i}"><span class="bar">▌</span><span class="b">${r.name}</span>${two?'':`<span class="mu el">${h(r.desc)}</span>`}<span>${r.k?`<kbd>${r.k}</kbd>`:''}</span>${two?`<span class="mu ld">${h(r.desc)}</span>`:''}</div>`;
+  });
+  return o+`<div class="lopt"><span class="mu">Project</span><span>mitiplay <span class="mu">from this directory</span></span><span class="mu">Writes to</span><span data-k="ArrowRight"><span class="ac">‹</span> ${h(WHERE[S.launch.where])} <span class="ac">›</span></span><span class="mu">Models</span><span>openai-codex ✓ &nbsp; anthropic ✓${two?'':' <span class="mu">agents may use either</span>'}</span></div></div>`;
+}
+function mainHTML(){return{launch:launchHTML,chat:chatHTML,fleet:fleetHTML,child:childHTML,changes:changesHTML,board:boardHTML}[S.view]();}
+/* Plan is the session ledger: the slices plus the steps no agent owns. */
+function planSteps(){
+  const past=['done','open','kept','gating','landed','shipped'].includes(S.phase),left=['kept','landed','shipped'].includes(S.phase);
+  return[...kids.map((k,i)=>{const[g,c]=kst(k);return[g,c,TITLE[k.id],i];}),
+    [S.phase==='checks'?SPIN:past?'✓':'○',S.phase==='checks'?'ac':past?'ok':'mu','Run covering checks'],
+    [left?'✓':S.phase==='gating'?SPIN:'○',left?'ok':S.phase==='gating'?'ac':'mu','Choose how it leaves']];
+}
+const sideTabs=(open,sum)=>['context','files','plan'].map(t=>`<span class="${open&&S.rail===t?'on':'mu'}" data-a="rail" data-v="${t}">${t[0].toUpperCase()+t.slice(1)}${sum&&sum[t]?` <span style="color:var(--text)">${sum[t]}</span>`:''}</span>`).join('');
+/* One tab's content, shared by the rail and the drawer. */
+function sideBody(){
+  if(S.phase==='idle')return `<div class="none">${{context:'no agents or jobs yet',files:'no changes yet',plan:'no plan yet'}[S.rail]}</div>`;
+  if(S.rail==='files')return liveFiles().map((f,i)=>`<div class="it" data-a="gofile" data-v="${i}"><span></span><span>${f.who.map(id=>`<span style="color:${kid(id).c}">●</span>`).join('')}</span><span class="el">${outside(f).length?'<span class="wa">!</span> ':''}${h(f.p.split('/').slice(-2).join('/'))}</span><span>&nbsp;<span class="ok">+${f.add}</span> <span class="er">−${f.del}</span></span></div>`).join('')||'<div class="none">no changes yet</div>';
+  if(S.rail==='plan'){
+    const P=planSteps();
+    return `<h4>${P.filter(s=>s[1]==='ok').length}/${P.length} done</h4>`+P.map(([g,c,t,i])=>`<div class="it${c==='ok'?' mu':''}" ${i==null?'':`data-a="open" data-v="${i}"`}><span></span><span class="${c}">${g}</span><span class="el">${t}</span><span></span></div>`).join('');
+  }
+  const at=k=>(S.view==='fleet'||S.view==='child')&&S.focus==='list'&&kids.indexOf(k)===S.sel,done=kids.filter(k=>k.st==='done'),jobs=S.jobs.filter(j=>j.st!=='done');
+  let o=`<h4>AGENTS</h4>`+(kids.filter(k=>k.st!=='done').map(k=>{const[g,c]=kst(k);return `<div class="it${at(k)?' sel':''}" data-a="${k.st==='needs'?'reask':'open'}" data-v="${kids.indexOf(k)}"><span class="bar">▌</span><span class="${c}">${g}</span><span class="el">${nm(k)} <span class="mu">${k.profile}</span></span><span></span><span class="sub el">${h(kact(k))}</span></div>`;}).join('')||'<div class="none">none at work</div>');
+  if(jobs.length)o+=`<h4>JOBS</h4>`+jobs.map(j=>`<div class="it"><span></span><span class="${j.st==='running'?'ac':'mu'}">${j.st==='running'?SPIN:'○'}</span><span class="el">${h(j.cmd)}</span><span class="mu">&nbsp;${j.st==='queued'?'queued':fmtT(j.el)}</span></div>`).join('');
+  if(done.length)o+=`<h4>COMPLETED · ${done.length}</h4><div class="none el">${done.map(k=>k.id).join(' · ')}</div>`;
+  return o;
+}
+function railHTML(){
+  return `<div class="rtabs">${sideTabs(true)}<span class="sp"></span><span class="mu" data-k="Ctrl+b"><kbd>Ctrl+B</kbd> ▸</span></div><div class="sb">${sideBody()}</div>`;
+}
+/* Collapsed, the three tabs rest on one row above the composer; opened, the row grows a drawer. A dialog owns the space. */
+function inlineHTML(){
+  if(!hasSide()||railOn()||dialogDef())return '';
+  const open=drawerOn(),run=count('running'),need=count('needs'),wait=count('queued'),P=planSteps(),idle=S.phase==='idle';
+  const sum=open||idle?null:{context:tiny()?(run+need?String(run+need):''):[run&&run+' running',need&&need+' asking',wait&&wait+' waiting'].filter(Boolean).join(' · '),plan:`${P.filter(s=>s[1]==='ok').length}/${P.length}`};
+  return `<div class="rtabs">${sideTabs(open,sum)}<span class="sp"></span><span class="mu" data-k="Ctrl+b">${tiny()?'':'<kbd>Ctrl+B</kbd> '}${open?'▾':'▴'}</span></div>`+(open?`<div class="drawer sb">${sideBody()}</div>`:'');
+}
+function dialogDef(){
+  if(S.overlay==='exit')return{title:DC<70?'How should this leave?':'How should this leave the build session?',meta:'mitiplay policy: gate allowed, review optional',opts:EXITS.map(e=>[e.label,e.desc]),pick:chooseExit,
+    esc(){closeOverlay();S.phase='open';toast('No exit chosen. Nothing was filed or landed.');}};
+  if(S.overlay==='ask')return{title:'picker-ui asks',meta:'frontend · claude-opus-5.5 · paused until you answer',body:h(ASK.q),opts:ASK.opts,pick:answer,esc(){closeOverlay();toast('picker-ui keeps waiting. Click ▲ to answer.');}};
+  if(S.overlay==='boardplan'){
+    const d=DC>=104?'full':DC>=60?'med':'min',starts=(p,i)=>p.dep.length?'after '+p.dep.join(', '):i<3?'now':'when a slot frees';
+    return{title:'File this plan on the board?',meta:'mitiplay · 5 tasks · 3 dependency edges · preview only',
+    body:`<div class="plan ${d}">`+(d==='full'?`<div class="tr th"><span>task</span><span>title</span><span>kind</span><span>profile</span><span>starts</span></div>`:'')+PLAN.map((p,i)=>`<div class="tr"><span class="b">${p.id}</span><span class="el">${h(p.title)}</span>${d==='full'?`<span class="mu">${p.kind}</span><span class="mu">${p.profile}</span>`:''}${d==='min'?'':`<span class="mu el">${starts(p,i)}</span>`}</div>`).join('')+`</div>`,
+    opts:[['File and start','your confirmation starts these 5 tasks only; 2 slots, the rest wait'],['File only','they land in Backlog; you start them from the board'],['Edit the plan','back to the conversation; nothing is written']],pick:fileBoard,
+    esc(){closeOverlay();toast('Nothing filed.');}};
+  }
+  return null;
+}
+function dockHTML(){
+  let o='';const d=dialogDef(),two=DC<84;
+  if(d)o+=`<div class="dlg"><div class="dt"><span class="b el">${d.title}</span>${DC<96?'':`<span class="mu el">${d.meta}</span>`}</div>${d.body?`<div class="db">${d.body}</div>`:''}<div class="opts">`
+   +d.opts.map((x,i)=>`<div class="opt${two?' two':''}${i===S.di?' sel':''}" data-a="pick" data-v="${i}"><span class="bar">▌</span><span class="ac">${i+1}</span><span class="b">${h(x[0])}</span>${two&&SHORT?'':`<span class="mu od${two?'':' el'}">${h(x[1])}</span>`}</div>`).join('')+`</div></div>`;
+  if(S.queue.length){
+    const tight=DC<84;
+    o+=`<div class="queue"><div class="mu el">QUEUE · ${S.queue.length} waiting${tight?'':' · each runs when its receiver is next idle'}</div>`
+     +S.queue.map((q,i)=>{const col=q.target==='parent'?'var(--accent)':kid(q.target).c;return `<div class="q${tight?' tight':''}"><span class="mu">${i+1}</span>${tight?`<span class="el"><span style="color:${col}">→${q.target}</span> ${h(q.text)}</span>`:`<span style="color:${col}">→ ${q.target}</span><span class="el">${h(q.text)}</span>`}<span class="ctl"><span data-a="qedit" data-v="${q.id}"><kbd>e</kbd>${tight?'':' edit'}</span><span data-a="qup" data-v="${q.id}" class="${i?'':'mu'}">↑</span><span data-a="qdown" data-v="${q.id}" class="${i<S.queue.length-1?'':'mu'}">↓</span><span data-a="qdel" data-v="${q.id}" class="er">×${tight?'':' remove'}</span></span></div>`;}).join('')+`</div>`;
+  }
+  return o;
+}
+function enterDoes(){
+  if(S.phase==='idle')return 'send';
+  if(S.target!=='parent')return 'steer '+S.target;
+  return S.phase==='running'||S.phase==='checks'||S.phase==='gating'?'steer':'send';
+}
+function statusHTML(){
+  if(S.view==='launch')return '';
+  const pct=Math.min(71,18+Math.round(S.clock/14)),cells=small()?8:12,fill=Math.round(cells*pct/100),sep='<span class="sep">│</span>';
+  const badge=`<span class="chipb">${tiny()?'B':'BUILD'}</span>&nbsp;<span class="wa">○</span>${small()?'':'&nbsp;<span class="mu">unbound</span>'}`;
+  const meter=`ctx&nbsp;<span class="ac">${'▰'.repeat(fill)}</span><span style="color:var(--line)">${'▱'.repeat(cells-fill)}</span> ${pct}%${tiny()?'':small()?` ${pct*2}k/200k`:` · ${(pct*2).toFixed(1)}k / 200k`}`;
+  return `<div class="srow">${badge}${sep}${money(totalCost())}${sep}${meter}</div>`;
+}
+/* Contextual hints first; the footer keeps as many as the pane has room for and always ends with F1. */
+function hints(){
+  if(S.overlay==='keys')return[['Escape','close']];
+  if(S.overlay==='palette')return[['ud','select'],['Enter','run'],['Escape','close']];
+  if(S.overlay)return[['ud','select'],['Enter','choose'],['num','1-'+dialogDef().opts.length],['Escape','not now']];
+  if(S.view==='launch')return[['ud','select'],['Enter','open'],['lr','where it writes'],['b','build'],['a','assistant'],['p','PM']];
+  if(S.focus==='composer')return[['Enter',enterDoes()],['Alt+Enter','queue'],['Alt+t','target'],['Alt+ArrowUp','edit queued']];
+  if(S.view==='fleet')return[['ud','select'],['Enter','open'],['s','steer'],['x','cancel'],['m','model'],['Escape','composer']];
+  if(S.view==='child')return[['Escape','fleet'],['s','steer'],['x','cancel'],['m','model']];
+  if(S.view==='changes')return[['ud','file'],['f','by agent'],['Escape','composer']];
+  if(S.view==='board')return[['ud','task'],['n','plan tasks'],['Escape','composer']];
+  return[];
+}
+const keyLabel=k=>({Enter:'⏎',Escape:'esc','Alt+Enter':'Alt+⏎','Alt+ArrowUp':'Alt+↑','Alt+t':'Alt+T','Ctrl+b':'Ctrl+B'}[k]??k);
+function footHTML(){
+  let H=hints();const base=!S.overlay&&S.view!=='launch';
+  if(T==='narrow')H=H.slice(0,4);if(tiny())H=H.slice(0,2);
+  if(base)H=[...H,...(small()?[]:[['F2','actions']]),['F1',small()?'more':'keys']];
+  return H.map(([k,l])=>k==='ud'?`<span><kbd data-k="ArrowUp">↑</kbd><kbd data-k="ArrowDown">↓</kbd> <span data-k="ArrowDown">${l}</span></span>`
+    :k==='lr'?`<span><kbd data-k="ArrowLeft">←</kbd><kbd data-k="ArrowRight">→</kbd> <span data-k="ArrowRight">${l}</span></span>`
+    :k==='num'?`<span><kbd>${l}</kbd> pick</span>`:`<span data-k="${k}"><kbd>${keyLabel(k)}</kbd> ${l}</span>`).join('');
+}
+function actions(){
+  const busy=S.phase==='running'||S.phase==='checks'||S.phase==='gating';
+  return[
+   ['Open chat','F9','F9'],['Open fleet','F8','F8'],['Open changes','F7','F7'],['Open board','F10','F10'],
+   ['Collapse or expand the sidebar','Ctrl+B','Ctrl+b'],['Sidebar: next tab','F6','F6'],
+   ['Queue the draft as a follow-up','Alt+⏎','Alt+Enter',draft.value.trim()?'':'the composer is empty'],
+   ['Edit the last queued input','Alt+↑','Alt+ArrowUp',S.queue.length?'':'nothing is queued'],
+   ['Change who receives the message','Alt+T','Alt+t'],
+   ['Finish: choose how this leaves the session','','finish',S.phase==='idle'?'nothing was built yet':busy?'agents or checks are still running':''],
+   ['Plan board tasks from this conversation','','planboard'],
+   ['Pause or resume every agent','','pause',S.phase==='running'?'':'no agent is running'],
+   ['Show keys','F1','F1'],
+  ].filter(a=>a[0].toLowerCase().includes(S.pq.toLowerCase()));
+}
+function popHTML(){
+  if(S.overlay==='palette'){
+    const A=actions();S.pi=Math.max(0,Math.min(S.pi,A.length-1));
+    return `<div class="backdrop" data-a="close"><div class="pop" data-a="noop"><div class="pt"><span class="el"><span class="ac">›</span> ${h(S.pq)}<span class="ac">▏</span><span class="mu">${S.pq?'':'type to filter actions'}</span></span><span class="mu">build · mitiplay</span></div>`
+     +(A.map((a,i)=>`<div class="pr${i===S.pi?' sel':''}${a[3]?' off':''}" data-a="prun" data-v="${i}"><span class="bar">▌</span><span>${a[0]}${a[3]?` <span class="wa">· unavailable: ${a[3]}</span>`:''}</span><span>${a[1]?`<kbd>${a[1]}</kbd>`:''}</span></div>`).join('')||'<div class="pr off"><span></span><span>no action matches</span></div>')+`</div></div>`;
+  }
+  if(S.overlay==='keys'){
+    const G=[['Views',[['F9','Chat'],['F8','Fleet: every agent, focus the list'],['F7','Changes, filtered by agent'],['F10','Board: tasks this session filed'],['Ctrl+b','Sidebar: collapse to one row, or open it'],['F6','Sidebar: next tab (Context, Files, Plan)']]],
+     ['Message',[['Enter','Send; steer while something runs'],['Alt+Enter','Queue as a follow-up'],['Alt+ArrowUp','Pull the last queued input back to edit'],['Alt+t','Change the receiver: parent or one agent']]],
+     ['A focused list',[['ArrowDown','Select; Enter opens'],['s','Steer the selected agent'],['x','Cancel the selected agent'],['m','Change its model'],['Escape','Back to the composer']]],
+     ['Anywhere',[['F2','Search actions; unavailable ones say why'],['F1','This list']]]];
+    return `<div class="backdrop" data-a="close"><div class="pop" data-a="noop"><div class="pt"><span class="b">Keys</span><span class="mu" data-a="close"><kbd>esc</kbd> close</span></div>`
+     +G.map(([t,rows])=>`<div class="grp">${t}</div>`+rows.map(([k,l])=>`<div class="kr" data-a="keyrow" data-v="${k}"><span></span><span><kbd>${k==='ArrowDown'?'↑↓':keyLabel(k)}</kbd></span><span>${l}</span></div>`).join('')).join('')+`</div></div>`;
+  }
+  return '';
+}
+function notesHTML(){
+  const key=S.overlay==='exit'||['done','open','kept','gating','landed','shipped'].includes(S.phase)&&S.view==='chat'&&!S.overlay?'finish':S.overlay==='boardplan'?'board':S.overlay==='keys'||S.overlay==='palette'?'keys':S.queue.length&&S.view==='chat'?'queue':S.view;
+  const[title,rows]=NOTES[key];
+  return `<h2>${title}: what changes</h2><ul>`+rows.map(([t,x])=>`<li><span class="tag ${t}">${t}</span><span>${x}</span></li>`).join('')+`</ul>`;
+}
+function setHTML(el,html){if(el._h===html)return false;const st=el.scrollTop;el.innerHTML=html;el._h=html;el.scrollTop=st;return true;}
+function render(){
+  const rail=railOn();
+  MC=COLS-(rail?34:0)-4;DC=COLS-4;D=MC>=112?'full':MC>=60?'med':'min';
+  Object.assign(term.dataset,{view:S.view,focus:S.focus,tier:T,side:rail?'1':'0',short:SHORT?'1':'0',dialog:dialogDef()?'1':'0'});
+  term.style.setProperty('--sd',-(performance.now()%900)+'ms');
+  setHTML($('head'),headHTML());setHTML($('tabs'),tabsHTML());
+  const changed=setHTML($('main'),mainHTML());
+  if(S.view!==S.last){$('main').scrollTop=0;S.last=S.view;}
+  setHTML($('side'),rail?railHTML():'');setHTML($('inl'),inlineHTML());
+  const docked=setHTML($('dock'),dockHTML());
+  const tc=S.target==='parent'?'var(--accent)':kid(S.target).c;
+  setHTML($('ctitle'),`<span class="mu">Message</span> <span data-k="Alt+t" style="color:${tc}">→ ${S.target}</span>`);
+  setHTML($('cbar'),`<span class="el"><span data-a="model" style="color:var(--text)">${MODELS[S.model]} ▾</span> · <span data-a="effort">${EFFORT[S.effort]} ↻</span></span>`);
+  draft.placeholder=S.phase==='idle'?'Describe what to build':'';
+  setHTML($('status'),statusHTML());setHTML($('foot'),footHTML());setHTML($('pop'),popHTML());setHTML($('toast'),S.toast?`<span class="tin">${h(S.toast)}</span>`:'');
+  if(!EMBED){
+    setHTML($('notes'),notesHTML());
+    setHTML($('sizeinfo'),`<b>${COLS} × ${ROWS}</b> · ${T}${SHORT?' + short':''}: ${TIERS[T]}${SHORT?'; second header row and model bar fold away':''}`);
+    $('pauseBtn').textContent=S.playing?'Pause':'Resume';
+  }
+  // The dock, status and footer resize the reading area: follow the conversation only once they have rendered.
+  if(S.view==='chat'&&(changed||docked))$('main').scrollTop=$('main').scrollHeight;
+  // A dialog taller than its share of the pane scrolls; keep the selected option in view.
+  const dock=$('dock'),opt=dock.querySelector('.opt.sel');
+  if(opt){const r=opt.getBoundingClientRect(),R=dock.getBoundingClientRect();if(r.bottom>R.bottom)dock.scrollTop+=r.bottom-R.bottom;else if(r.top<R.top)dock.scrollTop-=R.top-r.top;}
+}
+/* Tiers follow what fits, measured in terminal cells: the sidebar is a rail from 105 columns (as in today's workbench), compact below 64. */
+function measure(){
+  const cw=$('probe').getBoundingClientRect().width/10,lh=parseFloat(getComputedStyle(term).lineHeight);
+  COLS=Math.floor(term.clientWidth/cw);ROWS=Math.floor(term.clientHeight/lh);
+  T=COLS>=150?'wide':COLS>=105?'mid':COLS>=64?'narrow':'tiny';SHORT=ROWS<28;
+  $('dock').style.maxHeight=Math.floor(term.clientHeight*.58)+'px';
+  render();
+  if(EMBED)parent.postMessage({mock:'size',id:Q.get('id'),cols:COLS,rows:ROWS,tier:T+(SHORT?' + short':'')},'*');
+}
+/* Focus follows an action the reader took, never the simulation tick. */
+function syncFocus(){
+  const typing=S.focus==='composer'&&S.view!=='launch'&&!S.overlay;
+  (typing?draft:$('wrap')).focus({preventScroll:true});
+}
+
+/* ---------- input: one intent, two inputs ---------- */
+function go(view,focus){S.view=view;S.focus=focus;}
+function cycleTarget(){
+  const L=['parent',...kids.filter(k=>k.st==='running'||k.st==='needs'||k.st==='queued').map(k=>k.id)];
+  S.target=L[(L.indexOf(S.target)+1)%L.length]||'parent';S.focus='composer';
+}
+function cancelKid(k){
+  if(!['running','needs','queued'].includes(k.st))return;
+  if(k.st==='needs'&&S.overlay==='ask')closeOverlay();
+  k.st='cancelled';if(S.target===k.id)S.target='parent';
+  S.log.push({k:'note',tone:'er',text:`✗ ${k.id} cancelled by you · its edits so far stay in the worktree`});
+}
+function launchOpen(){
+  const r=LAUNCH[S.launch.row];
+  if(r.id==='build'){S.view='chat';S.focus='composer';draft.value=DEMO;}
+  else toast(r.id==='assistant'||r.id==='pm'?`${r.name} opens as it does today; this mock covers Build.`:'Resume is not part of this mock.');
+}
+function runAction(cmd){
+  if(cmd==='finish')finishNow();else if(cmd==='planboard')planBoard();else if(cmd==='pause')S.playing=!S.playing;else key(cmd);
+}
+function overlayKey(k){
+  if(S.overlay==='keys'){closeOverlay();return true;}
+  if(S.overlay==='palette'){
+    const A=actions();
+    if(k==='Escape')closeOverlay();
+    else if(k==='ArrowDown')S.pi=Math.min(A.length-1,S.pi+1);
+    else if(k==='ArrowUp')S.pi=Math.max(0,S.pi-1);
+    else if(k==='Backspace')S.pq=S.pq.slice(0,-1);
+    else if(k==='Enter'){const a=A[S.pi];if(a&&!a[3]){closeOverlay();runAction(a[2]);}}
+    else if(k.length===1){S.pq+=k;S.pi=0;}
+    else return false;
+    return true;
+  }
+  const d=dialogDef(),n=d.opts.length;
+  if(k==='ArrowDown'||k==='j')S.di=(S.di+1)%n;
+  else if(k==='ArrowUp'||k==='k')S.di=(S.di+n-1)%n;
+  else if(k==='Enter')d.pick(S.di);
+  else if(/^[1-9]$/.test(k)&&+k<=n)d.pick(+k-1);
+  else if(k==='Escape')d.esc();
+  else return false;
+  return true;
+}
+function launchKey(k){
+  const rows=LAUNCH.map((r,i)=>r.sec?-1:i).filter(i=>i>=0),at=rows.indexOf(S.launch.row);
+  if(k==='ArrowDown'||k==='j')S.launch.row=rows[Math.min(rows.length-1,at+1)];
+  else if(k==='ArrowUp'||k==='k')S.launch.row=rows[Math.max(0,at-1)];
+  else if(k==='ArrowRight'||k==='ArrowLeft')S.launch.where^=1;
+  else if(k==='Enter')launchOpen();
+  else if(k==='b'||k==='a'||k==='p'){S.launch.row=LAUNCH.findIndex(r=>r.k===k);launchOpen();}
+  else if(k==='Escape')toast('Esc leaves to the shell.');
+  else return false;
+  return true;
+}
+function listKey(k){
+  const down=k==='ArrowDown'||k==='j',up=k==='ArrowUp'||k==='k';
+  if(S.view==='fleet'||S.view==='child'){
+    const kd=kids[S.sel],live=['running','needs','queued'].includes(kd.st);
+    if(down&&S.view==='fleet')S.sel=Math.min(kids.length-1,S.sel+1);
+    else if(up&&S.view==='fleet')S.sel=Math.max(0,S.sel-1);
+    else if(k==='Enter'&&S.view==='fleet')S.view='child';
+    else if(k==='s'){if(live){S.target=kd.id;S.focus='composer';}else toast(kd.id+' is not running; nothing to steer.');}
+    else if(k==='x')cancelKid(kd);
+    else if(k==='m'){if(live){kd.model=MODELS[(MODELS.indexOf(kd.model)+1)%MODELS.length];toast(`${kd.id} uses ${kd.model} from its next request`);}}
+    else return false;
+    return true;
+  }
+  if(S.view==='changes'){
+    if(down)S.file++;else if(up)S.file=Math.max(0,S.file-1);
+    else if(k==='f'){const W=['all',...kids.filter(x=>!x.kind&&liveFiles().some(f=>f.who.includes(x.id))).map(x=>x.id)];S.filter=W[(W.indexOf(S.filter)+1)%W.length];S.file=0;}
+    else return false;
+    return true;
+  }
+  if(S.view==='board'){
+    if(down)S.bsel++;else if(up)S.bsel=Math.max(0,S.bsel-1);
+    else if(k==='n')planBoard();
+    else if(k==='Enter'||k==='a'||k==='o')toast('Opens the task, its pane or the corral board; not part of this mock.');
+    else return false;
+    return true;
+  }
+  return false;
+}
+function key(k){
+  let ok=true;
+  if(S.overlay)ok=overlayKey(k);
+  else if(S.view==='launch')ok=launchKey(k);
+  else switch(k){
+    case 'F9':go('chat','composer');break;
+    case 'F8':go('fleet','list');break;
+    case 'F7':go('changes','list');break;
+    case 'F10':go('board','list');break;
+    case 'F1':openDialog('keys');break;
+    case 'F2':openDialog('palette');S.pq='';S.pi=0;break;
+    case 'Alt+Enter':{const v=draft.value.trim();if(v){enqueue(v,S.target);draft.value='';}else toast('Nothing to queue: the composer is empty.');break;}
+    case 'Alt+ArrowUp':{const q=S.queue.pop();if(q){draft.value=q.text;S.target=q.target;S.focus='composer';}else toast('Nothing is queued.');break;}
+    case 'Alt+t':cycleTarget();break;
+    case 'Ctrl+b':if(small())S.drawer=!S.drawer;else S.side=S.side===false?null:false;break;
+    case 'F6':{const L=['context','files','plan'];S.rail=L[(L.indexOf(S.rail)+1)%3];if(small())S.drawer=true;else S.side=null;break;}
+    case 'Escape':if(S.view==='child')go('fleet','list');else if(S.focus==='list')S.focus='composer';else ok=false;break;
+    case 'Enter':if(S.focus==='composer'){send();break;}
+    default:ok=S.focus==='list'?listKey(k):false;
+  }
+  if(ok){render();syncFocus();}
+  return ok;
+}
+function act(a,v){
+  const q=()=>S.queue.findIndex(x=>x.id===+v);
+  switch(a){
+    case 'sel':if(+v===S.sel&&S.focus==='list')S.view='child';else{S.sel=+v;S.focus='list';}break;
+    case 'open':S.sel=+v;go('child','list');break;
+    case 'reask':if(kid(ASK.kid).st==='needs')openDialog('ask',0);break;
+    case 'rail':if(railOn())S.rail=v;else if(!small()){S.rail=v;S.side=null;}else if(S.drawer&&S.rail===v)S.drawer=false;else{S.rail=v;S.drawer=true;}break;
+    case 'gofile':S.filter='all';S.file=+v;go('changes','list');break;
+    case 'filter':S.filter=v;S.file=0;S.focus='list';break;
+    case 'file':S.file=+v;S.focus='list';break;
+    case 'bsel':S.bsel=+v;S.focus='list';break;
+    case 'lrow':if(+v===S.launch.row)launchOpen();else S.launch.row=+v;break;
+    case 'pick':if(+v===S.di)dialogDef().pick(+v);else S.di=+v;break;
+    case 'prun':{const A=actions(),x=A[+v];if(x&&!x[3]){closeOverlay();runAction(x[2]);}break;}
+    case 'keyrow':closeOverlay();key(v);break;
+    case 'close':if(S.overlay==='keys'||S.overlay==='palette')closeOverlay();break;
+    case 'noop':return;
+    case 'planboard':planBoard();break;
+    case 'finish':finishNow();break;
+    case 'model':S.model=(S.model+1)%MODELS.length;break;
+    case 'effort':S.effort=(S.effort+1)%EFFORT.length;break;
+    case 'qedit':{const i=q();if(i>=0){const[x]=S.queue.splice(i,1);draft.value=x.text;S.target=x.target;S.focus='composer';}break;}
+    case 'qup':{const i=q();if(i>0)S.queue.splice(i-1,0,S.queue.splice(i,1)[0]);break;}
+    case 'qdown':{const i=q();if(i>=0&&i<S.queue.length-1)S.queue.splice(i+1,0,S.queue.splice(i,1)[0]);break;}
+    case 'qdel':{const i=q();if(i>=0)S.queue.splice(i,1);break;}
+    case 'nomock':toast('Opens the task, its pane or the corral board; not part of this mock.');break;
+  }
+  render();syncFocus();
+}
+function scene(s,quiet){
+  if(s==='reset'||s==='launch')reset();
+  else if(s==='pause')S.playing=!S.playing;
+  else if(s==='ask')simAsk();
+  else if(s==='skip'){if(S.phase==='idle')begin(DEMO);S.view='chat';finishNow();}
+  else{
+    if(S.phase==='idle'){begin(DEMO);advance(8);}
+    if(S.overlay)closeOverlay();
+    if(s==='chat')go('chat','composer');
+    if(s==='fleet'){advance(6);go('fleet','list');}
+    if(s==='child'){S.sel=3;go('child','list');}
+    if(s==='changes'){if(S.phase==='running'&&S.clock<150)advance(14);go('changes','list');}
+    if(s==='queue'){go('chat','composer');if(!S.queue.length){enqueue('also add an empty state for zero slots','parent');enqueue('use the existing Button, not a new one','picker-ui');}draft.value='keep slot names editable';}
+    if(s==='finish'){go('chat','composer');finishNow();}
+    if(s==='board')planBoard();
+    if(s==='boardlive'){planBoard();fileBoard(0);advance(10);}
+    if(s==='keys')openDialog('keys');
+  }
+  render();if(!quiet)syncFocus();
+}
+/* ---------- pane size and the side-by-side comparison ---------- */
+const stage=$('stage'),wrap=$('wrap');
+$('sizes').addEventListener('click',e=>{
+  const b=e.target.closest('button');if(!b)return;
+  if(b.id==='galleryBtn'){gallery();return;}
+  const attr=b.dataset.f?'f':'hh';
+  for(const x of $('sizes').querySelectorAll(`[data-${attr}]`))x.classList.toggle('on',x===b);
+  if(attr==='f'){wrap.style.width='';stage.style.setProperty('--f',b.dataset.f);stage.classList.toggle('full',b.dataset.f==='1');}
+  else stage.classList.toggle('half',b.dataset.hh==='0.5');
+  syncFocus();
+});
+const PANES=[['Full','chat',12,620],['1/2','fleet',6,600],['1/4','chat',3,600],['1/4','finish',3,600],['1/3','changes',4,560],['1/3','boardlive',4,560],['1/3','queue',4,560],['1/2 wide, 1/2 high','chat',6,300],['1/2 wide, 1/2 high','finish',6,300]];
+function gallery(){
+  const g=$('gallery'),on=g.hidden;
+  if(on&&!g.childElementCount)g.innerHTML=PANES.map(([label,sc,span,ht],i)=>`<figure style="grid-column:span ${span}"><figcaption><b>${label}</b> <span id="cap${i}"></span></figcaption><iframe title="${label} pane, ${sc}" style="height:${ht}px" src="${location.pathname}?embed=1&id=${i}&scene=${sc}"></iframe></figure>`).join('');
+  g.hidden=!on;stage.hidden=on;$('notes').hidden=on;$('strip').hidden=on;
+  $('galleryBtn').textContent=on?'Back to one pane':'Compare sizes';$('galleryBtn').classList.toggle('on',on);
+}
+addEventListener('message',e=>{
+  const d=e.data;if(!d||d.mock!=='size')return;
+  const c=$('cap'+d.id);if(c)c.textContent=`· ${d.cols} × ${d.rows} · ${d.tier}`;
+});
+$('strip').addEventListener('click',e=>{const b=e.target.closest('button');if(b)scene(b.dataset.s);});
+term.addEventListener('click',e=>{
+  const a=e.target.closest('[data-a],[data-k]');
+  if(a){if(a.dataset.a)act(a.dataset.a,a.dataset.v);else key(a.dataset.k);return;}
+  if(e.target.closest('#composer')&&!S.overlay&&S.view!=='launch'){S.focus='composer';render();}
+  syncFocus();
+});
+wrap.addEventListener('keydown',e=>{
+  if(e.metaKey||e.ctrlKey&&e.key.toLowerCase()!=='b')return;
+  const k=e.ctrlKey?'Ctrl+b':e.altKey?'Alt+'+(e.key.length===1?e.key.toLowerCase():e.key):e.key;
+  const typing=document.activeElement===draft&&!S.overlay&&S.view!=='launch';
+  if(typing&&!/^(F\d+|Enter|Escape|Alt\+.+|Ctrl\+b)$/.test(k))return;
+  if(key(k))e.preventDefault();
+});
+draft.addEventListener('input',()=>render());
+if(EMBED)document.body.classList.add('embed');
+reset();
+new ResizeObserver(measure).observe(term);
+measure();
+if(Q.get('scene'))scene(Q.get('scene'),true);
+setInterval(()=>{if(S.playing&&S.view!=='launch'&&S.phase!=='idle'){step();render();}},TICK_MS);
+</script>
+</body>
+</html>
