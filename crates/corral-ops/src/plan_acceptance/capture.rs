@@ -242,8 +242,8 @@ fn member(
     id: &str,
     proof: Proof,
 ) -> Result<std::result::Result<AggregateMember, String>> {
-    let child_head = store
-        .head(id)
+    // Members are also siblings' dependencies: one head read and conversion per pinned pass.
+    let child_head = crate::queue::dependency_head(store, id)
         .with_context(|| format!("missing Plan member {id}"))?;
     ensure!(
         store
@@ -252,7 +252,9 @@ fn member(
             == Some(tracker.id.clone()),
         "execution Plan membership changed"
     );
-    let mut child = child_head.to_shell_task()?;
+    let mut child = crate::queue::dependency_shell(store, &child_head)?
+        .as_ref()
+        .clone();
     if let Some(run) = &child_head.current_run
         && run.facts.pending_decision.is_some()
         && let Some(current) = child.runs.last_mut()
@@ -280,26 +282,8 @@ fn member(
     if child.project != tracker.project {
         return Ok(Err(format!("{id}: member belongs to another repository")));
     }
-    use corral_core::backend::{EventQuery, PageReq};
-    let receipt = store
-        .view()?
-        .events(
-            &EventQuery {
-                task: Some(id.into()),
-                kinds: vec!["approved".into()],
-                run: Some(run.id.clone()),
-                newest_first: true,
-                valid_only: true,
-                ..EventQuery::default()
-            },
-            PageReq::first(1),
-        )?
-        .items
-        .into_iter()
-        .next()
-        .map(crate::approvals::event)
-        .transpose()?
-        .flatten();
+    // The same receipt Plan prerequisites read, shared within one pinned pass.
+    let receipt = crate::tracker::approval(store, id, &run.id)?;
     let Some(receipt) = receipt else {
         return Ok(Err(format!("{id}: accepted but no acceptance receipt")));
     };

@@ -1,7 +1,10 @@
 //! Reap external load-sandbox containers by the unguessable launch ownership marker.
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
 use corral_core::RunOutcome;
@@ -12,6 +15,35 @@ use crate::Ctx;
 #[cfg(all(test, unix))]
 #[path = "sandbox_cleanup_tests.rs"]
 mod tests;
+
+struct Memo {
+    owners: BTreeSet<String>,
+    listed: Instant,
+}
+
+impl Memo {
+    fn reusable(&self, owners: &BTreeSet<String>, now: Instant) -> bool {
+        self.owners == *owners
+            && now
+                .checked_duration_since(self.listed)
+                .is_some_and(|age| age < Duration::from_secs(60))
+    }
+}
+
+static SWEEP_MEMOS: LazyLock<Mutex<HashMap<PathBuf, Memo>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn remember_empty_listing(key: PathBuf, owners: BTreeSet<String>) {
+    if let Ok(mut memos) = SWEEP_MEMOS.lock() {
+        memos.insert(
+            key,
+            Memo {
+                owners,
+                listed: Instant::now(),
+            },
+        );
+    }
+}
 
 /// Own the retry retirement effect, after durable supersession and before replacement dispatch.
 /// A reap failure is an observed external outcome, not part of the preceding task transaction.
@@ -66,6 +98,18 @@ fn sweep_with(ctx: &Ctx, podman: &str) -> Result<()> {
     if owners.is_empty() {
         return Ok(());
     }
+    let key = ctx.store.dir().to_path_buf();
+    if let Ok(mut memos) = SWEEP_MEMOS.lock() {
+        // Recheck for containers a stray child of an ended run starts after the listing.
+        if memos
+            .get(&key)
+            .is_some_and(|memo| memo.reusable(&owners, Instant::now()))
+        {
+            return Ok(());
+        }
+        // A failed listing or any cleanup candidate must leave the next pass uncached.
+        memos.remove(&key);
+    }
     let listing = corral_core::timing::span("sync.sandbox_cleanup_sweep.podman");
     let output = match Command::new(podman)
         .args([
@@ -80,7 +124,10 @@ fn sweep_with(ctx: &Ctx, podman: &str) -> Result<()> {
         .output()
     {
         Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            remember_empty_listing(key, owners);
+            return Ok(());
+        }
         Err(error) => return Err(error).context("listing sandbox containers"),
     };
     drop(listing);
@@ -115,6 +162,7 @@ fn sweep_with(ctx: &Ctx, podman: &str) -> Result<()> {
         })
         .collect();
     if candidates.is_empty() {
+        remember_empty_listing(key, owners);
         return Ok(());
     }
     let current = terminal_owners(ctx)?;

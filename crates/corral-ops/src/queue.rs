@@ -233,7 +233,9 @@ mod snapshot;
 pub(crate) use snapshot::{check_snapshot, check_snapshot_head};
 
 mod dependencies;
-pub(crate) use dependencies::{dependency_check, head as dependency_head};
+pub(crate) use dependencies::{
+    dependency_check, head as dependency_head, shell as dependency_shell,
+};
 
 pub(crate) fn resolve_plan<T: corral_core::TaskRef + ?Sized>(
     ctx: &Ctx,
