@@ -46,12 +46,13 @@ omitted. No task content, titles, argument values or free text is recorded.
 | `git_calls` | Number of measured git subprocess attempts. |
 | `spans` | Static span names mapped to `{ "n": invocation count, "ms": total wall time }`. |
 
-Pass counters, spans and CPU time are differences between snapshots around that
-pass; peak memory remains the process-wide high-water mark. Process records are
-lifetime totals. CPU time reuses corral's best-effort process CPU reader (Linux
-`/proc/self/stat`). Counter categories and nested spans overlap, so summing all
-fields does not produce total wall time. Concurrent work on daemon threads may
-also contribute to a pass snapshot.
+Pass counters, spans and CPU time cover the interval from the previous pass's
+end-snapshot to the current pass's end-snapshot (the first starts at loop entry).
+This includes reader and other daemon-thread work between passes; `wall_ms`
+remains the current pass's own wall time. Peak memory remains the process-wide
+high-water mark. Process records are lifetime totals. CPU time reuses corral's
+best-effort process CPU reader (Linux `/proc/self/stat`). Counter categories and
+nested spans overlap, so summing all fields does not produce total wall time.
 
 Instrument coarse read/derive work with `let _span = corral_core::timing::span("static.name");`.
 The guard adds process-wide count and elapsed wall time on drop; repeated and nested names accumulate independently.

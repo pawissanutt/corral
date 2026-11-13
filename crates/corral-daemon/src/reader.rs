@@ -4,13 +4,25 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use corral_core::Store;
+use corral_core::{
+    Store,
+    backend::{ChangeScope, ChangeSeq, ReadView},
+};
 use corral_ops::{Ctx, attention::AttentionBoard};
 use corral_protocol::read::ReadKind;
 
 use crate::state::Shared;
 
 const MAX_AGE: Duration = Duration::from_secs(10);
+// Core writes this scope in sqlite/tx_storage.rs and backend/fake/storage.rs.
+// It does not currently export a lease-area constant.
+const LEASE_AREA: &str = "leases";
+const MAX_FRESHNESS_CHANGES: usize = 512;
+
+struct Cached {
+    document: Arc<Document>,
+    checked_through: u64,
+}
 
 pub(crate) struct Document {
     pub as_of: String,
@@ -49,7 +61,7 @@ pub(crate) fn start_with_compute(
         .name("corrald-reader".into())
         .spawn(move || {
             let shared = worker_shared;
-            let mut cache = HashMap::<ReadKind, Arc<Document>>::new();
+            let mut cache = HashMap::<ReadKind, Cached>::new();
             while !shared.lock().closed {
                 let job = match receiver.recv_timeout(Duration::from_millis(500)) {
                     Ok(job) => job,
@@ -84,21 +96,18 @@ fn read(
     ctx: &Ctx,
     shared: &Shared,
     kind: ReadKind,
-    cache: &mut HashMap<ReadKind, Arc<Document>>,
+    cache: &mut HashMap<ReadKind, Cached>,
     compute: &mut impl FnMut(&Ctx, ReadKind, Option<AttentionBoard>) -> Result<Vec<u8>>,
 ) -> Result<Served> {
-    let seq = ctx
-        .store
-        .view()
-        .context("polling reader store sequence")?
-        .seq()
-        .0;
-    if let Some(document) = cache.get(&kind)
-        && document.seq == seq
-        && document.computed.elapsed() < MAX_AGE
+    let view = ctx.store.view().context("polling reader store sequence")?;
+    let seq = view.seq().0;
+    if let Some(cached) = cache.get_mut(&kind)
+        && cached.document.computed.elapsed() < MAX_AGE
+        && unchanged(view.as_ref(), cached.checked_through)
     {
+        cached.checked_through = seq;
         return Ok(Served {
-            document: Arc::clone(document),
+            document: Arc::clone(&cached.document),
             cached: true,
         });
     }
@@ -110,19 +119,14 @@ fn read(
     };
     let _timing = corral_core::timing::span(label);
     let attention = if kind == ReadKind::BoardReadback {
-        shared
-            .attention
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .as_ref()
-            .filter(|(attention_seq, _)| *attention_seq == seq)
-            .map(|(_, board)| board.clone())
+        attention(shared, view.as_ref())
     } else {
         None
     };
+    drop(view);
     // PM projection prepares derived state before pinning its own view. Keep
     // this handle live, and cache under the pre-computation sequence so writes
-    // during preparation or evaluation invalidate reuse conservatively.
+    // during preparation or evaluation invalidate reuse unless they are leases.
     let bytes = compute(ctx, kind, attention)?;
     let document = Arc::new(Document {
         as_of: jiff::Timestamp::now().to_string(),
@@ -130,11 +134,77 @@ fn read(
         bytes,
         computed: Instant::now(),
     });
-    cache.insert(kind, Arc::clone(&document));
+    cache.insert(
+        kind,
+        Cached {
+            document: Arc::clone(&document),
+            checked_through: seq,
+        },
+    );
     Ok(Served {
         document,
         cached: false,
     })
+}
+
+/// Lease bookkeeping cannot change a readout. Gaps, failures, backwards views,
+/// unknown scopes and scans exceeding the work bound conservatively invalidate it.
+pub(crate) fn unchanged(view: &dyn ReadView, after: u64) -> bool {
+    let current = view.seq();
+    let mut cursor = ChangeSeq(after);
+    if cursor >= current {
+        return cursor == current;
+    }
+    let mut scanned = 0;
+    while scanned < MAX_FRESHNESS_CHANGES {
+        let limit = (MAX_FRESHNESS_CHANGES - scanned).min(128) as u32;
+        let Ok(page) = view.changes(cursor, limit) else {
+            return false;
+        };
+        if page.entries.is_empty() || page.entries.len() > limit as usize {
+            return false;
+        }
+        scanned += page.entries.len();
+        for entry in page.entries {
+            if entry.seq <= cursor
+                || entry.seq > current
+                || entry.scopes.is_empty()
+                || entry.scopes.iter().any(
+                    |scope| !matches!(scope, ChangeScope::Record { area, .. } if area == LEASE_AREA),
+                )
+            {
+                return false;
+            }
+            cursor = entry.seq;
+        }
+        if !page.more {
+            return cursor == current;
+        }
+    }
+    false
+}
+
+fn attention(shared: &Shared, view: &dyn ReadView) -> Option<AttentionBoard> {
+    let seq = shared
+        .attention
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .map(|(seq, _)| *seq)?;
+    // Scan without holding Shared's mutex; the pass can publish a newer board.
+    if !unchanged(view, seq) {
+        return None;
+    }
+    let mut attention = shared
+        .attention
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (attention_seq, board) = attention.as_mut()?;
+    if *attention_seq != seq {
+        return None;
+    }
+    *attention_seq = view.seq().0;
+    Some(board.clone())
 }
 
 fn compute(ctx: &Ctx, kind: ReadKind, attention: Option<AttentionBoard>) -> Result<Vec<u8>> {
