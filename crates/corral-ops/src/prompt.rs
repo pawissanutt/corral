@@ -16,7 +16,8 @@ const RUN_TEMPLATE: &str = include_str!("../assets/run.md");
 /// `[harnesses.<k>] prompt` file (relative to the workspace root, or absolute), else `.corral/prompts/run.md`,
 /// else the built-in `assets/run.md` (task header and body, then the run contract). Placeholders:
 /// {{id}} {{title}} {{body}} {{project}} {{project_dir}} {{worktree}} {{branch}} {{base}} {{agents_md}}
-/// {{gate}} {{artifact_cmd}} {{artifact_globs}} {{done_cmd}} {{corral}} {{skill}} (the worker role skill). Commands use the absolute path of the
+/// {{gate}} {{artifact_cmd}} {{artifact_globs}} {{done_cmd}} {{corral}} {{skill}} (the worker role skill).
+/// {{load_sandbox}} carries opt-in repository load-testing guidance. Commands use the absolute path of the
 /// running binary. The gate is the effective `[review]` gate, else the gate quoted in the repo's AGENTS.md.
 /// A tiered run's `{{gate}}` points to the one authoritative Gate contract section that is always
 /// appended after the template, whether or not the template contains `{{gate}}`.
@@ -138,6 +139,10 @@ fn render_prompt(
         .map(|g| format!("`{g}`"))
         .collect();
     let values = [
+        (
+            "load_sandbox",
+            load_sandbox_text(&ctx.store.config).to_string(),
+        ),
         ("id", id.clone()),
         ("title", task.title.clone()),
         ("body", body),
@@ -168,6 +173,9 @@ fn render_prompt(
         ("skill", crate::skill::WORKER_SKILL.to_string()),
     ];
     let mut prompt = fill(&template, &values);
+    if !template.contains("{{load_sandbox}}") {
+        prompt.push_str(load_sandbox_text(&ctx.store.config));
+    }
     if let Some(contract) = &contract {
         prompt.push_str(&worker_gate_section(contract, &corral, task, run, &exports));
     }
@@ -206,6 +214,21 @@ fn render_prompt(
     prompt.push_str("\n</corral-resume>\n");
     append_working_instructions(&mut prompt, run.execution.as_ref());
     Ok(prompt)
+}
+
+/// Shared by native prompts and the prompt files delivered to corral-pi.
+pub(crate) fn load_sandbox_text(config: &Config) -> &'static str {
+    if !config.load_sandbox.enabled {
+        return "";
+    }
+    "\n## Load testing: container only\n\n\
+     Never generate intentional load on the shared host: no host CPU/memory burners, \
+     spin loops, `stress-ng`, or parallel stress harnesses. The only allowed way to \
+     load-test is `scripts/load-sandbox.sh --cpus 2 --memory 2g --pids-limit 256 --burners 2 -- COMMAND` \
+     (one Podman container, maximum 4 CPUs, removed on exit/interrupt). If unavailable, \
+     report the blocked check; never fall back to host load. See `docs/guide/load-sandbox.md`. \
+     This does not authorize an extra gate or a different tier. Reviewers keep the worktree unchanged.\n\
+     When reproducing a flaky test, run its loop inside `scripts/load-sandbox.sh` and keep the failure-rate log.\n"
 }
 
 const GATE_POINTER: &str =

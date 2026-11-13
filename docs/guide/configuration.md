@@ -73,7 +73,7 @@ These commands only read recorded events; they do not reload settings or create 
 
 Sections: [limits](#limits) · [resources](#resources) · [dispatch](#dispatch) · [projects](#projects) · [defaults](#defaults) · [harnesses](#harnesses) ·
 [profiles](#profiles) · [routing](#routing) · [automation](#automation) · [review](#review) · [sync](#sync) · [ui](#ui) · [board.card](#boardcard) · [viewers](#viewers) ·
-[artifacts](#artifacts) · [storage](#storage) · [pm](#pm) · [herdr](#herdr) · [agents (legacy)](#agents-legacy)
+[artifacts](#artifacts) · [storage](#storage) · [load_sandbox](#load_sandbox) · [pm](#pm) · [herdr](#herdr) · [agents (legacy)](#agents-legacy)
 
 ## limits
 
@@ -305,6 +305,17 @@ harness = "claude"
 model = "claude-sonnet-4-5"
 effort = "medium"
 ```
+
+## load_sandbox
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Opt in to repository-provided load-sandbox cleanup and worker/reviewer prompt guidance. Store-level only; requires the repository's script and Podman. |
+
+Use `corral config set load_sandbox.enabled true` to opt in. Disabled cleanup
+does not scan sandbox owner files or start any process. Static installed skills
+are store-independent; enabled guidance is delivered in rendered run/review prompts,
+including those read by Pi. See [load sandbox](load-sandbox.md).
 
 ## digest
 

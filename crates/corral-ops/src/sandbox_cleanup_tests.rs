@@ -1,6 +1,12 @@
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 
+fn sandbox_ctx(mut store: corral_core::Store, enabled: bool) -> Ctx {
+    store.config.load_sandbox.enabled = enabled;
+    store.save_config().unwrap();
+    crate::resources::FixedResourceProbe::ctx(store)
+}
+
 #[test]
 fn noop_sweep_reuses_snapshot_without_task_metadata_work() {
     use corral_core::{
@@ -8,7 +14,7 @@ fn noop_sweep_reuses_snapshot_without_task_metadata_work() {
         work::{Work, count},
     };
     let tmp = tempfile::tempdir().unwrap();
-    let ctx = crate::resources::FixedResourceProbe::ctx(Store::init(tmp.path()).unwrap());
+    let ctx = sandbox_ctx(Store::init(tmp.path()).unwrap(), true);
     for _ in 0..32 {
         ctx.store
             .create("Historical task", None, Status::Done, "")
@@ -35,7 +41,7 @@ fn receipts_of_one_run_read_its_task_head_once() {
     use corral_core::{Status, Store};
     // Given a finished task whose run left worker, reviewer and gate owner receipts.
     let tmp = tempfile::tempdir().unwrap();
-    let ctx = crate::resources::FixedResourceProbe::ctx(Store::init(tmp.path()).unwrap());
+    let ctx = sandbox_ctx(Store::init(tmp.path()).unwrap(), true);
     let task = ctx
         .store
         .create("Finished", None, Status::Done, "")
@@ -64,8 +70,7 @@ fn receipts_of_one_run_read_its_task_head_once() {
 #[test]
 fn owner_listing_uses_portable_podman_template() {
     let tmp = tempfile::tempdir().unwrap();
-    let ctx =
-        crate::resources::FixedResourceProbe::ctx(corral_core::Store::init(tmp.path()).unwrap());
+    let ctx = sandbox_ctx(corral_core::Store::init(tmp.path()).unwrap(), true);
     let shim = tmp.path().join("podman");
     std::fs::write(
         &shim,
@@ -125,10 +130,9 @@ fn terminal_owner(ctx: &Ctx) {
     crate::launch_exit::arm(ctx, "true", &receipt).unwrap();
 }
 
-fn empty_sweep_fixture() -> (tempfile::TempDir, Ctx, PathBuf, PathBuf) {
+fn sweep_fixture(enabled: bool) -> (tempfile::TempDir, Ctx, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
-    let ctx =
-        crate::resources::FixedResourceProbe::ctx(corral_core::Store::init(tmp.path()).unwrap());
+    let ctx = sandbox_ctx(corral_core::Store::init(tmp.path()).unwrap(), enabled);
     terminal_owner(&ctx);
     assert_eq!(terminal_owners(&ctx).unwrap().len(), 1);
     let shim = tmp.path().join("podman");
@@ -147,7 +151,7 @@ fn empty_sweep_fixture() -> (tempfile::TempDir, Ctx, PathBuf, PathBuf) {
 
 #[test]
 fn unchanged_terminal_owners_do_not_repeat_empty_listing() {
-    let (_tmp, ctx, shim, log) = empty_sweep_fixture();
+    let (_tmp, ctx, shim, log) = sweep_fixture(true);
     sweep_with(&ctx, shim.to_str().unwrap()).unwrap();
     sweep_with(&ctx, shim.to_str().unwrap()).unwrap();
     assert_eq!(std::fs::read_to_string(log).unwrap(), "listed\n");
@@ -155,7 +159,7 @@ fn unchanged_terminal_owners_do_not_repeat_empty_listing() {
 
 #[test]
 fn new_terminal_owner_invalidates_empty_listing() {
-    let (_tmp, ctx, shim, log) = empty_sweep_fixture();
+    let (_tmp, ctx, shim, log) = sweep_fixture(true);
     sweep_with(&ctx, shim.to_str().unwrap()).unwrap();
     terminal_owner(&ctx);
     assert_eq!(terminal_owners(&ctx).unwrap().len(), 2);
@@ -165,7 +169,7 @@ fn new_terminal_owner_invalidates_empty_listing() {
 
 #[test]
 fn expired_empty_listing_rechecks_for_late_containers() {
-    let (_tmp, ctx, shim, log) = empty_sweep_fixture();
+    let (_tmp, ctx, shim, log) = sweep_fixture(true);
     sweep_with(&ctx, shim.to_str().unwrap()).unwrap();
     {
         let mut memos = SWEEP_MEMOS.lock().unwrap();
@@ -175,4 +179,23 @@ fn expired_empty_listing_rechecks_for_late_containers() {
     }
     sweep_with(&ctx, shim.to_str().unwrap()).unwrap();
     assert_eq!(std::fs::read_to_string(log).unwrap(), "listed\nlisted\n");
+}
+
+#[test]
+fn disabled_sandbox_cleanup_never_lists_or_reads_task_owners() {
+    use corral_core::work::{Work, count};
+    let (_tmp, ctx, shim, log) = sweep_fixture(false);
+    PODMAN.with(|slot| *slot.borrow_mut() = Some(shim.to_string_lossy().into()));
+    let counters = [Work::TaskList, Work::TaskStat, Work::SessionBindingRead];
+    let before = counters.map(count);
+    sweep(&ctx).unwrap();
+    reap_task(&ctx, "missing-task").unwrap();
+    reap(&ctx, "missing-task", "R1").unwrap();
+    retire_superseded(&ctx, "missing-task", "R1").unwrap();
+    sweep_with(&ctx, shim.to_str().unwrap()).unwrap();
+    reap_scope(&ctx, "missing-task", None).unwrap();
+    reap_scope_with(&ctx, "missing-task", None, shim.to_str().unwrap()).unwrap();
+    PODMAN.with(|slot| slot.borrow_mut().take());
+    assert_eq!(counters.map(count), before);
+    assert!(!log.exists());
 }

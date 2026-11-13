@@ -3,6 +3,13 @@ use super::*;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixListener;
 
+fn sandbox_fixture(count: usize) -> Fixture {
+    let mut fx = Fixture::new(count);
+    fx.ctx.store.config.load_sandbox.enabled = true;
+    fx.ctx.store.save_config().unwrap();
+    fx
+}
+
 fn sweep(ctx: &Ctx) -> anyhow::Result<()> {
     crate::sandbox_cleanup::sweep(ctx)
 }
@@ -87,7 +94,7 @@ fn containers(fx: &Fixture, entries: &[(&str, String)]) {
 
 #[test]
 fn historical_cleanup_does_not_hold_inventory_or_starve_gate_admission() {
-    let fx = Fixture::new(4);
+    let fx = sandbox_fixture(4);
     history(&fx);
     let live = fx.task();
     let gate = fx.task();
@@ -155,7 +162,7 @@ fn historical_cleanup_does_not_hold_inventory_or_starve_gate_admission() {
 
 #[test]
 fn hundreds_of_terminal_owners_need_only_one_podman_query() {
-    let fx = Fixture::new(2);
+    let fx = sandbox_fixture(2);
     history(&fx);
     let podman = fake_podman(&fx, false);
     containers(&fx, &[]);
@@ -173,7 +180,7 @@ fn hundreds_of_terminal_owners_need_only_one_podman_query() {
 
 #[test]
 fn resumed_task_is_revalidated_after_blocked_container_listing() {
-    let fx = Fixture::new(2);
+    let fx = sandbox_fixture(2);
     let id = history(&fx);
     let podman = fake_podman(&fx, true);
     containers(&fx, &[("123456789abc", format!("{:064x}", 1))]);
@@ -207,7 +214,7 @@ fn resumed_task_is_revalidated_after_blocked_container_listing() {
 
 #[test]
 fn foreign_session_and_live_runs_are_not_sandbox_cleanup_authority() {
-    let fx = Fixture::new(2);
+    let fx = sandbox_fixture(2);
     let id = history(&fx);
     let podman = fake_podman(&fx, false);
     containers(&fx, &[("123456789abc", format!("{:064x}", 1))]);

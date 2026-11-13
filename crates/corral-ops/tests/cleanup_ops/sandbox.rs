@@ -69,7 +69,9 @@ elif args[0] == 'rm':
         );
         return;
     }
-    let fx = Fx::new();
+    let mut fx = Fx::new();
+    fx.ctx.store.config.load_sandbox.enabled = true;
+    fx.ctx.store.save_config().unwrap();
     if fail_inventory {
         fx.review();
     }
