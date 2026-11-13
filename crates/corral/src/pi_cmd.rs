@@ -432,7 +432,8 @@ mod tests {
     fn the_invocation_split_follows_flags_workspace_and_terminal() {
         use Invocation::*;
         // (argv, in a workspace, on a terminal, what opens or the refusal code)
-        let cases: &[(&[&str], bool, bool, Result<Invocation, &str>)] = &[
+        type Case<'a> = (&'a [&'a str], bool, bool, Result<Invocation, &'a str>);
+        let cases: &[Case] = &[
             (&[], true, true, Ok(Launcher)),
             (
                 &["--model", "m", "--effort", "high"],
