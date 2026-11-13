@@ -49,9 +49,11 @@ impl BoardSnapshot {
         // Preparation may wait on derivation locks or do substantial filesystem work.
         // Never age a frame view while it runs. Sample the host once, outside the
         // retryable read derivation; all later admission reads replay that observation.
+        let _span = corral_core::timing::span("board.snap.prepare");
         corral_ops::lesson_rows::prepare_coordination(ctx)?;
         let _hot = corral_core::work::HotScope::enter();
         let sampled = crate::attention::refresh_context(ctx);
+        drop(_span);
         sampled.read_step(|read| Self::load_view(read, ctx.clone(), now, attention.clone()))
     }
 
@@ -62,7 +64,10 @@ impl BoardSnapshot {
         attention: Option<crate::attention::Snapshot>,
     ) -> Result<Self> {
         let (sources, finishes, unreviewed) = ctx.read_step(|read| {
+            let _span = corral_core::timing::span("board.snap.sources");
             let mut sources = sources::FrameSources::load(read)?;
+            drop(_span);
+            let _span = corral_core::timing::span("board.snap.finishes");
             let finishes = corral_ops::finishes_for(
                 &read.store,
                 &sources
@@ -72,6 +77,8 @@ impl BoardSnapshot {
                     .map(|h| h.id.clone())
                     .collect::<Vec<_>>(),
             )?;
+            drop(_span);
+            let _span = corral_core::timing::span("board.snap.unreviewed");
             let mut unreviewed = HashMap::new();
             for head in &sources.heads {
                 if head.status == Status::Review {
@@ -87,6 +94,7 @@ impl BoardSnapshot {
                     }
                 }
             }
+            drop(_span);
             sources.heads = sources
                 .heads
                 .into_iter()
@@ -103,19 +111,26 @@ impl BoardSnapshot {
             done_ids,
             pins,
         } = sources;
+        let _span = corral_core::timing::span("board.snap.plan_progress");
         let plan_progress = tasks
             .iter()
             .filter_map(|task| crate::plan::tracker::load(ctx, task).map(|p| (task.id.clone(), p)))
             .collect();
+        drop(_span);
+        let _span = corral_core::timing::span("board.snap.resources");
         let resource_ctx = crate::attention::refresh_context(ctx);
         let (resources, waits) =
             crate::resources::ResourceDisplay::sample_board(&resource_ctx, &tasks);
+        drop(_span);
         let pinned = pins
             .iter()
             .filter_map(|entry| PinRef::parse(&entry.pin.target).ok())
             .map(|reference| reference.task().to_string())
             .collect();
+        let _span = corral_core::timing::span("board.snap.stages");
         let stages = autopilot::active_stages(ctx, &tasks);
+        drop(_span);
+        let _span = corral_core::timing::span("board.snap.automation");
         let automation_blocks = tasks
             .iter()
             .filter_map(|task| {
@@ -124,12 +139,18 @@ impl BoardSnapshot {
                 reason.map(|reason| (task.id.clone(), reason))
             })
             .collect();
+        drop(_span);
+        let _span = corral_core::timing::span("board.snap.plan_review");
         let plan_review_waits = tasks
             .iter()
             .filter_map(|task| Some((task.id.clone(), corral_ops::plan_review_wait(ctx, task)?)))
             .collect();
+        drop(_span);
         Ok(Self {
-            attention: attention.unwrap_or_else(|| crate::attention::load(&resource_ctx, now)),
+            attention: attention.unwrap_or_else(|| {
+                let _span = corral_core::timing::span("board.snap.attention");
+                crate::attention::load(&resource_ctx, now)
+            }),
             ctx: live_ctx,
             tasks,
             heads: heads

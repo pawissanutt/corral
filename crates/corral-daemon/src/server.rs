@@ -7,6 +7,7 @@ use anyhow::{Context, Result, ensure};
 use corral_protocol::{
     self as wire,
     frame::{Frame, FrameKind, read_frame_until, write_frame_until},
+    read::{ReadKind, ReadReply, ReadRequest},
     rpc,
 };
 use serde::Serialize;
@@ -201,7 +202,7 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) -> Result<()>
                             caps: hello
                                 .caps
                                 .into_iter()
-                                .filter(|cap| cap == wire::BOARD_V1)
+                                .filter(|cap| cap == wire::BOARD_V1 || cap == wire::READ_V1)
                                 .collect(),
                             daemon: wire::DaemonInfo {
                                 version: env!("CARGO_PKG_VERSION").into(),
@@ -253,6 +254,15 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) -> Result<()>
                 )?,
             },
             wire::HEALTH_GET => reply(&mut stream, id, shared.health())?,
+            wire::READ => match serde_json::from_value::<ReadRequest>(params) {
+                Ok(request) => serve_read(&mut stream, &shared, id, request)?,
+                Err(_) => error(
+                    &mut stream,
+                    id,
+                    rpc::ErrorCode::InvalidParams,
+                    "invalid read",
+                )?,
+            },
             wire::SUB_OPEN => match serde_json::from_value::<wire::subscription::SubOpen>(params) {
                 Ok(open) => match topics.open(open) {
                     Ok(()) => reply(&mut stream, id, ())?,
@@ -327,6 +337,99 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>, store: &str) -> Result<()>
             )?,
         }
     }
+}
+
+fn serve_read(
+    stream: &mut UnixStream,
+    shared: &Shared,
+    id: Value,
+    request: ReadRequest,
+) -> Result<()> {
+    if request.kind == ReadKind::Other {
+        return error(
+            stream,
+            id,
+            rpc::ErrorCode::InvalidParams,
+            "unknown read kind",
+        );
+    }
+    let identity = corral_ops::pm_read::client_identity();
+    match identity {
+        Ok((exe, build)) if request.exe == exe && request.build == build => {}
+        Ok(_) => return error(stream, id, rpc::ErrorCode::Refused, "client_mismatch"),
+        Err(problem) => {
+            return error(
+                stream,
+                id,
+                rpc::ErrorCode::Internal,
+                &format!("{problem:#}").replace(['\r', '\n'], " "),
+            );
+        }
+    }
+    let Some(receiver) = crate::reader::request(shared, request.kind) else {
+        return error(
+            stream,
+            id,
+            rpc::ErrorCode::Unavailable,
+            "reader unavailable",
+        );
+    };
+    let served = match receiver.recv_timeout(Duration::from_secs(30)) {
+        Ok(Ok(served)) => served,
+        Ok(Err(problem)) => {
+            return error(
+                stream,
+                id,
+                rpc::ErrorCode::Internal,
+                &format!("{problem:#}").replace(['\r', '\n'], " "),
+            );
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            return error(stream, id, rpc::ErrorCode::Busy, "reader timed out");
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            return error(
+                stream,
+                id,
+                rpc::ErrorCode::Unavailable,
+                "reader unavailable",
+            );
+        }
+    };
+    let document = &served.document;
+    let frames = u32::try_from(document.bytes.len().div_ceil(wire::frame::DATA_MAX).max(1))
+        .context("counting read data frames")?;
+    let stream_id = 1;
+    reply(
+        stream,
+        id,
+        ReadReply {
+            as_of: document.as_of.clone(),
+            seq: document.seq,
+            cached: served.cached,
+            stream: stream_id,
+            bytes: document.bytes.len() as u64,
+            frames,
+        },
+    )?;
+    // This entire transfer completes before returning to the topic flush / RPC
+    // loop. One deadline bounds all DATA frames, not a fresh timeout per frame.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut frame = Frame {
+        kind: FrameKind::Data,
+        stream: stream_id,
+        payload: Vec::with_capacity(document.bytes.len().min(wire::frame::DATA_MAX)),
+    };
+    if document.bytes.is_empty() {
+        write_frame_until(stream, &frame, deadline).context("writing empty read document")?;
+    } else {
+        for chunk in document.bytes.chunks(wire::frame::DATA_MAX) {
+            frame.payload.clear();
+            frame.payload.extend_from_slice(chunk);
+            write_frame_until(stream, &frame, deadline).context("writing read document")?;
+        }
+    }
+    Ok(())
 }
 
 fn send(stream: &mut UnixStream, value: &impl Serialize) -> Result<()> {

@@ -304,6 +304,7 @@ pub fn refresh_search_index(ctx: &Ctx) -> Result<()> {
 
 /// Observe before listing tasks, so sync can detect its own and concurrent writes.
 pub(crate) fn task_stamp(ctx: &Ctx) -> Result<String> {
+    let _span = corral_core::timing::span("sync.task_stamp");
     ctx.store.tasks_stamp()
 }
 
@@ -342,5 +343,6 @@ pub(crate) fn refresh_after_sync(ctx: &Ctx, _tasks: &[Task], _before: &str) -> R
 /// held read views on the index lock (pinning the WAL). A pass deferred because another
 /// process holds the index leaves the cursor in place, so the next pass follows every change.
 pub(crate) fn refresh_after_sync_if_due(ctx: &Ctx, _tasks: &[Task], _before: &str) -> Result<bool> {
+    let _span = corral_core::timing::span("sync.refresh_after_sync_if_due");
     follow_index(ctx, true)
 }

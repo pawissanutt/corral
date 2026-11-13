@@ -264,6 +264,7 @@ pub(crate) fn deliver(ctx: &Ctx, pane: &str, policy: &PolicySnapshot) -> Result<
 /// Owning sync calls this independently of push_events and before optional event delivery.
 /// Unavailable transport keeps all delivery evidence; it never checkpoints policy away.
 pub fn reconcile_pm_policy(ctx: &Ctx, herdr_available: bool) -> Result<()> {
+    let _span = corral_core::timing::span("sync.reconcile_pm_policy");
     let Some(_delivery) = ctx.store.try_lock("pm-policy")? else {
         return Ok(());
     };

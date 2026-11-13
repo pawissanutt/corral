@@ -16,6 +16,7 @@ pub(crate) fn reconcile(
     snapshot: crate::pane_liveness::Snapshot<'_>,
     now: Timestamp,
 ) -> Result<()> {
+    let _span = corral_core::timing::span("sync.plan_pilot_reconcile");
     let panes = snapshot.panes;
     let _attribution = ctx.store.attribute(corral_core::Actor::System);
     let Some(run) = task.plan_runs.last().filter(|r| r.holds_slot()) else {
@@ -122,6 +123,7 @@ pub(crate) fn handles(task: &Task) -> bool {
 }
 
 pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp, scope: &crate::sync::SyncScope) -> Result<()> {
+    let _span = corral_core::timing::span("sync.plan_pilot_advance_all");
     let _attribution = ctx.store.attribute(corral_core::Actor::Autopilot);
     for task in ctx
         .store

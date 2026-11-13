@@ -84,6 +84,7 @@ pub fn report_at(
 }
 
 pub(crate) fn scheduled_digest_and_report_at(ctx: &Ctx, now: Timestamp) -> Result<()> {
+    let _span = corral_core::timing::span("sync.scheduled_digest_and_report_at");
     if crate::digest::scheduled_digest_at(ctx, now)?.is_some() {
         scheduled_report_at(ctx, now)?;
     }

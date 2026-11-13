@@ -642,6 +642,7 @@ pub(crate) fn reconcile(
     snapshot: crate::pane_liveness::Snapshot<'_>,
     now: Timestamp,
 ) -> Result<()> {
+    let _span = corral_core::timing::span("sync.review_budget_reconcile");
     let panes = snapshot.panes;
     if panes.is_empty() {
         crate::pane_liveness::unknown("herdr returned an empty pane inventory");

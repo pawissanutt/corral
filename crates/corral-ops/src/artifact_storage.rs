@@ -346,6 +346,7 @@ pub(crate) fn storage_exclusive(ctx: &Ctx) -> Result<StorageGuard> {
 /// Waits until no exclusive holder (GC) has artifact storage, without keeping access: a pass
 /// calls it before taking a lease its artifact writes must not park (T-505).
 pub(crate) fn await_storage(ctx: &Ctx) -> Result<()> {
+    let _span = corral_core::timing::span("sync.await_storage");
     if held_here() {
         return Ok(());
     }

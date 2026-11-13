@@ -493,6 +493,7 @@ pub(crate) fn work(ctx: &Ctx, recipient: &Recipient) -> Result<Work> {
 /// Sync pass for every owned inbox recipient. A live recipient gets a full delivery pass; a
 /// finished one only collects late evidence and finishes effects, never another send.
 pub fn reconcile_all(ctx: &Ctx) -> Result<()> {
+    let _span = corral_core::timing::span("sync.reconcile_all");
     reconcile_all_with(ctx, &adapter())
 }
 

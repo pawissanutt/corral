@@ -129,6 +129,7 @@ pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
 
 /// Indexed sync callers already hold the task identity, not a manufactured Task facade.
 pub(crate) fn task_id(ctx: &Ctx, id: &str, now: Timestamp) -> Result<TaskSync> {
+    let _span = corral_core::timing::span("sync.task_id");
     super::super::effects::reconcile_task_hot(ctx, id)?;
     crate::questions::terminalize(ctx, id)?;
     crate::questions::expire_deadlines(ctx, id, now)?;
@@ -381,6 +382,7 @@ fn probe_one(ctx: &Ctx, recipient: &Recipient, container: &ContainerRef, state: 
 /// Once per sync pass: the PM wake outbox and the PM's host, while a corral-pi PM record exists,
 /// and the host of every open assistant session.
 pub fn pass(ctx: &Ctx) -> Result<()> {
+    let _span = corral_core::timing::span("sync.agent_hooks_pass");
     if pm_state::load_current(&ctx.store)?.is_some() {
         consulted("sync");
         super::super::pm_wake::repost(ctx)?;

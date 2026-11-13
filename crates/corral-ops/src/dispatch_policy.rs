@@ -260,6 +260,7 @@ pub(crate) fn advance(
     now: Timestamp,
     scope: &crate::sync::SyncScope,
 ) -> Result<Vec<Change>> {
+    let _span = corral_core::timing::span("sync.dispatch_policy_advance");
     let Some(_policy) = ctx.store.try_lock("dispatch-policy")? else {
         return Ok(vec![]);
     };

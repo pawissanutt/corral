@@ -104,6 +104,7 @@ pub mod pm_inbox;
 mod pm_next;
 mod pm_policy;
 mod pm_questions;
+pub mod pm_read;
 mod pm_rotation;
 mod pm_supervisor;
 mod pm_usage_guard;

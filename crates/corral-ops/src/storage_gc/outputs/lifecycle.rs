@@ -26,6 +26,7 @@ struct Cursor {
 /// Cheap async hook. A durable one-minute throttle coalesces short questions and ticks;
 /// crash/restart merely postpones the next bounded pass. The child's own lease excludes overlap.
 pub(crate) fn schedule(ctx: &Ctx, now: Timestamp) -> Result<()> {
+    let _span = corral_core::timing::span("sync.outputs_schedule");
     if ctx.store.config.storage.outputs.is_empty() {
         return Ok(());
     }

@@ -1,6 +1,7 @@
 //! The workspace's single synchronization loop owner.
 mod health;
 mod projector;
+mod reader;
 #[cfg(unix)]
 mod server;
 mod state;
@@ -40,9 +41,16 @@ impl Exit {
 
 pub fn run(start: &Path, options: RunOptions) -> Result<Exit> {
     let ctx = Ctx::open_for_sync(start).context("opening daemon workspace")?;
-    run_with_pass(ctx, options, pass)
+    let shared = Arc::new(Shared::new());
+    run_with_state(
+        ctx,
+        options,
+        |ctx, supervisor| pass(ctx, supervisor, &shared),
+        Arc::clone(&shared),
+    )
 }
 
+#[cfg(test)]
 fn run_with_pass(
     ctx: Ctx,
     options: RunOptions,
@@ -102,6 +110,7 @@ fn run_with_state(
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))
             .context("securing daemon socket")?;
         cleanup.projector = Some(projector::start(&ctx, &shared)?);
+        reader::start(&ctx, &shared)?;
         server::start(listener, Arc::clone(&shared), ctx.store.dir())?;
         let transitions = Arc::new(Mutex::new(health::Transitions::new()));
         transitions
@@ -164,9 +173,10 @@ fn measured_pass(
     (spent, error)
 }
 
-fn pass(ctx: &mut Ctx, supervisor: bool) -> Option<String> {
+fn pass(ctx: &mut Ctx, supervisor: bool, shared: &Shared) -> Option<String> {
     let (sender, diagnostics) = std::sync::mpsc::channel();
     let mut errors = Vec::new();
+    let mut attention = None;
     {
         let _capture = corral_core::capture_messages(sender);
         step(
@@ -175,7 +185,13 @@ fn pass(ctx: &mut Ctx, supervisor: bool) -> Option<String> {
             &mut errors,
         );
         step(
-            corral_ops::sync_with_attention(ctx).map(|_| ()),
+            corral_ops::sync_with_attention(ctx).map(|(_, board)| {
+                if let Some(board) = board
+                    && let Ok(view) = ctx.store.view()
+                {
+                    attention = Some((view.seq().0, board));
+                }
+            }),
             "synchronizing",
             &mut errors,
         );
@@ -194,6 +210,14 @@ fn pass(ctx: &mut Ctx, supervisor: bool) -> Option<String> {
             &mut errors,
         );
     }
+    // Later pass stages may write too: never label an earlier attention board
+    // with a newer sequence. On any intervening write, the reader loads its own.
+    let attention =
+        attention.filter(|(seq, _)| ctx.store.view().is_ok_and(|view| view.seq().0 == *seq));
+    *shared
+        .attention
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = attention;
     for message in diagnostics.try_iter() {
         for line in message.text.lines() {
             eprintln!("{}: {line}", message.source);

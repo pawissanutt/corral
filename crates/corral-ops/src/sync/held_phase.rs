@@ -17,6 +17,7 @@ pub(super) fn close_held_run(
     panes: &HashMap<String, PaneInfo>,
     now: Timestamp,
 ) -> Result<()> {
+    let _span = corral_core::timing::span("sync.close_held_run");
     if task.status != Status::Backlog || !task.dispatch_hold || task.park.is_some() {
         return Ok(());
     }

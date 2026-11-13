@@ -105,6 +105,7 @@ pub fn lessons_due(ctx: &Ctx, now: Timestamp) -> Result<Vec<LessonDue>> {
 
 /// One actionable wake per project/request generation, shared by all sync callers.
 pub(crate) fn announce_due(ctx: &Ctx, now: Timestamp) -> Result<()> {
+    let _span = corral_core::timing::span("sync.announce_due");
     let config = &ctx.store.config.lessons;
     if config.every.is_none() && config.after_landings.is_none() && config.after_failures.is_none()
     {

@@ -569,6 +569,79 @@
         ],
         "type": "object"
       },
+      "ReadKind": {
+        "enum": [
+          "pm_next",
+          "pm_brief",
+          "board_readback",
+          "other"
+        ],
+        "type": "string"
+      },
+      "ReadReply": {
+        "description": "The response to `read`. Exactly `frames` Data frames follow it on `stream`, carrying `bytes` bytes of\none UTF-8 JSON document, in order, with nothing else written to the connection in between.",
+        "properties": {
+          "as_of": {
+            "description": "RFC 3339 time the document was computed.",
+            "type": "string"
+          },
+          "bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cached": {
+            "description": "True when an earlier computation was reused.",
+            "type": "boolean"
+          },
+          "frames": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "seq": {
+            "description": "Store change sequence the document was computed at.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stream": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "as_of",
+          "seq",
+          "cached",
+          "stream",
+          "bytes",
+          "frames"
+        ],
+        "type": "object"
+      },
+      "ReadRequest": {
+        "properties": {
+          "build": {
+            "description": "The client's build identity (what `corral build-identity` prints).",
+            "type": "string"
+          },
+          "exe": {
+            "description": "Absolute path of the client's executable.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ReadKind"
+          }
+        },
+        "required": [
+          "kind",
+          "exe",
+          "build"
+        ],
+        "type": "object"
+      },
       "Request": {
         "properties": {
           "id": true,
@@ -1102,6 +1175,70 @@
         {
           "code": "internal",
           "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "read",
+      "params": [
+        {
+          "name": "build",
+          "required": true,
+          "schema": {
+            "description": "The client's build identity (what `corral build-identity` prints).",
+            "type": "string"
+          }
+        },
+        {
+          "name": "exe",
+          "required": true,
+          "schema": {
+            "description": "Absolute path of the client's executable.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "kind",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ReadKind"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/ReadReply"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/ReadRequest"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "busy",
+          "message": "busy"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
         }
       ]
     },

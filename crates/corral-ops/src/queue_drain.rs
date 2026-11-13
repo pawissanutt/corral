@@ -20,6 +20,7 @@ pub(crate) fn start_queued(
     now: Timestamp,
     scope: &crate::sync::SyncScope,
 ) -> Result<Vec<Change>> {
+    let _span = corral_core::timing::span("sync.start_queued");
     let mut fresh = ctx.clone();
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;

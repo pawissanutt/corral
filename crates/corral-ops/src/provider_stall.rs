@@ -530,6 +530,7 @@ pub(crate) fn advance_agent(
     panes: &HashMap<String, PaneInfo>,
     now: Timestamp,
 ) -> Result<Option<Change>> {
+    let _span = corral_core::timing::span("sync.advance_agent");
     if let Some(run) = head
         .current_run
         .as_deref()

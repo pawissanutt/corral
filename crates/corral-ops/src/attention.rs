@@ -16,7 +16,7 @@ use corral_core::{
     TaskHeadFields, Verdict,
 };
 use jiff::Timestamp;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
 
@@ -51,7 +51,7 @@ pub use neighborhood::Neighborhood;
 #[cfg(test)]
 mod neighborhood_tests;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskAssessment {
     pub task: String,
     pub title: String,
@@ -62,7 +62,7 @@ pub struct TaskAssessment {
     pub assessment: Assessment,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AttentionBoard {
     pub version: u32,
     pub tasks: Vec<TaskAssessment>,

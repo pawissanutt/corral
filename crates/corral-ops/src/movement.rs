@@ -142,6 +142,7 @@ fn save(record: &StateRecord<'_>, state: &State) -> Result<()> {
 
 /// Run after landing advancement, even if herdr is down. The durable approval log is authority.
 pub(crate) fn reconcile(ctx: &Ctx, now: Timestamp, available: bool) -> Result<()> {
+    let _span = corral_core::timing::span("sync.movement_reconcile");
     let open: Vec<Task> = ctx
         .store
         .heads(&corral_core::backend::HeadQuery::Open { project: None })?

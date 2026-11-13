@@ -161,6 +161,7 @@ pub(crate) fn authorized_ready<T: TaskRef + ?Sized>(store: &Store, task: &T) -> 
 
 /// Upgrade the old invisible Backlog queue on the next owning sync.
 pub(crate) fn migrate_backlog(ctx: &Ctx) -> Result<Vec<crate::Change>> {
+    let _span = corral_core::timing::span("sync.migrate_backlog");
     let mut changes = Vec::new();
     for task in ctx
         .store

@@ -65,6 +65,7 @@ pub(crate) fn policy_digest(ctx: &Ctx) -> Result<String> {
 
 /// One bounded pass at `now`; another process's running pass makes it a no-op.
 pub fn lifecycle_pass(ctx: &Ctx, now: Timestamp) -> Result<()> {
+    let _span = corral_core::timing::span("sync.lifecycle_pass");
     let Some(_lease) = ctx.store.try_lock(LEASE)? else {
         return Ok(());
     };

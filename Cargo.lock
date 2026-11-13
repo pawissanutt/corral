@@ -419,6 +419,7 @@ dependencies = [
  "sha2",
  "sysinfo",
  "tempfile",
+ "unicode-width",
  "winsafe",
 ]
 

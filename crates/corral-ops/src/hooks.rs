@@ -451,6 +451,7 @@ pub(crate) fn update_notice(
 
 /// Restart reconciliation runs even when the terminal engine is unavailable.
 pub fn reconcile_post_land(ctx: &Ctx) -> Result<()> {
+    let _span = corral_core::timing::span("sync.reconcile_post_land");
     crate::plan_target::reconcile_all(ctx)?;
     let mut repos = std::collections::BTreeSet::new();
     for op in post_land_operations(ctx, None)? {

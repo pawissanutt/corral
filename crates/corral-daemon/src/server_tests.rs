@@ -418,3 +418,172 @@ fn health_subscriber_that_acks_receives_no_delta_for_clock_ticks() {
         0
     );
 }
+
+fn read_connection(
+    fixture: &Fixture,
+    shared: &Arc<Shared>,
+) -> (UnixStream, std::thread::JoinHandle<Result<()>>) {
+    let socket = fixture.root.join("read-test.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let worker_shared = Arc::clone(shared);
+    let store = fixture.ctx.store.dir().display().to_string();
+    let worker = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        serve(stream, worker_shared, &store)
+    });
+    let mut stream = UnixStream::connect(&socket).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream.set_write_timeout(Some(IO_TIMEOUT)).unwrap();
+    send_request(
+        &mut stream,
+        wire::HELLO,
+        wire::Hello {
+            proto: wire::Proto {
+                major: wire::PROTO_MAJOR,
+                minor: wire::PROTO_MINOR,
+            },
+            caps: vec![wire::READ_V1.into()],
+            client: wire::ClientInfo {
+                kind: "test".into(),
+                version: "0".into(),
+            },
+        },
+    );
+    let welcome: wire::Welcome = serde_json::from_value(result(&mut stream)).unwrap();
+    assert_eq!(welcome.caps, [wire::READ_V1]);
+    (stream, worker)
+}
+
+fn read_request(kind: ReadKind) -> ReadRequest {
+    corral_ops::pm_read::set_build_identity("test");
+    let (exe, build) = corral_ops::pm_read::client_identity().unwrap();
+    ReadRequest { kind, exe, build }
+}
+
+fn read_document(stream: &mut UnixStream) -> (ReadReply, Vec<u8>) {
+    let reply: ReadReply = serde_json::from_value(result(stream)).unwrap();
+    assert_ne!(reply.stream, 0);
+    assert_eq!(
+        reply.frames as usize,
+        (reply.bytes as usize)
+            .div_ceil(wire::frame::DATA_MAX)
+            .max(1)
+    );
+    let mut bytes = Vec::new();
+    for _ in 0..reply.frames {
+        let frame = read_frame(stream).unwrap().unwrap();
+        assert_eq!(frame.kind, FrameKind::Data);
+        assert_eq!(frame.stream, reply.stream);
+        assert!(frame.payload.len() <= wire::frame::DATA_MAX);
+        bytes.extend(frame.payload);
+    }
+    assert_eq!(bytes.len() as u64, reply.bytes);
+    (reply, bytes)
+}
+
+fn finish_read_connection(
+    mut stream: UnixStream,
+    shared: &Shared,
+    worker: std::thread::JoinHandle<Result<()>>,
+) {
+    call(&mut stream, wire::BYE, ());
+    worker.join().unwrap().unwrap();
+    shared.close();
+}
+
+#[test]
+fn multi_frame_read_is_complete_and_cannot_interleave_with_the_next_response() {
+    let fixture = Fixture::new();
+    let shared = Arc::new(Shared::new());
+    let text = format!(
+        "{}{}tail",
+        "a".repeat(wire::frame::DATA_MAX),
+        "b".repeat(wire::frame::DATA_MAX)
+    );
+    let expected = serde_json::to_vec(&serde_json::json!({"text": text})).unwrap();
+    let document = expected.clone();
+    crate::reader::start_with_compute(&fixture.ctx, &shared, move |_, kind, _| {
+        Ok(if kind == ReadKind::PmNext {
+            document.clone()
+        } else {
+            Vec::new()
+        })
+    })
+    .unwrap();
+    let (mut stream, worker) = read_connection(&fixture, &shared);
+    send_request(&mut stream, wire::READ, read_request(ReadKind::PmNext));
+    send_request(&mut stream, wire::PING, wire::Ping {});
+    let (reply, bytes) = read_document(&mut stream);
+    assert!(reply.frames > 1);
+    assert_eq!(bytes, expected);
+    assert!(!reply.cached);
+    let _: wire::Pong = serde_json::from_value(result(&mut stream)).unwrap();
+    send_request(&mut stream, wire::READ, read_request(ReadKind::PmBrief));
+    let (reply, bytes) = read_document(&mut stream);
+    assert_eq!(reply.frames, 1);
+    assert!(bytes.is_empty());
+    finish_read_connection(stream, &shared, worker);
+}
+
+#[test]
+fn executable_mismatch_is_refused_before_computing_a_read() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let fixture = Fixture::new();
+    let shared = Arc::new(Shared::new());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let computed = Arc::clone(&calls);
+    crate::reader::start_with_compute(&fixture.ctx, &shared, move |_, _, _| {
+        computed.fetch_add(1, Ordering::SeqCst);
+        Ok(b"{}".to_vec())
+    })
+    .unwrap();
+    let (mut stream, worker) = read_connection(&fixture, &shared);
+    let mut request = read_request(ReadKind::PmNext);
+    request.exe.push_str("-different");
+    send_request(&mut stream, wire::READ, request);
+    let frame = read_frame(&mut stream).unwrap().unwrap();
+    let response: rpc::Response<Value> = serde_json::from_slice(&frame.payload).unwrap();
+    let rpc::ResponseOutcome::Error { error } = response.outcome else {
+        panic!("mismatched executable was served");
+    };
+    assert_eq!(error.code, rpc::ErrorCode::Refused);
+    assert_eq!(error.message, "client_mismatch");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    finish_read_connection(stream, &shared, worker);
+}
+
+#[test]
+fn repeated_read_computes_once_until_the_store_sequence_changes() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let fixture = Fixture::new();
+    let shared = Arc::new(Shared::new());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let computed = Arc::clone(&calls);
+    crate::reader::start_with_compute(&fixture.ctx, &shared, move |_, _, _| {
+        computed.fetch_add(1, Ordering::SeqCst);
+        Ok(b"{}".to_vec())
+    })
+    .unwrap();
+    let (mut stream, worker) = read_connection(&fixture, &shared);
+    send_request(&mut stream, wire::READ, read_request(ReadKind::PmNext));
+    let (first, _) = read_document(&mut stream);
+    send_request(&mut stream, wire::READ, read_request(ReadKind::PmNext));
+    let (second, _) = read_document(&mut stream);
+    assert!(!first.cached);
+    assert!(second.cached);
+    assert_eq!(first.seq, second.seq);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    fixture
+        .ctx
+        .store
+        .create("Changed", None, Status::Ready, "")
+        .unwrap();
+    send_request(&mut stream, wire::READ, read_request(ReadKind::PmNext));
+    let (third, _) = read_document(&mut stream);
+    assert!(!third.cached);
+    assert!(third.seq > second.seq);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    finish_read_connection(stream, &shared, worker);
+}

@@ -138,3 +138,153 @@ fn full_accept_backlog_cannot_block_best_effort_connect() {
     worker.join().unwrap();
     drop(pending);
 }
+
+fn welcome_reader(stream: &mut UnixStream, read_capable: bool) {
+    stream.set_read_timeout(Some(IO_TIMEOUT)).unwrap();
+    stream.set_write_timeout(Some(IO_TIMEOUT)).unwrap();
+    let hello = request(stream);
+    assert_eq!(hello.method, corral_protocol::HELLO);
+    let params: Hello = serde_json::from_value(hello.params.clone()).unwrap();
+    assert!(
+        params
+            .caps
+            .iter()
+            .any(|cap| cap == corral_protocol::BOARD_V1)
+    );
+    assert!(
+        params
+            .caps
+            .iter()
+            .any(|cap| cap == corral_protocol::read::READ_V1)
+    );
+    let mut caps = vec![corral_protocol::BOARD_V1.into()];
+    if read_capable {
+        caps.push(corral_protocol::read::READ_V1.into());
+    }
+    respond(
+        stream,
+        hello,
+        Welcome {
+            proto: Proto {
+                major: PROTO_MAJOR,
+                minor: PROTO_MINOR,
+            },
+            caps,
+            daemon: DaemonInfo {
+                version: "test".into(),
+                store: "fixture".into(),
+                epoch: 1,
+            },
+            health: Health::down(),
+        },
+    );
+}
+
+#[test]
+fn served_document_reassembles_multiple_data_frames() {
+    crate::pm_read::set_build_identity("test");
+    let identity = crate::pm_read::client_identity().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("reader.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let document = br#"{"json":{"kind":"wait"},"text":"workspace: waiting\n"}"#;
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        welcome_reader(&mut stream, true);
+        let read = request(&mut stream);
+        assert_eq!(read.method, corral_protocol::read::READ);
+        let params: ReadRequest = serde_json::from_value(read.params.clone()).unwrap();
+        assert_eq!(params.kind, ReadKind::PmNext);
+        assert_eq!((params.exe, params.build), identity);
+        let chunks = document.chunks(11);
+        respond(
+            &mut stream,
+            read,
+            ReadReply {
+                as_of: "2026-11-12T00:00:00Z".into(),
+                seq: 7,
+                cached: false,
+                stream: 1,
+                bytes: document.len() as u64,
+                frames: chunks.len() as u32,
+            },
+        );
+        for chunk in chunks {
+            write_frame(
+                &mut stream,
+                &Frame {
+                    kind: FrameKind::Data,
+                    stream: 1,
+                    payload: chunk.to_vec(),
+                },
+            )
+            .unwrap();
+        }
+    });
+    let mut client = Client::connect_at(&socket).unwrap().unwrap();
+    assert_eq!(client.read(ReadKind::PmNext).unwrap().unwrap(), document);
+    server.join().unwrap();
+}
+
+#[test]
+fn served_document_refusal_is_a_local_fallback() {
+    crate::pm_read::set_build_identity("test");
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("reader.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        welcome_reader(&mut stream, true);
+        let read = request(&mut stream);
+        assert_eq!(read.method, corral_protocol::read::READ);
+        let response: Response = Response {
+            jsonrpc: JSONRPC.into(),
+            id: read.id,
+            outcome: ResponseOutcome::Error {
+                error: corral_protocol::rpc::Error {
+                    code: corral_protocol::rpc::ErrorCode::Refused,
+                    message: "client_mismatch".into(),
+                    data: None,
+                },
+            },
+        };
+        write_frame(
+            &mut stream,
+            &Frame {
+                kind: FrameKind::Control,
+                stream: 0,
+                payload: serde_json::to_vec(&response).unwrap(),
+            },
+        )
+        .unwrap();
+    });
+    let mut client = Client::connect_at(&socket).unwrap().unwrap();
+    assert!(client.read(ReadKind::PmBrief).unwrap().is_none());
+    server.join().unwrap();
+}
+
+#[test]
+fn missing_read_capability_never_sends_a_read_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("reader.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        welcome_reader(&mut stream, false);
+        // The next RPC must be the caller's nudge, not an unsupported read.
+        let nudge = request(&mut stream);
+        assert_eq!(nudge.method, corral_protocol::NUDGE);
+        respond(
+            &mut stream,
+            nudge,
+            NudgeAck {
+                pass_seq: 1,
+                completed: true,
+            },
+        );
+    });
+    let mut client = Client::connect_at(&socket).unwrap().unwrap();
+    assert!(client.read(ReadKind::BoardReadback).unwrap().is_none());
+    assert!(client.nudge("fixture", None).unwrap().completed);
+    server.join().unwrap();
+}

@@ -19,6 +19,7 @@ pub(crate) fn reconcile_one(
     now: Timestamp,
     panes: Option<&HashMap<String, PaneInfo>>,
 ) -> Result<Option<Change>> {
+    let _span = corral_core::timing::span("sync.reconcile_one");
     let head = ctx.read_step(|read| Ok(read.store.head(id)?.detach()))?;
     reconcile_head(ctx, &head, now, panes)
 }
@@ -31,6 +32,7 @@ pub(crate) fn reconcile_head(
     now: Timestamp,
     panes: Option<&HashMap<String, PaneInfo>>,
 ) -> Result<Option<Change>> {
+    let _span = corral_core::timing::span("sync.reconcile_head");
     if panes.is_some() && !crate::session_scope::owns_head(ctx, head)? {
         return Ok(None);
     }

@@ -10,6 +10,7 @@ pub(super) fn reconcile(
     output: Option<&mut Option<attention::AttentionBoard>>,
     held_admission: Option<&str>,
 ) -> Result<()> {
+    let _span = corral_core::timing::span("sync.attention_phase_reconcile");
     if let Some(reason) = held_admission {
         let board = attention::reconcile_sampled(
             ctx,
