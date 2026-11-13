@@ -27,9 +27,9 @@ pub(crate) fn schedule(ctx: &Ctx, force: bool) -> Result<()> {
     let root = super::root(ctx)?;
     if !force
         && !root.join("restart").is_file()
+        && !root.join("progress.json").is_file()
         && let Some(manifest) = super::read_manifest(&root)?
-        && super::current(ctx, manifest.after)?
-        && root.join(&manifest.prefix_file).is_file()
+        && !super::due(ctx, &manifest)?
     {
         return Ok(());
     }

@@ -119,8 +119,9 @@ corral config set search.catalog false
 overriding the configured boolean for that process. Other values leave configuration
 in control. This runtime override does not rewrite the config or change what
 `corral config get` reports. With the catalog disabled, queries use streaming search.
-When enabled, queries use a current published catalog or immediately fall back to
-streaming search while a background worker advances the catalog.
+When enabled, queries use a published generation plus an exact bounded change overlay.
+Unusable generations fall back to streaming search; background maintenance republishes lazily.
+See [stored content search](content-search.md#derived-index) for bounds and maintenance controls.
 
 ## limits
 

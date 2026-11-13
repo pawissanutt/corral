@@ -6,8 +6,9 @@ use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 
 use super::{
-    Phase, Progress, Step, advance_with_cache, current, load_prefix_cache, published,
-    read_manifest, request_reindex, root,
+    LAZY_DELTA_SIZE, LAZY_MAX_AGE_SECS, Phase, Progress, Step, advance_with_cache, current,
+    generation_available, lazy_due, load_prefix_cache, published, read_manifest, request_reindex,
+    root,
 };
 use crate::Ctx;
 
@@ -24,7 +25,7 @@ pub(crate) fn build_foreground(ctx: &Ctx, reindex: bool) -> Result<Value> {
     }
     if reindex {
         request_reindex(&ctx)?;
-    } else if published(&ctx)?.is_some() {
+    } else if !root(&ctx)?.join("progress.json").is_file() && published(&ctx)?.is_some() {
         return status(&ctx);
     }
     clear_error(&ctx)?;
@@ -56,6 +57,11 @@ pub(crate) fn build_foreground(ctx: &Ctx, reindex: bool) -> Result<Value> {
 }
 
 pub(crate) fn status(ctx: &Ctx) -> Result<Value> {
+    let pinned = Ctx {
+        store: ctx.store.read_only_snapshot()?,
+        ..ctx.clone()
+    };
+    let ctx = &pinned;
     let root = root(ctx)?;
     let enabled = super::super::enabled(ctx);
     let manifest = read_manifest(&root)?;
@@ -72,9 +78,35 @@ pub(crate) fn status(ctx: &Ctx) -> Result<Value> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error).context("reading catalog build diagnostic"),
     };
-    let ready = enabled && published(ctx)?.is_some();
+    let restart_requested = root.join("restart").is_file();
+    let available = match manifest.as_ref() {
+        Some(manifest) => !restart_requested && generation_available(&root, manifest)?,
+        None => false,
+    };
+    let delta = match manifest.as_ref() {
+        Some(manifest) => super::super::delta::plan(ctx, manifest)?,
+        None => None,
+    };
+    let delta_size = delta.as_ref().map(|delta| delta.size());
+    let delta_tasks = delta.as_ref().map(|delta| delta.tasks.len());
+    let delta_event_distance = delta
+        .as_ref()
+        .map(|delta| delta.events_tail.saturating_sub(delta.events_after));
+    let ready = enabled && available && delta.is_some();
+    let serving_generation_plus_delta =
+        ready && delta.as_ref().is_some_and(|delta| delta.has_changes());
+    let lazy_maintenance_due = enabled
+        && (restart_requested
+            || progress.is_some()
+            || !available
+            || match (manifest.as_ref(), delta.as_ref()) {
+                (Some(_), Some(delta)) => lazy_due(delta),
+                _ => true,
+            });
     let state = if !enabled {
         "disabled"
+    } else if serving_generation_plus_delta {
+        "generation-plus-delta"
     } else if ready {
         "ready"
     } else if last_error.is_some() {
@@ -126,7 +158,15 @@ pub(crate) fn status(ctx: &Ctx) -> Result<Value> {
         "metadata_cursor": metadata_cursor, "source_cursor": source_cursor,
         "indexed_sequence": build_sequence, "indexed_event_sequence": build_event_sequence,
         "published_sequence": published_sequence, "published_event_sequence": published_event_sequence,
-        "published_current": published_current, "restart_requested": root.join("restart").is_file(),
+        "published_current": published_current, "restart_requested": restart_requested,
+        "delta_size": delta_size, "delta_tasks": delta_tasks,
+        "delta_event_distance": delta_event_distance,
+        "delta_age_secs": delta.as_ref().map(|delta| delta.age_seconds()),
+        "published_at": manifest.as_ref().and_then(|manifest| manifest.published_at),
+        "serving_generation_plus_delta": serving_generation_plus_delta,
+        "lazy_maintenance_due": lazy_maintenance_due,
+        "lazy_delta_size_threshold": LAZY_DELTA_SIZE,
+        "lazy_max_age_secs": LAZY_MAX_AGE_SECS,
         "last_error": last_error,
     }))
 }

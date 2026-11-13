@@ -18,6 +18,8 @@ impl SearchData {
     /// require each task, so visit one at a time and hydrate only selected output rows later.
     /// Incomplete catalogs use query-local fallback data without waiting for the builder.
     pub fn search_ids(store: &Store, input: &str, limit: usize) -> Result<Vec<String>> {
+        let pinned = store.read_only_snapshot()?;
+        let store = &pinned;
         match Self::search_ids_once(store, input, limit, false) {
             Err(error) if crate::content_index::catalog::is_corrupt(&error) => {
                 crate::content_index::catalog::repair(&crate::Ctx::from_store(store.clone()));

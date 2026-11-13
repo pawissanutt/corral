@@ -13,6 +13,11 @@ use sha2::{Digest, Sha256};
 use super::{Cache, Document, INDEX_BYTES, Record, Source, TEXT_BUDGET, VERSION, digest, postings};
 use crate::Ctx;
 
+#[path = "catalog_delta.rs"]
+mod delta;
+#[cfg(test)]
+#[path = "catalog_delta_tests.rs"]
+mod delta_tests;
 #[path = "catalog_error.rs"]
 mod error;
 #[path = "catalog_fallback.rs"]
@@ -63,6 +68,10 @@ pub(super) struct Manifest {
     assistants: Option<String>,
     overflow_binary: BTreeSet<String>,
     prefix_file: String,
+    #[serde(default)]
+    config_fingerprint: Option<String>,
+    #[serde(default)]
+    published_at: Option<jiff::Timestamp>,
     extras: BTreeMap<String, String>,
 }
 
@@ -92,7 +101,7 @@ pub(crate) struct Catalog {
 }
 
 impl Catalog {
-    /// Never waits for a build. Only complete, current immutable generations serve hits.
+    /// Never waits for a build. Exact bounded deltas overlay complete generations.
     pub fn open(ctx: &Ctx, reindex: bool) -> Result<Option<Self>> {
         let _span = corral_core::timing::span("search.index_open_refresh");
         if !enabled(ctx) && !cfg!(test) {
@@ -104,9 +113,9 @@ impl Catalog {
                 refresh::schedule(ctx, true)?;
                 return Ok(None);
             }
-            let ready = refresh::published(ctx)?;
-            if ready.is_none() {
-                refresh::schedule(ctx, true)?;
+            let ready = delta::open(ctx)?;
+            if let Err(error) = refresh::schedule(ctx, false) {
+                deferred(ctx, &error);
             }
             Ok(ready)
         })();
@@ -135,22 +144,35 @@ impl Catalog {
     }
 
     fn visit_entries(&self, mut visit: impl FnMut(Entry) -> Result<()>) -> Result<()> {
-        for path in self.manifest.tasks.values() {
+        let paths = self
+            .manifest
+            .tasks
+            .values()
+            .chain(self.manifest.assistants.iter())
+            .chain(self.manifest.events.iter());
+        for path in paths {
+            let path = self.root.join(path);
+            let parent = path.parent().context("catalog partition has no parent")?;
             entries(
-                File::open(self.root.join(path)).context("opening task search catalog")?,
-                &mut visit,
-            )?;
-        }
-        if let Some(path) = &self.manifest.assistants {
-            entries(
-                File::open(self.root.join(path)).context("opening assistant search catalog")?,
-                &mut visit,
-            )?;
-        }
-        for path in &self.manifest.events {
-            entries(
-                File::open(self.root.join(path)).context("opening event search catalog")?,
-                &mut visit,
+                File::open(&path).context("opening search catalog partition")?,
+                |mut entry| {
+                    // Merged partitions have different roots. Make temporary descriptors
+                    // self-contained without copying immutable generation bodies.
+                    match &mut entry.source {
+                        IndexedSource::Text(key) => {
+                            *key = parent
+                                .join("objects")
+                                .join(&*key)
+                                .to_string_lossy()
+                                .into_owned();
+                        }
+                        IndexedSource::Slice { file, .. } => {
+                            *file = parent.join(&*file).to_string_lossy().into_owned();
+                        }
+                        _ => {}
+                    }
+                    visit(entry)
+                },
             )?;
         }
         Ok(())
@@ -258,9 +280,10 @@ impl Catalog {
         artifact: &corral_core::Artifact,
         terms: &[&str],
     ) -> Result<bool> {
-        if self.temporary.is_some() {
+        if self.temporary.is_some() && self.objects.starts_with(&self.root) {
             return Ok(true);
         }
+        // Fallback has no lexical files; a merged catalog retains the base object root.
         let key = format!("a-{}", digest(&artifact.sha256));
         let Some(indexed) = lexical(&self.objects, &key)? else {
             return Ok(true);
@@ -294,8 +317,15 @@ impl Catalog {
         }
     }
 
-    fn rebuild_prefixes(&mut self, ctx: &Ctx, reindex: bool, publish: bool) -> Result<()> {
+    fn rebuild_prefixes(
+        &mut self,
+        ctx: &Ctx,
+        reindex: bool,
+        publish: bool,
+        hints: Option<&Path>,
+    ) -> Result<()> {
         let _span = corral_core::timing::span("search.prefix_refresh");
+        let storage = super::search_storage_context(ctx)?;
         let mut previous = std::mem::take(&mut self.cache);
         if reindex {
             previous = Cache::default();
@@ -304,6 +334,8 @@ impl Catalog {
         let mut descriptors = order::Order::new(&self.root);
         self.visit_entries(|entry| descriptors.push(entry.document, entry.lexical, entry.source))?;
         let mut descriptors = descriptors.sorted()?;
+        let mut hints_path = hints;
+        let mut prefix_hints: Option<Cache> = None;
         let mut budget = TEXT_BUDGET;
         let mut documents = BTreeMap::new();
         let mut extra = BTreeMap::<String, String>::new();
@@ -319,10 +351,37 @@ impl Catalog {
                 doc.binary = cached.binary;
                 doc.file_stamp.clone_from(&cached.file_stamp);
             } else if budget > 0 && documents.len() < 4096 {
-                let text = prefix_source(ctx, &self.root, &doc.task, &source)?;
-                doc.text = text.text;
-                doc.complete = text.complete;
-                doc.binary = text.binary;
+                // Hints supply canonical extracted bytes, never the admission/statistics
+                // seed. Empty incomplete entries can represent budget skips, not extraction.
+                if let Some(path) = hints_path.take() {
+                    let file = File::open(path).context("opening reusable catalog prefixes")?;
+                    let mut cache = super::read_cache(file.take(INDEX_BYTES + 1));
+                    cache.postings.clear();
+                    prefix_hints = Some(cache);
+                }
+                let hint = prefix_hints
+                    .as_ref()
+                    .filter(|cache| cache.version == VERSION)
+                    .and_then(|cache| cache.documents.get(&doc.reference))
+                    .filter(|cached| {
+                        cached.fingerprint == doc.fingerprint
+                            && (cached.complete || cached.binary || !cached.text.is_empty())
+                    });
+                if let Some(hint) = hint {
+                    doc.text.clone_from(&hint.text);
+                    doc.complete = hint.complete;
+                    doc.binary = hint.binary;
+                } else {
+                    let source_ctx = if matches!(&source, IndexedSource::Artifact(_)) {
+                        &storage
+                    } else {
+                        ctx
+                    };
+                    let text = prefix_source(source_ctx, &self.root, &doc.task, &source)?;
+                    doc.text = text.text;
+                    doc.complete = text.complete;
+                    doc.binary = text.binary;
+                }
             }
             if doc.text.len() <= budget && documents.len() < 4096 {
                 budget -= doc.text.len();

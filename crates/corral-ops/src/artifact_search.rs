@@ -14,11 +14,16 @@ pub struct ArtifactSearch {
 
 impl ArtifactSearch {
     /// Loads the shared extracted-text cache without creating a separate finder index.
-    /// A cold or outdated catalog falls back without waiting for background construction.
+    /// Missing or unmergeable catalogs fall back without waiting for construction.
     ///
     /// # Errors
     /// Returns an error if tasks, snapshots or the derived cache cannot be read.
     pub fn load(ctx: &Ctx) -> Result<Self> {
+        let pinned = Ctx {
+            store: ctx.store.read_only_snapshot()?,
+            ..ctx.clone()
+        };
+        let ctx = &pinned;
         match Self::load_once(ctx, false) {
             Err(error) if content_index::catalog::is_corrupt(&error) => {
                 content_index::catalog::repair(ctx);

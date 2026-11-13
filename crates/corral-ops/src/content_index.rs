@@ -655,6 +655,16 @@ fn build_locked(
     Ok(Snapshot { records })
 }
 
+/// Reuse one live metadata handle while logical search rows remain pinned.
+pub(crate) fn search_storage_context(ctx: &Ctx) -> Result<Ctx> {
+    let mut live = ctx.clone();
+    if live.store.is_snapshot() {
+        live.store = corral_core::Store::open_unobserved(ctx.store.root())
+            .context("opening live artifact encoding metadata")?;
+    }
+    Ok(live)
+}
+
 /// Pin the encoded bytes and their current metadata only while opening a source.
 /// Retention can rename/unlink after this returns; the reader owns the stable handle.
 pub(crate) fn search_artifact_reader(
@@ -665,11 +675,7 @@ pub(crate) fn search_artifact_reader(
     if ctx.store.is_snapshot() {
         // Logical query metadata can remain pinned, but retention's encoding must be read
         // on the live store while holding its short opening guard.
-        let live = Ctx {
-            store: corral_core::Store::open_unobserved(ctx.store.root())
-                .context("opening live artifact encoding metadata")?,
-            ..ctx.clone()
-        };
+        let live = search_storage_context(ctx)?;
         return search_artifact_reader(&live, owner, artifact);
     }
     let _storage = crate::artifact_storage::storage_lock(ctx)?;
