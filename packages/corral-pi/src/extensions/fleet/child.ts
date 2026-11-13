@@ -278,7 +278,8 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
           resourceLoaderOptions: { ...resourceLoaderOptions([extension]), agentsFilesOverride: () => ({ agentsFiles: [] }), systemPromptOverride: () => SYSTEM } });
         ({ session } = await sdk.createAgentSessionFromServices({ services, sessionManager: sdk.SessionManager.open(file), model,
           tools: [...allowed], thinkingLevel: level, scopedModels: [{ model, thinkingLevel: level }] }));
-        unsubscribe = session.subscribe(event => observeHelperEvent(event, hooks.onEvent));
+        // Build children share the helper projection, including bounded tool argument/result streaming.
+        unsubscribe = session.subscribe(event => observeHelperEvent(event, hooks.onEvent, options.now));
         signal.addEventListener("abort", abort, { once: true });
         signal.throwIfAborted();
         await session.bindExtensions({ mode: "print", abortHandler: abort });

@@ -37,6 +37,7 @@ import { guardTerminalStop } from "./terminal-stop.ts";
 import { NEW_ASSISTANT_EXIT, RELINK_ASSISTANT_EXIT } from "./assistant-relink.ts";
 import { RESUME_ASSISTANT_EXIT } from "./assistant-resume.ts";
 import { admitConnection } from "./connections.ts";
+import { presentHostNotice } from "../ui/host-notices.ts";
 
 function launchFd(argv: readonly string[]): number {
   const index = argv.indexOf("--launch-fd");
@@ -197,7 +198,8 @@ export async function runHost(config: HostConfig, overrides: {
   physicalTerminal = new ProcessTerminal();
   terminal = new sdk.InteractiveMode(session.runtime, {
     verbose: false, terminal: panels ? panels.wrap(physicalTerminal) : physicalTerminal,
-    ...(panels ? { tuiMode: "fullscreen" as const, readOnlyQueue: true, mainView: (transcript, presentation) => panels.mainView(transcript, presentation) } : {}),
+    ...(panels ? { tuiMode: "fullscreen" as const, readOnlyQueue: true, mainView: (transcript, presentation) => panels.mainView(transcript, presentation),
+      userPresentation: presentHostNotice } : {}),
   });
   guardTerminalStop(terminal, process.stdin);
   await terminal.init();

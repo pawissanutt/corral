@@ -350,9 +350,11 @@ export class Sidebar {
    */
   row(source: SideSource, cells: number, tiny: boolean, rows?: number): SideFrame {
     const summary = sideSummary(source, tiny), short = sideSummary(source, true), plain = toggle("▴", false);
+    // While a helper, child or job is at work the Context summary leads with the shared spinner.
+    const spin = (source.agents ?? []).some(agent => !agent.settled) || (source.jobs ?? []).some(job => !job.settled);
     const variants: [readonly Segment[], readonly Segment[]][] = tiny
-      ? [[this.rowSegments(summary, 2), plain], [this.rowSegments(undefined, 2), plain], [this.initials(false), plain]]
-      : [[this.rowSegments(summary, 2), toggle("▴", true)], [this.rowSegments(summary, 2), plain], [this.rowSegments(short, 2), plain],
+      ? [[this.rowSegments(summary, 2, spin), plain], [this.rowSegments(undefined, 2), plain], [this.initials(false), plain]]
+      : [[this.rowSegments(summary, 2, spin), toggle("▴", true)], [this.rowSegments(summary, 2, spin), plain], [this.rowSegments(short, 2, spin), plain],
         [this.rowSegments(undefined, 2), plain], [this.initials(false), plain]];
     const row = choose(variants, cells);
     for (const hit of row.hits) if (hit.tab) this.opening.add(hit);
@@ -513,12 +515,16 @@ export class Sidebar {
     return active ? (this.focused ? PANEL_SELECTED : "") + PANEL_BLUE + BOLD + UNDERLINE + text + NO_UNDERLINE + NORMAL + PANEL_BG
       : PANEL_MUTED + text;
   }
-  /** Collapsed (`summary` given): every label muted with its summary. Rail and drawer (`summary` undefined): the active tab marked. */
-  private rowSegments(summary: Readonly<Record<SideTab, string>> | undefined, gapCells: number): Segment[] {
+  /**
+   * Collapsed (`summary` given): every label muted with its summary, Context led by the spinner while `spin`.
+   * Rail and drawer (`summary` undefined): the active tab marked.
+   */
+  private rowSegments(summary: Readonly<Record<SideTab, string>> | undefined, gapCells: number, spin = false): Segment[] {
     return TABS.flatMap((tab, at) => {
       const value = summary?.[tab] ?? "", tone = value === "!" || value === "?" ? PANEL_WARNING : PANEL_TEXT;
-      const text = summary ? PANEL_MUTED + LABELS[tab] + (value ? " " + tone + value : "") : this.label(LABELS[tab], tab === this.tab);
-      return [...(at ? [space(gapCells)] : []), seg(text, LABELS[tab] + (value ? " " + value : ""), { tab })];
+      const glyph = summary && spin && tab === "context" ? spinner(Date.now()) + " " : "";
+      const text = summary ? PANEL_BLUE + glyph + PANEL_MUTED + LABELS[tab] + (value ? " " + tone + value : "") : this.label(LABELS[tab], tab === this.tab);
+      return [...(at ? [space(gapCells)] : []), seg(text, glyph + LABELS[tab] + (value ? " " + value : ""), { tab })];
     });
   }
   /** The narrowest tab row: one letter per tab. */

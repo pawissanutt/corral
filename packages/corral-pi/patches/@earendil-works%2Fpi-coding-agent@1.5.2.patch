@@ -1,5 +1,11 @@
+diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-a623d2c712400c20 b/.bun-tag-a623d2c712400c20
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-f675643e48a4a4b8 b/.bun-tag-f675643e48a4a4b8
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/core/agent-session.d.ts b/dist/core/agent-session.d.ts
-index 8b6a584..9845d69 100644
+index 8b6a58430eea2cbb463e2b51773a8bc6e4914505..9845d698f787386557bfb3527936dfb74fc65ced 100644
 --- a/dist/core/agent-session.d.ts
 +++ b/dist/core/agent-session.d.ts
 @@ -12,7 +12,7 @@
@@ -63,7 +69,7 @@ index 8b6a584..9845d69 100644
          followUp: string[];
      };
 diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
-index d67feeb..9550f3f 100644
+index d67feeb70a00ff60a93583bf4ffb79a3d780fa9b..9550f3fb8400bf7dc1844936d8a29f169d5f79c5 100644
 --- a/dist/core/agent-session.js
 +++ b/dist/core/agent-session.js
 @@ -117,6 +117,14 @@ export class AgentSession {
@@ -291,7 +297,7 @@ index d67feeb..9550f3f 100644
      }
      /** Number of pending messages (includes both steering and follow-up) */
 diff --git a/dist/core/session-manager.d.ts b/dist/core/session-manager.d.ts
-index c042aaf..53cdbd4 100644
+index c042aaf3f7aff9aa8dca36a83a6d96cdbbfc949e..53cdbd4fbcc1cdeb8337d98b20eda1e7cda8212e 100644
 --- a/dist/core/session-manager.d.ts
 +++ b/dist/core/session-manager.d.ts
 @@ -277,7 +277,7 @@ export declare class SessionManager {
@@ -304,7 +310,7 @@ index c042aaf..53cdbd4 100644
      appendSessionInfo(name: string): string;
      /** Get the current session name from the latest session_info entry, if any. */
 diff --git a/dist/core/session-manager.js b/dist/core/session-manager.js
-index 7ee0501..70ec518 100644
+index 7ee05014e13c6434040bfdd7b39b455a6731a7d6..70ec5185af15a96c14395a1623a23573bff47bc3 100644
 --- a/dist/core/session-manager.js
 +++ b/dist/core/session-manager.js
 @@ -792,11 +792,11 @@ export class SessionManager {
@@ -356,7 +362,7 @@ index 7ee0501..70ec518 100644
      }
      /** Append a session info entry (e.g., display name). Returns entry id. */
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index bb8acdb..892fb61 100644
+index bb8acdb1b034f89e8fcb86a5933fa513d49a8ef3..11347c908cd30def8bd51b2206dc99ebf74344f1 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
 @@ -1,6 +1,8 @@
@@ -369,8 +375,16 @@ index bb8acdb..892fb61 100644
  export { readStoredCredential } from "./core/auth-storage.ts";
  export type { CacheWarmingDecision, CacheWarmingStatus } from "./core/cache-warmer.ts";
  export { type BranchPreparation, type BranchSummaryResult, type CollectEntriesResult, type CompactionResult, type CutPointResult, calculateContextTokens, collectEntriesForBranchSummary, compact, DEFAULT_COMPACTION_SETTINGS, estimateTokens, type FileOperations, findCutPoint, findTurnStartIndex, type GenerateBranchSummaryOptions, generateBranchSummary, generateSummary, generateSummaryWithUsage, getLastAssistantUsage, prepareBranchEntries, serializeConversation, shouldCompact, } from "./core/compaction/index.ts";
+@@ -35,6 +37,7 @@ export { createToolSearchExtension } from "./extensions/tool-search/index.ts";
+ export { type MainOptions, main } from "./main.ts";
+ export { InteractiveMode, type InteractiveModeOptions, type JsonAgentSessionEvent, type ModelInfo, type PrintModeOptions, RpcClient, type RpcClientOptions, type RpcCommand, type RpcEventListener, type RpcExtensionUIRequest, type RpcExtensionUIResponse, type RpcResponse, type RpcSessionState, runPrintMode, runRpcMode, } from "./modes/index.ts";
+ export { ArminComponent, AssistantMessageComponent, BashExecutionComponent, BorderedLoader, BranchSummaryMessageComponent, CompactionSummaryMessageComponent, CustomEditor, type CustomEditorOptions, CustomMessageComponent, DynamicBorder, ExtensionEditorComponent, ExtensionInputComponent, ExtensionSelectorComponent, FooterComponent, keyHint, keyText, LoginDialogComponent, ModelSelectorComponent, OAuthSelectorComponent, type RenderDiffOptions, rawKeyHint, renderDiff, SessionSelectorComponent, type SettingsCallbacks, type SettingsConfig, SettingsSelectorComponent, ShowImagesSelectorComponent, SkillInvocationMessageComponent, ThemeSelectorComponent, ThinkingSelectorComponent, ToolExecutionComponent, type ToolExecutionOptions, TreeSelectorComponent, truncateToVisualLines, UserMessageComponent, UserMessageSelectorComponent, type VisualTruncateResult, } from "./modes/interactive/components/index.ts";
++export { TranscriptContainer } from "./modes/interactive/components/index.ts";
+ export { getLanguageFromPath, getMarkdownTheme, getSelectListTheme, getSettingsListTheme, highlightCode, initTheme, Theme, type ThemeAppearance, type ThemeBg, type ThemeColor, type ThemeStyle, type ThemeToken, } from "./modes/interactive/theme/theme.ts";
+ export { copyToClipboard } from "./utils/clipboard.ts";
+ export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";
 diff --git a/dist/index.js b/dist/index.js
-index ab5cfcc..443c03d 100644
+index ab5cfccc3a90939e533b9118122189507a7af326..fbd8a9406f0078eae886a1471bc3c0aa6c1310b7 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -1,3 +1,4 @@
@@ -378,8 +392,16 @@ index ab5cfcc..443c03d 100644
  // Core session management
  export { parseArgs } from "./cli/args.js";
  // Config paths
+@@ -41,6 +42,7 @@ export { main } from "./main.js";
+ export { InteractiveMode, RpcClient, runPrintMode, runRpcMode, } from "./modes/index.js";
+ // UI components for extensions
+ export { ArminComponent, AssistantMessageComponent, BashExecutionComponent, BorderedLoader, BranchSummaryMessageComponent, CompactionSummaryMessageComponent, CustomEditor, CustomMessageComponent, DynamicBorder, ExtensionEditorComponent, ExtensionInputComponent, ExtensionSelectorComponent, FooterComponent, keyHint, keyText, LoginDialogComponent, ModelSelectorComponent, OAuthSelectorComponent, rawKeyHint, renderDiff, SessionSelectorComponent, SettingsSelectorComponent, ShowImagesSelectorComponent, SkillInvocationMessageComponent, ThemeSelectorComponent, ThinkingSelectorComponent, ToolExecutionComponent, TreeSelectorComponent, truncateToVisualLines, UserMessageComponent, UserMessageSelectorComponent, } from "./modes/interactive/components/index.js";
++export { TranscriptContainer } from "./modes/interactive/components/index.js";
+ // Theme utilities for custom tools and extensions
+ export { getLanguageFromPath, getMarkdownTheme, getSelectListTheme, getSettingsListTheme, highlightCode, initTheme, Theme, } from "./modes/interactive/theme/theme.js";
+ // Clipboard utilities
 diff --git a/dist/modes/interactive/chat-viewport.d.ts b/dist/modes/interactive/chat-viewport.d.ts
-index 65638e7..b94d737 100644
+index 65638e7fc46589141ca4b0d37e7032f553d6f573..b94d7375521752f911de63a0cd0dff5827b3e819 100644
 --- a/dist/modes/interactive/chat-viewport.d.ts
 +++ b/dist/modes/interactive/chat-viewport.d.ts
 @@ -1,6 +1,7 @@
@@ -391,7 +413,7 @@ index 65638e7..b94d737 100644
      readonly status: Component;
      readonly editor: Component;
 diff --git a/dist/modes/interactive/chat-viewport.js b/dist/modes/interactive/chat-viewport.js
-index afed5bd..e995c18 100644
+index afed5bdc99bad115f3e5c14b872aa714ef71d023..e995c18b1fc7c748d7630fccd91f623ba0deaf39 100644
 --- a/dist/modes/interactive/chat-viewport.js
 +++ b/dist/modes/interactive/chat-viewport.js
 @@ -20,7 +20,7 @@ export function createChatViewport(options) {
@@ -404,7 +426,7 @@ index afed5bd..e995c18 100644
          ]),
      };
 diff --git a/dist/modes/interactive/components/assistant-message.d.ts b/dist/modes/interactive/components/assistant-message.d.ts
-index c58f050..6f07cb2 100644
+index c58f050624a13c494174ab5f60be20e14a3dbfd5..6f07cb2effd89fa9db9fe76061ec3fcdd57c7855 100644
 --- a/dist/modes/interactive/components/assistant-message.d.ts
 +++ b/dist/modes/interactive/components/assistant-message.d.ts
 @@ -1,6 +1,8 @@
@@ -433,7 +455,7 @@ index c58f050..6f07cb2 100644
  //# sourceMappingURL=assistant-message.d.ts.map
 \ No newline at end of file
 diff --git a/dist/modes/interactive/components/assistant-message.js b/dist/modes/interactive/components/assistant-message.js
-index 1e16f4c..3bfef65 100644
+index 1e16f4cb43136e7c20264f1e3dc8c5c43c0bd8a8..3bfef65c1e3dfe13685e00df4d11ab6fe162d847 100644
 --- a/dist/modes/interactive/components/assistant-message.js
 +++ b/dist/modes/interactive/components/assistant-message.js
 @@ -157,7 +157,7 @@ export class AssistantMessageComponent extends Container {
@@ -445,8 +467,162 @@ index 1e16f4c..3bfef65 100644
          this.hasToolCalls = hasToolCalls;
          if (message.stopReason === "length") {
              this.contentContainer.addChild(new Spacer(1));
+diff --git a/dist/modes/interactive/components/index.d.ts b/dist/modes/interactive/components/index.d.ts
+index a9c22b513c4441226dcea3108dbab513279f4fbb..07e45e7cdd1756c0e1017785d101d3e1b4056cf2 100644
+--- a/dist/modes/interactive/components/index.d.ts
++++ b/dist/modes/interactive/components/index.d.ts
+@@ -24,7 +24,7 @@ export { ShowImagesSelectorComponent } from "./show-images-selector.ts";
+ export { SkillInvocationMessageComponent } from "./skill-invocation-message.ts";
+ export { ThemeSelectorComponent } from "./theme-selector.ts";
+ export { ThinkingSelectorComponent } from "./thinking-selector.ts";
+-export { ToolExecutionComponent, type ToolExecutionOptions } from "./tool-execution.ts";
++export { ToolExecutionComponent, type ToolExecutionOptions, TranscriptContainer } from "./tool-execution.ts";
+ export { TreeSelectorComponent } from "./tree-selector.ts";
+ export { TrustSelectorComponent } from "./trust-selector.ts";
+ export { UserMessageComponent } from "./user-message.ts";
+diff --git a/dist/modes/interactive/components/index.js b/dist/modes/interactive/components/index.js
+index 1e998a7b86b0589f6d5fc8d693f7a7ae567c25f1..77bce69ce5bc0c37fb514104a7cb6f8ae21e2640 100644
+--- a/dist/modes/interactive/components/index.js
++++ b/dist/modes/interactive/components/index.js
+@@ -25,7 +25,7 @@ export { ShowImagesSelectorComponent } from "./show-images-selector.js";
+ export { SkillInvocationMessageComponent } from "./skill-invocation-message.js";
+ export { ThemeSelectorComponent } from "./theme-selector.js";
+ export { ThinkingSelectorComponent } from "./thinking-selector.js";
+-export { ToolExecutionComponent } from "./tool-execution.js";
++export { ToolExecutionComponent, TranscriptContainer } from "./tool-execution.js";
+ export { TreeSelectorComponent } from "./tree-selector.js";
+ export { TrustSelectorComponent } from "./trust-selector.js";
+ export { UserMessageComponent } from "./user-message.js";
+diff --git a/dist/modes/interactive/components/tool-execution.d.ts b/dist/modes/interactive/components/tool-execution.d.ts
+index 89cf0519dc56399ebb4017054d9a2ac0f2563347..da5f17398acb5347bcf43af5a2808898b8dfba26 100644
+--- a/dist/modes/interactive/components/tool-execution.d.ts
++++ b/dist/modes/interactive/components/tool-execution.d.ts
+@@ -67,6 +67,10 @@ export declare class ToolExecutionComponent extends Container {
+     }, isPartial?: boolean): void;
+     setExpanded(expanded: boolean): void;
+     setOutputPad(outputPad: number): void;
++    /** True when the tool draws its own frame (`renderShell: "self"`). */
++    isSelfFramed(): boolean;
++    /** Drops the blank row above a self-framed row; default-shell rows keep their spacing. */
++    setTightTop(tight: boolean): void;
+     setShowImages(show: boolean): void;
+     setImageWidthCells(width: number): void;
+     invalidate(): void;
+@@ -76,4 +80,11 @@ export declare class ToolExecutionComponent extends Container {
+     private getTextOutput;
+     private formatToolExecution;
+ }
++/**
++ * The transcript container: a self-framed tool row drawn directly under another self-framed tool row (nothing
++ * visible between them) drops its blank row, so a run of tool lines reads as one block.
++ */
++export declare class TranscriptContainer extends Container {
++    render(width: number): string[];
++}
+ //# sourceMappingURL=tool-execution.d.ts.map
+\ No newline at end of file
+diff --git a/dist/modes/interactive/components/tool-execution.js b/dist/modes/interactive/components/tool-execution.js
+index 611416e9d082fe5bbae0019ea4393a76219c381e..056b25f5b5344196aca9624673b5ccfe4b17f1e7 100644
+--- a/dist/modes/interactive/components/tool-execution.js
++++ b/dist/modes/interactive/components/tool-execution.js
+@@ -34,6 +34,8 @@ export class ToolExecutionComponent extends Container {
+     argsPending = false;
+     result;
+     hideComponent = false;
++    /** A self-framed row drawn directly under another self-framed row: no blank row above it. */
++    tightTop = false;
+     constructor(toolName, toolCallId, args, options = {}, toolDefinition, ui, cwd) {
+         super();
+         this.toolName = toolName;
+@@ -73,6 +75,14 @@ export class ToolExecutionComponent extends Container {
+     getRenderShell() {
+         return this.toolDefinition?.renderShell ?? "default";
+     }
++    /** True when the tool draws its own frame (`renderShell: "self"`). */
++    isSelfFramed() {
++        return this.hasRendererDefinition() && this.getRenderShell() === "self";
++    }
++    /** Drops the blank row above a self-framed row; default-shell rows keep their spacing. */
++    setTightTop(tight) {
++        this.tightTop = tight;
++    }
+     getRenderContext(lastComponent) {
+         return {
+             args: this.args,
+@@ -179,7 +189,8 @@ export class ToolExecutionComponent extends Container {
+             }
+             const lines = [];
+             if (contentLines.length > 0) {
+-                lines.push("");
++                if (!this.tightTop)
++                    lines.push("");
+                 lines.push(...contentLines);
+             }
+             for (let i = 0; i < this.imageComponents.length; i++) {
+@@ -199,13 +210,22 @@ export class ToolExecutionComponent extends Container {
+     handleMouse(event) {
+         if (!this.hasRendererDefinition() || this.getRenderShell() !== "self")
+             return super.handleMouse(event);
+-        if (event.y <= 0 || event.y > this.selfRenderHeight)
+-            return undefined;
+-        return this.selfRenderContainer.handleMouse({
+-            ...event,
+-            y: event.y - 1,
+-            height: this.selfRenderHeight,
+-        });
++        // render() puts the blank top row only before non-empty content, then each image after its spacer.
++        const top = this.selfRenderHeight > 0 && !this.tightTop ? 1 : 0;
++        if (event.y >= top && event.y < top + this.selfRenderHeight)
++            return this.selfRenderContainer.handleMouse({ ...event, y: event.y - top, height: this.selfRenderHeight });
++        let y = top + this.selfRenderHeight;
++        for (let i = 0; i < this.imageComponents.length; i++) {
++            y += this.imageSpacers[i]?.render(event.width).length ?? 0;
++            const image = this.imageComponents[i];
++            if (!image)
++                continue;
++            const height = image.render(event.width).length;
++            if (event.y >= y && event.y < y + height)
++                return image.handleMouse?.({ ...event, y: event.y - y, height });
++            y += height;
++        }
++        return undefined;
+     }
+     updateDisplay() {
+         this.argsPending = false;
+@@ -333,4 +353,30 @@ export class ToolExecutionComponent extends Container {
+         return text;
+     }
+ }
++/**
++ * The transcript container: a self-framed tool row drawn directly under another self-framed tool row (nothing
++ * visible between them) drops its blank row, so a run of tool lines reads as one block. Decided while rendering,
++ * so live, resumed and spliced transcripts follow the same rule; default-shell rows keep their spacing.
++ */
++export class TranscriptContainer extends Container {
++    render(width) {
++        const lines = [];
++        const mouseChildren = [];
++        let afterSelfRow = false;
++        for (const child of this.children) {
++            const selfRow = child instanceof ToolExecutionComponent && child.isSelfFramed();
++            if (selfRow)
++                child.setTightTop(afterSelfRow);
++            const childLines = child.render(width);
++            mouseChildren.push({ component: child, height: childLines.length });
++            for (const line of childLines) {
++                lines.push(line);
++            }
++            if (childLines.length > 0)
++                afterSelfRow = selfRow;
++        }
++        this.mouseLayout = { width, children: mouseChildren };
++        return lines;
++    }
++}
+ //# sourceMappingURL=tool-execution.js.map
+\ No newline at end of file
 diff --git a/dist/modes/interactive/components/user-message.js b/dist/modes/interactive/components/user-message.js
-index 4f57224..12194a2 100644
+index 4f5722425293a837926b8fb42de5ce6d820757dc..12194a23e323b737a74af27b2b6ac3832e33cbdd 100644
 --- a/dist/modes/interactive/components/user-message.js
 +++ b/dist/modes/interactive/components/user-message.js
 @@ -32,7 +32,7 @@ export class UserMessageComponent extends Container {
@@ -469,7 +645,7 @@ index 4f57224..12194a2 100644
              return lines;
          }
 diff --git a/dist/modes/interactive/interactive-mode.d.ts b/dist/modes/interactive/interactive-mode.d.ts
-index 6fc6016..502e70c 100644
+index 6fc601645f5fe0ad734e64d10026ccddfc80f506..27546e660f567d4bf8cfa2650e78c6edd0b9f308 100644
 --- a/dist/modes/interactive/interactive-mode.d.ts
 +++ b/dist/modes/interactive/interactive-mode.d.ts
 @@ -3,7 +3,8 @@
@@ -482,7 +658,7 @@ index 6fc6016..502e70c 100644
  import { type AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
  import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
  import { SessionManager } from "../../core/session-manager.ts";
-@@ -38,6 +39,18 @@ export interface InteractiveModeOptions {
+@@ -38,6 +39,23 @@ export interface InteractiveModeOptions {
      initialThemeSetting?: string;
      /** Terminal implementation. Defaults to the current process terminal. */
      terminal?: Terminal;
@@ -490,6 +666,11 @@ index 6fc6016..502e70c 100644
 +    mainView?: (transcript: Component, presentation: () => InteractiveChatPresentation) => Component;
 +    /** Pi shows no queued input and never restores it into the owner's editor; the host owns the queue. */
 +    readOnlyQueue?: boolean;
++    /**
++     * Presentation-only replacement for a user-role transcript message: return a component to draw instead of the
++     * user bubble, or undefined to keep the bubble. What the model receives is unchanged.
++     */
++    userPresentation?: (text: string) => Component | undefined;
 +}
 +/** Live, presentation-only chat surface owned by this same interactive mode. */
 +export interface InteractiveChatPresentation {
@@ -502,9 +683,27 @@ index 6fc6016..502e70c 100644
  export declare class InteractiveMode {
      private runtimeHost;
 diff --git a/dist/modes/interactive/interactive-mode.js b/dist/modes/interactive/interactive-mode.js
-index d4e4b09..0ee0a45 100644
+index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..19f737b375ec9ff277df99ccde3fcdeb5e1c971f 100644
 --- a/dist/modes/interactive/interactive-mode.js
 +++ b/dist/modes/interactive/interactive-mode.js
+@@ -82,7 +82,7 @@ import { SkillInvocationMessageComponent } from "./components/skill-invocation-m
+ import { BranchSummaryStatusIndicator, CompactionStatusIndicator, IdleStatus, RetryStatusIndicator, WorkingStatusIndicator, } from "./components/status-indicator.js";
+ import { ThemedText } from "./components/themed-text.js";
+ import { ThinkingSelectorComponent } from "./components/thinking-selector.js";
+-import { ToolExecutionComponent } from "./components/tool-execution.js";
++import { ToolExecutionComponent, TranscriptContainer } from "./components/tool-execution.js";
+ import { TreeSelectorComponent } from "./components/tree-selector.js";
+ import { TrustSelectorComponent } from "./components/trust-selector.js";
+ import { UserMessageComponent } from "./components/user-message.js";
+@@ -400,7 +400,7 @@ export class InteractiveMode {
+         this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
+         this.headerContainer = new Container();
+         this.loadedResourcesContainer = new Container();
+-        this.chatContainer = new Container();
++        this.chatContainer = new TranscriptContainer();
+         this.documentContainer = new Container();
+         this.documentContainer.addChild(this.headerContainer);
+         this.documentContainer.addChild(this.loadedResourcesContainer);
 @@ -466,7 +466,7 @@ export class InteractiveMode {
          return description ? `[${sourceTag}] ${description}` : `[${sourceTag}]`;
      }
@@ -548,7 +747,23 @@ index d4e4b09..0ee0a45 100644
                  this.showSessionSelector();
                  this.editor.setText("");
                  return;
-@@ -3814,6 +3823,10 @@ export class InteractiveMode {
+@@ -3314,6 +3323,15 @@ export class InteractiveMode {
+                         }
+                     }
+                     else {
++                        // A host-made input the host presents itself (a notice row); the model still receives the text.
++                        const presented = this.options.userPresentation?.(textContent);
++                        if (presented) {
++                            if (isExpandable(presented)) {
++                                presented.setExpanded(this.toolOutputExpanded);
++                            }
++                            this.chatContainer.addChild(presented);
++                            break;
++                        }
+                         const userComponent = new UserMessageComponent(textContent, this.getMarkdownThemeWithSettings(), this.outputPad, this.getMarkdownTransformers(), options?.messageId, options?.timestamp);
+                         this.chatContainer.addChild(userComponent);
+                     }
+@@ -3814,6 +3832,10 @@ export class InteractiveMode {
          }
      }
      handleDequeue() {
@@ -559,7 +774,7 @@ index d4e4b09..0ee0a45 100644
          const restored = this.restoreQueuedMessagesToEditor();
          if (restored === 0) {
              this.showStatus("No queued messages to restore");
-@@ -3990,7 +4003,7 @@ export class InteractiveMode {
+@@ -3990,7 +4012,7 @@ export class InteractiveMode {
       * Clears both session queue and compaction queue.
       */
      clearAllQueues() {
@@ -568,7 +783,7 @@ index d4e4b09..0ee0a45 100644
          const compactionSteering = this.compactionQueuedMessages
              .filter((msg) => msg.mode === "steer")
              .map((msg) => msg.text);
-@@ -4010,6 +4023,8 @@ export class InteractiveMode {
+@@ -4010,6 +4032,8 @@ export class InteractiveMode {
              this.pendingMessagesContainer.addChild(component);
          }
          const { steering: steeringMessages, followUp: followUpMessages } = this.getAllQueuedMessages();
@@ -577,7 +792,7 @@ index d4e4b09..0ee0a45 100644
          if (steeringMessages.length > 0 || followUpMessages.length > 0) {
              this.pendingMessagesContainer.addChild(new Spacer(1));
              for (const message of steeringMessages) {
-@@ -4026,6 +4041,13 @@ export class InteractiveMode {
+@@ -4026,6 +4050,13 @@ export class InteractiveMode {
          }
      }
      restoreQueuedMessagesToEditor(options) {
@@ -591,7 +806,7 @@ index d4e4b09..0ee0a45 100644
          const { steering, followUp } = this.clearAllQueues();
          const allQueued = [...steering, ...followUp];
          if (allQueued.length === 0) {
-@@ -5919,7 +5941,7 @@ export class InteractiveMode {
+@@ -5919,7 +5950,7 @@ export class InteractiveMode {
  | \`${externalEditor}\` | Edit message in external editor |
  | \`${copyMessage}\` | Copy selection or last assistant message |
  | \`${followUp}\` | Queue follow-up message |
@@ -601,7 +816,7 @@ index d4e4b09..0ee0a45 100644
  | \`/\` | Slash commands |
  | \`!\` | Run bash command |
 diff --git a/dist/utils/image-process.js b/dist/utils/image-process.js
-index 65b15af..75c1e84 100644
+index 65b15afe6f7532d030e841d3ac163b462e833849..75c1e84ccc88e7e0c4b2798dfada5ee62b769672 100644
 --- a/dist/utils/image-process.js
 +++ b/dist/utils/image-process.js
 @@ -1,3 +1,4 @@

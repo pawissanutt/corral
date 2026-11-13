@@ -10,8 +10,9 @@ import type { HistoryRead } from "./history.ts";
 import type { ReviewBases } from "./review-store.ts";
 import type { JobControl } from "../host/job-controls.ts";
 import type { QueueControl } from "../host/queue-control.ts";
-import { panelTheme, userLabel } from "./panels-theme.ts";
-import { type Appearance, type Density, PACKAGED } from "./appearance.ts";
+import { hiddenThinkingLabel, panelTheme, thinkingLead, userLabel } from "./panels-theme.ts";
+import { type Appearance, type Density, type Motion, PACKAGED } from "./appearance.ts";
+import { Activity, ActivityClock, elapsedLabel, PassCache, SYSTEM_SCHEDULER, type Scheduler, type Ticker } from "./activity.ts";
 import { ActionPalette, type HostAction } from "./action-palette.ts";
 import { setCanvasAppearance } from "./panel-canvas.ts";
 import { agentColor, setAgentHueAppearance } from "./agent-hues.ts";
@@ -20,7 +21,7 @@ import { composerBar, composerBottom, composerRow, composerTitle, composerTop, t
 import { chromeTier, COMPACT_COLUMNS, SHORT_ROWS, type Notice } from "./header.ts";
 import { contextHints, footerBase, footerRow, keyGroups, keyLabel, piKey, queueFocusKey, targetKey, type FooterHit, type HintState, type KeyContext } from "./keymap.ts";
 import { KeysList } from "./keys-list.ts";
-import { rule } from "./frame.ts";
+import { rule, setMotion } from "./frame.ts";
 import { QueueDock } from "./queue-dock.ts";
 import { Sidebar, type SideHit, type SideTarget } from "./sidebar.ts";
 import { inspectorActivity } from "./inspector.ts";
@@ -54,7 +55,11 @@ export interface NativePanelsOptions {
   readonly reviewBases?: ReviewBases;
   /** The host's delivery of composer text to the current child target; false when the child or the session cannot take it. */
   readonly deliverBuildInput?: (text: string) => Promise<boolean>;
+  /** Time and interval source of the working indicator's clock; tests inject one. */
+  readonly scheduler?: Scheduler;
 }
+/** Views a tool row's clickable label can open by name; `plan` is the sidebar's Plan tab. */
+export type PanelView = "chat" | "agents" | "changes" | "task" | "proof" | "artifacts" | "inbox" | "usage" | "board" | "plan";
 /** `/panels <target>` names for main views; history, receipts, project, refresh and toggle are actions. */
 const PANEL_VIEWS: Readonly<Record<string, MainView>> = {
   chat: "conversation", files: "changes", changes: "changes", agents: "agents", activity: "agents", jobs: "agents", helpers: "agents",
@@ -115,6 +120,15 @@ export class NativePanels implements PanelSurface {
   private overlay: "palette" | "keys" | "pager" | undefined;
   appearance: Appearance = "dark";
   density: Density = "comfortable";
+  motion: Motion = "animate";
+  /** The shared redraw clock: rows that keep changing after their tool returned (a running job, a detached cell) hold it. */
+  readonly ticker: Ticker;
+  /** What the main agent is doing, for the composer's working indicator and the header's state word. */
+  private readonly activity: Activity;
+  private readonly clock: ActivityClock;
+  /** The host snapshot, built once per render pass however many surfaces read it. */
+  private readonly snapshots: PassCache<PanelSnapshot | null>;
+  private releaseLive: (() => void) | undefined;
   private nativeAction: ((id: "app.model.select" | "app.thinking.cycle") => void) | undefined;
   private nativeKeys: ((id: "app.model.select" | "app.thinking.cycle") => string) | undefined;
   private terminal: PanelTerminal | undefined;
@@ -135,10 +149,15 @@ export class NativePanels implements PanelSurface {
   private readonly posts: BuildEntry<unknown>[] = [];
 
   constructor(private readonly options: NativePanelsOptions) {
+    const scheduler = options.scheduler ?? SYSTEM_SCHEDULER;
+    this.snapshots = new PassCache(() => options.snapshot());
+    this.activity = new Activity(() => scheduler.now());
+    this.clock = new ActivityClock(scheduler, () => this.activity.busy(), () => this.refresh(), () => this.motion === "still");
+    this.ticker = this.clock;
     this.sidebar = new Sidebar(() => this.refresh());
     const build = options.build ? routedBuild(options.build, options.deliverBuildInput) : undefined;
     this.build = build ? new BuildController({
-      ui: build, state: () => this.options.snapshot()?.build, streaming: () => this.options.snapshot()?.streaming ?? false,
+      ui: build, state: () => this.snapshot()?.build, streaming: () => this.snapshot()?.streaming ?? false,
       overlay: () => !this.canInteract, draft: () => this.ui?.getEditorText() ?? "", setDraft: text => this.ui?.setEditorText(text),
       focusComposer: () => this.focusComposer(), focusDock: () => this.focusChoice(),
       notice: (text, tone) => this.workbench.notice(text, tone), post: entry => this.post(entry),
@@ -146,7 +165,7 @@ export class NativePanels implements PanelSurface {
       color: agentColor, now: () => Date.now(), changed: () => this.refresh(),
     }) : undefined;
     this.queue = new QueueDock({
-      items: () => this.options.snapshot()?.queue ?? [], control: () => this.options.queueControl,
+      items: () => this.snapshot()?.queue ?? [], control: () => this.options.queueControl,
       draft: () => this.ui?.getEditorText() ?? "", setDraft: text => this.ui?.setEditorText(text),
       focusComposer: () => this.focusComposer(), notice: (text, tone) => this.workbench.notice(text, tone),
       changed: () => this.refresh(),
@@ -154,6 +173,7 @@ export class NativePanels implements PanelSurface {
       ...(build ? { receiver: () => "parent" } : {}),
     });
     this.workbench = new NativeWorkbench({ ...options, ...(build && this.build ? { build, buildController: this.build } : {}),
+      snapshot: () => this.snapshot(),
       terminal: () => this.terminal ? { columns: this.terminal.physical.columns, rows: this.terminal.rows } : undefined,
       onFocusMain: () => { this.sidebar.focused = false; this.queue.focused = false; this.blurDock(); this.closeKeyDrawer(); },
       canInteract: () => this.canInteract && !this.activeSelection?.(), changed: () => this.refresh(),
@@ -161,13 +181,27 @@ export class NativePanels implements PanelSurface {
         width: () => this.wide && this.terminal ? this.terminal.railWidth : undefined,
         render: (width, height) => this.renderSidebar(width, height),
         placed: (top, height) => { this.railTop = top; this.railRows = height; },
-      } });
+      },
+      mark: () => {
+        // A missed start or end event is squared with the session's own flag once per frame.
+        this.activity.reconcile(this.snapshot()?.streaming ?? false);
+        this.clock.sync();
+        return this.activity.headerMark(this.clock.now());
+      },
+      live: live => this.liveRows(live) });
     if (build) {
       const sync = () => { this.build?.sync(); this.refresh(); };
       this.unsubscribeBuild = [build.fleet.subscribe(sync), build.exit.subscribe(sync), build.board.subscribe(sync)];
     }
   }
   mainView(transcript: Component, presentation?: () => InteractiveChatPresentation): Component { return this.workbench.mount(transcript, presentation); }
+  /** The host snapshot for this render pass. */
+  private snapshot(): PanelSnapshot | null { return this.snapshots.get(); }
+  /** While a helper, child or job runs, the shared clock keeps their spinners and elapsed times moving. */
+  private liveRows(live: boolean): void {
+    if (live) this.releaseLive ??= this.clock.hold("panels:live-rows");
+    else { this.releaseLive?.(); this.releaseLive = undefined; }
+  }
   wrap(physical: Terminal): PanelTerminal {
     if (this.terminal) throw new Error("native panels already have a terminal");
     this.terminal = new PanelTerminal(physical, this);
@@ -184,6 +218,8 @@ export class NativePanels implements PanelSurface {
   }
   layoutChanged(): void { this.refresh(); }
   refresh(): void {
+    // State changed: later reads in this job rebuild the snapshot.
+    this.snapshots.clear();
     if (this.queued || this.disposed) return;
     this.queued = true;
     queueMicrotask(() => {
@@ -216,6 +252,7 @@ export class NativePanels implements PanelSurface {
   }
   dispose(): void {
     this.disposed = true;
+    this.releaseLive = undefined; this.clock.dispose();
     this.toast?.handle.hide(); this.toast = undefined; this.tui = undefined;
     for (const unsubscribe of this.unsubscribeBuild) unsubscribe();
     this.build?.dispose();
@@ -279,7 +316,7 @@ export class NativePanels implements PanelSurface {
   private openSideTarget(target: SideTarget): void {
     // A build child waiting for an answer docks its question; every other agent opens in the agents view.
     const id = this.build && target.kind === "agent" ? childIdOf(target.key) : undefined;
-    const asking = id !== undefined && this.options.snapshot()?.build?.fleet.children.some(child => child.id === id && child.state === "needs");
+    const asking = id !== undefined && this.snapshot()?.build?.fleet.children.some(child => child.id === id && child.state === "needs");
     if (id !== undefined && asking) this.build?.open("question", id);
     else if (target.kind === "agent" || target.kind === "job") this.workbench.openAgents(target.key);
     else if (target.kind === "file") void this.workbench.openFile(target.path);
@@ -354,7 +391,7 @@ export class NativePanels implements PanelSurface {
     return header + 1 + (rows < SHORT_ROWS ? 3 : 4) + this.statusRows + 1 + rules + queueRows;
   }
   private queueState(): HintState["queue"] {
-    const items = this.options.snapshot()?.queue ?? [];
+    const items = this.snapshot()?.queue ?? [];
     return { items: items.length, editable: items.filter(item => item.editable).length, control: this.queue.controllable };
   }
   /**
@@ -447,25 +484,58 @@ export class NativePanels implements PanelSurface {
   install(pi: ExtensionAPI, sdk: typeof Sdk): void {
     this.themeCtor = sdk.Theme;
     this.pi = pi;
-    pi.registerMarkdownTransformer(userLabel, { messageTypes: ["user"] });
+    // Pi keeps one Markdown transformer per extension (a second registration replaces the first), so the owner's `you`
+    // label and the thinking lead share one; each leaves every other message type unchanged.
+    pi.registerMarkdownTransformer((markdown, context) => thinkingLead(userLabel(markdown, context), context),
+      { messageTypes: ["user", "assistant-thinking"] });
     if (this.build) {
       const entries = buildEntryRenderer(() => this.build);
       for (const type of [BUILD_EXIT_ENTRY, BUILD_BOARD_ENTRY, BUILD_FINISH_ENTRY]) pi.registerMessageRenderer(type, entries);
-      // The latest `build_finish` call's card shows live exit progress; older cards read as superseded.
-      pi.on("tool_execution_start", event => {
-        if (event.toolName === "build_finish" && event.parentToolCallId === undefined) this.build?.noteFinish(event.toolCallId);
-      });
     }
-    pi.on("ui_prompt_start", () => { this.prompts++; this.refresh(); });
-    pi.on("ui_prompt_end", () => { this.prompts = Math.max(0, this.prompts - 1); this.refresh(); });
+    // The working indicator follows the run: each change restarts or stops the shared clock and redraws once.
+    const observe = (change: () => void) => { change(); this.clock.sync(); this.refresh(); };
+    pi.on("tool_execution_start", event => {
+      // The latest `build_finish` call's card shows live exit progress; older cards read as superseded.
+      if (this.build && event.toolName === "build_finish" && event.parentToolCallId === undefined) this.build.noteFinish(event.toolCallId);
+      observe(() => this.activity.toolStart(event.toolCallId, event.toolName, event.parentToolCallId));
+    });
+    pi.on("tool_execution_end", event => { observe(() => this.activity.toolEnd(event.toolCallId)); });
+    // Panel overlays (the palette, the keys list, a pager) are the owner's own prompts, not the agent waiting on the owner.
+    pi.on("ui_prompt_start", () => { this.prompts++; observe(() => this.activity.promptStart(this.overlay !== undefined || this.workbench.pagerOpen)); });
+    pi.on("ui_prompt_end", () => { this.prompts = Math.max(0, this.prompts - 1); observe(() => this.activity.promptEnd()); });
+    pi.on("before_provider_request", () => { observe(() => this.activity.request()); });
+    // Stream events only mark that data arrived; Pi redraws the transcript for them itself.
+    pi.on("provider_stream_event", () => { this.activity.data(); });
+    pi.on("message_update", event => {
+      const update = event.assistantMessageEvent;
+      const block = "partial" in update && "contentIndex" in update ? update.partial.content[update.contentIndex] : undefined;
+      this.activity.update(update.type, block?.type === "toolCall" ? block.name : undefined);
+      this.clock.sync();
+    });
+    pi.on("message_end", event => {
+      const message = event.message;
+      if (message.role === "assistant") observe(() => this.activity.messageEnd(message.stopReason));
+    });
+    pi.on("session_before_compact", () => { observe(() => this.activity.compactStart()); });
+    pi.on("session_compact", () => { observe(() => this.activity.compactEnd()); });
+    pi.on("session_compact_failed", () => { observe(() => this.activity.compactEnd()); });
+    pi.on("agent_settled", event => {
+      const ended = this.activity.settled(event.aborted);
+      this.clock.sync(); this.refresh();
+      // Away from Chat a long turn's end also raises a toast; in Chat the indicator says it.
+      if (ended && this.workbench.view !== "conversation" && ended.elapsed > 10_000) {
+        this.workbench.notice(`Turn ${ended.aborted ? "stopped" : "finished"} · ${elapsedLabel(ended.elapsed)}`, ended.aborted ? "warning" : "success");
+      }
+    });
     pi.on("session_start", (_event, ctx) => {
       if (ctx.mode !== "tui" || !this.terminal) return;
       this.ui = ctx.ui;
       this.workbench.bind(ctx.ui);
       this.prompts = 0;
-      setPanelAppearance(this.appearance); setCanvasAppearance(this.appearance); setAgentHueAppearance(this.appearance);
+      setPanelAppearance(this.appearance); setCanvasAppearance(this.appearance); setAgentHueAppearance(this.appearance); setMotion(this.motion);
       ctx.ui.setTheme(panelTheme(sdk.Theme, ctx.ui.theme.getColorMode(), this.appearance));
-      // The header's state word carries Working; Pi's loader row above the composer would repeat it.
+      ctx.ui.setHiddenThinkingLabel(hiddenThinkingLabel());
+      // The composer's working indicator (activity.ts) replaces Pi's loader row above the composer.
       ctx.ui.setWorkingVisible(false);
       const owner = this;
       ctx.ui.setEditorComponent((tui, theme, keys) => {
@@ -508,16 +578,18 @@ export class NativePanels implements PanelSurface {
           }
           protected renderTopBorder(width: number, hidden: number): string {
             this.hiddenAbove = hidden;
-            // The receiver stays at every width (it decides where Enter goes); the input disposition goes first.
-            const tiny = (owner.terminal?.physical.columns ?? width) < COMPACT_COLUMNS, target = owner.build?.composerTarget();
-            return composerTop(composerTitle(tiny ? null : owner.options.snapshot(), target), width, this.accent, hidden ? `↑ ${hidden} more` : "");
+            // The receiver stays at every width (it decides where Enter goes); the input disposition clips first, then the indicator.
+            const columns = owner.terminal?.physical.columns ?? width, target = owner.build?.composerTarget(), stop = piKey("app.interrupt");
+            const status = owner.activity.indicator(columns, owner.clock.now(), stop ? keyLabel(stop) : undefined);
+            return composerTop(composerTitle(columns < COMPACT_COLUMNS ? null : owner.snapshot(), target), width, this.accent,
+              hidden ? `↑ ${hidden} more` : "", status, visibleWidth(composerTitle(null, target)));
           }
           protected renderBottomBorder(width: number, hidden: number): string {
             if ((owner.terminal?.rows ?? SHORT_ROWS) < SHORT_ROWS) {
               this.composer = undefined;
               this.bottom = composerBottom(width, this.accent, hidden ? `↓ ${hidden} more` : "");
             } else {
-              this.composer = composerBar(owner.options.snapshot(), width, hidden, this.accent);
+              this.composer = composerBar(owner.snapshot(), width, hidden, this.accent);
               this.bottom = this.composer.line;
             }
             return this.bottom;
@@ -570,7 +642,7 @@ export class NativePanels implements PanelSurface {
         return {
           // The status bar, a rule (not below RULE_ROWS rows), then one row of the focused surface's keys ending with F1.
           render: width => {
-            const snapshot = this.options.snapshot(), cost = this.build ? buildCost(snapshot) : undefined;
+            const snapshot = this.snapshot(), cost = this.build ? buildCost(snapshot) : undefined;
             const status = statusBar(this.options.identity, cost && snapshot ? { ...snapshot, cost: cost.total } : snapshot,
               data.getExtensionStatuses(), width, cost?.partial ?? false);
             const context = this.footerContext();
@@ -599,8 +671,8 @@ export class NativePanels implements PanelSurface {
       if (this.workbench.view !== "conversation") { this.workbench.setView("conversation"); this.workbench.focused = false; this.refresh(); }
       return { action: "continue" };
     });
-    pi.on("agent_start", () => { this.refresh(); });
-    pi.on("agent_end", () => { this.refresh(); });
+    pi.on("agent_start", () => { observe(() => this.activity.agentStart()); });
+    pi.on("agent_end", () => { observe(() => this.activity.agentEnd()); });
     pi.on("turn_end", () => { this.refresh(); });
     pi.on("model_select", () => { this.refresh(); });
     pi.on("thinking_level_select", () => { this.refresh(); });
@@ -613,7 +685,7 @@ export class NativePanels implements PanelSurface {
       },
     });
     pi.registerCommand("actions", {
-      description: "Search permitted host actions and session appearance/density (F2)",
+      description: "Search permitted host actions and session appearance, density and motion (F2)",
       handler: async (_args, ctx) => {
         if (ctx.mode !== "tui" || !this.terminal) { ctx.ui.notify("Actions require native panels; plain UI is unchanged.", "warning"); return; }
         await this.palette();
@@ -621,7 +693,7 @@ export class NativePanels implements PanelSurface {
     });
   }
   private editableQueue(): boolean {
-    return (this.options.snapshot()?.queue ?? []).some(item => item.editable);
+    return (this.snapshot()?.queue ?? []).some(item => item.editable);
   }
   /** The dequeue binding: the owner's last queued input returns above the draft; false leaves the key to Pi. */
   editQueued(): boolean {
@@ -645,6 +717,34 @@ export class NativePanels implements PanelSurface {
     if (!this.build || !this.ui || this.disposed) return;
     this.workbench.setView("board");
   }
+  /**
+   * Opens a view by name, for a tool row's clickable label. `select` picks inside it: an Agents row key (`job:<id>`,
+   * `helper:<request>`; a bare id reads as a job), a Changes file path or an artifact path. `plan` shows the
+   * sidebar's Plan tab (the rail, or the drawer below the rail's width). A view this session lacks says why in a
+   * notice and changes nothing.
+   */
+  openView(view: PanelView, select?: string): void {
+    if (this.disposed) return;
+    const taskBound = !!this.options.identity.task;
+    const missing = (view === "task" || view === "proof" || view === "artifacts") && !taskBound ? "this session has no bound task"
+      : view === "board" && !this.build ? "only a build session has a board"
+      : view === "inbox" && this.build ? "a build session has no inbox" : undefined;
+    if (missing) { this.workbench.notice(`Cannot open ${view}: ${missing}`, "warning"); return; }
+    switch (view) {
+      case "chat": this.workbench.chat(); break;
+      case "agents": this.workbench.openAgents(select === undefined || select.includes(":") ? select : `job:${select}`); break;
+      case "changes": if (select) void this.workbench.openFile(select); else this.workbench.setView("changes"); break;
+      case "proof": this.workbench.setView("evidence"); break;
+      case "artifacts": this.workbench.setView("artifacts"); if (select) void this.workbench.artifacts.openPath(select); break;
+      case "task": case "inbox": case "usage": case "board": this.workbench.setView(view); break;
+      case "plan":
+        this.sidebar.tab = "plan";
+        if ((this.terminal?.physical.columns ?? 0) < PANEL_BREAKPOINT) { this.sidebar.drawer = true; this.drawerByKey = false; }
+        else if (!this.sidebarEnabled) { this.sidebarEnabled = true; this.terminal?.refreshLayout(); }
+        break;
+    }
+    this.refresh();
+  }
   /** Conversation entries join without starting a turn; while the parent streams Pi adds them after its turn. */
   private post(entry: BuildEntry<unknown>): void {
     if (this.pi && this.ui) this.pi.sendMessage(entry, { triggerTurn: false });
@@ -667,7 +767,7 @@ export class NativePanels implements PanelSurface {
   }
   /** The bounded host receipt and event observations, read-only. */
   private async showReceipts(): Promise<void> {
-    const ui = this.ui, info = this.options.snapshot()?.inspector;
+    const ui = this.ui, info = this.snapshot()?.inspector;
     if (!ui) return;
     if (!info) { this.workbench.notice("Host receipts and events unavailable from this host", "warning"); return; }
     this.overlay = "pager"; this.refresh();
@@ -707,7 +807,7 @@ export class NativePanels implements PanelSurface {
       action("keys", "Show keys", "F1", () => this.showKeys()),
       action("app.model.select", "Select model", this.nativeKeys?.("app.model.select") ?? "", () => this.nativeAction?.("app.model.select")),
       action("app.thinking.cycle", "Cycle effort", this.nativeKeys?.("app.thinking.cycle") ?? "", () => this.nativeAction?.("app.thinking.cycle"),
-        () => !this.options.snapshot()?.effortAvailable ? "Effort unavailable for current model" : ready()),
+        () => !this.snapshot()?.effortAvailable ? "Effort unavailable for current model" : ready()),
       action("inbox.answer-flow", "Inspect established answer flow (not sent)", "", () => {
         this.workbench.setView("inbox"); this.workbench.focused = true; this.workbench.handleInput("a");
       }, () => {
@@ -730,6 +830,10 @@ export class NativePanels implements PanelSurface {
       `Density: ${density}${density === this.density ? " (current)" : ""}`, "", () => {
         this.density = density; this.updateDensity?.(); this.refresh();
       }));
+    for (const motion of ["animate", "still"] as const) items.push(action(`motion.${motion}`,
+      `Motion: ${motion}${motion === this.motion ? " (current)" : ""}`, "", () => {
+        this.motion = motion; setMotion(motion); this.clock.sync(); this.refresh();
+      }));
     return items;
   }
   /** F2 in a build session: Board, the message receiver, open questions, Finish and board planning, each with its unavailable reason. */
@@ -737,7 +841,7 @@ export class NativePanels implements PanelSurface {
     ready: () => string | undefined): HostAction[] {
     const build = this.build, ui = this.options.build;
     if (!build || !ui) return [];
-    const receiver = targetKey(), unavailable = () => ready() ?? boardUnavailable(this.options.snapshot()?.build);
+    const receiver = targetKey(), unavailable = () => ready() ?? boardUnavailable(this.snapshot()?.build);
     return [
       action("/panels board", "Open board", "F10", () => this.panelCommand("board")),
       action("build.target", "Change who receives the message", receiver ? keyLabel(receiver) : "", () => build.cycleTarget(),
@@ -776,7 +880,7 @@ export class NativePanels implements PanelSurface {
     if (!ui || !this.canInteract) return;
     const identity = this.options.identity;
     const groups = keyGroups({ taskBound: !!identity.task, answer: identity.role === "pm" || identity.role === "assistant",
-      jobs: this.options.snapshot()?.jobs != null, queueControl: this.queue.controllable, lifecycle: !!identity.task,
+      jobs: this.snapshot()?.jobs != null, queueControl: this.queue.controllable, lifecycle: !!identity.task,
       ...(this.build ? { build: true } : {}) });
     this.overlay = "keys"; this.refresh();
     let data: string | undefined;

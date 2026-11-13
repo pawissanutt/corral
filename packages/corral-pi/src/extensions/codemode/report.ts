@@ -19,6 +19,19 @@ export interface ChildOutcome {
   readonly tool: string;
   readonly call: string;
   readonly key: string;
+  id?: string;
+  /** JSON input, bounded to 2 KiB per child and 32 KiB per cell. */
+  args?: string;
+  argsBytes?: number;
+  startedAt: number;
+  durationMs?: number;
+  preview?: string;
+  /** Full text size, not the bounded preview; absent for structured-only results. */
+  resultLines?: number;
+  resultBytes?: number;
+  /** Receipt state and bounded scalar result fields, never the full receipt. */
+  structured?: unknown;
+  late?: boolean;
   /** Undefined while the call runs. */
   ok?: boolean;
   code?: string;
@@ -29,7 +42,7 @@ export interface ChildOutcome {
   lookup?: unknown;
 }
 
-export type ReportStatus = CellStatus | "detached" | "not_found";
+export type ReportStatus = CellStatus | "running" | "detached" | "not_found";
 
 export interface CellReport {
   readonly cell: string;
@@ -43,6 +56,10 @@ export interface CellReport {
   readonly calls: { readonly total: number; readonly ok: number; readonly failed: number; readonly running: number;
     readonly committed: number };
   readonly failures: readonly ChildOutcome[];
+  readonly children: readonly ChildOutcome[];
+  readonly childrenOmitted?: Readonly<Record<string, number>>;
+  readonly startedAt: number;
+  readonly durationMs?: number;
   readonly waitMs?: number;
   /** A nested call committed an operation that ends the run or review. */
   readonly terminate?: boolean;
@@ -51,7 +68,7 @@ export interface CellReport {
 type Fields = Record<string, unknown>;
 const text = (value: unknown) => typeof value === "string" && value.length > 0 ? value : undefined;
 
-export function classify(child: CodeChild, outcome: AgentToolCallOutcome): Omit<ChildOutcome, "tool" | "call" | "key"> {
+export function classify(child: CodeChild, outcome: AgentToolCallOutcome): Omit<ChildOutcome, "tool" | "call" | "key" | "startedAt"> {
   if (child.denied !== undefined) return { ok: false, code: "denied", message: child.denied, effect: "not_started" };
   const structured = outcome.result.structuredContent as Fields | undefined;
   const error = structured?.error as Fields | undefined;

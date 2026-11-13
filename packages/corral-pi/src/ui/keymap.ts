@@ -11,6 +11,8 @@ export interface Hint { readonly id: string; readonly key: string; readonly labe
 export interface HintState {
   readonly context: KeyContext;
   readonly mode: { readonly taskBound: boolean; readonly answer: boolean; readonly lifecycle: boolean };
+  /** True while Chat is the open view: its tool rows fold and unfold with Pi's tool-output key. */
+  readonly chat?: boolean;
   readonly streaming: boolean;
   readonly queue: { readonly items: number; readonly editable: number; readonly control: boolean };
   /** AgentsAction ids offered for the selected row; in `board`, the BoardAction ids offered. */
@@ -73,6 +75,7 @@ export function keyData(binding: string): string | undefined {
 const PI_DEFAULTS: Readonly<Record<string, string>> = {
   "tui.input.submit": "enter", "app.interrupt": "escape", "app.message.followUp": "alt+enter",
   "app.message.dequeue": "alt+up", "app.tools.expand": "ctrl+o", "app.model.select": "ctrl+l", "app.thinking.cycle": "shift+tab",
+  "app.thinking.toggle": "ctrl+t",
 };
 /** First configured key via getKeybindings(); undefined when the user unbound it. */
 export function piKey(id: string): string | undefined {
@@ -133,19 +136,22 @@ function targetHint(): Hint | undefined {
 }
 function composerHints(state: HintState): (Hint | undefined)[] {
   const build = state.build, target = build?.target;
+  // While the agent works, stop comes right after Enter so it survives every width.
+  const stop = state.streaming ? piHint("app.interrupt", "interrupt", "stop") : undefined;
+  // In Chat the tool rows' expand key comes last, so a narrow footer drops it first.
+  const expand = state.chat ? piHint("app.tools.expand", "tools", "expand") : undefined;
   if (target) {
     // A child receives Enter: the queue and follow-up keys stay the parent's, so only Alt+T and stop remain.
     const id = plainLabel(target.id);
     const submit = piHint("tui.input.submit", "submit", `${target.answer ? "answer" : "steer"} ${id}`, target.answer ? "answer" : "steer");
-    return [submit, targetHint(), !target.answer && state.streaming ? piHint("app.interrupt", "interrupt", "stop") : undefined];
+    return [submit, target.answer ? undefined : stop, targetHint(), expand];
   }
   const to = build?.steerable ? targetHint() : undefined;
-  // Pulling queued input back comes before stop: it is the key the mock's composer footer names.
+  // Pulling queued input back comes before the queue focus: it is the key the mock's composer footer names.
   const [dequeue, focus] = queueHints(state);
   return state.streaming
-    ? [piHint("tui.input.submit", "submit", "steer"), piHint("app.message.followUp", "followUp", "queue"), to, dequeue,
-      piHint("app.interrupt", "interrupt", "stop"), focus]
-    : [piHint("tui.input.submit", "submit", "send"), to, dequeue, focus];
+    ? [piHint("tui.input.submit", "submit", "steer"), stop, piHint("app.message.followUp", "followUp", "queue"), to, dequeue, focus, expand]
+    : [piHint("tui.input.submit", "submit", "send"), to, dequeue, focus, expand];
 }
 function boardHints(state: HintState): (Hint | false | undefined)[] {
   // Without the view's offered actions, a task is assumed selected and the board reachable. Task keys need a task.
@@ -316,7 +322,8 @@ export function keyGroups(mode: {
       mode.queueControl && pi("app.message.dequeue", "Pull the last queued input back to edit"),
       pi("app.model.select", "Choose the model"),
       pi("app.thinking.cycle", "Cycle the effort"),
-      pi("app.tools.expand", "Expand or fold tool output"),
+      pi("app.thinking.toggle", "Show or hide thinking"),
+      pi("app.tools.expand", "Expand or collapse tool output"),
     ) },
     { title: "Agents", rows: rows(
       info("↑↓", "Select an agent" + (mode.jobs ? " or job" : "")),

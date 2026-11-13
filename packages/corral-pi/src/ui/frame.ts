@@ -4,10 +4,14 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
   PANEL_BG, PANEL_BLUE, PANEL_DIALOG, PANEL_KEY, PANEL_LINE, PANEL_ON_ACCENT, PANEL_RAISED, PANEL_RULE, PANEL_SELECTED, PANEL_TEXT,
 } from "./panels-view.ts";
+import type { Motion } from "./appearance.ts";
 
 const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧";
-/** One spinner frame lasts this long; not a divisor of the one-second redraw tick, so each tick shows a new frame. */
+/** One spinner frame lasts this long; the shared clock (activity.ts) ticks at the same period while animating. */
 const FRAME_MS = 110;
+/** `Motion: still` draws the running state as a steady `●`, as the mock's reduced-motion fallback does. */
+let still = false;
+export function setMotion(motion: Motion): void { still = motion === "still"; }
 const RESET = "\x1b[0m";
 
 /**
@@ -46,8 +50,9 @@ export function keyCap(key: string, on = false, restore?: string): string {
 export function countChip(text: string): string {
   return `${PANEL_SELECTED}${PANEL_TEXT} ${text} ${canvas()}`;
 }
-/** The braille spinner frame for `now` (milliseconds); `phase` staggers rows. */
+/** The braille spinner frame for `now` (milliseconds); `phase` staggers rows. A steady `●` while motion is still. */
 export function spinner(now: number, phase = 0): string {
+  if (still) return "●";
   const step = Math.floor((Number.isFinite(now) ? now : 0) / FRAME_MS) + Math.trunc(Number.isFinite(phase) ? phase : 0);
   return SPINNER[((step % SPINNER.length) + SPINNER.length) % SPINNER.length]!;
 }

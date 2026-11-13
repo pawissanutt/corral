@@ -2,7 +2,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { EventLog, EventPage } from "../bridge/events.ts";
 import type { CapabilitySet } from "../roles/types.ts";
-import { renderResultText } from "./render.ts";
+import { corralSummary } from "./corral-presenter.ts";
 import { observedCorralResult } from "./receipt-source.ts";
 
 export interface InspectorSnapshot {
@@ -24,7 +24,6 @@ export interface InspectorSnapshot {
   readonly receipts: readonly string[];
   readonly receiptsOmitted: number;
 }
-const plainTheme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 
 /** Retains bounded summaries, not receipt bodies or tool arguments that may contain private text. */
 export class InspectorActivity {
@@ -35,7 +34,8 @@ export class InspectorActivity {
   extend(pi: ExtensionAPI, allowed: ReadonlySet<string>): void {
     pi.on("tool_result", event => {
       if (!allowed.has(event.toolName) || !observedCorralResult(event)) return;
-      const summary = renderResultText({ content: event.content, details: event.details }, false, event.isError, plainTheme);
+      const summary = corralSummary(event.toolName, event.input, { content: event.content, details: event.details }, event.isError)
+        ?? (event.isError ? "✗ failed" : "✓");
       const details = event.details as { state?: unknown } | undefined;
       const state = typeof details?.state === "string"
         && ["committed", "rejected", "reserved", "queued", "uncertain", "abandoned"].includes(details.state) ? details.state : "no receipt";

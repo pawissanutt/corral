@@ -2,7 +2,7 @@
 // from senpi's stream-events.js, stream-protocol.js and errors.js (MIT).
 import {
   type AssistantMessage, type AssistantMessageEventStream, type Model, type StopReason, type TextContent,
-  type ThinkingContent, type ToolCall, calculateCost, parseStreamingJson,
+  type ThinkingContent, type ToolCall, calculateCost, ToolCallArgumentsStream,
 } from "@earendil-works/pi-ai";
 
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -28,13 +28,14 @@ export type StreamEvent =
   | { type: "message_delta"; delta: { stop_reason?: string | null }; usage?: SdkUsage }
   | { type: "message_stop" };
 
-type Indexed<T> = T & { index?: number; partialJson?: string; custom?: boolean };
+type Indexed<T> = T & { index?: number; custom?: boolean };
 type OpenBlock = Indexed<TextContent> | Indexed<ThinkingContent> | Indexed<ToolCall>;
 
 export interface EventContext {
   readonly model: Model<string>;
   readonly output: AssistantMessage;
   readonly blocks: OpenBlock[];
+  readonly argumentsStreams: Map<number, ToolCallArgumentsStream>;
   readonly stream: AssistantMessageEventStream;
   readonly customToolNameToPi: ReadonlyMap<string, string>;
 }
@@ -100,10 +101,6 @@ export function emptyOutput(model: Model<string>): AssistantMessage {
   };
 }
 
-function record(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
 function open(context: EventContext, block: OpenBlock, kind: "text" | "thinking" | "toolcall"): void {
   context.blocks.push(block);
   context.output.content.push(block);
@@ -125,9 +122,10 @@ export function applyStreamEvent(context: EventContext, event: StreamEvent): voi
     else if (start.type === "thinking") {
       open(context, { type: "thinking", thinking: "", thinkingSignature: "", index: event.index }, "thinking");
     } else if (start.type === "tool_use") {
+      context.argumentsStreams.set(event.index, new ToolCallArgumentsStream());
       open(context, {
         type: "toolCall", id: start.id ?? "", name: mapSdkToolNameToPi(start.name ?? "", context.customToolNameToPi),
-        arguments: {}, partialJson: "", index: event.index, custom: context.customToolNameToPi.has(start.name ?? ""),
+        arguments: {}, index: event.index, custom: context.customToolNameToPi.has(start.name ?? ""),
       }, "toolcall");
     }
   } else if (event.type === "content_block_delta") {
@@ -142,7 +140,9 @@ export function applyStreamEvent(context: EventContext, event: StreamEvent): voi
     } else if (delta.type === "signature_delta" && block?.type === "thinking" && delta.signature !== undefined) {
       block.thinkingSignature = `${block.thinkingSignature ?? ""}${delta.signature}`;
     } else if (delta.type === "input_json_delta" && block?.type === "toolCall" && delta.partial_json !== undefined) {
-      block.partialJson = `${block.partialJson ?? ""}${delta.partial_json}`;
+      const argumentsStream = context.argumentsStreams.get(event.index);
+      if (!argumentsStream) return;
+      block.arguments = mapToolArgs(block.name, argumentsStream.append(delta.partial_json), block.custom) as ToolCall["arguments"];
       stream.push({ type: "toolcall_delta", contentIndex, delta: delta.partial_json, partial: output });
     }
   } else if (event.type === "content_block_stop") {
@@ -151,8 +151,12 @@ export function applyStreamEvent(context: EventContext, event: StreamEvent): voi
     else if (block?.type === "thinking") {
       stream.push({ type: "thinking_end", contentIndex, content: block.thinking, partial: output });
     } else if (block?.type === "toolCall") {
-      block.arguments = mapToolArgs(block.name, record(parseStreamingJson(block.partialJson)), block.custom) as ToolCall["arguments"];
-      delete block.partialJson;
+      const argumentsStream = context.argumentsStreams.get(event.index);
+      if (!argumentsStream) return;
+      const result = argumentsStream.finish();
+      Object.assign(block, result);
+      if (!result.argumentsError) block.arguments = mapToolArgs(block.name, result.arguments, block.custom) as ToolCall["arguments"];
+      context.argumentsStreams.delete(event.index);
       delete block.custom;
       stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
     }

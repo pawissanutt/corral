@@ -19,6 +19,10 @@ interface Command {
   delivery?: "result" | "notice";
   readonly release: Set<() => void>;
 }
+export interface CommandUpdate {
+  readonly content: [{ readonly type: "text"; readonly text: string }];
+  readonly details: { readonly job: string; readonly state: "running" };
+}
 export interface CommandOptions {
   readonly jobs: JobRuntime; readonly generation: number; readonly waitMs?: number;
   readonly worker: boolean;
@@ -131,7 +135,7 @@ export class Commands {
     }
   }
 
-  async run(command: string, key: string, options: { timeout?: number; wait_ms?: number; nested?: boolean; signal?: AbortSignal } = {}): Promise<Record<string, unknown>> {
+  async run(command: string, key: string, options: { timeout?: number; wait_ms?: number; nested?: boolean; signal?: AbortSignal; onUpdate?: (update: CommandUpdate) => void } = {}): Promise<Record<string, unknown>> {
     this.prune();
     if (options.signal?.aborted) throw new JobError("command cancelled before launch; nothing ran");
     this.starting++;
@@ -159,7 +163,7 @@ export class Commands {
     // changes that; Code Mode owns yielding the enclosing cell to the agent.
     const budget = options.wait_ms ?? (options.nested ? undefined : this.options.waitMs ?? 10000);
     try {
-      const state = await this.observe(record, budget, options.signal);
+      const state = await this.observe(record, budget, options.signal, options.onUpdate);
       if (state === "aborted") {
         await this.options.jobs.kill(job);
         this.consume(record);
@@ -173,14 +177,25 @@ export class Commands {
     }
   }
 
-  private observe(command: Command, ms?: number, signal?: AbortSignal): Promise<"done" | "released" | "aborted"> {
+  private observe(command: Command, ms?: number, signal?: AbortSignal, onUpdate?: (update: CommandUpdate) => void): Promise<"done" | "released" | "aborted"> {
     if (command.result) return Promise.resolve("done");
     if (signal?.aborted) return Promise.resolve("aborted");
     if (ms === 0) return Promise.resolve("released");
     return new Promise(resolve => {
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let progress: ReturnType<typeof setInterval> | undefined;
+      let previous = "";
+      const update = () => {
+        const output = this.options.jobs.peek(command.job, { tail_lines: 20, max_bytes: 2048 });
+        if (output.state !== "running" || typeof output.text !== "string" || output.text === previous) return;
+        previous = output.text;
+        // Progress is observational and must not change process ownership or its final result.
+        try { onUpdate?.({ content: [{ type: "text", text: previous }], details: { job: command.job, state: "running" } }); }
+        catch {}
+      };
       const finish = (state: "done" | "released" | "aborted") => {
-        if (timer) clearTimeout(timer);
+        clearTimeout(timer);
+        clearInterval(progress);
         command.release.delete(release);
         this.changes.delete(changed);
         signal?.removeEventListener("abort", abort);
@@ -192,17 +207,18 @@ export class Commands {
       command.release.add(release);
       signal?.addEventListener("abort", abort, { once: true });
       if (ms !== undefined) timer = setTimeout(release, ms);
+      if (onUpdate) progress = setInterval(update, 100);
       changed();
     });
   }
 
   /** Wait cancellation releases observation only; unlike Bash cancellation it never kills work. */
-  async wait(job?: string, ms = 60000, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  async wait(job?: string, ms = 60000, signal?: AbortSignal, onUpdate?: (update: CommandUpdate) => void): Promise<Record<string, unknown>> {
     if (job !== undefined) {
       const command = this.command(job);
       command.holds++;
       try {
-        await this.observe(command, ms, signal);
+        await this.observe(command, ms, signal, onUpdate);
         if (command.result) { this.consume(command); return command.result; }
         return { job, state: signal?.aborted ? "wait_cancelled" : "running" };
       } finally { command.holds--; this.announce(command); }

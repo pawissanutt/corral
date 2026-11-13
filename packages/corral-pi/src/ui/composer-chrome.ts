@@ -29,16 +29,26 @@ export function composerTitle(snapshot: PanelSnapshot | null,
 
 function border(focused: boolean): string { return PANEL_BG + (focused ? PANEL_BLUE : PANEL_LINE); }
 
-/** The top border with `title` set into it and `right` (the `↑ n more` marker) near its right corner. */
-export function composerTop(title: string, width: number, focused: boolean, right = ""): string {
+/**
+ * The top border with `title` set into it, the working indicator near the right corner and `right` (the
+ * `↑ n more` marker) after it. `status` lists the indicator's variants from the longest to the shortest; the
+ * longest that fits is drawn and none when even the shortest would squeeze the title below `keep` cells (the
+ * `Message → receiver` part, which survives every tier while the input disposition clips first).
+ */
+export function composerTop(title: string, width: number, focused: boolean, right = "", status: readonly string[] = [], keep = 0): string {
   const inner = Math.max(0, width - 2), color = border(focused);
   if (inner < 2) return PANEL_BG + " ".repeat(Math.max(0, width));
   const tail = right && inner >= visibleWidth(right) + 12 ? ` ${right} ─` : "";
-  const room = inner - 2 - visibleWidth(tail) - 4;
+  const base = inner - 2 - visibleWidth(tail) - 4;
+  // The title keeps `keep` cells (or all of itself when shorter); the indicator takes ` <status> ─` from the rest.
+  const reserve = title ? Math.min(visibleWidth(title), keep) : 0;
+  const shown = status.find(item => base - (visibleWidth(item) + 3) >= reserve) ?? "";
+  const mark = shown ? ` ${shown}${color} ─` : "";
+  const room = base - visibleWidth(mark);
   const label = title && room > 0 ? truncateToWidth(title, room, "…") : "";
   const head = label ? `─ ${PANEL_TEXT}${label}${color} ` : "─";
-  const fill = Math.max(0, inner - 2 - visibleWidth(head) - visibleWidth(tail));
-  return `${PANEL_BG} ${color}╭${head}${"─".repeat(fill)}${PANEL_MUTED}${tail.slice(0, -1)}${color}${tail.slice(-1)}╮${PANEL_BG} ${PANEL_TEXT}`;
+  const fill = Math.max(0, inner - 2 - visibleWidth(head) - visibleWidth(mark) - visibleWidth(tail));
+  return `${PANEL_BG} ${color}╭${head}${"─".repeat(fill)}${mark}${PANEL_MUTED}${tail.slice(0, -1)}${color}${tail.slice(-1)}╮${PANEL_BG} ${PANEL_TEXT}`;
 }
 /** The bottom border; in a short terminal it carries `↓ n more` since the bar is gone. */
 export function composerBottom(width: number, focused: boolean, right = ""): string {
