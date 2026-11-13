@@ -8,7 +8,7 @@ import { LIVE_CHILD_STATES } from "../build/types.ts";
 import type { BuildPanelState, BuildUi } from "../build/types.ts";
 import { target } from "./chrome.ts";
 import type { ExtensionUIContext, InteractiveChatPresentation } from "@earendil-works/pi-coding-agent";
-import { VStack, ScrollView, Text, getKeybindings, matchesKey, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { HStack, VStack, ScrollView, Text, getKeybindings, matchesKey, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { anchoredRow } from "./reading-anchor.ts";
 import { NativeImageViewer } from "./image-viewer.ts";
 import { ReviewStore, comparisonLabel, fileStatus, type PatchSnapshot, type ReviewBases } from "./review-store.ts";
@@ -39,7 +39,55 @@ import { BoardView, boardDetailLines, type BoardAction } from "./build/board-vie
 import { childIdOf, childKey } from "./build/contract.ts";
 import { childActions, childAuthors, fleetExtras, steerable } from "./build/fleet-rows.ts";
 import type { SideSource } from "./sidebar.ts";
-import { pad, plainLabel, styledPanelLine, PANEL_BLUE, PANEL_TEXT, type PanelSnapshot } from "./panels-view.ts";
+import { pad, plainLabel, styledPanelLine, PANEL_BG, PANEL_BLUE, PANEL_LINE, PANEL_TEXT, type PanelSnapshot } from "./panels-view.ts";
+import { rule, VIEW_INSET } from "./frame.ts";
+
+/** Below this many terminal rows the rule under the tab row goes first. */
+export const RULE_ROWS = 16;
+/** The rail beside the main view: the sidebar while it shows as a rail. */
+export interface RailSource {
+  /** Cells of the rail while it shows (the `│` column on its left not included), else undefined. */
+  width(): number | undefined;
+  /** `height` rows of the rail, each `width` cells. */
+  render(width: number, height: number): readonly string[];
+  /** Where the rail's rows start on screen and how many there are, after each layout. */
+  placed(top: number, height: number): void;
+}
+/**
+ * The rail column: a `│` in the line colour, then the rail. It renders the height of its last layout and asks for
+ * one more render when the layout gives it another height, so the rail always fills the rows between the tab
+ * rule and the dock exactly.
+ */
+function railColumn(source: RailSource, top: () => number, estimate: () => number): Component {
+  let height = 0;
+  const content: Component = {
+    render: () => {
+      const width = source.width() ?? 0, rows = Math.max(1, height || estimate());
+      const lines = source.render(width, rows);
+      return Array.from({ length: rows }, (_, row) => PANEL_BG + PANEL_LINE + "│" + PANEL_TEXT + (lines[row] ?? PANEL_BG + " ".repeat(width)));
+    },
+    invalidate() {},
+  };
+  return new class extends ScrollView {
+    override updateLayout(contentHeight: number, viewportHeight: number, requestRender: () => void): void {
+      super.updateLayout(contentHeight, viewportHeight, requestRender);
+      source.placed(top(), viewportHeight);
+      if (viewportHeight !== height) { height = viewportHeight; requestRender(); }
+    }
+  }(content, { follow: "none", primary: false, scrollbar: "hidden" });
+}
+/**
+ * `component` one cell in from the main view's left edge, like the header, the tab row and the other views, with one
+ * blank cell on the right (where a scroll bar draws). It renders `VIEW_INSET` cells narrower, so it wraps instead of
+ * overflowing, and pointer columns move with it; the view's layout thresholds add `VIEW_INSET` back.
+ */
+function inset(component: Component): Component {
+  return {
+    render: width => component.render(Math.max(1, width - VIEW_INSET)).map(line => " " + line),
+    handleMouse: event => component.handleMouse?.({ ...event, x: Math.max(0, event.x - 1), width: Math.max(1, event.width - VIEW_INSET) }),
+    invalidate: () => component.invalidate(),
+  };
+}
 
 export function plainClick(event: TuiMouseEvent): boolean {
   return event.type === "click" && event.button === "left" && !event.shift && !event.alt && !event.ctrl && (event.clickCount ?? 1) === 1;
@@ -122,6 +170,8 @@ export interface WorkbenchOptions {
   readonly build?: BuildUi;
   /** Docked dialogs, the message target and conversation entries of a build session. */
   readonly buildController?: BuildController;
+  /** The sidebar as a rail beside the main view; without it the main view takes the full width. */
+  readonly rail?: RailSource;
 }
 /** Main-area composition via the packaged SDK's public mainView hook; editor stays SDK-owned. */
 export class NativeWorkbench {
@@ -177,8 +227,10 @@ export class NativeWorkbench {
   private readonly launchRoot: string;
   private shownNotice: Notice | undefined;
   private noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Rows of the header in the last frame: the rail starts below them, the tab row and its rule. */
+  private headerRows = 0;
   get scopeLabel(): string { return this.review.scopeRequired ? "Choose project" : this.projectName ?? this.review.name; }
-  /** The panel-originated notice header row 1 shows in place of the state word, if any. */
+  /** The panel-originated notice the toast at the top right of the main view shows, if any. */
   get currentNotice(): Notice | undefined { return this.shownNotice; }
   /** True while a pager or detail sheet the workbench opened is on screen; the footer lists its keys. */
   get pagerOpen(): boolean { return this.pagers > 0 || this.inboxView.sheetOpen; }
@@ -325,7 +377,7 @@ export class NativeWorkbench {
   openTab(id: TabId): void {
     if (id === "agents") this.openAgents(); else if (id === "conversation") this.chat(); else this.setView(id);
   }
-  /** Panel feedback in header row 1 for NOTICE_MS; Pi's own notifications keep their native place. */
+  /** Panel feedback as a toast for NOTICE_MS; Pi's own notifications keep their native place. */
   notice(text: string, tone: Notice["tone"] = "text"): void {
     clearTimeout(this.noticeTimer);
     this.shownNotice = { text: plainLabel(text), tone };
@@ -425,7 +477,6 @@ export class NativeWorkbench {
     return {
       title: target(identity), state, context,
       ...(pending ? { attention: { text: `⚑ ${pending}`, tone: "warning" as const } } : {}),
-      ...(this.shownNotice ? { notice: this.shownNotice } : {}),
     };
   }
   /**
@@ -450,16 +501,14 @@ export class NativeWorkbench {
       },
       ...(asking ? { attention: { text: tiny ? `▲ ${asking}` : `▲ ${asking} needs you`, tone: "warning" as const } } : {}),
       ...(status ? { status } : {}),
-      ...(this.shownNotice ? { notice: this.shownNotice } : {}),
     };
   }
   private tabSpecs(): TabSpec[] {
-    const snapshot = this.options.snapshot(), r = this.review, data = this.inspection.current;
+    const r = this.review, data = this.inspection.current;
     const live = liveCount(this.agentsModel()), pending = this.pendingInbox();
     const badge = (id: TabId): TabSpec["badge"] => {
       switch (id) {
-        case "task": return undefined;
-        case "conversation": return snapshot?.streaming ? { text: "●", tone: "accent" } : undefined;
+        case "task": case "conversation": return undefined;
         case "agents": return live ? { text: String(live), tone: "accent" } : undefined;
         case "changes": return changesBadge({ checked: r.checkedAt !== undefined, files: r.files.length, scopeRequired: r.scopeRequired, error: r.error !== undefined });
         case "evidence": return proofBadge({ gate: data?.gate ?? undefined, review: data?.review ?? undefined, stale: this.inspection.stale, error: this.inspection.error !== undefined });
@@ -479,9 +528,9 @@ export class NativeWorkbench {
     const header: Component = {
       render: width => {
         // Renders before the transcript, so a paused reader keeps the same passage at a new width.
-        this.anchorTranscript(width);
+        this.anchorTranscript(this.mainWidth(width));
         const frame = headerFrame(this.headerInput(width), width, this.compact(width));
-        headerHits = frame.hits;
+        headerHits = frame.hits; this.headerRows = frame.lines.length;
         return frame.lines;
       },
       // Build sessions only: the attention chip docks the oldest question, the pending exit status reopens its choice.
@@ -542,37 +591,38 @@ export class NativeWorkbench {
       click: event => this.options.canInteract() && plainClick(event), focus: () => { this.focusMain(); this.options.changed(); },
       back: () => this.openAgents(), ...(this.childActs ? { answer: (key: string) => this.agentAction("answer", key) } : {}) });
     if (this.agentKey !== undefined) this.conversation.restore(this.agentKey);
-    this.evidenceScroll = new ScrollView({ render: width => this.renderEvidence(width), handleMouse: event => {
+    // Task, Proof, lifecycle, Usage, Artifacts and Inbox draw from their first column: `inset` puts them one cell in, as the frame is.
+    this.evidenceScroll = new ScrollView(inset({ render: width => this.renderEvidence(width), handleMouse: event => {
       if (!this.options.canInteract() || !plainClick(event)) return undefined;
       const index = this.criterionHits.get(event.y); if (index !== undefined) this.criterionIndex = index;
       this.focusMain(); this.options.changed(); return { handled: true };
-    }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
-    this.lifecycleScroll = new ScrollView({ render: width => this.lifecycle.render(width), handleMouse: event => {
+    }, invalidate() {} }), { primary: true, follow: "none", scrollbar: "auto" });
+    this.lifecycleScroll = new ScrollView(inset({ render: width => this.lifecycle.render(width), handleMouse: event => {
       const result = this.lifecycle.handleMouse(event);
       if (result?.handled) { this.focusMain(); this.options.changed(); }
       return result;
-    }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
-    this.usageScroll = new ScrollView({ render: width => {
+    }, invalidate() {} }), { primary: true, follow: "none", scrollbar: "auto" });
+    this.usageScroll = new ScrollView(inset({ render: width => {
       const snapshot = this.options.snapshot();
       return usageLines(this.inspection, snapshot?.budget, snapshot?.bound ?? false, width, this.usageChart)
         .flatMap(row => new Text((row.heading ? PANEL_BLUE : PANEL_TEXT) + row.text, 0, 0).render(width));
-    }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
-    this.artifactScroll = new ScrollView({ render: width => this.artifacts.render(width), handleMouse: event => {
+    }, invalidate() {} }), { primary: true, follow: "none", scrollbar: "auto" });
+    this.artifactScroll = new ScrollView(inset({ render: width => this.artifacts.render(width), handleMouse: event => {
       const result = this.artifacts.handleMouse(event);
       if (result?.handled) { this.focusMain(); this.options.changed(); }
       return result;
-    }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
-    this.inboxScroll = new ScrollView(this.inboxView, { primary: true, follow: "none", scrollbar: "auto" });
-    this.taskScroll = new ScrollView({ render: width => taskLines(this.options.identity, this.task)
+    }, invalidate() {} }), { primary: true, follow: "none", scrollbar: "auto" });
+    this.inboxScroll = new ScrollView(inset(this.inboxView), { primary: true, follow: "none", scrollbar: "auto" });
+    this.taskScroll = new ScrollView(inset({ render: width => taskLines(this.options.identity, this.task)
       .flatMap(row => new Text(styledPanelLine(row), 0, 0).render(width)), handleMouse: event => {
       if (!this.options.canInteract() || !plainClick(event)) return undefined;
       this.focusMain(); this.options.changed(); return { handled: true };
-    }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
+    }, invalidate() {} }), { primary: true, follow: "none", scrollbar: "auto" });
     const chrome = this.chrome();
-    return new VStack([
-      { component: chrome.header, basis: "auto", shrink: 0 },
-      // An expanded image takes the tab row's place; Esc or F9 brings both back.
-      { component: chrome.tabs, basis: 1, shrink: 0, visible: () => !this.images.isOpen },
+    const views = new class extends VStack {
+      // Laid out by height only: the rail's row beside it never needs this stack's natural height.
+      override render(): string[] { return []; }
+    }([
       { component: this.taskScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "task" && !this.images.isOpen },
       { component: transcript, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "conversation" && !this.images.isOpen },
       { component: this.images, basis: 0, grow: 1, minSize: 1, visible: viewport => {
@@ -582,13 +632,39 @@ export class NativeWorkbench {
       { component: this.agentsView.scroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "agents" },
       { component: this.conversation.scroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "agent" },
       { component: this.evidenceScroll, basis: 0, grow: 1, minSize: 1,
-        visible: viewport => { this.proofWide = viewport.width >= SPLIT_MIN; return this.view === "evidence"; } },
+        // The split follows the main view's width; the inset only narrows the detail column.
+        visible: viewport => { this.proofWide = this.mainWidth(viewport.width) >= SPLIT_MIN; return this.view === "evidence"; } },
       { component: this.usageScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "usage" },
       { component: this.lifecycleScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "graph" || this.view === "timeline" },
       { component: this.artifactScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "artifacts" && !this.images.isOpen },
       { component: this.inboxScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "inbox" },
       ...(this.boardView ? [{ component: this.boardView.scroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "board" }] : []),
     ]);
+    const rail = this.options.rail;
+    // The rail fills the rows between the tab rule and the dock; header, tabs and rule span the full width.
+    const body = rail ? new HStack([
+      { component: views, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+      { component: railColumn(rail, () => this.bodyTop(),
+        () => { const rows = this.size(0).rows; return Number.isFinite(rows) ? rows - 12 : 1; }),
+        basis: "auto", shrink: 0, visible: () => rail.width() !== undefined },
+    ]) : views;
+    const tabRule: Component = { render: width => [rule(width)], invalidate() {} };
+    return new VStack([
+      { component: chrome.header, basis: "auto", shrink: 0 },
+      // An expanded image takes the tab row's place; Esc or F9 brings both back.
+      { component: chrome.tabs, basis: 1, shrink: 0, visible: () => !this.images.isOpen },
+      { component: tabRule, basis: 1, shrink: 0, visible: () => this.ruled() },
+      { component: body, basis: 0, grow: 1, minSize: 1 },
+    ]);
+  }
+  /** True while the rule under the tab row shows: the tab row shows and the terminal has RULE_ROWS rows or more. */
+  private ruled(): boolean { return !this.images.isOpen && this.size(0).rows >= RULE_ROWS; }
+  /** The first screen row of the main view: below the header, the tab row and its rule. */
+  bodyTop(): number { return this.headerRows + (this.images.isOpen ? 0 : 1) + (this.ruled() ? 1 : 0); }
+  /** Columns of the main view at a frame `width`: less the rail and its `│` while the rail shows. */
+  private mainWidth(width: number): number {
+    const rail = this.options.rail?.width();
+    return rail === undefined ? width : Math.max(1, width - rail - 1);
   }
   private renderEvidence(width: number): string[] {
     this.criterionIndex = Math.max(0, Math.min(this.criterionIndex, this.proofRows() - 1));
@@ -780,7 +856,22 @@ export class NativeWorkbench {
       plan: { progress: snapshot?.ledger ?? null, stale: snapshot?.ledgerStale ?? false },
       bound: snapshot?.bound ?? false,
       color: agentColor,
+      ...(this.focused && this.selectedAgent() ? { current: this.selectedAgent()!.key } : {}),
     };
+  }
+  /** The agent the Agents view selects, or whose conversation is open; undefined elsewhere or on a job row. */
+  selectedAgent(): AgentRow | undefined {
+    if (this.view === "agent") return this.agentRow(this.agentKey);
+    if (this.view !== "agents") return undefined;
+    const entry = this.agentsView.entry();
+    return entry?.kind === "agent" ? this.agentRow(entry.row.key) : undefined;
+  }
+  /** The selected agent's model, call id and session file, in the read-only pager; false when there is nothing to show. */
+  async openAgentDetails(): Promise<boolean> {
+    const ui = this.ui, row = this.selectedAgent();
+    if (!ui || !row?.meta.length) return false;
+    await this.inPager(() => openOutputPager(ui, plainLabel(row.name), row.meta.map(plainLabel), 0));
+    return true;
   }
   /** The scroll region of a main view, for page keys. */
   private scrollOf(view: MainView): ScrollView | undefined {

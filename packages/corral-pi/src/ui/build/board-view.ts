@@ -1,11 +1,13 @@
-// F10 Board view of a build session: a summary line, the plan waiting for the owner, one row per task this
-// session filed with its stage, and the selected task's detail. Selection is keyed by task id, so a task
-// inserted above never moves it. Keys live in the footer; the page only offers clickable action labels.
-import { ScrollView, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type TuiMouseEvent } from "@earendil-works/pi-tui";
+// F10 Board view of a build session: a summary line, the plan waiting for the owner, the table of the tasks this
+// session filed (the mock's `.board` grid) and the selected task's actions as key caps. The task's full detail
+// opens with Enter. Selection is keyed by task id, so a task inserted above never moves it.
+import { ScrollView, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { BoardPhase, BoardPlan, BoardTaskStatus } from "../../build/types.ts";
 import { duration, toneColor } from "../agents-model.ts";
 import { agentDensity } from "../agents-view.ts";
-import { plainLabel, PANEL_BG, PANEL_BLUE, PANEL_MUTED, PANEL_RULE, PANEL_SELECTED, PANEL_TEXT, PANEL_WARNING, RESET } from "../panels-view.ts";
+import { keyCap, spinner } from "../frame.ts";
+import { plainLabel, PANEL_BG, PANEL_BLUE, PANEL_MUTED, PANEL_SELECTED, PANEL_TEXT, PANEL_WARNING, RESET } from "../panels-view.ts";
 import type { BuildTone } from "./contract.ts";
 
 export type BoardAction = "details" | "refresh" | "plan" | "review";
@@ -19,8 +21,12 @@ export interface BoardViewHost {
 }
 
 const BOLD = "\x1b[1m", UNBOLD = "\x1b[22m", GAP = "  ";
-/** Id column floor and cap, the title cap at full density, the stage column, the narrowest `now` column. */
+/** Id column floor and cap, the title column at full density, the stage column, the narrowest `now` column. */
 const ID_MIN = 6, ID_MAX = 10, TITLE_MAX = 40, STAGE = 10, NOW_MIN = 12;
+/** The task's actions under the table: their key and label. */
+const ROW_ACTIONS: Readonly<Record<"details" | "refresh", { readonly key: string; readonly label: string }>> = {
+  details: { key: "⏎", label: "open task" }, refresh: { key: "r", label: "refresh" },
+};
 
 /** Styled text clipped to exactly `width` cells; resets inside the clip restore `base` so the row keeps its surface. */
 function cell(text: string, width: number, base: string): string {
@@ -59,6 +65,7 @@ export function boardStage(task: BoardTaskStatus, tasks: readonly BoardTaskStatu
   }
 }
 
+/** `From this session · 2 running · 1 in gate or review · 3/5 landed` as `lead`, blocked and failed counts as `alert`; `min` drops the source. */
 function summaryParts(tasks: readonly BoardTaskStatus[], min: boolean): { readonly lead: string; readonly alert: string } {
   const count = (...phases: BoardPhase[]) => tasks.filter(task => phases.includes(task.phase)).length;
   const blocked = count("blocked"), failed = count("failed");
@@ -67,32 +74,19 @@ function summaryParts(tasks: readonly BoardTaskStatus[], min: boolean): { readon
   const alert = (blocked ? ` · ${blocked} blocked` : "") + (failed ? ` · ${failed} failed` : "");
   return { lead, alert };
 }
-/** `From this session · 2 running · 1 in gate or review · 3/5 landed`, plus blocked and failed counts; `min` drops the source. */
-export function boardSummary(tasks: readonly BoardTaskStatus[], min: boolean): string {
-  const { lead, alert } = summaryParts(tasks, min);
-  return lead + alert;
-}
 
-interface DetailLine { readonly text: string; readonly tone: BuildTone }
-function detailParts(task: BoardTaskStatus, tasks: readonly BoardTaskStatus[], now: number): DetailLine[] {
-  const stage = boardStage(task, tasks);
-  const detail = (task.detail ?? "").split("\n").map(plainLabel).filter(Boolean);
+/** The task's stage, corral status and dependencies, its detail text and its age, as plain lines for the details pager. */
+export function boardDetailLines(task: BoardTaskStatus, now: number): string[] {
+  const stage = boardStage(task, []);
   const depends = task.depends.length ? "depends on " + task.depends.map(plainLabel).join(", ") : "no dependencies";
   const age = now - task.updatedAt;
-  const lines: DetailLine[] = [
+  return [
     // The stage's `now` repeats the detail for blocked and failed tasks, so it is named once.
-    { text: `${stage.glyph} ${stage.word}` + (stage.now === plainLabel(task.detail ?? "") ? "" : " · " + stage.now), tone: stage.tone },
-    { text: `corral status: ${plainLabel(task.status) || "unknown"} · ${depends}`, tone: "muted" },
+    `${stage.glyph} ${stage.word}` + (stage.now === plainLabel(task.detail ?? "") ? "" : " · " + stage.now),
+    `corral status: ${plainLabel(task.status) || "unknown"} · ${depends}`,
+    ...(task.detail ?? "").split("\n").map(plainLabel).filter(Boolean),
+    age < 1000 ? "updated just now" : `updated ${duration(age)} ago`,
   ];
-  for (const line of detail) {
-    lines.push({ text: line, tone: task.phase === "failed" ? "error" : task.phase === "blocked" ? "warning" : "text" });
-  }
-  lines.push({ text: age < 1000 ? "updated just now" : `updated ${duration(age)} ago`, tone: "muted" });
-  return lines;
-}
-/** The task's stage, corral status and dependencies, its detail text and its age, as plain lines for the detail block and the pager. */
-export function boardDetailLines(task: BoardTaskStatus, now: number): string[] {
-  return detailParts(task, [], now).map(line => line.text);
 }
 
 function shownTask(tasks: readonly BoardTaskStatus[], selected: string | undefined): BoardTaskStatus | undefined {
@@ -106,14 +100,15 @@ function offered(tasks: readonly BoardTaskStatus[], proposed: BoardPlan | undefi
   return actions;
 }
 
-/** Clickable action labels after `lead` on one row; labels that do not fit are left out (their keys stay in the footer). */
-function actionLine(id: string, lead: string, actions: readonly ("details" | "refresh")[], width: number): { readonly line: string; readonly hits: BoardHit[] } {
+/** The task's actions as key caps after a one-cell inset; actions that do not fit are left out (their keys stay in the footer). */
+function actionLine(id: string, actions: readonly ("details" | "refresh")[], width: number): { readonly line: string; readonly hits: BoardHit[] } {
   const hits: BoardHit[] = [];
-  let text = lead, used = visibleWidth(lead);
+  let text = " ", used = 1;
   for (const action of actions) {
-    const from = used + (used > 1 ? 3 : 0), to = from + visibleWidth(action);
+    const { key, label } = ROW_ACTIONS[action];
+    const from = used + (used > 1 ? 2 : 0), to = from + visibleWidth(key) + 3 + visibleWidth(label);
     if (to > width - 1) break;
-    text += (used > 1 ? "   " : "") + PANEL_BLUE + action;
+    text += (used > 1 ? GAP : "") + keyCap(key) + " " + PANEL_TEXT + label;
     hits.push({ id, action, from, to });
     used = to;
   }
@@ -122,14 +117,16 @@ function actionLine(id: string, lead: string, actions: readonly ("details" | "re
 
 /**
  * The whole Board page for `width` columns; `hits[row]` lists the click targets on that rendered row. A hit
- * without a range covers the row. Full density: bar, id, title, stage, now. Med: bar, id, stage, now, then
- * the title on a second row. Min: bar, id, stage, then the title.
+ * without a range covers the row. Columns follow the mock's `.board` grid, two cells apart after the bar: full
+ * density id, title (40), stage, now; med id, stage, now, then the title on a second row under the id; min id and
+ * stage, then the title. The empty states are paragraphs one blank row apart (none when the view is short).
  */
 export function renderBoard(tasks: readonly BoardTaskStatus[], proposed: BoardPlan | undefined, selected: string | undefined,
   width: number, options: { readonly now: number; readonly short: boolean; readonly unavailable?: string }):
   { readonly lines: string[]; readonly hits: ReadonlyMap<number, readonly BoardHit[]>; readonly selectedRow: number } {
   const density = agentDensity(width), lines: string[] = [], hits = new Map<number, BoardHit[]>();
   const push = (line: string, rowHits?: readonly BoardHit[]) => { if (rowHits?.length) hits.set(lines.length, [...rowHits]); lines.push(line); };
+  const paragraph = () => { if (!options.short) push(fill("", width)); };
   const shown = shownTask(tasks, selected);
   let selectedRow = -1;
 
@@ -144,14 +141,17 @@ export function renderBoard(tasks: readonly BoardTaskStatus[], proposed: BoardPl
   }
 
   if (!tasks.length) {
-    if (proposed) push(fill("", width));
+    if (proposed) paragraph();
     if (options.unavailable !== undefined) {
       push(fill(" " + BOLD + PANEL_TEXT + "The board is not available in this session." + UNBOLD, width));
+      paragraph();
       lines.push(...wrapped(plainLabel(options.unavailable), PANEL_MUTED, width, 4));
     } else {
       push(fill(" " + BOLD + PANEL_TEXT + "Nothing from this session is on the board." + UNBOLD, width));
+      paragraph();
       lines.push(...wrapped("A finished build can ship through the board, or a larger plan can be split into tasks that run there under corral's gate and review.",
         PANEL_MUTED, width, options.short ? 2 : 4));
+      paragraph();
       const label = "Plan board tasks from this conversation…";
       push(fill(" " + PANEL_BLUE + label, width), [{ action: "plan", from: 1, to: Math.min(width, 1 + visibleWidth(label)) }]);
     }
@@ -159,55 +159,38 @@ export function renderBoard(tasks: readonly BoardTaskStatus[], proposed: BoardPl
   }
 
   const idWidth = Math.min(ID_MAX, Math.max(ID_MIN, ...tasks.map(task => visibleWidth(plainLabel(task.id)))));
-  // Bar and space, the id, then the columns after it with their gaps, and one cell of right inset.
-  const flex = width - (2 + idWidth + GAP.length + STAGE + 1);
-  const titleWidth = density === "full"
-    ? Math.max(0, Math.min(TITLE_MAX, Math.max(...tasks.map(task => visibleWidth(plainLabel(task.title)))), flex - GAP.length * 2 - NOW_MIN))
-    : 0;
-  const nowWidth = density === "full" ? flex - titleWidth - GAP.length * 2 : flex - GAP.length;
+  // The bar, the id and the stage with their gaps, and one cell of right inset; the rest is shared by title and now.
+  const rest = width - (1 + GAP.length + idWidth + GAP.length + STAGE + GAP.length + 1);
+  const titleWidth = density === "full" ? Math.max(0, Math.min(TITLE_MAX, rest - GAP.length - NOW_MIN)) : 0;
+  const nowWidth = density === "full" ? rest - GAP.length - titleWidth : rest;
+  const stageWidth = density === "min" ? Math.max(1, rest + GAP.length + STAGE) : STAGE;
   if (density === "full") {
     const base = PANEL_BG + PANEL_MUTED;
-    push(fill(PANEL_MUTED + "  " + cell("task", idWidth, base) + GAP + cell("title", titleWidth, base) + GAP + cell("stage", STAGE, base)
+    push(fill(PANEL_MUTED + " " + GAP + cell("task", idWidth, base) + GAP + cell("title", titleWidth, base) + GAP + cell("stage", STAGE, base)
       + GAP + cell("now", nowWidth, base), width));
   }
-  for (const task of tasks) {
+  tasks.forEach((task, index) => {
     const isSelected = task.id === shown?.id, surface = isSelected ? PANEL_SELECTED : PANEL_BG, base = surface + PANEL_TEXT;
     if (isSelected) selectedRow = lines.length;
     const stage = boardStage(task, tasks), color = toneColor(stage.tone);
-    const lead = (isSelected ? PANEL_BLUE + "▌" : " ") + " " + BOLD + PANEL_TEXT + cell(plainLabel(task.id), idWidth, base) + UNBOLD;
-    const stageCell = cell(color + stage.glyph + " " + stage.word, STAGE, base);
+    // A task an agent, the gate or a review is working on shows the spinner.
+    const glyph = stage.tone === "accent" ? spinner(options.now, index) : stage.glyph;
+    const lead = (isSelected ? PANEL_BLUE + "▌" : " ") + GAP + BOLD + PANEL_TEXT + cell(plainLabel(task.id), idWidth, base) + UNBOLD;
+    const stageCell = cell(color + glyph + " " + stage.word, stageWidth, base);
     const nowColor = stage.tone === "warning" || stage.tone === "error" ? color : PANEL_MUTED;
     const title = PANEL_TEXT + plainLabel(task.title);
     const rowHit: BoardHit[] = [{ id: task.id }];
     if (density === "full") {
       push(fill(lead + GAP + cell(title, titleWidth, base) + GAP + stageCell + GAP + cell(nowColor + stage.now, nowWidth, base), width, surface), rowHit);
-    } else if (density === "med") {
-      push(fill(lead + GAP + stageCell + GAP + cell(nowColor + stage.now, nowWidth, base), width, surface), rowHit);
-      push(fill("  " + cell(title, width - 3, base), width, surface), rowHit);
-    } else {
-      push(fill(lead + GAP + stageCell, width, surface), rowHit);
-      push(fill("  " + cell(title, width - 3, base), width, surface), rowHit);
+      return;
     }
-  }
+    push(fill(lead + GAP + stageCell + (density === "med" ? GAP + cell(nowColor + stage.now, nowWidth, base) : ""), width, surface), rowHit);
+    push(fill(" " + GAP + cell(title, width - 4, base), width, surface), rowHit);
+  });
 
   if (shown) {
-    push(fill(PANEL_RULE + "─".repeat(width), width));
-    const id = plainLabel(shown.id), actions: ("details" | "refresh")[] = options.unavailable === undefined ? ["details", "refresh"] : ["details"];
-    const parts = detailParts(shown, tasks, options.now);
-    if (options.short) {
-      // One line: the id, the stage line, and as many action labels as fit at its end.
-      const labels = actions.reduce((sum, action) => sum + 3 + visibleWidth(action), 0);
-      const room = Math.max(0, width - 1 - labels - 1);
-      const stage = parts[0]!;
-      const lead = " " + cell(BOLD + PANEL_TEXT + id + UNBOLD + "  " + toneColor(stage.tone) + stage.text, room, PANEL_BG + PANEL_TEXT);
-      const row = actionLine(shown.id, lead, actions, width);
-      push(row.line, row.hits);
-    } else {
-      push(fill(" " + BOLD + PANEL_TEXT + id + UNBOLD + "  " + PANEL_TEXT + plainLabel(shown.title), width));
-      for (const part of parts) lines.push(...wrapped(part.text, toneColor(part.tone), width, 4));
-      const row = actionLine(shown.id, " ", actions, width);
-      push(row.line, row.hits);
-    }
+    const row = actionLine(shown.id, options.unavailable === undefined ? ["details", "refresh"] : ["details"], width);
+    push(row.line, row.hits);
   }
   return { lines, hits, selectedRow };
 }

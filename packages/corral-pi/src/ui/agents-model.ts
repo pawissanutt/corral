@@ -3,7 +3,7 @@
 // `AgentExtras`. Unknown values stay absent and render as "–", never as zero.
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { HelperInspection, HelperMessage } from "../extensions/subagent/inspection.ts";
-import { helperText } from "./helper-chat.ts";
+import { helperText, toolSummary } from "./helper-chat.ts";
 import {
   plainLabel, PANEL_BG, PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_SELECTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING,
   type PanelJob, type PanelSnapshot,
@@ -56,6 +56,16 @@ export function money(cost: number | undefined): string {
   return cost === undefined || !Number.isFinite(cost) ? "–" : `$${cost.toFixed(2)}`;
 }
 
+const BARS = " ▁▂▃▄▅▆▇";
+/**
+ * The activity sparkline: the last `cells` 5-second buckets of tool calls as bars, right-aligned. Heights scale to
+ * the busiest bucket shown, with four calls or more at full height so a quiet agent stays low; an idle bucket is blank.
+ */
+export function sparkline(pulse: readonly number[], cells: number): string {
+  const shown = pulse.slice(-cells), top = Math.max(4, ...shown);
+  return shown.map(value => value > 0 ? BARS[Math.max(1, Math.min(7, Math.round(value * 7 / top)))] ?? " " : " ").join("").padStart(cells, " ");
+}
+
 /** Glyph and word, so colour is never the only signal. */
 export interface Status { readonly glyph: string; readonly tone: Tone; readonly word: string; readonly time?: string }
 
@@ -79,6 +89,10 @@ export function agentStatus(state: AgentState, time?: string): Status {
 /** The short state text beside a glyph: elapsed time while running or once done, otherwise the word. */
 export function statusLabel(status: Status): string {
   return status.tone === "accent" || status.tone === "success" ? status.time ?? status.word : status.word;
+}
+/** The time column and the conversation header: elapsed time while running or once done, `waiting` before it starts, otherwise the state word. */
+export function timeLabel(status: Status): string {
+  return status.tone === "muted" ? "waiting" : statusLabel(status);
 }
 export function jobStatus(job: PanelJob, now: number): Status {
   const d = job.detail;
@@ -105,27 +119,6 @@ export function helperStatus(helper: HelperInspection, now: number): Status {
 }
 export function helperKindName(kind: HelperInspection["kind"]): string {
   switch (kind) { case "explore": return "explore"; case "oracle": return "oracle"; case "web_search": return "search"; case "shadow": return "shadow"; case "expert": return "expert"; }
-}
-
-function toolArgs(text: string | undefined): Readonly<Record<string, unknown>> | undefined {
-  if (text === undefined) return undefined;
-  try {
-    const value: unknown = JSON.parse(text);
-    return value !== null && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value)) : undefined;
-  } catch { return undefined; }
-}
-/** One plain line for a tool call: its name, then the argument that says what it touches (`read src/a.ts:10-20`). */
-export function toolSummary(message: HelperMessage): string {
-  const name = plainLabel(helperText(message.tool ?? "tool")), args = toolArgs(message.arguments);
-  const field = (key: string) => { const value = args?.[key]; return typeof value === "string" || typeof value === "number" ? plainLabel(helperText(String(value))) : undefined; };
-  const offset = Number(args?.["offset"]), limit = Number(args?.["limit"]);
-  const range = Number.isInteger(offset) && offset > 0 ? `:${offset}${Number.isInteger(limit) && limit > 0 ? `-${offset + limit - 1}` : ""}` : "";
-  const summary = !args ? plainLabel(helperText(message.arguments ?? "")).slice(0, 80)
-    : name === "read" ? (field("path") ?? "") + range
-    : name === "grep" ? [field("pattern") === undefined ? "" : `"${field("pattern")}"`, field("path"), field("glob")].filter(Boolean).join(" ")
-    : field("command") ?? field("path") ?? field("pattern") ?? field("query") ?? field("url")
-      ?? Object.values(args).filter((value): value is string => typeof value === "string").map(value => plainLabel(helperText(value))).join(" ");
-  return (name + " " + summary.slice(0, 160)).trim();
 }
 
 /** One stretch of the timeline. `to` absent means still open (drawn up to now). */
@@ -201,7 +194,7 @@ export interface AgentExtras {
 export interface AgentsModel {
   readonly agents: readonly AgentRow[];
   readonly jobs: readonly JobRow[];
-  /** false: the session has no such source; the section is omitted and one muted line says so. */
+  /** false: the session has no such source, so it contributes no rows (unknown, never reported as an empty list). */
   readonly sources: { readonly helpers: boolean; readonly jobs: boolean };
   readonly bound: boolean;
   readonly maxParallel?: number;

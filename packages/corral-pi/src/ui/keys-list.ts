@@ -1,12 +1,18 @@
-// F1: the keys this mode offers, grouped. Rows that carry a key sequence can be run: ↑↓ selects among
-// them, Enter or a click returns the sequence, Esc or F1 closes. Reference rows only inform.
-import { matchesKey, truncateToWidth, visibleWidth, type Component, type Focusable, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import { keyCap } from "./header.ts";
+// F1: the keys this mode offers, grouped, as a popup on the raised surface. Rows that carry a key sequence
+// can be run: ↑↓ selects among them, Enter or a click returns the sequence, Esc, F1 or a click on
+// `esc close` closes. Reference rows only inform.
+import { matchesKey, visibleWidth, type Component, type Focusable, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { keyCap, popup } from "./frame.ts";
 import type { KeyGroup, KeyRow } from "./keymap.ts";
-import { pad, plainLabel, PANEL_BG, PANEL_SELECTED, RESET } from "./panels-view.ts";
+import { plainLabel, PANEL_HEAD, PANEL_MUTED, PANEL_TEXT } from "./panels-view.ts";
 
 type Line = { readonly kind: "group"; readonly title: string } | { readonly kind: "row"; readonly row: KeyRow };
+/** Rows above the list: the top border, the title row and its divider. */
+const HEAD_ROWS = 3;
+/** Cells of the key column: the cap and its gap before the label. */
+const KEY_COLUMN = 11;
+/** `[esc] close` at the right of the title row; built per render so an appearance change recolours it. */
+function closeLabel(): string { return keyCap("esc") + " " + PANEL_MUTED + "close"; }
 
 export class KeysList implements Component, Focusable {
   focused = false;
@@ -14,9 +20,9 @@ export class KeysList implements Component, Focusable {
   private readonly runnable: readonly number[];
   private selected: number;
   private start = 0;
-  constructor(groups: readonly KeyGroup[], private readonly theme: Pick<Theme, "fg" | "bold">,
-    private readonly done: (data: string | undefined) => void, private readonly changed: () => void,
-    private readonly capacity: number) {
+  private width = 0;
+  constructor(groups: readonly KeyGroup[], private readonly done: (data: string | undefined) => void,
+    private readonly changed: () => void, private readonly capacity: number) {
     this.lines = groups.flatMap(group => [{ kind: "group" as const, title: group.title },
       ...group.rows.map(row => ({ kind: "row" as const, row }))]);
     this.runnable = this.lines.flatMap((line, index) => line.kind === "row" && line.row.data ? [index] : []);
@@ -33,7 +39,9 @@ export class KeysList implements Component, Focusable {
   }
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
     if (event.type !== "click" || event.button !== "left" || event.shift || event.alt || event.ctrl) return { handled: true };
-    if (event.y >= 1) this.run(this.start + event.y - 1);
+    // `esc close` sits at the right end of the title row.
+    if (event.y === 1 && event.x >= this.width - 2 - visibleWidth(closeLabel())) { this.done(undefined); return { handled: true }; }
+    if (event.y >= HEAD_ROWS) this.run(this.start + event.y - HEAD_ROWS);
     return { handled: true };
   }
   private run(index: number): void {
@@ -41,7 +49,7 @@ export class KeysList implements Component, Focusable {
     if (line?.kind === "row" && line.row.data) this.done(line.row.data);
   }
   render(width: number): string[] {
-    const room = Math.max(0, width);
+    this.width = width;
     const height = Math.max(1, this.capacity);
     if (this.selected >= 0) {
       // Keep the selection in view with the least movement; show its group title when it opens a group.
@@ -50,21 +58,14 @@ export class KeysList implements Component, Focusable {
       if (this.selected >= this.start + height) this.start = this.selected - height + 1;
     }
     this.start = Math.max(0, Math.min(this.start, this.lines.length - height));
-    const keyWidth = Math.min(14, Math.max(0, ...this.lines.map(line => line.kind === "row" ? visibleWidth(plainLabel(line.row.key)) + 2 : 0)));
-    const out = [truncateToWidth(this.theme.bold("Keys"), room, "…")];
-    for (const [offset, line] of this.lines.slice(this.start, this.start + height).entries()) {
-      if (line.kind === "group") {
-        out.push(truncateToWidth("  " + this.theme.bold(this.theme.fg("muted", plainLabel(line.title).toUpperCase())), room, "…"));
-        continue;
-      }
-      const on = this.start + offset === this.selected;
-      const bg = on ? PANEL_SELECTED : PANEL_BG;
+    const shown = this.lines.slice(this.start, this.start + height);
+    const body = shown.map(line => {
+      if (line.kind === "group") return " " + PANEL_HEAD + "\x1b[1m" + plainLabel(line.title) + "\x1b[22m" + PANEL_TEXT;
       const key = plainLabel(line.row.key);
-      const cap = keyCap(key, { restore: bg }) + " ".repeat(Math.max(0, keyWidth - visibleWidth(key) - 2));
-      const text = (on ? this.theme.fg("accent", "▌") : " ") + " " + cap + " " + this.theme.fg("text", plainLabel(line.row.label));
-      out.push(bg + pad(text, room).replaceAll(RESET, RESET + bg) + RESET);
-    }
-    return out;
+      return " " + keyCap(key) + " ".repeat(Math.max(1, KEY_COLUMN - visibleWidth(key) - 2)) + PANEL_TEXT + plainLabel(line.row.label);
+    });
+    const at = this.selected - this.start;
+    return popup("\x1b[1mKeys\x1b[22m", closeLabel(), body, width, at >= 0 && at < shown.length ? at : undefined);
   }
   invalidate(): void {}
 }

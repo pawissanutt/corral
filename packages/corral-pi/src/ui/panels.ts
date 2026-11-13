@@ -1,30 +1,31 @@
 // First-party native panels over the existing InteractiveMode, never a second agent/editor loop.
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionUIContext, InteractiveChatPresentation } from "@earendil-works/pi-coding-agent";
-import { decodeKittyPrintable, isKeyRelease, matchesKey, TuiAltScreen, visibleWidth, type Component, type Terminal, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { decodeKittyPrintable, isKeyRelease, matchesKey, TuiAltScreen, visibleWidth, type Component, type OverlayHandle, type OverlayOptions, type Terminal, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
 import type { BuildUi, FleetControl } from "../build/types.ts";
 import { PanelTerminal, PANEL_BREAKPOINT, PANEL_WIDTH, RAIL_MIN, RAIL_MAX, MIN_MAIN, type PanelSurface } from "./panel-terminal.ts";
-import { NativeWorkbench, boardUnavailable, plainClick, type MainView } from "./workbench.ts";
+import { NativeWorkbench, boardUnavailable, plainClick, RULE_ROWS, type MainView } from "./workbench.ts";
 import type { HistoryRead } from "./history.ts";
 import type { ReviewBases } from "./review-store.ts";
 import type { JobControl } from "../host/job-controls.ts";
 import type { QueueControl } from "../host/queue-control.ts";
-import { panelTheme } from "./panels-theme.ts";
+import { panelTheme, userLabel } from "./panels-theme.ts";
 import { type Appearance, type Density, PACKAGED } from "./appearance.ts";
 import { ActionPalette, type HostAction } from "./action-palette.ts";
 import { setCanvasAppearance } from "./panel-canvas.ts";
 import { agentColor, setAgentHueAppearance } from "./agent-hues.ts";
 import { statusBar } from "./panels-chrome.ts";
-import { composerBar, composerTitle, type ComposerHit } from "./composer-chrome.ts";
-import { chromeTier, COMPACT_COLUMNS, SHORT_ROWS } from "./header.ts";
+import { composerBar, composerBottom, composerRow, composerTitle, composerTop, type ComposerHit } from "./composer-chrome.ts";
+import { chromeTier, COMPACT_COLUMNS, SHORT_ROWS, type Notice } from "./header.ts";
 import { contextHints, footerBase, footerRow, keyGroups, keyLabel, piKey, queueFocusKey, targetKey, type FooterHit, type HintState, type KeyContext } from "./keymap.ts";
 import { KeysList } from "./keys-list.ts";
+import { rule } from "./frame.ts";
 import { QueueDock } from "./queue-dock.ts";
 import { Sidebar, type SideHit, type SideTarget } from "./sidebar.ts";
 import { inspectorActivity } from "./inspector.ts";
 import { openOutputPager } from "./job-detail.ts";
-import { pad, plainLabel, setPanelAppearance, PANEL_MUTED, type PanelSnapshot } from "./panels-view.ts";
+import { pad, plainLabel, setPanelAppearance, PANEL_ERROR, PANEL_RAISED, PANEL_RULE, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING, type PanelSnapshot } from "./panels-view.ts";
 import { BuildController } from "./build/build-controller.ts";
 import { BUILD_BOARD_ENTRY, BUILD_EXIT_ENTRY, BUILD_FINISH_ENTRY, buildEntryRenderer, type BuildEntry } from "./build/build-entries.ts";
 import { choiceRows } from "./build/choice-dock.ts";
@@ -98,6 +99,16 @@ export class NativePanels implements PanelSurface {
   private drag: { readonly start: number } | undefined;
   private separatorAt = 0;
   private railHits: ReadonlyMap<number, readonly SideHit[]> = new Map();
+  /** Screen rows of the rail in the last layout: the first row and how many. */
+  private railTop = 0;
+  private railRows = 0;
+  /** The notice toast at the top right of the main view, while one shows. */
+  private toast: { readonly handle: OverlayHandle; readonly notice: Notice } | undefined;
+  /** True while `hasOverlay` asks the TUI about every overlay but the toast. */
+  private probing = false;
+  private tui: TUI | undefined;
+  /** Rows of the status bar in the last frame. */
+  private statusRows = 1;
   /** The drawer was opened by F6 and closes when the sidebar gives up the focus. */
   private drawerByKey = false;
   /** A dialog or pager the panels opened (Pi raises a prompt for it too): its footer shows its own keys. */
@@ -139,13 +150,18 @@ export class NativePanels implements PanelSurface {
       draft: () => this.ui?.getEditorText() ?? "", setDraft: text => this.ui?.setEditorText(text),
       focusComposer: () => this.focusComposer(), notice: (text, tone) => this.workbench.notice(text, tone),
       changed: () => this.refresh(),
-      // Children never take queued input, so with any child the queue names the parent as its receiver.
-      ...(build ? { receiver: () => this.options.snapshot()?.build?.fleet.children.length ? "the parent" : undefined } : {}),
+      // A build session's queue names the parent as every item's receiver: children never take queued input.
+      ...(build ? { receiver: () => "parent" } : {}),
     });
     this.workbench = new NativeWorkbench({ ...options, ...(build && this.build ? { build, buildController: this.build } : {}),
       terminal: () => this.terminal ? { columns: this.terminal.physical.columns, rows: this.terminal.rows } : undefined,
       onFocusMain: () => { this.sidebar.focused = false; this.queue.focused = false; this.blurDock(); this.closeKeyDrawer(); },
-      canInteract: () => this.canInteract && !this.activeSelection?.(), changed: () => this.refresh() });
+      canInteract: () => this.canInteract && !this.activeSelection?.(), changed: () => this.refresh(),
+      rail: {
+        width: () => this.wide && this.terminal ? this.terminal.railWidth : undefined,
+        render: (width, height) => this.renderSidebar(width, height),
+        placed: (top, height) => { this.railTop = top; this.railRows = height; },
+      } });
     if (build) {
       const sync = () => { this.build?.sync(); this.refresh(); };
       this.unsubscribeBuild = [build.fleet.subscribe(sync), build.exit.subscribe(sync), build.board.subscribe(sync)];
@@ -173,12 +189,34 @@ export class NativePanels implements PanelSurface {
     queueMicrotask(() => {
       this.queued = false;
       if (this.disposed) return;
+      this.syncToast();
       this.requestRender?.();
-      this.terminal?.redrawSidebar();
     });
+  }
+  /**
+   * The workbench's notice as a toast: raised surface, rounded border in the rule colour, at the top right of the
+   * main view. It never takes the focus; a new notice replaces it and it leaves when the notice expires.
+   */
+  private syncToast(): void {
+    const notice = this.workbench.currentNotice, tui = this.tui, terminal = this.terminal;
+    if (this.toast?.notice === notice) return;
+    this.toast?.handle.hide(); this.toast = undefined;
+    if (!notice || !tui || !terminal) return;
+    const main = terminal.mainColumns, width = Math.max(6, Math.min(visibleWidth(notice.text) + 4, main - 2));
+    const tone = notice.tone === "success" ? PANEL_SUCCESS : notice.tone === "warning" ? PANEL_WARNING : notice.tone === "error" ? PANEL_ERROR : PANEL_TEXT;
+    const lines = [
+      `${PANEL_RAISED}${PANEL_RULE}╭${"─".repeat(width - 2)}╮`,
+      `${PANEL_RAISED}${PANEL_RULE}│${tone} ${pad(notice.text, width - 4)}${PANEL_RAISED} ${PANEL_RULE}│`,
+      `${PANEL_RAISED}${PANEL_RULE}╰${"─".repeat(width - 2)}╯`,
+    ].map(line => line + "\x1b[0m");
+    const handle = tui.showOverlay({ render: () => lines, invalidate() {} }, {
+      row: this.workbench.bodyTop(), col: Math.max(0, main - 1 - width), width, nonCapturing: true, visible: () => !this.probing,
+    });
+    this.toast = { handle, notice };
   }
   dispose(): void {
     this.disposed = true;
+    this.toast?.handle.hide(); this.toast = undefined; this.tui = undefined;
     for (const unsubscribe of this.unsubscribeBuild) unsubscribe();
     this.build?.dispose();
     this.workbench.dispose();
@@ -262,11 +300,11 @@ export class NativePanels implements PanelSurface {
     if (target) this.openSideTarget(target);
   }
   /**
-   * One widget above the editor: a docked build dialog, else the collapsed sidebar row or its drawer (only
-   * without a rail), then the queue.
+   * One widget above the editor, in the mock's dock order: a docked build dialog, then the queue, then (only
+   * without a rail and without a dialog) the collapsed sidebar row or its drawer, each with its own rule.
    */
   private dock(): Component {
-    let choiceRowsShown = 0, sideRows = 0;
+    let choiceRowsShown = 0, queueRows = 0;
     let sideHits: ReadonlyMap<number, readonly SideHit[]> = new Map();
     return {
       render: width => {
@@ -283,21 +321,22 @@ export class NativePanels implements PanelSurface {
         if (!this.wide && !choice.length) {
           const source = this.workbench.sideSource();
           const frame = this.sidebar.drawer ? this.sidebar.drawerFrame(source, width, rows)
-            : this.sidebar.row(source, width, chromeTier(this.terminal?.physical.columns ?? width) === "tiny");
+            : this.sidebar.row(source, width, chromeTier(this.terminal?.physical.columns ?? width) === "tiny", rows);
           side = frame.lines; sideHits = frame.hits;
         }
-        choiceRowsShown = choice.length; sideRows = side.length;
-        return [...choice, ...side, ...queue];
+        choiceRowsShown = choice.length; queueRows = queue.length;
+        return [...choice, ...queue, ...side];
       },
       handleMouse: event => {
         if (event.y < choiceRowsShown) return this.canInteract ? this.build?.dock.handleMouse(event) : { handled: true };
         const y = event.y - choiceRowsShown;
-        if (y < sideRows) {
-          if (this.canInteract && plainClick(event)) this.sideClick(sideHits.get(y)?.find(hit => event.x >= hit.from && event.x < hit.to), false);
+        if (y >= queueRows) {
+          const row = y - queueRows;
+          if (this.canInteract && plainClick(event)) this.sideClick(sideHits.get(row)?.find(hit => event.x >= hit.from && event.x < hit.to), false);
           return { handled: true };
         }
         if (!this.canInteract) return undefined;
-        const result = this.queue.handleMouse({ ...event, y: y - sideRows });
+        const result = this.queue.handleMouse({ ...event, y });
         if (this.queue.focused) { this.sidebar.focused = false; this.workbench.focused = false; this.blurDock(); this.closeKeyDrawer(); this.refresh(); }
         return result;
       },
@@ -305,12 +344,14 @@ export class NativePanels implements PanelSurface {
     };
   }
   /**
-   * Rows the rest of the screen keeps while a dialog is docked: header (one row when short or tiny), tabs,
-   * the composer's three rows, the status bar (two rows below 52 columns), the footer and the queue.
+   * Rows the rest of the screen keeps while a dialog is docked: header (one row when short or tiny), tabs and
+   * their rule, the composer box (its bar folds away when short), the status bar, the footer and its rule, and
+   * the queue.
    */
   private chromeRows(width: number, rows: number, queueRows: number): number {
     const header = rows < SHORT_ROWS || (this.terminal?.physical.columns ?? width) < COMPACT_COLUMNS ? 1 : 2;
-    return header + 1 + 3 + (width < 52 ? 2 : 1) + 1 + queueRows;
+    const rules = rows >= RULE_ROWS ? 2 : 0;
+    return header + 1 + (rows < SHORT_ROWS ? 3 : 4) + this.statusRows + 1 + rules + queueRows;
   }
   private queueState(): HintState["queue"] {
     const items = this.options.snapshot()?.queue ?? [];
@@ -336,32 +377,32 @@ export class NativePanels implements PanelSurface {
     if (isKeyRelease(data)) return false;
     const mouse = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
     if (mouse && this.wide && this.terminal) {
-      const column = Number(mouse[2]) - 1, x = column - this.terminal.columns - 1;
+      const column = Number(mouse[2]) - 1, row = Number(mouse[3]) - 1, x = column - this.terminal.mainColumns - 1;
+      const inRail = row >= this.railTop && row < this.railTop + this.railRows;
       const button = Number(mouse[1]);
       const release = mouse[4] === "m" || (button & 3) === 3;
-      // The separator column (x = -1) resizes the rail: drag, Esc restores, double-click resets.
+      // The rail's `│` column (x = -1) resizes the rail: drag, Esc restores, double-click resets.
       if (this.drag) {
         if (release) { this.drag = undefined; this.refresh(); }
         else if (button & 32) this.resizeRail(this.terminal.physical.columns - column - 1);
         return true;
       }
-      if (x === -1 && mouse[4] === "M" && button === 0 && this.canInteract) {
+      if (inRail && x === -1 && mouse[4] === "M" && button === 0 && this.canInteract) {
         const now = Date.now();
         if (now - this.separatorAt < 400) { this.separatorAt = 0; this.resizeRail(PANEL_WIDTH); }
         else { this.separatorAt = now; this.drag = { start: this.terminal.railWidth }; this.refresh(); }
         return true;
       }
-      if (mouse[4] === "M" && !(button & 96) && !release) this.pointerOrigin = x >= 0 ? "sidebar" : "main";
+      if (mouse[4] === "M" && !(button & 96) && !release) this.pointerOrigin = inRail && x >= 0 ? "sidebar" : "main";
       const origin = this.pointerOrigin;
       if (release) this.pointerOrigin = undefined;
       // A main-pane selection must receive its release even when dragged into the rail.
       if (origin === "main") return false;
-      if (x >= 0 || origin === "sidebar") {
-        if (x >= 0 && this.canInteract && mouse[4] === "M" && button === 0) {
-          const row = Number(mouse[3]) - 1;
-          this.sideClick(this.railHits.get(row)?.find(hit => x >= hit.from && x < hit.to), true);
+      if ((inRail && x >= 0) || origin === "sidebar") {
+        if (inRail && x >= 0 && this.canInteract && mouse[4] === "M" && button === 0) {
+          this.sideClick(this.railHits.get(row - this.railTop)?.find(hit => x >= hit.from && x < hit.to), true);
         }
-        return true; // Physical rail cells must not enter Pi's smaller main viewport.
+        return true; // Rail cells are the sidebar's: Pi's views never receive them.
       }
     }
     if (this.drag && matchesKey(data, "escape")) { const start = this.drag.start; this.drag = undefined; this.resizeRail(start); this.refresh(); return true; }
@@ -406,6 +447,7 @@ export class NativePanels implements PanelSurface {
   install(pi: ExtensionAPI, sdk: typeof Sdk): void {
     this.themeCtor = sdk.Theme;
     this.pi = pi;
+    pi.registerMarkdownTransformer(userLabel, { messageTypes: ["user"] });
     if (this.build) {
       const entries = buildEntryRenderer(() => this.build);
       for (const type of [BUILD_EXIT_ENTRY, BUILD_BOARD_ENTRY, BUILD_FINISH_ENTRY]) pi.registerMessageRenderer(type, entries);
@@ -423,13 +465,25 @@ export class NativePanels implements PanelSurface {
       this.prompts = 0;
       setPanelAppearance(this.appearance); setCanvasAppearance(this.appearance); setAgentHueAppearance(this.appearance);
       ctx.ui.setTheme(panelTheme(sdk.Theme, ctx.ui.theme.getColorMode(), this.appearance));
+      // The header's state word carries Working; Pi's loader row above the composer would repeat it.
+      ctx.ui.setWorkingVisible(false);
       const owner = this;
       ctx.ui.setEditorComponent((tui, theme, keys) => {
+        /**
+         * The composer: a rounded box with its title set into the top border, `›` before the draft and the model
+         * bar inside, in accent while it has the focus. Pi's own top and bottom border rows carry the box's top
+         * and the bar; the box's bottom border follows the bar, and the bar folds away in a short terminal.
+         */
         const editor = new class extends sdk.CustomEditor {
           private composer: { readonly line: string; readonly model?: ComposerHit; readonly effort?: ComposerHit } | undefined;
+          private bottom = "";
           private bottomRow = -1;
+          private hiddenAbove = 0;
           dispatchNative(id: "app.model.select" | "app.thinking.cycle"): void { this.actionHandlers.get(id)?.(); }
-          setPaddingX(padding: number): void { super.setPaddingX(owner.density === "compact" ? 0 : Math.max(2, padding)); }
+          /** The margin, `│` and blank before the content, then `› `; compact density drops the blank after `›`. */
+          get inset(): number { return owner.density === "compact" ? 4 : 5; }
+          setPaddingX(_padding: number): void { super.setPaddingX(this.inset); }
+          private get accent(): boolean { return this.focused && owner.focus === "composer"; }
           handleInput(data: string): void {
             if (owner.canInteract && matchesKey(data, "f2")) { void owner.palette(); return; }
             // The dequeue binding pulls the owner's last queued input back above the draft.
@@ -453,43 +507,54 @@ export class NativePanels implements PanelSurface {
             super.handleInput(data);
           }
           protected renderTopBorder(width: number, hidden: number): string {
-            if (hidden) return super.renderTopBorder(width, hidden);
+            this.hiddenAbove = hidden;
             // The receiver stays at every width (it decides where Enter goes); the input disposition goes first.
             const tiny = (owner.terminal?.physical.columns ?? width) < COMPACT_COLUMNS, target = owner.build?.composerTarget();
-            const label = pad(` ${composerTitle(tiny ? null : owner.options.snapshot(), target)} `, Math.max(0, width - 3)).trimEnd();
-            return PANEL_MUTED + "──" + label + "─".repeat(Math.max(0, width - visibleWidth(label) - 2));
+            return composerTop(composerTitle(tiny ? null : owner.options.snapshot(), target), width, this.accent, hidden ? `↑ ${hidden} more` : "");
           }
           protected renderBottomBorder(width: number, hidden: number): string {
-            this.composer = composerBar(owner.options.snapshot(), width, hidden, (owner.terminal?.rows ?? SHORT_ROWS) < SHORT_ROWS);
-            return this.composer.line;
+            if ((owner.terminal?.rows ?? SHORT_ROWS) < SHORT_ROWS) {
+              this.composer = undefined;
+              this.bottom = composerBottom(width, this.accent, hidden ? `↓ ${hidden} more` : "");
+            } else {
+              this.composer = composerBar(owner.options.snapshot(), width, hidden, this.accent);
+              this.bottom = this.composer.line;
+            }
+            return this.bottom;
           }
           handleMouse(event: TuiMouseEvent) {
             if (event.type === "click" && event.button === "left") {
               owner.focusComposer();
-              if (owner.canInteract && event.y === this.bottomRow) {
+              if (owner.canInteract && this.composer && event.y === this.bottomRow) {
                 const hit = (range: { from: number; to: number } | undefined) => range && event.x >= range.from && event.x < range.to;
                 // Use the same native actions as Ctrl+L / Shift+Tab; selection still commits through host preflight.
-                if (hit(this.composer?.model)) { this.actionHandlers.get("app.model.select")?.(); return { handled: true }; }
-                if (hit(this.composer?.effort)) { this.actionHandlers.get("app.thinking.cycle")?.(); return { handled: true }; }
+                if (hit(this.composer.model)) { this.actionHandlers.get("app.model.select")?.(); return { handled: true }; }
+                if (hit(this.composer.effort)) { this.actionHandlers.get("app.thinking.cycle")?.(); return { handled: true }; }
               }
             }
-            return super.handleMouse(event);
+            // The box's bottom border follows the bar: rows below the bar are one further down than Pi counts them.
+            return super.handleMouse(this.composer && this.bottomRow >= 0 && event.y > this.bottomRow ? { ...event, y: event.y - 1 } : event);
           }
           render(width: number): string[] {
-            this.borderColor = text => ctx.ui.theme.fg("borderAccent", text);
-            const lines = super.render(width);
-            this.bottomRow = this.composer ? lines.indexOf(this.composer.line) : -1;
-            // No side rules: terminal row selection would copy them into the message text.
-            return lines.map(line => ctx.ui.theme.bg("userMessageBg", pad(line, width)));
+            const lines = super.render(width), end = lines.indexOf(this.bottom), accent = this.accent;
+            this.bottomRow = this.composer ? end : -1;
+            if (end < 0) return lines;
+            const rows = lines.slice(1, end).map((line, index) => composerRow(line, this.inset, width, accent, index === 0 && this.hiddenAbove === 0));
+            return [lines[0]!, ...rows, lines[end]!, ...(this.composer ? [composerBottom(width, accent)] : []), ...lines.slice(end + 1)];
           }
         }(tui, theme, keys);
-        editor.setPaddingX(2);
+        editor.setPaddingX(editor.inset);
         owner.nativeAction = id => editor.dispatchNative(id);
-        owner.updateDensity = () => editor.setPaddingX(2);
+        owner.updateDensity = () => editor.setPaddingX(editor.inset);
         owner.nativeKeys = id => keys.getKeys(id).map(key => keyLabel(key)).join(", ");
         owner.editorFocused = () => editor.focused;
         owner.requestRender = force => tui.requestRender(force);
-        owner.hasOverlay = () => tui.hasOverlay();
+        owner.tui = tui;
+        // The toast never takes the focus, so it does not count as an overlay that holds the keys.
+        owner.hasOverlay = () => {
+          owner.probing = true;
+          try { return tui.hasOverlay(); } finally { owner.probing = false; }
+        };
         owner.activeSelection = tui instanceof TuiAltScreen ? () => tui.hasActiveSelection() : () => false;
         return editor;
       });
@@ -500,10 +565,10 @@ export class NativePanels implements PanelSurface {
           render: () => [],
           invalidate() {},
         }));
-        let statusRows = 0;
+        let footerAt = 0;
         let hits: readonly FooterHit[] = [];
         return {
-          // The status bar, then one row of the focused surface's keys ending with F1.
+          // The status bar, a rule (not below RULE_ROWS rows), then one row of the focused surface's keys ending with F1.
           render: width => {
             const snapshot = this.options.snapshot(), cost = this.build ? buildCost(snapshot) : undefined;
             const status = statusBar(this.options.identity, cost && snapshot ? { ...snapshot, cost: cost.total } : snapshot,
@@ -511,11 +576,12 @@ export class NativePanels implements PanelSurface {
             const context = this.footerContext();
             const row = footerRow(contextHints(this.workbench.hintState(context, this.queueState())),
               chromeTier(this.terminal?.physical.columns ?? width), width, footerBase(context));
-            statusRows = status.length; hits = row.hits;
-            return [...status, row.line];
+            const ruled = (this.terminal?.rows ?? RULE_ROWS) >= RULE_ROWS;
+            this.statusRows = status.length; footerAt = status.length + (ruled ? 1 : 0); hits = row.hits;
+            return [...status, ...(ruled ? [rule(width) + "\x1b[0m"] : []), row.line];
           },
           handleMouse: event => {
-            if (event.y !== statusRows) return undefined;
+            if (event.y !== footerAt) return undefined;
             const hit = plainClick(event) ? hits.find(item => event.x >= item.from && event.x < item.to) : undefined;
             if (hit?.hint.data) this.replay(hit.hint.data);
             return { handled: true };
@@ -620,6 +686,11 @@ export class NativePanels implements PanelSurface {
     const items = [
       panel("chat", "Chat", "F9"),
       panel("agents", "Agents: helper calls and jobs", "F8"),
+      action("agents.details", "Agent details", "", async () => { await this.workbench.openAgentDetails(); }, () => {
+        if (ready()) return ready();
+        const row = this.workbench.selectedAgent();
+        return !row ? "No agent selected in Agents" : row.meta.length ? undefined : "No details for this agent";
+      }),
       panel("changes", "Changes", "F7"),
       ...(taskBound ? [panel("task", "Task", "F5"), panel("proof", "Proof", "F10")] : []),
       ...(this.build ? this.buildActions(action, ready) : [panel("inbox", "Inbox", "F11")]),
@@ -688,8 +759,10 @@ export class NativePanels implements PanelSurface {
     this.overlay = "palette"; this.refresh();
     let action: HostAction | undefined;
     try {
-      action = await ui.custom<HostAction | undefined>((tui, theme, _keys, done) =>
-        new ActionPalette(this.actions(), theme, done, () => tui.requestRender(), Math.max(1, Math.min(12, tui.terminal.rows - 8))));
+      // A popup centred near the top, as the mock's backdrop places it: at most 78 cells wide.
+      action = await ui.custom<HostAction | undefined>((tui, _theme, _keys, done) =>
+        new ActionPalette(this.actions(), done, () => tui.requestRender(), Math.max(1, Math.min(12, tui.terminal.rows - 8))),
+      { overlay: true, overlayOptions: () => this.popupPlace() });
     } finally { this.overlay = undefined; this.refresh(); }
     if (!action || this.disposed) return;
     const reason = action.disabled();
@@ -708,9 +781,16 @@ export class NativePanels implements PanelSurface {
     this.overlay = "keys"; this.refresh();
     let data: string | undefined;
     try {
-      data = await ui.custom<string | undefined>((tui, theme, _keys, done) =>
-        new KeysList(groups, theme, done, () => tui.requestRender(), Math.max(3, Math.min(18, tui.terminal.rows - 9))));
+      data = await ui.custom<string | undefined>((tui, _theme, _keys, done) =>
+        new KeysList(groups, done, () => tui.requestRender(), Math.max(3, Math.min(22, tui.terminal.rows - 8))),
+      { overlay: true, overlayOptions: () => this.popupPlace() });
     } finally { this.overlay = undefined; this.refresh(); }
     if (data && !this.disposed) this.replay(data);
+  }
+  /** Where the F1 and F2 popups sit: centred, at most 78 cells wide, 12% down (one row down when short). */
+  private popupPlace(): OverlayOptions {
+    const columns = this.terminal?.physical.columns ?? 80, rows = this.terminal?.rows ?? 24;
+    const top = rows < SHORT_ROWS ? 1 : Math.round(rows * 0.12);
+    return { anchor: "top-center", width: Math.max(20, Math.min(78, columns - 4)), offsetY: top, maxHeight: Math.max(4, rows - top - 1) };
   }
 }

@@ -88,7 +88,7 @@ test("project-less assistant shows actionable scope choice, not a misleading cle
     expect(panels.workbench.sideSource().files.state).toBe("choose");
     panels.sidebar.tab = "files";
     const files = stripTerminalSequences(panels.renderSidebar(34, 26).join("\n"));
-    expect(files).toContain("No project chosen"); expect(files).toContain("Choose project"); expect(files).not.toContain("No changes yet");
+    expect(files).toContain("No project chosen"); expect(files).toContain("Choose project"); expect(files).not.toMatch(/no changes yet/i);
     // The Changes tab reads `?`, never a count of zero.
     const root = panels.workbench.mount(new Text("transcript", 0, 0));
     const tabs = stripTerminalSequences(renderLayoutFrame(root, 104, 24, () => {}).lines.join("\n"));

@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { COMPACT_COLUMNS, SHORT_ROWS } from "../src/ui/header.ts";
 import { EventLog } from "../src/bridge/events.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
@@ -32,11 +31,11 @@ function rows(h: PanelHost): string[] {
 }
 /**
  * The paragraph a reader sees at the top of the transcript: the first non-blank row below the
- * header and tab rows. The header has one row on short or compact terminals and two otherwise.
+ * header, the tab row and its rule.
  */
 function readingAnchor(h: PanelHost): number {
   const lines = rows(h);
-  let top = (h.physical.rows < SHORT_ROWS || h.physical.columns < COMPACT_COLUMNS ? 1 : 2) + 1;
+  let top = h.panels.workbench.bodyTop();
   while (top < lines.length && !lines[top]?.trim()) top++;
   for (let row = top; row < lines.length; row++) {
     const marker = /P(\d\d)(E| )/.exec(lines[row] ?? "");
@@ -46,15 +45,28 @@ function readingAnchor(h: PanelHost): number {
   }
   throw new Error("no paragraph visible:\n" + lines.join("\n"));
 }
-function frame(h: PanelHost, ready: (screen: string) => boolean, what: string): Promise<void> {
-  return h.physical.whenWritten(() => ready(rows(h).join("\n")), what);
+/**
+ * Waits until `ready` holds over the main columns of a frame written after write `after`. A resize keeps the old
+ * cells in the screen model until Pi redraws, so frames after a resize pass the write count from before it.
+ */
+function frame(h: PanelHost, ready: (screen: string) => boolean, what: string, after = 0): Promise<void> {
+  return h.physical.whenWritten(() => h.physical.writes.length > after && ready(rows(h).join("\n")), what);
+}
+/** Resizes the terminal and returns the write count from before, for `frame`. */
+function resize(h: PanelHost, columns: number, height: number): number {
+  const mark = h.physical.writes.length;
+  h.resize(columns, height);
+  return mark;
 }
 function expectIntact(h: PanelHost): void {
   const screen = h.screen();
   expect(screen.overflow).toBe(0);
   if (!h.panels.wide) return;
-  // The separator column never carries main-pane text.
-  for (let row = 0; row < screen.rows; row++) expect(screen.slice(row, 105, 106)).toBe(" ");
+  // The rail's `│` border runs down from the tab rule: main-pane text never takes its column.
+  const top = h.panels.workbench.bodyTop();
+  let row = top;
+  while (row < screen.rows && screen.slice(row, 105, 106) === "│") row++;
+  expect(row - top).toBeGreaterThan(screen.rows / 2);
 }
 const click = (h: PanelHost, col: number, row: number) => {
   h.physical.send(`\x1b[<0;${col + 1};${row + 1}M`); h.physical.send(`\x1b[<0;${col + 1};${row + 1}m`);
@@ -85,8 +97,8 @@ test("follow pauses for reading through a stream and relocation; jump-to-live is
     const ended = nextEvent(h.events, event => event.kind === "turn_ended");
     release(); await ended; await h.host.drained();
     await h.physical.whenWritten(() => h.transcript.render(mainColumns(h)).some(line => line.includes("LIVE_TAIL")), "the finished stream");
-    h.resize(140, 46);
-    await frame(h, screen => screen.includes(DRAFT), "a settled frame after the stream");
+    let mark = resize(h, 140, 46);
+    await frame(h, screen => screen.includes(DRAFT), "a settled frame after the stream", mark);
     expect(h.transcript.scrollTop).toBe(scrollTop);
     expect(h.transcript.isFollowingEnd).toBeFalse();
     expect(rows(h).join("\n")).not.toContain("LIVE_TAIL");
@@ -94,15 +106,15 @@ test("follow pauses for reading through a stream and relocation; jump-to-live is
 
     // Width changes (narrow, minimum, wide, manual rail toggle) keep the reading position and the draft.
     for (const [columns, height] of [[80, 34], [52, 24], [140, 46]] as const) {
-      h.resize(columns, height);
-      await frame(h, screen => screen.includes(DRAFT.slice(0, 8)) && screen.includes("Jump to latest"), `${columns}x${height} reading frame`);
+      mark = resize(h, columns, height);
+      await frame(h, screen => screen.includes(DRAFT.slice(0, 8)) && screen.includes("Jump to latest"), `${columns}x${height} reading frame`, mark);
       expect(readingAnchor(h)).toBe(anchor);
       expect(h.transcript.isFollowingEnd).toBeFalse();
       expect(h.host.sessionId()).toBe(h.bound);
       expectIntact(h);
     }
     for (const wide of [false, true]) {
-      const mark = h.physical.writes.length;
+      mark = h.physical.writes.length;
       h.physical.send(KEY.ctrlB);
       await h.physical.whenWritten(() => h.panels.wide === wide && h.physical.writes.length > mark, "manual rail toggle frame");
       await frame(h, screen => screen.includes("Jump to latest"), "manual relocation frame");
@@ -111,8 +123,8 @@ test("follow pauses for reading through a stream and relocation; jump-to-live is
     }
 
     // Narrow keyboard route: viewport keys scroll the transcript.
-    h.resize(80, 34);
-    await h.physical.whenWritten(() => !h.panels.wide, "narrow frame");
+    mark = resize(h, 80, 34);
+    await h.physical.whenWritten(() => !h.panels.wide && h.physical.writes.length > mark, "narrow frame");
     h.physical.send(KEY.pageUp);
     expect(h.transcript.isFollowingEnd).toBeFalse();
     h.physical.send(KEY.bottom);
@@ -120,8 +132,8 @@ test("follow pauses for reading through a stream and relocation; jump-to-live is
     expect(h.transcript.isFollowingEnd).toBeTrue();
 
     // Wide pointer route: wheel pauses follow; clicking the jump control resumes it, .
-    h.resize(140, 46);
-    await frame(h, screen => screen.includes("LIVE_TAIL"), "wide live frame");
+    mark = resize(h, 140, 46);
+    await frame(h, screen => screen.includes("LIVE_TAIL"), "wide live frame", mark);
     for (let i = 0; i < 6; i++) h.physical.send("\x1b[<64;20;12M");
     await frame(h, screen => screen.includes("Jump to latest message"), "wheel pauses follow");
     expect(h.transcript.isFollowingEnd).toBeFalse();

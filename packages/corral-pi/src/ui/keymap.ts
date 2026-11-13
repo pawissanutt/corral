@@ -1,8 +1,9 @@
 // What each focus context offers, as footer hints and as the F1 keys list. Pi-owned keys come from the
 // configured keybindings, so a changed user binding changes the hint; panel keys are fixed.
 import { getKeybindings, visibleWidth, type KeyId, type Keybinding } from "@earendil-works/pi-tui";
-import { chromeLine, keyCap, keyCapWidth, type ChromeTier } from "./header.ts";
-import { PANEL_MUTED, plainLabel } from "./panels-view.ts";
+import type { ChromeTier } from "./header.ts";
+import { keyCap } from "./frame.ts";
+import { pad, PANEL_BG, PANEL_MUTED, PANEL_TEXT, plainLabel, RESET } from "./panels-view.ts";
 
 export type KeyContext = "composer" | "agents" | "agent" | "changes" | "task" | "lifecycle" | "proof" | "artifacts"
   | "inbox" | "usage" | "image" | "sidebar" | "queue" | "dialog" | "palette" | "keys" | "pager" | "board" | "choice";
@@ -139,10 +140,12 @@ function composerHints(state: HintState): (Hint | undefined)[] {
     return [submit, targetHint(), !target.answer && state.streaming ? piHint("app.interrupt", "interrupt", "stop") : undefined];
   }
   const to = build?.steerable ? targetHint() : undefined;
+  // Pulling queued input back comes before stop: it is the key the mock's composer footer names.
+  const [dequeue, focus] = queueHints(state);
   return state.streaming
-    ? [piHint("tui.input.submit", "submit", "steer"), piHint("app.message.followUp", "followUp", "queue"), to,
-      piHint("app.interrupt", "interrupt", "stop"), ...queueHints(state)]
-    : [piHint("tui.input.submit", "submit", "send"), to, ...queueHints(state)];
+    ? [piHint("tui.input.submit", "submit", "steer"), piHint("app.message.followUp", "followUp", "queue"), to, dequeue,
+      piHint("app.interrupt", "interrupt", "stop"), focus]
+    : [piHint("tui.input.submit", "submit", "send"), to, dequeue, focus];
 }
 function boardHints(state: HintState): (Hint | false | undefined)[] {
   // Without the view's offered actions, a task is assumed selected and the board reachable. Task keys need a task.
@@ -226,44 +229,52 @@ export function footerBase(context: KeyContext): boolean {
 
 function hintWidth(item: Hint, short: boolean): number {
   const label = short ? item.short ?? item.label : item.label;
-  return keyCapWidth(item.key) + (label ? 1 + visibleWidth(label) : 0);
+  return visibleWidth(item.key) + 2 + (label ? 1 + visibleWidth(label) : 0);
 }
 
 /**
- * The footer row: contextual hints, then `F2 actions` (wide and mid) and `F1 keys` (`F1 more` in narrow
- * and tiny) when `base`. Trimming: the tier cap (narrow 4, tiny 2); the last contextual hint drops while
- * the row is too wide, down to one; short labels; the last contextual hint; F2; at worst a bare F1 cap.
+ * The footer row: contextual hints, then `F2 actions` (wide and mid) and `F1` when `base`. As many contextual
+ * hints as fit the row show, in priority order, at any width; F2 goes before any of them, and short labels are
+ * used when they let more hints show. F1 reads `keys` when nothing was dropped and `more` when something was;
+ * at worst it is a bare cap.
  */
 export function footerRow(hints: readonly Hint[], tier: ChromeTier, width: number, base: boolean):
   { readonly line: string; readonly hits: readonly FooterHit[] } {
   const roomy = tier === "wide" || tier === "mid";
   const gap = tier === "tiny" ? 1 : 2;
   const room = Math.max(0, width - 1);
-  let contextual = hints.slice(0, tier === "narrow" ? 4 : tier === "tiny" ? 2 : hints.length);
-  let actions: Hint | undefined = base && roomy ? hint("f2", "f2", "actions") : undefined;
-  let keys: Hint | undefined = base ? hint("f1", "f1", roomy ? "keys" : "more") : undefined;
-  let short = false;
-  const items = () => [...contextual, ...(actions ? [actions] : []), ...(keys ? [keys] : [])];
-  const total = () => {
-    const shown = items();
-    return shown.reduce((sum, item) => sum + hintWidth(item, short), 0) + gap * Math.max(0, shown.length - 1);
+  const f2 = base && roomy ? hint("f2", "f2", "actions") : undefined;
+  const f1 = (label: string): Hint[] => base ? [hint("f1", "f1", label)] : [];
+  const measure = (shown: readonly Hint[], short: boolean) =>
+    shown.reduce((sum, item) => sum + hintWidth(item, short), 0) + gap * Math.max(0, shown.length - 1);
+  /** The most contextual hints that fit with `tail` after them. */
+  const most = (short: boolean, tail: readonly Hint[]) => {
+    let count = hints.length;
+    while (count > 0 && measure([...hints.slice(0, count), ...tail], short) > room) count--;
+    return count;
   };
-  while (total() > room && contextual.length > 1) contextual = contextual.slice(0, -1);
-  if (total() > room) short = true;
-  if (total() > room) contextual = [];
-  if (total() > room) actions = undefined;
-  if (total() > room && keys) keys = { ...keys, label: "" };
+  let short = false;
+  let shown: Hint[];
+  if (measure([...hints, ...(f2 ? [f2] : []), ...f1("keys")], false) <= room) shown = [...hints, ...(f2 ? [f2] : []), ...f1("keys")];
+  else {
+    const full = most(false, f1("more")), brief = most(true, f1("more"));
+    short = brief > full;
+    const count = short ? brief : full;
+    shown = [...hints.slice(0, count), ...f1(count === hints.length && !f2 ? "keys" : "more")];
+    if (measure(shown, short) > room) shown = f1("");
+  }
   const hits: FooterHit[] = [];
   const parts: string[] = [];
   let x = 1;
-  for (const item of items()) {
+  for (const item of shown) {
     const label = short ? item.short ?? item.label : item.label;
     parts.push(keyCap(item.key) + (label ? " " + PANEL_MUTED + label : ""));
     const end = x + hintWidth(item, short);
     if (x < width) hits.push({ from: x, to: Math.min(width, end), hint: item });
     x = end + gap;
   }
-  return { line: chromeLine(" " + PANEL_MUTED + parts.join(" ".repeat(gap)), width), hits };
+  const line = " " + parts.join(PANEL_MUTED + " ".repeat(gap));
+  return { line: PANEL_BG + PANEL_TEXT + pad(line, Math.max(0, width)).replaceAll(RESET, RESET + PANEL_BG) + RESET, hits };
 }
 
 /**

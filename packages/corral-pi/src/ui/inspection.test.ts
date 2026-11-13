@@ -8,6 +8,7 @@ import { getLayoutBoxesAt, renderLayoutFrame } from "../../node_modules/@earendi
 import { InspectionStore, evidenceLines, type Inspection } from "./inspection.ts";
 import { ReviewStore } from "./review-store.ts";
 import { NativeWorkbench } from "./workbench.ts";
+import { SPLIT_MIN } from "./proof-view.ts";
 import { parseChangedPaths } from "./candidate-git.ts";
 import { CorralClient } from "../tools/corral.ts";
 import { writeFakeCorral } from "../../test/support/fake-corral.ts";
@@ -119,8 +120,12 @@ test("committed candidate files, binary/rename diffstats and captured hunks igno
     try {
       const component = wb.mount(new Text("transcript", 0, 0)); wb.setView("changes"); await wb.review.refresh(); await wb.openFile("added.ts");
       const visible = stripTerminalSequences(renderLayoutFrame(component, 80, 50, () => {}).lines.join("\n"));
-      expect(visible).toContain(current.base.slice(0, 8)); expect(visible).toContain(current.head.slice(0, 8)); expect(visible).toMatch(/added\.ts\s+added\s+\+1 −0/);
-      expect(visible).toContain("+ committed line"); expect(visible).not.toContain("dirty worktree");
+      // The comparison row names the candidate by its exact base and head; the displayed patch carries the same identity.
+      expect(visible).toContain(current.base.slice(0, 8)); expect(visible).toContain(current.head.slice(0, 8));
+      expect(wb.review.patchSnapshot?.base).toBe(current.base); expect(wb.review.patchSnapshot?.head).toBe(current.head);
+      expect(visible).toMatch(/added\.ts\s+\+1 −0/);
+      // Diff rows: the new-side line number, then the sign directly before the text.
+      expect(visible).toMatch(/\d \+committed line/); expect(visible).not.toContain("dirty worktree");
     } finally { wb.dispose(); }
     expect(parseChangedPaths("M\0literal\n界面.ts\0")[0]?.path).toBe("literal\n界面.ts");
   } finally { store.dispose(); rmSync(root, { recursive: true, force: true }); }
@@ -148,7 +153,8 @@ test("retained candidate status/diffstat and hunks advance together only when th
       wb.setView("changes"); await wb.review.refresh(); await wb.openFile("a.txt"); await wb.review.refresh();
       for (const width of [80, 140]) {
         const initial = render(width, "initial");
-        expect(initial).toContain(first.slice(0, 8)); expect(initial).toMatch(/a\.txt\s+modified\s+\+1 −1/); expect(initial).toContain("+ first");
+        expect(initial).toContain(first.slice(0, 8)); expect(wb.review.patchSnapshot?.head).toBe(first);
+        expect(initial).toMatch(/a\.txt\s+\+1 −1/); expect(initial).toMatch(/\d \+first/);
       }
       if (next === "edit") writeFileSync(join(root, "a.txt"), "second\nsecond2\nsecond3\n");
       else rmSync(join(root, "a.txt"));
@@ -159,17 +165,21 @@ test("retained candidate status/diffstat and hunks advance together only when th
       expect(wb.review.head).toBe(second);
       expect(wb.review.stats.get("a.txt")).toEqual({ added: next === "edit" ? 3 : 0, removed: 1 });
       for (const width of [80, 140]) {
+        // The store read the new candidate; the screen keeps the applied patch, its counts and hunks until it is applied.
         const retained = render(width, "retained");
         expect(retained).toContain(first.slice(0, 8)); expect(retained).not.toContain(second.slice(0, 8)); expect(retained).toContain(current.base.slice(0, 8));
-        expect(retained).toContain("+ first"); expect(retained).toMatch(/a\.txt\s+modified\s+\+1 −1/);
-        expect(retained).toContain("New diff available"); expect(retained).not.toMatch(/a\.txt\s+deleted/);
+        expect(retained).toMatch(/\d \+first/); expect(retained).toMatch(/a\.txt\s+\+1 −1/);
+        expect(retained).toContain("New diff available"); expect(retained).not.toContain("@@ deleted file");
       }
       expect(wb.handleInput("r")).toBeTrue(); await wb.review.refresh();
+      expect(wb.review.patchSnapshot?.head).toBe(second); expect(wb.review.patchSnapshot?.base).toBe(current.base);
       for (const width of [80, 140]) {
         const applied = render(width, "applied");
         expect(applied).toContain(second.slice(0, 8)); expect(applied).not.toContain(first.slice(0, 8)); expect(applied).toContain(current.base.slice(0, 8));
-        expect(applied).toMatch(next === "edit" ? /a\.txt\s+modified\s+\+3 −1/ : /a\.txt\s+deleted\s+\+0 −1/);
-        expect(applied).not.toContain("+ first"); expect(applied).toContain(next === "edit" ? "+ second3" : "− base");
+        expect(applied).not.toContain("New diff available");
+        expect(applied).toMatch(next === "edit" ? /a\.txt\s+\+3 −1/ : /a\.txt\s+\+0 −1/);
+        if (next === "delete") expect(applied).toContain("@@ deleted file");
+        expect(applied).not.toMatch(/\+first/); expect(applied).toMatch(next === "edit" ? /\d \+second3/ : /−base/);
       }
     } finally { wb.dispose(); rmSync(root, { recursive: true, force: true }); }
   }
@@ -183,20 +193,25 @@ test("Evidence keyboard/pointer navigation survives narrow/wide rendering and pr
     wb.handleInput("\x1b[21~"); await wb.inspection.refresh();
     expect(wb.view).toBe("evidence");
     for (const width of [52, 80, 140]) for (const row of lines(width)) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
-    wb.handleInput("j"); expect(stripTerminalSequences(lines(140).join("\n"))).toMatch(/^▌ C2 /m);
-    wb.handleInput("k"); expect(stripTerminalSequences(lines(52).join("\n"))).toMatch(/^ ‹ C1 1\/2 › /m);
+    // Proof splits into list and detail from SPLIT_MIN main-view columns, the same width as before the inset.
+    expect(stripTerminalSequences(lines(SPLIT_MIN).join("\n"))).toContain("┬");
+    expect(stripTerminalSequences(lines(SPLIT_MIN - 1).join("\n"))).not.toContain("┬");
+    expect(stripTerminalSequences(lines(SPLIT_MIN - 1).join("\n"))).toMatch(/‹ C1 1\/2 ›/);
+    // Proof sits one cell in from the main view's edge, like the rest of the frame.
+    wb.handleInput("j"); expect(stripTerminalSequences(lines(140).join("\n"))).toMatch(/^ ▌ C2 /m);
+    wb.handleInput("k"); expect(stripTerminalSequences(lines(52).join("\n"))).toMatch(/^  ‹ C1 1\/2 › /m);
     const wide = lines(140).map(row => stripTerminalSequences(row));
     // Key hints live in the footer, never in the Proof content.
     expect(wide.some(row => row.includes("j/k criterion"))).toBe(false);
-    const line = wide.findIndex(row => row.startsWith("  C2 "));
-    const event: TuiMouseEvent = { type: "click", button: "left", x: 1, y: line, screenX: 1, screenY: line, width: 140, height: 200, shift: false, alt: false, ctrl: false };
+    const line = wide.findIndex(row => row.startsWith("   C2 "));
+    const event: TuiMouseEvent = { type: "click", button: "left", x: 2, y: line, screenX: 2, screenY: line, width: 140, height: 200, shift: false, alt: false, ctrl: false };
     const frame = renderLayoutFrame(root, 140, 200, () => {});
     for (const box of getLayoutBoxesAt(frame, event.screenX, event.screenY)) {
       if (box.component.handleMouse?.({ ...event, x: event.screenX - box.rect.x, y: event.screenY - box.rect.y, width: box.rect.width, height: box.rect.height })) break;
     }
-    expect(stripTerminalSequences(lines(140).join("\n"))).toMatch(/^▌ C2 /m);
+    expect(stripTerminalSequences(lines(140).join("\n"))).toMatch(/^ ▌ C2 /m);
     wb.handleInput("j"); wb.handleInput("\r");
-    expect(stripTerminalSequences(lines(140).join("\n"))).toMatch(/^▌ ▾ Review notes/m);
+    expect(stripTerminalSequences(lines(140).join("\n"))).toMatch(/^ ▌ ▾ Review notes/m);
     wb.handleInput("\x1b[20~"); expect(stripTerminalSequences(lines(80).join("\n"))).toContain("REAL_TRANSCRIPT");
   } finally { wb.dispose(); }
 });

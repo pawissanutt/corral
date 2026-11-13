@@ -1,5 +1,6 @@
 // Inbox (F11) split layout: item list beside the selected item's detail, matching Proof.
-// Below SPLIT_MIN columns the list collapses to a one-line picker above the same detail.
+// Below SPLIT_MIN main-view columns the list collapses to a one-line picker above the same detail. The workbench
+// draws this view VIEW_INSET cells narrower than the main view, so the threshold adds them back.
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Text, matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { Role } from "../roles/types.ts";
@@ -8,6 +9,7 @@ import { ago, bold, chip, chipRows, clock, field, listRow, sectionRule, toneColo
 import { splitRow } from "./panels-chrome.ts";
 import { box, pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_MUTED, PANEL_RULE, PANEL_TEXT, PANEL_WARNING, RESET } from "./panels-view.ts";
 import { LIST_WIDTH, SPLIT_MIN } from "./proof-view.ts";
+import { VIEW_INSET } from "./frame.ts";
 
 const fit = (text: string, width: number) => stripTerminalSequences(truncateToWidth(plainLabel(text), Math.max(0, width), "…"));
 const stateOf = (item: InboxItem): readonly [glyph: string, tone: Tone] => item.pending ? ["⚑", "warn"] : ["·", "none"];
@@ -63,7 +65,7 @@ export class InboxView implements Component {
       : "No matching items in this canonical snapshot." : "Canonical inbox unavailable; r to retry.";
     const current = store.current, index = current ? items.indexOf(current) : -1;
 
-    if (width < SPLIT_MIN) {
+    if (width + VIEW_INSET < SPLIT_MIN) {
       if (!items.length) { full(PANEL_MUTED + empty + PANEL_TEXT); return lines; }
       const shown = current ?? items[0];
       if (!shown) return lines;

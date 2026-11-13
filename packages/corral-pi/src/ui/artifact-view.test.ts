@@ -4,7 +4,8 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getCapabilities, setCapabilities, visibleWidth, type ImageSource } from "@earendil-works/pi-tui";
-import { ArtifactView, type ArtifactCatalog } from "./artifact-view.ts";
+import { ArtifactView, COMPARE_ROW_MIN, type ArtifactCatalog } from "./artifact-view.ts";
+import { VIEW_INSET } from "./frame.ts";
 
 const identity = { store: "s", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 1 };
 const HEAD = "b".repeat(40), OLD = "a".repeat(40);
@@ -141,6 +142,9 @@ test("comparison uses only explicit selection order and never infers before/afte
     expect(wide).toContain("Registered bytes differ (different SHA256)");
     expect(wide).toContain("Title: A 2222-report.md │ B 1111-shot.png");
     expect(text(view, 60)).toContain("Title B: 1111-shot.png");
+    // One row per field from COMPARE_ROW_MIN main-view columns; the workbench renders the view VIEW_INSET narrower.
+    expect(text(view, COMPARE_ROW_MIN - VIEW_INSET)).toContain("Title: A 2222-report.md │ B 1111-shot.png");
+    expect(text(view, COMPARE_ROW_MIN - VIEW_INSET - 1)).toContain("Title B: 1111-shot.png");
     expect(wide).not.toMatch(/\b(before|after):/i);
     view.handleInput("k"); view.handleInput("k"); view.handleInput("m");
     expect(view.compare).toBe(false);

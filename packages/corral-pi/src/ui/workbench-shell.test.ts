@@ -6,7 +6,7 @@ import * as sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { createChatViewport } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/chat-viewport.js";
-import { getKeybindings, setKeybindings, stripTerminalSequences, Text, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { getKeybindings, setKeybindings, sliceByColumn, stripTerminalSequences, Text, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
 import { NativePanels, type NativePanelsOptions } from "./panels.ts";
 import { NativeWorkbench, type MainView } from "./workbench.ts";
@@ -70,12 +70,13 @@ function shell(columns: number, rows: number, state: () => PanelSnapshot | null,
   const commands = new Map<string, (args: string, ctx: unknown) => Promise<void>>();
   const pi = { on: (name: string, fn: (event: unknown, ctx: unknown) => unknown) => { handlers.set(name, fn); },
     registerCommand: (name: string, command: { handler: (args: string, ctx: unknown) => Promise<void> }) => { commands.set(name, command.handler); },
+    registerMarkdownTransformer() {},
   } as unknown as ExtensionAPI;
   const tui = { terminal: { rows }, requestRender() {} }, theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
   let draft = "", dock: Component | undefined, footer: Component | undefined;
   const customs: Component[] = [];
   const ui = {
-    theme: { getColorMode: () => "truecolor" }, setTheme() {}, setEditorComponent() {}, setHeader() {}, notify() {},
+    theme: { getColorMode: () => "truecolor" }, setTheme() {}, setEditorComponent() {}, setHeader() {}, notify() {}, setWorkingVisible() {},
     setWidget: (_key: string, factory: (tui: unknown, theme: unknown) => Component) => { dock = factory(tui, theme); },
     setFooter: (factory: (tui: unknown, theme: unknown, data: unknown) => Component) => {
       footer = factory(tui, theme, { onBranchChange: () => () => {}, getExtensionStatuses: () => new Map() });
@@ -258,7 +259,9 @@ test("Ctrl+B at 140 columns hides the rail for the collapsed row; at 80 it opens
     expect(narrow.panels.handleInput(KEY.ctrlB)).toBeTrue();
     expect(narrow.panels.sidebar.drawer).toBeTrue();
     const drawer = narrow.dock.render(80);
-    expect(plain(drawer.slice(0, 1))).toContain("▾"); expect(drawer.length).toBeGreaterThan(1);
+    // The drawer's own rule comes first, then its tab row.
+    expect(plain(drawer.slice(0, 1))).toBe("─".repeat(80));
+    expect(plain(drawer.slice(1, 2))).toContain("▾"); expect(drawer.length).toBeGreaterThan(2);
   } finally { narrow.stop(); }
 });
 
@@ -314,7 +317,7 @@ test("F10 and F5 do nothing for an assistant", () => {
   } finally { h.stop(); }
 });
 
-test("every surface renders within its frame at 140x46, 80x24, 80x14 and 52x24", () => {
+test("every surface renders within its frame at the contract's sizes", () => {
   const state = snapshot({ streaming: true, cost: 1.25,
     helpers: [helper("first"), helper("second", { phase: "running", endedAt: undefined, result: undefined,
       messages: [{ id: "t", kind: "tool", tool: "read", phase: "running", arguments: JSON.stringify({ path: "src/a.ts" }), text: "" }] }),
@@ -327,14 +330,18 @@ test("every surface renders within its frame at 140x46, 80x24, 80x14 and 52x24",
       { id: "b", label: "Wire the workbench", status: { state: "in_progress" }, criteria: [] },
       { id: "c", label: "Verify the frames", status: { state: "pending" }, criteria: [] }] }] } });
   const views: readonly MainView[] = ["conversation", "task", "agents", "changes", "evidence", "artifacts", "inbox", "usage", "graph", "timeline"];
-  for (const [columns, rows] of [[140, 46], [80, 24], [80, 14], [52, 24]] as const) {
+  for (const [columns, rows] of [[185, 40], [140, 46], [105, 30], [92, 40], [80, 24], [80, 14], [61, 40], [52, 24], [46, 40]] as const) {
     const h = shell(columns, rows, () => state);
     try {
       const main = createChatViewport({ document: new Text("PARENT_TRANSCRIPT", 0, 0), pendingMessages: new Text("", 0, 0), status: new Text("", 0, 0),
         widgetsAbove: h.dock, editor: new Text("REAL_EDITOR_DRAFT", 0, 0), footer: h.footer, mainView: transcript => h.panels.mainView(transcript) });
       const check = (label: string) => {
         const width = h.terminal.columns;
+        expect(width).toBe(columns);
+        // Twice: the rail takes the height of the first layout in the second.
+        renderLayoutFrame(main.root, width, rows, () => {});
         const lines = renderLayoutFrame(main.root, width, rows, () => {}).lines;
+        expect(lines).toHaveLength(rows);
         for (const line of lines) if (visibleWidth(line) > width) throw new Error(`${label} at ${columns}x${rows} overflows: ${stripTerminalSequences(line)}`);
         if (h.panels.wide) for (const line of h.panels.renderSidebar(h.terminal.railWidth, rows)) expect(visibleWidth(line)).toBe(h.terminal.railWidth);
       };
@@ -345,4 +352,58 @@ test("every surface renders within its frame at 140x46, 80x24, 80x14 and 52x24",
       h.panels.handleInput("\x1b[17~"); check("sidebar focus");
     } finally { h.stop(); }
   }
+});
+
+test("the frame: header, tabs, dock, status bar and footer span the full width; the rail only the rows between", () => {
+  for (const [columns, rows] of [[185, 40], [140, 46], [105, 30]] as const) {
+    const h = shell(columns, rows, () => snapshot({ helpers: [helper("first")], cost: 0.5 }));
+    try {
+      const main = createChatViewport({ document: new Text("PARENT_TRANSCRIPT", 0, 0), pendingMessages: new Text("", 0, 0), status: new Text("", 0, 0),
+        widgetsAbove: h.dock, editor: new Text("REAL_EDITOR_DRAFT", 0, 0), footer: h.footer, mainView: transcript => h.panels.mainView(transcript) });
+      renderLayoutFrame(main.root, columns, rows, () => {});
+      const lines = renderLayoutFrame(main.root, columns, rows, () => {}).lines.map(line => stripTerminalSequences(line));
+      const rail = h.terminal.mainColumns, at = (row: number) => sliceByColumn(lines[row]!, rail, 1);
+      expect(rail).toBe(columns - h.terminal.railWidth - 1);
+      // Header row 1's state word sits at the terminal's right edge, past the rail's column.
+      expect(visibleWidth(lines[0]!.trimEnd())).toBeGreaterThan(rail + 1);
+      expect(lines[2]).toContain("F9");
+      expect(lines[3]).toBe("─".repeat(columns));
+      const composer = lines.findIndex(line => line.includes("REAL_EDITOR_DRAFT"));
+      expect(composer).toBeGreaterThan(4);
+      for (let row = 4; row < composer; row++) expect(at(row)).toBe("│");
+      expect(at(0)).not.toBe("│"); expect(at(3)).toBe("─");
+      // Below the composer: the status bar with the role pill, a rule, the footer.
+      expect(lines[rows - 3]).toContain("WORKER");
+      expect(lines[rows - 2]).toBe("─".repeat(columns));
+      expect(lines[rows - 1]!.trimEnd()).toMatch(/F1\s+keys$/);
+    } finally { h.stop(); }
+  }
+  // Below 105 columns: no rail, the collapsed sidebar row under its own rule above the composer.
+  const h = shell(92, 40, () => snapshot({ helpers: [helper("first")] }));
+  try {
+    expect(h.panels.wide).toBeFalse();
+    const dock = plain(h.dock.render(92)).split("\n");
+    expect(dock[0]).toBe("─".repeat(92));
+    expect(dock[1]).toContain("Context");
+  } finally { h.stop(); }
+});
+
+test("a notice is a toast at the top right of the main view, not a header word; Agent details opens the pager", async () => {
+  const h = shell(140, 46, () => snapshot({ helpers: [helper("first")] }), { identity: assistant });
+  try {
+    h.panels.workbench.notice("Saved the plan", "success");
+    expect(h.panels.workbench.currentNotice?.text).toBe("Saved the plan");
+    const main = createChatViewport({ document: new Text("PARENT_TRANSCRIPT", 0, 0), pendingMessages: new Text("", 0, 0), status: new Text("", 0, 0),
+      widgetsAbove: h.dock, editor: new Text("REAL_EDITOR_DRAFT", 0, 0), footer: h.footer, mainView: transcript => h.panels.mainView(transcript) });
+    const header = plain(renderLayoutFrame(main.root, 140, 46, () => {}).lines.slice(0, 2));
+    expect(header).not.toContain("Saved the plan");
+    const details = h.panels.actions().find(action => action.id === "agents.details")!;
+    expect(details.label).toBe("Agent details"); expect(details.shortcut).toBe("");
+    expect(h.panels.workbench.selectedAgent()).toBeUndefined();
+    expect(await h.panels.workbench.openAgentDetails()).toBeFalse();
+    h.panels.workbench.openAgents("helper:first");
+    expect(h.panels.workbench.selectedAgent()?.meta.length).toBeGreaterThan(0);
+    void h.panels.workbench.openAgentDetails(); await settle();
+    expect(plain(h.customs.at(-1)?.render(100) ?? [])).toContain("model");
+  } finally { h.stop(); }
 });

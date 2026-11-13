@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +17,6 @@ import { nextEvent, within } from "./support/wait.ts";
 
 // T-687 layout proof: the production seam (PanelTerminal + mainView + extension UI) over a real
 // HostSession, InteractiveMode and editor. Only provider and control-plane I/O are fixtures.
-const RAIL_ORIGIN = "\x1b[1;107H"; // 140 columns: 105 main + 1 gap, rail painted from column 107.
 
 test("panel layout streams a held reply and tool output, keeps one binding through inspection and resize, submits once and refuses", async () => {
   const work = mkdtempSync(join(tmpdir(), "corral-panel-proof-")), assets = buildFixtureInstall();
@@ -59,9 +59,9 @@ test("panel layout streams a held reply and tool output, keeps one binding throu
     mode = new sdk.InteractiveMode(host.runtime, { terminal, tuiMode: "fullscreen", readOnlyQueue: true, verbose: false, mainView: transcript => panels.mainView(transcript) });
     await mode.init(); host.markAttached("interactive");
     void mode.run().catch(error => { throw error; });
-    await physical.untilVisible("WORKER ● g1"); // the bottom bar's bound dot
+    await physical.untilVisible("WORKER  ● g1"); // the status bar's role pill and bound dot
     physical.send("\x1b[20~"); // task-bound sessions open on Task; F9 shows the transcript
-    expect(terminal.columns).toBe(105);
+    expect(terminal.mainColumns).toBe(105);
     const initial = binding();
     expect(initial).toMatchObject({ generation: 1, bound: true, boundId: bound, currentId: bound, turn: { current: 0, open: false } });
 
@@ -82,9 +82,9 @@ test("panel layout streams a held reply and tool output, keeps one binding throu
     await within(firstChunk, 10_000, "the first streamed delta");
     await physical.until("STREAM_PART_ONE", mark);
     await physical.until("tool-output.txt", mark);
-    // The partial reply and the rail arrive in the same synchronized frame from the panel terminal.
+    // The rail is part of Pi's frame: the row with the partial reply carries the rail's `│` column after it.
     const partial = physical.writes.slice(mark).find(write => write.includes("STREAM_PART_ONE"));
-    expect(partial).toContain(RAIL_ORIGIN);
+    expect(stripTerminalSequences(partial ?? "")).toMatch(/STREAM_PART_ONE[^\n\r]*│/);
     expect(physical.writes.join("")).not.toContain("TOOL_OUTPUT_SENTINEL");
     physical.send("\x0f"); // Stock app.tools.expand reaches Pi through the panel terminal.
     await physical.until("TOOL_OUTPUT_SENTINEL", mark);
@@ -97,7 +97,7 @@ test("panel layout streams a held reply and tool output, keeps one binding throu
     mark = physical.writes.length;
     physical.send("\x1b[19~");
     expect(panels.workbench.view).toBe("agents");
-    await physical.untilVisible("helper calls and jobs", mark); // the agents view replaces the transcript
+    await physical.untilVisible("No agents yet", mark); // the agents view replaces the transcript
     mark = physical.writes.length;
     physical.send("\x1b[20~");
     expect(panels.workbench.view).toBe("conversation");
@@ -110,7 +110,7 @@ test("panel layout streams a held reply and tool output, keeps one binding throu
       mark = physical.writes.length;
       physical.resize(columns, rows);
       await physical.until("Draft survives", mark);
-      expect(terminal.columns).toBe(main);
+      expect(terminal.mainColumns).toBe(main);
       expect(binding()).toEqual({ ...initial, turn: { current: 1, open: true } });
     }
     expect(physical.writes.join("")).not.toContain("STREAM_PART_TWO");

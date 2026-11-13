@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { sliceByColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
 import { boardBadge, changesBadge, headerFrame, headerRows, mainTabs, tabRow, tabSpec, type HeaderInput, type TabId, type TabSpec } from "./header.ts";
+import { PANEL_LINE, PANEL_ON_ACCENT } from "./panels-view.ts";
 
 const worker: HostIdentity = { store: "s", project: "demo", role: "worker", task: "T-1", run: "R-1", generation: 1 };
 const reviewer: HostIdentity = { store: "s", project: "demo", role: "reviewer", task: "T-1", review: "V-1", generation: 1 };
@@ -120,4 +121,68 @@ test("a notice still replaces the status for its duration and takes away its hit
   expect(text).not.toContain("exit choice pending");
   expect(hits.some(hit => hit.id === "status")).toBeFalse();
   expect(headerRows(input, 140, { short: false, tiny: false })).toEqual(lines);
+});
+
+/** The text of the cells `from`..`to` of a styled line. */
+const cells = (line: string, from: number, to: number) => sliceByColumn(stripTerminalSequences(line), from, to - from);
+
+test("Chat takes no chip, and counts sit in chips after their labels at every width that has room for them", () => {
+  expect(tabSpec("conversation", { text: "●", tone: "accent" }).badge).toBeUndefined();
+  for (const identity of [worker, reviewer, assistant, pm, build]) {
+    const tabs = specs(identity);
+    const text = stripTerminalSequences(tabRow(tabs, "conversation", 185).line);
+    expect(text).not.toContain("●");
+    for (const tab of tabs) if (tab.badge) expect(text).toContain(`${tab.label}  ${tab.badge.text} `);
+  }
+});
+
+test("the open tab has the active key cap and an accent-underlined bold label; separators are in the line colour", () => {
+  const tabs = specs(build);
+  for (const active of mainTabs(build)) {
+    const { line, hits } = tabRow(tabs, active, 185);
+    const open = tabs.find(tab => tab.id === active)!;
+    // The active cap is the only accent surface in the row, and it sits on the open tab.
+    expect(line.split(PANEL_ON_ACCENT)).toHaveLength(2);
+    const before = stripTerminalSequences(line.slice(0, line.indexOf(PANEL_ON_ACCENT)));
+    const hit = hits.find(item => item.id === active)!;
+    expect(visibleWidth(before)).toBe(hit.from);
+    expect(line).toContain("\x1b[4m\x1b[58;");
+    expect(stripTerminalSequences(line.slice(line.indexOf("\x1b[4m"))).startsWith(open.label)).toBeTrue();
+    expect(line.split(PANEL_LINE + "│")).toHaveLength(tabs.length);
+  }
+});
+
+test("wide and narrow rows keep separators and chips; tiny drops them and reads Diff; below 50 only the open tab is named", () => {
+  const tabs = specs(build);
+  for (const width of [185, 140, 105, 92, 80]) {
+    const text = stripTerminalSequences(tabRow(tabs, "conversation", width).line);
+    expect(text).toContain("│"); expect(text).toContain("Changes"); expect(text).toContain(" 148 ");
+  }
+  for (const width of [61, 52]) {
+    const text = stripTerminalSequences(tabRow(tabs, "conversation", width).line);
+    expect(text).not.toContain("│"); expect(text).toContain("Diff"); expect(text).not.toContain("148");
+    expect(text).toContain("Agents");
+  }
+  const quarter = stripTerminalSequences(tabRow(tabs, "conversation", 46).line);
+  expect(quarter).toContain("Chat"); expect(quarter).not.toContain("Agents"); expect(quarter).not.toContain("Board");
+  for (const key of ["F9", "F8", "F7", "F10"]) expect(quarter).toContain(key);
+});
+
+test("the state word and the status sit at the right edge of the full width, short and lower case below 105 columns", () => {
+  const status = { long: "exit choice pending", short: "choose exit", tone: "warning" as const, clickable: true };
+  const base: HeaderInput = { title: "build · save-slots", state: "Working", context: { left: "mitiplay · .worktrees/build-save-slots", right: "exit policy: gate allowed" } };
+  for (const width of [185, 140, 105, 104, 92, 80, 64, 61, 52, 46]) {
+    const tiny = width < 64;
+    const working = headerFrame(base, width, { short: false, tiny }).lines;
+    const text = stripTerminalSequences(working[0]!);
+    expect(text.trimEnd().endsWith(width < 105 ? "working" : "Working")).toBeTrue();
+    expect(visibleWidth(text.trimEnd())).toBe(width - 1);
+    expect(text.trimStart().startsWith(tiny ? "build · save-slots" : "corral / build · save-slots")).toBeTrue();
+    if (!tiny) expect(stripTerminalSequences(working[1]!).trimEnd().endsWith("exit policy: gate allowed")).toBeTrue();
+    const pending = headerFrame({ ...base, status }, width, { short: false, tiny });
+    expect(stripTerminalSequences(pending.lines[0]!).trimEnd().endsWith(width < 105 ? status.short : status.long)).toBeTrue();
+    const hit = pending.hits.find(item => item.id === "status")!;
+    expect(hit.to).toBe(width - 1);
+    expect(cells(pending.lines[0]!, hit.from, hit.to)).toBe(width < 105 ? status.short : status.long);
+  }
 });

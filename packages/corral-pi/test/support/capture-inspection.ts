@@ -27,10 +27,11 @@ const results: Record<string, unknown> = { source: { task, run }, runtime: "prod
 function frame(name: string, columns: number, rows: number) {
   terminal.resize(columns, rows);
   const width = adapter.columns;
+  // The rail is part of the layout; the second layout gives it the height the first one measured.
+  renderLayoutFrame(root, width, rows - 2, () => {});
   const layout = renderLayoutFrame(root, width, rows - 2, () => {});
-  const rail = panels.wide ? panels.renderSidebar(34, rows - 2) : [];
   const lines = [PANEL_BG + PANEL_MUTED + pad(`READ-ONLY QA · canonical ${task}/${run} · no live generation`, columns) + RESET,
-    ...layout.lines.map((line, i) => pad(line, width) + (panels.wide ? "│" + pad(rail[i] ?? "", 34) : ""))];
+    ...layout.lines.map(line => pad(line, width))];
   for (const line of lines) if (visibleWidth(line) > columns) throw new Error("Capture overflow");
   writeFileSync(join(out, name + ".ansi"), lines.join("\n") + "\n");
   writeFileSync(join(out, name + ".txt"), stripTerminalSequences(lines.join("\n")) + "\n");

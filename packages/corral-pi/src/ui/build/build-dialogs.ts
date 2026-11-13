@@ -11,6 +11,7 @@ export type PreviewState = { readonly state: "loading" } | { readonly state: "re
 /** Preview table tiers by the dialog's inner width (the dock columns minus the border): 104 and 60 dock columns. */
 const PREVIEW_FULL = 100;
 const PREVIEW_MED = 56;
+const BOLD = "\x1b[1m", NORMAL = "\x1b[22m";
 
 /** "mitiplay policy: gate allowed, review optional"; outside a workspace, the reason instead of a policy. */
 export function policyLabel(state: BuildPanelState): string {
@@ -117,19 +118,20 @@ export function previewLines(plan: BoardPlan, preview: BoardPreview, width: numb
   const gap = "  ", task = 6;
   const starts = (depends: readonly string[]) => depends.length ? `after ${depends.map(id).join(", ")}` : "no dependencies";
   const kind = (value: BoardPlan["tasks"][number]) => [value.kind, value.size].filter(Boolean).map(text => plainLabel(text!)).join(" ");
+  const taskId = (value: BoardPlan["tasks"][number]) => PANEL_TEXT + BOLD + cell(id(value.key), task) + NORMAL;
   let layout: (value: BoardPlan["tasks"][number]) => string;
   let header: string | undefined;
   if (tier === "full") {
     const title = Math.min(46, Math.max(5, ...plan.tasks.map(value => visibleWidth(plainLabel(value.title)))));
     const rest = Math.max(0, width - task - title - 12 - 10 - gap.length * 4);
-    layout = value => PANEL_TEXT + cell(id(value.key), task) + gap + cell(plainLabel(value.title), title) + gap + PANEL_MUTED
+    layout = value => taskId(value) + gap + cell(plainLabel(value.title), title) + gap + PANEL_MUTED
       + cell(kind(value), 12) + gap + cell(plainLabel(value.profile ?? "default"), 10) + gap + cell(starts(value.depends), rest);
     header = PANEL_MUTED + cell("task", task) + gap + cell("title", title) + gap + cell("kind", 12) + gap + cell("profile", 10) + gap + cell("starts", rest);
   } else if (tier === "med") {
     const title = Math.max(0, width - task - 22 - gap.length * 2);
-    layout = value => PANEL_TEXT + cell(id(value.key), task) + gap + cell(plainLabel(value.title), title) + gap + PANEL_MUTED + cell(starts(value.depends), 22);
+    layout = value => taskId(value) + gap + cell(plainLabel(value.title), title) + gap + PANEL_MUTED + cell(starts(value.depends), 22);
   } else {
-    layout = value => PANEL_TEXT + cell(id(value.key), task) + gap + cell(plainLabel(value.title), Math.max(0, width - task - gap.length));
+    layout = value => taskId(value) + gap + cell(plainLabel(value.title), Math.max(0, width - task - gap.length));
   }
   const fits = (header ? 1 : 0) + plan.tasks.length <= rows;
   if (header && !fits && rows - 2 < 1) header = undefined;

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { ChildSnapshot, ChildSpec, FleetSnapshot } from "../../build/types.ts";
 import { agentColor } from "../agent-hues.ts";
-import { taskCardLines, taskCardRows, taskTotals } from "./task-card.ts";
+import { CARD_MAX, finishedLines, taskCardLines, taskCardRows } from "./task-card.ts";
 
 const NOW = 2_000_000;
 function child(id: string, state: ChildSnapshot["state"], extra: Partial<ChildSnapshot> = {}): ChildSnapshot {
@@ -31,19 +31,43 @@ test("after a resume the settled result supplies the rows, and with neither the 
   expect(resumed.map(row => row.state)).toEqual(["done", "failed"]);
   const lost = taskCardRows(args, "call-1", fleet([]), undefined, NOW);
   expect(lost.map(row => row.state)).toEqual(["unknown", "unknown"]);
-  const text = plain(taskCardLines(lost, 120, { expanded: false, color: agentColor }).lines).join("\n");
+  const text = plain(taskCardLines(lost, 120, { expanded: false, color: agentColor, now: NOW }).lines).join("\n");
   expect(text).toContain("outcome unknown");
 });
 
-test("a row waiting for an answer carries the question and its hit says it needs the owner", () => {
-  const asking = child("picker-ui", "needs", { question: { question: "Empty state?\nMore detail", options: [], askedAt: NOW - 5000 } });
+test("the card is a rounded box headed by the call, one row per slice with its hit, no summary row", () => {
+  const asking = child("picker-ui", "needs", { question: { question: "Empty state?", options: [], askedAt: NOW - 5000 } });
   const rows = taskCardRows(args, "call-1", fleet([child("host-slots", "running"), asking]), undefined, NOW);
-  const { lines, hits } = taskCardLines(rows, 120, { expanded: false, color: agentColor });
-  const index = plain(lines).findIndex(line => line.includes("▲ Empty state?"));
-  expect(index).toBeGreaterThan(0);
-  expect(hits.get(index)).toEqual({ id: "picker-ui", needs: true });
-  const running = plain(lines).findIndex(line => line.includes("host-slots"));
+  const { lines, hits } = taskCardLines(rows, 140, { expanded: false, color: agentColor, now: NOW });
+  const text = plain(lines);
+  expect(text[0]?.startsWith("╭")).toBeTrue();
+  expect(text[text.length - 1]?.startsWith("╰")).toBeTrue();
+  expect(text[1]).toContain("task · 2 slices, one worktree");
+  expect(text).toHaveLength(2 + rows.length + 1);
+  const running = text.findIndex(line => line.includes("host-slots"));
   expect(hits.get(running)).toEqual({ id: "host-slots", needs: false });
+  const needs = text.findIndex(line => line.includes("picker-ui"));
+  expect(hits.get(needs)).toEqual({ id: "picker-ui", needs: true });
+  expect(text[needs]).toContain("needs you");
+  // The running row's state is a braille spinner frame, not a dot.
+  expect(text[running]).toMatch(/│ [⠋⠙⠹⠸⠼⠴⠦⠧]  host-slots/);
+});
+
+test("columns follow the mini grid per density and the card is at most 108 cells wide", () => {
+  const rows = taskCardRows(args, "call-1", fleet([child("host-slots", "done"), child("picker-ui", "queued")]), undefined, NOW);
+  const at = (width: number) => plain(taskCardLines(rows, width, { expanded: false, color: agentColor, now: NOW }).lines);
+  const full = at(160);
+  expect(visibleWidth(full[0] ?? "")).toBe(CARD_MAX);
+  // Name column of 11 cells: the title starts two cells after it.
+  expect(full[2]?.indexOf("Deliver")).toBe((full[2]?.indexOf("host-slots") ?? 0) + 11 + 2);
+  expect(full[2]).toContain("frontend · claude-sonnet-4.5");
+  const med = at(80);
+  expect(med[2]).toContain("frontend");
+  expect(med[2]).not.toContain("claude-sonnet");
+  const min = at(50);
+  expect(min[1]).not.toContain("one worktree");
+  expect(min[2]).not.toContain("frontend");
+  expect(min[3]).toContain("waiting");
 });
 
 test("every line fits its width at every density", () => {
@@ -54,28 +78,24 @@ test("every line fits its width at every density", () => {
     child("tests", "cancelled"), child("docs", "queued"),
   ];
   const rows = taskCardRows(args, "call-1", fleet(children), undefined, NOW);
-  for (const width of [30, 40, 59, 60, 111, 112, 140]) {
+  for (const width of [30, 40, 46, 52, 59, 60, 92, 111, 112, 140, 185]) {
     for (const expanded of [false, true]) {
-      const { lines } = taskCardLines(rows, width, { expanded, color: agentColor, totals: taskTotals(children) });
+      const { lines } = taskCardLines(rows, width, { expanded, color: agentColor, now: NOW });
       for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
       expect(lines.length).toBeGreaterThan(children.length);
     }
+    for (const line of finishedLines(children, fleet(children), width, agentColor).lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
   }
 });
 
-test("totals never claim a zero cost when every cost is unknown", () => {
-  const children = [child("a", "done"), child("b", "failed")];
-  const totals = taskTotals(children);
-  expect(totals.cost).toBeUndefined();
-  const text = plain(taskCardLines([], 120, { expanded: false, color: agentColor, totals }).lines).join("\n");
-  expect(text).not.toContain("$0.00");
-  expect(text).toContain("1 failed");
-});
-
-test("files count distinct paths and outside counts paths edited outside their owner's files", () => {
+test("each slice that came back posts one line in the order they ended, files counting distinct paths", () => {
   const children = [
-    child("a", "done", { edits: [{ path: "x.ts", outside: false, at: 1 }, { path: "x.ts", outside: false, at: 2 }, { path: "y.ts", outside: true, at: 3 }] }),
-    child("b", "done", { edits: [{ path: "y.ts", outside: true, at: 4 }] }),
+    child("a", "done", { endedAt: NOW - 1000, report: "## tsc clean\nmore", edits: [{ path: "x.ts", outside: false, at: 1 }, { path: "x.ts", outside: false, at: 2 }, { path: "y.ts", outside: true, at: 3 }] }),
+    child("b", "failed", { endedAt: NOW - 5000, error: "boom" }),
+    child("c", "running"),
   ];
-  expect(taskTotals(children)).toMatchObject({ done: 2, files: 2, outside: 1 });
+  const { lines, hits } = finishedLines(children, fleet(children), 120, agentColor);
+  const text = plain(lines);
+  expect(text).toEqual(["✗ b failed · boom", "✓ a finished · 1 file + 1 outside its set · tsc clean"]);
+  expect(hits.get(1)).toEqual({ id: "a", needs: false });
 });

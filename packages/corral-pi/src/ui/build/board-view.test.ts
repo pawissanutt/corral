@@ -92,6 +92,31 @@ test("outside a workspace the empty state states the reason and offers no plan a
   expect([...inside.hits.values()].flat().some(hit => hit.action === "plan")).toBeTrue();
 });
 
+test("the table follows the board grid per density and ends in key-cap actions whose hits cover cap and label", () => {
+  const tasks = [task("T-971", "running"), task("T-972", "waiting", { depends: ["T-971"] })];
+  const full = renderBoard(tasks, undefined, "T-971", 140, { now: NOW, short: false });
+  const text = full.lines.map(line => stripTerminalSequences(line));
+  // Header, then rows: bar, two cells, the id, then the title in a 40-cell column, the stage, now.
+  expect(text[1]?.indexOf("task")).toBe(3);
+  expect(text[2]?.startsWith("▌  T-971")).toBeTrue();
+  const title = text[2]?.indexOf("Task T-971") ?? -1;
+  expect(title).toBe(3 + 6 + 2);
+  expect(text[2]?.indexOf("running")).toBe(title + 40 + 2 + 2);
+  expect(text[2]).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧] running/);
+  expect(text[3]).toContain("waits T-971");
+  const actions = text.length - 1;
+  expect(text[actions]).toContain("⏎  open task");
+  expect(text[actions]).toContain("r  refresh");
+  const hits = full.hits.get(actions) ?? [];
+  expect(hits.map(hit => hit.action)).toEqual(["details", "refresh"]);
+  expect(text[actions]?.slice(hits[0]!.from, hits[0]!.to)).toBe(" ⏎  open task");
+  expect(text.join("\n")).not.toContain("corral status");
+
+  const med = renderBoard(tasks, undefined, "T-971", 80, { now: NOW, short: false }).lines.map(line => stripTerminalSequences(line));
+  // The title moves to a second row under the id.
+  expect(med[2]?.indexOf("Task T-971")).toBe(3);
+});
+
 test("every board line fits its width at every density, short or not", () => {
   const long = "a-very-long-task-identifier";
   const tasks = PHASES.map((phase, index) => task(index === 0 ? long : `T-97${index}`, phase, {

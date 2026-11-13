@@ -1,10 +1,12 @@
 // The session sidebar: Context, Files and Plan over structural inputs. One body model feeds the
 // rail (34 columns from 105), the collapsed navigation row above the composer and the drawer that
 // row opens. Selection is keyed per tab and the page window keeps it in view with the least
-// movement, so new items never move it. Every state carries a glyph or word next to its colour, and
-// no key hint is drawn here: the footer and the F1 list own them.
+// movement, so new items never move it. Every state carries a glyph or word next to its colour. The
+// only key cap is `Ctrl+B` beside the toggle; nothing here fills a background except the selected row.
 import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import type { TodoProgress } from "./todo-widget.ts";
+import { keyCap, rule, spinner } from "./frame.ts";
+import { COMPACT_COLUMNS } from "./header.ts";
 import { splitRow } from "./panels-chrome.ts";
 import {
   pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_SELECTED, PANEL_SUCCESS, PANEL_TEXT,
@@ -29,6 +31,8 @@ export interface SideSource {
   readonly bound: boolean;
   /** ANSI foreground for an agent hue index. */
   readonly color: (hue: number) => string;
+  /** Key of the agent the Agents view selects while its list has the focus; its row is drawn selected. */
+  readonly current?: string;
 }
 export type SideTarget = { readonly kind: "agent" | "job"; readonly key: string } | { readonly kind: "file"; readonly path: string }
   | { readonly kind: "step"; readonly id: string } | { readonly kind: "scope" };
@@ -41,6 +45,8 @@ export interface SideFrame { readonly lines: string[]; readonly hits: ReadonlyMa
 export function drawerRows(terminalRows: number): number {
   return Math.max(2, Math.min(terminalRows < 28 ? 5 : 10, terminalRows - 12));
 }
+/** Below this many terminal rows the rule above the collapsed row goes first. */
+const RULE_ROWS = 16;
 
 const TABS: readonly SideTab[] = ["context", "files", "plan"];
 const LABELS: Readonly<Record<SideTab, string>> = { context: "Context", files: "Files", plan: "Plan" };
@@ -59,7 +65,9 @@ function toneColor(tone: SideTone): string {
 
 /**
  * The tab summaries the collapsed row shows. Live agents count by tone (accent running, warning
- * asking, anything else waiting); unsettled jobs count as running. Tiny keeps one live count.
+ * asking, anything else waiting); unsettled jobs count as running. Tiny keeps one count of what is at
+ * work (running and asking). Files shows only `?` (no project) or `!` (Git failed); its count is the
+ * Changes tab's.
  */
 export function sideSummary(source: SideSource, tiny: boolean): Readonly<Record<SideTab, string>> {
   const agents = source.agents ?? [], jobs = source.jobs ?? [];
@@ -68,14 +76,14 @@ export function sideSummary(source: SideSource, tiny: boolean): Readonly<Record<
   const waiting = live.filter(agent => agent.tone !== "warning" && agent.tone !== "accent").length;
   const running = live.length - asking - waiting + liveJobs;
   const failed = agents.filter(agent => agent.settled === "failed").length + jobs.filter(job => job.settled === "failed").length;
-  const context = tiny ? (live.length + liveJobs ? String(live.length + liveJobs) : "")
+  const context = tiny ? (running + asking ? String(running + asking) : "")
     : [running ? `${running} running` : "", asking ? `${asking} asking` : "", waiting ? `${waiting} waiting` : "",
       failed ? `${failed} failed` : ""].filter(Boolean).join(" · ");
   const { files } = source;
   const steps = source.plan.progress?.phases.flatMap(phase => phase.steps) ?? [];
   return {
     context,
-    files: files.state === "error" ? "!" : files.state === "choose" ? "?" : files.list.length ? String(files.list.length) : "",
+    files: files.state === "error" ? "!" : files.state === "choose" ? "?" : "",
     plan: steps.length ? `${steps.filter(step => step.status.state === "done").length}/${steps.length}` : "",
   };
 }
@@ -117,43 +125,41 @@ const heading = (text: string): Block => ({ rows: [{ left: PANEL_MUTED + text }]
 /** A muted line; `indent` 2 aligns it with item text under a heading. */
 const note = (text: string, indent = 2): Block => ({ rows: [{ left: " ".repeat(indent) + PANEL_MUTED + text }] });
 const counts = (added: number, removed: number) => PANEL_SUCCESS + `+${added}` + " " + PANEL_ERROR + `−${removed}`;
+/** A running state draws the braille spinner, staggered by row; every other state its own glyph. */
+const stateGlyph = (glyph: string, tone: SideTone, running: boolean, phase: number) =>
+  toneColor(tone) + (running ? spinner(Date.now(), phase) : plainLabel(glyph) || "·");
 
 function contextBlocks(source: SideSource): Block[] {
   const blocks: Block[] = [];
   // Sections are separated by one blank row, never a rule.
   const section = (block: Block) => { if (blocks.length) blocks.push(GAP); blocks.push(block); };
-  if (!source.bound) blocks.push({ rows: [{ left: PANEL_WARNING + "! " + PANEL_MUTED + "unbound · may be stale" }] });
-  const { agents, jobs } = source;
-  if (agents === null && jobs === null) { blocks.push(note("Agents and jobs unavailable", 0)); return blocks; }
-  if (agents?.length === 0 && jobs?.length === 0) { blocks.push(note("No agents or jobs yet", 0)); return blocks; }
+  const agents = source.agents ?? [], jobs = source.jobs ?? [];
+  if (!agents.length && !jobs.length) return [note("no agents or jobs yet")];
   // Successful completions fold into one line; failed and uncertain ones stay listed.
-  const done = [...(agents ?? []).filter(agent => agent.settled === "ok").map(agent => plainLabel(agent.name)),
-    ...(jobs ?? []).filter(job => job.settled === "ok").map(job => plainLabel(job.command))];
-  if (agents === null) section(note("Agents unavailable", 0));
-  else {
+  const done = [...agents.filter(agent => agent.settled === "ok").map(agent => plainLabel(agent.name)),
+    ...jobs.filter(job => job.settled === "ok").map(job => plainLabel(job.command))];
+  if (source.agents !== null) {
     section(heading("AGENTS"));
     const listed = agents.filter(agent => agent.settled !== "ok");
     if (!listed.length) blocks.push(note("none at work"));
-    for (const agent of listed) {
+    listed.forEach((agent, index) => {
       const name = plainLabel(agent.name), profile = plainLabel(agent.profile), activity = plainLabel(agent.activity);
       // A helper's name already is its kind; the profile shows only when it adds something.
-      const left = toneColor(agent.tone) + (plainLabel(agent.glyph) || "·") + " " + source.color(agent.hue) + name
-        + (profile && !name.startsWith(profile) ? " " + PANEL_MUTED + profile : "");
+      const left = stateGlyph(agent.glyph, agent.tone, !agent.settled && agent.tone === "accent", index) + " "
+        + source.color(agent.hue) + BOLD + name + NORMAL + (profile && !name.startsWith(profile) ? " " + PANEL_MUTED + profile : "");
       blocks.push({ rows: activity ? [{ left }, { left: "  " + PANEL_MUTED + activity }] : [{ left }],
         item: { key: targetKey({ kind: "agent", key: agent.key }), target: { kind: "agent", key: agent.key } } });
-    }
+    });
   }
-  if (jobs === null) section(note("Jobs unavailable", 0));
-  else {
-    const listed = jobs.filter(job => job.settled !== "ok");
-    if (listed.length) section(heading("JOBS"));
-    for (const job of listed) {
-      const time = plainLabel(job.time);
-      blocks.push({ rows: [{ left: toneColor(job.tone) + (plainLabel(job.glyph) || "·") + " " + PANEL_TEXT + plainLabel(job.command),
-        ...(time ? { right: PANEL_MUTED + time } : {}) }],
-      item: { key: targetKey({ kind: "job", key: job.key }), target: { kind: "job", key: job.key } } });
-    }
-  }
+  // A Jobs section appears only while a job is listed.
+  const listedJobs = jobs.filter(job => job.settled !== "ok");
+  if (listedJobs.length) section(heading("JOBS"));
+  listedJobs.forEach((job, index) => {
+    const time = plainLabel(job.time);
+    blocks.push({ rows: [{ left: stateGlyph(job.glyph, job.tone, !job.settled && job.tone === "accent", index + agents.length) + " "
+      + PANEL_TEXT + plainLabel(job.command), ...(time ? { right: PANEL_MUTED + time } : {}) }],
+    item: { key: targetKey({ kind: "job", key: job.key }), target: { kind: "job", key: job.key } } });
+  });
   if (done.length) {
     section(heading(`COMPLETED · ${done.length}`));
     blocks.push(note(done.join(" · ")));
@@ -161,52 +167,52 @@ function contextBlocks(source: SideSource): Block[] {
   return blocks;
 }
 
+/** The last two segments of a path: the file and its folder. */
+const shortPath = (path: string) => path.split("/").slice(-2).join("/");
+
 function fileBlocks(source: SideSource): Block[] {
-  const { files } = source, scope = plainLabel(files.scope);
+  const { files } = source;
   const choose: Block = { rows: [{ left: PANEL_BLUE + "› " + PANEL_TEXT + "Choose project" }], item: { key: "scope", target: { kind: "scope" } } };
   if (files.state === "choose") return [{ rows: [{ left: PANEL_WARNING + "? " + PANEL_MUTED + "No project chosen" }] }, choose];
   if (files.state === "error") {
     const detail = plainLabel(files.error?.split("\n")[0] ?? "");
     return [{ rows: [{ left: PANEL_WARNING + "! " + PANEL_TEXT + "Git unavailable" }] }, ...(detail ? [note(detail)] : []), choose];
   }
-  if (!files.list.length) return [heading(scope || "Files"), note(files.state === "loading" ? "Reading changes…" : "No changes yet", 0)];
-  // Untracked and binary files have no line counts; they never add +0 −0 to the total.
-  let added = 0, removed = 0, counted = 0;
-  for (const file of files.list) if (typeof file.added === "number") { counted++; added += file.added; removed += file.removed ?? 0; }
-  const total = `${files.list.length} ${files.list.length === 1 ? "file" : "files"}`;
-  const blocks: Block[] = [{ rows: [{ left: PANEL_MUTED + (scope ? scope + " · " : "") + total, ...(counted ? { right: counts(added, removed) } : {}) }] }];
-  for (const file of files.list) {
-    const letter = plainLabel(file.letter) || "·";
+  if (!files.list.length) return [note(files.state === "loading" ? "reading changes…" : "no changes yet")];
+  return files.list.map(file => {
+    // The two-cell mark column: the dots of the agents that touched the file, else its Git status letter.
+    const who = (file.who ?? []).slice(0, 2);
+    const letter = plainLabel(file.letter).slice(0, 1) || "·";
     const tone = letter === "A" || letter === "?" ? PANEL_SUCCESS : letter === "D" ? PANEL_ERROR : letter === "U" ? PANEL_WARNING
       : letter === "R" ? PANEL_BLUE : PANEL_MUTED;
-    const who = (file.who ?? []).slice(0, 4), dots = who.map(hue => source.color(hue) + "●").join("") + (who.length ? " " : "");
+    const mark = who.length ? who.map(hue => source.color(hue) + "●").join("") + (who.length < 2 ? " " : "") : tone + letter + " ";
     const flag = file.outside ? PANEL_WARNING + "! " : "";
-    const lead = visibleWidth(letter) + 1 + who.length + (who.length ? 1 : 0) + (file.outside ? 2 : 0), path = plainLabel(file.path);
+    const lead = 2 + (file.outside ? 2 : 0), path = shortPath(plainLabel(file.path));
     const right = file.added === null ? PANEL_MUTED + (letter === "?" || letter === "A" ? "new" : "bin")
       : file.added === undefined ? "" : counts(file.added, file.removed ?? 0);
-    blocks.push({ rows: [{ left: (room: number) => tone + letter + " " + dots + flag + PANEL_TEXT + tail(path, Math.max(0, room - lead)),
-      ...(right ? { right } : {}) }], item: { key: targetKey({ kind: "file", path: file.path }), target: { kind: "file", path: file.path } } });
-  }
-  return blocks;
+    return { rows: [{ left: (room: number) => mark + flag + PANEL_TEXT + tail(path, Math.max(0, room - lead)),
+      ...(right ? { right } : {}) }], item: { key: targetKey({ kind: "file", path: file.path }), target: { kind: "file", path: file.path } } };
+  });
 }
 
 function planBlocks(source: SideSource, fold: boolean): Block[] {
   const { progress, stale } = source.plan;
   const phases = progress?.phases ?? [], steps = phases.flatMap(phase => phase.steps);
-  if (!steps.length) return [note("No plan yet", 0)];
+  if (!steps.length) return [note("no plan yet")];
   const waits = new Map(progress?.waits?.map(wait => [wait.step, wait.on.kind] as const) ?? []);
   const done = steps.filter(step => step.status.state === "done").length;
-  const blocks: Block[] = [{ rows: [{ left: PANEL_TEXT + `${done}/${steps.length}` + PANEL_MUTED + " done" + (stale ? PANEL_WARNING + " · stale" : "") }] }];
+  const blocks: Block[] = [{ rows: [{ left: PANEL_MUTED + `${done}/${steps.length} done` + (stale ? PANEL_WARNING + " · stale" : "") }] }];
   // Under pressure finished steps fold into one line so the open ones stay in view.
-  if (fold && done) blocks.push({ rows: [{ left: PANEL_MUTED + `✓ ${done} done` }] });
+  if (fold && done) blocks.push({ rows: [{ left: PANEL_SUCCESS + "✓" + PANEL_MUTED + ` ${done} done` }] });
+  let running = 0;
   for (const phase of phases) {
     const shown = phase.steps.filter(step => !fold || step.status.state !== "done");
     if (!shown.length) continue;
     if (phases.length > 1) blocks.push(heading(plainLabel(phase.label)));
     for (const step of shown) {
       const state = step.status.state, wait = waits.get(step.id);
-      const [mark, markColor, textColor]: readonly [string, string, string] = state === "done" ? ["✓", PANEL_MUTED, PANEL_MUTED]
-        : state === "in_progress" ? ["●", PANEL_BLUE, PANEL_TEXT] : state === "dropped" ? ["–", PANEL_MUTED, PANEL_MUTED]
+      const [mark, markColor, textColor]: readonly [string, string, string] = state === "done" ? ["✓", PANEL_SUCCESS, PANEL_MUTED]
+        : state === "in_progress" ? [spinner(Date.now(), running++), PANEL_BLUE, PANEL_TEXT] : state === "dropped" ? ["–", PANEL_MUTED, PANEL_MUTED]
         : ["○", PANEL_MUTED, PANEL_TEXT];
       const right = wait === "owner" ? PANEL_WARNING + "?" : wait === "event" ? PANEL_MUTED + "…" : "";
       blocks.push({ rows: [{ left: markColor + mark + " " + textColor + plainLabel(step.label), ...(right ? { right } : {}) }],
@@ -253,8 +259,6 @@ interface Segment { readonly text: string; readonly width: number; readonly hit?
 
 const seg = (text: string, visible: string, hit?: Omit<SideHit, "from" | "to">): Segment => ({ text, width: visibleWidth(visible), ...(hit ? { hit } : {}) });
 const width = (list: readonly Segment[]) => list.reduce((n, part) => n + part.width, 0);
-/** The first variant within `room` cells, else the narrowest (the last). */
-const fit = (variants: readonly (readonly Segment[])[], room: number) => variants.find(list => width(list) <= room) ?? variants[variants.length - 1] ?? [];
 /** `left` from column 1, `right` against a one-cell margin; the last right segment's hit runs to the edge. */
 function compose(left: readonly Segment[], right: readonly Segment[], cells: number): { line: string; hits: SideHit[] } {
   const rightWidth = width(right), room = Math.max(0, cells - 2 - rightWidth - (rightWidth ? 1 : 0));
@@ -273,6 +277,20 @@ function compose(left: readonly Segment[], right: readonly Segment[], cells: num
   return { line: paint(text, cells, PANEL_BG), hits };
 }
 const space = (cells: number): Segment => ({ text: " ".repeat(cells), width: cells });
+/** The toggle at a row's right edge: `▸`, `▴` or `▾`, after the `Ctrl+B` key cap when `capped`; all of it clicks. */
+function toggle(arrow: string, capped: boolean): Segment[] {
+  return [...(capped ? [seg(keyCap("Ctrl+B"), " Ctrl+B ", { toggle: true })] : []), seg(PANEL_MUTED + " " + arrow, " " + arrow, { toggle: true })];
+}
+/** The first `[left, right]` pair that fits `cells` (one-cell margins, one cell between them), else the last. */
+function choose(variants: readonly (readonly [readonly Segment[], readonly Segment[]])[], cells: number): { line: string; hits: SideHit[] } {
+  const [left, right] = variants.find(([l, r]) => width(l) + width(r) + (width(r) ? 1 : 0) <= cells - 2) ?? variants[variants.length - 1] ?? [[], []] as const;
+  return compose(left, right, cells);
+}
+/** `lines` under a rule in the line colour, unless the terminal has fewer than 16 rows; hits move down with their lines. */
+function ruled(lines: readonly string[], hits: ReadonlyMap<number, readonly SideHit[]>, cells: number, rows: number | undefined): SideFrame {
+  if (rows !== undefined && rows < RULE_ROWS) return { lines: [...lines], hits };
+  return { lines: [paint(rule(cells), cells, PANEL_BG), ...lines], hits: new Map([...hits].map(([row, list]) => [row + 1, list])) };
+}
 function pagerSegments(pager: Pager): Segment[] {
   const back = pager.first > 0, next = pager.last < pager.count - 1;
   const range = pager.first === pager.last ? `${pager.first + 1}` : `${pager.first + 1}–${pager.last + 1}`;
@@ -296,16 +314,20 @@ export class Sidebar {
     return { key: undefined, index: 0, offset: 0, align: undefined, first: 0, last: 0, firstKey: undefined, lastKey: undefined, capacity: Infinity };
   }
 
-  /** The full-height rail: tabs on row 0, the active tab's body below, a pager on the last row when it overflows. */
+  /**
+   * The rail, from the row under the tab rule down: tabs and `[Ctrl+B] ▸` on row 0, the active tab's body
+   * directly below, a pager on the last row when it overflows. A narrow rail drops the key cap, then
+   * shortens the tabs to initials.
+   */
   rail(source: SideSource, cells: number, height: number, resizing?: number): SideFrame {
     const lines: string[] = [], hits = new Map<number, SideHit[]>();
     if (height <= 0) return { lines, hits };
-    const toggle = [seg(PANEL_MUTED + "▸", "▸", { toggle: true })];
-    const head = compose(resizing === undefined ? fit([this.rowSegments(undefined, 2), this.initials(true)], cells - 4)
-      : [seg(PANEL_BLUE + `⇔ ${resizing} cols`, `⇔ ${resizing} cols`)], toggle, cells);
+    const head = resizing === undefined
+      ? choose([[this.rowSegments(undefined, 1), toggle("▸", true)], [this.rowSegments(undefined, 1), toggle("▸", false)],
+        [this.initials(true), toggle("▸", false)]], cells)
+      : compose([seg(PANEL_BLUE + `⇔ ${resizing} cols`, `⇔ ${resizing} cols`)], toggle("▸", false), cells);
     lines.push(head.line); hits.set(0, head.hits);
     const blank = paint("", cells, PANEL_BG);
-    if (height > 8) lines.push(blank);
     const capacity = height - lines.length;
     if (capacity > 0) {
       const body = this.body(source, cells, capacity, false), top = lines.length;
@@ -321,28 +343,39 @@ export class Sidebar {
     return { lines, hits };
   }
 
-  /** The collapsed navigation row: tabs with their summaries and the ▴ toggle. */
-  row(source: SideSource, cells: number, tiny: boolean): SideFrame {
-    const right = [seg(PANEL_MUTED + " ▴", " ▴", { toggle: true })];
-    const summary = sideSummary(source, tiny), short = sideSummary(source, true);
-    const row = compose(fit([this.rowSegments(summary, tiny ? 2 : 3), this.rowSegments(short, 2), this.rowSegments(undefined, 2),
-      this.initials(false)], cells - 3 - width(right)), right, cells);
+  /**
+   * The collapsed navigation row under its rule: muted labels with their summaries in text, and
+   * `[Ctrl+B] ▴` at the right (`▴` alone when tiny). The rule goes when the terminal has fewer than
+   * 16 `rows`.
+   */
+  row(source: SideSource, cells: number, tiny: boolean, rows?: number): SideFrame {
+    const summary = sideSummary(source, tiny), short = sideSummary(source, true), plain = toggle("▴", false);
+    const variants: [readonly Segment[], readonly Segment[]][] = tiny
+      ? [[this.rowSegments(summary, 2), plain], [this.rowSegments(undefined, 2), plain], [this.initials(false), plain]]
+      : [[this.rowSegments(summary, 2), toggle("▴", true)], [this.rowSegments(summary, 2), plain], [this.rowSegments(short, 2), plain],
+        [this.rowSegments(undefined, 2), plain], [this.initials(false), plain]];
+    const row = choose(variants, cells);
     for (const hit of row.hits) if (hit.tab) this.opening.add(hit);
-    return { lines: [row.line], hits: new Map([[0, row.hits]]) };
+    return ruled([row.line], new Map([[0, row.hits]]), cells, rows);
   }
 
-  /** The open drawer: the row with ▾ (and the pager left of it), then the active tab's body for `drawerRows(rows)` rows at most. */
+  /**
+   * The open drawer under its rule: the tabs with the active one marked, the pager and `[Ctrl+B] ▾` at the
+   * right (`▾` alone below 64 columns), then the active tab's body for `drawerRows(rows)` rows at most.
+   */
   drawerFrame(source: SideSource, cells: number, rows: number): SideFrame {
     const capacity = drawerRows(rows), body = this.body(source, cells, capacity, true);
-    const toggle = seg(PANEL_MUTED + " ▾", " ▾", { toggle: true });
-    const right = body.pager ? [...pagerSegments(body.pager), space(1), toggle] : [toggle];
-    const head = compose(fit([this.rowSegments(undefined, 2), this.initials(true)], cells - 3 - width(right)), right, cells);
+    const right = (capped: boolean) => body.pager ? [...pagerSegments(body.pager), space(1), ...toggle("▾", capped)] : toggle("▾", capped);
+    const variants: [readonly Segment[], readonly Segment[]][] = [
+      ...(cells >= COMPACT_COLUMNS ? [[this.rowSegments(undefined, 2), right(true)] as [Segment[], Segment[]]] : []),
+      [this.rowSegments(undefined, 2), right(false)], [this.initials(true), right(false)]];
+    const head = choose(variants, cells);
     for (const hit of head.hits) if (hit.tab) this.closing.add(hit);
     const lines = [head.line, ...body.lines], hits = new Map<number, SideHit[]>([[0, head.hits]]);
     for (const [row, list] of body.hits) hits.set(row + 1, list);
     // A paged drawer keeps its height while turning pages.
     if (body.pager) while (lines.length < capacity + 1) lines.push(paint("", cells, PANEL_BG));
-    return { lines, hits };
+    return ruled(lines, hits, cells, rows);
   }
 
   nextTab(): void { this.shift(1); }
@@ -450,6 +483,7 @@ export class Sidebar {
       while (start > 0 && last(start - 1) >= Math.max(selected, last(start))) start--;
     }
     const view = reach(blocks, items, start, paged ? rows : Infinity);
+    const current = source.current === undefined ? undefined : targetKey({ kind: "agent", key: source.current });
     state.offset = start; state.align = undefined;
     state.first = start; state.last = Math.max(start, view.last);
     state.firstKey = list[state.first]?.key; state.lastKey = list[state.last]?.key;
@@ -457,7 +491,8 @@ export class Sidebar {
     for (let at = view.from; at < view.to && lines.length < rows; at++) {
       const block = blocks[at];
       if (!block) continue;
-      const chosen = this.focused && block.item !== undefined && block.item.key === list[selected]?.key;
+      // The sidebar's own selection while it has the focus, and the agent the Agents view selects.
+      const chosen = block.item !== undefined && (this.focused && block.item.key === list[selected]?.key || block.item.key === current);
       block.rows.forEach((row, index) => {
         if (lines.length >= rows) return;
         if (block.item) hits.set(lines.length, [{ from: 0, to: cells, target: block.item.target }]);

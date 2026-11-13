@@ -46,19 +46,19 @@ function click(view: AgentsView, width: number, height: number, x: number, y: nu
   }
 }
 
-test("the page follows the agents, jobs, detail and timeline order at 140 and 52 columns without hint text", () => {
+test("the page follows the agents, jobs, detail and timeline order at 140 and 52 columns without captions", () => {
   for (const width of [140, 52]) {
     for (const selected of [undefined, "job:build"]) {
       const rows = plain(renderAgents(agentsModel(fixture, NOW, { jobControl: true }), selected, width, options()).lines);
       const at = (needle: string) => rows.findIndex(row => row.includes(needle));
-      expect(at("explore")).toBeGreaterThan(0);
+      expect(at("explore")).toBeGreaterThanOrEqual(0);
       expect(at("oracle")).toBeGreaterThan(at("explore"));
       expect(at("Jobs")).toBeGreaterThan(at("oracle"));
       expect(at("bun test lint")).toBeGreaterThan(at("bun test build"));
       expect(at("Timeline")).toBeGreaterThan(at(selected ? "OUTPUT_build" : "open conversation"));
       expect(rows.at(-1)).toContain("0s");
       const text = rows.join("\n");
-      expect(text).not.toMatch(/\b(Enter|Esc|PgUp|PgDn|Ctrl\+|Alt\+|F\d{1,2})\b|j\/k|⏎|press /);
+      expect(text).not.toMatch(/observations, not task settlement|host observations|unavailable|No helper calls/);
     }
   }
 });
@@ -70,13 +70,15 @@ test("selection stays on the same key when a newer helper is inserted above it",
   snapshot = { ...fixture, helpers: [helper("h-new", "running", NOW - 1000), ...(fixture.helpers ?? [])] };
   expect(view.entry()?.row.key).toBe("helper:h-2");
   const frame = renderAgents(agentsModel(snapshot, NOW), view.selected, 140, options());
-  expect(stripTerminalSequences(frame.lines[frame.selectedRow] ?? "")).toMatch(/^▌✓ explore\b/);
+  expect(stripTerminalSequences(frame.lines[frame.selectedRow] ?? "")).toMatch(/^ ▌  ✓  explore\b/);
   view.move(1);
   expect(view.entry()?.row.key).toBe("helper:h-1");
 });
 
-test("every line fits the width, and the table density switches at 60 and 112 columns", () => {
-  expect([59, 60, 111, 112].map(agentDensity)).toEqual(["min", "med", "med", "full"]);
+test("every line fits the width, and the table density switches at the mock's 60 and 112 content cells", () => {
+  // The mock measures the area minus four cells of padding: a 61-column pane is narrow, a 92-column pane is not.
+  expect([63, 64, 115, 116].map(agentDensity)).toEqual(["min", "med", "med", "full"]);
+  expect([46, 61, 92, 150].map(agentDensity)).toEqual(["min", "min", "med", "full"]);
   const model = agentsModel(fixture, NOW, { jobControl: true });
   for (const width of [34, 52, 80, 112, 140]) {
     for (const selected of [undefined, "helper:h-2", "job:build", "job:gone"]) {
@@ -86,9 +88,9 @@ test("every line fits the width, and the table density switches at 60 and 112 co
     }
   }
   const header = (width: number) => plain(renderAgents(model, undefined, width, options()).lines).some(row => row.includes("profile · model"));
-  expect(header(112)).toBe(true); expect(header(111)).toBe(false);
+  expect(header(116)).toBe(true); expect(header(115)).toBe(false);
   const profile = (width: number) => plain(renderAgents(model, undefined, width, options()).lines).some(row => /explore\s.*model-a/.test(row));
-  expect(profile(60)).toBe(true); expect(profile(59)).toBe(false);
+  expect(profile(64)).toBe(true); expect(profile(63)).toBe(false);
 });
 
 test("a helper row offers no steer, cancel or model, while a child row shows them dim with the reason", () => {
@@ -112,7 +114,8 @@ test("a helper row offers no steer, cancel or model, while a child row shows the
   const frame = renderAgents(model(), "child:c-1", 140, options());
   const actionRow = frame.lines.find(line => stripTerminalSequences(line).includes("open conversation")) ?? "";
   for (const label of ["steer", "cancel", "model"]) expect(actionRow).toContain(PANEL_MUTED + label);
-  expect(stripTerminalSequences(actionRow)).toContain("not running");
+  // An unavailable action is its muted label alone: no key cap before it and no reason after it.
+  expect(stripTerminalSequences(actionRow)).toMatch(/ ⏎  open conversation  steer  cancel  model\s*$/);
   const actionHits = [...frame.hits.values()].flat().flatMap(hit => hit.key === "child:c-1" && hit.action ? [hit.action] : []);
   expect(actionHits.filter(action => action === "steer" || action === "cancel" || action === "model")).toEqual([]);
   expect(childView.actions()).toEqual(["open"]);
@@ -129,16 +132,18 @@ test("a stale host or a lost job never shows retained job output", () => {
   expect(lost).not.toContain("OUTPUT_build");
 });
 
-test("unavailable job and helper sources print an explicit line, never an empty table", () => {
+test("an unavailable or empty source adds no caption; an empty page says how agents appear", () => {
   for (const width of [140, 80, 52]) {
     const unknown = plain(renderAgents(agentsModel({ ...fixture, jobs: null, helpers: null }, NOW), undefined, width, options()).lines).join("\n");
-    expect(unknown).toContain("Helper calls unavailable");
-    expect(unknown).toContain("Background jobs unavailable");
-    expect(unknown).not.toContain("No helper calls");
+    expect(unknown).not.toContain("unavailable");
+    expect(unknown).not.toContain("Jobs");
+    expect(unknown).toContain("No agents yet.");
   }
-  const empty = plain(renderAgents(agentsModel({ ...fixture, jobs: [], helpers: [] }, NOW), undefined, 80, options()).lines).join("\n");
-  expect(empty).toContain("No helper calls or background jobs yet");
-  expect(empty).not.toContain("unavailable");
+  const jobsOnly = plain(renderAgents(agentsModel({ ...fixture, helpers: [] }, NOW), undefined, 80, options()).lines).join("\n");
+  expect(jobsOnly).toContain("Jobs");
+  expect(jobsOnly).not.toMatch(/No agents yet|No helper calls/);
+  const agentsOnly = plain(renderAgents(agentsModel({ ...fixture, jobs: [] }, NOW), undefined, 80, options()).lines).join("\n");
+  expect(agentsOnly).not.toContain("Jobs");
 });
 
 test("clicking an action label runs that action for the shown row", () => {
@@ -194,23 +199,66 @@ function buildState(fleet: FleetSnapshot): BuildPanelState {
 }
 const buildModel = (fleet = MOCK_FLEET) => agentsModel(fixture, NOW, { extra: fleetExtras(buildState(fleet), NOW) });
 
-test("child rows lead the table in fleet order, with their detail, at 140 and 52 columns and no hint text", () => {
+test("child rows lead the table in fleet order, with their detail and key-cap actions, at 140 and 52 columns", () => {
   for (const width of [140, 52]) {
     for (const selected of [undefined, ...MOCK_FLEET.children.map(child => childKey(child.id))]) {
       const rows = plain(renderAgents(buildModel(), selected, width, options()).lines);
       const at = (needle: string) => rows.findIndex(row => row.includes(needle));
-      expect(at("host-slots")).toBeGreaterThan(0);
+      expect(at("host-slots")).toBeGreaterThanOrEqual(0);
       expect(at("app-store")).toBeGreaterThan(at("host-slots"));
       expect(at("picker-ui")).toBeGreaterThan(at("app-store"));
       expect(at("arrival")).toBeGreaterThan(at("picker-ui"));
       expect(at("explore")).toBeGreaterThan(at("arrival"));
       expect(at("Timeline")).toBeGreaterThan(at("open conversation"));
       const text = rows.join("\n");
-      expect(text).not.toMatch(/\b(Enter|Esc|PgUp|PgDn|Ctrl\+|Alt\+|F\d{1,2})\b|j\/k|⏎|press /);
+      expect(text).toMatch(/ ⏎  open conversation/);
+      expect(text).not.toMatch(/model \S+\/|call call-1|session file/);
       if (selected === childKey("picker-ui")) expect(text).toContain("picker render");
       if (selected === childKey("app-store")) expect(text).toContain("Keep the store API stable");
     }
   }
+});
+
+test("the full table keeps the mock's column cells: header and rows aligned, a 14-cell sparkline, waiting and done times", () => {
+  const lines = renderAgents(buildModel(), childKey("app-store"), 150, options()).lines, rows = plain(lines);
+  const header = rows[0] ?? "", find = (needle: string) => rows.find(row => row.includes(needle)) ?? "";
+  expect(header.indexOf("agent")).toBe(7);
+  expect(header.indexOf("profile · model")).toBe(20);
+  expect(header.indexOf("activity")).toBe(81);
+  expect(header.indexOf("now")).toBe(97);
+  const done = find("host-slots"), running = find("app-store"), queued = find("arrival");
+  expect(done.indexOf("host-slots")).toBe(7);
+  // Time is right-aligned under its heading: done shows its run time, a queued child reads `waiting`.
+  expect(done.indexOf("1m30s") + "1m30s".length).toBe(header.indexOf("time") + "time".length);
+  expect(queued.indexOf("waiting") + "waiting".length).toBe(header.indexOf("time") + "time".length);
+  // Tool calls per 5 s bucket [1, 3, 5, 2], scaled to the busiest bucket shown, right-aligned in 14 cells.
+  expect(running.slice(81, 95)).toBe("          ▁▄▇▃");
+  expect(running.indexOf("edit src/app-store/store.rs")).toBe(97);
+  // The selected row is the only one on another surface and carries the accent bar.
+  expect(running.startsWith(" ▌")).toBeTrue();
+  for (const line of lines) expect(visibleWidth(line)).toBe(150);
+});
+
+test("med and min densities fold the activity onto a second line under the name", () => {
+  for (const width of [92, 46]) {
+    const rows = plain(renderAgents(buildModel(), undefined, width, options()).lines);
+    const name = rows.findIndex(row => row.includes("app-store"));
+    expect(rows[name + 1]?.indexOf("edit src/app-store/store.rs")).toBe((rows[name] ?? "").indexOf("app-store"));
+    expect(rows.some(row => row.includes("profile · model"))).toBeFalse();
+    expect((rows[name] ?? "").includes("model-a")).toBe(width >= 60);
+  }
+});
+
+test("the timeline spends one column per 5 s and its axis spans only the bars", () => {
+  const rows = plain(renderAgents(buildModel(), undefined, 150, options()).lines);
+  const axis = rows.at(-1) ?? "";
+  // 200 s since the fleet started: 40 columns from the bar start at cell 13, ending in the elapsed time.
+  expect(axis.indexOf("0s")).toBe(13);
+  expect(axis.trimEnd().length).toBe(13 + 40);
+  expect(axis.trimEnd().endsWith("3m20s")).toBeTrue();
+  const done = [...rows].reverse().find(row => row.startsWith(" host-slots")) ?? "";
+  expect(done.trimEnd().endsWith("✓")).toBeTrue();
+  expect(done.trimEnd().length).toBeLessThanOrEqual(13 + 40);
 });
 
 test("helper rows beside child rows still offer no steer, cancel, model or answer", () => {

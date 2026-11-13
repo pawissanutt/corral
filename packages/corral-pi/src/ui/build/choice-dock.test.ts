@@ -3,6 +3,7 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { ChoiceDock, choiceLines, choiceRows } from "./choice-dock.ts";
 import type { ChoiceDialog } from "./choice-dock.ts";
+import { PANEL_SELECTED } from "../panels-view.ts";
 
 const ENTER = "\r", ESC = "\x1b", DOWN = "\x1b[B";
 const click = (x: number, y: number): TuiMouseEvent =>
@@ -124,7 +125,7 @@ test("options take one row from 84 columns, two below, and drop the detail when 
   expect(text(narrow)).not.toContain("mitiplay");
 });
 
-test("the top and bottom borders are exactly the dialog's width and keep their corners", () => {
+test("the dialog is an accent card: closed borders, the question in its header, every line exactly the width", () => {
   const LONG: ChoiceDialog = { ...EXIT, key: "long", title: "How should this leave the build session? 界界界 · done",
     meta: "qa-repo · outside a corral workspace · 3 agents still running 界界界 and a very long project label" };
   const QA: ChoiceDialog = { ...EXIT, key: "qa", meta: "qa-repo · outside a corral workspace" };
@@ -133,19 +134,50 @@ test("the top and bottom borders are exactly the dialog's width and keep their c
       for (let width = 8; width <= 160; width++) {
         const lines = choiceLines(dialog, 0, width, 14, short).lines, rows = screen(lines);
         for (const line of lines) expect(visibleWidth(line)).toBe(width);
-        expect(rows[0]!.startsWith("╭─")).toBeTrue();
-        expect(rows[0]!.endsWith("─╮")).toBeTrue();
-        for (const row of rows.slice(1)) expect(row.endsWith("│") || row.endsWith("╯")).toBeTrue();
+        for (const row of rows) {
+          if (row.startsWith("╭")) expect(row).toBe("╭" + "─".repeat(width - 2) + "╮");
+          else if (row.startsWith("╰")) expect(row).toBe("╰" + "─".repeat(width - 2) + "╯");
+          else expect(row.startsWith("│") && row.endsWith("│")).toBeTrue();
+        }
       }
     }
   }
-  // With the sidebar rail at 140 columns the dock is 105 wide: the whole label fits and the corner closes the row.
-  const top = screen(choiceLines(QA, 0, 105, 14, false).lines)[0]!;
-  expect(top).toContain("qa-repo · outside a corral workspace");
-  // When the label cannot fit whole it is shortened with an ellipsis before it is dropped.
-  const clipped = screen(choiceLines(LONG, 0, 120, 14, false).lines)[0]!;
+  // The question is bold in the header row, the policy note right-aligned after it; the border carries no title.
+  const wide = choiceLines(EXIT, 0, 120, 14, false), rows = screen(wide.lines);
+  expect(rows[0]).toBe("╭" + "─".repeat(118) + "╮");
+  expect(rows[1]!.startsWith("│ How should this leave the build session? ")).toBeTrue();
+  expect(rows[1]!.endsWith(" mitiplay policy: gate allowed, review optional │")).toBeTrue();
+  // Bold is on at the question's first cell and off again before the policy note.
+  const head = wide.lines[1]!, start = head.indexOf("How should"), end = head.indexOf("mitiplay");
+  const on = head.lastIndexOf("\x1b[1m", start);
+  expect(on).toBeGreaterThanOrEqual(0);
+  expect(head.slice(on, start).includes("\x1b[22m")).toBeFalse();
+  expect(head.slice(start, end).includes("\x1b[22m")).toBeTrue();
+  // Options: the number, the label in a 26-cell column, then the detail; the selected one carries the bar.
+  const keep = rows.find(row => row.includes("Keep on the branch"))!;
+  expect(keep.indexOf("1 Keep on the branch")).toBe(2);
+  expect(keep.indexOf("the worktree and its branch stay")).toBe(2 + 2 + 26);
+  expect(keep[1]).toBe("▌");
+  expect(rows.find(row => row.includes("Land after the gate"))).toContain("unavailable: Project policy requires independent review.");
+  // With the sidebar rail at 140 columns the dock is 105 wide: the whole note fits.
+  expect(screen(choiceLines(QA, 0, 105, 14, false).lines)[1]).toContain("qa-repo · outside a corral workspace");
+  // A note that cannot fit whole is shortened with an ellipsis before it is dropped.
+  const clipped = screen(choiceLines(LONG, 0, 120, 14, false).lines)[1]!;
   expect(clipped).toContain("qa-repo");
   expect(clipped).toContain("…");
+  expect(screen(choiceLines(EXIT, 0, 90, 14, false).lines)[1]).not.toContain("mitiplay");
+});
+
+test("below 84 columns the detail sits under the label and the selection covers every row of its option", () => {
+  const frame = choiceLines(EXIT, 0, 60, 14, false), rows = screen(frame.lines);
+  const at = rows.findIndex(row => row.includes("Keep on the branch"));
+  expect(rows[at]![1]).toBe("▌");
+  expect(rows[at + 1]!.indexOf("the worktree and its branch stay")).toBe(4);
+  expect(rows[at + 1]![1]).toBe(" ");
+  expect(frame.lines[at]).toContain(PANEL_SELECTED);
+  expect(frame.lines[at + 1]).toContain(PANEL_SELECTED);
+  expect(frame.lines[at + 2]).not.toContain(PANEL_SELECTED);
+  expect(rows[1]).toContain("How should this leave?");
 });
 
 test("clicking an option row picks the same option as its digit", () => {

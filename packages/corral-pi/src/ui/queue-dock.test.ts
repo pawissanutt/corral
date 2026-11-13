@@ -3,6 +3,8 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { QueueControl, QueuedItem } from "../host/queue-control.ts";
 import { QueueDock, queueCapacity } from "./queue-dock.ts";
+import { keyCap } from "./frame.ts";
+import { PANEL_BG, PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_TEXT } from "./panels-view.ts";
 
 const item = (key: string, text: string, editable = true, policy: QueuedItem["policy"] = "follow_up"): QueuedItem =>
   ({ key, text, policy, editable });
@@ -213,7 +215,7 @@ test("a refused call leaves the rows as reported and raises a notice; disabled c
 test("control hit ranges trigger the same calls as the keys at 40 and 120 columns", async () => {
   const items = [item("a", "alpha"), item("b", "bravo"), item("c", "charlie")];
   const actions = [
-    { keys: ["\r"], glyph: (width: number) => width < 84 ? "✎" : "edit" },
+    { keys: ["\r"], glyph: (width: number) => width < 84 ? "e" : "edit" },
     { keys: [SHIFT_UP], glyph: () => "↑" },
     { keys: ["J"], glyph: () => "↓" },
     { keys: ["\x1b[3~"], glyph: () => "×" },
@@ -239,7 +241,7 @@ test("control hit ranges trigger the same calls as the keys at 40 and 120 column
   }
 });
 
-test("every dock line fits from 30 to 140 columns and long queues stay within capacity", async () => {
+test("every dock line is exactly the width from 30 to 140 columns and long queues stay within capacity", async () => {
   expect([queueCapacity(14), queueCapacity(24), queueCapacity(46)]).toEqual([2, 3, 5]);
   const { gate, release } = gated();
   const items = [item("a", "界".repeat(80), true, "steer"), item("b", "x".repeat(300)), item("c", "tab\there\x1b[2Jnewline\nend"),
@@ -252,24 +254,46 @@ test("every dock line fits from 30 to 140 columns and long queues stay within ca
     for (let width = 30; width <= 140; width++) {
       const lines = dock.render(width);
       expect(lines.length).toBeLessThanOrEqual(1 + queueCapacity(rows) + 1);
-      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      for (const line of lines) expect(visibleWidth(line)).toBe(width);
       expect(lines.join("")).not.toContain("\x1b[2J");
     }
   }
   release(); await settle();
 });
 
-test("a receiver is named in the header, which stays within the width at 40 and 120 columns", () => {
+test("each row names its receiver in accent, joined to the text below 84 columns; lines keep the width", () => {
   const items = [item("a", "alpha"), item("b", "bravo")];
   const host = (receiver?: () => string | undefined) => new QueueDock({
     items: () => items, control: () => undefined, draft: () => "", setDraft: () => {}, focusComposer: () => {},
     notice: () => {}, changed: () => {}, ...(receiver ? { receiver } : {}),
   });
   const named = host(() => "the parent"), plain = host(), unset = host(() => undefined);
-  expect(screen(named.render(120))[0]).toContain("the parent");
-  expect(screen(plain.render(120))[0]).not.toContain("the parent");
-  expect(screen(unset.render(120))[0]).toEqual(screen(plain.render(120))[0]);
-  for (const width of [40, 120]) {
-    for (const line of named.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+  const wide = screen(named.render(120));
+  expect(wide[0]).toContain("QUEUE · 2 waiting · each runs when its receiver is next idle");
+  // `n  → receiver` in a 14-cell column, then the text.
+  const row = wide.find(line => line.includes("alpha"))!;
+  expect(row.indexOf("→ parent")).toBe(3);
+  expect(row.indexOf("alpha")).toBe(3 + 14);
+  expect(named.render(120).find(line => line.includes("alpha"))).toContain(PANEL_BLUE + "→ parent");
+  expect(screen(named.render(40)).find(line => line.includes("alpha"))).toContain("→parent alpha");
+  expect(screen(named.render(40))[0]!.trim()).toBe("QUEUE · 2 waiting");
+  expect(screen(plain.render(120)).join("\n")).not.toContain("→");
+  expect(screen(unset.render(120))).toEqual(screen(plain.render(120)));
+  for (let width = 30; width <= 140; width++) {
+    for (const line of named.render(width)) expect(visibleWidth(line)).toBe(width);
   }
+});
+
+test("controls are a key cap and words from 84 columns, glyphs below; impossible moves are dim, remove in error", () => {
+  const { dock } = harness([item("a", "alpha"), item("b", "bravo")]);
+  const wide = screen(dock.render(120)), first = wide.find(line => line.includes("alpha"))!;
+  expect(first.trimEnd().endsWith(" e  edit  ↑  ↓  × remove")).toBeTrue();
+  expect(first.length).toBe(120);
+  const styled = dock.render(120).find(line => line.includes("alpha"))!;
+  expect(styled).toContain(PANEL_MUTED + "↑");
+  expect(styled).toContain(PANEL_TEXT + "↓");
+  expect(styled).toContain(PANEL_ERROR + "× remove");
+  expect(styled).toContain(keyCap("e", false, PANEL_BG));
+  const tight = screen(dock.render(46)).find(line => line.includes("alpha"))!;
+  expect(tight.trimEnd().endsWith(" e  ↑ ↓ ×")).toBeTrue();
 });

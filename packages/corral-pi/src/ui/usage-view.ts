@@ -2,6 +2,12 @@
 import { z } from "zod";
 import type { InspectionStore } from "./inspection.ts";
 import { plainLabel, type PanelLine } from "./panels-view.ts";
+import { VIEW_INSET } from "./frame.ts";
+/**
+ * Main-view columns from which usage rows are one table row each; below, three labelled lines. The workbench draws
+ * this view VIEW_INSET cells narrower than the main view, so the comparison adds them back.
+ */
+export const TABLE_MIN = 90;
 const Count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const Dollars = z.number().finite().nonnegative().nullable().optional();
 const Usage = z.object({ input: Count, output: Count, cache_read: Count, cache_write: Count,
@@ -31,7 +37,7 @@ export function budgetLines(value: unknown): string[] {
     "Cancellation is best-effort; provider billing may lag. No provider quota or subscription balance is available."];
 }
 export function usageLines(store: InspectionStore, budget: unknown, bound: boolean, width: number, chart = false): PanelLine[] {
-  const rows: PanelLine[] = [];
+  const rows: PanelLine[] = [], table = width + VIEW_INSET >= TABLE_MIN;
   const add = (text: string, heading = false) => rows.push({ text: plainLabel(text), heading });
   add("Measured usage · source tables", true);
   add("c chart on/off (source table retained) · r reread stored snapshot · F9 conversation");
@@ -46,13 +52,13 @@ export function usageLines(store: InspectionStore, budget: unknown, bound: boole
     add(panel.source);
     add("Reported USD is transcript-reported, not verified billed metered spend. Subscription costs are API-equivalent estimates, not subscription charges.");
     add("Wall time is completed-run elapsed time, not model-active time. Response latency is transcript-derived, not throughput.");
-    if (width >= 90) add("Scope │ Input │ Output │ Cache read │ Cache write │ Reported USD │ API-equivalent USD │ Unpriced tokens", true);
+    if (table) add("Scope │ Input │ Output │ Cache read │ Cache write │ Reported USD │ API-equivalent USD │ Unpriced tokens", true);
     for (const row of panel.rows) {
       const u = row.usage;
       add(row.scope, true);
       add(`Coverage ${row.known_runs}/${row.runs} workers known · completed wall seconds ${row.wall_seconds ?? "unavailable"}`);
       if (!u) { add("Usage unknown · no collected sample"); continue; }
-      if (width >= 90) add(`${u.input} │ ${u.output} │ ${u.cache_read} │ ${u.cache_write} │ ${dollars(u.reported_usd ?? u.cost_usd)} │ ${dollars(u.estimated_usd)} │ ${u.unpriced_tokens}`);
+      if (table) add(`${u.input} │ ${u.output} │ ${u.cache_read} │ ${u.cache_write} │ ${dollars(u.reported_usd ?? u.cost_usd)} │ ${dollars(u.estimated_usd)} │ ${u.unpriced_tokens}`);
       else {
         add(`Input ${u.input} · output ${u.output} · cache read ${u.cache_read} · cache write ${u.cache_write}`);
         add(`Reported ${dollars(u.reported_usd ?? u.cost_usd)} · API-equivalent ${dollars(u.estimated_usd)}`);

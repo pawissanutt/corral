@@ -36,7 +36,9 @@ const settled = async (h: PanelHost, report: Promise<unknown>, what: string) => 
   await report;
   await until(h, lines => !lines.some(line => line.includes("last input")), what);
 };
-const queueRow = (policy: "steer" | "next", text: string) => new RegExp(`\\b${policy}\\s+${text}\\b`);
+/** A queue row: its number, `steer · ` before a steer item's text (a follow-up has no marker), then the controls ending in `×`. */
+const queueRow = (policy: "steer" | "next", text: string) =>
+  new RegExp(`^\\s*▌?\\d+\\s+${policy === "steer" ? "steer · " : ""}${text}\\b.*×`);
 /** The composer holds `first` above `second`, and no queue row lists `first` any more. */
 const pulledBack = (lines: readonly string[], first: string, second: string) => {
   const above = lines.findIndex(line => line.includes(first)), below = lines.findIndex(line => line.includes(second));
@@ -100,7 +102,7 @@ test("busy Enter steers and Alt+Enter follows once; the queue lists both, notice
     type(h, "Start"); h.physical.send("\r"); await within(first, 10_000, "held stream");
     type(h, "Steer once"); h.physical.send("\r"); await frame(h, "last input queued");
     type(h, "Follow once"); h.physical.send("\x1b\r");
-    // Each queued input is one row above the composer with its delivery policy; Pi prints no count line of its own.
+    // Each queued input is one row above the composer, a steer item marked as such; Pi prints no count line of its own.
     await until(h, lines => lines.some(line => queueRow("steer", "Steer once").test(line))
       && lines.some(line => queueRow("next", "Follow once").test(line)), "steer and follow-up queue rows");
     expect(h.screen().text()).not.toContain("queued, not execution");

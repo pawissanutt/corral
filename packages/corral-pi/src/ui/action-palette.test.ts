@@ -9,14 +9,14 @@ import { PanelCanvas, setCanvasAppearance } from "./panel-canvas.ts";
 import { resourceLoaderOptions, restrictedSettings } from "../host/restrict.ts";
 import { NativePanels } from "./panels.ts";
 
-const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+const plain = (lines: readonly string[]) => lines.map(line => stripTerminalSequences(line));
 const action = (id: string, disabled?: string): HostAction => ({ id, label: id, shortcut: "F6", scope: "worker · demo",
   disabled: () => disabled, run() {} });
 afterEach(() => { setPanelAppearance("dark"); setCanvasAppearance("dark"); });
 
 test("search uses labels, shortcuts, scope and disabled reasons; cancel never dispatches", () => {
   let chosen: HostAction | undefined;
-  const palette = new ActionPalette([action("inspect"), action("answer", "Role worker cannot answer")], theme,
+  const palette = new ActionPalette([action("inspect"), action("answer", "Role worker cannot answer")],
     a => { chosen = a; }, () => {});
   palette.focused = true;
   palette.handleInput("worker answer");
@@ -29,16 +29,28 @@ test("search uses labels, shortcuts, scope and disabled reasons; cancel never di
 test("keyboard selection returns only explicit handlers; dynamic disabled state is checked", () => {
   let blocked = false, chosen: HostAction | undefined;
   const selectable = { ...action("model"), disabled: () => blocked ? "Capability unavailable" : undefined };
-  const palette = new ActionPalette([action("inspect"), selectable], theme, a => { chosen = a; }, () => {});
+  const palette = new ActionPalette([action("inspect"), selectable], a => { chosen = a; }, () => {});
   palette.handleInput("\x1b[B"); blocked = true;
   palette.handleInput("\r"); expect(chosen).toBeUndefined();
   blocked = false; palette.handleInput("\r"); expect(chosen).toBe(selectable);
 });
 
 test("palette clips wide glyphs and state labels at minimum widths and supports no-match search", () => {
-  const palette = new ActionPalette([action("界面 👩‍💻 inspect"), action("cycle effort", "Effort unavailable")], theme, () => {}, () => {});
+  const palette = new ActionPalette([action("界面 👩‍💻 inspect"), action("cycle effort", "Effort unavailable")], () => {}, () => {});
   for (const width of [1, 20, 52, 80]) for (const line of palette.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
   palette.handleInput("unknown action"); expect(palette.render(52).join("\n")).toContain("no action matches");
+});
+
+test("the palette is a popup: rounded border, the filter row with the scope, a divider, then rows with key caps", () => {
+  const palette = new ActionPalette([action("inspect"), action("answer", "Role worker cannot answer")], () => {}, () => {});
+  const text = plain(palette.render(78));
+  expect(text[0]!.startsWith("╭")).toBeTrue();
+  expect(text[1]).toMatch(/^│ › .*type to filter actions.* worker · demo │$/);
+  expect(text[2]).toMatch(/^│─+│$/);
+  expect(text[3]).toMatch(/^│▌inspect +F6 │$/);
+  expect(text[4]).toMatch(/^│ answer · unavailable: Role worker cannot answer +F6 │$/);
+  expect(text.at(-1)!.startsWith("╰")).toBeTrue();
+  for (const line of palette.render(78)) expect(visibleWidth(line)).toBe(78);
 });
 
 test("production catalog disables effort when capability is unavailable or unknown", () => {
@@ -47,7 +59,7 @@ test("production catalog disables effort when capability is unavailable or unkno
   try {
     const effort = panels.actions().find(a => a.id === "app.thinking.cycle");
     expect(effort?.disabled()).toBe("Effort unavailable for current model");
-    const palette = new ActionPalette(panels.actions(), theme, () => { throw new Error("disabled action dispatched"); }, () => {});
+    const palette = new ActionPalette(panels.actions(), () => { throw new Error("disabled action dispatched"); }, () => {});
     palette.handleInput("cycle effort");
     expect(palette.render(100).join("\n")).toContain("unavailable: Effort unavailable for current model");
     palette.handleInput("\r");

@@ -7,7 +7,7 @@ import { visibleWidth, stripTerminalSequences, Text } from "@earendil-works/pi-t
 import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
 import { PanelTerminal, type PanelSurface } from "./panel-terminal.ts";
 import { NativePanels } from "./panels.ts";
-import { box, diffLine, PANEL_WARNING, type PanelSnapshot } from "./panels-view.ts";
+import { box, diffLine, PANEL_LINE, PANEL_ON_ACCENT, PANEL_WARNING, type PanelSnapshot } from "./panels-view.ts";
 import { contextLabel, contextSegment, statusBar } from "./panels-chrome.ts";
 import { STATUS_BINDING, STATUS_ALERTS } from "./chrome.ts";
 import { parseStatus, readPanelDiff, readPanelFiles } from "./panels-git.ts";
@@ -30,7 +30,6 @@ function fixture() {
   let changes = 0, consumed = false;
   const surface: PanelSurface = {
     sidebarEnabled: true,
-    renderSidebar: (width, height) => box("Real inspector", ["session data"], width, height),
     handleInput: () => consumed,
     layoutChanged: () => { changes++; },
   };
@@ -39,54 +38,42 @@ function fixture() {
   return { physical, surface, terminal, inputs, changes: () => changes, consume: () => { consumed = true; } };
 }
 
-test("public terminal adapter reserves only a wide native rail and preserves normal-screen width", () => {
+test("the adapter gives Pi the physical width and names the main columns beside a wide rail", () => {
   const { physical, terminal } = fixture();
-  expect(terminal.columns).toBe(105);
-  physical.resize(104, 34); expect(terminal.columns).toBe(104);
-  physical.resize(105, 34); expect(terminal.columns).toBe(70);
-  terminal.write("\x1b[?1049l"); expect(terminal.columns).toBe(105);
+  expect(terminal.columns).toBe(140); expect(terminal.mainColumns).toBe(105); expect(terminal.sidebarVisible).toBeTrue();
+  physical.resize(104, 34); expect(terminal.columns).toBe(104); expect(terminal.mainColumns).toBe(104); expect(terminal.sidebarVisible).toBeFalse();
+  physical.resize(105, 34); expect(terminal.mainColumns).toBe(70);
+  terminal.write("\x1b[?1049l"); expect(terminal.sidebarVisible).toBeFalse(); expect(terminal.mainColumns).toBe(105);
   terminal.stop();
 });
-test("main content/cursor bytes are preserved, rail is synchronized, and drawing stops before leaving alternate screen", () => {
+test("frame bytes pass through with only default colours decorated, and leaving the alternate screen is untouched", () => {
   const { physical, terminal } = fixture();
   const frame = "\x1b[?1049h\x1b[?7l\x1b[?2026h\x1b[1;1HREAL STREAM\x1b[?2026l";
   terminal.write(frame);
   const output = physical.writes.at(-1) ?? "";
-  // Only SGR default colors may be decorated; content, cursor and framing stay byte-identical.
-  expect(output.replace(/\x1b\[[\d;:]*m/g, "").startsWith(frame.slice(0, -8))).toBeTrue();
-  expect(output).toContain("REAL STREAM");
-  expect(output).toContain("\x1b[1;107H");
-  expect(output).toContain("Real inspector");
-  expect(output.endsWith("\x1b[?2026l")).toBeTrue();
+  expect(output.replace(/\x1b\[[\d;:]*m/g, "")).toBe(frame);
   terminal.write("\x1b[?1049lSHELL");
   expect(physical.writes.at(-1)).toBe("\x1b[?1049lSHELL");
-  terminal.stop(); const mark = physical.writes.length; terminal.redrawSidebar();
-  expect(physical.writes.length).toBe(mark);
+  terminal.stop();
 });
-test("native viewport paints an explicit canvas instead of inheriting the owner's terminal background", () => {
+test("native viewport paints the one canvas background instead of inheriting the owner's terminal background", () => {
   const { physical, terminal } = fixture(); physical.resize(80, 34);
   terminal.write("\x1b[?1049h\x1b[2J\x1b[0mconversation\x1b[49m");
   const output = physical.writes.at(-1) ?? "";
-  expect(output).toContain("\x1b[48;2;15;16;18m\x1b[2J");
-  expect(output).toContain("\x1b[0m\x1b[38;2;224;227;233m\x1b[48;2;15;16;18mconversation");
+  expect(output).toContain("\x1b[48;2;25;27;32m\x1b[2J");
+  expect(output).toContain("\x1b[0m\x1b[38;2;224;227;233m\x1b[48;2;25;27;32mconversation");
   terminal.write("\x1b[?1049l"); terminal.stop();
 });
-test("rail painting never interrupts split clipboard/image protocol payloads", () => {
+test("split clipboard/image protocol payloads pass through unchanged", () => {
   const { physical, terminal } = fixture();
   terminal.write("\x1b[?1049h");
   terminal.write("\x1b]52;c;partial");
   expect(physical.writes.at(-1)).toBe("\x1b]52;c;partial");
-  const count = physical.writes.length; terminal.redrawSidebar();
-  expect(physical.writes.length).toBe(count);
   terminal.write("payload\x07");
-  expect(physical.writes.at(-1)?.startsWith("payload\x07")).toBeTrue();
-  expect(physical.writes.at(-1)).toContain("Real inspector");
+  expect(physical.writes.at(-1)).toBe("payload\x07");
   terminal.write("\x1b(");
   expect(physical.writes.at(-1)).toBe("\x1b(");
-  const pending = physical.writes.length; terminal.redrawSidebar();
-  expect(physical.writes.length).toBe(pending);
-  terminal.write("B"); expect(physical.writes.at(-1)?.startsWith("B")).toBeTrue();
-  expect(physical.writes.at(-1)).toContain("Real inspector");
+  terminal.write("B"); expect(physical.writes.at(-1)).toBe("B");
   terminal.write("\x1b[?1049l"); terminal.stop();
 });
 test("main input and resize stay on the original terminal while consumed inspector keys never submit", () => {
@@ -96,22 +83,29 @@ test("main input and resize stay on the original terminal while consumed inspect
   f.physical.resize(80, 32); expect(f.changes()).toBe(2);
   f.terminal.stop();
 });
-test("main pointer gestures retain their release across the rail and Kitty releases do not toggle layout", () => {
+test("main pointer gestures retain their release across the rail; only the rail's rows belong to the sidebar", () => {
   const native = new NativePanels({ identity, cwd: work, snapshot: () => snapshot });
   const physical = new RecordingTerminal(), terminal = native.wrap(physical), input: string[] = [];
   terminal.start(data => input.push(data), () => {});
-  physical.send("\x1b[<0;10;5M"); physical.send("\x1b[<32;120;5M"); physical.send("\x1b[<0;120;5m");
+  // The layout places the rail: below the two header rows, the tab row and its rule.
+  renderLayoutFrame(native.workbench.mount(new Text("transcript", 0, 0)), 140, 46, () => {});
+  physical.send("\x1b[<0;10;7M"); physical.send("\x1b[<32;120;7M"); physical.send("\x1b[<0;120;7m");
   expect(input).toHaveLength(3);
-  physical.send("\x1b[<0;109;2M"); physical.send("\x1b[<0;10;2m");
-  expect(input).toHaveLength(3);
+  // Header rows span the full width: their right part is Pi's, not the rail's.
+  physical.send("\x1b[<0;120;1M"); physical.send("\x1b[<0;120;1m");
+  expect(input).toHaveLength(5);
+  physical.send("\x1b[<0;120;7M"); physical.send("\x1b[<0;10;7m");
+  expect(input).toHaveLength(5);
   physical.send("\x1b[98;5:3u"); expect(native.sidebarEnabled).toBeTrue();
   terminal.stop(); native.dispose();
 });
-test("native panel boxes are bounded at supported widths, sanitize controls and reserve wide glyph cells", () => {
+test("native panel boxes are rounded, bounded at supported widths, sanitize controls and reserve wide glyph cells", () => {
   for (const width of [34, 52, 80, 140]) {
     const lines = box("Session\x1b[2J", ["界界界".repeat(100)], width, 7, true);
     expect(lines).toHaveLength(7);
     for (const line of lines) expect(visibleWidth(line)).toBe(width);
+    expect(stripTerminalSequences(lines[0]!).startsWith("╭")).toBeTrue();
+    expect(stripTerminalSequences(lines[6]!).endsWith("╯")).toBeTrue();
     expect(lines.join("\n")).not.toContain("\x1b[2J");
   }
 });
@@ -119,33 +113,43 @@ test("view data uses measured values and explicit unavailable/empty states, neve
   expect(contextLabel(null)).toBe("Context unavailable");
   expect(contextLabel(snapshot)).toBe("1.2k/10k · 12% context");
 });
-test("the status bar is the one home of session cost and context, with binding and refusals retained", () => {
-  for (const width of [40, 52, 80, 105, 140]) {
+test("the status bar is the one home of session cost and context, with the role pill, binding and refusals", () => {
+  for (const width of [40, 52, 61, 80, 92, 105, 140, 185]) {
     const statuses = new Map([[STATUS_BINDING, "● corral g3"], [STATUS_ALERTS, "2 tool denied"]]);
     const bar = statusBar(identity, { ...snapshot, cost: 1.234 }, statuses, width);
     const screen = stripTerminalSequences(bar.join("\n"));
     expect(screen).not.toContain("example"); // the model belongs to the composer bar
     expect(screen.match(/12%/g)).toHaveLength(1);
-    expect(screen).toMatch(/1\.2k \/ 10k|1k\/10k/);
+    if (width >= 64) expect(screen).toMatch(/1\.2k \/ 10k|1k\/10k/);
     expect(screen).toContain("2 tool denied");
     expect(screen).toContain("$1.23");
     expect(screen).toContain("●");
     expect(screen).not.toContain("● corral g3");
-    if (width >= 80) expect(screen).toContain("WORKER");
-    expect(bar.length).toBe(width < 52 ? 2 : 1);
-    for (const line of bar) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    // The role is a filled accent pill: the full word from 64 columns, its initial below.
+    expect(bar[0]).toContain(PANEL_ON_ACCENT);
+    expect(screen.startsWith(width >= 64 ? "  WORKER " : "  W ")).toBeTrue();
+    expect(bar).toHaveLength(1);
+    for (const line of bar) expect(visibleWidth(line)).toBe(width);
     const unbound = stripTerminalSequences(statusBar(identity, { ...snapshot, bound: false }, new Map(), width).join("\n"));
     expect(unbound).toContain("○");
     if (width >= 105) expect(unbound).toContain("unbound"); else expect(unbound).not.toContain("unbound");
+    // A build session has no corral binding: `○ unbound`, never a generation.
+    const build = stripTerminalSequences(statusBar({ ...identity, role: "build" as const }, snapshot, new Map(), width).join("\n"));
+    expect(build).toContain(width >= 64 ? "BUILD" : " B ");
+    expect(build).toContain("○"); expect(build).not.toContain("●"); expect(build).not.toMatch(/g\d/);
+    if (width >= 105) expect(build).toContain("○ unbound"); else expect(build).not.toContain("unbound");
   }
 });
 test("context segment shortens in steps, warns at 80% and stays explicit when unknown", () => {
   const at = (percent: number | null) => ({ ...snapshot, context: { tokens: 172000, contextWindow: 200000, percent } });
-  expect(stripTerminalSequences(contextSegment(at(86), 80))).toContain("ctx ▰");
-  expect(stripTerminalSequences(contextSegment(at(86), 80))).toContain("86% · 172k / 200k");
-  expect(stripTerminalSequences(contextSegment(at(86), 22))).toBe("ctx ▰▰▰▱ 86% 172k/200k");
-  expect(stripTerminalSequences(contextSegment(at(86), 5))).toBe("86% 172k/200k");
+  expect(stripTerminalSequences(contextSegment(at(86), 80))).toBe("ctx ▰▰▰▰▰▰▰▰▰▰▱▱ 86% · 172k / 200k");
+  expect(stripTerminalSequences(contextSegment(at(86), 80, "mid"))).toBe("ctx ▰▰▰▰▰▰▰▱ 86% 172k/200k");
+  expect(stripTerminalSequences(contextSegment(at(86), 80, "tiny"))).toBe("ctx ▰▰▰▰▰▰▰▱ 86%");
+  expect(stripTerminalSequences(contextSegment(at(86), 22))).toBe("ctx ▰▰▰▰▰▰▰▱ 86%");
+  expect(stripTerminalSequences(contextSegment(at(86), 13))).toBe("86% 172k/200k");
+  expect(stripTerminalSequences(contextSegment(at(86), 5))).toBe("86%");
   expect(contextSegment(at(86), 80)).toContain(PANEL_WARNING);
+  expect(contextSegment(at(50), 80)).toContain(PANEL_LINE + "▱");
   expect(stripTerminalSequences(contextSegment(at(null), 80))).toContain("usage unknown");
   expect(stripTerminalSequences(contextSegment(at(null), 80))).not.toContain("0%");
   expect(stripTerminalSequences(contextSegment(null, 80))).toBe("Context unavailable");
@@ -178,9 +182,10 @@ for (const [kind, payload] of Object.entries({
     expect(review.visible.map(file => file.path)).toEqual([path]);
     const files = native.workbench.sideSource().files.list;
     expect(files.map(file => file.path)).toEqual([path]);
-    // Strip only presentation SGR, not arbitrary sequences (which could hide an injection).
+    // Strip only presentation SGR and the layout's own empty hyperlink close (`OSC 8 ;;`), which it writes where the main
+    // view and the rail meet; any other sequence (which could hide an injection) still fails.
     const safe = (lines: readonly string[]) => {
-      for (const line of lines) expect(line.replace(/\x1b\[[\d;]*m/g, "")).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+      for (const line of lines) expect(line.replace(/\x1b\[[\d;]*m/g, "").replaceAll("\x1b]8;;\x07", "")).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
     };
     native.sidebar.tab = "files";
     safe(native.renderSidebar(34, 20));

@@ -5,6 +5,7 @@ import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dis
 import { DecisionInbox, inboxIdentity, type InboxItem } from "./decision-inbox.ts";
 import { InboxView } from "./inbox-view.ts";
 import { NativeWorkbench } from "./workbench.ts";
+import { SPLIT_MIN } from "./proof-view.ts";
 
 const item: InboxItem = { kind: "question", task: "T-1", container: "T-1/R2", key: "T-1/R2/Q1", revision: "7", revision_kind: "question_revision", state: "open", pending: true, scope: "demo", reason: "Which route?\x1b]52;c;unsafe\x07", responsible: "pm_or_owner", detail: ["blocking=false"], inspect: "corral question show T-1/R2/Q1 --json", response: "Existing trusted owner answer flow", pm_eligible: true };
 const read = async () => ({ version: 1, workspace: "/bound-workspace", observed_at: "2026-11-02T00:00:00Z", items: [item, { ...item, task: "T-2", key: "T-2/R1/Q1" }] });
@@ -23,6 +24,19 @@ test("Inbox keyboard and mouse select exact records in the real main-view layout
     wb.handleInput("\x1b[A"); expect(wb.inbox.current?.key).toBe("T-1/R2/Q1");
     wb.handleInput("\t"); expect(wb.focused).toBeFalse(); expect(wb.view).toBe("inbox");
     wb.handleInput("\x1b[20~"); expect(screen()).toContain("REAL_TRANSCRIPT");
+  } finally { wb.dispose(); }
+});
+
+test("the Inbox splits into list and detail from SPLIT_MIN main-view columns, the same width as before the inset", async () => {
+  const wb = new NativeWorkbench({ cwd: "/nonexistent", identity: { store: "s", project: "demo", role: "assistant", assistant: "A-1", generation: 1 }, snapshot: () => null, changed() {}, canInteract: () => true, readInbox: read });
+  const root = wb.mount(new Text("REAL_TRANSCRIPT", 0, 0));
+  try {
+    expect(wb.handleInput("\x1b[23~")).toBeTrue();
+    await wb.inbox.refresh();
+    const screen = (width: number) => stripTerminalSequences(renderLayoutFrame(root, width, 40, () => {}).lines.join("\n"));
+    expect(screen(SPLIT_MIN)).toContain("┬"); expect(screen(SPLIT_MIN)).toContain("PENDING 2");
+    expect(screen(SPLIT_MIN - 1)).not.toContain("┬"); expect(screen(SPLIT_MIN - 1)).toContain("‹");
+    for (const width of [SPLIT_MIN - 1, SPLIT_MIN]) for (const line of renderLayoutFrame(root, width, 40, () => {}).lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
   } finally { wb.dispose(); }
 });
 

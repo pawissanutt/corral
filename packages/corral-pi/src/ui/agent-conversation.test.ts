@@ -97,6 +97,13 @@ test("a child conversation shows the brief once, the steers after the replies, a
   const rows = view.scroll.render(80).map(line => stripTerminalSequences(line));
   const text = rows.join("\n");
   expect(text.split("BRIEF_ONCE_VISIBLE").length - 1).toBe(1);
+  // childHTML: the header, a blank row, then the brief bubble with what the child owns inside it.
+  expect(rows[0]).toMatch(/^ ‹ Agents picker-ui default · model-a ▲ needs you/);
+  expect(rows[1]?.trim()).toBe("");
+  expect(rows[2]?.startsWith("  brief from parent BRIEF_ONCE_VISIBLE")).toBeTrue();
+  expect(rows[3]?.trim()).toBe("Owns: src/picker/ · no board access · no nested agents");
+  expect(rows.some(line => line.startsWith("  you → picker-ui STEER_ONE_VISIBLE"))).toBeTrue();
+  expect(text).toContain("▲ QUESTION_VISIBLE · answer in the dialog");
   const at = (needle: string) => rows.findIndex(line => line.includes(needle));
   expect(at("REPLY_VISIBLE")).toBeGreaterThan(at("BRIEF_ONCE_VISIBLE"));
   expect(at("STEER_ONE_VISIBLE")).toBeGreaterThan(at("REPLY_VISIBLE"));

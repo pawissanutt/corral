@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { PanelCanvas } from "./panel-canvas.ts";
 
 const enter = "\x1b[?1049h", exit = "\x1b[?1049l";
-const fg = "\x1b[38;2;224;227;233m", bg = "\x1b[48;2;15;16;18m";
+/** The one background of the whole screen, dark appearance: `#191b20`. */
+const fg = "\x1b[38;2;224;227;233m", bg = "\x1b[48;2;25;27;32m";
 function active() { const canvas = new PanelCanvas(); canvas.write(enter); return canvas; }
 
 test("default colors are explicit only within the alternate screen; normal screen/palette bytes remain untouched", () => {

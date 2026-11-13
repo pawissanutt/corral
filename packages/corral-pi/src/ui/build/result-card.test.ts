@@ -27,10 +27,26 @@ function card(input: { summary?: BuildSummary; exit?: ExitState; live?: boolean;
 
 test("a file edited outside their files by two children is one flag row naming both", () => {
   const { text } = card({ summary: summary({ outside: [{ path: "app/src/api/client.ts", by: ["picker-ui", "tests"] }] }) });
-  const flags = text.filter(line => line.startsWith("!") && line.includes("client.ts"));
+  const flags = text.filter(line => line.includes("! ") && line.includes("client.ts"));
   expect(flags).toHaveLength(1);
   expect(flags[0]).toContain("picker-ui");
   expect(flags[0]).toContain("tests");
+});
+
+test("the card is a rounded box headed by the build, slice rows in the sres columns, then the branch figures", () => {
+  const { text } = card({ summary: summary(), note: "Not checked: the full gate." }, 140);
+  expect(text[0]?.startsWith("╭")).toBeTrue();
+  expect(text[text.length - 1]?.startsWith("╰")).toBeTrue();
+  expect(visibleWidth(text[0] ?? "")).toBe(108);
+  expect(text[1]).toContain("Build finished · 1/2 slices");
+  // Name in 11 cells, the state and time in 9, two cells apart, then the cost.
+  const row = text[2] ?? "";
+  expect(row.indexOf("✓ 1m30s")).toBe(row.indexOf("host-slots") + 13);
+  expect(row.indexOf("$0.21")).toBe(row.indexOf("host-slots") + 24);
+  expect(text[4]).toContain("9 files +475 −11 on build/save-slots, 4 commits");
+  expect(text.join("\n")).toContain("Not checked: the full gate.");
+  expect(text.join("\n")).not.toContain("Exit choice pending");
+  expect(text.join("\n")).not.toContain("Reading the branch");
 });
 
 test("uncommitted changes are called out", () => {
@@ -54,7 +70,7 @@ test("a failed exit without a record shows its error detail with a cross on the 
   const exit: ExitState = { phase: "failed", detail: "The gate failed for T-962: just check" };
   const line = card({ summary: summary(), exit }).text.find(row => row.includes("The gate failed"));
   expect(line).toBeDefined();
-  expect(line?.startsWith("✗")).toBeTrue();
+  expect(line).toContain("✗ The gate failed");
 });
 
 test("a settled exit shows its choice and outcome once across the card and its entry, a running exit stays on the card", () => {
@@ -70,8 +86,8 @@ test("a settled exit shows its choice and outcome once across the card and its e
   expect(live).toContain("● Submitting the branch.");
 });
 
-test("slice rows and the pending exit row are clickable, and every line fits", () => {
-  for (const width of [30, 52, 80, 140]) {
+test("slice rows and, while the exit is pending, the header are clickable, and every line fits", () => {
+  for (const width of [30, 46, 52, 61, 80, 92, 140, 185]) {
     const { lines, hits, text } = card({
       summary: summary({ dirty: true, outside: [{ path: "a/very/long/path/to/a/file/that/needs/clipping.ts", by: ["a", "b", "c"] }] }),
       note: "Not checked: the full gate (just check), a browser run of the arrival screen.",
@@ -79,6 +95,7 @@ test("slice rows and the pending exit row are clickable, and every line fits", (
     for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     const slice = text.findIndex(row => row.includes("host-slots"));
     expect(hits.get(slice)).toEqual({ child: "host-slots" });
-    expect(hits.get(text.length - 1)).toEqual({ exit: true });
+    expect(hits.get(1)).toEqual({ exit: true });
   }
+  expect(card({ summary: summary(), exit: { phase: "none" } }).hits.get(1)).toBeUndefined();
 });
