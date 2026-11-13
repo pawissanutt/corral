@@ -50,6 +50,7 @@ fn fixture_with(plan: &str) -> (tempfile::TempDir, Ctx, String, std::path::PathB
             path: "app".into(),
             default_profile: None,
             base: None,
+            build_exit: None,
             review: Default::default(),
             artifact_retention: None,
             post_land: Vec::new(),

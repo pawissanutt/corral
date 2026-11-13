@@ -828,37 +828,50 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
         "memory_file": super::hooks::memory::role(bootstrap.role)
             .map(|_| ready.generation_dir.join(super::hooks::memory::FILE)),
         "todo": bootstrap.todo,
-        "capabilities": bootstrap.capabilities.as_ref().map(|snapshot| {
-            let mut payload = json!({
-                "catalog": snapshot.catalog, "digest": snapshot.digest,
-                // Rust-side keys (lessons) never reach the host, which refuses keys it lacks.
-                "preset": snapshot.preset.as_str(), "enabled": snapshot.enabled_keys()
-                    .filter(|key| corral_core::agent::capability(key).is_some_and(|def| def.host))
-                    .collect::<Vec<_>>(),
-                "settings": snapshot.features.iter()
-                    .filter(|(_, state)| state.enabled && !state.settings.is_empty())
-                    .map(|(key, state)| (key.clone(), json!(state.settings)))
-                    .collect::<serde_json::Map<_, _>>(),
-                "project_text": snapshot.project_text == Some(true),
-                "project_dir": bootstrap.project_dir,
-            });
-            if snapshot.enabled("web.enabled") && let Some(web) = &snapshot.web {
-                payload["web"] = json!(web);
-            }
-            if snapshot.enabled("mcp.enabled") && let Some(mcp) = &snapshot.mcp {
-                payload["mcp"] = json!(mcp);
-            }
-            if snapshot.enabled("llama_cpp.enabled") && let Some(local) = &snapshot.llama_cpp {
-                payload["llama_cpp"] = json!(local);
-            }
-            payload
-        }),
+        "capabilities": bootstrap.capabilities.as_ref().map(|snapshot|
+            capabilities_payload(snapshot, bootstrap.project_dir.as_deref())),
     });
     let bytes = serde_json::to_vec(&message)?;
     if bytes.len() > MESSAGE_MAX_BYTES {
         bail!("the launch message exceeds {MESSAGE_MAX_BYTES} bytes");
     }
     Ok(bytes)
+}
+
+/// The host-facing capability grant, shared by bound and untethered launches.
+pub(crate) fn capabilities_payload(
+    snapshot: &corral_core::agent::CapabilitySnapshot,
+    project_dir: Option<&Path>,
+) -> serde_json::Value {
+    let mut payload = json!({
+        "catalog": snapshot.catalog, "digest": snapshot.digest,
+        // Rust-side keys never reach the host, which refuses keys it lacks.
+        "preset": snapshot.preset.as_str(), "enabled": snapshot.enabled_keys()
+            .filter(|key| corral_core::agent::capability(key).is_some_and(|def| def.host))
+            .collect::<Vec<_>>(),
+        "settings": snapshot.features.iter()
+            .filter(|(_, state)| state.enabled && !state.settings.is_empty())
+            .map(|(key, state)| (key.clone(), json!(state.settings)))
+            .collect::<serde_json::Map<_, _>>(),
+        "project_text": snapshot.project_text == Some(true),
+        "project_dir": project_dir,
+    });
+    if snapshot.enabled("web.enabled")
+        && let Some(web) = &snapshot.web
+    {
+        payload["web"] = json!(web);
+    }
+    if snapshot.enabled("mcp.enabled")
+        && let Some(mcp) = &snapshot.mcp
+    {
+        payload["mcp"] = json!(mcp);
+    }
+    if snapshot.enabled("llama_cpp.enabled")
+        && let Some(local) = &snapshot.llama_cpp
+    {
+        payload["llama_cpp"] = json!(local);
+    }
+    payload
 }
 
 /// `bun --no-env-file <assets>/src/host/main.ts --launch-fd <n>` in the asset directory (or

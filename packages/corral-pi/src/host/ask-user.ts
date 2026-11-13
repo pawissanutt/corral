@@ -33,7 +33,7 @@ type Answer = { question: string; option?: string; options?: string[]; text?: st
 const TIMEOUT_MS = 300_000;
 
 export function askUserEnabled(role: string, enabled: readonly string[]): boolean {
-  return enabled.includes("ask_user") && (role === "assistant" || role === "pm");
+  return enabled.includes("ask_user") && (role === "assistant" || role === "build" || role === "pm");
 }
 
 function normalize(q: Question): DialogQuestion {

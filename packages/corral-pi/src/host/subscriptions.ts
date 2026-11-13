@@ -12,7 +12,7 @@ export async function subscriptionRoutes(auth: AuthModule, primary: ProviderId, 
     refreshEndpoint: PROVIDERS[provider].refresh });
   const stores = new Map<string, CredentialStore>();
   stores.set(primary, auth.credentials(context(primary)));
-  if ((role === "assistant" || role === "pm") && PROVIDER_IDS.includes(primary)) {
+  if ((role === "assistant" || role === "build" || role === "pm") && PROVIDER_IDS.includes(primary)) {
     for (const id of PROVIDER_IDS) {
       if (id === primary || !(auth.providers ?? [auth.provider]).includes(id)) continue;
       try {

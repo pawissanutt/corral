@@ -14,6 +14,8 @@ pub use crate::dispatch_config::{DispatchCfg, DispatchOverride, DispatchPolicy, 
 pub mod agent_capabilities;
 pub use agent_capabilities::{AgentCfg, AgentUi};
 mod attention;
+mod build;
+pub use build::{BuildCfg, BuildExit, BuildProfileCfg};
 mod pm;
 pub use pm::{PmCfg, PmGuardCfg};
 
@@ -89,6 +91,9 @@ pub struct Config {
         skip_serializing_if = "crate::assistant::AssistantCfg::is_default"
     )]
     pub assistant: crate::assistant::AssistantCfg,
+    /// `[build]`: untethered build session settings.
+    #[serde(default, skip_serializing_if = "BuildCfg::is_default")]
+    pub build: BuildCfg,
     /// `[agent]`: corral-pi host settings; they apply only to corral-pi runs.
     #[serde(default, skip_serializing_if = "AgentCfg::is_default")]
     pub agent: AgentCfg,
@@ -288,6 +293,9 @@ pub struct Project {
     /// Base branch for new runs; default: the repo's current branch at dispatch time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// Owner exit choices available to build sessions in this project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_exit: Option<BuildExit>,
     /// `[projects.<p>.review]`: overrides of the global `[review]` policy.
     #[serde(default, skip_serializing_if = "review_is_empty")]
     pub review: ReviewOverride,
@@ -546,6 +554,7 @@ impl Config {
                             path: name,
                             default_profile: None,
                             base: None,
+                            build_exit: None,
                             review: ReviewOverride::default(),
                         },
                     );
@@ -566,6 +575,7 @@ impl Config {
                     path: ".".into(),
                     default_profile: None,
                     base: None,
+                    build_exit: None,
                     review: ReviewOverride::default(),
                 },
             );
@@ -620,6 +630,7 @@ impl Config {
             herdr: HerdrCfg::default(),
             pm: PmCfg::default(),
             assistant: crate::assistant::AssistantCfg::default(),
+            build: BuildCfg::default(),
             agent: AgentCfg::default(),
             lessons: LessonsCfg::default(),
             daemon: crate::DaemonCfg::default(),
@@ -726,6 +737,7 @@ impl Config {
         let mut out = self.board.card.problems();
         out.extend(attention::problems(&self.pm));
         out.extend(self.pm.guard.problems());
+        out.extend(self.build.problems());
         if let Some(policy) = &self.routing.repair
             && let Err(error) = policy.validate()
         {

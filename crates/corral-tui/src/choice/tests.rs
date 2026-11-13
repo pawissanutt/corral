@@ -47,6 +47,7 @@ fn dispatch_sheet_reports_friendly_fix_when_engine_is_down() {
             path: ".".into(),
             default_profile: None,
             base: None,
+            build_exit: None,
             review: Default::default(),
         },
     );

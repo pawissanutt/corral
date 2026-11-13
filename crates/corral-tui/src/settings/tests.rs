@@ -51,6 +51,7 @@ pub(super) fn fixture() -> Fixture {
         path: path.into(),
         default_profile: None,
         base: None,
+        build_exit: None,
         review: ReviewOverride::default(),
     };
     cfg.projects.insert("app".into(), project("app"));

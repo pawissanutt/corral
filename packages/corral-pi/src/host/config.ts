@@ -107,7 +107,7 @@ function awsBinding(value: unknown): AwsBinding | undefined {
   return { profile: field(binding, "profile", AWS_PROFILE, 64), region };
 }
 
-function capabilityGuidance(value: unknown): CapabilityGuidance | undefined {
+export function capabilityGuidance(value: unknown): CapabilityGuidance | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const set = value as Json;
   if (set.settings === undefined) return undefined;
@@ -121,7 +121,7 @@ function capabilityGuidance(value: unknown): CapabilityGuidance | undefined {
   return { settings: settings as CapabilityGuidance["settings"], projectText: set.project_text, ...(projectDir ? { projectDir } : {}) };
 }
 
-function capabilitySet(value: unknown): HostCapabilities | undefined {
+export function capabilitySet(value: unknown): HostCapabilities | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "object" || Array.isArray(value)) throw new LaunchMessageInvalid("capabilities must be an object");
   const set = value as Json;
@@ -174,6 +174,7 @@ export function parseLaunchMessage(text: string): HostConfig {
   if (message.version !== LAUNCH_VERSION) throw new LaunchMessageInvalid(`version must be ${LAUNCH_VERSION}`);
   const role = message.role;
   if (typeof role !== "string" || !ROLES.includes(role as Role)) throw new LaunchMessageInvalid("role is unknown");
+  if (role === "build") throw new LaunchMessageInvalid("build sessions require the build host entry");
   const generation = message.generation;
   if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 1) {
     throw new LaunchMessageInvalid("generation must be a positive integer");

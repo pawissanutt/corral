@@ -560,6 +560,7 @@ fn add_project(cfg: &mut Config, name: &str) -> Result<(), String> {
             path: name.to_string(),
             default_profile: None,
             base: None,
+            build_exit: None,
             review: ReviewOverride::default(),
         },
     );

@@ -39,6 +39,7 @@ fn fixture(scale: usize) -> (tempfile::TempDir, Ctx, String) {
             dispatch: Default::default(),
             default_profile: None,
             base: None,
+            build_exit: None,
             review: Default::default(),
             artifact_retention: None,
             post_land: vec![],

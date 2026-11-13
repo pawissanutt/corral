@@ -16,6 +16,8 @@ import { dirname, join } from "node:path";
 import compat from "../../compat.json" with { type: "json" };
 import assistantContract from "../../assets/assistant-contract.md" with { type: "text" };
 import gptAssistant from "../../assets/families/gpt/assistant.md" with { type: "text" };
+import buildContract from "../../assets/build-contract.md" with { type: "text" };
+import gptBuild from "../../assets/families/gpt/build.md" with { type: "text" };
 import gptPm from "../../assets/families/gpt/pm.md" with { type: "text" };
 import pmContext from "../../assets/pm-context.md" with { type: "text" };
 import pmSkill from "../roles/pm/skills/corral-pm/SKILL.md" with { type: "text" };
@@ -31,6 +33,8 @@ export const INSTALL_FILES: Readonly<Record<string, string>> = {
   "compat.json": `${JSON.stringify(compat, null, 2)}\n`,
   "assets/assistant-contract.md": assistantContract,
   "assets/families/gpt/assistant.md": gptAssistant,
+  "assets/build-contract.md": buildContract,
+  "assets/families/gpt/build.md": gptBuild,
   "assets/families/gpt/pm.md": gptPm,
   "assets/pm-context.md": pmContext,
   "src/roles/pm/skills/corral-pm/SKILL.md": pmSkill,
@@ -55,22 +59,26 @@ function writeInstall(dir: string): void {
 }
 
 async function installBundle(): Promise<void> {
-  const [{ setBundle }, worker, reviewer, pm, planner, planReviewer, assistant, delivery, auth] = await Promise.all([
+  // Load role and SDK dependencies only after the executable's environment guard runs.
+  const [{ setBundle }, worker, reviewer, pm, planner, planReviewer, assistant, build, delivery, auth] = await Promise.all([
     import("./bundle.ts"), import("../roles/worker/index.ts"), import("../roles/reviewer/index.ts"),
     import("../roles/pm/index.ts"), import("../roles/planner/index.ts"), import("../roles/plan-reviewer/index.ts"),
-    import("../roles/assistant/index.ts"), import("../delivery/index.ts"), import("../auth/index.ts"),
+    import("../roles/assistant/index.ts"), import("../roles/build/index.ts"), import("../delivery/index.ts"), import("../auth/index.ts"),
   ]);
   setBundle({
     roles: { worker: (root) => worker.workerRole(root), reviewer: (root) => reviewer.reviewerRole(root),
       pm: (root) => pm.pmRole(root), planner: () => planner.default, plan_reviewer: () => planReviewer.default,
-      assistant: (root) => assistant.assistantRole(root) },
+      assistant: (root) => assistant.assistantRole(root), build: (root) => build.buildRole(root) },
     delivery: delivery.default, auth: auth.default,
   });
 }
 
 async function runHost(): Promise<void> {
   await installBundle();
-  await import("./main.ts");
+  await (await import("./main.ts")).main().catch((error: unknown) => {
+    process.stderr.write(`corral-pi host stopped: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(2);
+  });
 }
 
 restrictEnvironment(process.env);
@@ -98,6 +106,10 @@ if (command === "--version") {
   setBundle({ auth: auth.default });
   // The installation directory is the one this executable was installed into.
   await (await import("./bare.ts")).bareCommand(process.argv.slice(3), dirname(process.execPath));
+} else if (command === "build") {
+  await installBundle();
+  // Importing the host before restrictEnvironment would expose ambient credentials.
+  await (await import("./build.ts")).buildCommand(process.argv.slice(3), dirname(process.execPath));
 } else {
   await runHost();
 }

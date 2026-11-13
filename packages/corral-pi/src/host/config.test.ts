@@ -13,6 +13,10 @@ const message = {
   assets: "/assets", runtime_dir: "/runtime", session_dir: "/sessions", model: "gpt-6.1-sol",
 };
 
+test("build sessions cannot enter the bound launch protocol", () => {
+  expect(() => parseLaunchMessage(JSON.stringify({ ...message, role: "build" }))).toThrow("build sessions require the build host entry");
+});
+
 test("assistant launch keeps its recorded project and accepts legacy projectless sessions", () => {
   // Given an assistant bootstrap with either a project or its legacy empty binding.
   const assistant = { ...message, role: "assistant", assistant: "A-1",

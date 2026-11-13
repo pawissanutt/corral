@@ -36,6 +36,7 @@ import { scratchRoots, writeSettings } from "../roles/assistant/paths.ts";
 import { investigationTool } from "../roles/assistant/investigate.ts";
 import { AssistantShell, assistantShellBackend, requireVerifiedPlanningDrain } from "../roles/assistant/shell.ts";
 import type { HostIdentity, RoleContext } from "../roles/types.ts";
+import type { BuildContext } from "../build/types.ts";
 import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from "../tools/corral.ts";
 import { corralToolNames, defineCorralTool } from "../tools/define.ts";
 import { installChrome } from "../ui/chrome.ts";
@@ -100,6 +101,7 @@ import { pmCacheKeyStream } from "./pm-cache-key.ts";
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
   readonly identity: HostIdentity;
+  readonly build?: BuildContext;
   readonly cwd: string;
   readonly agentDir: string;
   readonly model: string;
@@ -477,6 +479,7 @@ export class HostSession {
       model: options.model, registerCapability,
       todo: options.capabilities ? options.capabilities.enabled.includes("todo") : options.todo === true,
       ...(options.capabilities ? { capabilities: options.capabilities } : {}),
+      ...(options.build ? { build: options.build } : {}),
       ...(options.guidance?.settings.lsp ? { lspSettings: options.guidance.settings.lsp } : {}),
       ...(options.effort ? { effort: options.effort } : {}),
       ...(options.promptFile ? { promptFile: options.promptFile } : {}),
@@ -512,7 +515,7 @@ export class HostSession {
     }
     let browser: ReturnType<typeof browserSettings>;
     try {
-      browser = browserSettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
+      browser = browserSettings(options.identity.role === "build" ? "assistant" : options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
     } catch (error) {
       throw new Error(`module_invalid: ${error instanceof Error ? error.message : error}`);
     }
@@ -634,7 +637,7 @@ export class HostSession {
       },
       error: error => { options.events.emit("local_plan_review_error", { message: error instanceof Error ? error.message : String(error) }); },
     }) : undefined;
-    const dialogEnabled = askUserEnabled(options.identity.role, options.capabilities?.enabled ?? []);
+    const dialogEnabled = askUserEnabled(options.identity.role === "build" ? "assistant" : options.identity.role, options.capabilities?.enabled ?? []);
     this.ownerQuestions = dialogEnabled ? new PendingQuestions({
       session: () => options.sessionManager.getSessionId(), generation: options.identity.generation,
       entries: () => options.sessionManager.getEntries(),
@@ -693,7 +696,7 @@ export class HostSession {
       enableSkillCommands: options.capabilities?.enabled.includes("skills") === true && options.guidance !== undefined,
     };
     try {
-      this.controls = parseControls(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
+      this.controls = parseControls(options.identity.role === "build" ? "worker" : options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
     } catch (error) {
       throw new Error(`module_invalid: ${error instanceof Error ? error.message : error}`);
     }
@@ -736,7 +739,7 @@ export class HostSession {
     if (options.capabilities?.enabled.includes("background_shell") !== true) return undefined;
     const settings = JobSettingsSchema.safeParse(options.guidance?.settings.background_shell);
     const worker = options.identity.role === "worker";
-    if ((!worker && options.identity.role !== "pm" && options.identity.role !== "assistant") || !settings.success || !options.runtimeDir) {
+    if ((!worker && options.identity.role !== "pm" && options.identity.role !== "assistant" && options.identity.role !== "build") || !settings.success || !options.runtimeDir) {
       throw new Error("module_invalid: background_shell needs an eligible role, settings and a runtime directory");
     }
     const ops = options.modules.role.corralOps;
@@ -750,7 +753,7 @@ export class HostSession {
         job, generation: options.identity.generation, consumed: false,
       } satisfies CommandFact),
       onEvent: (kind, data) => options.events.emit(kind, data),
-      call: (op, key, payload) => worker ? options.client.call(op, {
+      call: (op, key, payload) => worker || options.identity.role === "build" ? options.client.call(op, {
         requestId: toolRequestId(this.sessionId(), key), payload, turn: this.currentTurn(),
       }) : this.planningJob(payload),
     });
@@ -948,7 +951,8 @@ export class HostSession {
       throw new Error("module_invalid: llama.cpp requires its explicit generation-bound capability");
     }
     const localModels = local ? await createLocalModels(local, options.model, options.network.fetch) : undefined;
-    const subscriptions = await subscriptionRoutes(options.modules.auth, route.id, options.binding ? "worker" : options.identity.role);
+    const subscriptions = await subscriptionRoutes(options.modules.auth, route.id,
+      options.binding ? "worker" : options.identity.role === "build" ? "assistant" : options.identity.role);
     const models = localModels?.models ?? await createModelCatalog(subscriptions.credentials, {
       providers: subscriptions.providers,
     });

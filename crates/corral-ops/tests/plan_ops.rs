@@ -794,6 +794,7 @@ fn enabled_policy_dispatches_plan_without_implementation_candidate() {
             path: ".".into(),
             default_profile: None,
             base: None,
+            build_exit: None,
             review: Default::default(),
         },
     );

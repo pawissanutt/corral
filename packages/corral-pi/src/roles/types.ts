@@ -6,10 +6,11 @@ import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-age
 import type { TSchema } from "typebox";
 import type { WebSettings } from "../extensions/web/settings.ts";
 import type { McpSettings } from "../host/mcp-settings.ts";
+import type { BuildContext } from "../build/types.ts";
 
-export type Role = "worker" | "reviewer" | "pm" | "planner" | "plan_reviewer" | "assistant";
+export type Role = "worker" | "reviewer" | "pm" | "planner" | "plan_reviewer" | "assistant" | "build";
 
-export const ROLES: readonly Role[] = ["worker", "reviewer", "pm", "planner", "plan_reviewer", "assistant"];
+export const ROLES: readonly Role[] = ["worker", "reviewer", "pm", "planner", "plan_reviewer", "assistant", "build"];
 
 /** The native planning roles: each runs only while its `role_enabled` capability is on. */
 export const PLANNING_ROLES: readonly Role[] = ["planner", "plan_reviewer"];
@@ -100,6 +101,8 @@ export interface RoleContext {
   readonly cwd: string;
   /** The run's prompt file, when dispatch wrote one. */
   readonly promptFile?: string;
+  /** Build sessions only: the worktree the session writes in, its settings and its data directory. */
+  readonly build?: BuildContext;
   readonly model: string;
   readonly effort?: string;
 }
