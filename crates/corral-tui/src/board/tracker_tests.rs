@@ -7,7 +7,7 @@ use crate::app::mouse_tests::{click, find_any, render};
 use crate::detail::DetailView;
 use crate::{Action, HitMap, Mode, View};
 
-const TRACKER: &str = "T-002";
+pub(super) const TRACKER: &str = "T-002";
 const CHILDREN: [&str; 4] = ["T-003", "T-004", "T-006", "T-007"];
 
 fn tracker() -> super::tests::Fixture {
@@ -217,7 +217,7 @@ fn tracker_child_and_parent_links_work_through_the_app_by_mouse_and_keyboard() {
     assert!(render(&mut app).contains("Child tasks (4)"));
 }
 
-fn scoped_tracker() -> super::tests::Fixture {
+pub(super) fn scoped_tracker() -> super::tests::Fixture {
     let fx = tracker();
     let children = ["T-003", "T-004", "T-005", "T-006", "T-007"];
     fx.ctx
@@ -251,25 +251,53 @@ fn scoped_tracker() -> super::tests::Fixture {
     }
     fx.ctx
         .store
-        .amend_plan_scope(
-            TRACKER,
-            0,
-            corral_core::ApprovedScope {
-                goal: "Ship a cohesive widget".into(),
-                acceptance: vec![corral_core::PlanAcceptance {
-                    criterion: Some("C1".into()),
-                    scenario: "Run the widget".into(),
-                    expected: "Works end to end".into(),
-                }],
-                delivery_target: corral_core::PlanDeliveryTarget::Integration {
-                    branch: "widget-integration".into(),
-                },
-                approved_design: None,
-            },
-            |_, _, _| Ok(()),
-        )
+        .amend_plan_scope(TRACKER, 0, widget_scope("widget-integration"), |_, _, _| {
+            Ok(())
+        })
         .unwrap();
     fx
+}
+
+fn widget_scope(branch: &str) -> corral_core::ApprovedScope {
+    corral_core::ApprovedScope {
+        goal: "Ship a cohesive widget".into(),
+        acceptance: vec![corral_core::PlanAcceptance {
+            criterion: Some("C1".into()),
+            scenario: "Run the widget".into(),
+            expected: "Works end to end".into(),
+        }],
+        delivery_target: corral_core::PlanDeliveryTarget::Integration {
+            branch: branch.into(),
+        },
+        approved_design: None,
+    }
+}
+
+/// One more approved tracker in the `corral` project, with one Ready member of its own.
+fn add_scoped_tracker(fx: &super::tests::Fixture, title: &str, branch: &str) {
+    let store = &fx.ctx.store;
+    let plan = store
+        .create(title, Some("corral"), Status::Backlog, "")
+        .unwrap();
+    let member = store
+        .create(&format!("{title} work"), Some("corral"), Status::Ready, "")
+        .unwrap();
+    store
+        .update(&plan.id, |t| {
+            t.tracker = true;
+            t.children = vec![member.id.clone()];
+            Ok(())
+        })
+        .unwrap();
+    store
+        .update(&member.id, |t| {
+            t.parent = Some(plan.id.clone());
+            Ok(())
+        })
+        .unwrap();
+    store
+        .amend_plan_scope(&plan.id, 0, widget_scope(branch), |_, _, _| Ok(()))
+        .unwrap();
 }
 
 #[test]
@@ -385,23 +413,31 @@ fn scoped_tracker_projection_errors_remain_visible_instead_of_done_counts() {
 #[test]
 fn board_refresh_reads_the_board_once_for_every_tracker() {
     use corral_core::work::{Work, count};
-    // Given a scoped tracker.
-    let fx = scoped_tracker();
-    let task = fx.ctx.store.get(TRACKER).unwrap();
-    let lists = |tasks: &[corral_core::Task]| {
+    // Given a scoped tracker, and the same board with two more scoped trackers.
+    let single_fx = scoped_tracker();
+    let many_fx = scoped_tracker();
+    add_scoped_tracker(&many_fx, "Second plan", "second-integration");
+    add_scoped_tracker(&many_fx, "Third plan", "third-integration");
+    let lists = |fx: &super::tests::Fixture| {
         let start = count(Work::TaskList);
-        let progress = crate::plan::tracker::load_all(&fx.ctx, tasks);
-        (count(Work::TaskList) - start, progress)
+        let frame = super::frame_tests::local_frame(&fx.ctx, fx.now.get());
+        (count(Work::TaskList) - start, frame)
     };
-    // When one refresh projects one tracker, then three (T-547).
-    let (one, single) = lists(std::slice::from_ref(&task));
-    let (three, many) = lists(&[task.clone(), task.clone(), task.clone()]);
+    // When one local frame projects one tracker, then three (T-547).
+    let (one, single) = lists(&single_fx);
+    let (three, many) = lists(&many_fx);
     // Then the trackers share one read of the board, with the same projection as `load`.
     assert_eq!(three, one);
+    assert_eq!(
+        (single.plan_progress.len(), many.plan_progress.len()),
+        (1, 3)
+    );
     let shown = |p: &crate::plan::tracker::Progress| crate::plan::tracker::summary(p);
-    let loaded = crate::plan::tracker::load(&fx.ctx, &task).unwrap();
-    assert_eq!(shown(&single[TRACKER]), shown(&loaded));
-    assert_eq!(shown(&many[TRACKER]), shown(&loaded));
+    for (fx, frame) in [(&single_fx, &single), (&many_fx, &many)] {
+        let task = fx.ctx.store.get(TRACKER).unwrap();
+        let loaded = crate::plan::tracker::load(&fx.ctx, &task).unwrap();
+        assert_eq!(shown(&frame.plan_progress[TRACKER]), shown(&loaded));
+    }
 }
 
 #[test]

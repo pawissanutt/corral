@@ -419,6 +419,89 @@ fn health_subscriber_that_acks_receives_no_delta_for_clock_ticks() {
     );
 }
 
+fn publish_classic(shared: &Shared, rev: u64) {
+    *shared.classic.lock().unwrap() = Some(Arc::new(crate::classic::Published {
+        epoch: 7,
+        rev,
+        seq: rev * 10,
+        as_of: format!("rev {rev}"),
+        bytes: Arc::new(Vec::new()),
+    }));
+}
+
+fn classic_notice(stream: &mut UnixStream) -> corral_protocol::classic::ClassicNotice {
+    let frame = read_frame(stream).unwrap().unwrap();
+    let message: rpc::Notification<SubDelta> = serde_json::from_slice(&frame.payload).unwrap();
+    assert_eq!(message.method, wire::SUB_DELTA);
+    let SubDelta::Classic { notice } = message.params else {
+        panic!("wrong topic")
+    };
+    notice
+}
+
+#[test]
+fn classic_topic_pushes_latest_rev_once() {
+    use std::sync::atomic::Ordering;
+    let quiet = |client: &UnixStream| {
+        rustix::event::poll(
+            &mut [rustix::event::PollFd::new(
+                client,
+                rustix::event::PollFlags::IN,
+            )],
+            Some(&rustix::event::Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            }),
+        )
+        .unwrap()
+            == 0
+    };
+    let ack = |rev| SubAck {
+        topic: Topic::Classic,
+        cursor: corral_protocol::board::BoardCursor { rev, after: None },
+    };
+    let shared = Shared::new();
+    publish_classic(&shared, 1);
+    let mut topics = topics::Topics::new(&shared);
+    topics
+        .open(SubOpen {
+            topic: Topic::Classic,
+            since: None,
+        })
+        .unwrap();
+    assert_eq!(shared.classic_subscribers.load(Ordering::Relaxed), 1);
+    let (mut server, mut client) = UnixStream::pair().unwrap();
+    client.set_read_timeout(Some(IO_TIMEOUT)).unwrap();
+    topics.flush(&mut server).unwrap();
+    let first = classic_notice(&mut client);
+    assert_eq!((first.epoch, first.rev, first.seq), (7, 1, 10));
+
+    // Two publishes while the first notice is unacknowledged queue nothing.
+    for rev in [2, 3] {
+        publish_classic(&shared, rev);
+        topics.flush(&mut server).unwrap();
+    }
+    assert!(quiet(&client));
+    topics.ack(ack(1)).unwrap();
+    topics.flush(&mut server).unwrap();
+    let latest = classic_notice(&mut client);
+    assert_eq!(
+        (latest.epoch, latest.rev, latest.seq, latest.as_of.as_str()),
+        (7, 3, 30, "rev 3")
+    );
+    topics.flush(&mut server).unwrap();
+    assert!(
+        quiet(&client),
+        "a notice was pushed while one was in flight"
+    );
+    topics.ack(ack(3)).unwrap();
+    topics.flush(&mut server).unwrap();
+    assert!(quiet(&client), "an unchanged revision was pushed again");
+
+    drop(topics);
+    assert_eq!(shared.classic_subscribers.load(Ordering::Relaxed), 0);
+}
+
 fn read_connection(
     fixture: &Fixture,
     shared: &Arc<Shared>,
@@ -504,7 +587,7 @@ fn multi_frame_read_is_complete_and_cannot_interleave_with_the_next_response() {
     );
     let expected = serde_json::to_vec(&serde_json::json!({"text": text})).unwrap();
     let document = expected.clone();
-    crate::reader::start_with_compute(&fixture.ctx, &shared, move |_, kind, _| {
+    crate::reader::start_with_compute(&fixture.ctx, &shared, move |_, kind| {
         Ok(if kind == ReadKind::PmNext {
             document.clone()
         } else {
@@ -534,7 +617,7 @@ fn executable_mismatch_is_refused_before_computing_a_read() {
     let shared = Arc::new(Shared::new());
     let calls = Arc::new(AtomicUsize::new(0));
     let computed = Arc::clone(&calls);
-    crate::reader::start_with_compute(&fixture.ctx, &shared, move |_, _, _| {
+    crate::reader::start_with_compute(&fixture.ctx, &shared, move |_, _| {
         computed.fetch_add(1, Ordering::SeqCst);
         Ok(b"{}".to_vec())
     })
@@ -561,7 +644,7 @@ fn lease_bookkeeping_reuses_a_read_but_task_changes_force_recomputation() {
     let shared = Arc::new(Shared::new());
     let calls = Arc::new(AtomicUsize::new(0));
     let computed = Arc::clone(&calls);
-    crate::reader::start_with_compute(&fixture.ctx, &shared, move |_, _, _| {
+    crate::reader::start_with_compute(&fixture.ctx, &shared, move |_, _| {
         computed.fetch_add(1, Ordering::SeqCst);
         Ok(b"{}".to_vec())
     })

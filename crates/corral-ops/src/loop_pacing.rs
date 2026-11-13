@@ -12,6 +12,17 @@ pub fn periodic_wait(pass_cpu: Duration) -> Duration {
     pass_cpu.saturating_mul(19).clamp(SYNC_EVERY, SYNC_MAX_WAIT)
 }
 
+/// The daemon's wait after a quiet incremental pass, which only checked its inputs.
+pub const QUIET_EVERY: Duration = Duration::from_secs(5);
+
+/// A pass that ran no gated step only checked inputs: check again every 5 s, or keep the
+/// pass to about 5% of a core when checking alone costs more.
+pub fn quiet_wait(pass_cpu: Duration) -> Duration {
+    pass_cpu
+        .saturating_mul(19)
+        .clamp(QUIET_EVERY, SYNC_MAX_WAIT)
+}
+
 /// CPU time used so far by this whole process (every thread), where /proc provides it.
 pub fn process_cpu() -> Option<Duration> {
     let stat = std::fs::read_to_string("/proc/self/stat").ok()?;

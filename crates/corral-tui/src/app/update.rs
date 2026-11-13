@@ -124,7 +124,7 @@ impl App {
             store,
             ..self.ctx.clone()
         };
-        let Ok(board) = crate::board::sources::open_board(&ctx) else {
+        let Ok(board) = ctx.store.cached_board() else {
             return;
         };
         self.counts = Counts::from_heads(&board.heads, &board.status_counts, &ctx.store.config);

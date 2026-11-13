@@ -1,5 +1,5 @@
 //! In-memory coordination: no store or socket I/O while the state mutex is held.
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -17,6 +17,12 @@ pub(crate) struct Shared {
     pub health_topic: Mutex<(u64, Health)>,
     pub reader: Mutex<Option<std::sync::mpsc::Sender<crate::reader::Job>>>,
     pub attention: Mutex<Option<(u64, corral_ops::attention::AttentionBoard)>>,
+    /// The last published classic frame revision (reader thread writes, topics read).
+    pub classic: Mutex<Option<std::sync::Arc<crate::classic::Published>>>,
+    /// Open `classic` topic subscriptions; any keeps the frame refreshed.
+    pub classic_subscribers: AtomicUsize,
+    /// A completed owner-requested full pass asks the classic frame for a full recompute.
+    pub classic_force: AtomicBool,
     /// The command service once `commands::start` ran; `None` answers `unavailable`.
     #[cfg(unix)]
     pub commands: Mutex<Option<std::sync::Arc<crate::commands::Service>>>,
@@ -62,6 +68,9 @@ impl Shared {
             health_topic: Mutex::new((0, Health::down())),
             reader: Mutex::new(None),
             attention: Mutex::new(None),
+            classic: Mutex::new(None),
+            classic_subscribers: AtomicUsize::new(0),
+            classic_force: AtomicBool::new(false),
             #[cfg(unix)]
             commands: Mutex::new(None),
             state: Mutex::new(State {
@@ -202,7 +211,6 @@ impl Shared {
     }
 
     /// Takes the pending request flags: (full pass requested, nudged).
-    #[allow(dead_code, reason = "used by the incremental loop, unit A4")]
     pub fn take_request(&self) -> (bool, bool) {
         let mut state = self.lock();
         (

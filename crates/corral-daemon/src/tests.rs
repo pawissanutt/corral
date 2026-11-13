@@ -102,6 +102,25 @@ fn in_pass_nudges_coalesce_and_completion_requires_a_later_started_pass() {
     assert_eq!(passes, 2);
 }
 
+#[test]
+fn cli_nudge_forces_full_pass() {
+    let shared = Shared::new();
+    let full = PassRequest::Full(FullReason::Owner);
+    shared.nudge_from("cli", None);
+    let taken = shared.take_request();
+    assert_eq!(taken, (true, true));
+    assert_eq!(pass_request(taken, false), full);
+    let taken = shared.take_request();
+    assert_eq!(taken, (false, false));
+    assert_eq!(pass_request(taken, false), PassRequest::Paced);
+    shared.nudge_from("hook", None);
+    let taken = shared.take_request();
+    assert_eq!(taken, (false, true));
+    assert_eq!(pass_request(taken, false), PassRequest::Nudged);
+    // The `sync-full-on` switch makes any pass full.
+    assert_eq!(pass_request(taken, true), full);
+}
+
 #[cfg(unix)]
 #[test]
 fn fatal_listener_error_returns_error_after_socket_and_lease_cleanup() {

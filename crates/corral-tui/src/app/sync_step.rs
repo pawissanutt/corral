@@ -1,11 +1,17 @@
 //! One background update of the board: sync, then the live cost refresh of unfinished runs.
+//! A daemon-owned board instead reads the daemon's classic frame.
 
+use corral_ops::attention::AttentionBoard;
+use corral_ops::classic::ClassicFrame;
 use corral_ops::{Change, Ctx};
+
+/// A pass's changes and the attention board the frame is computed with.
+pub(crate) type Synced = Result<(Vec<Change>, Result<AttentionBoard, String>), String>;
 
 pub(crate) fn run_with_attention(
     ctx: &Ctx,
     messages: &std::sync::mpsc::Sender<corral_ops::Message>,
-) -> Result<(Vec<Change>, crate::attention::Snapshot, String), String> {
+) -> Synced {
     let (sender, diagnostics) = std::sync::mpsc::channel();
     let synced = {
         let _capture = corral_core::capture_messages(sender);
@@ -33,79 +39,45 @@ pub(crate) fn run_with_attention(
         Ok(board)
     } else {
         // A foreign scope or busy reconciliation lease did not classify this pass.
-        let _timing = corral_core::timing::span("board.attention");
-        crate::attention::load_board(ctx, jiff::Timestamp::now())
+        local_attention(ctx)
     };
-    Ok(read_back(ctx, changes, attention))
+    Ok((changes, attention))
 }
 
 /// The pass of a board whose executable was replaced: the installed corral syncs and this
 /// outdated process only reads the result back (T-587).
-pub(crate) fn run_installed(
-    ctx: &Ctx,
-    installed: &std::path::Path,
-) -> Result<(Vec<Change>, crate::attention::Snapshot, String), String> {
+pub(crate) fn run_installed(ctx: &Ctx, installed: &std::path::Path) -> Synced {
     corral_ops::sync_installed(ctx, installed)
         .map_err(|error| corral_herdr::friendly_error(&error))?;
-    let attention = {
-        let _timing = corral_core::timing::span("board.attention");
-        crate::attention::load_board(ctx, jiff::Timestamp::now())
-    };
-    Ok(read_back(ctx, Vec::new(), attention))
+    Ok((Vec::new(), local_attention(ctx)))
 }
 
-/// A daemon-owned board reads the daemon's result back. Only an explicit refresh (`wait` is
+/// The daemon's classic frame, or None when it is absent, refused (identity mismatch), busy
+/// or invalid; the caller then computes the frame locally. Only an explicit refresh (`wait` is
 /// set) asks for a pass: a nudge on every periodic tick would start a daemon pass per board
-/// tick and defeat the daemon's own pacing.
-pub(crate) fn run_daemon(
-    ctx: &Ctx,
-    wait: Option<std::time::Duration>,
-) -> Result<(Vec<Change>, crate::attention::Snapshot, String), String> {
-    // Failure to reach the daemon never authorizes a competing in-process pass.
+/// tick and defeat the daemon's own pacing. Failure to reach the daemon never authorizes a
+/// competing in-process pass.
+pub(crate) fn daemon_frame(ctx: &Ctx, wait: Option<std::time::Duration>) -> Option<ClassicFrame> {
     if let Some(wait) = wait
         && let Ok(Some(mut client)) = corral_ops::daemon_client::Client::connect(&ctx.store)
     {
         let _ = client.nudge("board", Some(wait));
     }
-    let served = {
-        let _timing = corral_core::timing::span("board.served");
+    let bytes = {
+        let _timing = corral_core::timing::span("board.frame.read");
         corral_ops::daemon_client::served(
             &ctx.store,
-            corral_protocol::read::ReadKind::BoardReadback,
-        )
-        .and_then(|bytes| serde_json::from_slice::<corral_ops::pm_read::BoardReadback>(&bytes).ok())
+            corral_protocol::read::ReadKind::ClassicFrame,
+        )?
     };
-    if let Some(readback) = served {
-        return Ok((
-            Vec::new(),
-            crate::attention::from_board(readback.attention),
-            readback.operating,
-        ));
-    }
-    let attention = {
-        let _timing = corral_core::timing::span("board.attention");
-        crate::attention::load_board(ctx, jiff::Timestamp::now())
-    };
-    Ok(read_back(ctx, Vec::new(), attention))
+    let _timing = corral_core::timing::span("board.frame.decode");
+    serde_json::from_slice(&bytes).ok()
 }
 
-fn read_back(
-    ctx: &Ctx,
-    changes: Vec<Change>,
-    attention: Result<corral_ops::attention::AttentionBoard, String>,
-) -> (Vec<Change>, crate::attention::Snapshot, String) {
-    let workset = attention
-        .as_ref()
-        .map_err(|error| anyhow::anyhow!(error.clone()))
-        .and_then(|board| {
-            let _timing = corral_core::timing::span("board.workset");
-            corral_ops::pm_workset_with_attention(ctx, board)
-        });
-    (
-        changes,
-        attention.and_then(crate::attention::from_board),
-        super::operating::readback_result(workset),
-    )
+/// The attention board read in this process when no pass or daemon supplied one.
+pub(crate) fn local_attention(ctx: &Ctx) -> Result<AttentionBoard, String> {
+    let _timing = corral_core::timing::span("board.attention");
+    crate::attention::load_board(ctx, jiff::Timestamp::now())
 }
 
 #[cfg(test)]

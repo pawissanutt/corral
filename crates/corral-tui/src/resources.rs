@@ -1,11 +1,8 @@
 //! Resource samples are refreshed with the board, never during terminal redraws.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use corral_core::{AutoStage, Config, GateResult, ResourceState, Status, Task};
 use corral_ops::Ctx;
-use corral_ops::resources::FixedResourceProbe;
+use corral_ops::classic::{GaugeLevel, ResourceGauges};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
@@ -23,106 +20,26 @@ impl ResourceDisplay {
     }
 
     pub(crate) fn from_sample(sample: anyhow::Result<ResourceState>, config: &Config) -> Self {
-        let (state, min_mem, min_disk) = match sample.and_then(|state| {
-            Ok((
-                state,
-                config.resources.min_mem_bytes()?,
-                config.resources.min_disk_bytes()?,
-            ))
-        }) {
-            Ok(values) => values,
-            Err(error) => {
-                return Self {
-                    reason: None,
-                    gauges: vec![(format!("resources unavailable: {error:#}"), theme::YELLOW)],
-                };
-            }
-        };
-        let s = &state.snapshot;
-        let load_color = if s.load_per_core > config.resources.max_load_per_core {
-            theme::RED
-        } else if s.load_per_core >= config.resources.max_load_per_core * 0.8 {
-            theme::YELLOW
-        } else {
-            theme::GREEN
-        };
-        let low_color = |available: u64, minimum: u64| {
-            if available < minimum {
-                theme::RED
-            } else if available < minimum.saturating_add(minimum / 4) {
-                theme::YELLOW
-            } else {
-                theme::GREEN
-            }
-        };
-        let disk = s.disks.iter().map(|d| d.free_bytes).min();
-        let mut gauges = vec![
-            (format!("load {:.2}/core", s.load_per_core), load_color),
-            (
-                format!("mem {}", bytes(s.mem_available)),
-                low_color(s.mem_available, min_mem),
-            ),
-            (
-                disk.map_or_else(|| "disk n/a".into(), |free| format!("disk {}", bytes(free))),
-                disk.map_or(theme::YELLOW, |free| low_color(free, min_disk)),
-            ),
-        ];
-        if state.held {
-            gauges.push((
-                if state.severe {
-                    "held: needs you"
-                } else {
-                    "held"
-                }
-                .into(),
-                if state.severe {
-                    theme::RED
-                } else {
-                    theme::YELLOW
-                },
-            ));
-        }
-        Self {
-            reason: state.reason,
-            gauges,
-        }
+        Self::from_gauges(&corral_ops::classic::gauges(sample, config))
     }
 
-    /// One host observation per board refresh, replayed into the shared dispatch queue so the gauges and every
-    /// Ready card's waiting reason (`eligible` or the exact wait) agree. Returns the reasons by task id.
-    pub(crate) fn sample_board(ctx: &Ctx, tasks: &[Task]) -> (Self, HashMap<String, String>) {
-        let snapshot = match ctx.resource_probe.sample(&ctx.store) {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                return (
-                    Self::from_sample(Err(error), &ctx.store.config),
-                    HashMap::new(),
-                );
-            }
-        };
-        let replay = Ctx {
-            resource_probe: Arc::new(FixedResourceProbe(snapshot)),
-            ..ctx.clone()
-        };
-        let mut display = Self::sample(&replay);
-        let waits = match corral_ops::dispatch_queue(&replay) {
-            Ok(entries) => entries
-                .into_iter()
-                .filter(|e| {
-                    tasks
-                        .iter()
-                        .any(|t| t.id == e.id && t.status == Status::Ready)
+    /// The gauges of a classic frame, drawn in frame order.
+    pub(crate) fn from_gauges(gauges: &ResourceGauges) -> Self {
+        Self {
+            reason: gauges.reason.clone(),
+            gauges: gauges
+                .gauges
+                .iter()
+                .map(|gauge| {
+                    let color = match gauge.level {
+                        GaugeLevel::Good => theme::GREEN,
+                        GaugeLevel::Warn => theme::YELLOW,
+                        GaugeLevel::Bad => theme::RED,
+                    };
+                    (gauge.text.clone(), color)
                 })
-                .map(|e| (e.id, e.reason))
                 .collect(),
-            Err(error) => {
-                display
-                    .gauges
-                    .push((format!("queue unavailable: {error:#}"), theme::RED));
-                HashMap::new()
-            }
-        };
-        (display, waits)
+        }
     }
 
     pub(crate) fn line(&self) -> Line<'static> {
@@ -134,14 +51,6 @@ impl ResourceDisplay {
             spans.push(Span::styled(text.clone(), Style::new().fg(*color)));
         }
         Line::from(spans)
-    }
-}
-
-fn bytes(bytes: u64) -> String {
-    if bytes >= 1_073_741_824 {
-        format!("{}GiB", bytes / 1_073_741_824)
-    } else {
-        format!("{}MiB", bytes / 1_048_576)
     }
 }
 

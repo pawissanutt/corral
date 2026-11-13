@@ -6,9 +6,10 @@ use corral_ops::boardview::DeltaOutcome;
 use corral_protocol::{
     self as wire,
     board::BoardCursor,
+    classic::ClassicNotice,
     frame::{CONTROL_MAX, Frame, FrameKind, write_frame_until},
     rpc,
-    subscription::{SubAck, SubClose, SubDelta, SubOpen, SubReset, Topic},
+    subscription::{SubAck, SubClose, SubDelta, SubOpen, SubReset, SubSince, Topic},
 };
 use serde::Serialize;
 use std::os::unix::net::UnixStream;
@@ -22,10 +23,20 @@ struct Subscriber {
     initial: bool,
 }
 
+/// A `classic` subscription: the frame series it follows and the last revision noticed.
+struct ClassicSubscriber {
+    /// None until the first notice when the client opened without `since`.
+    epoch: Option<u64>,
+    rev: u64,
+    in_flight: bool,
+    initial: bool,
+}
+
 pub(super) struct Topics<'a> {
     shared: &'a Shared,
     board: Option<Subscriber>,
     health: Option<Subscriber>,
+    classic: Option<ClassicSubscriber>,
 }
 
 impl<'a> Topics<'a> {
@@ -34,25 +45,16 @@ impl<'a> Topics<'a> {
             shared,
             board: None,
             health: None,
+            classic: None,
         }
     }
 
     pub fn open(&mut self, open: SubOpen) -> Result<()> {
         ensure!(open.topic != Topic::Other, "unsupported topic");
         self.close(SubClose { topic: open.topic });
-        let epoch = self.shared.epoch();
-        let (epoch, cursor) = open.since.map_or((epoch, BoardCursor::default()), |since| {
-            (since.epoch, since.cursor)
-        });
-        let subscriber = Some(Subscriber {
-            epoch,
-            cursor,
-            in_flight: false,
-            initial: true,
-        });
         match open.topic {
             Topic::Board => {
-                self.board = subscriber;
+                self.board = Some(subscriber(self.shared, open.since));
                 self.shared
                     .board_subscribers
                     .fetch_add(1, Ordering::Relaxed);
@@ -60,8 +62,23 @@ impl<'a> Topics<'a> {
                 state.projection_wake = state.projection_wake.wrapping_add(1);
                 self.shared.changed.notify_all();
             }
-            Topic::Health => self.health = subscriber,
-            Topic::Classic | Topic::Other => bail!("unsupported topic"),
+            Topic::Health => self.health = Some(subscriber(self.shared, open.since)),
+            Topic::Classic => {
+                let (epoch, rev) = open
+                    .since
+                    .map_or((None, 0), |since| (Some(since.epoch), since.cursor.rev));
+                self.classic = Some(ClassicSubscriber {
+                    epoch,
+                    rev,
+                    in_flight: false,
+                    initial: true,
+                });
+                // The reader thread starts refreshing the frame on its next idle wake.
+                self.shared
+                    .classic_subscribers
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            Topic::Other => bail!("unsupported topic"),
         }
         Ok(())
     }
@@ -70,7 +87,18 @@ impl<'a> Topics<'a> {
         let subscriber = match ack.topic {
             Topic::Board => self.board.as_mut(),
             Topic::Health => self.health.as_mut(),
-            Topic::Classic | Topic::Other => None,
+            Topic::Classic => {
+                let classic = self.classic.as_mut().context("topic is not open")?;
+                ensure!(
+                    classic.in_flight
+                        && ack.cursor.rev == classic.rev
+                        && ack.cursor.after.is_none(),
+                    "ack does not match the in-flight cursor"
+                );
+                classic.in_flight = false;
+                return Ok(());
+            }
+            Topic::Other => None,
         }
         .context("topic is not open")?;
         ensure!(
@@ -91,12 +119,19 @@ impl<'a> Topics<'a> {
                 }
             }
             Topic::Health => self.health = None,
-            Topic::Classic | Topic::Other => {}
+            Topic::Classic => {
+                if self.classic.take().is_some() {
+                    self.shared
+                        .classic_subscribers
+                        .fetch_sub(1, Ordering::Relaxed);
+                }
+            }
+            Topic::Other => {}
         }
     }
 
     pub fn flush(&mut self, stream: &mut UnixStream) -> Result<()> {
-        for topic in [Topic::Board, Topic::Health] {
+        for topic in [Topic::Board, Topic::Health, Topic::Classic] {
             let result = self.next(topic);
             match result {
                 Ok(Some(frame)) => write_frame_until(
@@ -124,7 +159,8 @@ impl<'a> Topics<'a> {
         let subscriber = match topic {
             Topic::Board => self.board.as_mut(),
             Topic::Health => self.health.as_mut(),
-            Topic::Classic | Topic::Other => None,
+            Topic::Classic => return self.next_classic(),
+            Topic::Other => None,
         };
         let Some(subscriber) = subscriber.filter(|subscriber| !subscriber.in_flight) else {
             return Ok(None);
@@ -227,13 +263,77 @@ impl<'a> Topics<'a> {
             Topic::Classic | Topic::Other => bail!("unsupported topic"),
         }
     }
+
+    /// One notice in flight; the latest published revision wins, older ones are never queued.
+    fn next_classic(&mut self) -> Result<Option<Frame>> {
+        let Some(classic) = self.classic.as_mut().filter(|classic| !classic.in_flight) else {
+            return Ok(None);
+        };
+        let Some(published) = self
+            .shared
+            .classic
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+        else {
+            return Ok(None);
+        };
+        if classic.epoch.is_some_and(|epoch| epoch != published.epoch) {
+            let topic = Topic::Classic;
+            let frame = notification(
+                wire::SUB_RESET,
+                SubReset {
+                    topic,
+                    epoch: published.epoch,
+                },
+            )?;
+            self.close(SubClose { topic });
+            return Ok(Some(frame));
+        }
+        if !classic.initial && published.rev <= classic.rev {
+            return Ok(None);
+        }
+        let frame = notification(
+            wire::SUB_DELTA,
+            SubDelta::Classic {
+                notice: ClassicNotice {
+                    epoch: published.epoch,
+                    rev: published.rev,
+                    seq: published.seq,
+                    as_of: published.as_of.clone(),
+                },
+            },
+        )?;
+        ensure!(
+            frame.payload.len() <= CONTROL_MAX,
+            "internal: classic notice exceeds CONTROL_MAX"
+        );
+        classic.epoch = Some(published.epoch);
+        classic.rev = published.rev;
+        classic.initial = false;
+        classic.in_flight = true;
+        Ok(Some(frame))
+    }
+}
+
+fn subscriber(shared: &Shared, since: Option<SubSince>) -> Subscriber {
+    let (epoch, cursor) = since.map_or_else(
+        || (shared.epoch(), BoardCursor::default()),
+        |since| (since.epoch, since.cursor),
+    );
+    Subscriber {
+        epoch,
+        cursor,
+        in_flight: false,
+        initial: true,
+    }
 }
 
 impl Drop for Topics<'_> {
     fn drop(&mut self) {
-        self.close(SubClose {
-            topic: Topic::Board,
-        });
+        for topic in [Topic::Board, Topic::Classic] {
+            self.close(SubClose { topic });
+        }
     }
 }
 

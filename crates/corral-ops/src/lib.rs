@@ -369,7 +369,10 @@ pub use stats::{
     AssistantRoleStats, AssistantStats, StatsBy, StatsRow, assistant_role_stats, assistant_stats,
     stats,
 };
-pub use sync::{Change, sync, sync_at, sync_at_with_processes, sync_hook, sync_with_attention};
+pub use sync::{
+    Change, FullReason, PassMemory, PassReport, PassRequest, StepId, sync, sync_at,
+    sync_at_with_processes, sync_hook, sync_incremental, sync_with_attention,
+};
 pub use sync_installed::sync_installed;
 pub use tasks::{
     infer_project, move_task, move_task_with_decision, new_task, new_task_initialized,

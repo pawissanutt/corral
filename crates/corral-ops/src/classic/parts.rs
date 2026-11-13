@@ -285,8 +285,8 @@ pub(super) fn waits(replay: &Ctx, tasks: &[&Task]) -> (BTreeMap<String, String>,
     }
 }
 
-/// `ResourceDisplay::from_sample` with levels instead of colours.
-fn gauges(sample: Result<ResourceState>, config: &Config) -> ResourceGauges {
+/// `ResourceDisplay::from_sample` with levels instead of colours. Shared with the board's header.
+pub fn gauges(sample: Result<ResourceState>, config: &Config) -> ResourceGauges {
     let (state, min_mem, min_disk) = match sample.and_then(|state| {
         Ok((
             state,

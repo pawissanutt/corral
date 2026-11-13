@@ -2981,7 +2981,6 @@
           "pm_brief",
           "agent_pm_brief",
           "agent_pm_next",
-          "board_readback",
           "classic_frame",
           "other"
         ],

@@ -122,22 +122,41 @@ pub(crate) fn handles(task: &Task) -> bool {
         || (task.status == Status::Review && task.current_run().is_none() && !task.plans.is_empty())
 }
 
+#[cfg(test)]
 pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp, scope: &crate::sync::SyncScope) -> Result<()> {
+    advance_tasks(ctx, now, scope, &mut crate::sync::FullGate)
+}
+
+/// [`advance_all`] for the open tasks `gate` admits (sync row 32).
+pub(crate) fn advance_tasks(
+    ctx: &Ctx,
+    now: Timestamp,
+    scope: &crate::sync::SyncScope,
+    gate: &mut dyn crate::sync::StepGate,
+) -> Result<()> {
+    use crate::sync::{StepId, effect, mark};
     let _span = corral_core::timing::span("sync.plan_pilot_advance_all");
     let _attribution = ctx.store.attribute(corral_core::Actor::Autopilot);
-    for task in ctx
-        .store
-        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
-    {
-        if !scope.includes(task.project.as_deref()) {
+    // The daemon's planner (the measuring gate) refreshes the handle's cached board, so its
+    // quiet passes decode no unchanged head; every other pass reads the open heads whole.
+    let heads = if gate.measures() {
+        ctx.store.cached_board()?.heads
+    } else {
+        ctx.store
+            .heads(&corral_core::backend::HeadQuery::Open { project: None })?
+    };
+    for task in heads {
+        if !scope.includes(task.project.as_deref()) || !gate.task(StepId::PlanPilot, &task) {
             continue;
         }
         let Some(_lock) = ctx.store.try_lock(&format!("plan-pilot-{}", task.id))? else {
             continue;
         };
+        let before = mark(ctx, gate)?;
         if let Err(error) = advance(ctx, &task.id, now) {
             crate::messages::report(Some(&task.id), "plan autopilot", format!("{error:#}"));
         }
+        gate.finished_task(StepId::PlanPilot, &task.id, effect(ctx, before, 0)?);
     }
     Ok(())
 }
