@@ -994,6 +994,20 @@ stuck_after_secs = 600
 omo_agent_dir = "/home/me/.omo/agent"
 ```
 
+## daemon
+
+Workspace switches for `corrald`; see [daemon](daemon.md).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `commands` | `true` | Whether the daemon executes owner and agent commands. `false` refuses them, so every client runs its commands locally. See [commands through the daemon](daemon.md#commands-through-the-daemon). |
+| `pass` | `"incremental"` | How the daemon's sync passes skip work. `"incremental"` runs a step or task only when an input changed or came due; `"audit"` makes every pass full and reports steps an incremental pass would have wrongly skipped; `"full"` makes every pass full. Applies from the next pass. The `sync-audit-on` and `sync-full-on` runtime files can only make it more conservative. See [incremental passes](daemon.md#incremental-passes). |
+
+```toml
+[daemon]
+pass = "audit"
+```
+
 ## ui
 
 | Key | Default | Meaning |

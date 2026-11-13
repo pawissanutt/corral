@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use corral_core::{Actor, Store};
+use corral_core::{Actor, DaemonPass, Store};
 use corral_ops::{
     Ctx, FullReason, PassMemory, PassReport, PassRequest, StepId, daemon_client,
     loop_pacing::{periodic_wait, process_cpu, quiet_wait},
@@ -25,11 +25,45 @@ use jiff::Timestamp;
 
 use state::Shared;
 
-/// While this file exists beside the daemon socket, every pass is full and also reports
-/// the steps and tasks the incremental rules would have skipped although they acted.
+/// While this file exists beside the daemon socket, passes are at least `audit` ([`DaemonPass`]).
 const SYNC_AUDIT_SWITCH: &str = "sync-audit-on";
-/// While this file exists beside the daemon socket, every pass is full (no skipping).
+/// While this file exists beside the daemon socket, passes are `full` ([`DaemonPass`]).
 const SYNC_FULL_SWITCH: &str = "sync-full-on";
+
+/// The pass mode the daemon's next pass uses: the most conservative of `[daemon] pass` in
+/// the store's loaded config and the switch files beside the daemon socket.
+pub fn pass_mode(store: &Store) -> DaemonPass {
+    let runtime = daemon_client::runtime_dir(store);
+    effective_pass(
+        store.config.daemon.pass,
+        runtime.join(SYNC_AUDIT_SWITCH).exists(),
+        runtime.join(SYNC_FULL_SWITCH).exists(),
+    )
+}
+
+/// `corral daemon status` line naming a mode other than `incremental` and what set it.
+pub fn pass_mode_line(store: &Store) -> Option<String> {
+    let mode = pass_mode(store);
+    let source = match mode {
+        DaemonPass::Incremental => return None,
+        _ if store.config.daemon.pass == mode => "[daemon] pass",
+        DaemonPass::Audit => SYNC_AUDIT_SWITCH,
+        DaemonPass::Full => SYNC_FULL_SWITCH,
+    };
+    Some(format!("sync passes: {} ({source})", mode.as_str()))
+}
+
+/// A switch file can only make passes more conservative: full > audit > incremental.
+fn effective_pass(config: DaemonPass, audit_file: bool, full_file: bool) -> DaemonPass {
+    let file = if full_file {
+        DaemonPass::Full
+    } else if audit_file {
+        DaemonPass::Audit
+    } else {
+        DaemonPass::Incremental
+    };
+    config.max(file)
+}
 
 pub struct RunOptions {
     pub once: bool,
@@ -231,7 +265,7 @@ impl Pacing {
     }
 }
 
-/// A `cli`/`board` nudge or the `sync-full-on` switch asks for a full pass.
+/// A `cli`/`board` nudge or the `full` pass mode (config or `sync-full-on`) asks for a full pass.
 fn pass_request((full, nudged): (bool, bool), forced: bool) -> PassRequest {
     if full {
         PassRequest::Full(FullReason::Owner)
@@ -261,11 +295,7 @@ fn pass(
     memory: &mut PassMemory,
     pacing: &Cell<Pacing>,
 ) -> Option<String> {
-    let runtime = daemon_client::runtime_dir(&ctx.store);
-    let forced = runtime.join(SYNC_FULL_SWITCH).exists();
-    memory.set_audit(!forced && runtime.join(SYNC_AUDIT_SWITCH).exists());
     let taken = shared.take_request();
-    let request = pass_request(taken, forced);
     let (sender, diagnostics) = std::sync::mpsc::channel();
     let mut errors = Vec::new();
     let mut attention = None;
@@ -277,6 +307,10 @@ fn pass(
             "reloading config",
             &mut errors,
         );
+        // After the reload, so a `[daemon] pass` edit applies from this pass on.
+        let mode = pass_mode(&ctx.store);
+        memory.set_audit(mode == DaemonPass::Audit);
+        let request = pass_request(taken, mode == DaemonPass::Full);
         step(
             corral_ops::sync_incremental(ctx, memory, request).map(|(_, board, pass_report)| {
                 if let Some(board) = board

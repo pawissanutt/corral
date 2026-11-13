@@ -8,6 +8,35 @@ pub struct DaemonCfg {
     /// so every client runs its commands locally.
     #[serde(default = "yes")]
     pub commands: bool,
+    /// How the daemon's sync passes skip work. The runtime switch files can only make it
+    /// more conservative.
+    #[serde(default)]
+    pub pass: DaemonPass,
+}
+
+/// `[daemon] pass`, ordered from least to most conservative.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum DaemonPass {
+    /// Steps and tasks run only when an input changed or came due.
+    #[default]
+    Incremental,
+    /// Every pass is full and reports the steps an incremental pass would have wrongly skipped.
+    Audit,
+    /// Every pass is full; nothing is skipped.
+    Full,
+}
+
+impl DaemonPass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Incremental => "incremental",
+            Self::Audit => "audit",
+            Self::Full => "full",
+        }
+    }
 }
 
 fn yes() -> bool {
@@ -16,7 +45,10 @@ fn yes() -> bool {
 
 impl Default for DaemonCfg {
     fn default() -> Self {
-        Self { commands: true }
+        Self {
+            commands: true,
+            pass: DaemonPass::Incremental,
+        }
     }
 }
 

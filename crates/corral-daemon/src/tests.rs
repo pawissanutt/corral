@@ -145,6 +145,33 @@ fn near_due_time_never_cuts_the_cpu_proportional_wait() {
     assert_eq!(Pacing::of(Some(&quiet)).wait(spent), QUIET_EVERY);
 }
 
+#[test]
+fn switch_files_only_make_the_configured_pass_mode_more_conservative() {
+    use DaemonPass::{Audit, Full, Incremental};
+    // (config, sync-audit-on, sync-full-on) -> effective mode
+    let table = [
+        (Incremental, false, false, Incremental),
+        (Incremental, true, false, Audit),
+        (Incremental, false, true, Full),
+        (Incremental, true, true, Full),
+        (Audit, false, false, Audit),
+        (Audit, true, false, Audit),
+        (Audit, false, true, Full),
+        (Audit, true, true, Full),
+        (Full, false, false, Full),
+        (Full, true, false, Full),
+        (Full, false, true, Full),
+        (Full, true, true, Full),
+    ];
+    for (config, audit, full, expected) in table {
+        assert_eq!(
+            effective_pass(config, audit, full),
+            expected,
+            "config {config:?}, audit file {audit}, full file {full}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn fatal_listener_error_returns_error_after_socket_and_lease_cleanup() {

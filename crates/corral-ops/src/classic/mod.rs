@@ -19,6 +19,7 @@ use crate::attention::AttentionBoard;
 use crate::feed_delta::FeedDelta;
 use crate::git_watch::{GitChanges, GitTarget, GitWatch, stat_fingerprint};
 
+mod attention;
 mod parts;
 mod plan;
 pub use parts::gauges;
@@ -129,6 +130,10 @@ struct Resources {
 struct Attention {
     attention: Result<AttentionBoard, String>,
     operating: String,
+    /// `attention::content` of `attention`: what a republish compares.
+    content: u64,
+    /// `attention::workset_inputs` of `attention`: what the operating text was derived from.
+    inputs: u64,
 }
 
 /// The last computed frame and what it was computed from.
@@ -165,13 +170,16 @@ pub struct ClassicCache {
 struct Plan<'a> {
     now: Timestamp,
     full: bool,
+    /// An explicit refresh (reported as the workset's recompute reason).
+    forced: bool,
     pins_changed: bool,
     git: &'a GitChanges,
     stages_due: bool,
     attention_due: bool,
     /// The caller's attention; the cache then does not compute it.
     supplied: Option<&'a Result<AttentionBoard, String>>,
-    /// The supplied attention differs from the cached one.
+    /// The supplied attention's content differs from the cached one (clock-only fields
+    /// excluded).
     supplied_changed: bool,
 }
 
@@ -188,7 +196,9 @@ struct Computed {
     plan_review: Option<BTreeMap<String, String>>,
     /// The attention board this read computed (None when supplied or not dirty).
     attention: Option<Result<AttentionBoard, String>>,
-    /// The operating text, read back with this read's or the supplied attention.
+    /// `(content, workset inputs)` of the supplied or computed attention.
+    identities: Option<(u64, u64)>,
+    /// The operating text, when the workset had to run.
     operating: Option<String>,
 }
 
@@ -263,19 +273,25 @@ impl ClassicCache {
             || self.frame.is_none()
             || config_changed
             || due(self.last_full, FULL_EVERY);
+        let supplied_changed = match &inputs.attention {
+            Some(supplied) => {
+                let content = attention::content(supplied)?;
+                self.attention
+                    .as_ref()
+                    .is_none_or(|cached| cached.content != content)
+            }
+            None => false,
+        };
         let plan = Plan {
             now,
             full,
+            forced: inputs.force,
             pins_changed,
             git: &git,
             stages_due: self.gating && due(self.stages_at, STAGES_EVERY),
             attention_due: due(self.attention_at, ATTENTION_EVERY),
             supplied: inputs.attention.as_ref(),
-            supplied_changed: inputs.attention.as_ref().is_some_and(|supplied| {
-                self.attention
-                    .as_ref()
-                    .is_none_or(|cached| &cached.attention != supplied)
-            }),
+            supplied_changed,
         };
         let any = match self.checked_through {
             Some(cursor) => FeedDelta::since(&*ctx.store.view()?, cursor, FEED_LIMIT).any(),
@@ -307,19 +323,25 @@ impl ClassicCache {
         // Gauges, admission and attention share one host observation.
         let sampled = sampled(ctx);
         let mut computed = sampled.read_step(|read| self.compute(read, &plan))?;
-        // The new attention (supplied, or computed on the pinned read) and, when its content
-        // or the store changed, its operating text; otherwise the cached text still holds.
+        // The new attention (supplied, or computed on the pinned read) and, when the workset
+        // had to run, its operating text; otherwise the cached text still holds.
         let fresh = inputs.attention.or(computed.attention.take());
-        let attention = match (fresh, computed.operating.take()) {
-            (Some(attention), Some(operating)) => Some(Attention {
+        let attention = match (fresh, computed.identities, computed.operating.take()) {
+            (Some(attention), Some((content, inputs)), Some(operating)) => Some(Attention {
                 attention,
                 operating,
+                content,
+                inputs,
             }),
-            (Some(attention), None) => self.attention.as_ref().map(|cached| Attention {
-                attention,
-                operating: cached.operating.clone(),
-            }),
-            (None, _) => None,
+            (Some(attention), Some((content, inputs)), None) => {
+                self.attention.as_ref().map(|cached| Attention {
+                    attention,
+                    operating: cached.operating.clone(),
+                    content,
+                    inputs,
+                })
+            }
+            _ => None,
         };
         if config_changed {
             self.config = Some(ctx.store.config.clone());
@@ -469,30 +491,39 @@ impl ClassicCache {
             Some(_) => None,
             None if full || delta.any() || plan.attention_due => {
                 let _span = corral_core::timing::span("classic.attention");
-                Some(attention_at(read, plan.now))
+                Some(attention::at(read, plan.now))
             }
             None => None,
         };
-        // The workset runs only when the attention or the store changed (or every part is
-        // recomputed): its output is a function of both. On this pinned read it skips its
+        // The workset runs only when the store or its attention inputs changed (or every part
+        // is recomputed): its output is a function of both. On this pinned read it skips its
         // live preparation and evaluates on this view.
-        let operating = plan
-            .supplied
-            .or(attention.as_ref())
-            .filter(|attention| {
-                full || delta.any()
-                    || self
-                        .attention
-                        .as_ref()
-                        .is_none_or(|cached| &cached.attention != *attention)
+        let fresh = plan.supplied.or(attention.as_ref());
+        let identities = fresh
+            .map(|board| {
+                Ok::<_, anyhow::Error>((
+                    attention::content(board)?,
+                    attention::workset_inputs(board)?,
+                ))
             })
-            .map(|attention| {
-                if self.skip_operating {
-                    return String::new();
+            .transpose()?;
+        let operating = match (fresh, identities) {
+            (Some(_), Some(_)) if self.skip_operating => Some(String::new()),
+            (Some(board), Some((_, inputs))) => {
+                let cached = self.attention.as_ref().map(|cached| cached.inputs);
+                match attention::recompute(plan.forced, full, delta.any(), cached, inputs) {
+                    Some(reason) => {
+                        let _span = corral_core::timing::span(reason.span());
+                        Some(attention::operating(read, board))
+                    }
+                    None => {
+                        let _span = corral_core::timing::span("classic.workset.reuse");
+                        None
+                    }
                 }
-                let _span = corral_core::timing::span("classic.attention");
-                operating(read, attention)
-            });
+            }
+            _ => None,
+        };
         Ok(Computed {
             seq: delta.through,
             full,
@@ -503,6 +534,7 @@ impl ClassicCache {
             automation,
             plan_review,
             attention,
+            identities,
             operating,
         })
     }
@@ -523,6 +555,7 @@ impl ClassicCache {
             automation,
             plan_review,
             attention: _,
+            identities: _,
             operating: _,
         } = computed;
         self.checked_through = Some(seq);
@@ -573,7 +606,7 @@ impl ClassicCache {
         if let Some(attention) = attention {
             changed |= self.settle(
                 Part::Attention,
-                digest(&(&attention.attention, &attention.operating))?,
+                digest(&(attention.content, &attention.operating))?,
             );
             self.attention = Some(attention);
             self.attention_at = Some(now);
@@ -742,40 +775,4 @@ fn sampled(ctx: &Ctx) -> Ctx {
         resource_probe: Arc::new(SampleProbe(observation)),
         ..ctx.clone()
     }
-}
-
-/// The attention board at `now`. A partial listing must never become a falsely reassuring
-/// attention count: a file diagnostic makes the whole read unavailable.
-fn attention_at(ctx: &Ctx, now: Timestamp) -> Result<AttentionBoard, String> {
-    let (sender, messages) = std::sync::mpsc::channel();
-    let result = {
-        let _capture = corral_core::capture_messages(sender);
-        crate::attention::board_hot(ctx, now)
-    };
-    let mut unavailable = None;
-    for message in messages.try_iter() {
-        if message.file.is_some() {
-            unavailable.get_or_insert(message.text);
-        } else {
-            corral_core::report_message(message.task.as_deref(), message.source, message.text);
-        }
-    }
-    if let Some(error) = unavailable {
-        return Err(error);
-    }
-    result.map_err(|error| format!("{error:#}"))
-}
-
-/// The operating header read back with the frame's attention, as `board_readback` does. On
-/// the frame's pinned ctx the workset evaluates on that same view (no view of its own); its
-/// live-store preparation ran before the read.
-fn operating(ctx: &Ctx, attention: &Result<AttentionBoard, String>) -> String {
-    let workset = attention
-        .as_ref()
-        .map_err(|error| anyhow::anyhow!(error.clone()))
-        .and_then(|board| {
-            let _span = corral_core::timing::span("board.workset");
-            crate::pm_workset_with_attention(ctx, board)
-        });
-    crate::pm_read::readback_result(workset)
 }
