@@ -1,13 +1,40 @@
-// Deferred owner questions stay beside the composer, independently of transcript/panel output.
-// Asking never opens UI. Only the owner's command, shortcut or click opens the answer dialog.
+// Deferred owner questions stay beside the composer, independently of transcript/panel output, in the same
+// docked dialog form as every other question the owner is asked. Asking never opens UI. Only the owner's
+// command, shortcut or click opens the answer dialog.
 import type { ExtensionAPI, ExtensionContext, ExtensionUIContext, SessionProjection } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { askDialog, sequential } from "../host/ask-user.ts";
 import type { ChoiceAnswer, PendingQuestion, PendingQuestions } from "../host/pending-questions.ts";
+import { choiceLines } from "./build/choice-dock.ts";
 
 export const QUESTIONS_COMMAND = "questions";
 export const QUESTIONS_SHORTCUT = "ctrl+shift+q";
 const plain = (value: string) => value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+/** Questions listed in the dock; the header counts the rest. */
+const LISTED = 3;
+
+/**
+ * The waiting questions as a docked dialog: the count in the header, how to answer as its note, and one
+ * option per question, the question on its label row and under it the full id the owner answers by
+ * (`/questions <id>`). `hits` maps a line to the question drawn on it.
+ */
+export function ownerQuestionLines(pending: readonly PendingQuestion[], width: number):
+  { readonly lines: string[]; readonly hits: ReadonlyMap<number, string> } {
+  if (!pending.length) return { lines: [], hits: new Map() };
+  const listed = pending.slice(0, LISTED), count = pending.length;
+  const frame = choiceLines({
+    key: "owner-questions",
+    title: count === 1 ? "An owner question is waiting" : `${count} owner questions are waiting`,
+    short: count === 1 ? "Question waiting" : `${count} questions waiting`,
+    meta: "click, /questions or Ctrl+Shift+Q to answer",
+    stacked: true,
+    options: listed.map(q => ({ label: plain(q.questions[0]!.question),
+      detail: q.status === "answered" ? `${q.id} · answer recorded; delivery pending` : `/questions ${q.id}` })),
+  }, -1, width, 3 + listed.length * 4, false);
+  const hits = new Map<number, string>();
+  for (const [line, option] of frame.hits) hits.set(line, listed[option]!.id);
+  return { lines: frame.lines, hits };
+}
 
 export const OWNER_QUESTION_STATE = "corral_owner_question_state";
 
@@ -62,16 +89,18 @@ export class OwnerQuestionUi {
       this.questions.restore();
       if (ctx.hasUI && ctx.mode === "tui") {
         this.ctx = ctx; this.ui = ctx.ui;
-        ctx.ui.setWidget("corral-owner-questions", (tui, theme) => ({
+        let hits: ReadonlyMap<number, string> = new Map();
+        ctx.ui.setWidget("corral-owner-questions", tui => ({
           render: width => {
-            const pending = this.visible();
-            if (!pending.length) return [];
-            return [truncateToWidth(theme.fg("warning", `${pending.length} pending owner question${pending.length === 1 ? "" : "s"} · /questions · Ctrl+Shift+Q · click to answer`), width),
-              ...pending.slice(0, 2).map(q => truncateToWidth(theme.fg("muted", `  ${q.id} · ${q.status === "answered" ? "answer recorded; delivery pending · " : ""}${plain(q.questions[0]!.question)}`), width))];
+            const frame = ownerQuestionLines(this.visible(), width);
+            hits = frame.hits;
+            return frame.lines;
           },
           handleMouse: (event: TuiMouseEvent) => {
             if (event.type !== "click" || event.button !== "left") return undefined;
-            void this.open(ctx).catch(error => ctx.ui.notify(String(error), "error"));
+            // A pending question's row opens that question; anywhere else opens the list.
+            const id = hits.get(event.y), question = id === undefined ? undefined : this.questions.get(id);
+            void this.open(ctx, question?.status === "pending" ? id : undefined).catch(error => ctx.ui.notify(String(error), "error"));
             tui.requestRender(); return { handled: true };
           },
           invalidate() {},

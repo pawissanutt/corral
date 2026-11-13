@@ -1,10 +1,12 @@
-// Background job detail: the card under the agents table when a job row is selected, and the bounded
-// read-only output pager. Values are this host's job runtime observations, never task settlement.
+// Background job detail: the selected job's title and state chips under the agents table, its retained output
+// in a rounded card, and the bounded read-only output pager. Values are this host's job runtime observations,
+// never task settlement.
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { ScrollView, matchesKey, stripTerminalSequences, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { ScrollView, matchesKey, stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { chipRows, jobStatus, type Chip } from "./agents-model.ts";
+import { card, titledBox } from "./frame.ts";
 import {
-  box, pad, plainLabel, PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_RULE, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING,
+  pad, plainLabel, PANEL_BLUE, PANEL_ERROR, PANEL_LINE, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING,
   type PanelJob,
 } from "./panels-view.ts";
 
@@ -47,14 +49,15 @@ function size(bytes: number): string {
 }
 
 /**
- * The job card: command, state chips, an optional legend, then the numbered retained tail sized to `height`
- * rows. A stale host or a lost job shows why output is withheld instead of retained text.
+ * The job detail: the command in bold with its id and directory, state chips, the legend when it is on, then the
+ * numbered retained tail in a card sized to `height` rows with the follow state under it. A stale host or a lost
+ * job shows why output is withheld instead of retained text.
  */
 export function jobDetailLines(job: PanelJob, input: { readonly bound: boolean; readonly now: number; readonly legend: boolean; readonly freeze: JobFreeze | undefined },
   width: number, height: number): string[] {
   const d = job.detail, status = jobStatus(job, input.now);
   const cwd = d?.cwd ? " · cwd " + plainLabel(d.cwd.split("/").filter(Boolean).slice(-2).join("/")) : "";
-  const head = "\x1b[1m" + PANEL_TEXT + "$ " + plainLabel(d?.command ?? job.job) + "\x1b[22m" + PANEL_MUTED + "   " + plainLabel(job.job) + cwd;
+  const head = "\x1b[1m" + PANEL_TEXT + "$ " + plainLabel(d?.command ?? job.job) + "\x1b[22m" + PANEL_MUTED + "  " + plainLabel(job.job) + cwd;
   const chips: Chip[] = [{ text: `${status.glyph} ${status.word}`, tone: status.tone }];
   if (status.time) chips.push({ text: status.time, tone: "text" });
   if (d) chips.push({ text: size(d.bytes), tone: "text" });
@@ -65,8 +68,7 @@ export function jobDetailLines(job: PanelJob, input: { readonly bound: boolean; 
     chips.push({ text: `⌁ watch /${plainLabel(w.pattern)}/ ${state}`, tone });
   }
   if (!input.bound) chips.push({ text: "stale", tone: "warning" });
-  const cardBody = [head, ...chipRows(chips, width - 4)];
-  const rows = box("", cardBody, width, cardBody.length + 2);
+  const rows = [truncateToWidth(head, width, "…"), ...chipRows(chips, width)];
   if (input.legend) {
     const body = ["Source: this host's job runtime only; a job missing here is not completed.",
       "Exit status is a local observation: it does not imply gate PASS or task settlement.",
@@ -76,7 +78,7 @@ export function jobDetailLines(job: PanelJob, input: { readonly bound: boolean; 
       "Peek is nonblocking. Background releases observation, not the process. Stop confirms before signalling the owned group. There is no restart.",
       "A line match is not service health. Stale, foreign or denied controls never signal a process."]
       .flatMap(line => wrapTextWithAnsi(line, Math.max(1, width - 4))).map(line => PANEL_MUTED + line);
-    rows.push(...box("Legend", body, width, body.length + 2, true));
+    rows.push(...titledBox("Legend", body, width));
   }
   if (job.state === "lost" || !d) return [...rows, PANEL_MUTED + "Detailed output unavailable for this job source."];
   if (!input.bound) return [...rows, PANEL_WARNING + "Output unavailable: stale/disconnected host"];
@@ -84,17 +86,18 @@ export function jobDetailLines(job: PanelJob, input: { readonly bound: boolean; 
   const source = frozen ?? { tail: d.tail, lines: d.lines, running: job.state === "running" };
   const all = numberedTail(source.tail, source.lines, source.running);
   if (!all.length) return [...rows, PANEL_MUTED + "No output captured yet."];
-  const shown = all.slice(-Math.max(3, height - rows.length - 3));
+  // The card spends three rows on its borders and header, and the follow state takes one more.
+  const shown = all.slice(-Math.max(3, height - rows.length - 4));
   const last = shown.at(-1)?.number, gutter = String(last ?? "").length;
   const body = shown.map((line, index) => {
     const cursor = !frozen && source.running && index === shown.length - 1 ? PANEL_BLUE + "▍" : "";
-    const number = line.number === undefined ? "" : PANEL_MUTED + String(line.number).padStart(gutter) + " " + PANEL_RULE + "│ ";
+    const number = line.number === undefined ? "" : PANEL_MUTED + String(line.number).padStart(gutter) + " " + PANEL_LINE + "│ ";
     return number + (line.text ? outputLine(line.text) : "") + cursor;
   });
-  rows.push(...box("", body, width, body.length + 2));
-  const count = last === undefined ? `showing last ${shown.length} retained lines` : `showing last ${shown.length} of ${last} lines`;
+  const count = last === undefined ? `last ${shown.length} retained lines` : `last ${shown.length} of ${last} lines`;
+  rows.push(...card(PANEL_TEXT + "output", body, width, { right: PANEL_MUTED + count }));
   const stored = d.truncated ? PANEL_WARNING + "stored output truncated" : "stored output not truncated";
-  rows.push(PANEL_MUTED + (frozen ? `‖ follow paused · ${count} at pause` : source.running ? `▼ following tail · ${count} · ${stored}` : `■ exited · ${count} · ${stored}`));
+  rows.push(PANEL_MUTED + (frozen ? `‖ follow paused · showing ${count} at pause` : source.running ? `▼ following tail · ${stored}` : `■ exited · ${stored}`));
   return rows;
 }
 

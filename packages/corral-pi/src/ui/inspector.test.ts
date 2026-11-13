@@ -5,6 +5,7 @@ import { InspectorActivity, inspectorActivity, inspectorContext, type InspectorS
 import { TodoLedger } from "./todo.ts";
 import type { PanelSnapshot } from "./panels-view.ts";
 import { NativePanels } from "./panels.ts";
+import { statusBar } from "./panels-chrome.ts";
 import { stripTerminalSequences, Text } from "@earendil-works/pi-tui";
 import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -106,7 +107,10 @@ test("disconnected/legacy inspectors and activity never present unknown as succe
   const root = panels.workbench.mount(new Text("", 0, 0));
   panels.workbench.openAgents();
   const agents = stripTerminalSequences(renderLayoutFrame(root, 80, 30, () => {}).lines.join("\n"));
-  expect(agents).toContain("Host unbound"); expect(agents).toContain("unknown, not none");
+  // Nothing observed reads as nothing yet, and the status bar says the host is unbound: unknown is never shown as success.
+  expect(agents).toContain("No agents yet.");
+  const status = stripTerminalSequences(statusBar(identity, snapshot, new Map(), 105).join("\n"));
+  expect(status).toContain("○"); expect(status).toContain("unbound"); expect(status).not.toContain("●");
   expect(agents).not.toMatch(/\bPASS\b|accepted/);
   panels.sidebar.tab = "plan";
   const rendered = stripTerminalSequences(panels.renderSidebar(80, 20).join("\n"));

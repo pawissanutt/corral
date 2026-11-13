@@ -51,7 +51,7 @@ test("wide Proof: one chip row, selectable criteria and MORE rows with glyph lad
     expect(selected.slice(0, selected.indexOf("│")).includes("\x1b[0m")).toBe(false);
     const detail = frame.lines.map(line => strip(line).slice(LIST_WIDTH + 2));
     for (const step of [" I ✓ implemented ", " T ✓ pass · worker ", " R ~ approve stale* ", " A — not recorded "]) expect(detail.some(line => line.includes(step))).toBe(true);
-    const top = detail.findIndex(line => line.startsWith("┌")), bottom = detail.findIndex(line => line.startsWith("└"));
+    const top = detail.findIndex(line => line.startsWith("╭")), bottom = detail.findIndex(line => line.startsWith("╰"));
     expect(top).toBeGreaterThan(0); expect(bottom - top).toBeGreaterThanOrEqual(5);
     expect(detail.slice(top + 1, bottom).every(line => line.startsWith("│ ") && line.trimEnd().endsWith("│"))).toBe(true);
     expect(detail[top + 1]).toContain("captured 2m ago");
@@ -75,7 +75,7 @@ test("Proof sections open in the detail pane and invalid proof stays inline", as
     expect(narrow.wide).toBe(false);
     for (const row of narrow.lines) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
     expect(rows.find(row => row.includes("‹"))).toMatch(/^ ‹ C2 2\/2 › .* I○ T! R~ A— $/);
-    expect(rows.some(row => row.startsWith("┌"))).toBe(true);
+    expect(rows.some(row => row.startsWith("╭"))).toBe(true);
     expect(rows.some(row => /[0-9a-f]{40}/.test(row))).toBe(false);
   }
   const section = renderProof(store, 2, 80, false, new Set(["findings"])).lines.map(strip);

@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
-import { LifecycleView, type LifecycleSnapshot } from "./lifecycle-view.ts";
+import { GRAPH_MIN, LifecycleView, type LifecycleSnapshot } from "./lifecycle-view.ts";
+import { VIEW_INSET } from "./frame.ts";
 import type { InspectorSnapshot } from "./inspector.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
 const identity = { store: "s", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 1 };
@@ -31,6 +32,14 @@ test("bounded cached projection, source order, graph/list input and canonical de
   expect(rows.join("\n")).toContain("GAP:");
   expect(rows.every(row => visibleWidth(row) <= 52)).toBe(true);
   expect(reads).toBe(1); view.dispose();
+});
+test("the graph form starts at GRAPH_MIN main-view columns, measured before the workbench's inset", async () => {
+  const view = new LifecycleView(identity, async () => sample(), () => undefined, () => true, () => {}, () => true);
+  await view.refresh();
+  // The workbench renders the view VIEW_INSET cells narrower than the main view.
+  expect(view.render(GRAPH_MIN - VIEW_INSET).join("\n")).toContain("─depends_on→");
+  expect(view.render(GRAPH_MIN - VIEW_INSET - 1).join("\n")).toContain("Dependency list");
+  view.dispose();
 });
 test("read failures retain historical rows, foreign identities rejected and actions gated", async () => {
   let fail = false;

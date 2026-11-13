@@ -1,17 +1,19 @@
-// Transcript renderers for the build tools. `task` draws the live slice card and, once the call returns, its
-// totals; `build_finish` draws the result card with live exit progress; `board_plan` draws one plan line and
-// whether the owner still has to confirm it. Live cards redraw through `BuildCardSource.watch` until they settle.
+// Transcript renderers for the build tools. `task` draws the live slice card and under it one line per slice that
+// came back; `build_finish` draws the result card with live exit progress; `board_plan` draws one tool line and
+// whether the owner still has to confirm the plan. Live cards redraw through `BuildCardSource.watch` until they settle.
+// Each tool draws its own frame (`renderShell: "self"`): Pi puts one blank row above it and no box around it, and the
+// card keeps the output padding free on both sides itself, so it starts in the column of the conversation entries.
 import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { BoardPlan, BoardTaskPlan, ChildSnapshot, ChildSpec } from "../../build/types.ts";
-import { plainLabel, PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_TEXT, PANEL_WARNING } from "../panels-view.ts";
+import { spinner } from "../frame.ts";
+import { plainLabel, PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING } from "../panels-view.ts";
 import { planEdges } from "./build-dialogs.ts";
 import { BuildCard, finishLive, resultCard } from "./build-entries.ts";
 import type { BuildCardSource } from "./contract.ts";
-import {
-  BOLD, cardLine, cardWrap, firstLine, taskCardLines, taskCardRows, taskRowsSettled, taskTotals, totalsText, UNBOLD,
-} from "./task-card.ts";
+import { callChildren, cardLine, cardWrap, finishedLines, firstLine, taskCardLines, taskCardRows, taskRowsSettled } from "./task-card.ts";
+import type { TaskCardHit } from "./task-card.ts";
 
-type Renderers = Pick<ToolDefinition, "renderCall" | "renderResult">;
+type Renderers = Pick<ToolDefinition, "renderShell" | "renderCall" | "renderResult">;
 type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2];
 type Source = () => BuildCardSource | undefined;
 type TaskArgs = { readonly agents: readonly ChildSpec[] };
@@ -43,9 +45,9 @@ function track(source: Source, context: RenderContext, live: boolean): void {
 function resultText(result: AgentToolResult<unknown>): string {
   return result.content.flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
 }
-function errorCard(result: AgentToolResult<unknown>): BuildCard<never> {
+function errorCard(result: AgentToolResult<unknown>, inset: number): BuildCard<never> {
   const text = firstLine(resultText(result)) || "The tool failed.";
-  return new BuildCard<never>(width => ({ lines: cardWrap(PANEL_ERROR + "✗ " + text, "", width) }));
+  return new BuildCard<never>(width => ({ lines: cardWrap(PANEL_ERROR + "✗ " + text, "", width) }), undefined, inset);
 }
 
 function taskRenderers(source: Source): Renderers {
@@ -56,17 +58,22 @@ function taskRenderers(source: Source): Renderers {
     return taskCardRows(spec, context.toolCallId, cards?.state()?.fleet, cardState(context).settled, cards?.now() ?? Date.now());
   };
   return {
+    renderShell: "self",
     renderCall: (args, _theme, context) => {
       const expanded = context.expanded;
       track(source, context, !(cardState(context).result && taskRowsSettled(rowsOf(args, context))));
-      return new BuildCard<{ readonly id: string; readonly needs: boolean }>(width => {
-        const cards = source();
-        return taskCardLines(rowsOf(args, context), width, { expanded, color: hue => cards?.color(hue) ?? "" });
+      return new BuildCard<TaskCardHit>(width => {
+        const cards = source(), fleet = cards?.state()?.fleet, color = (hue: number) => cards?.color(hue) ?? "";
+        const card = taskCardLines(rowsOf(args, context), width, { expanded, color, now: cards?.now() ?? Date.now() });
+        const back = finishedLines(callChildren(context.toolCallId, fleet, cardState(context).settled), fleet, width, color);
+        const hits = new Map(card.hits);
+        for (const [line, hit] of back.hits) hits.set(card.lines.length + line, hit);
+        return { lines: [...card.lines, ...back.lines], hits };
       }, hit => {
         const cards = source();
         if (hit.needs) cards?.question(hit.id);
         else cards?.openChild(hit.id);
-      });
+      }, context.outputPad);
     },
     renderResult: (result, options, _theme, context) => {
       const state = cardState(context), details: unknown = result.details;
@@ -75,28 +82,26 @@ function taskRenderers(source: Source): Renderers {
       }
       if (!options.isPartial) state.result = true;
       track(source, context, !(state.result && taskRowsSettled(rowsOf(context.args, context))));
-      if (!state.settled?.length && context.isError) return errorCard(result);
-      return new BuildCard(width => {
-        const live = source()?.state()?.fleet.children.filter(child => child.call === context.toolCallId) ?? [];
-        const children = live.length ? live : state.settled ?? [];
-        return { lines: children.length ? cardWrap(totalsText(taskTotals(children)), "", width) : [] };
-      });
+      // The call's card and the lines under it show the outcome; the result adds a row only when the call failed.
+      if (!state.settled?.length && context.isError) return errorCard(result, context.outputPad);
+      return new BuildCard(() => ({ lines: [] }));
     },
   };
 }
 
 function finishRenderers(source: Source): Renderers {
   return {
+    renderShell: "self",
     renderCall: (args: unknown, _theme, context) => {
       const summary = typeof args === "object" && args !== null && "summary" in args ? args.summary : undefined;
       track(source, context, !cardState(context).result || finishLive(source(), context.toolCallId));
-      return resultCard(source, context.toolCallId, typeof summary === "string" ? summary : undefined);
+      return resultCard(source, context.toolCallId, typeof summary === "string" ? summary : undefined, context.outputPad);
     },
     renderResult: (result, options, _theme, context) => {
       const state = cardState(context);
       if (!options.isPartial) state.result = true;
       track(source, context, !state.result || finishLive(source(), context.toolCallId));
-      return context.isError ? errorCard(result) : new BuildCard(() => ({ lines: [] }));
+      return context.isError ? errorCard(result, context.outputPad) : new BuildCard(() => ({ lines: [] }));
     },
   };
 }
@@ -124,20 +129,25 @@ function waiting(cards: BuildCardSource | undefined, plan: BoardPlan): boolean {
 
 function planRenderers(source: Source): Renderers {
   return {
-    renderCall: (args: unknown) => {
+    renderShell: "self",
+    // One tool line: the state glyph, `board plan` in accent, the plan's title, its size muted.
+    renderCall: (args: unknown, _theme, context) => {
       const plan = planOf(args), edges = planEdges(plan);
       const tasks = `${plan.tasks.length} ${plan.tasks.length === 1 ? "task" : "tasks"}`;
-      const text = BOLD + PANEL_BLUE + "board plan" + UNBOLD + (plan.title ? PANEL_MUTED + " · " + PANEL_TEXT + plainLabel(plan.title) : "")
-        + PANEL_MUTED + " · " + PANEL_TEXT + `${tasks}, ${edges} dependency ${edges === 1 ? "edge" : "edges"}`;
-      return new BuildCard(width => ({ lines: [cardLine(text, width)] }));
+      const text = PANEL_BLUE + "board plan" + (plan.title ? PANEL_TEXT + " " + plainLabel(plan.title) : "")
+        + PANEL_MUTED + " · " + `${tasks}, ${edges} dependency ${edges === 1 ? "edge" : "edges"}`;
+      return new BuildCard(width => {
+        const glyph = context.isPartial ? PANEL_BLUE + spinner(Date.now()) : context.isError ? PANEL_ERROR + "✗" : PANEL_SUCCESS + "✓";
+        return { lines: [cardLine(glyph + " " + text, width)] };
+      }, undefined, context.outputPad);
     },
     renderResult: (result, _options, _theme, context) => {
-      if (context.isError) return errorCard(result);
+      if (context.isError) return errorCard(result, context.outputPad);
       const plan = planOf(context.args), text = firstLine(resultText(result));
       track(source, context, waiting(source(), plan));
       return new BuildCard<true>(width => waiting(source(), plan)
         ? { lines: [cardLine(PANEL_WARNING + "◆ waiting for your confirmation", width)], hits: new Map([[0, true as const]]) }
-        : { lines: text ? cardWrap(text, PANEL_MUTED, width) : [] }, () => source()?.plan());
+        : { lines: text ? cardWrap(text, PANEL_MUTED, width) : [] }, () => source()?.plan(), context.outputPad);
     },
   };
 }

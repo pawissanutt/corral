@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, jest, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,10 +12,9 @@ import { getLayoutBoxesAt, renderLayoutFrame, type LayoutFrame } from "../../../
 import type {
   BoardTaskStatus, BuildPanelState, BuildSessionRecord, BuildSummary, BuildUi, ChildSnapshot, ChildState, ExitOption, ExitState,
 } from "../../build/types.ts";
-import { NOTICE_MS } from "../header.ts";
 import { keyData } from "../keymap.ts";
 import { NativePanels, type NativePanelsOptions } from "../panels.ts";
-import type { PanelSnapshot } from "../panels-view.ts";
+import { PANEL_BLUE, PANEL_ON_ACCENT, type PanelSnapshot } from "../panels-view.ts";
 import type { MainView } from "../workbench.ts";
 import { RecordingTerminal } from "../../../test/support/panel-terminal.ts";
 
@@ -118,9 +117,16 @@ function shell(columns: number, rows: number, build: Build, extra: Partial<Panel
   const sent: unknown[] = [];
   const pi = {
     on: (name: string, fn: (event: unknown, ctx: unknown) => unknown) => { handlers.set(name, fn); }, registerCommand() {},
-    registerMessageRenderer() {}, sendMessage: (message: unknown) => { sent.push(message); },
+    registerMessageRenderer() {}, registerMarkdownTransformer() {}, sendMessage: (message: unknown) => { sent.push(message); },
   } as unknown as ExtensionAPI;
-  const tui = { terminal: { rows, columns }, requestRender() {}, hasOverlay: () => false };
+  // Toasts the panels show, with their placement; `hide` marks one gone.
+  const toasts: { readonly lines: () => string[]; readonly options: { readonly row?: unknown; readonly col?: unknown; readonly nonCapturing?: boolean }; hidden: boolean }[] = [];
+  const tui = { terminal: { rows, columns }, requestRender() {}, hasOverlay: () => false,
+    showOverlay: (component: Component, options: { readonly row?: unknown; readonly col?: unknown; readonly nonCapturing?: boolean }) => {
+      const toast = { lines: () => component.render(columns), options, hidden: false };
+      toasts.push(toast);
+      return { hide() { toast.hidden = true; } };
+    } };
   const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
   const editorTheme = { borderColor: (text: string) => text, selectList: {
     selectedPrefix: (text: string) => text, selectedText: (text: string) => text, description: (text: string) => text,
@@ -131,7 +137,7 @@ function shell(columns: number, rows: number, build: Build, extra: Partial<Panel
   const answers = { confirm: false, select: undefined as string | undefined };
   const ui = {
     theme: { getColorMode: () => "truecolor", fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text },
-    setTheme() {}, setHeader() {}, notify() {},
+    setTheme() {}, setHeader() {}, notify() {}, setWorkingVisible() {},
     setEditorComponent: (factory: (tui: unknown, theme: unknown, keys: unknown) => ShellEditor) => {
       editor = factory(tui, editorTheme, BINDINGS);
       editor.focused = true;
@@ -153,8 +159,9 @@ function shell(columns: number, rows: number, build: Build, extra: Partial<Panel
   const main = createChatViewport({ document: new Text("PARENT_TRANSCRIPT", 0, 0), pendingMessages: new Text("", 0, 0), status: new Text("", 0, 0),
     widgetsAbove: installed.dock, editor: installed.editor, footer: installed.footer, mainView: transcript => panels.mainView(transcript) });
   return {
-    panels, terminal, asked, answers, sent, ...installed,
-    frame: (): LayoutFrame => renderLayoutFrame(main.root, terminal.columns, rows, () => {}),
+    panels, terminal, asked, answers, sent, toasts, ...installed,
+    // Laid out twice: the rail takes the height the first layout gave it.
+    frame: (): LayoutFrame => { renderLayoutFrame(main.root, terminal.columns, rows, () => {}); return renderLayoutFrame(main.root, terminal.columns, rows, () => {}); },
     stop() { terminal.stop(); panels.dispose(); },
   };
 }
@@ -185,6 +192,33 @@ test("F10 opens Board in a build session, and a click on the Board tab does the 
     expect(x).toBeGreaterThan(0);
     expect(click(frame, x, row)).toBeTrue(); expect(h.panels.workbench.view).toBe("board");
   } finally { h.stop(); }
+});
+
+test("the composer is a rounded box with its title in the top border, `›` before the draft and the model bar inside", () => {
+  for (const [columns, rows] of [[185, 40], [92, 40], [46, 40]] as const) {
+    const build = fakeBuild(work);
+    const h = shell(columns, rows, build);
+    try {
+      h.editor.setText("draft text");
+      const raw = h.frame().lines, lines = raw.map(line => stripTerminalSequences(line));
+      const top = lines.findIndex(line => line.includes("╭─ Message"));
+      expect(top).toBeGreaterThan(0);
+      expect(lines[top]!.startsWith(" ╭─ Message")).toBeTrue(); expect(lines[top]!.endsWith("╮ ")).toBeTrue();
+      expect(lines[top + 1]).toMatch(/^ │ › draft text +│ $/);
+      expect(lines[top + 2]).toMatch(/^ │ example ▾/);
+      expect(lines[top + 3]).toMatch(/^ ╰─+╯ $/);
+      // The composer has the focus: its border is accent.
+      expect(raw[top]).toContain(PANEL_BLUE + "╭");
+      // Then the status bar with the BUILD pill and `○ unbound` (the word from 105 columns), a rule and the footer.
+      expect(lines[top + 4]).toContain(columns >= 64 ? " BUILD " : " B ");
+      expect(lines[top + 4]).toContain("○"); expect(lines[top + 4]).not.toContain("●");
+      if (columns >= 105) expect(lines[top + 4]).toContain("○ unbound");
+      expect(raw[top + 4]).toContain(PANEL_ON_ACCENT);
+      expect(lines[top + 5]).toBe("─".repeat(columns));
+      expect(lines[top + 6]).toMatch(/F1\s+(keys|more)\s*$/);
+      expect(top + 7).toBe(rows);
+    } finally { h.stop(); }
+  }
 });
 
 test("Alt+T then Enter steers the child and clears the composer; a refusal keeps the text; /finish still reaches Pi", async () => {
@@ -240,13 +274,16 @@ test("the exit dialog docks on pending; Esc leaves the header prompt, whose clic
     build.s.exit = { phase: "pending" }; build.fire();
     expect(h.panels.focus).toBe("choice");
     expect(plain(h.dock.render(105))).toContain("How should this leave");
-    // The "No exit chosen" notice holds header row 1 for its duration; the prompt follows.
-    jest.useFakeTimers();
-    try {
-      expect(h.panels.handleInput(KEY.esc)).toBeTrue();
-      expect(h.panels.focus).toBe("composer"); expect(plain(h.dock.render(105))).not.toContain("How should this leave");
-      jest.advanceTimersByTime(NOTICE_MS + 1);
-    } finally { jest.useRealTimers(); }
+    // Esc leaves the exit prompt in header row 1 at once; the notice it posts is a toast at the top right of the main view.
+    expect(h.panels.handleInput(KEY.esc)).toBeTrue();
+    expect(h.panels.focus).toBe("composer"); expect(plain(h.dock.render(105))).not.toContain("How should this leave");
+    await settle();
+    const toast = h.toasts.at(-1), notice = h.panels.workbench.currentNotice;
+    expect(notice).toBeDefined(); expect(toast?.hidden).toBeFalse(); expect(toast?.options.nonCapturing).toBeTrue();
+    expect(toast?.options.row).toBe(h.panels.workbench.bodyTop());
+    const box = toast!.lines().map(line => stripTerminalSequences(line));
+    expect(box).toHaveLength(3); expect(box[0]!.startsWith("╭")).toBeTrue(); expect(box[1]).toContain(notice!.text.slice(0, 20));
+    expect(plain(h.frame().lines.slice(0, 1))).not.toContain(notice!.text.slice(0, 20));
     const frame = h.frame(), x = column(frame, 0, "exit choice pending");
     expect(x).toBeGreaterThan(0);
     expect(click(frame, x, 0)).toBeTrue();
@@ -308,7 +345,7 @@ test("a build session's Changes reads its worktree from the start: what the sess
     await h.panels.loadFiles(); await settle();
     const frame = h.frame(), screen = plain(frame.lines);
     expect(screen).toContain("alpha.txt"); expect(screen).toContain("beta.txt");
-    expect(screen).toMatch(/all 2 · alpha 1 · beta 1/);
+    expect(screen).toMatch(/all 2\s+alpha 1\s+beta 1/);
     expect(screen).not.toContain("Choose a project"); expect(screen).not.toContain("Choose project");
     expect(stripTerminalSequences(frame.lines[1] ?? "")).not.toContain("Changes:");
     h.panels.sidebar.tab = "files";
@@ -317,7 +354,7 @@ test("a build session's Changes reads its worktree from the start: what the sess
     await h.panels.workbench.review.setRepository(other.path);
     await h.panels.loadFiles(); await settle();
     const elsewhere = plain(h.frame().lines);
-    expect(elsewhere).toContain("alpha.txt"); expect(elsewhere).not.toMatch(/all \d+ · alpha/);
+    expect(elsewhere).toContain("alpha.txt"); expect(elsewhere).not.toMatch(/all \d+\s+alpha \d/);
   } finally { h.stop(); }
 });
 

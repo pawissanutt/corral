@@ -64,7 +64,7 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
     const root = workbench.mount(new Text("PARENT_TRANSCRIPT", 0, 0), () => ({ tui, outputPad: 1,
       markdownTheme: sdk.getMarkdownTheme(), markdownTransformers: [], renderers: name => sdk.withBuiltInRenderers(name, undefined) }));
     const screen = () => stripTerminalSequences(renderLayoutFrame(root, 80, 70, () => {}).lines.join("\n"));
-    workbench.openAgents(); expect(screen()).toContain("No helper calls");
+    workbench.openAgents(); expect(screen()).toContain("No agents yet.");
     for (const stage of ["startup", "reload"]) {
       if (stage === "reload") await host.session.reload();
       fixtureTransport().script([

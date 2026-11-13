@@ -1,9 +1,11 @@
 import { beforeAll, expect, test } from "bun:test";
-import { AssistantMessageComponent, UserMessageComponent, ToolExecutionComponent, getMarkdownTheme, initTheme, withBuiltInRenderers } from "@earendil-works/pi-coding-agent";
+import { AssistantMessageComponent, ToolExecutionComponent, UserMessageComponent, getMarkdownTheme, initTheme, withBuiltInRenderers } from "@earendil-works/pi-coding-agent";
 import { TuiAltScreen, stripTerminalSequences, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { AuxiliaryHistory, type HelperInspection } from "../extensions/subagent/inspection.ts";
 import { RecordingTerminal } from "../../test/support/panel-terminal.ts";
-import { HelperChat, type HelperChatStyle } from "./helper-chat.ts";
+import { HelperChat, bubble, promptLabel, type HelperChatStyle } from "./helper-chat.ts";
+import { userLabel } from "./panels-theme.ts";
+import { PANEL_BUBBLE } from "./panels-view.ts";
 
 beforeAll(() => initTheme("dark", false));
 const prompt = "Explain **this code**, then read `sample.ts`.";
@@ -18,26 +20,47 @@ function style(outputPad: 0 | 1): HelperChatStyle {
   return { outputPad, markdownTheme: { ...getMarkdownTheme(), codeBlockIndent: "  " }, markdownTransformers: [],
     renderers: name => withBuiltInRenderers(name, undefined) };
 }
+const plain = (lines: readonly string[]) => lines.map(line => stripTerminalSequences(line));
+const click = (y: number, height: number): TuiMouseEvent => ({ type: "click", button: "left", x: 2, y, width: 80, height,
+  shift: false, alt: false, ctrl: false, screenX: 2, screenY: y });
 
-test("helper messages are byte-for-byte native Pi user, assistant and read-tool rendering at each width/padding", () => {
+test("the prompt is the native user bubble with its own label, replies are native Pi rendering, and a tool call is one line until tools expand", () => {
   const tui = new TuiAltScreen(new RecordingTerminal());
   for (const padding of [0, 1] as const) for (const width of [24, 80, 120]) {
     const settings = style(padding), chat = new HelperChat(() => tui, "/tmp", () => settings);
-    const nativeUser = new UserMessageComponent(prompt, settings.markdownTheme, padding, []);
     const nativeAssistant = new AssistantMessageComponent({ stopReason: "toolUse", content: [{ type: "text", text: response },
       { type: "toolCall", id: "read", name: "read", arguments: { path: "sample.ts" } }] }, true, settings.markdownTheme, "", padding, []);
     const nativeTool = new ToolExecutionComponent("read", "read", { path: "sample.ts" }, { showImages: false, outputPad: padding }, settings.renderers("read"), tui, "/tmp");
     nativeTool.setArgsComplete(); nativeTool.markExecutionStarted();
     nativeTool.updateResult({ content: [{ type: "text", text: result }], isError: false });
-    const expected = [...nativeUser.render(width), ...nativeAssistant.render(width), ...nativeTool.render(width)];
-    const actual = chat.renderHelper(fixture(), width);
-    expect(actual).toEqual(expected);
+    const prompted = new UserMessageComponent(prompt, settings.markdownTheme, padding, [promptLabel("brief from parent")]).render(width);
+    const actual = chat.renderHelper(fixture(), width, { bubble: { label: "brief from parent", notes: ["Owns: src/"] } });
+    expect(actual.slice(0, prompted.length)).toEqual(prompted);
+    expect(plain(actual)[0]?.startsWith(" ".repeat(1 + padding) + "brief from parent Explain")).toBe(width >= 80);
+    // The notes sit inside the bubble in its geometry, and the reply follows with its own leading blank row.
+    expect(plain(actual)[prompted.length]?.trim()).toBe("Owns: src/");
+    expect(visibleWidth(actual[prompted.length] ?? "")).toBe(visibleWidth(prompted[0] ?? ""));
+    const assistant = nativeAssistant.render(width);
+    expect(actual.slice(prompted.length + 1, prompted.length + 1 + assistant.length)).toEqual(assistant);
+    expect(plain(actual.slice(prompted.length + 1 + assistant.length))).toEqual(["", " ✓ read sample.ts"]);
     expect(actual.every(line => visibleWidth(line) <= width)).toBe(true);
-    // Native card expansion is reused, not flattened into custom Text/ActivityRow output.
+    // Expanding tools reuses the native card rather than a flattened copy.
     chat.expandTools(true); nativeTool.setExpanded(true);
-    expect(chat.renderHelper(fixture(), width)).toEqual([...nativeUser.render(width), ...nativeAssistant.render(width), ...nativeTool.render(width)]);
+    expect(chat.renderHelper(fixture(), width).slice(-nativeTool.render(width).length)).toEqual(nativeTool.render(width));
     expect(stripTerminalSequences(chat.renderHelper(fixture(), width).join("\n"))).toContain("const answer = 42;");
   }
+});
+
+test("a bubble sits one cell in on the bubble surface, at most 96 cells wide as the transcript's user bubble, with its notes inside", () => {
+  const rows = bubble("you → host-slots", "word ".repeat(80), 140, ["Owns: crates/host"]);
+  for (const row of rows) {
+    expect(row).toContain(PANEL_BUBBLE);
+    expect(visibleWidth(row)).toBe(1 + 96);
+    expect(stripTerminalSequences(row).startsWith("  ")).toBeTrue();
+  }
+  expect(stripTerminalSequences(rows[0] ?? "")).toMatch(/^ {2}you → host-slots word/);
+  expect(stripTerminalSequences(rows.at(-1) ?? "").trim()).toBe("Owns: crates/host");
+  for (const width of [24, 46]) for (const row of bubble("brief from parent", "word ".repeat(40), width)) expect(visibleWidth(row)).toBe(width);
 });
 
 test("native components update from streaming observations, hide reasoning and do not duplicate the final result", () => {
@@ -55,29 +78,42 @@ test("native components update from streaming observations, hide reasoning and d
   expect(finished).not.toContain("Returned result");
 });
 
-test("multiple text blocks and response errors use the same native composition without invented model/usage fields", () => {
+test("multiple text blocks and response errors use the native assistant composition without invented model/usage fields", () => {
   const settings = style(1), blocks = ["First paragraph", "```ts\nconst second = true;\n```"], errorMessage = "Fixture request interrupted";
   const entry = { ...fixture(), phase: "uncertain" as const, result: blocks.join(""), messages: [{ id: "assistant", kind: "assistant" as const,
     text: blocks.join("\n"), textBlocks: blocks, errorMessage, stopReason: "error" as const, hasToolCalls: false }] };
   const chat = new HelperChat(() => undefined, "/tmp", () => settings);
-  const user = new UserMessageComponent(prompt, settings.markdownTheme, 1, []);
   const assistant = new AssistantMessageComponent({ content: blocks.map(text => ({ type: "text", text })), stopReason: "error", errorMessage }, true, settings.markdownTheme, "", 1, []);
+  const user = new UserMessageComponent(prompt, settings.markdownTheme, 1, [promptLabel("prompt")]);
   expect(chat.renderHelper(entry, 80)).toEqual([...user.render(80), ...assistant.render(80)]);
 });
 
-test("native tool cards expand by pointer and stay expanded across refreshes without mutating history", () => {
+test("the owner's `you` label never reaches a helper prompt or reply", () => {
+  // The host registers `userLabel` behind a wrapper of its own, as here.
+  const chat = new HelperChat(() => undefined, "/tmp", () => ({ ...style(1), markdownTransformers: [(markdown, context) => userLabel(markdown, context)] }));
+  const text = plain(chat.renderHelper({ ...fixture(), messages: [{ id: "a", kind: "assistant", text: "REPLY", stopReason: "stop" }] }, 80,
+    { bubble: { label: "brief from parent" } }));
+  expect(text.some(line => /\byou\b/.test(line))).toBeFalse();
+  expect(text.some(line => line.trim() === "REPLY")).toBeTrue();
+  expect(text[0]?.trimStart().startsWith("brief from parent Explain")).toBeTrue();
+});
+
+test("a tool line opens its native card by pointer, stays open across refreshes, and folds back without mutating history", () => {
   const tui = new TuiAltScreen(new RecordingTerminal()), entry = fixture(), before = JSON.stringify(entry);
   const chat = new HelperChat(() => tui, "/tmp", () => style(1));
   const initial = chat.renderHelper(entry, 80);
   expect(stripTerminalSequences(initial.join("\n"))).not.toContain("export { answer }");
-  const row = initial.findIndex(line => stripTerminalSequences(line).trim().startsWith("read sample.ts"));
+  const row = plain(initial).findIndex(line => line.trim().startsWith("✓ read sample.ts"));
   expect(row).toBeGreaterThan(0);
-  const event: TuiMouseEvent = { type: "click", button: "left", x: 2, y: row, width: 80, height: initial.length,
-    shift: false, alt: false, ctrl: false, screenX: 2, screenY: row };
-  expect(chat.handleMouse(event)?.handled).toBe(true);
-  expect(stripTerminalSequences(chat.renderHelper(entry, 80).join("\n"))).toContain("export { answer }");
+  expect(chat.handleMouse(click(row, initial.length))?.handled).toBe(true);
+  const opened = chat.renderHelper(entry, 80);
+  expect(stripTerminalSequences(opened.join("\n"))).toContain("export { answer }");
   chat.invalidate();
-  expect(stripTerminalSequences(chat.renderHelper(entry, 80).join("\n"))).toContain("export { answer }");
+  const refreshed = chat.renderHelper(entry, 80);
+  expect(stripTerminalSequences(refreshed.join("\n"))).toContain("export { answer }");
+  const header = plain(refreshed).findIndex(line => line.trim().startsWith("read sample.ts"));
+  expect(chat.handleMouse(click(header, refreshed.length))?.handled).toBe(true);
+  expect(plain(chat.renderHelper(entry, 80)).some(line => line.trim() === "✓ read sample.ts")).toBeTrue();
   expect(JSON.stringify(entry)).toBe(before);
 });
 
@@ -87,6 +123,8 @@ test("incomplete argument JSON uses native generic rendering, never a built-in r
   const entry = fixture();
   const incomplete = { ...entry, messages: [{ id: "t", kind: "tool" as const, tool: "read", phase: "error" as const,
     arguments: '{"path":"truncated', text: "Arguments omitted by retention limit" }] };
+  expect(stripTerminalSequences(chat.renderHelper(incomplete, 80).join("\n"))).toContain("✗ read");
+  chat.expandTools(true);
   expect(stripTerminalSequences(chat.renderHelper(incomplete, 80).join("\n"))).toContain("truncated");
   expect(resolved).toBe(0);
 });
@@ -98,9 +136,12 @@ test("data controls are sanitized before Markdown and tool argument rendering; n
     { id: "a", kind: "assistant" as const, text: "**Visible**\x1b[2J\x1b]52;c;SECRET\x07", stopReason: "stop" as const },
     { id: "t", kind: "tool" as const, tool: "read", arguments: JSON.stringify({ path: "safe\x1b[2J.ts" }), text: "result", phase: "completed" as const },
   ] };
-  const rendered = chat.renderHelper(entry, 80).join("\n");
-  expect(rendered).not.toContain("\x1b]52"); expect(rendered).not.toContain("\x1b[2J");
-  expect(rendered).not.toContain("SECRET"); expect(rendered).not.toContain("CLIPBOARD");
-  expect(rendered).toContain("\x1b["); expect(stripTerminalSequences(rendered)).toContain("Visible");
-  expect(stripTerminalSequences(rendered)).toContain("safe.ts");
+  for (const expanded of [false, true]) {
+    chat.expandTools(expanded);
+    const rendered = chat.renderHelper(entry, 80).join("\n");
+    expect(rendered).not.toContain("\x1b]52"); expect(rendered).not.toContain("\x1b[2J");
+    expect(rendered).not.toContain("SECRET"); expect(rendered).not.toContain("CLIPBOARD");
+    expect(rendered).toContain("\x1b["); expect(stripTerminalSequences(rendered)).toContain("Visible");
+    expect(stripTerminalSequences(rendered)).toContain("safe.ts");
+  }
 });

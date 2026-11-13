@@ -1,13 +1,14 @@
 // Scope default cell colors to the app's alternate screen, never the terminal palette.
 // Streaming lexer: only complete CSI SGR/mode sequences are interpreted; OSC/DCS/APC
 // payloads (clipboard, links, images) remain opaque, even across write boundaries.
+// The canvas is the one background of the whole screen: the packaged `background` of the appearance.
 import { PANEL_TEXT } from "./panels-view.ts";
 import { ansi, PACKAGED, type Appearance } from "./appearance.ts";
 
-export let CANVAS_BG = "\x1b[48;2;15;16;18m";
+export let CANVAS_BG = ansi(PACKAGED.dark.background, true);
 export let CANVAS_STYLE = PANEL_TEXT + CANVAS_BG;
 export function setCanvasAppearance(appearance: Appearance): void {
-  CANVAS_BG = ansi(appearance === "dark" ? "#0f1012" : PACKAGED[appearance].background, true);
+  CANVAS_BG = ansi(PACKAGED[appearance].background, true);
   CANVAS_STYLE = PANEL_TEXT + CANVAS_BG;
 }
 type State = "text" | "escape" | "escape-intermediate" | "csi" | "osc" | "string";

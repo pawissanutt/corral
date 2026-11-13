@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { SessionManager, type BeforeAgentStartEvent, type BeforeAgentStartEventResult, type ContextEvent, type ContextEventResult,
   type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildSystemPrompt, normalizeBuildSystemPromptOptions } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.js";
 import { PendingQuestions, QUESTION_ENTRY, type QuestionEntry } from "../host/pending-questions.ts";
-import { OwnerQuestionUi, OWNER_QUESTION_STATE, QUESTIONS_SHORTCUT, renderOwnerQuestionState } from "./owner-questions.ts";
+import { OwnerQuestionUi, OWNER_QUESTION_STATE, QUESTIONS_SHORTCUT, ownerQuestionLines, renderOwnerQuestionState } from "./owner-questions.ts";
 
 test("owner UI dismisses without consent, preserves permission dialogs and fences stale callbacks", async () => {
   const entries: QuestionEntry[] = [];
@@ -171,4 +172,29 @@ test("/questions takes the owner's own typed answer, keeps drafts across questio
   expect(records).toEqual([`[ask_user answer ${id}]\nWhich release?: ship 1.4 only after QA\nNotify?: No`]);
   expect(await q.answer(id, [{ text: "again" }, { option: "No" }])).not.toBe("pending");
   expect(records).toHaveLength(1);
+});
+
+test("waiting owner questions use the docked dialog form: count in the header, one option per question", () => {
+  const entries: QuestionEntry[] = [];
+  const q = new PendingQuestions({ session: () => "owned", generation: 1, entries: () => entries,
+    append: data => { entries.push({ type: "custom", customType: QUESTION_ENTRY, data }); }, changed() {},
+    record: async text => text, deliver: async () => true });
+  const ids = ["A", "B", "C", "D"].map(key => q.ask(key, [{ question: `Which layout for ${key}?`, options: ["Grid", "List"] }]).id);
+  expect(ownerQuestionLines([], 120).lines).toEqual([]);
+  for (let width = 30; width <= 160; width++) {
+    const frame = ownerQuestionLines(q.list(), width), rows = frame.lines.map(line => stripTerminalSequences(line));
+    for (const line of frame.lines) expect(visibleWidth(line)).toBe(width);
+    // Three questions are listed; each row maps back to its question for a click.
+    expect(new Set(frame.hits.values()).size).toBe(3);
+    for (const [line, id] of frame.hits) {
+      expect(ids.slice(0, 3)).toContain(id);
+      expect(rows[line]!.startsWith("│")).toBeTrue();
+    }
+  }
+  const rows = ownerQuestionLines(q.list(), 120).lines.map(line => stripTerminalSequences(line));
+  expect(rows[0]!.startsWith("╭─")).toBeTrue();
+  expect(rows[1]).toContain("4 owner questions are waiting");
+  // The question is the option's label; the full id the owner answers by sits under it.
+  const at = rows.findIndex(row => row.includes("Which layout for A?"));
+  expect(rows[at + 1]).toContain(`/questions ${ids[0]}`);
 });

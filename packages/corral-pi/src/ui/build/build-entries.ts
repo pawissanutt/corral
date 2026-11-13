@@ -1,15 +1,21 @@
 // Conversation entries a build session posts for the owner's decisions: the exit outcome, the board filing and
 // an owner-opened finish card. Their content reaches the parent model (custom messages become user content), so
 // it states the decision and its outcome in plain sentences. The renderer draws exit and board entries as a
-// `you chose …` row plus an outcome row, and finish entries as the live result card.
+// `you chose …` bubble (the user message surface) plus an outcome line, and finish entries as the live result card.
 import type { MessageRenderer } from "@earendil-works/pi-coding-agent";
+import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import type { BoardTaskStatus, ExitChoice, ExitOption, ExitPhase, ExitState } from "../../build/types.ts";
 import { toneColor } from "../agents-model.ts";
-import { plainLabel, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT } from "../panels-view.ts";
+import { onSurface } from "../frame.ts";
+import { plainLabel, PANEL_BG, PANEL_BUBBLE, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT } from "../panels-view.ts";
 import type { BuildCardSource } from "./contract.ts";
 import { EXIT_LABELS, exitProgress, resultCardLines } from "./result-card.ts";
-import { cardLine, cardWrap } from "./task-card.ts";
+import type { ResultHit } from "./result-card.ts";
+import { cardCell, cardLine, cardWrap } from "./task-card.ts";
+
+/** The widest user message bubble (the mock's `.msg`). */
+const BUBBLE_MAX = 96;
 
 export const BUILD_EXIT_ENTRY = "corral_build_exit";
 export const BUILD_BOARD_ENTRY = "corral_build_board";
@@ -22,8 +28,8 @@ export interface FinishEntryDetails { readonly id: string }
 
 /**
  * A card drawn from live data on every render. `draw` returns the lines and the rows a click acts on; a plain
- * left click on such a row calls `act` with its hit. `inset` cells are kept free on both sides, as Pi's tool box
- * does with its output padding; conversation entries get the full row and pass that padding here.
+ * left click on such a row calls `act` with its hit. `inset` cells are kept free on both sides: tool cards draw
+ * their own frame and conversation entries get the full row, so both pass Pi's output padding here.
  */
 export class BuildCard<T> implements Component {
   private hits: ReadonlyMap<number, T> = new Map();
@@ -48,7 +54,6 @@ export class BuildCard<T> implements Component {
   invalidate(): void {}
 }
 
-type ResultHit = { readonly child?: string; readonly exit?: true };
 /**
  * Exit card `id` (a `build_finish` tool call or a finish entry) shows live progress when the source names it as
  * the latest exit card, or names none: a resumed session then reads the current exit.
@@ -118,23 +123,29 @@ export function finishEntry(id: string): BuildEntry<FinishEntryDetails> {
   };
 }
 
+/** `who` muted then `text`, wrapped on the user message surface at most BUBBLE_MAX cells wide with one cell of padding each side. */
+function bubble(who: string, text: string, width: number): string[] {
+  const size = Math.min(BUBBLE_MAX, width);
+  if (size < 3) return [cardLine(PANEL_MUTED + who + " " + PANEL_TEXT + text, width)];
+  return wrapTextWithAnsi(PANEL_MUTED + who + " " + PANEL_TEXT + text, size - 2)
+    .map(row => PANEL_BUBBLE + PANEL_TEXT + " " + onSurface(cardCell(row, size - 2), PANEL_BUBBLE) + " " + PANEL_BG);
+}
 function exitLines(details: ExitEntryDetails, width: number): string[] {
   // A stored entry may name a choice this build does not know; its own words are shown then.
   const label = details.label || (EXIT_LABELS[details.choice] ?? details.choice);
-  const lines = [cardLine(PANEL_MUTED + "you chose " + PANEL_TEXT + plainLabel(label), width)];
   const shown = exitProgress(details);
   const text = shown ? toneColor(shown.tone) + shown.glyph + " " + shown.text : PANEL_MUTED + "· " + outcome(details);
-  return [...lines, ...cardWrap(text, "", width)];
+  return [...bubble("you chose", plainLabel(label), width), ...cardWrap(text, "", width)];
 }
 function boardLines(details: BoardEntryDetails, width: number): string[] {
   const ids = details.filed.map(task => task.id), count = `${ids.length} ${ids.length === 1 ? "task" : "tasks"}`;
   return [
-    cardLine(PANEL_MUTED + "you chose " + PANEL_TEXT + (details.started ? "File and start" : "File only"), width),
-    ...cardWrap(PANEL_SUCCESS + "✓ " + PANEL_TEXT + `Filed ${count}` + (ids.length ? ": " + ids.join(", ") : "")
-      + PANEL_MUTED + (details.started ? " · queued, they start as slots free" : " · in Backlog"), "", width),
+    ...bubble("you chose", details.started ? "File and start" : "File only", width),
+    ...cardWrap(`✓ Filed ${count}` + (ids.length ? ": " + ids.join(", ") : "")
+      + (details.started ? " · queued, they start as slots free" : " · in Backlog"), PANEL_SUCCESS, width),
   ];
 }
-/** Renders exit and board entries as one `you chose …` row plus one outcome row; finish entries as the live result card. */
+/** Renders exit and board entries as a `you chose …` bubble plus an outcome line; finish entries as the live result card. */
 export function buildEntryRenderer(source: () => BuildCardSource | undefined): MessageRenderer {
   return (message, options) => {
     const details = typeof message.details === "object" && message.details !== null ? message.details as Record<string, unknown> : undefined;

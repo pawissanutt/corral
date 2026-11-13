@@ -55,14 +55,14 @@ test("native panels retain real streaming, composing, binding, modal isolation a
     const running = mode.run();
     // Stop is explicit below; no Ctrl+D/process.exit is sent to the test runner.
     void running.catch(error => { throw error; });
-    await physical.untilVisible("WORKER ● g1"); // the bottom bar's bound dot
+    await physical.untilVisible("WORKER  ● g1"); // the status bar's role pill and bound dot
     physical.send("\x1b[20~"); // task-bound sessions open on Task; F9 shows the transcript
-    expect(terminal.columns).toBe(105);
+    expect(terminal.mainColumns).toBe(105);
     const image = new Image(readFileSync(new URL("./fixtures/images/zoom.png", import.meta.url)).toString("base64"), "image/png", { fallbackColor: text => text }, { filename: "zoom.png" });
     expect(image.handleMouse({ type: "click", button: "left", x: 0, y: 0, screenX: 0, screenY: 0, width: 60, height: 20, shift: false, alt: false, ctrl: false })?.handled).toBeTrue();
     await physical.until("zoom.png"); expect(panels.workbench.images.isOpen).toBeTrue();
     physical.send("\x1b[<0;40;23M"); physical.send("\x1b[<0;40;23m");
-    await physical.untilVisible("WORKER ● g1"); // the bottom bar's bound dot
+    await physical.untilVisible("WORKER  ● g1"); // the status bar's role pill and bound dot
     expect(panels.workbench.images.isOpen).toBeFalse();
     image.handleMouse({ type: "click", button: "left", x: 0, y: 0, screenX: 0, screenY: 0, width: 60, height: 20, shift: false, alt: false, ctrl: false });
     await physical.until("960×480"); physical.send("IMAGE_DRAFT"); await physical.until("IMAGE_DRAFT");
@@ -81,23 +81,23 @@ test("native panels retain real streaming, composing, binding, modal isolation a
     for (const char of "Keep this unsent draft") physical.send(char);
     let mark = physical.writes.length;
     physical.resize(80, 34); await physical.until("Keep this unsent draft", mark);
-    expect(terminal.columns).toBe(80); expect(host.sessionId()).toBe(bound);
-    // A click in the draft row: below it are the composer's bottom bar, the status bar and the key hint row.
-    physical.send("\x1b[<0;6;31M"); physical.send("\x1b[<0;6;31m");
+    expect(terminal.mainColumns).toBe(80); expect(host.sessionId()).toBe(bound);
+    // A click in the draft row: below it are the composer's model bar, its bottom border, the status bar, a rule and the key hint row.
+    physical.send("\x1b[<0;6;29M"); physical.send("\x1b[<0;6;29m");
     physical.send("\x1b[F"); // Keep the fake-cursor escape outside the draft substring checked on resize.
     if (evidence) writeFileSync(join(evidence, "narrow.ansi"), physical.writes.join(""));
     mark = physical.writes.length;
     physical.resize(52, 24); await physical.until("Keep this unsent draft", mark);
-    expect(terminal.columns).toBe(52);
+    expect(terminal.mainColumns).toBe(52);
     if (evidence) writeFileSync(join(evidence, "small.ansi"), physical.writes.join(""));
     physical.resize(140, 46); await physical.until("Keep this unsent draft", mark);
-    expect(terminal.columns).toBe(105);
+    expect(terminal.mainColumns).toBe(105);
 
     const confirmed = host.session.prompt("/native-confirm", { source: "interactive" });
     await physical.until("Native confirmation");
     physical.send("\x02");
     physical.send("\x1b[<0;117;2M"); physical.send("\x1b[<0;117;2m");
-    expect(terminal.columns).toBe(105);
+    expect(terminal.mainColumns).toBe(105);
     physical.send("\x1b"); await within(confirmed, 10_000, "native cancel");
     expect(answer).toBeFalse();
 

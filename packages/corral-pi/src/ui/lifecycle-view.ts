@@ -4,6 +4,13 @@ import type { HostIdentity } from "../roles/types.ts";
 import type { InspectorSnapshot } from "./inspector.ts";
 import type { AgentObservation } from "./agents-model.ts";
 import { plainLabel } from "./panels-view.ts";
+import { VIEW_INSET } from "./frame.ts";
+
+/**
+ * Main-view columns from which the graph draws its edges as arrows; below, a dependency list. The workbench draws
+ * this view VIEW_INSET cells narrower than the main view, so the comparison adds them back.
+ */
+export const GRAPH_MIN = 90;
 
 const Label = z.string().max(4096);
 const Schema = z.object({
@@ -85,6 +92,7 @@ export class LifecycleView implements Component {
   }
   render(width: number): string[] {
     const rows: string[] = []; this.hits.clear();
+    const graph = width + VIEW_INSET >= GRAPH_MIN;
     const add = (text: string, index?: number) => {
       const wrapped = new Text(plainLabel(text), 0, 0).render(Math.max(1, width));
       if (index !== undefined) for (let i = 0; i < wrapped.length; i++) this.hits.set(rows.length + i, index);
@@ -123,7 +131,7 @@ export class LifecycleView implements Component {
     this.selected = Math.max(-1, Math.min(this.selected, count - 1));
     if (this.selected < 0) add("Selected identity no longer in this window · j/k or click to select an existing record");
     if (this.mode === "graph") {
-      add(width >= 90 ? "Task graph: task ─depends_on→ prerequisite · task ┄task-parent→ parent" : "Dependency list · same canonical edges and details");
+      add(graph ? "Task graph: task ─depends_on→ prerequisite · task ┄task-parent→ parent" : "Dependency list · same canonical edges and details");
       if (data.graph_gap) add("GAP: graph capped at 24 nodes/edges per task; omitted targets remain unknown");
       const node = data.nodes[this.selected];
       if (node) { add(`Inspect canonical task ${node.id} · ${node.status ?? "unavailable"}`); add(node.title); add(`depends_on: ${node.depends_on.join(", ") || "none"} · task-parent: ${node.parent ?? "none"}`); }
@@ -134,9 +142,9 @@ export class LifecycleView implements Component {
         add(`${i === this.selected ? ">" : " "} ${node.id} [${node.status ?? "unavailable"}] ${node.title}`, i);
         for (const dep of i === this.selected ? node.depends_on : []) {
           const target = data.nodes.find(n => n.id === dep);
-          add(`  ${width >= 90 ? "├─depends_on→" : "requires"} ${dep} [${!target || target.missing ? "missing / unavailable" : target.status}]${target && !target.missing && target.status !== "done" ? " · unmet prerequisite" : ""}`, i);
+          add(`  ${graph ? "├─depends_on→" : "requires"} ${dep} [${!target || target.missing ? "missing / unavailable" : target.status}]${target && !target.missing && target.status !== "done" ? " · unmet prerequisite" : ""}`, i);
         }
-        if (node.parent) add(`  ${width >= 90 ? "└┄task-parent→" : "task-parent"} ${node.parent}`, i);
+        if (node.parent) add(`  ${graph ? "└┄task-parent→" : "task-parent"} ${node.parent}`, i);
       });
       add("Agent-parent provenance (host observations, NOT task dependency edges):");
       const agents = this.agents();

@@ -70,7 +70,7 @@ export async function startPanelHost(extend?: (...args: Parameters<Extend>) => v
       mainView: (view, presentation) => { transcript = view; chatPresentation = presentation; return panels.mainView(view, presentation); } });
     await mode.init(); host.markAttached("interactive");
     void mode.run().catch(error => { throw error; });
-    await physical.untilVisible("WORKER ● g1"); // the bottom bar's bound dot
+    await physical.untilVisible("WORKER  ● g1"); // the status bar's role pill and bound dot
     physical.send("\x1b[20~"); // task-bound sessions open on Task; F9 shows the transcript
     const view: Component | undefined = transcript;
     if (!(view instanceof ScrollView)) throw new Error("transcript is not a ScrollView");

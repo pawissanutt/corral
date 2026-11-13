@@ -445,6 +445,29 @@ index 1e16f4c..3bfef65 100644
          this.hasToolCalls = hasToolCalls;
          if (message.stopReason === "length") {
              this.contentContainer.addChild(new Spacer(1));
+diff --git a/dist/modes/interactive/components/user-message.js b/dist/modes/interactive/components/user-message.js
+index 4f57224..12194a2 100644
+--- a/dist/modes/interactive/components/user-message.js
++++ b/dist/modes/interactive/components/user-message.js
+@@ -32,7 +32,7 @@ export class UserMessageComponent extends Container {
+         this.clear();
+         // The Markdown pads and colors its own background: a Box around it would keep a second full-width copy of every
+         // line, with identical output.
+-        this.addChild(new Markdown(this.text, this.outputPad, 1, this.markdownTheme, {
++        this.addChild(new Markdown(this.text, this.outputPad, 0, this.markdownTheme, {
+             color: (content) => theme.fg("userMessageText", content),
+             bgColor: (content) => theme.bg("userMessageBg", content),
+         }, {
+@@ -42,7 +42,8 @@ export class UserMessageComponent extends Container {
+         }));
+     }
+     render(width) {
+-        const lines = super.render(width);
++        // A bubble one cell in from the transcript's edge, at most 96 cells wide and as tall as its text.
++        const lines = super.render(Math.max(1, Math.min(width - 1, 96))).map((line) => ` ${line}`);
+         if (lines.length === 0) {
+             return lines;
+         }
 diff --git a/dist/modes/interactive/interactive-mode.d.ts b/dist/modes/interactive/interactive-mode.d.ts
 index 6fc6016..502e70c 100644
 --- a/dist/modes/interactive/interactive-mode.d.ts

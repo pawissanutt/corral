@@ -1,7 +1,18 @@
 import { expect, test } from "bun:test";
-import { agentsModel, helperRows, liveCount, money } from "./agents-model.ts";
+import { agentsModel, helperRows, liveCount, money, sparkline } from "./agents-model.ts";
 import type { PanelJob, PanelSnapshot } from "./panels-view.ts";
 import type { HelperInspection } from "../extensions/subagent/inspection.ts";
+
+test("the sparkline keeps the last buckets right-aligned, scaled to the busiest one with a floor of four calls", () => {
+  expect(sparkline([1], 14)).toBe(" ".repeat(13) + "▂");
+  expect(sparkline([0, 1, 2, 4], 6)).toBe("   ▂▄▇");
+  expect(sparkline([7, 0, 14], 3)).toBe("▄ ▇");
+  const busy = Array.from({ length: 40 }, (_, index) => (index % 5) + 1);
+  const line = sparkline(busy, 14);
+  expect(line).toHaveLength(14);
+  expect(line.includes(" ")).toBeFalse();
+  expect(line.includes("▇")).toBeTrue();
+});
 
 const NOW = 1_000_000;
 function helper(request: string, phase: HelperInspection["phase"], extra: Partial<HelperInspection> = {}): HelperInspection {

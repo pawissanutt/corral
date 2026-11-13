@@ -1,13 +1,15 @@
-// Compact transcript rendering for corral_* tools (rich UI). A call is one line: the tool's short
-// name and the one argument that says what it does; a result is one line: the receipt state and
-// the few result fields a person acts on. The raw receipt is shown only when the view is expanded.
-// Rendering reads the call and its receipt only; it never changes what the tool sends or returns.
+// Compact transcript rendering for corral_* tools (rich UI), as one tool line: the state glyph (the spinner
+// while the call runs, then the receipt's), the tool's short name in accent, the one argument that says what it
+// does, and after a dot the few result fields a person acts on. The raw receipt is shown only when the view is
+// expanded. Rendering reads the call and its receipt only; it never changes what the tool sends or returns.
 import type { AgentToolResult, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 
 import type { CorralReceipt } from "../tools/corral.ts";
+import { spinner } from "./frame.ts";
 
-type Style = Pick<Theme, "fg" | "bold">;
+type Style = Pick<Theme, "fg">;
 type Args = Record<string, unknown>;
 
 const SUMMARY_MAX = 96;
@@ -46,12 +48,13 @@ export function callSummary(args: Args): string | undefined {
   return kind;
 }
 
+/** `corral ask` in accent, then what the call does. */
 export function renderCallText(name: string, args: Args, theme: Style): string {
   const summary = name === "corral_todo" && typeof args.op === "string"
     ? oneLine([args.op, args.step ?? args.phase].filter((value) => typeof value === "string").join(" "))
     : name === "corral_show" ? showSummary(args ?? {}) : callSummary(args ?? {});
-  const head = theme.fg("toolTitle", theme.bold(`corral ${shortName(name)}`));
-  return summary ? `${head} ${theme.fg("muted", summary)}` : head;
+  const head = theme.fg("toolTitle", `corral ${shortName(name)}`);
+  return summary ? `${head} ${theme.fg("text", summary)}` : head;
 }
 
 function showSummary(args: Args): string {
@@ -110,42 +113,82 @@ function expandedBody(receipt: CorralReceipt): string {
   return shown.join("\n");
 }
 
-export function renderResultText(
-  result: AgentToolResult<unknown>, expanded: boolean, isError: boolean, theme: Style,
-): string {
+/** A receipt's outcome: its glyph, words in the glyph's tone, and detail drawn dim. */
+interface Outcome { readonly glyph: string; readonly tone: "success" | "muted" | "error" | "warning"; readonly words?: string; readonly detail?: string }
+function outcome(result: AgentToolResult<unknown>, isError: boolean): Outcome {
   const receipt = result.details as CorralReceipt | undefined;
   if (isError || !receipt || typeof receipt.state !== "string") {
     // A call that never produced a receipt (spawn failure, timeout, malformed output).
-    return theme.fg("error", `✗ ${oneLine(textOf(result) || "corral call failed", 160)}`);
+    return { glyph: "✗", tone: "error", words: oneLine(textOf(result) || "corral call failed", 160) };
   }
-  let line: string;
   switch (receipt.state) {
     case "committed": {
-      const fields = resultFields(receipt.result);
-      const mark = receipt.replayed ? theme.fg("muted", "↺ replayed") : theme.fg("success", "✓");
-      line = fields ? `${mark} ${theme.fg("dim", fields)}` : mark;
-      break;
+      const fields = resultFields(receipt.result), detail = fields ? { detail: fields } : {};
+      return receipt.replayed ? { glyph: "↺", tone: "muted", words: "replayed", ...detail } : { glyph: "✓", tone: "success", ...detail };
     }
     case "rejected": {
       const why = refusal(receipt.result);
-      line = theme.fg("error", why ? `✗ rejected  ${why}` : "✗ rejected");
-      break;
+      return { glyph: "✗", tone: "error", words: why ? `rejected  ${why}` : "rejected" };
     }
     case "reserved":
-    case "uncertain":
-      line = theme.fg("warning", `◷ ${receipt.state}`) +
-        (refusal(receipt.result) ? ` ${theme.fg("dim", refusal(receipt.result) ?? "")}` : "");
-      break;
+    case "uncertain": {
+      const why = refusal(receipt.result);
+      return { glyph: "◷", tone: "warning", words: receipt.state, ...(why ? { detail: why } : {}) };
+    }
     default:
-      line = theme.fg("warning", `◷ ${receipt.state}`);
+      return { glyph: "◷", tone: "warning", words: receipt.state };
   }
-  return expanded ? `${line}\n${theme.fg("dim", expandedBody(receipt))}` : line;
+}
+/** The raw receipt, for the expanded view; undefined for a call without a receipt. */
+function receiptBody(result: AgentToolResult<unknown>, isError: boolean): string | undefined {
+  const receipt = result.details as CorralReceipt | undefined;
+  return isError || !receipt || typeof receipt.state !== "string" ? undefined : expandedBody(receipt);
 }
 
-export function corralRenderers(name: string): Pick<ToolDefinition, "renderCall" | "renderResult"> {
+/** The receipt as one line (`✓ key=Q-3 · tier=quick`), and the raw receipt under it when `expanded`. */
+export function renderResultText(
+  result: AgentToolResult<unknown>, expanded: boolean, isError: boolean, theme: Style,
+): string {
+  const shown = outcome(result, isError), body = expanded ? receiptBody(result, isError) : undefined;
+  const line = theme.fg(shown.tone, shown.words ? `${shown.glyph} ${shown.words}` : shown.glyph)
+    + (shown.detail ? ` ${theme.fg("dim", shown.detail)}` : "");
+  return body === undefined ? line : `${line}\n${theme.fg("dim", body)}`;
+}
+
+/** One line drawn at render time, `inset` cells in from both sides and clipped with `…`; nothing when `text` is empty. */
+class ToolLine implements Component {
+  constructor(private readonly text: () => string, private readonly inset = 0) {}
+  render(width: number): string[] {
+    const line = this.text();
+    if (!line) return [];
+    const pad = Math.max(0, Math.min(this.inset, Math.floor((width - 1) / 2))), room = Math.max(1, width - pad * 2);
+    return [" ".repeat(pad) + (visibleWidth(line) > room ? truncateToWidth(line, room, "…") : line)];
+  }
+  invalidate(): void {}
+}
+
+/**
+ * The tool draws its own frame (`renderShell: "self"`): Pi puts one blank row above the line and no box around it,
+ * and the line keeps the output padding free itself, so it starts in the column of the rest of the transcript.
+ */
+export function corralRenderers(name: string): Pick<ToolDefinition, "renderShell" | "renderCall" | "renderResult"> {
   return {
-    renderCall: (args, theme) => new Text(renderCallText(name, args as Args, theme), 0, 0),
-    renderResult: (result, options, theme, context) =>
-      new Text(renderResultText(result, options.expanded, context.isError, theme), 0, 0),
+    renderShell: "self",
+    // While the call runs its line carries the spinner; once the receipt arrives the result draws the line instead.
+    renderCall: (args, theme, context) => new ToolLine(() => context.isPartial
+      ? `${theme.fg("accent", spinner(Date.now()))} ${renderCallText(name, args as Args, theme)}` : "", context.outputPad),
+    renderResult: (result, options, theme, context) => {
+      if (options.isPartial) return new ToolLine(() => "");
+      const shown = outcome(result, context.isError);
+      const after = [shown.words ? theme.fg(shown.tone, shown.words) : "", shown.detail ? theme.fg("dim", shown.detail) : ""].filter(Boolean).join(" ");
+      const line = new ToolLine(() => `${theme.fg(shown.tone, shown.glyph)} ${renderCallText(name, (context.args ?? {}) as Args, theme)}`
+        + (after ? `${theme.fg("muted", " · ")}${after}` : ""), context.outputPad);
+      const body = options.expanded ? receiptBody(result, context.isError) : undefined;
+      if (body === undefined) return line;
+      const both = new Container();
+      both.addChild(line);
+      both.addChild(new Text(theme.fg("dim", body), Math.max(0, context.outputPad), 0));
+      return both;
+    },
   };
 }

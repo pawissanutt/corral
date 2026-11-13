@@ -17,6 +17,11 @@ test("retained tail numbers end at the host line count, with the open line while
   expect(numberedTail("a\n", undefined, true).every(line => line.number === undefined)).toBe(true);
   const lines = jobDetailLines(running, input, 80, 24);
   for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(80);
+  const plainRows = lines.map(line => stripTerminalSequences(line));
+  // The retained tail sits in a rounded card whose header names it and counts the lines shown.
+  expect(plainRows.some(row => row.startsWith("╭") && row.endsWith("╮"))).toBeTrue();
+  expect(plainRows.some(row => /^│ output +last \d+ of 31 lines │$/.test(row))).toBeTrue();
+  expect(plainRows[0]).toMatch(/^\$ cargo test {2}j-1/);
   const gutter = lines.map(line => stripTerminalSequences(line)).flatMap(row => /│ +(\d+) │/.exec(row)?.[1] ?? []).map(Number);
   expect(gutter.at(-1)).toBe(31);
   expect(gutter.every((value, index) => index === 0 || value === (gutter[index - 1] ?? 0) + 1)).toBe(true);

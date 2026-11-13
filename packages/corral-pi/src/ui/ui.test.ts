@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { type AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 
 import { EventLog } from "../bridge/events.ts";
 import type { CorralReceipt } from "../tools/corral.ts";
@@ -64,9 +65,9 @@ test("todo renders its operation and step with the canonical receipt revision", 
   const result = receipt("committed", { revision: 3, progress: { revision: 3, spec_revision: 1, phases: [] } }, { op: "todo" });
   expect(renderResultText(result, false, false, plain)).toBe("✓ revision=3");
   const renderers = corralRenderers("corral_todo");
-  const context = { isError: false } as Parameters<NonNullable<typeof renderers.renderResult>>[3];
-  const component = renderers.renderResult?.(result, { expanded: false } as never, plain as never, context);
-  expect(component?.render(40).join("").trim()).toBe("✓ revision=3");
+  const context = { isError: false, isPartial: false, outputPad: 0, args: { op: "done", step: "implement" } } as Parameters<NonNullable<typeof renderers.renderResult>>[3];
+  const component = renderers.renderResult?.(result, { expanded: false, isPartial: false }, plain as never, context);
+  expect(component?.render(80)).toEqual(["✓ corral todo done implement · revision=3"]);
 });
 
 test("a call without a receipt shows its error, and only the expanded view shows the raw result", () => {
@@ -78,15 +79,26 @@ test("a call without a receipt shows its error, and only the expanded view shows
   expect(expanded).toContain('"key": "Q-1"');
 });
 
-test("the renderers draw width-bounded components", () => {
+test("a corral call is one self-framed tool line: the spinner while it runs, then the receipt's glyph and fields", () => {
   const renderers = corralRenderers("corral_ask");
-  const context = { isError: false } as Parameters<NonNullable<typeof renderers.renderResult>>[3];
-  const call = renderers.renderCall?.({ kind: "clarification", text: "a ".repeat(100) }, plain as never, context as never);
-  const lines = call?.render(40) ?? [];
-  expect(lines.length).toBeGreaterThan(1);
-  for (const line of lines) expect(line.length).toBeLessThanOrEqual(40);
-  const result = renderers.renderResult?.(receipt("committed", { key: "Q-9" }), { expanded: false } as never, plain as never, context);
-  expect(result?.render(40).join("").trim()).toBe("✓ key=Q-9");
+  expect(renderers.renderShell).toBe("self");
+  const args = { kind: "clarification", text: "a ".repeat(100) };
+  // The line keeps Pi's output padding free on both sides itself.
+  const running = { isError: false, isPartial: true, outputPad: 1, args } as Parameters<NonNullable<typeof renderers.renderResult>>[3];
+  const call = (renderers.renderCall?.(args, plain as never, running as never).render(40) ?? []).map(line => stripTerminalSequences(line));
+  expect(call).toHaveLength(1);
+  expect(call[0]).toMatch(/^ [⠋⠙⠹⠸⠼⠴⠦⠧] corral ask clarification: a a/);
+  expect(visibleWidth(call[0] ?? "")).toBeLessThanOrEqual(39);
+  const done = { ...running, isPartial: false };
+  expect(renderers.renderCall?.(args, plain as never, done as never).render(40)).toEqual([]);
+  const result = (renderers.renderResult?.(receipt("committed", { key: "Q-9" }), { expanded: false, isPartial: false }, plain as never, done).render(40) ?? [])
+    .map(line => stripTerminalSequences(line));
+  expect(result).toHaveLength(1);
+  expect(result[0]).toMatch(/^ ✓ corral ask clarification: a a/);
+  expect(visibleWidth(result[0] ?? "")).toBeLessThanOrEqual(39);
+  const short = renderers.renderResult?.(receipt("committed", { key: "Q-9" }), { expanded: false, isPartial: false }, plain as never,
+    { ...done, args: { kind: "clarification", text: "Which slot?" } }).render(80);
+  expect(short).toEqual([" ✓ corral ask clarification: Which slot? · key=Q-9"]);
 });
 
 test("the header names the role, the run and the model; the title is short", () => {

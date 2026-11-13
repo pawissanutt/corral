@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Box, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { BuildPanelState, ChildSnapshot, ExitState, FleetSnapshot } from "../../build/types.ts";
 import { agentColor } from "../agent-hues.ts";
 import { boardEntry, buildEntryRenderer, exitEntry, finishEntry } from "./build-entries.ts";
@@ -16,22 +16,23 @@ function child(id: string, state: ChildSnapshot["state"]): ChildSnapshot {
 }
 
 function fakeSource(fleet: () => FleetSnapshot) {
-  const watched: string[] = [];
+  const watched: string[] = [], opened: string[] = [];
   let released = 0;
   // The cards read only `fleet` and `exit` from the panel state.
   const state = () => ({ fleet: fleet(), exit: { phase: "none" } }) as unknown as BuildPanelState;
   const source: BuildCardSource = {
     state, summary: () => undefined, latestFinish: () => undefined, color: agentColor, now: () => NOW,
     watch(id) { watched.push(id); return () => { released += 1; }; },
-    question() {}, exit() {}, plan() {}, openChild() {},
+    question() {}, exit() {}, plan() {}, openChild(id) { opened.push(id); },
   };
-  return { source, watched, released: () => released };
+  return { source, watched, opened, released: () => released };
 }
-function context(args: unknown, state: object = {}) {
+function context(args: unknown, state: object = {}, outputPad = 0) {
   return { args, toolCallId: "call-1", invalidate() {}, lastComponent: undefined, state, cwd: "/", executionStarted: true,
-    argsComplete: true, isPartial: false, expanded: false, showImages: false, isError: false, durationMs: undefined, outputPad: 0,
+    argsComplete: true, isPartial: false, expanded: false, showImages: false, isError: false, durationMs: undefined, outputPad,
     keyText: () => "", keyHint: () => "" } as never;
 }
+const click = (y: number) => ({ type: "click", button: "left", x: 4, y, shift: false, alt: false, ctrl: false }) as never;
 
 test("renderers exist for exactly the three build tools", () => {
   const source = () => undefined;
@@ -52,10 +53,15 @@ test("the task card watches once per tool call and releases once every row settl
   expect(fake.watched).toEqual(["call-1"]);
 
   const card = renderers.renderCall!(args, undefined as never, ctx);
-  expect(stripTerminalSequences(card.render(100).join("\n"))).toContain("picker-ui");
+  const running = stripTerminalSequences(card.render(100).join("\n"));
+  expect(running).toContain("picker-ui");
+  expect(running).not.toContain("finished");
 
   children = children.map(item => ({ ...item, state: "done" as const, endedAt: NOW - 1000 }));
-  renderers.renderCall!(args, undefined as never, ctx);
+  const back = renderers.renderCall!(args, undefined as never, ctx).render(100).map(line => stripTerminalSequences(line));
+  // Under the card's bottom border, one line per slice that came back.
+  const border = back.findIndex(line => line.includes("╰"));
+  expect(back.slice(border + 1).map(line => line.trim().split(" · ")[0])).toEqual(["✓ host-slots finished", "✓ picker-ui finished"]);
   expect(fake.released()).toBe(0);
 
   const result = { content: [{ type: "text" as const, text: "## host-slots: done" }], details: { children } };
@@ -91,23 +97,28 @@ test("an exit entry tells the parent which exit the owner chose and how it ended
   expect(shipped.display).toBeTrue();
 });
 
-test("conversation entries start in the same column as the task card and stay within the row", () => {
+test("the task card frames itself, starts in the entries' column and keeps its click rows", () => {
   const children = [child("alpha", "done"), child("beta", "done")];
   const fake = fakeSource(() => ({ children, maxParallel: 3, startedAt: NOW - 60_000 }));
   const args = { agents: children.map(item => ({ id: item.id, title: item.title, brief: "b", owns: [] })) };
-  const firstColumn = (lines: readonly string[]) => stripTerminalSequences(lines[0] ?? "").search(/\S/);
+  // The column where each drawing starts: the cells of inset before its first styled cell.
+  const firstColumn = (lines: readonly string[]) => (lines[0] ?? "").search(/[^ ]/);
   const kept: ExitState = { phase: "kept", record: { choice: "keep", at: "t" }, detail: "The worktree and branch are kept." };
   const entries = [
     finishEntry("finish-1"),
     exitEntry({ choice: "keep", label: "Keep on the branch", detail: "d" }, kept),
     boardEntry([{ id: "T-971", title: "Slot manifest", status: "Backlog", phase: "backlog", depends: [], updatedAt: NOW }], false),
   ];
+  const renderers = buildToolRenderers("task", () => fake.source)!;
+  expect(renderers.renderShell).toBe("self");
+  expect(buildToolRenderers("build_finish", () => fake.source)?.renderShell).toBe("self");
+  expect(buildToolRenderers("board_plan", () => fake.source)?.renderShell).toBe("self");
   const renderer = buildEntryRenderer(() => fake.source);
   for (const width of [40, 80, 140]) {
-    // Pi draws a tool card inside its tool box, which insets it by the output padding on both sides.
-    const box = new Box(1, 0);
-    box.addChild(buildToolRenderers("task", () => fake.source)!.renderCall!(args, undefined as never, context(args)));
-    const card = box.render(width);
+    // Pi hands a self-framed tool the full row; the card keeps the output padding free itself, as the entries do.
+    const component = renderers.renderCall!(args, undefined as never, context(args, {}, 1));
+    const card = component.render(width);
+    expect(firstColumn(card)).toBe(1);
     for (const entry of entries) {
       const message = { role: "custom" as const, ...entry, timestamp: NOW };
       const lines = renderer(message, { expanded: false, outputPad: 1 } as never, undefined as never)!.render(width);
@@ -115,5 +126,14 @@ test("conversation entries start in the same column as the task card and stay wi
       expect(firstColumn(lines)).toBe(firstColumn(card));
       for (const line of [...lines, ...card]) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
     }
+    // A click on a slice row and on a finished line opens that slice; the borders are not targets.
+    const text = card.map(line => stripTerminalSequences(line));
+    const row = text.findIndex(line => line.includes("alpha") && line.includes("│"));
+    const back = text.findIndex(line => line.includes("beta finished"));
+    fake.opened.length = 0;
+    expect(component.handleMouse?.(click(row))).toEqual({ handled: true });
+    expect(component.handleMouse?.(click(back))).toEqual({ handled: true });
+    expect(component.handleMouse?.(click(0))).toBeUndefined();
+    expect(fake.opened).toEqual(["alpha", "beta"]);
   }
 });

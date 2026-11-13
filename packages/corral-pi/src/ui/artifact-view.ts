@@ -5,6 +5,13 @@ import { z } from "zod";
 import { Text, getCapabilities, getImageDimensions, matchesKey, type Component, type ImageSource, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
 import { plainLabel } from "./panels-view.ts";
+import { VIEW_INSET } from "./frame.ts";
+
+/**
+ * Main-view columns from which a comparison puts A and B on one row; below, one row each. The workbench draws this
+ * view VIEW_INSET cells narrower than the main view, so the comparison adds them back.
+ */
+export const COMPARE_ROW_MIN = 100;
 
 const Label = z.string().max(4096);
 const Schema = z.object({
@@ -231,7 +238,7 @@ export class ArtifactView implements Component {
         add(a.sha256 === b.sha256 ? "Registered bytes identical (same SHA256)" : "Registered bytes differ (different SHA256)");
         for (const [label, pick] of [["Title", (e: Entry) => e.title], ["Kind", (e: Entry) => e.kind], ["Run", (e: Entry) => e.run || "none"], ["Added", (e: Entry) => e.added],
           ["Bytes", (e: Entry) => String(e.bytes)], ["SHA256", (e: Entry) => e.sha256], ["Evidence", (e: Entry) => e.run !== data.run ? "unknown (not read)" : e.evidence.map(l => `${l.criterion}@${l.head.slice(0, 12)}`).join(", ") || "none"]] as const) {
-          if (width >= 100) add(`${label}: A ${pick(a)} │ B ${pick(b)}`);
+          if (width + VIEW_INSET >= COMPARE_ROW_MIN) add(`${label}: A ${pick(a)} │ B ${pick(b)}`);
           else { add(`${label} A: ${pick(a)}`); add(`${label} B: ${pick(b)}`); }
         }
       }

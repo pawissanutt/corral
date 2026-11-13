@@ -1,12 +1,14 @@
-// F8 agents view: one scrollable page of the agents table, background jobs, the selected row's detail and a
-// timeline. Selection is keyed ("helper:<request>", "job:<id>"), so rows inserted above never move it. Keys
-// live in the footer; the page itself only offers clickable action labels.
+// F8 agents view: one scrollable page with the agents table (the mock's `.fleet` grid at three densities),
+// background jobs when there are any, the selected row's detail with its actions as key caps, and the
+// timeline. Selection is keyed ("helper:<request>", "child:<id>", "job:<id>"), so rows inserted above never
+// move it. Every row keeps one blank cell each side; only the selected row has a surface of its own.
 import { ScrollView, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import {
-  duration, money, statusLabel, toneColor, type AgentRow, type AgentSpan, type AgentsModel, type JobRow, type Tone,
+  duration, money, sparkline, timeLabel, toneColor, type AgentRow, type AgentSpan, type AgentsModel, type JobRow, type Status, type Tone,
 } from "./agents-model.ts";
+import { keyCap, rule, spinner } from "./frame.ts";
 import { jobDetailLines, type JobFreeze } from "./job-detail.ts";
-import { PANEL_BG, PANEL_BLUE, PANEL_MUTED, PANEL_RULE, PANEL_SELECTED, PANEL_TEXT, PANEL_WARNING, RESET } from "./panels-view.ts";
+import { PANEL_BG, PANEL_BLUE, PANEL_HEAD, PANEL_MUTED, PANEL_RULE, PANEL_SELECTED, PANEL_TEXT, PANEL_WARNING, RESET } from "./panels-view.ts";
 
 export type AgentsAction = "open" | "answer" | "transcript" | "steer" | "cancel" | "model"
   | "output" | "search" | "follow" | "peek" | "background" | "stop";
@@ -24,19 +26,26 @@ export interface AgentsOptions {
   readonly freeze: JobFreeze | undefined; readonly color: (hue: number) => string;
 }
 
-/** Table density by main-area columns: every column at 112+, two-row entries from 60, the fewest below. */
+/**
+ * Table density by main-area columns, measured as the mock does (the area minus four cells of padding): every
+ * column from 112 content cells, two-row entries with profile and model from 60, below that name, time and cost only.
+ */
 export function agentDensity(width: number): "full" | "med" | "min" {
-  return width >= 112 ? "full" : width >= 60 ? "med" : "min";
+  const content = width - 4;
+  return content >= 112 ? "full" : content >= 60 ? "med" : "min";
 }
 
-const BOLD = "\x1b[1m", UNBOLD = "\x1b[22m";
-const NAME = 11, TIME = 11, COST = 6, CTX = 4, FILES = 5, PULSE_FULL = 14, PULSE_MED = 12, PROFILE = 27, GAP = "  ";
-/** Cells before the activity column at full density: bar, glyph and space, seven fixed columns, their gaps, a right inset. */
-const FULL_FIXED = 3 + NAME + PROFILE + TIME + COST + CTX + FILES + PULSE_FULL + GAP.length * 7 + 1;
-const BARS = " ▁▂▃▄▅▆▇";
-const AGENT_ACTIONS = ["open", "answer", "transcript", "steer", "cancel", "model"] as const;
-const AGENT_LABELS: Readonly<Record<(typeof AGENT_ACTIONS)[number], string>> = {
-  open: "open conversation", answer: "answer", transcript: "transcript", steer: "steer", cancel: "cancel", model: "model",
+const BOLD = "\x1b[1m", UNBOLD = "\x1b[22m", GAP = "  ";
+/** `.fleet` column widths in cells; columns are two cells apart. */
+const NAME = 11, PROFILE = 27, TIME = 9, COST = 6, CTX = 4, FILES = 5, PULSE_FULL = 14, PULSE_MED = 12, JOB_ID = 14, JOB_STATE = 20;
+/** Bar, gap, state glyph, gap: the name column starts this many cells into a row. */
+const LEAD = 6;
+/** One timeline column per fleet history bucket until the bars fill their room. */
+const TICK = 5000;
+const AGENT_ACTIONS = ["open", "answer", "steer", "cancel", "model", "transcript"] as const;
+const AGENT_KEYS: Readonly<Record<(typeof AGENT_ACTIONS)[number], readonly [string, string]>> = {
+  open: ["⏎", "open conversation"], answer: ["a", "answer"], steer: ["s", "steer"], cancel: ["x", "cancel"], model: ["m", "model"],
+  transcript: ["t", "transcript"],
 };
 const JOB_ACTIONS = ["output", "search", "follow", "peek", "background", "stop"] as const;
 
@@ -47,9 +56,16 @@ function cell(text: string, width: number, base: string, right = false): string 
   const kept = clipped.replaceAll(RESET, RESET + base);
   return right ? room + kept : kept + room;
 }
-function fill(text: string, width: number, surface = PANEL_BG): string {
-  const base = surface + PANEL_TEXT;
+/** `text` on the canvas, exactly `width` cells. */
+function fill(text: string, width: number): string {
+  const base = PANEL_BG + PANEL_TEXT;
   return base + cell(text, width, base) + RESET;
+}
+/** One page row: a blank cell each side and `text` fitted to the cells between, on `surface`. */
+function row(text: string, width: number, surface = PANEL_BG): string {
+  if (width <= 2) return PANEL_BG + " ".repeat(Math.max(0, width)) + RESET;
+  const base = surface + PANEL_TEXT;
+  return PANEL_BG + " " + base + cell(text, width - 2, base) + PANEL_BG + " " + RESET;
 }
 function entriesOf(model: AgentsModel): AgentsEntry[] {
   return [...model.agents.map(row => ({ kind: "agent" as const, row })), ...model.jobs.map(row => ({ kind: "job" as const, row }))];
@@ -59,88 +75,93 @@ function shownEntry(model: AgentsModel, selected: string | undefined): AgentsEnt
   return selected === undefined ? entries[0] : entries.find(entry => entry.row.key === selected);
 }
 function timeTone(tone: Tone): Tone { return tone === "accent" ? "text" : tone; }
-function pulse(row: AgentRow, cells: number, color: string): string {
-  if (!row.pulse?.length || (row.state !== "running" && row.state !== "needs")) return "";
-  const bars = row.pulse.slice(-cells).map(value => BARS[Math.max(0, Math.min(7, Math.round(value)))] ?? " ").join("");
-  return color + bars.padStart(cells, " ");
+/** The state cell: the spinner while running (staggered by `phase`), otherwise the state glyph in its tone. */
+function glyph(status: Status, running: boolean, now: number, phase: number): string {
+  return running ? PANEL_BLUE + spinner(now, phase) : toneColor(status.tone) + status.glyph;
 }
-function activityColor(row: AgentRow): string {
-  return row.status.tone === "error" || row.status.tone === "warning" ? toneColor(row.status.tone) : PANEL_MUTED;
+/** The activity sparkline, `cells` wide in the agent's hue, while it runs or asks. */
+function pulse(entry: AgentRow, cells: number, color: string): string {
+  if (!entry.pulse?.length || (entry.state !== "running" && entry.state !== "needs")) return "";
+  return color + sparkline(entry.pulse, cells);
 }
 
-function agentLines(row: AgentRow, selected: boolean, density: "full" | "med" | "min", width: number, color: (hue: number) => string): string[] {
-  const surface = selected ? PANEL_SELECTED : PANEL_BG, base = surface + PANEL_TEXT;
-  const lead = (selected ? PANEL_BLUE + "▌" : " ") + toneColor(row.status.tone) + row.status.glyph + " ";
-  const hue = color(row.hue), name = BOLD + hue + row.name + UNBOLD;
-  const time = cell(toneColor(timeTone(row.status.tone)) + statusLabel(row.status), TIME, base, true);
-  const cost = cell(PANEL_TEXT + money(row.usage?.cost), COST, base, true);
-  const profile = PANEL_MUTED + row.profile + " · " + row.model + (row.pendingModel ? " → " + row.pendingModel : "");
+/** The cells a table row spends on its grid: the page minus its two blank cells and the row's right inset. */
+function gridOf(width: number): number { return width - 3; }
+
+function agentLines(entry: AgentRow, phase: number, selected: boolean, density: "full" | "med" | "min", width: number,
+  color: (hue: number) => string, now: number): string[] {
+  const surface = selected ? PANEL_SELECTED : PANEL_BG, base = surface + PANEL_TEXT, grid = gridOf(width);
+  const hue = color(entry.hue), name = BOLD + hue + entry.name + UNBOLD;
+  const lead = (selected ? PANEL_BLUE + "▌" : " ") + GAP + glyph(entry.status, entry.state === "running", now, phase) + GAP;
+  const time = cell(toneColor(timeTone(entry.status.tone)) + timeLabel(entry.status), TIME, base, true);
+  const cost = cell(PANEL_TEXT + money(entry.usage?.cost), COST, base, true);
+  const profile = PANEL_MUTED + entry.profile + " · " + entry.model + (entry.pendingModel ? " → " + entry.pendingModel : "");
+  const activity = PANEL_MUTED + entry.activity;
   if (density === "full") {
-    const ctx = cell(PANEL_TEXT + (row.usage?.contextPercent === undefined ? "–" : `${Math.round(row.usage.contextPercent)}%`), CTX, base, true);
-    const files = cell((row.outside ? PANEL_WARNING + "!" : "") + PANEL_TEXT + (row.files === undefined ? "–" : String(row.files)), FILES, base, true);
-    const text = lead + cell(name, NAME, base) + GAP + cell(profile, PROFILE, base) + GAP + time + GAP + cost + GAP + ctx + GAP + files
-      + GAP + cell(pulse(row, PULSE_FULL, hue), PULSE_FULL, base) + GAP + cell(activityColor(row) + row.activity, width - FULL_FIXED, base);
-    return [fill(text, width, surface)];
+    const ctx = cell(PANEL_TEXT + (entry.usage?.contextPercent === undefined ? "–" : `${Math.round(entry.usage.contextPercent)}%`), CTX, base, true);
+    const files = cell((entry.outside ? PANEL_WARNING + "!" : "") + PANEL_TEXT + (entry.files === undefined ? "–" : String(entry.files)), FILES, base, true);
+    const rest = grid - (LEAD + NAME + PROFILE + TIME + COST + CTX + FILES + PULSE_FULL + GAP.length * 7);
+    return [row(lead + cell(name, NAME, base) + GAP + cell(profile, PROFILE, base) + GAP + time + GAP + cost + GAP + ctx + GAP + files
+      + GAP + cell(pulse(entry, PULSE_FULL, hue), PULSE_FULL, base) + GAP + cell(activity, rest, base), width, surface)];
   }
-  const flex = density === "med" ? width - (3 + NAME + TIME + COST + GAP.length * 3 + 1) : width - (3 + TIME + COST + GAP.length * 2 + 1);
   const first = density === "med"
-    ? lead + cell(name, NAME, base) + GAP + cell(profile, flex, base) + GAP + time + GAP + cost
-    : lead + cell(name, flex, base) + GAP + time + GAP + cost;
-  const beat = density === "med" ? pulse(row, PULSE_MED, hue) : "";
-  const room = width - 4 - (beat ? PULSE_MED + GAP.length : 0);
-  const second = "   " + cell(activityColor(row) + row.activity, room, base) + (beat ? GAP + cell(beat, PULSE_MED, base) : "");
-  return [fill(first, width, surface), fill(second, width, surface)];
+    ? lead + cell(name, NAME, base) + GAP + cell(profile, grid - (LEAD + NAME + TIME + COST + GAP.length * 3), base) + GAP + time + GAP + cost
+    : lead + cell(name, grid - (LEAD + TIME + COST + GAP.length * 2), base) + GAP + time + GAP + cost;
+  const beat = density === "med" ? pulse(entry, PULSE_MED, hue) : "";
+  const second = " ".repeat(LEAD) + cell(activity, grid - LEAD - (beat ? PULSE_MED + GAP.length : 0), base) + (beat ? GAP + beat : "");
+  return [row(first, width, surface), row(second, width, surface)];
 }
-function jobLine(row: JobRow, selected: boolean, density: "full" | "med" | "min", width: number): string {
-  const surface = selected ? PANEL_SELECTED : PANEL_BG, base = surface + PANEL_TEXT;
-  const lead = (selected ? PANEL_BLUE + "▌" : " ") + toneColor(row.status.tone) + row.status.glyph + " ";
-  const state = row.status.time ? `${row.status.word} ${row.status.time}` : row.status.word;
-  const stateWidth = Math.min(20, visibleWidth(state)), id = density === "min" ? "" : row.job;
-  const idWidth = id ? Math.min(14, visibleWidth(id)) : 0;
-  const flex = width - 3 - stateWidth - GAP.length - (idWidth ? idWidth + GAP.length : 0) - 1;
-  return fill(lead + cell(PANEL_TEXT + row.command, flex, base) + (idWidth ? GAP + cell(PANEL_MUTED + id, idWidth, base) : "")
-    + GAP + cell(toneColor(timeTone(row.status.tone)) + state, stateWidth, base, true), width, surface);
+function jobLine(entry: JobRow, phase: number, selected: boolean, density: "full" | "med" | "min", width: number, now: number): string {
+  const surface = selected ? PANEL_SELECTED : PANEL_BG, base = surface + PANEL_TEXT, grid = gridOf(width);
+  const lead = (selected ? PANEL_BLUE + "▌" : " ") + GAP + glyph(entry.status, entry.live, now, phase) + GAP;
+  const state = entry.status.time ? `${entry.status.word} ${entry.status.time}` : entry.status.word;
+  const stateWidth = Math.min(JOB_STATE, visibleWidth(state)), idWidth = density === "min" ? 0 : Math.min(JOB_ID, visibleWidth(entry.job));
+  const command = grid - LEAD - stateWidth - GAP.length - (idWidth ? idWidth + GAP.length : 0);
+  return row(lead + cell(PANEL_TEXT + entry.command, command, base) + (idWidth ? GAP + cell(PANEL_MUTED + entry.job, idWidth, base) : "")
+    + GAP + cell(toneColor(timeTone(entry.status.tone)) + state, stateWidth, base, true), width, surface);
 }
 function headerLine(width: number): string {
-  const base = PANEL_BG + PANEL_MUTED;
-  return fill(PANEL_MUTED + "   " + cell("agent", NAME, base) + GAP + cell("profile · model", PROFILE, base) + GAP + cell("time", TIME, base, true)
+  const base = PANEL_BG + PANEL_MUTED, rest = gridOf(width) - (LEAD + NAME + PROFILE + TIME + COST + CTX + FILES + PULSE_FULL + GAP.length * 7);
+  return row(PANEL_MUTED + " ".repeat(LEAD) + cell("agent", NAME, base) + GAP + cell("profile · model", PROFILE, base) + GAP + cell("time", TIME, base, true)
     + GAP + cell("cost", COST, base, true) + GAP + cell("ctx", CTX, base, true) + GAP + cell("files", FILES, base, true)
-    + GAP + cell("activity", PULSE_FULL, base) + GAP + cell("now", width - FULL_FIXED, base), width);
+    + GAP + cell("activity", PULSE_FULL, base) + GAP + cell("now", rest, base), width);
 }
 
-interface Action { readonly action: AgentsAction; readonly label: string; readonly enabled: boolean; readonly reason?: string }
-/** Clickable action labels, wrapped to `width`; returns the rows and the hit ranges of each row. */
+interface Action { readonly action: AgentsAction; readonly key: string; readonly label: string; readonly enabled: boolean }
+/**
+ * The actions as key caps, `[s] steer`, two cells apart and wrapped to `width`; an unavailable one is its muted label
+ * without a cap. Returns the rows and, per row, the hit range of each available action (cap and label).
+ */
 function actionRows(key: string, actions: readonly Action[], width: number): { readonly lines: string[]; readonly hits: AgentsHit[][] } {
-  const lines: string[] = [], hits: AgentsHit[][] = [];
-  let text = " ", used = 1, row: AgentsHit[] = [];
-  const reasons = [...new Set(actions.flatMap(action => action.enabled || !action.reason ? [] : [action.reason]))];
-  const items = [...actions.map(action => ({ text: action.label, color: action.enabled ? PANEL_BLUE : PANEL_MUTED, action })),
-    ...(reasons.length ? [{ text: "· " + reasons.join(", "), color: PANEL_MUTED, action: undefined }] : [])];
-  for (const item of items) {
-    const size = visibleWidth(item.text), gap = used > 1 ? 3 : 0;
-    if (used > 1 && used + gap + size > width) { lines.push(fill(text, width)); hits.push(row); text = " "; used = 1; row = []; }
-    const from = used + (used > 1 ? 3 : 0);
-    text += (used > 1 ? "   " : "") + item.color + item.text;
-    if (item.action?.enabled) row.push({ key, action: item.action.action, from, to: from + size });
-    used = from + size;
+  const room = width - 2, lines: string[] = [], hits: AgentsHit[][] = [];
+  let text = "", used = 0, rowHits: AgentsHit[] = [];
+  for (const item of actions) {
+    const piece = item.enabled ? keyCap(item.key) + " " + PANEL_TEXT + item.label : PANEL_MUTED + item.label;
+    const size = visibleWidth(piece);
+    if (used > 0 && used + GAP.length + size > room) { lines.push(row(text, width)); hits.push(rowHits); text = ""; used = 0; rowHits = []; }
+    const at = used > 0 ? used + GAP.length : 0;
+    text += (used > 0 ? GAP : "") + piece;
+    if (item.enabled) rowHits.push({ key, action: item.action, from: 1 + at, to: 1 + at + size });
+    used = at + size;
   }
-  lines.push(fill(text, width)); hits.push(row);
+  if (text) { lines.push(row(text, width)); hits.push(rowHits); }
   return { lines, hits };
 }
-function agentActions(row: AgentRow): Action[] {
+function agentActions(entry: AgentRow): Action[] {
   return AGENT_ACTIONS.flatMap((action): Action[] => {
-    if (row.capabilities[action] !== true) return [];
-    const reason = row.disabled?.[action];
-    return [reason === undefined ? { action, label: AGENT_LABELS[action], enabled: true } : { action, label: AGENT_LABELS[action], enabled: false, reason }];
+    if (entry.capabilities[action] !== true) return [];
+    const [key, label] = AGENT_KEYS[action];
+    return [{ action, key, label, enabled: entry.disabled?.[action] === undefined }];
   });
 }
-function jobActions(row: JobRow, freeze: JobFreeze | undefined): Action[] {
-  const frozen = freeze?.job === row.job;
-  const labels: Readonly<Record<(typeof JOB_ACTIONS)[number], string>> = {
-    output: "output", search: "search output", follow: frozen ? "resume follow" : "pause follow", peek: "peek", background: "background", stop: "stop",
+function jobActions(entry: JobRow, freeze: JobFreeze | undefined): Action[] {
+  const frozen = freeze?.job === entry.job;
+  const keys: Readonly<Record<(typeof JOB_ACTIONS)[number], readonly [string, string]>> = {
+    output: ["⏎", "output"], search: ["/", "search output"], follow: ["f", frozen ? "resume follow" : "pause follow"], peek: ["p", "peek"],
+    background: ["b", "background"], stop: ["x", "stop"],
   };
-  return JOB_ACTIONS.filter(action => row.capabilities[action] || action === "follow" && frozen)
-    .map(action => ({ action, label: labels[action], enabled: true }));
+  return JOB_ACTIONS.filter(action => entry.capabilities[action] || action === "follow" && frozen)
+    .map(action => ({ action, key: keys[action][0], label: keys[action][1], enabled: true }));
 }
 /** The actions the shown entry offers right now; disabled and absent capabilities are excluded. */
 function offered(entry: AgentsEntry | undefined, freeze: JobFreeze | undefined): AgentsAction[] {
@@ -148,62 +169,61 @@ function offered(entry: AgentsEntry | undefined, freeze: JobFreeze | undefined):
   return (entry.kind === "agent" ? agentActions(entry.row) : jobActions(entry.row, freeze)).filter(action => action.enabled).map(action => action.action);
 }
 function wrapped(text: string, color: string, width: number, cap: number): string[] {
-  const rows = wrapTextWithAnsi(text, Math.max(1, width - 1));
-  const shown = rows.slice(0, cap);
-  if (rows.length > cap && shown.length) shown[shown.length - 1] = truncateToWidth(shown[shown.length - 1] ?? "", Math.max(1, width - 2), "") + "…";
-  return shown.map(line => fill(" " + color + line, width));
+  const room = Math.max(1, width - 2), rows = wrapTextWithAnsi(text, room), shown = rows.slice(0, cap);
+  if (rows.length > cap && shown.length) shown[shown.length - 1] = truncateToWidth(shown[shown.length - 1] ?? "", Math.max(1, room - 1), "") + "…";
+  return shown.map(line => row(color + line, width));
 }
 /**
- * A build child's detail under its title: what it owns, what it starts after and waits for, the owner's steers,
- * its open question, its notes (pending model, edits outside its files, error), then its meta. Short terminals
- * keep only the question, the one thing the owner must act on; meta drops below 52 columns.
+ * The selected agent's detail under its title: what a build child owns and starts after, the owner's steers, its
+ * open question and its notes (pending model, edits outside its files, errors). A queued child's wait already
+ * reads in its `now` cell. Short terminals keep only the question, the one thing the owner must act on.
  */
-function childDetail(row: AgentRow, width: number, short: boolean): string[] {
-  const asks = row.question === undefined ? [] : wrapped("▲ Asks: " + row.question, PANEL_WARNING, width, short ? 2 : 4);
+function agentDetail(entry: AgentRow, width: number, short: boolean): string[] {
+  const asks = entry.question === undefined ? [] : wrapped("▲ Asks: " + entry.question, PANEL_WARNING, width, short ? 2 : 4);
   if (short) return asks;
-  const lines = wrapped("Owns: " + (row.owns?.length ? row.owns.join(", ") : "nothing (read-only)"), PANEL_MUTED, width, 3);
-  if (row.after?.length) lines.push(...wrapped("Starts after: " + row.after.join(", "), PANEL_MUTED, width, 2));
-  // The live wait of a queued child arrives as its muted notes.
-  for (const note of row.notes) if (note.tone === "muted") lines.push(...wrapped(note.text, PANEL_MUTED, width, 2));
-  if (row.steers?.length) lines.push(...wrapped("Steered: " + row.steers.join(" · "), PANEL_BLUE, width, 3));
+  const lines: string[] = [];
+  if (entry.source === "child") {
+    const after = entry.after?.length ? " · starts after " + entry.after.join(", ") : "";
+    lines.push(...wrapped("Owns: " + (entry.owns?.length ? entry.owns.join(", ") : "nothing (read-only)") + after, PANEL_MUTED, width, 3));
+  }
+  if (entry.steers?.length) lines.push(...wrapped("Steered: " + entry.steers.join(" · "), PANEL_BLUE, width, 3));
   lines.push(...asks);
-  for (const note of row.notes) if (note.tone !== "muted") lines.push(...wrapped(note.text, toneColor(note.tone), width, 4));
-  if (width >= 52 && row.meta.length) lines.push(...wrapped(row.meta.join(" · "), PANEL_MUTED, width, 3));
+  for (const note of entry.notes) if (note.tone !== "muted") lines.push(...wrapped(note.text, toneColor(note.tone), width, 4));
   return lines;
 }
 
 /**
  * Timeline bars, one row per agent: `┄` waiting, `━` running in the agent's hue, `━` in warning tone while
- * asking, then `✓`, `✗` or `!` where it ended. The last row is the axis from `0s` to the elapsed time.
+ * asking, then `✓`, `✗` or `!` where it ended. One column per 5 s of the session until the bars fill their room
+ * (at most 96 cells), and the last row is the axis from `0s` to the elapsed time under the bars only.
  * `names` false draws a bare `●` per row for narrow panes.
  */
 export function timelineLines(rows: readonly AgentRow[], width: number, now: number, origin: number,
   names: boolean, color: (hue: number) => string): string[] {
-  const cols = names ? Math.max(10, Math.min(96, width - 14)) : Math.max(1, width - 3);
-  const end = Math.max(now, ...rows.flatMap(row => [row.end?.at ?? origin, ...row.spans.map(span => span.to ?? origin)]));
-  const total = Math.max(1000, end - origin), step = total / cols;
+  const end = Math.max(now, ...rows.flatMap(entry => [entry.end?.at ?? origin, ...entry.spans.map(span => span.to ?? origin)]));
+  const elapsed = Math.max(0, end - origin), room = Math.max(10, Math.min(96, width - (names ? 14 : 4)));
+  const cols = Math.max(1, Math.min(room, Math.ceil(elapsed / TICK))), step = Math.max(1, elapsed) / cols;
   const column = (time: number) => Math.max(0, Math.min(cols - 1, Math.floor((time - origin) / step)));
-  const lead = (row: AgentRow) => " " + (names ? cell(color(row.hue) + row.name, NAME, PANEL_TEXT) : color(row.hue) + "●") + " ";
-  const result = rows.map(row => {
+  const lead = (entry: AgentRow) => " " + (names ? cell(color(entry.hue) + entry.name, NAME, PANEL_BG + PANEL_TEXT) : color(entry.hue) + "●") + " ";
+  const result = rows.map(entry => {
     const kinds: (AgentSpan["kind"] | "end" | undefined)[] = Array.from({ length: cols }, () => undefined);
     for (const kind of ["wait", "run", "ask"] as const) {
-      for (const span of row.spans.filter(item => item.kind === kind)) {
+      for (const span of entry.spans.filter(item => item.kind === kind)) {
         const first = column(span.from), last = span.to === undefined ? column(now) : Math.max(first, Math.ceil((span.to - origin) / step) - 1);
         for (let index = first; index <= Math.min(cols - 1, last); index++) kinds[index] = kind;
       }
     }
-    let mark = -1;
-    if (row.end) { mark = column(row.end.at); kinds[mark] = "end"; kinds.fill(undefined, mark + 1); }
-    const glyph = row.end?.outcome === "done" ? "✓" : row.end?.outcome === "uncertain" ? "!" : "✗";
-    const tone: Tone = row.end?.outcome === "done" ? "success" : row.end?.outcome === "uncertain" ? "warning" : "error";
+    if (entry.end) { const mark = column(entry.end.at); kinds[mark] = "end"; kinds.fill(undefined, mark + 1); }
+    const sign = entry.end?.outcome === "done" ? "✓" : entry.end?.outcome === "uncertain" ? "!" : "✗";
+    const tone: Tone = entry.end?.outcome === "done" ? "success" : entry.end?.outcome === "uncertain" ? "warning" : "error";
     let bar = "";
     kinds.forEach(kind => {
-      bar += kind === "run" ? color(row.hue) + "━" : kind === "ask" ? PANEL_WARNING + "━" : kind === "wait" ? PANEL_RULE + "┄"
-        : kind === "end" ? toneColor(tone) + glyph : " ";
+      bar += kind === "run" ? color(entry.hue) + "━" : kind === "ask" ? PANEL_WARNING + "━" : kind === "wait" ? PANEL_RULE + "┄"
+        : kind === "end" ? toneColor(tone) + sign : " ";
     });
-    return truncateToWidth(lead(row) + bar + PANEL_TEXT, width, "");
+    return truncateToWidth(lead(entry) + bar + PANEL_TEXT, width, "");
   });
-  const label = duration(end - origin), gutter = names ? NAME + 1 : 2;
+  const label = duration(elapsed), gutter = names ? NAME + 1 : 2;
   const axis = "0s".padEnd(Math.max(3, cols - label.length)) + (cols > label.length + 3 ? label : "");
   return [...result, truncateToWidth(" " + " ".repeat(gutter) + PANEL_MUTED + axis + PANEL_TEXT, width, "")];
 }
@@ -212,65 +232,61 @@ export function renderAgents(model: AgentsModel, selected: string | undefined, w
   { readonly lines: string[]; readonly hits: ReadonlyMap<number, AgentsHit[]>; readonly selectedRow: number } {
   const density = agentDensity(width), lines: string[] = [], hits = new Map<number, AgentsHit[]>();
   const push = (line: string, rowHits?: readonly AgentsHit[]) => { if (rowHits?.length) hits.set(lines.length, [...rowHits]); lines.push(line); };
-  const muted = (text: string) => push(fill(" " + PANEL_MUTED + text, width));
-  const rule = () => push(fill(PANEL_RULE + "─".repeat(width), width));
+  const divider = () => push(row(rule(width - 2), width));
+  const heading = (title: string, note: string) => push(row(BOLD + PANEL_HEAD + title + UNBOLD + PANEL_MUTED + note, width));
   const entry = shownEntry(model, selected);
   let selectedRow = -1;
 
-  muted(density === "min" ? "host observations" : "This host's helper calls and jobs · observations, not task settlement");
-  if (!model.bound) push(fill(" " + PANEL_WARNING + "! Host unbound · these observations may be stale", width));
+  if (!model.bound && (model.jobs.length > 0 || model.agents.some(agent => agent.source === "helper"))) {
+    push(row(PANEL_WARNING + "! Host unbound · these observations may be stale", width));
+  }
+  if (!model.agents.length && !model.jobs.length) {
+    lines.push(...wrapped(BOLD + PANEL_TEXT + "No agents yet." + UNBOLD + PANEL_MUTED + " Agents and background jobs appear here when the session starts them.", "", width, 3));
+  }
 
   if (model.agents.length && density === "full") push(headerLine(width));
-  for (const row of model.agents) {
-    const isSelected = entry?.row.key === row.key;
-    if (isSelected) selectedRow = lines.length;
-    for (const line of agentLines(row, isSelected, density, width, options.color)) push(line, [{ key: row.key }]);
-  }
-  if (!model.sources.helpers) muted("Helper calls unavailable from this host · unknown, not none");
-  else if (!model.agents.length) muted(model.jobs.length || !model.sources.jobs ? "No helper calls yet" : "No helper calls or background jobs yet · they appear here when the agent starts them");
-
-  if (!model.sources.jobs) muted("Background jobs unavailable from this host · unknown, not none");
-  else if (model.jobs.length) {
-    push(fill(" " + BOLD + PANEL_TEXT + "Jobs" + UNBOLD + PANEL_MUTED + ` · ${model.jobs.filter(job => job.live).length} running`, width));
-    for (const row of model.jobs) {
-      const isSelected = entry?.row.key === row.key;
-      if (isSelected) selectedRow = lines.length;
-      push(jobLine(row, isSelected, density, width), [{ key: row.key }]);
-    }
+  model.agents.forEach((agent, index) => {
+    const on = entry?.row.key === agent.key;
+    if (on) selectedRow = lines.length;
+    for (const line of agentLines(agent, index, on, density, width, options.color, options.now)) push(line, [{ key: agent.key }]);
+  });
+  if (model.jobs.length) {
+    heading("Jobs", ` · ${model.jobs.filter(job => job.live).length} running`);
+    model.jobs.forEach((job, index) => {
+      const on = entry?.row.key === job.key;
+      if (on) selectedRow = lines.length;
+      push(jobLine(job, model.agents.length + index, on, density, width, options.now), [{ key: job.key }]);
+    });
   }
 
   if (selected !== undefined && !entry) {
-    rule();
-    push(fill(" " + PANEL_WARNING + `The selected ${selected.startsWith("job:") ? "job" : "agent"} is no longer retained`, width));
+    divider();
+    push(row(PANEL_WARNING + `The selected ${selected.startsWith("job:") ? "job" : "agent"} is no longer retained`, width));
   } else if (entry?.kind === "agent") {
-    const row = entry.row;
-    rule();
-    push(fill(" " + BOLD + options.color(row.hue) + row.name + UNBOLD + PANEL_TEXT + "  " + row.title, width));
-    if (row.source === "child") lines.push(...childDetail(row, width, options.short));
-    else if (!options.short) {
-      if (row.meta.length) lines.push(...wrapped(row.meta.join(" · "), PANEL_MUTED, width, 3));
-      for (const note of row.notes) lines.push(...wrapped(note.text, toneColor(note.tone), width, 4));
-    }
-    const actions = actionRows(row.key, agentActions(row), width);
+    const shown = entry.row;
+    divider();
+    push(row(BOLD + options.color(shown.hue) + shown.name + UNBOLD + " " + PANEL_TEXT + shown.title, width));
+    lines.push(...agentDetail(shown, width, options.short));
+    const actions = actionRows(shown.key, agentActions(shown), width);
     actions.lines.forEach((line, index) => push(line, actions.hits[index]));
   } else if (entry?.kind === "job") {
-    const row = entry.row;
-    rule();
+    const shown = entry.row;
+    divider();
     const height = options.short ? 10 : 22;
-    for (const line of jobDetailLines(row.source, { bound: model.bound, now: options.now, legend: options.legend, freeze: options.freeze }, Math.max(4, width - 1), height)) {
-      push(fill(" " + line, width));
+    for (const line of jobDetailLines(shown.source, { bound: model.bound, now: options.now, legend: options.legend, freeze: options.freeze }, Math.max(4, width - 2), height)) {
+      push(row(line, width));
     }
-    const actions = actionRows(row.key, jobActions(row, options.freeze), width);
-    if (actions.hits.some(rowHits => rowHits.length)) actions.lines.forEach((line, index) => push(line, actions.hits[index]));
+    const actions = actionRows(shown.key, jobActions(shown, options.freeze), width);
+    actions.lines.forEach((line, index) => push(line, actions.hits[index]));
   }
 
   if (model.agents.length) {
-    rule();
-    push(fill(" " + BOLD + PANEL_TEXT + "Timeline" + UNBOLD + (model.maxParallel === undefined ? "" : PANEL_MUTED + ` · up to ${model.maxParallel} at once`), width));
+    divider();
+    heading("Timeline", model.maxParallel === undefined ? "" : ` · up to ${model.maxParallel} at once`);
     const bars = timelineLines(model.agents, width, options.now, model.origin, density !== "min", options.color);
     bars.forEach((line, index) => {
-      const row = model.agents[index];
-      push(fill(line, width), row ? [row.capabilities.open ? { key: row.key, action: "open" } : { key: row.key }] : undefined);
+      const agent = model.agents[index];
+      push(fill(line, width), agent ? [agent.capabilities.open ? { key: agent.key, action: "open" } : { key: agent.key }] : undefined);
     });
   }
   return { lines, hits, selectedRow };

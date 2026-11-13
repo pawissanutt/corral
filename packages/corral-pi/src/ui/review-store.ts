@@ -2,7 +2,7 @@ import { resolve, basename } from "node:path";
 import { realpath } from "node:fs/promises";
 import type { Inspection } from "./inspection.ts";
 import { parseChangedPaths, readCandidateDiff } from "./candidate-git.ts";
-import { gitFailure, panelGit, repositoryRoot, parseStatus, parseNumstat, comparisonArgs, relevantFile, readPanelDiff, FILE_LIMIT, type Comparison } from "./panels-git.ts";
+import { gitFailure, panelGit, repositoryRoot, parseStatus, parseNumstat, untrackedStats, comparisonArgs, relevantFile, readPanelDiff, FILE_LIMIT, type Comparison } from "./panels-git.ts";
 import type { PanelFile } from "./panels-view.ts";
 export const COMPARISONS: readonly Comparison[] = ["candidate", "session", "all", "unstaged", "staged"];
 /** The HEAD each repository root had when this session first read it; persisted so resume keeps it. */
@@ -126,9 +126,12 @@ export class ReviewStore {
         files = sessionFiles(parseChangedPaths(paths), worktree);
         statText = stats;
       } else statText = await panelGit(root, ["diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z", ...comparisonArgs(comparison === "session" ? "all" : comparison)], this.abort.signal).catch(() => "");
+      // Numstat leaves untracked files out; their added lines are counted from the files themselves, numstat winning.
+      const untracked = await untrackedStats(root, files, this.abort.signal);
       if (this.disposed || epoch !== this.epoch) return;
       this.sessionBase = sessionBase; this.baseRewritten = rewritten;
-      this.root = root; this.head = current; this.branch = branch.trim(); this.files = files; this.worktree = worktree; this.stats = parseNumstat(statText);
+      this.root = root; this.head = current; this.branch = branch.trim(); this.files = files; this.worktree = worktree;
+      this.stats = new Map([...untracked, ...parseNumstat(statText)]);
       this.error = undefined; this.checkedAt = Date.now(); this.revision++;
       if (this.selected === undefined) this.selected = this.visible[0]?.path;
       await this.loadSelected();

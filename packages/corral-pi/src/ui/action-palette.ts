@@ -1,7 +1,6 @@
-import { Input, matchesKey, truncateToWidth, visibleWidth, type Component, type Focusable, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import { keyCap } from "./header.ts";
-import { pad, plainLabel, PANEL_BG, PANEL_SELECTED, RESET } from "./panels-view.ts";
+import { Input, matchesKey, visibleWidth, type Component, type Focusable, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { keyCap, popup } from "./frame.ts";
+import { pad, plainLabel, PANEL_BLUE, PANEL_MUTED, PANEL_TEXT, PANEL_WARNING } from "./panels-view.ts";
 
 export interface HostAction {
   readonly id: string;
@@ -12,11 +11,14 @@ export interface HostAction {
   readonly disabled: () => string | undefined;
   readonly run: () => void | Promise<void>;
 }
+/** Rows above the list: the top border, the filter row and its divider. */
+const HEAD_ROWS = 3;
 
 /**
- * Only explicit host handlers, never strings sent to an editor, shell, model or CLI. A filter row
- * (`› query`, with the session scope on the right), then one row per action: label, the reason it is
- * unavailable, and its key cap. Words match the label, id, scope, shortcut and the unavailable reason.
+ * Only explicit host handlers, never strings sent to an editor, shell, model or CLI. A popup on the raised
+ * surface: the filter row (`› query`, with the session scope on the right) over a divider, then one row per
+ * action: label, the reason it is unavailable, and its key cap. Words match the label, id, scope, shortcut
+ * and the unavailable reason.
  */
 export class ActionPalette implements Component, Focusable {
   private readonly input: Input;
@@ -24,11 +26,10 @@ export class ActionPalette implements Component, Focusable {
   private start = 0;
   get focused(): boolean { return this.input.focused; }
   set focused(value: boolean) { this.input.focused = value; }
-  constructor(private readonly actions: readonly HostAction[], private readonly theme: Pick<Theme, "fg" | "bold">,
-    private readonly done: (action: HostAction | undefined) => void, private readonly changed: () => void,
-    private readonly capacity = 8) {
-    this.input = new Input({ prompt: theme.fg("accent", "›") + " ", placeholder: "type to filter actions",
-      placeholderStyle: text => theme.fg("muted", text) });
+  constructor(private readonly actions: readonly HostAction[], private readonly done: (action: HostAction | undefined) => void,
+    private readonly changed: () => void, private readonly capacity = 8) {
+    this.input = new Input({ prompt: PANEL_BLUE + "›" + PANEL_TEXT + " ", placeholder: "type to filter actions",
+      placeholderStyle: text => PANEL_MUTED + text + PANEL_TEXT });
   }
   get matches(): readonly HostAction[] {
     const words = this.input.getValue().toLowerCase().split(/\s+/).filter(Boolean);
@@ -44,8 +45,8 @@ export class ActionPalette implements Component, Focusable {
     this.changed();
   }
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    if (event.type !== "click" || event.button !== "left" || event.shift || event.alt || event.ctrl || event.y < 1) return { handled: true };
-    const index = this.start + event.y - 1;
+    if (event.type !== "click" || event.button !== "left" || event.shift || event.alt || event.ctrl || event.y < HEAD_ROWS) return { handled: true };
+    const index = this.start + event.y - HEAD_ROWS;
     if (index === this.selected) this.choose(this.matches[index]);
     else if (index < this.matches.length) { this.selected = index; this.changed(); }
     return { handled: true };
@@ -54,7 +55,7 @@ export class ActionPalette implements Component, Focusable {
     if (action && !action.disabled()) this.done(action);
   }
   render(width: number): string[] {
-    const room = Math.max(0, width);
+    const inner = Math.max(0, width - 3);
     const actions = this.matches;
     const height = Math.max(1, this.capacity);
     this.selected = Math.min(this.selected, Math.max(0, actions.length - 1));
@@ -62,24 +63,18 @@ export class ActionPalette implements Component, Focusable {
     if (this.selected >= this.start + height) this.start = this.selected - height + 1;
     this.start = Math.max(0, Math.min(this.start, actions.length - height));
     const scope = plainLabel(this.actions[0]?.scope ?? "").replace(/\s*·\s*$/, "");
-    const scopeWidth = scope && room >= visibleWidth(scope) + 24 ? visibleWidth(scope) : 0;
-    const field = this.input.render(Math.max(1, room - (scopeWidth ? scopeWidth + 2 : 0)))[0] ?? "";
-    const lines = [truncateToWidth(field + (scopeWidth ? "  " + this.theme.fg("muted", scope) : ""), room, "…")];
-    for (const [offset, action] of actions.slice(this.start, this.start + height).entries()) {
-      const on = this.start + offset === this.selected;
+    const scopeWidth = scope && inner >= visibleWidth(scope) + 24 ? visibleWidth(scope) : 0;
+    const field = this.input.render(Math.max(1, inner - 1 - (scopeWidth ? scopeWidth + 1 : 0)))[0] ?? "";
+    const rows = actions.slice(this.start, this.start + height).map(action => {
       const reason = action.disabled();
-      const bg = on ? PANEL_SELECTED : PANEL_BG;
       const shortcut = plainLabel(action.shortcut);
-      const cap = shortcut ? keyCap(shortcut, { restore: bg }) : "";
       const capWidth = shortcut ? visibleWidth(shortcut) + 2 : 0;
-      const label = this.theme.fg(reason ? "muted" : "text", plainLabel(action.label))
-        + (reason ? " " + this.theme.fg("warning", `· unavailable: ${plainLabel(reason)}`) : "");
-      const bar = on ? this.theme.fg("accent", "▌") : " ";
-      const body = room >= capWidth + 12 ? pad(bar + " " + label, room - capWidth - 1) + " " + cap : pad(bar + " " + label, room);
-      lines.push(bg + pad(body, room).replaceAll(RESET, RESET + bg) + RESET);
-    }
-    if (!actions.length) lines.push(truncateToWidth("  " + this.theme.fg("muted", "no action matches"), room, "…"));
-    return lines;
+      const label = (reason ? PANEL_MUTED : PANEL_TEXT) + plainLabel(action.label)
+        + (reason ? " " + PANEL_WARNING + `· unavailable: ${plainLabel(reason)}` : "") + PANEL_TEXT;
+      return shortcut && inner >= capWidth + 12 ? pad(label, inner - capWidth - 1) + " " + keyCap(shortcut) : label;
+    });
+    if (!actions.length) rows.push(PANEL_MUTED + "no action matches");
+    return popup(field, scopeWidth ? PANEL_MUTED + scope : "", rows, width, actions.length ? this.selected - this.start : undefined);
   }
   invalidate(): void { this.input.invalidate(); }
 }

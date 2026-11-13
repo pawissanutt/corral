@@ -4,7 +4,7 @@
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { splitRow } from "./panels-chrome.ts";
 import {
-  pad, plainLabel, PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_RULE, PANEL_SELECTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_TINT,
+  pad, plainLabel, PANEL_BLUE, PANEL_ERROR, PANEL_LINE, PANEL_MUTED, PANEL_SELECTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_TINT,
   PANEL_WARNING,
 } from "./panels-view.ts";
 
@@ -31,9 +31,10 @@ export function chipRows(chips: readonly string[], width: number): string[] {
   if (row) rows.push(row);
   return rows;
 }
+/** A section heading in muted bold followed by a rule in the line colour to `width`. */
 export function sectionRule(label: string, width: number): string {
   const head = plainLabel(label).toUpperCase();
-  return `${PANEL_MUTED}${bold(head)} ${PANEL_RULE}${"─".repeat(Math.max(0, width - visibleWidth(head) - 1))}${PANEL_TEXT}`;
+  return `${PANEL_MUTED}${bold(head)} ${PANEL_LINE}${"─".repeat(Math.max(0, width - visibleWidth(head) - 1))}${PANEL_TEXT}`;
 }
 /** A muted label column beside wrapped text; an empty value reads as `—`. */
 export function field(label: string, value: string, width: number, labelWidth: number): string[] {

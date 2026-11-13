@@ -2,7 +2,8 @@
 import { decodeKittyPrintable, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Component, TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { QueueControl, QueuedItem } from "../host/queue-control.ts";
-import { plainLabel, PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_SELECTED, PANEL_TEXT, RESET } from "./panels-view.ts";
+import { keyCap } from "./frame.ts";
+import { plainLabel, PANEL_BG, PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_SELECTED, PANEL_TEXT, RESET } from "./panels-view.ts";
 
 export interface QueueDockHost {
   items(): readonly QueuedItem[];
@@ -11,13 +12,13 @@ export interface QueueDockHost {
   focusComposer(): void;
   notice(text: string, tone: "text" | "warning"): void;
   changed(): void;
-  /** Who runs queued input, as `the parent`; the header names it when set. */
+  /** Who runs queued input, as `the parent`; each row names it when set. */
   receiver?(): string | undefined;
 }
 
-/** Below this many columns the controls shrink to glyphs and the header to its count. */
+/** Below this many columns the controls shrink to their glyphs, the header to its count and the receiver joins the text. */
 const TIGHT_COLUMNS = 84;
-const POLICY_CELLS = 6;
+const RECEIVER_CELLS = 14;
 const OFF = "Queue control is off in this session";
 const GONE = "That input already left the queue";
 const STUCK = "That input cannot move there";
@@ -35,6 +36,23 @@ function fit(text: string, width: number): string {
   if (width <= 0) return "";
   const out = visibleWidth(text) > width ? truncateToWidth(text, width - 1, "").replaceAll(RESET, "") + "…" : text;
   return out + " ".repeat(Math.max(0, width - visibleWidth(out)));
+}
+
+/** Coloured plain segments clipped together to `width` cells with one ellipsis, then padded. */
+function fitSegments(segments: readonly (readonly [color: string, text: string])[], width: number): string {
+  if (width <= 0) return "";
+  const total = segments.reduce((sum, [, text]) => sum + visibleWidth(text), 0);
+  const clipped = total > width;
+  let room = clipped ? width - 1 : width, out = "", color = PANEL_TEXT;
+  for (const [tone, text] of segments) {
+    if (!text || room <= 0) continue;
+    const cut = visibleWidth(text) > room;
+    const shown = cut ? truncateToWidth(text, room, "").replaceAll(RESET, "") : text;
+    out += tone + shown; room -= visibleWidth(shown); color = tone;
+    // A wide glyph at the cut leaves a cell; the ellipsis follows the cut directly.
+    if (cut) break;
+  }
+  return out + (clipped ? color + "…" : "") + " ".repeat(Math.max(0, room));
 }
 
 /**
@@ -114,7 +132,7 @@ export class QueueDock implements Component {
     const notices = items.length - editable.length;
     if (notices) {
       this.hits.set(lines.length, [{ from: 0, to: width }]);
-      lines.push("  " + PANEL_MUTED + fit(`+ ${notices} queued notice${notices === 1 ? "" : "s"} · read-only`, width - 4) + "  " + RESET);
+      lines.push(PANEL_BG + " " + PANEL_MUTED + fit(`+ ${notices} queued notice${notices === 1 ? "" : "s"} · read-only`, Math.max(0, width - 2)) + " " + RESET);
     }
     // Rows are built to exactly `width`; only a terminal narrower than the margins clips them.
     return width < 12 ? lines.map(line => truncateToWidth(line, width, "")) : lines;
@@ -206,50 +224,64 @@ export class QueueDock implements Component {
     return result !== undefined && result !== false;
   }
 
+  /** `QUEUE · n waiting · each runs when its receiver is next idle` in muted, `+k more` at the right. */
   private header(items: readonly QueuedItem[], hidden: number, tight: boolean, width: number): string {
-    const inner = Math.max(0, width - 4);
+    const inner = Math.max(0, width - 2);
     const more = hidden > 0 && `+${hidden} more`.length + 2 < inner ? `+${hidden} more` : "";
     // Steer items reach the running turn at its next step, so the idle clause holds only for follow-ups.
     const followUps = items.every(item => item.policy === "follow_up");
-    const receiver = this.host.receiver?.();
-    const lead = tight ? `QUEUE · ${items.length}`
-      : receiver ? `QUEUE · ${items.length} for ${plainLabel(receiver)}${followUps ? " · each runs when it is next idle" : ""}`
-      : `QUEUE · ${items.length} waiting${followUps ? " · each runs when the agent is next idle" : ""}`;
-    return "  " + PANEL_MUTED + fit(lead, inner - (more ? more.length + 2 : 0)) + (more ? "  " + more : "") + "  " + RESET;
+    const idle = this.receiver() ? " · each runs when its receiver is next idle" : " · each runs when the agent is next idle";
+    const lead = `QUEUE · ${items.length} waiting${tight || !followUps ? "" : idle}`;
+    return PANEL_BG + " " + PANEL_MUTED + fit(lead, inner - (more ? more.length + 2 : 0)) + (more ? "  " + more : "") + " " + RESET;
   }
 
-  /** `▌ n  steer  text … edit  ↑  ↓  ×`; hit ranges are measured while the row is drawn. */
+  /** The session's name for whoever runs queued input (`parent`), without its article. */
+  private receiver(): string | undefined {
+    const name = this.host.receiver?.();
+    return name ? plainLabel(name).replace(/^the\s+/i, "") || undefined : undefined;
+  }
+
+  /**
+   * `▌n  → receiver  text   [e] edit  ↑  ↓  × remove`; below 84 columns `▌n →receiver text  [e] ↑ ↓ ×`.
+   * The receiver is in accent (queued input always goes to the parent); a steer item says so before its text.
+   * Hit ranges are measured while the row is drawn.
+   */
   private row(item: QueuedItem, at: number, items: readonly QueuedItem[], tight: boolean, width: number, line: number): string {
-    const selected = this.focused && item.key === this.selected;
-    const indexCells = tight ? 2 : 3, gap = tight ? 1 : 2;
+    const selected = this.focused && item.key === this.selected, back = selected ? PANEL_SELECTED : PANEL_BG;
+    const indexCells = Math.max(2, String(items.length).length + 1), gap = tight ? 1 : 2;
     const up = movable(items, item.key, -1), down = movable(items, item.key, 1);
-    const parts: readonly { readonly glyph: string; readonly op: QueueOp; readonly enabled: boolean; readonly color: string }[] = [
-      { glyph: tight ? "✎" : "edit", op: "edit", enabled: true, color: PANEL_BLUE },
-      { glyph: "↑", op: -1, enabled: up, color: up ? PANEL_TEXT : PANEL_MUTED },
-      { glyph: "↓", op: 1, enabled: down, color: down ? PANEL_TEXT : PANEL_MUTED },
-      { glyph: "×", op: "remove", enabled: true, color: PANEL_ERROR },
+    const parts: readonly { readonly text: string; readonly cells: number; readonly op: QueueOp; readonly enabled: boolean }[] = [
+      { text: keyCap("e", false, back) + (tight ? "" : PANEL_TEXT + " edit"), cells: tight ? 3 : 8, op: "edit", enabled: true },
+      { text: (up ? PANEL_TEXT : PANEL_MUTED) + "↑", cells: 1, op: -1, enabled: up },
+      { text: (down ? PANEL_TEXT : PANEL_MUTED) + "↓", cells: 1, op: 1, enabled: down },
+      { text: PANEL_ERROR + (tight ? "×" : "× remove"), cells: tight ? 1 : 8, op: "remove", enabled: true },
     ];
-    const controlCells = parts.reduce((sum, part) => sum + visibleWidth(part.glyph), 0) + gap * (parts.length - 1);
-    const lead = 2 + indexCells + POLICY_CELLS;
-    // Controls stay only while the text keeps a few readable cells.
-    const controls = this.controllable && width - lead - 2 - controlCells - gap >= 4;
-    const textCells = Math.max(0, width - lead - 2 - (controls ? controlCells + gap : 0));
+    const controlCells = parts.reduce((sum, part) => sum + part.cells, 0) + gap * (parts.length - 1);
+    const receiver = this.receiver();
+    const receiverCells = receiver && !tight ? RECEIVER_CELLS : 0;
+    const lead = 1 + indexCells + receiverCells;
+    // Controls, two cells after the text, stay only while the text keeps a few readable cells.
+    const controls = this.controllable && width - lead - 2 - controlCells >= 4;
+    const textCells = Math.max(0, width - lead - (controls ? controlCells + 2 : 0));
     const hits: QueueHit[] = [{ from: 0, to: lead + textCells, key: item.key, op: "select" }];
-    let out = (selected ? PANEL_SELECTED : "") + " " + PANEL_BLUE + (selected ? "▌" : " ")
-      + PANEL_MUTED + fit(String(at + 1), indexCells)
-      + (item.policy === "steer" ? PANEL_BLUE + fit("steer", POLICY_CELLS) : PANEL_MUTED + fit("next", POLICY_CELLS))
-      + PANEL_TEXT + fit(plainLabel(item.text), textCells);
-    if (controls && this.pending === item.key) out += PANEL_MUTED + " ".repeat(gap + controlCells - 1) + "…";
+    // Tight rows join the receiver to the text; the span is clipped as one with an ellipsis.
+    const span = fitSegments([
+      [PANEL_BLUE, receiver && tight ? `→${receiver} ` : ""],
+      [PANEL_BLUE, item.policy === "steer" ? "steer · " : ""],
+      [PANEL_TEXT, plainLabel(item.text)],
+    ], textCells);
+    let out = back + PANEL_BLUE + (selected ? "▌" : " ") + (selected ? PANEL_BLUE : PANEL_MUTED) + fit(String(at + 1), indexCells)
+      + (receiverCells ? PANEL_BLUE + fit(`→ ${receiver}`, receiverCells - 1) + " " : "") + span;
+    if (controls && this.pending === item.key) out += PANEL_MUTED + " ".repeat(1 + controlCells) + "…";
     else if (controls) {
-      let x = lead + textCells + gap;
-      out += " ".repeat(gap) + parts.map(part => {
-        const cells = visibleWidth(part.glyph);
-        if (part.enabled) hits.push({ from: x, to: x + cells, key: item.key, op: part.op });
-        x += cells + gap;
-        return part.color + part.glyph;
+      let x = lead + textCells + 2;
+      out += "  " + parts.map(part => {
+        if (part.enabled) hits.push({ from: x, to: x + part.cells, key: item.key, op: part.op });
+        x += part.cells + gap;
+        return part.text;
       }).join(" ".repeat(gap));
     }
     this.hits.set(line, hits);
-    return out + "  " + RESET;
+    return out + RESET;
   }
 }

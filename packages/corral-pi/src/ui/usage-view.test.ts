@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { Text, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { usageLines, budgetLines } from "./usage-view.ts";
+import { TABLE_MIN, usageLines, budgetLines } from "./usage-view.ts";
+import { VIEW_INSET } from "./frame.ts";
 import { InspectionStore, type Inspection } from "./inspection.ts";
 import { NativeWorkbench } from "./workbench.ts";
 import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
@@ -39,6 +40,14 @@ test("unavailable/legacy budgets are never unlimited or zero; zero configured li
     const output = budgetLines(value).join("\n"); expect(output).toContain("unavailable / legacy"); expect(output).not.toContain("not configured");
   }
   expect(budgetLines({ ...budget, limits: { max_tokens: 0, max_usd_nanos: 0 } }).join("\n")).toContain("Token limit: 0 · USD limit: $0.000000");
+});
+test("usage rows are a table from TABLE_MIN main-view columns, measured before the workbench's inset", async () => {
+  const store = new InspectionStore(identity, async () => source(), () => {}); await store.refresh();
+  // The workbench renders the view VIEW_INSET cells narrower than the main view.
+  expect(text(store, TABLE_MIN - VIEW_INSET)).toContain("Scope │ Input │ Output");
+  expect(text(store, TABLE_MIN - VIEW_INSET - 1)).not.toContain("Scope │ Input");
+  expect(text(store, TABLE_MIN - VIEW_INSET - 1)).toContain("Input 10 · output 2");
+  store.dispose();
 });
 test("missing and failed accounting reads retain explicit stale state, and render has no I/O", async () => {
   let reads = 0, fail = false;

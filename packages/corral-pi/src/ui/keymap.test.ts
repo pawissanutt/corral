@@ -3,6 +3,7 @@ import { KeybindingsManager } from "../../node_modules/@earendil-works/pi-coding
 import { getKeybindings, setKeybindings, sliceByColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { chromeTier } from "./header.ts";
 import { contextHints, footerBase, footerRow, keyGroups, type HintState, type KeyContext } from "./keymap.ts";
+import { PANEL_BLUE, PANEL_KEY } from "./panels-view.ts";
 
 const CONTEXTS: readonly KeyContext[] = ["composer", "agents", "agent", "changes", "task", "lifecycle", "proof", "artifacts",
   "inbox", "usage", "image", "sidebar", "queue", "dialog", "palette", "keys", "pager", "board", "choice"];
@@ -60,6 +61,29 @@ test("the edit-queued hint appears only with an editable item and queue control"
     expect(ids({ items: 0, editable: 0, control: true }, streaming)).not.toContain("dequeue");
   }
   expect(contextHints(state("composer", { streaming: false })).find(hint => hint.id === "dequeue")?.label).toBe("edit queued");
+});
+
+test("while a turn runs the composer footer reads steer, queue, target, edit queued, then stop, as key caps", () => {
+  const ids = contextHints(state("composer", { build: BUILD })).map(hint => hint.id);
+  expect(ids.slice(0, 5)).toEqual(["submit", "followUp", "target", "dequeue", "interrupt"]);
+  // The narrow tier keeps four: `edit queued` is one of them.
+  const narrow = footerRow(contextHints(state("composer", { build: BUILD })), "narrow", 92, true);
+  expect(narrow.hits.map(hit => hit.hint.id)).toContain("dequeue");
+  const row = footerRow(contextHints(state("composer")), "wide", 160, true);
+  expect(row.line).toContain(PANEL_KEY + PANEL_BLUE + " ⏎ ");
+  expect(stripTerminalSequences(row.line).startsWith(" ")).toBeTrue();
+});
+
+test("as many hints as fit show at any width; F1 reads keys when none was dropped and more when one was", () => {
+  const hints = contextHints(state("composer", { build: BUILD }));
+  const ids = (width: number) => footerRow(hints, chromeTier(width), width, true).hits.map(hit => hit.hint.id);
+  const label = (width: number) => footerRow(hints, chromeTier(width), width, true).hits.at(-1)!.hint.label;
+  expect(ids(185)).toEqual([...hints.map(hint => hint.id), "f2", "f1"]); expect(label(185)).toBe("keys");
+  // Narrow keeps every hint that fits, more than the old cap of four.
+  expect(ids(92).length - 1).toBeGreaterThan(4);
+  expect(label(46)).toBe("more"); expect(ids(46).length).toBeGreaterThan(1);
+  const one = [contextHints(state("composer", { streaming: false, queue: { items: 0, editable: 0, control: true } }))[0]!];
+  expect(footerRow(one, "narrow", 92, true).hits.map(hit => hit.hint.label)).toEqual(["send", "keys"]);
 });
 
 type Build = NonNullable<HintState["build"]>;

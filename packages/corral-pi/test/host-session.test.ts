@@ -91,10 +91,12 @@ function captureInspector(bound: boolean): void {
   // Header row 1 names the bound task and run; the tab row offers the task-bound views.
   expect(chrome[0]).toContain("T-001 · R1");
   for (const tab of ["Task", "Chat", "Agents", "Changes", "Proof", "Inbox"]) expect(chrome[2]).toContain(tab);
-  // A disconnected host marks the rail's observations as possibly stale; a bound one does not.
-  expect(rail.some(line => line.includes("unbound"))).toBe(!bound);
-  expect(inline).toHaveLength(1);
-  expect(visibleWidth(inline[0] ?? "")).toBe(80);
+  // The host's binding reaches the panels: a disconnected host's status bar reads `○ … unbound`, a bound one `● g<n>`.
+  expect(panels.workbench.sideSource().bound).toBe(bound);
+  // The collapsed row sits under its own rule, both the full width.
+  expect(inline).toHaveLength(2);
+  expect(stripTerminalSequences(inline[0] ?? "")).toBe("─".repeat(80));
+  expect(visibleWidth(inline[1] ?? "")).toBe(80);
   // The model label belongs to the real composer, not the header or the sidebar.
   expect([...chrome, ...rail].join("\n")).not.toContain("gpt-6.1-sol");
   const evidence = resolve(import.meta.dirname, "../../../.evidence");

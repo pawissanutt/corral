@@ -19,7 +19,7 @@ test("public SDK body seam switches main views while retaining the actual transc
     expect(supplied).toBe(viewport.transcript);
     const screen = () => stripTerminalSequences(renderLayoutFrame(viewport.root, 80, 24, () => {}).lines.join("\n"));
     expect(screen()).toContain("REAL_TRANSCRIPT"); expect(screen()).toContain("REAL_EDITOR_DRAFT");
-    wb.setView("agents"); expect(screen()).toContain("unavailable from this host"); expect(screen()).not.toContain("REAL_TRANSCRIPT"); expect(screen()).toContain("REAL_EDITOR_DRAFT");
+    wb.setView("agents"); expect(screen()).toContain("No agents yet."); expect(screen()).not.toContain("REAL_TRANSCRIPT"); expect(screen()).toContain("REAL_EDITOR_DRAFT");
     wb.setView("conversation"); expect(screen()).toContain("REAL_TRANSCRIPT");
   } finally { wb.dispose(); }
 });
