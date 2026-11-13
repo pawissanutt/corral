@@ -48,6 +48,9 @@ TOKEN = re.compile(r'\x1b\[([<=>?]?)([\d;:]*)[ -/]*([@-~])|\x1b[\]_P^].*?(?:\x07
 BOUND = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* g1\b')
 # The Agents view of a session with no helper calls, children or jobs: its empty state (the rail says `no agents or jobs yet`).
 NO_AGENTS = 'No agents yet.'
+# The job's completion notice, drawn as one row: `✗ job j1-1 exited 7 · <size> output`. Ctrl+O, pressed earlier in this
+# run, also shows the delivered notice text under it; the row is what the owner reads.
+JOB_NOTICE = re.compile(rb'\xe2\x9c\x97 (?:\x1b\[[\d;:]*m)*job j1-1 exited 7\b')
 
 
 class Screen:
@@ -354,10 +357,10 @@ try:
     with open(work / 'exit-gate', 'w') as job_gate: job_gate.write('done\n')
     until(lambda: text('exit 7', mark) and text('exited', mark), 'actual nonzero job exit')
     save_frame('real-job-exited', mark)
-    # The exit reaches the agent as a completion notice that starts its own turn. Wait until that notice
-    # is shown and every started turn has ended, then read the binding at that stable point.
-    until(lambda: text('j1-1:completion', mark) and len(kinds('turn_started')) > started
-          and len(kinds('turn_started')) == len(kinds('turn_ended')), 'completion notice turn ends and the host is idle')
+    # The exit reaches the agent as a completion notice that starts its own turn. Wait until its row is drawn
+    # and every started turn has ended, then read the binding at that stable point.
+    until(lambda: JOB_NOTICE.search(log, mark) is not None and len(kinds('turn_started')) > started
+          and len(kinds('turn_started')) == len(kinds('turn_ended')), 'completion notice row drawn and the host is idle')
     settled = len(kinds('turn_started'))
     binding('job-exited', False, {'current': settled, 'open': False})
     # The notice turn already shows Chat; F9 keeps it there.

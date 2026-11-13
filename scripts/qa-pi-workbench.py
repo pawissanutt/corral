@@ -36,6 +36,15 @@ BOUND = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m
 CHIP = re.compile(rb'(candidate|since session|working tree|unstaged|staged) \xe2\x96\xbe')
 # The Changes list's path-search row: a blank cell, `/` in muted, then the query in the text colour (styling between).
 QUERY = re.compile(rb' (?:\x1b\[[\d;:]*m)*/(?:\x1b\[[\d;:]*m)*notification(?:\x1b\[[\d;:]*m)* ')
+SGR = re.compile(rb'\x1b\[[\d;:]*m')
+# The composer box's top border, `╭─ Message` up to its `╮` on the same row; the working indicator sits near its right corner.
+TOP = re.compile(rb'\xe2\x95\xad\xe2\x94\x80 (?:\x1b\[[\d;:]*m)*Message(?:(?!\x1b\[\d+;\d+H)[^\r\n])*?\xe2\x95\xae')
+# The indicator while a turn runs (from 105 columns): spinner frame, `Working`, what the agent does, the phase's elapsed time.
+WORKING = re.compile(r'[⠋⠙⠹⠸⠼⠴⠦⠧●] Working · [^·]+ · \d+(?:s|m \d+s|h \d+m)\b')
+# The job's completion notice, drawn as one row: `✗ job j1-1 exited 7 · <size> output` (a nonzero exit is a failure).
+JOB_NOTICE = re.compile(rb'\xe2\x9c\x97 (?:\x1b\[[\d;:]*m)*job j1-1 exited 7\b')
+# The backgrounded command's own row once its job exits: `✗ bash printf 'BUILD_WAIT (+2 lines) · exit 7`, the reason after `·`.
+FAILED_ROW = re.compile(rb'\xe2\x9c\x97 (?:\x1b\[[\d;:]*m)*bash (?:\x1b\[[\d;:]*m)*printf \'BUILD_WAIT[^\x1b]*(?:\x1b\[[\d;:]*m)* \xc2\xb7 (?:\x1b\[[\d;:]*m)*exit 7\b')
 try:
     env = {key: value for key, value in os.environ.items() if not key.startswith(('HERDR_', 'CORRAL_', 'PI_'))}
     env.update(HOME=str(work / 'home'), XDG_CONFIG_HOME=str(work / 'config'), XDG_DATA_HOME=str(work / 'data'),
@@ -44,7 +53,7 @@ try:
     for command in [['init', '-q'], ['config', 'user.name', 'Native TUI fixture'], ['config', 'user.email', 'fixture@example.invalid']]:
         subprocess.run(['git', '-C', str(work), *command], check=True, env=env)
     (work / '.gitignore').write_text('*\n!.gitignore\n!notification.ts\n!new-file.ts\n')
-    os.mkfifo(work / 'monitor-gate'); os.mkfifo(work / 'exit-gate')
+    os.mkfifo(work / 'monitor-gate'); os.mkfifo(work / 'exit-gate'); os.mkfifo(work / 'indicator-gate')
     candidate = work / 'notification.ts'
     candidate.write_text('export const quietHours = false;\n')
     subprocess.run(['git', '-C', str(work), 'add', 'notification.ts'], check=True, env=env)
@@ -116,10 +125,40 @@ try:
             until(lambda: any(match.group(1).decode() != previous for match in CHIP.finditer(log, after)), 'next comparison after c')
             shown = next(match.group(1).decode() for match in CHIP.finditer(log, after) if match.group(1).decode() != previous)
         raise AssertionError('comparison never reached ' + name)
+    def composer_top(after):
+        """The plain text of the last composer top border drawn after `after`, or None."""
+        tops = TOP.findall(log, after)
+        return SGR.sub(b'', tops[-1]).decode('utf-8', 'replace') if tops else None
+    def turns_settled():
+        kinds = [c['payload'].get('kind') for c in calls()]
+        return kinds.count('turn_started') == kinds.count('turn_ended')
 
     until(lambda: BOUND.search(log) is not None, 'production workbench bound')
     send(b'Reply only NATIVE_PTY_OK.\r')
     until(lambda: any(call['payload'].get('kind') == 'turn_ended' for call in calls()), 'native response')
+    # The working indicator: while a turn runs, the composer's top border animates (spinner frame, elapsed time); the
+    # turn's end reads `✓ done · <time>` for the notice time, then the border is plain again. A reply held after its
+    # first chunk keeps the turn running for as long as the check needs.
+    held = work / 'indicator-held.log'
+    (work / 'indicator-steps.json').write_text(json.dumps([dict(chunks=['INDICATOR_HELD', ' INDICATOR_RELEASED'],
+                                                                hold=dict(gate=str(work / 'indicator-gate'), mark=str(held), label='indicator'))]))
+    send(b'/fixture-script ' + str(work / 'indicator-steps.json').encode() + b'\r')
+    mark=len(log); send(b'Hold the reply.\r')
+    until(lambda: held.exists() and text('INDICATOR_HELD', mark), 'reply held after its first chunk')
+    mark=len(log)
+    until(lambda: WORKING.search(composer_top(mark) or '') is not None, 'the composer border shows the working indicator')
+    first, since, mark = composer_top(mark), time.monotonic(), len(log)
+    until(lambda: time.monotonic() - since >= 0.3 and composer_top(mark) is not None, 'the composer border is redrawn 300 ms later')
+    second = composer_top(mark)
+    assert WORKING.search(second) and second != first, ('the working indicator did not move in 300 ms', first, second)
+    save_frame('indicator-working')
+    mark=len(log)
+    with open(work / 'indicator-gate', 'w') as gate: gate.write('go\n')
+    until(lambda: text('INDICATOR_RELEASED', mark) and turns_settled(), 'released reply ends its turn')
+    until(lambda: re.search(r'✓ done · \d', composer_top(mark) or '') is not None, 'turn end: the border reads ✓ done with the time')
+    mark=len(log)
+    until(lambda: re.fullmatch(r'╭─ Message ─+╮', composer_top(mark) or '') is not None, 'idle: the border has no indicator')
+    save_frame('indicator-idle')
     send(b'Keep native draft')
     until(lambda: text('Keep native draft'), 'composer draft')
     save_frame('conversation')
@@ -176,13 +215,18 @@ try:
     mark=len(log); send(b'\x1b')
     # The pager's footer has no F1; the footer of the view beneath it ends with the F1 key cap again.
     until(lambda: re.search(rb'F1(?![0-9])', log[mark:]) is not None, 'Esc closes the output pager')
-    mark=len(log)
+    mark=len(log); started=[c['payload'].get('kind') for c in calls()].count('turn_started')
     with open(work/'exit-gate','w') as gate: gate.write('done\n')
     until(lambda: text('exit 7',mark) and text('exited',mark), 'actual failed process outcome, not command text')
     save_frame('activity-exited')
-    # The exit reaches the agent as a completion notice that starts its own turn; let it end before typing.
-    until(lambda: text('j1-1:completion',mark) and len([c for c in calls() if c['payload'].get('kind')=='turn_started']) == len([c for c in calls() if c['payload'].get('kind')=='turn_ended']), 'completion notice turn ends')
+    # The exit reaches the agent as a completion notice that starts its own turn; the transcript draws it as one row
+    # (`✗ job j1-1 exited 7 · <size> output`), not as a `you` bubble. Let that turn end before typing.
+    until(lambda: JOB_NOTICE.search(log, mark) is not None and [c['payload'].get('kind') for c in calls()].count('turn_started') > started
+          and turns_settled(), 'completion notice row drawn and its turn ends')
     send(b'\x1b[20~')  # Always return to Conversation, independently of composer focus.
+    # The backgrounded command's row absorbed the exit: a failed call reads ✗ with its reason after `·`.
+    until(lambda: FAILED_ROW.search(log, mark) is not None, 'the job_start row reads ✗ bash … · exit 7')
+    save_frame('failed-row')
     send(b'\x15/fixture-native-confirm\r')
     until(lambda: text('Native permission fixture'), 'permission dialog owns input')
     save_frame('permission')
@@ -214,7 +258,9 @@ try:
     if proc.returncode != 0: raise AssertionError('host exit '+str(proc.returncode))
     (args.output/'pty-session.ansi').write_bytes(log)
     result=dict(status='PASS',production_entrypoint='src/host/main.ts',provider='offline fixtures; real owned Git and jobs',
-                checks=['native real composer', 'F8 agents view selects the job row; Enter opens its output pager', 'real background job output', 'armed and matched watch in the job detail', 'exit code 7, not task/gate PASS', 'permission cancellation', 'clean terminal exit']
+                checks=['native real composer', 'working indicator in the composer border moves within 300 ms while a turn runs, reads ✓ done at its end, then is absent when idle',
+                        'F8 agents view selects the job row; Enter opens its output pager', 'real background job output', 'armed and matched watch in the job detail', 'exit code 7, not task/gate PASS',
+                        'job completion notice drawn as one row (✗ job j1-1 exited 7)', 'failed job_start row reads ✗ with its reason (exit 7)', 'permission cancellation', 'clean terminal exit']
                         + ([] if args.activity_only else ['persistent Changes, not modal', 'native path search', 'external refresh preserves hunk until applied', 'hunk reference without autosend', '140→80→52→140 draft retention', 'explicit comparison']))
     (args.output/'result.json').write_text(json.dumps(result,indent=2)); print(json.dumps(result,indent=2))
 finally:
