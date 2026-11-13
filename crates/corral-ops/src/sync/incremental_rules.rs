@@ -2,7 +2,7 @@
 //! A rule is the union of the detectors for the inputs its step reads.
 use jiff::SignedDuration;
 
-use super::{EVERY_LONG, EVERY_SANDBOX, EVERY_SHORT, StepId};
+use super::{EVERY_LONG, EVERY_SANDBOX, EVERY_SHORT, PassMemory, StepId, Tokens, area_matches};
 
 /// `movement::QUIET_SECS` (2 s) plus one second.
 const MOVEMENT_QUIET: SignedDuration = SignedDuration::from_secs(3);
@@ -168,10 +168,12 @@ pub(super) fn rule(step: StepId) -> Rule {
             tasks: true,
             ..Rule::NEVER
         },
-        // 8.
+        // 8: running tasks pick the escalated task; `[resources]` thresholds.
         StepId::ResourcePhase => Rule {
             resources: true,
-            areas: &["resource-alert", "claims"],
+            tasks: true,
+            config: true,
+            areas: &["resources", "resource-alert", "claims"],
             sticky: true,
             ..Rule::NEVER
         },
@@ -189,10 +191,11 @@ pub(super) fn rule(step: StepId) -> Rule {
             every: Some(EVERY_SHORT),
             ..Rule::NEVER
         },
-        // 11: runs before row 13, so INV is the previous pass's.
+        // 11: runs before row 13, so INV is the previous pass's. `agent-pm*` is the native PM
+        // binding (not matched by `pm*`).
         StepId::PmPolicy => Rule {
             config: true,
-            areas: &["pm*", "operating*"],
+            areas: &["pm*", "agent-pm*", "operating*"],
             inventory: true,
             every: Some(EVERY_LONG),
             ..Rule::NEVER
@@ -207,6 +210,7 @@ pub(super) fn rule(step: StepId) -> Rule {
         StepId::ScratchReclaim => Rule {
             scratch: true,
             tasks: true,
+            areas: &["scratch-warnings"],
             inventory: true,
             every: Some(EVERY_LONG),
             ..Rule::NEVER
@@ -252,19 +256,25 @@ pub(super) fn rule(step: StepId) -> Rule {
             every: Some(EVERY_SHORT),
             ..Rule::NEVER
         },
-        // 26.
+        // 26: PM binding and receipts (`agent-pm*`), wait deadlines, PM inbox messages, wake
+        // keys, assistant containers, native task heads and their questions, dispatch config:
+        // any store change. Host liveness probes are covered by the cadence.
         StepId::AgentHooksPass => Rule {
-            areas: &["pm*", "assistant*"],
+            any: true,
+            config: true,
             sticky: true,
             every: Some(EVERY_SHORT),
             ..Rule::NEVER
         },
-        // 27: `review_budget` keeps its launches in area `review-launch`.
+        // 27: `review_budget` keeps its launches in area `review-launch`; launch-exit receipts
+        // and the second pane-liveness sample are not in the store.
         StepId::ReviewBudget => Rule {
             tasks: true,
             inventory: true,
             in_pass: true,
             areas: &["review-budget", "review-launch"],
+            launch_exits: true,
+            every: Some(EVERY_SHORT),
             ..Rule::NEVER
         },
         // 28: running hooks are judged by process liveness.
@@ -277,9 +287,10 @@ pub(super) fn rule(step: StepId) -> Rule {
             every: Some(EVERY_SHORT),
             ..Rule::NEVER
         },
-        // 29.
+        // 29: transfers and continuations read their tasks' heads.
         StepId::HandoffRecovery => Rule {
             areas: &["assistant-handoff*"],
+            tasks: true,
             sticky: true,
             every: Some(EVERY_LONG),
             ..Rule::NEVER
@@ -348,7 +359,7 @@ pub(super) fn rule(step: StepId) -> Rule {
         // 39: harness asset files are not observed.
         StepId::StartQueued => Rule {
             tasks: true,
-            areas: &["queue-refusals", "operating*"],
+            areas: &["queue-refusals", "operating*", "authorizations", "claims"],
             config: true,
             resources: true,
             git_repos: true,
@@ -356,9 +367,11 @@ pub(super) fn rule(step: StepId) -> Rule {
             every: Some(EVERY_LONG),
             ..Rule::NEVER
         },
-        // 40: the UTC day partition of `max_auto_promotions_per_day`.
+        // 40: the UTC day partition of `max_auto_promotions_per_day`; operating policy and
+        // authorizations gate automatic launch.
         StepId::DispatchPolicy => Rule {
             tasks: true,
+            areas: &["operating*", "authorizations", "claims"],
             config: true,
             resources: true,
             in_pass: true,
@@ -375,10 +388,11 @@ pub(super) fn rule(step: StepId) -> Rule {
             ..Rule::NEVER
         },
         // 42: a failed prompt keeps its cursor and does not write. Events logged earlier in
-        // this pass are on its feed (`IN-PASS`).
+        // this pass are on its feed (`IN-PASS`). Reads its cursor, wake cursors and keys
+        // (`pm*`), the native PM binding (`agent-pm*`) and the PM inbox.
         StepId::PmEvents => Rule {
             events: &["*"],
-            areas: &["pm", "pm-events"],
+            areas: &["pm*", "agent-pm*", "inbox/pm/*"],
             inventory: true,
             sticky: true,
             in_pass: true,
@@ -413,4 +427,29 @@ pub(super) fn rule(step: StepId) -> Rule {
             ..Rule::NEVER
         },
     }
+}
+
+/// Whether `rule` fires on `t`, except its git and clock inputs (which per-task rules scope
+/// per task, and which do not change within a pass).
+pub(super) fn tokens_fire(t: &Tokens, memory: &PassMemory, step: StepId, rule: &Rule) -> bool {
+    let feed = &t.feed;
+    (rule.any && t.any)
+        || (rule.tasks && t.tasks_changed())
+        || rule
+            .areas
+            .iter()
+            .any(|p| feed.areas.keys().any(|area| area_matches(p, area)))
+        || rule.events.iter().any(|kind| match *kind {
+            "*" => !feed.event_kinds.is_empty(),
+            kind => feed.event_kinds.contains(kind),
+        })
+        || (rule.scratch && feed.scratch)
+        || (rule.lifecycle && feed.lifecycle)
+        || (rule.inventory && (t.inventory || memory.inventory_prev))
+        || (rule.resources && t.resources)
+        || (rule.config && t.config_changed)
+        || (rule.launch_exits && t.launch_exits)
+        || (rule.sticky && memory.sticky.contains(&step))
+        || (rule.in_pass && t.in_pass)
+        || (rule.gate_running && memory.gate_running)
 }

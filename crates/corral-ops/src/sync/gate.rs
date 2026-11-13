@@ -64,6 +64,8 @@ pub(crate) trait StepGate {
     fn observe_inventory(&mut self, panes: &[PaneInfo]);
     /// Row 7's admission key `(held, severe, reason)`.
     fn observe_resources(&mut self, _state: &crate::resources::ResourceState) {}
+    /// The config the pass runs with (row 1's reload).
+    fn observe_config(&mut self, _config: &corral_core::Config) {}
     /// Row 10's `herdr.available()`; a flip makes the rest of the pass full.
     fn observe_herdr(&mut self, _available: bool) {}
     /// Row 15's open heads (after the ownership fence).

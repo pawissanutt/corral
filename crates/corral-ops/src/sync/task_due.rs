@@ -51,6 +51,9 @@ pub(super) struct TaskMemo {
     pub(super) pane_ref: bool,
     /// Unresolved waits on another task's status.
     pub(super) dependency_waits: bool,
+    /// A plan, plan run, plan review or aggregate attempt: its steps may open or wait on the
+    /// PM, so PM state is its input.
+    pub(super) pm_reader: bool,
 }
 
 impl TaskMemo {
@@ -119,6 +122,9 @@ impl TaskMemo {
             live_panes: live,
             pane_ref,
             dependency_waits,
+            pm_reader: head.last_plan.is_some()
+                || head.last_plan_run.is_some()
+                || head.last_aggregate_attempt.is_some(),
         }
     }
 }

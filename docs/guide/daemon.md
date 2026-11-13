@@ -80,11 +80,12 @@ daemon, when:
 - ten minutes passed since the last full pass. This bounds how late a step can react
   to an input the rules do not watch.
 
-Pacing: after a quiet pass the daemon waits 19 times the pass's CPU time, clamped
-between 5 and 60 seconds; after a pass that did work it waits 19 times the CPU time,
-clamped between 2 and 60 seconds. Either wait is shortened to the earliest time a
-step or task comes due (an idle or startup threshold, a deadline, a schedule). A
-nudge starts the next pass at once. Expect one extra "echo" pass after any pass that
+Pacing: after a quiet incremental pass the daemon waits 19 times the pass's CPU time,
+clamped between 5 and 60 seconds; after a full pass, or an incremental pass that did
+work, it waits 19 times the CPU time, clamped between 2 and 60 seconds, as the loop did
+before passes were incremental. A step or task coming due never shortens the wait, so
+paced passes use at most about 5% of a core; anything due is served by the next pass.
+A nudge starts the next pass at once. Expect one extra "echo" pass after any pass that
 wrote: it sees those writes, reruns the affected steps once and settles.
 
 Two switch files beside the daemon socket change this, checked at the start of every
@@ -93,10 +94,20 @@ pass like the timing switch ([timing guide](timing.md)); no restart is needed:
 - `sync-full-on` turns skipping off: every pass is full. Use it to rule out the
   incremental planner when something reacts late, or as a rollback switch.
 - `sync-audit-on` makes every pass full while still deciding what an incremental pass
-  would have skipped. A step or task that would have been skipped but wrote to the store
-  or reported a change is printed to the daemon's stderr (the service journal) as
-  `corrald sync audit: <Step>[ task <id>] would have been skipped but acted`. If both
-  files exist, `sync-full-on` wins and nothing is audited.
+  would have skipped, on the schedule an incremental pass would keep (a step's
+  "every N seconds" cadence restarts only when its rule fired). A step or task that would
+  have been skipped but wrote to the store or reported a change is printed to the daemon's
+  stderr (the service journal) as
+  `corrald sync audit: <Step>[ task <id>] would have been skipped but acted`, with one of
+  two explanations appended when they hold:
+  - `; raced: an input its rule lists changed during the pass`: another process or an
+    earlier step of the same pass wrote it, or the config file was edited mid-pass. The
+    next pass sees that change and runs the step, so nothing is lost.
+  - `; delayed: its every <N>s cadence would have run it`: the input is not in the store
+    (a process, a file, a herdr pane), and the step's cadence would have run it at most
+    N seconds later.
+
+  If both files exist, `sync-full-on` wins and nothing is audited.
 
 ```sh
 touch "$(dirname "$(corral daemon socket)")/sync-audit-on"
@@ -114,13 +125,16 @@ With timing on, each pass record shows what the planner did, as span counts (`n`
 | `sync.audit.pass` | 1 when the pass was audited |
 | `sync.audit.step` | steps and tasks the audited pass decided |
 | `sync.audit.would_skip` | of those, the ones the rules would have skipped |
-| `sync.audit.wrong_skip` | of those, the ones that acted anyway |
+| `sync.audit.raced` | of those, the ones that acted after an input their rule lists changed during the pass |
+| `sync.audit.delayed` | of those, the ones that acted on an input only their `every N` cadence covers |
+| `sync.audit.wrong_skip` | of those, the ones that acted with no listed input changed and no cadence covering them |
 
 An audited pass is one whose only reason to be full is `sync-audit-on`; a pass that is
 full for another reason (start, nudge, periodic, ...) is not audited. `sync.audit.pass`
 proves audit ran, and `sync.audit.would_skip` that it had something to check.
-`sync.audit.wrong_skip` should stay absent or zero; any finding names a rule that misses
-an input, so report the printed step and task.
+`sync.audit.raced` is expected while other processes write, and `sync.audit.delayed` while
+agents, gates and hooks run outside the store. `sync.audit.wrong_skip` should stay absent or
+zero; any finding names a rule that misses an input, so report the printed step and task.
 
 ## Projected board
 

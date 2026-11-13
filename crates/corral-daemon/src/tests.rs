@@ -124,6 +124,27 @@ fn cli_nudge_forces_full_pass() {
     );
 }
 
+#[test]
+fn near_due_time_never_cuts_the_cpu_proportional_wait() {
+    use corral_ops::loop_pacing::{QUIET_EVERY, SYNC_EVERY};
+    let spent = Duration::from_millis(100);
+    let next_due = Some(Timestamp::now() + jiff::SignedDuration::from_secs(1));
+    let full = PassReport {
+        full: Some(FullReason::Audit),
+        ran: 40,
+        next_due,
+        ..PassReport::default()
+    };
+    assert_eq!(Pacing::of(Some(&full)).wait(spent), periodic_wait(spent));
+    assert_eq!(periodic_wait(spent), SYNC_EVERY);
+    let quiet = PassReport {
+        quiet: true,
+        next_due,
+        ..PassReport::default()
+    };
+    assert_eq!(Pacing::of(Some(&quiet)).wait(spent), QUIET_EVERY);
+}
+
 #[cfg(unix)]
 #[test]
 fn fatal_listener_error_returns_error_after_socket_and_lease_cleanup() {
