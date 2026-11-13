@@ -9,6 +9,8 @@ import { HelperChat } from "./helper-chat.ts";
 import type { PanelSnapshot } from "./panels-view.ts";
 import type { HelperInspection } from "../extensions/subagent/inspection.ts";
 import { RecordingTerminal } from "../../test/support/panel-terminal.ts";
+import type { ChildSnapshot } from "../build/types.ts";
+import { childRow } from "./build/fleet-rows.ts";
 
 beforeAll(() => initTheme("dark", false));
 const NOW = 1_000_000;
@@ -80,4 +82,38 @@ test("the back target covers the rendered ‹ Agents at every width, and a click
   press(range.to + 4, 0); expect(back).toBe(0);
   press(range.from, 0); expect(back).toBe(1);
   press(range.to - 1, 0); expect(back).toBe(2);
+});
+
+test("a child conversation shows the brief once, the steers after the replies, and its ▲ question line answers", () => {
+  const child: ChildSnapshot = { id: "picker-ui", call: "call-1", title: "Picker", brief: "BRIEF_ONCE_VISIBLE", owns: ["src/picker/"], after: [],
+    profile: "default", model: "anthropic/model-a", state: "needs", createdAt: NOW - 9000, startedAt: NOW - 8000, edits: [],
+    usage: { input: 1, output: 1, turns: 1 }, steers: ["STEER_ONE_VISIBLE", "STEER_TWO_VISIBLE"], pulse: [], history: "rn",
+    question: { question: "QUESTION_VISIBLE", options: [{ label: "Grid" }, { label: "List" }], askedAt: NOW - 1000 },
+    messages: [{ id: "a", kind: "assistant", text: "REPLY_VISIBLE", stopReason: "stop" }] };
+  const row = childRow(child, { children: [child], maxParallel: 3, startedAt: NOW - 9000 }, NOW);
+  const answered: string[] = [];
+  const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"), color: agentColor, now: () => NOW,
+    click: (event: TuiMouseEvent) => event.type === "click" && event.button === "left", focus() {}, back() {}, answer(key) { answered.push(key); } });
+  const rows = view.scroll.render(80).map(line => stripTerminalSequences(line));
+  const text = rows.join("\n");
+  expect(text.split("BRIEF_ONCE_VISIBLE").length - 1).toBe(1);
+  const at = (needle: string) => rows.findIndex(line => line.includes(needle));
+  expect(at("REPLY_VISIBLE")).toBeGreaterThan(at("BRIEF_ONCE_VISIBLE"));
+  expect(at("STEER_ONE_VISIBLE")).toBeGreaterThan(at("REPLY_VISIBLE"));
+  expect(at("STEER_TWO_VISIBLE")).toBeGreaterThan(at("STEER_ONE_VISIBLE"));
+  const ask = at("QUESTION_VISIBLE");
+  expect(ask).toBeGreaterThan(at("STEER_TWO_VISIBLE"));
+
+  const press = (y: number) => {
+    const frame = renderLayoutFrame(view.scroll, 80, rows.length + 4, () => {});
+    for (const box of getLayoutBoxesAt(frame, 3, y)) {
+      const result = box.component.handleMouse?.({ type: "click", button: "left", x: 3 - box.rect.x, y: y - box.rect.y, screenX: 3, screenY: y,
+        width: box.rect.width, height: box.rect.height, shift: false, alt: false, ctrl: false, clickCount: 1 });
+      if (result?.handled) return;
+    }
+  };
+  press(at("STEER_ONE_VISIBLE"));
+  expect(answered).toEqual([]);
+  press(ask);
+  expect(answered).toEqual([row.key]);
 });

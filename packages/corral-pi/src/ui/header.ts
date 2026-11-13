@@ -20,7 +20,7 @@ export function chromeTier(columns: number): ChromeTier {
   return columns >= WIDE_COLUMNS ? "wide" : columns >= RAIL_COLUMNS ? "mid" : columns >= COMPACT_COLUMNS ? "narrow" : "tiny";
 }
 
-export type TabId = "task" | "conversation" | "agents" | "changes" | "evidence" | "inbox";
+export type TabId = "task" | "conversation" | "agents" | "changes" | "evidence" | "inbox" | "board";
 export type BadgeTone = "text" | "accent" | "success" | "warning" | "error";
 export interface TabSpec {
   readonly id: TabId; readonly key: string; readonly label: string; readonly short?: string;
@@ -28,15 +28,21 @@ export interface TabSpec {
 }
 export interface TabHit { readonly from: number; readonly to: number; readonly id: TabId }
 export interface Notice { readonly text: string; readonly tone: "text" | "success" | "warning" | "error" }
+/** A status that replaces the state word: `long` in roomy headers, `short` when tiny or tight. */
+export interface HeaderStatus { readonly long: string; readonly short: string; readonly tone: BadgeTone | "muted"; readonly clickable: boolean }
 export interface HeaderInput {
   readonly title: string; readonly state: "Working" | "Idle" | "Unavailable";
   readonly attention?: { readonly text: string; readonly tone: BadgeTone }; readonly notice?: Notice;
   readonly context?: { readonly left: string; readonly right?: string };
+  /** Replaces the state word; a notice still wins for its duration. */
+  readonly status?: HeaderStatus;
 }
+/** Columns of header row `row` that a click acts on: the attention chip, or a clickable status. */
+export interface HeaderHit { readonly row: number; readonly from: number; readonly to: number; readonly id: "attention" | "status" }
 
-function toneColor(tone: BadgeTone | Notice["tone"]): string {
+function toneColor(tone: BadgeTone | Notice["tone"] | "muted"): string {
   return tone === "accent" ? PANEL_BLUE : tone === "success" ? PANEL_SUCCESS : tone === "warning" ? PANEL_WARNING
-    : tone === "error" ? PANEL_ERROR : PANEL_TEXT;
+    : tone === "error" ? PANEL_ERROR : tone === "muted" ? PANEL_MUTED : PANEL_TEXT;
 }
 
 /**
@@ -69,13 +75,18 @@ const TAB_TEXT: Readonly<Record<TabId, { readonly key: string; readonly label: s
   changes: { key: "F7", label: "Changes", short: "Diff" },
   evidence: { key: "F10", label: "Proof" },
   inbox: { key: "F11", label: "Inbox" },
+  board: { key: "F10", label: "Board" },
 };
 const TASK_TABS: readonly TabId[] = ["task", "conversation", "agents", "changes", "evidence", "inbox"];
 const SESSION_TABS: readonly TabId[] = ["conversation", "agents", "changes", "inbox"];
+const BUILD_TABS: readonly TabId[] = ["conversation", "agents", "changes", "board"];
 
-/** Task-bound roles keep Task and Proof; assistant and PM sessions have neither. Inbox is in every mode. */
+/**
+ * Task-bound roles keep Task and Proof; assistant and PM sessions have neither, and both have Inbox. A build
+ * session has Board in Proof's place on F10 and no Inbox.
+ */
 export function mainTabs(identity: HostIdentity): readonly TabId[] {
-  return identity.task ? TASK_TABS : SESSION_TABS;
+  return identity.role === "build" ? BUILD_TABS : identity.task ? TASK_TABS : SESSION_TABS;
 }
 /** The key cap and label of a main view tab, with an optional count badge. */
 export function tabSpec(id: TabId, badge?: TabSpec["badge"]): TabSpec {
@@ -87,6 +98,12 @@ export function changesBadge(input: { readonly checked: boolean; readonly files:
   if (input.scopeRequired) return { text: "?", tone: "warning" };
   if (input.error) return { text: "!", tone: "warning" };
   return input.checked && input.files > 0 ? { text: String(input.files), tone: "text" } : undefined;
+}
+
+/** Board tasks not yet landed, in warning when one is blocked or failed; `◆` when a plan waits and nothing is filed. */
+export function boardBadge(input: { readonly open: number; readonly alert: boolean; readonly proposed: boolean }): TabSpec["badge"] {
+  if (input.open > 0) return { text: String(input.open), tone: input.alert ? "warning" : "accent" };
+  return input.proposed ? { text: "◆", tone: "warning" } : undefined;
 }
 
 /**
@@ -179,20 +196,47 @@ export function tabRow(tabs: readonly TabSpec[], active: TabId | undefined, widt
   return { line: chromeLine(" " + chosen.pieces.map(piece => piece.text).join(separator), width), hits };
 }
 
+/** The title keeps at least this many cells before a long status gives way to its short form. */
+const TITLE_KEEP = 24;
+
 /**
  * Header row 1: `corral / <target>` on the left (`<target>` alone when tiny); on the right the attention
- * chip, then the state word, or a notice in its place. Row 2 (context) shows only when neither short nor tiny.
+ * chip, then the status (long, or short when tiny or when the long form would squeeze the title) or the
+ * state word, or a notice in its place. Row 2 (context) shows only when neither short nor tiny. Hits are
+ * columns of row 0: the chip, and the status when it is clickable and no notice covers it.
  */
-export function headerRows(input: HeaderInput, width: number, options: { readonly short: boolean; readonly tiny: boolean }): string[] {
+export function headerFrame(input: HeaderInput, width: number, options: { readonly short: boolean; readonly tiny: boolean }):
+  { readonly lines: string[]; readonly hits: readonly HeaderHit[] } {
   const inner = Math.max(0, width - 2);
-  const title = "\x1b[1m" + PANEL_BLUE + (options.tiny ? "" : "corral / ") + plainLabel(input.title) + "\x1b[22m";
-  const state = input.notice ? toneColor(input.notice.tone) + plainLabel(input.notice.text) : PANEL_MUTED + input.state;
+  const label = (options.tiny ? "" : "corral / ") + plainLabel(input.title);
+  const title = "\x1b[1m" + PANEL_BLUE + label + "\x1b[22m";
+  const chipText = input.attention ? " " + plainLabel(input.attention.text) + " " : "";
+  const chipWidth = visibleWidth(chipText), chipGap = chipText ? 1 : 0;
+  const keep = Math.min(visibleWidth(label), TITLE_KEEP);
+  const status = input.notice || !input.status ? undefined : input.status;
+  const statusText = input.notice ? plainLabel(input.notice.text) : !status ? input.state
+    : !options.tiny && chipWidth + chipGap + visibleWidth(plainLabel(status.long)) + 2 + keep <= inner ? plainLabel(status.long) : plainLabel(status.short);
+  const state = (input.notice ? toneColor(input.notice.tone) : status ? toneColor(status.tone) : PANEL_MUTED) + statusText;
   const chip = input.attention
-    ? toneColor(input.attention.tone) + "\x1b[7m\x1b[1m " + plainLabel(input.attention.text) + " \x1b[22m\x1b[27m" + PANEL_BG + " "
+    ? toneColor(input.attention.tone) + "\x1b[7m\x1b[1m" + chipText + "\x1b[22m\x1b[27m" + PANEL_BG + " "
     : "";
-  const rows = [chromeLine(" " + splitRow(title, chip + state, inner), width)];
+  const lines = [chromeLine(" " + splitRow(title, chip + state, inner), width)];
   if (!options.short && !options.tiny && input.context) {
-    rows.push(chromeLine(" " + PANEL_MUTED + splitRow(plainLabel(input.context.left), plainLabel(input.context.right ?? ""), inner), width));
+    lines.push(chromeLine(" " + PANEL_MUTED + splitRow(plainLabel(input.context.left), plainLabel(input.context.right ?? ""), inner), width));
   }
-  return rows;
+  // splitRow right-aligns the chip and status within `inner`, after the row's one-cell left inset.
+  const right = chipWidth + chipGap + visibleWidth(statusText), end = 1 + inner, start = end - Math.min(inner, right);
+  const hits: HeaderHit[] = [];
+  const add = (id: HeaderHit["id"], from: number, size: number) => {
+    const to = Math.min(end, from + size);
+    if (from < to) hits.push({ row: 0, from, to, id });
+  };
+  if (input.attention) add("attention", start, chipWidth);
+  if (status?.clickable) add("status", start + chipWidth + chipGap, visibleWidth(statusText));
+  return { lines, hits };
+}
+
+/** The header rows alone; see `headerFrame`. */
+export function headerRows(input: HeaderInput, width: number, options: { readonly short: boolean; readonly tiny: boolean }): string[] {
+  return headerFrame(input, width, options).lines;
 }

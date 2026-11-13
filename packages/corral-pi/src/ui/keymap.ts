@@ -2,19 +2,24 @@
 // configured keybindings, so a changed user binding changes the hint; panel keys are fixed.
 import { getKeybindings, visibleWidth, type KeyId, type Keybinding } from "@earendil-works/pi-tui";
 import { chromeLine, keyCap, keyCapWidth, type ChromeTier } from "./header.ts";
-import { PANEL_MUTED } from "./panels-view.ts";
+import { PANEL_MUTED, plainLabel } from "./panels-view.ts";
 
 export type KeyContext = "composer" | "agents" | "agent" | "changes" | "task" | "lifecycle" | "proof" | "artifacts"
-  | "inbox" | "usage" | "image" | "sidebar" | "queue" | "dialog" | "palette" | "keys" | "pager";
+  | "inbox" | "usage" | "image" | "sidebar" | "queue" | "dialog" | "palette" | "keys" | "pager" | "board" | "choice";
 export interface Hint { readonly id: string; readonly key: string; readonly label: string; readonly short?: string; readonly data?: string }
 export interface HintState {
   readonly context: KeyContext;
   readonly mode: { readonly taskBound: boolean; readonly answer: boolean; readonly lifecycle: boolean };
   readonly streaming: boolean;
   readonly queue: { readonly items: number; readonly editable: number; readonly control: boolean };
-  /** AgentsAction ids offered for the selected row. */
+  /** AgentsAction ids offered for the selected row; in `board`, the BoardAction ids offered. */
   readonly selection?: readonly string[];
   readonly authors?: boolean; readonly legend?: boolean; readonly history?: boolean; readonly timelineSource?: "task" | "host";
+  /** Build sessions only: who Enter reaches, whether a child can take a message, a waiting board plan, docked options. */
+  readonly build?: {
+    readonly target?: { readonly id: string; readonly answer: boolean }; readonly steerable: boolean;
+    readonly proposed: boolean; readonly choices: number;
+  };
 }
 export interface FooterHit { readonly from: number; readonly to: number; readonly hint: Hint }
 export interface KeyRow { readonly key: string; readonly label: string; readonly data?: string }
@@ -76,13 +81,21 @@ export function piKey(id: string): string | undefined {
 }
 // Bindings scoped to Pi's own selectors, where panel keys are inert, never collide with a panel key.
 const SCOPED = ["app.models.", "app.tree.", "tui.select."];
-/** Alt+↓ focuses the queue unless the user bound it to an editor or app action. */
-export function queueFocusKey(): KeyId | undefined {
+/** `key` unless the user bound it to an editor or app action. */
+function freeKey(key: KeyId): KeyId | undefined {
   for (const [id, bound] of Object.entries(getKeybindings().getResolvedBindings())) {
     if (SCOPED.some(prefix => id.startsWith(prefix))) continue;
-    if ((Array.isArray(bound) ? bound : bound ? [bound] : []).some(key => key.toLowerCase() === "alt+down")) return undefined;
+    if ((Array.isArray(bound) ? bound : bound ? [bound] : []).some(item => item.toLowerCase() === key)) return undefined;
   }
-  return "alt+down";
+  return key;
+}
+/** Alt+↓ focuses the queue unless the user bound it to an editor or app action. */
+export function queueFocusKey(): KeyId | undefined {
+  return freeKey("alt+down");
+}
+/** Alt+T changes who receives the message in a build session, unless the user bound it to an editor or app action. */
+export function targetKey(): KeyId | undefined {
+  return freeKey("alt+t");
 }
 
 function hint(id: string, binding: string, label: string, short?: string): Hint {
@@ -103,16 +116,40 @@ const ENTER = (label: string) => hint("enter", "enter", label);
 const letter = (key: string, label: string, short?: string) => hint(key, key, label, short);
 
 const AGENT_HINTS: Readonly<Record<string, Hint>> = {
-  open: ENTER("open"), transcript: letter("t", "transcript", "log"), steer: letter("s", "steer"),
+  open: ENTER("open"), answer: letter("a", "answer"), transcript: letter("t", "transcript", "log"), steer: letter("s", "steer"),
   cancel: letter("x", "cancel"), model: letter("m", "model"),
 };
 const JOB_HINTS: Readonly<Record<string, Hint>> = {
   output: ENTER("output"), stop: letter("x", "stop"), peek: letter("p", "peek"), follow: letter("f", "follow"),
   search: letter("/", "search"), background: letter("b", "background", "bg"),
 };
-const AGENT_ORDER = ["open", "transcript", "steer", "cancel", "model"];
+const AGENT_ORDER = ["open", "answer", "transcript", "steer", "cancel", "model"];
 const JOB_ORDER = ["output", "stop", "peek", "follow", "search", "background"];
 
+function targetHint(): Hint | undefined {
+  const key = targetKey();
+  return key ? hint("target", key, "target", "to") : undefined;
+}
+function composerHints(state: HintState): (Hint | undefined)[] {
+  const build = state.build, target = build?.target;
+  if (target) {
+    // A child receives Enter: the queue and follow-up keys stay the parent's, so only Alt+T and stop remain.
+    const id = plainLabel(target.id);
+    const submit = piHint("tui.input.submit", "submit", `${target.answer ? "answer" : "steer"} ${id}`, target.answer ? "answer" : "steer");
+    return [submit, targetHint(), !target.answer && state.streaming ? piHint("app.interrupt", "interrupt", "stop") : undefined];
+  }
+  const to = build?.steerable ? targetHint() : undefined;
+  return state.streaming
+    ? [piHint("tui.input.submit", "submit", "steer"), piHint("app.message.followUp", "followUp", "queue"), to,
+      piHint("app.interrupt", "interrupt", "stop"), ...queueHints(state)]
+    : [piHint("tui.input.submit", "submit", "send"), to, ...queueHints(state)];
+}
+function boardHints(state: HintState): (Hint | false | undefined)[] {
+  // Without the view's offered actions, a task is assumed selected and the board reachable.
+  const offered = new Set(state.selection ?? ["details", "refresh", ...(state.build?.proposed ? ["review"] : [])]);
+  return [UP_DOWN("task", "task"), offered.has("review") && letter("p", "review plan", "plan"), offered.has("details") && ENTER("details"),
+    offered.has("plan") && letter("n", "plan tasks", "plan"), offered.has("refresh") && letter("r", "refresh"), ESC("chat")];
+}
 function queueHints(state: HintState): (Hint | undefined)[] {
   // Without an editable item and queue control there is nothing the queue keys could do.
   if (!state.queue.control || state.queue.editable < 1) return [];
@@ -125,10 +162,7 @@ export function contextHints(state: HintState): Hint[] {
   const pick = (...hints: (Hint | false | undefined)[]) => hints.filter((h): h is Hint => !!h);
   switch (state.context) {
     case "composer":
-      return state.streaming
-        ? pick(piHint("tui.input.submit", "submit", "steer"), piHint("app.message.followUp", "followUp", "queue"),
-          piHint("app.interrupt", "interrupt", "stop"), ...queueHints(state))
-        : pick(piHint("tui.input.submit", "submit", "send"), ...queueHints(state));
+      return pick(...composerHints(state));
     case "agents": {
       const offered = new Set(state.selection ?? []);
       const job = JOB_ORDER.some(action => offered.has(action));
@@ -137,7 +171,7 @@ export function contextHints(state: HintState): Hint[] {
     }
     case "agent": {
       const offered = new Set(state.selection ?? []);
-      return pick(ESC("agents"), ...["steer", "cancel", "model", "transcript"].filter(action => offered.has(action)).map(action => AGENT_HINTS[action]),
+      return pick(ESC("agents"), ...["answer", "steer", "cancel", "model", "transcript"].filter(action => offered.has(action)).map(action => AGENT_HINTS[action]),
         piHint("app.tools.expand", "tools", "tools"));
     }
     case "changes":
@@ -174,12 +208,20 @@ export function contextHints(state: HintState): Hint[] {
       return pick(UP_DOWN("scroll", "scroll"), pair("page", "PgUp/PgDn", "\x1b[6~", "page"), ESC("close"));
     case "image":
       return pick(ESC("close"), hint("f9", "f9", "chat"));
+    case "board":
+      return pick(...boardHints(state));
+    case "choice": {
+      // Digits pick directly; the hint names the range and replays nothing, so a click never picks blindly.
+      const choices = state.build?.choices ?? 0;
+      return pick(UP_DOWN("select", "select"), ENTER("choose"),
+        choices > 0 && { id: "pick", key: choices > 1 ? `1-${Math.min(9, choices)}` : "1", label: "pick" }, ESC("not now"));
+    }
   }
 }
 
-/** Dialogs, the palette, the keys list and pagers own their keys: their footer has no F2 or F1. */
+/** Dialogs, the docked choice dialog, the palette, the keys list and pagers own their keys: their footer has no F2 or F1. */
 export function footerBase(context: KeyContext): boolean {
-  return context !== "dialog" && context !== "palette" && context !== "keys" && context !== "pager";
+  return context !== "dialog" && context !== "palette" && context !== "keys" && context !== "pager" && context !== "choice";
 }
 
 function hintWidth(item: Hint, short: boolean): number {
@@ -224,10 +266,13 @@ export function footerRow(hints: readonly Hint[], tier: ChromeTier, width: numbe
   return { line: chromeLine(" " + PANEL_MUTED + parts.join(" ".repeat(gap)), width), hits };
 }
 
-/** The F1 keys list for this mode: every group holds only keys the mode offers. Rows with data run on Enter. */
+/**
+ * The F1 keys list for this mode: every group holds only keys the mode offers. Rows with data run on Enter.
+ * `build` adds Board and the message receiver, names each agent's own keys, and has no Task, Proof or Inbox.
+ */
 export function keyGroups(mode: {
   readonly taskBound: boolean; readonly answer: boolean; readonly jobs: boolean;
-  readonly queueControl: boolean; readonly lifecycle: boolean;
+  readonly queueControl: boolean; readonly lifecycle: boolean; readonly build?: boolean;
 }): KeyGroup[] {
   const row = (binding: string, label: string): KeyRow => {
     const data = keyData(binding);
@@ -240,18 +285,22 @@ export function keyGroups(mode: {
   const info = (key: string, label: string): KeyRow => ({ key, label });
   const rows = (...items: (KeyRow | false | undefined)[]) => items.filter((item): item is KeyRow => !!item);
   const focus = mode.queueControl ? queueFocusKey() : undefined;
+  const build = mode.build === true, target = build ? targetKey() : undefined;
+  const taskBound = mode.taskBound && !build;
   const groups: KeyGroup[] = [
     { title: "Views", rows: rows(
-      mode.taskBound && row("f5", "Task: the bound task, its plan and criteria"),
+      taskBound && row("f5", "Task: the bound task, its plan and criteria"),
       row("f9", "Chat: the conversation"),
-      row("f8", mode.jobs ? "Agents: helper calls and jobs, focus the list" : "Agents: helper calls, focus the list"),
-      row("f7", "Changes: files and diffs in the chosen comparison"),
-      mode.taskBound && row("f10", "Proof: criteria, gate and review"),
-      row("f11", "Inbox: decisions waiting for the owner"),
+      row("f8", build ? "Agents: every agent, focus the list" : mode.jobs ? "Agents: helper calls and jobs, focus the list" : "Agents: helper calls, focus the list"),
+      row("f7", build ? "Changes: files and diffs, filtered by agent" : "Changes: files and diffs in the chosen comparison"),
+      taskBound && row("f10", "Proof: criteria, gate and review"),
+      build && row("f10", "Board: tasks this session filed"),
+      !build && row("f11", "Inbox: decisions waiting for the owner"),
     ) },
     { title: "Message", rows: rows(
-      pi("tui.input.submit", "Send; steer while the agent works"),
-      pi("app.message.followUp", "Queue as a follow-up"),
+      pi("tui.input.submit", build ? "Send; steer while something runs; steers the chosen agent when one receives" : "Send; steer while the agent works"),
+      pi("app.message.followUp", build ? "Queue a follow-up for the parent" : "Queue as a follow-up"),
+      target !== undefined && row(target, "Change the receiver: parent or one running agent"),
       pi("app.interrupt", "Stop the running turn"),
       mode.queueControl && pi("app.message.dequeue", "Pull the last queued input back to edit"),
       pi("app.model.select", "Choose the model"),
@@ -261,8 +310,12 @@ export function keyGroups(mode: {
     { title: "Agents", rows: rows(
       info("↑↓", "Select an agent" + (mode.jobs ? " or job" : "")),
       info("⏎", mode.jobs ? "Open its conversation, or a job's output" : "Open its conversation"),
+      build && info("a", "Answer its question"),
+      build && info("s", "Point the composer at it"),
+      build && info("x", "Cancel it (asks first); its edits stay" + (mode.jobs ? "; on a job, stops it" : "")),
+      build && info("m", "Change its model from its next request"),
       info("t", "Read-only transcript, when the agent has one"),
-      mode.jobs && info("x", "Stop the selected job (asks first)"),
+      !build && mode.jobs && info("x", "Stop the selected job (asks first)"),
       mode.jobs && info("p", "Peek at the job's current logs"),
       mode.jobs && info("f", "Follow the job's output on or off"),
       mode.jobs && info("/", "Search the job's output"),
@@ -276,10 +329,20 @@ export function keyGroups(mode: {
       info("/", "Filter paths"),
       info("c", "Choose the comparison"),
       info("o", "Choose the project or worktree"),
+      build && info("f", "Filter by agent"),
       info("r", "Refresh"),
     ) },
   ];
-  if (mode.taskBound) {
+  if (build) {
+    groups.push({ title: "Board", rows: rows(
+      info("↑↓", "Select a task"),
+      info("⏎", "Details"),
+      info("n", "Plan board tasks from this conversation"),
+      info("p", "Review the proposed plan"),
+      info("r", "Refresh status"),
+    ) });
+  }
+  if (taskBound) {
     groups.push({ title: "Task", rows: rows(
       info("↑↓", "Scroll"),
       info("r", "Refresh"),
@@ -295,15 +358,17 @@ export function keyGroups(mode: {
       info("r", "Refresh"),
     ) });
   }
-  groups.push({ title: "Inbox", rows: rows(
-    info("j/k", "Select an item"),
-    info("⏎", "Inspect it"),
-    mode.answer && info("a", "Answer flow instructions (nothing is sent)"),
-    info("h", "History or pending"),
-    info("/", "Filter"),
-    info("r", "Reread"),
-    info("?", "Legend"),
-  ) });
+  if (!build) {
+    groups.push({ title: "Inbox", rows: rows(
+      info("j/k", "Select an item"),
+      info("⏎", "Inspect it"),
+      mode.answer && info("a", "Answer flow instructions (nothing is sent)"),
+      info("h", "History or pending"),
+      info("/", "Filter"),
+      info("r", "Reread"),
+      info("?", "Legend"),
+    ) });
+  }
   groups.push({ title: "Sidebar", rows: rows(
     row("ctrl+b", "Collapse to one row, or open it"),
     row("f6", "Focus the sidebar; again for the next tab"),

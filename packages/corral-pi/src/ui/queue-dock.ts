@@ -11,6 +11,8 @@ export interface QueueDockHost {
   focusComposer(): void;
   notice(text: string, tone: "text" | "warning"): void;
   changed(): void;
+  /** Who runs queued input, as `the parent`; the header names it when set. */
+  receiver?(): string | undefined;
 }
 
 /** Below this many columns the controls shrink to glyphs and the header to its count. */
@@ -208,8 +210,11 @@ export class QueueDock implements Component {
     const inner = Math.max(0, width - 4);
     const more = hidden > 0 && `+${hidden} more`.length + 2 < inner ? `+${hidden} more` : "";
     // Steer items reach the running turn at its next step, so the idle clause holds only for follow-ups.
-    const idle = items.every(item => item.policy === "follow_up") ? " · each runs when the agent is next idle" : "";
-    const lead = tight ? `QUEUE · ${items.length}` : `QUEUE · ${items.length} waiting${idle}`;
+    const followUps = items.every(item => item.policy === "follow_up");
+    const receiver = this.host.receiver?.();
+    const lead = tight ? `QUEUE · ${items.length}`
+      : receiver ? `QUEUE · ${items.length} for ${plainLabel(receiver)}${followUps ? " · each runs when it is next idle" : ""}`
+      : `QUEUE · ${items.length} waiting${followUps ? " · each runs when the agent is next idle" : ""}`;
     return "  " + PANEL_MUTED + fit(lead, inner - (more ? more.length + 2 : 0)) + (more ? "  " + more : "") + "  " + RESET;
   }
 

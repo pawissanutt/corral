@@ -242,7 +242,8 @@ export class FleetRuntime implements FleetControl {
   cancel(id: string): boolean {
     const entry = this.entries.get(id);
     if (!entry || !live(entry)) return false;
-    this.finish(entry, "cancelled", "Cancelled"); entry.controller.abort(); this.pump(); return true;
+    // The state says it was cancelled; `error` is kept for a reason the owner did not cause.
+    this.finish(entry, "cancelled"); entry.controller.abort(); this.pump(); return true;
   }
   private adopt(entry: Entry, model: ResolvedModel): void {
     entry.model = model; entry.value.profile = model.profile;

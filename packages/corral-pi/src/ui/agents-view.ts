@@ -8,7 +8,7 @@ import {
 import { jobDetailLines, type JobFreeze } from "./job-detail.ts";
 import { PANEL_BG, PANEL_BLUE, PANEL_MUTED, PANEL_RULE, PANEL_SELECTED, PANEL_TEXT, PANEL_WARNING, RESET } from "./panels-view.ts";
 
-export type AgentsAction = "open" | "transcript" | "steer" | "cancel" | "model"
+export type AgentsAction = "open" | "answer" | "transcript" | "steer" | "cancel" | "model"
   | "output" | "search" | "follow" | "peek" | "background" | "stop";
 export interface AgentsViewHost {
   model(): AgentsModel; now(): number; short(): boolean; legend(): boolean;
@@ -34,9 +34,9 @@ const NAME = 11, TIME = 11, COST = 6, CTX = 4, FILES = 5, PULSE_FULL = 14, PULSE
 /** Cells before the activity column at full density: bar, glyph and space, seven fixed columns, their gaps, a right inset. */
 const FULL_FIXED = 3 + NAME + PROFILE + TIME + COST + CTX + FILES + PULSE_FULL + GAP.length * 7 + 1;
 const BARS = " ▁▂▃▄▅▆▇";
-const AGENT_ACTIONS = ["open", "transcript", "steer", "cancel", "model"] as const;
+const AGENT_ACTIONS = ["open", "answer", "transcript", "steer", "cancel", "model"] as const;
 const AGENT_LABELS: Readonly<Record<(typeof AGENT_ACTIONS)[number], string>> = {
-  open: "open conversation", transcript: "transcript", steer: "steer", cancel: "cancel", model: "model",
+  open: "open conversation", answer: "answer", transcript: "transcript", steer: "steer", cancel: "cancel", model: "model",
 };
 const JOB_ACTIONS = ["output", "search", "follow", "peek", "background", "stop"] as const;
 
@@ -153,6 +153,24 @@ function wrapped(text: string, color: string, width: number, cap: number): strin
   if (rows.length > cap && shown.length) shown[shown.length - 1] = truncateToWidth(shown[shown.length - 1] ?? "", Math.max(1, width - 2), "") + "…";
   return shown.map(line => fill(" " + color + line, width));
 }
+/**
+ * A build child's detail under its title: what it owns, what it starts after and waits for, the owner's steers,
+ * its open question, its notes (pending model, edits outside its files, error), then its meta. Short terminals
+ * keep only the question, the one thing the owner must act on; meta drops below 52 columns.
+ */
+function childDetail(row: AgentRow, width: number, short: boolean): string[] {
+  const asks = row.question === undefined ? [] : wrapped("▲ Asks: " + row.question, PANEL_WARNING, width, short ? 2 : 4);
+  if (short) return asks;
+  const lines = wrapped("Owns: " + (row.owns?.length ? row.owns.join(", ") : "nothing (read-only)"), PANEL_MUTED, width, 3);
+  if (row.after?.length) lines.push(...wrapped("Starts after: " + row.after.join(", "), PANEL_MUTED, width, 2));
+  // The live wait of a queued child arrives as its muted notes.
+  for (const note of row.notes) if (note.tone === "muted") lines.push(...wrapped(note.text, PANEL_MUTED, width, 2));
+  if (row.steers?.length) lines.push(...wrapped("Steered: " + row.steers.join(" · "), PANEL_BLUE, width, 3));
+  lines.push(...asks);
+  for (const note of row.notes) if (note.tone !== "muted") lines.push(...wrapped(note.text, toneColor(note.tone), width, 4));
+  if (width >= 52 && row.meta.length) lines.push(...wrapped(row.meta.join(" · "), PANEL_MUTED, width, 3));
+  return lines;
+}
 
 /**
  * Timeline bars, one row per agent: `┄` waiting, `━` running in the agent's hue, `━` in warning tone while
@@ -228,15 +246,9 @@ export function renderAgents(model: AgentsModel, selected: string | undefined, w
     const row = entry.row;
     rule();
     push(fill(" " + BOLD + options.color(row.hue) + row.name + UNBOLD + PANEL_TEXT + "  " + row.title, width));
-    if (!options.short) {
+    if (row.source === "child") lines.push(...childDetail(row, width, options.short));
+    else if (!options.short) {
       if (row.meta.length) lines.push(...wrapped(row.meta.join(" · "), PANEL_MUTED, width, 3));
-      if (row.pendingModel) push(fill(" " + PANEL_BLUE + `Next request uses ${row.pendingModel}`, width));
-      if (row.owns !== undefined || row.after?.length) {
-        const owns = row.owns?.length ? row.owns.join(", ") : "nothing (read-only)";
-        lines.push(...wrapped(`Owns: ${owns}${row.after?.length ? " · starts after " + row.after.join(", ") : ""}`, PANEL_MUTED, width, 3));
-      }
-      if (row.steers?.length) lines.push(...wrapped("Steered: " + row.steers.join(" · "), PANEL_BLUE, width, 3));
-      if (row.question) lines.push(...wrapped("▲ " + row.question, PANEL_WARNING, width, 3));
       for (const note of row.notes) lines.push(...wrapped(note.text, toneColor(note.tone), width, 4));
     }
     const actions = actionRows(row.key, agentActions(row), width);
@@ -298,7 +310,7 @@ export class AgentsView {
     if (!entry) return false;
     const enter = matchesKey(data, "enter");
     const action: AgentsAction | undefined = entry.kind === "agent"
-      ? enter ? "open" : data === "t" ? "transcript" : data === "s" ? "steer" : data === "x" ? "cancel" : data === "m" ? "model" : undefined
+      ? enter ? "open" : data === "a" ? "answer" : data === "t" ? "transcript" : data === "s" ? "steer" : data === "x" ? "cancel" : data === "m" ? "model" : undefined
       : enter ? "output" : data === "/" ? "search" : data === "f" ? "follow" : data === "p" ? "peek" : data === "b" ? "background" : data === "x" ? "stop" : undefined;
     if (!action) return false;
     if (this.actions().includes(action)) { this.host.act(action, entry.row.key); return true; }

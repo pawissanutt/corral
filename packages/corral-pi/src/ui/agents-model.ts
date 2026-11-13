@@ -142,7 +142,7 @@ export interface AgentCapabilities {
   readonly steer?: boolean;        // s: point the composer at it (build)
   readonly cancel?: boolean;       // x: cancel it (build)
   readonly model?: boolean;        // m: change its model for the next request (build)
-  readonly answer?: boolean;       // Enter on a `needs` row opens its question (build)
+  readonly answer?: boolean;       // a: dock its question (build)
 }
 /** Capability present but not usable in the current state: shown dim with this reason. */
 export type Disabled = Partial<Record<keyof AgentCapabilities, string>>;
@@ -208,13 +208,14 @@ export interface AgentsModel {
   readonly origin: number;
 }
 
-/** Callbacks for actions. The workbench implements open/transcript/job actions; build adds steer/cancel/model. */
+/** Callbacks for actions. The workbench implements open/transcript/job actions; build adds steer/cancel/model/answer. */
 export interface AgentActions {
   open(key: string): void;
   transcript(key: string): void;
   steer?(key: string): void;
   cancel?(key: string): void;
   model?(key: string): void;
+  answer?(key: string): void;
 }
 
 /** Host observations only. Parentage is provenance, never a board dependency. The host fills it in session.ts. */
