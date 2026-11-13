@@ -3,6 +3,7 @@ import { decodeKittyPrintable, matchesKey, truncateToWidth, visibleWidth } from 
 import type { Component, TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { QueueControl, QueuedItem } from "../host/queue-control.ts";
 import { keyCap } from "./frame.ts";
+import { PASTE_START } from "./build/choice-dock.ts";
 import { plainLabel, PANEL_BG, PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_SELECTED, PANEL_TEXT, RESET } from "./panels-view.ts";
 
 export interface QueueDockHost {
@@ -64,6 +65,17 @@ function movable(items: readonly QueuedItem[], key: string, delta: -1 | 1): bool
   return at >= 0 && !!self?.editable && !!other?.editable && other.policy === self.policy;
 }
 
+/** Queued input that is not the owner's, counted by where it came from: `3 inbox deliveries · 2 extension notices`. */
+function sources(items: readonly QueuedItem[]): string {
+  const count = (origin: QueuedItem["origin"]) => items.filter(item => item.origin === origin).length;
+  const parts: string[] = [];
+  const add = (n: number, one: string, many: string) => { if (n) parts.push(`${n} ${n === 1 ? one : many}`); };
+  add(count("corral-inbox"), "inbox delivery", "inbox deliveries");
+  add(count("extension"), "extension notice", "extension notices");
+  add(items.filter(item => item.origin !== "corral-inbox" && item.origin !== "extension").length, "queued notice", "queued notices");
+  return parts.join(" · ");
+}
+
 export class QueueDock implements Component {
   focused = false;
   selected: string | undefined;
@@ -98,6 +110,8 @@ export class QueueDock implements Component {
 
   handleKey(data: string): boolean {
     if (!this.focused) return false;
+    // Pasted text is typing: the composer takes it, so a later Enter sends the draft instead of editing an item.
+    if (data.startsWith(PASTE_START)) { this.leave(); return false; }
     const ch = decodeKittyPrintable(data) ?? data;
     const op = (kind: QueueOp) => { const key = this.current()?.key; if (key) void this.operate(key, kind); return true; };
     if (matchesKey(data, "escape") || matchesKey(data, "tab")) { this.leave(); return true; }
@@ -125,16 +139,15 @@ export class QueueDock implements Component {
     if (current !== undefined && current < this.offset) this.offset = current;
     else if (current !== undefined && current >= this.offset + shown) this.offset = current - shown + 1;
     this.offset = Math.max(0, Math.min(this.offset, editable.length - shown));
-    const lines = [this.header(items, editable.length - shown, tight, width)];
+    const lines = [this.header(items, editable.length - shown, tight, width, editable.length > 0 && !this.controllable)];
     for (let at = this.offset; at < this.offset + shown; at++) {
       lines.push(this.row(editable[at]!, at, items, tight, width, lines.length));
     }
-    const notices = items.length - editable.length;
-    if (notices) {
+    const foreign = items.filter(item => !item.editable);
+    if (foreign.length) {
       this.hits.set(lines.length, [{ from: 0, to: width }]);
-      lines.push(PANEL_BG + " " + PANEL_MUTED + fit(`+ ${notices} queued notice${notices === 1 ? "" : "s"} · read-only`, Math.max(0, width - 2)) + " " + RESET);
+      lines.push(PANEL_BG + " " + PANEL_MUTED + fit(`+ ${sources(foreign)} · read-only`, Math.max(0, width - 2)) + " " + RESET);
     }
-    // Rows are built to exactly `width`; only a terminal narrower than the margins clips them.
     return width < 12 ? lines.map(line => truncateToWidth(line, width, "")) : lines;
   }
 
@@ -224,14 +237,18 @@ export class QueueDock implements Component {
     return result !== undefined && result !== false;
   }
 
-  /** `QUEUE · n waiting · each runs when its receiver is next idle` in muted, `+k more` at the right. */
-  private header(items: readonly QueuedItem[], hidden: number, tight: boolean, width: number): string {
+  /**
+   * `QUEUE · n waiting · each runs when its receiver is next idle` in muted, `+k more` at the right. With queue
+   * control off the clause says editing is off instead, since the rows then carry no controls.
+   */
+  private header(items: readonly QueuedItem[], hidden: number, tight: boolean, width: number, locked: boolean): string {
     const inner = Math.max(0, width - 2);
     const more = hidden > 0 && `+${hidden} more`.length + 2 < inner ? `+${hidden} more` : "";
     // Steer items reach the running turn at its next step, so the idle clause holds only for follow-ups.
     const followUps = items.every(item => item.policy === "follow_up");
     const idle = this.receiver() ? " · each runs when its receiver is next idle" : " · each runs when the agent is next idle";
-    const lead = `QUEUE · ${items.length} waiting${tight || !followUps ? "" : idle}`;
+    const clause = locked ? (tight ? " · editing off" : " · editing is off in this session") : tight || !followUps ? "" : idle;
+    const lead = `QUEUE · ${items.length} waiting${clause}`;
     return PANEL_BG + " " + PANEL_MUTED + fit(lead, inner - (more ? more.length + 2 : 0)) + (more ? "  " + more : "") + " " + RESET;
   }
 

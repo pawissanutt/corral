@@ -18,6 +18,8 @@ export interface BoardViewHost {
   now(): number; short(): boolean;
   click(event: TuiMouseEvent): boolean; focus(): void;
   act(action: BoardAction, id?: string): void;
+  /** True while the view has the keys: the selection bar is accent then, muted otherwise. Absent reads as focused. */
+  focused?(): boolean;
 }
 
 const BOLD = "\x1b[1m", UNBOLD = "\x1b[22m", GAP = "  ";
@@ -122,7 +124,7 @@ function actionLine(id: string, actions: readonly ("details" | "refresh")[], wid
  * stage, then the title. The empty states are paragraphs one blank row apart (none when the view is short).
  */
 export function renderBoard(tasks: readonly BoardTaskStatus[], proposed: BoardPlan | undefined, selected: string | undefined,
-  width: number, options: { readonly now: number; readonly short: boolean; readonly unavailable?: string }):
+  width: number, options: { readonly now: number; readonly short: boolean; readonly unavailable?: string; readonly focused?: boolean }):
   { readonly lines: string[]; readonly hits: ReadonlyMap<number, readonly BoardHit[]>; readonly selectedRow: number } {
   const density = agentDensity(width), lines: string[] = [], hits = new Map<number, BoardHit[]>();
   const push = (line: string, rowHits?: readonly BoardHit[]) => { if (rowHits?.length) hits.set(lines.length, [...rowHits]); lines.push(line); };
@@ -175,7 +177,7 @@ export function renderBoard(tasks: readonly BoardTaskStatus[], proposed: BoardPl
     const stage = boardStage(task, tasks), color = toneColor(stage.tone);
     // A task an agent, the gate or a review is working on shows the spinner.
     const glyph = stage.tone === "accent" ? spinner(options.now, index) : stage.glyph;
-    const lead = (isSelected ? PANEL_BLUE + "▌" : " ") + GAP + BOLD + PANEL_TEXT + cell(plainLabel(task.id), idWidth, base) + UNBOLD;
+    const lead = (isSelected ? (options.focused === false ? PANEL_MUTED : PANEL_BLUE) + "▌" : " ") + GAP + BOLD + PANEL_TEXT + cell(plainLabel(task.id), idWidth, base) + UNBOLD;
     const stageCell = cell(color + glyph + " " + stage.word, stageWidth, base);
     const nowColor = stage.tone === "warning" || stage.tone === "error" ? color : PANEL_MUTED;
     const title = PANEL_TEXT + plainLabel(task.title);
@@ -238,7 +240,7 @@ export class BoardView {
   private render(width: number): string[] {
     const unavailable = this.host.unavailable();
     const frame = renderBoard(this.host.tasks(), this.host.proposed(), this.selected, width, {
-      now: this.host.now(), short: this.host.short(), ...(unavailable === undefined ? {} : { unavailable }),
+      now: this.host.now(), short: this.host.short(), focused: this.host.focused?.() ?? true, ...(unavailable === undefined ? {} : { unavailable }),
     });
     this.hits = frame.hits;
     const height = this.scroll.viewportHeight, top = this.scroll.scrollTop, row = frame.selectedRow;

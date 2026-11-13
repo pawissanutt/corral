@@ -2,11 +2,11 @@ import { expect, test } from "bun:test";
 import { KeybindingsManager } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { getKeybindings, setKeybindings, sliceByColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { chromeTier } from "./header.ts";
-import { contextHints, footerBase, footerRow, keyGroups, type HintState, type KeyContext } from "./keymap.ts";
+import { contextHints, footerBase, footerRow, keyGroups, viewKey, type HintState, type KeyContext } from "./keymap.ts";
 import { PANEL_BLUE, PANEL_KEY } from "./panels-view.ts";
 
 const CONTEXTS: readonly KeyContext[] = ["composer", "agents", "agent", "changes", "task", "lifecycle", "proof", "artifacts",
-  "inbox", "usage", "image", "sidebar", "queue", "dialog", "palette", "keys", "pager", "board", "choice"];
+  "inbox", "usage", "image", "sidebar", "queue", "dialog", "palette", "keys", "pager", "board", "choice", "questions"];
 const state = (context: KeyContext, overrides: Partial<HintState> = {}): HintState => ({
   context, mode: { taskBound: true, answer: true, lifecycle: true }, streaming: true,
   queue: { items: 3, editable: 2, control: true },
@@ -85,7 +85,7 @@ test("as many hints as fit show at any width; F1 reads keys when none was droppe
   expect(ids(92).length - 1).toBeGreaterThan(4);
   expect(label(46)).toBe("more"); expect(ids(46).length).toBeGreaterThan(1);
   const one = [contextHints(state("composer", { streaming: false, queue: { items: 0, editable: 0, control: true } }))[0]!];
-  expect(footerRow(one, "narrow", 92, true).hits.map(hit => hit.hint.label)).toEqual(["send", "keys"]);
+  expect(footerRow(one, "narrow", 92, true).hits.map(hit => hit.hint.label)).toEqual(["send", "actions", "keys"]);
 });
 
 test("in Chat the composer footer names the tool-output key last, before F2 and F1, and drops it first when narrow", () => {
@@ -112,7 +112,7 @@ const TARGETS: readonly Build[] = [
 ];
 const CHILD_ROW = ["open", "answer", "steer", "cancel", "model"];
 
-test("the build footer never overflows from 10 to 200 columns, and the docked choice has no F2 or F1", () => {
+test("the build footer never overflows from 10 to 200 columns, and the docked choice keeps F2 and F1 when they fit", () => {
   const cases: HintState[] = [
     ...TARGETS.flatMap(build => [false, true].map(streaming => state("composer", { build, streaming }))),
     state("agents", { build: BUILD, selection: CHILD_ROW }),
@@ -129,11 +129,10 @@ test("the build footer never overflows from 10 to 200 columns, and the docked ch
       expect(visibleWidth(line)).toBe(width);
       for (const hit of hits) expect(hit.to).toBeLessThanOrEqual(width);
       const ids = hits.map(hit => hit.hint.id);
-      if (item.context === "choice") { expect(ids).not.toContain("f1"); expect(ids).not.toContain("f2"); }
-      else expect(ids[ids.length - 1]).toBe("f1");
+      expect(ids[ids.length - 1]).toBe("f1");
     }
   }
-  expect(footerBase("choice")).toBeFalse();
+  expect(footerBase("choice")).toBeTrue();
 });
 
 test("Alt+T appears only with a steerable child or a child target, and Enter names the child", () => {
@@ -162,11 +161,11 @@ test("a answer is offered only when the selected child asks", () => {
 
 test("the board offers review, plan and task hints only when the view offers them", () => {
   const keys = (selection: string[]) => contextHints(state("board", { build: BUILD, selection })).map(hint => hint.key);
-  expect(keys(["review", "details", "plan", "refresh"])).toEqual(["↑↓", "p", "⏎", "n", "r", "esc"]);
+  expect(keys(["review", "details", "plan", "refresh"])).toEqual(["↑↓", "p", "esc", "⏎", "n", "r"]);
   expect(keys(["details"])).not.toContain("p");
   expect(keys(["details"])).not.toContain("n");
   // No task on the board: no task keys, only what still acts.
-  expect(keys(["plan", "refresh"])).toEqual(["n", "r", "esc"]);
+  expect(keys(["plan", "refresh"])).toEqual(["n", "esc", "r"]);
   // Outside a workspace with nothing filed: neither task keys nor planning.
   expect(keys([])).toEqual(["esc"]);
   const row = stripTerminalSequences(footerRow(contextHints(state("board", { build: BUILD, selection: [] })), chromeTier(140), 140, footerBase("board")).line);
@@ -192,4 +191,72 @@ test("the build keys list has Board and no Task, Proof or Inbox; other modes kee
   for (const title of ["Task", "Proof", "Inbox"]) expect(titles(true, false)).not.toContain(title);
   expect(titles(false, true)).toContain("Inbox"); expect(titles(false, true)).toContain("Proof");
   expect(titles(false, true)).not.toContain("Board");
+});
+
+const FOOTER_WIDTHS = [46, 61, 92, 104, 140];
+
+test("F2 shows whenever the essential hints, F2 and F1 fit, at every width tier", () => {
+  for (const context of CONTEXTS) {
+    if (!footerBase(context)) continue;
+    for (const width of FOOTER_WIDTHS) {
+      const hints = contextHints(state(context, { streaming: false })), row = footerRow(hints, chromeTier(width), width, true);
+      // Essential: the first hint, and Esc when it comes within the first three.
+      const out = hints.slice(0, 3).findIndex(hint => hint.id === "escape"), kept = hints.slice(0, out < 0 ? 1 : out + 1);
+      const gap = width < 64 ? 1 : 2;
+      const minimum = kept.reduce((sum, hint) => sum + visibleWidth(hint.key) + 3 + visibleWidth(hint.short ?? hint.label), 0) + 12 + 9 + gap * (kept.length + 1);
+      if (minimum <= width - 1) expect(row.hits.map(hit => hit.hint.id)).toContain("f2");
+    }
+  }
+});
+
+test("in the choice, agent, board, lifecycle and artifacts footers Esc comes right after the primary action and is never dropped", () => {
+  const cases: HintState[] = [
+    state("choice", { build: { ...BUILD, exit: true } }), state("agent", { selection: CHILD_ROW }),
+    state("board", { build: BUILD, selection: ["review", "details", "plan", "refresh"] }), state("lifecycle"), state("artifacts"),
+  ];
+  for (const item of cases) {
+    const hints = contextHints(item), at = hints.findIndex(hint => hint.id === "escape");
+    expect(at).toBeGreaterThanOrEqual(0); expect(at).toBeLessThanOrEqual(2);
+    for (const width of FOOTER_WIDTHS) expect(footerRow(hints, chromeTier(width), width, footerBase(item.context)).hits.map(hit => hit.hint.id)).toContain("escape");
+  }
+  // An exit choice offers Changes, after the way out.
+  const exit = contextHints(state("choice", { build: { ...BUILD, exit: true } })).map(hint => hint.id);
+  expect(exit.indexOf("f7")).toBeGreaterThan(exit.indexOf("escape"));
+  expect(contextHints(state("choice", { build: BUILD })).some(hint => hint.id === "f7")).toBeFalse();
+});
+
+test("a focused view's footer leads with who has the keys; a click on the lead replays Tab", () => {
+  const hints = contextHints(state("changes", { lead: "Changes" }));
+  expect(hints[0]).toMatchObject({ id: "lead", data: "\t" });
+  expect(contextHints(state("changes")).some(hint => hint.id === "lead")).toBeFalse();
+  const wide = footerRow(hints, chromeTier(140), 140, true), narrow = footerRow(hints, chromeTier(46), 46, true);
+  expect(wide.hits[0]?.hint.id).toBe("lead"); expect(stripTerminalSequences(wide.line)).toContain("Tab to type");
+  expect(narrow.hits[0]?.hint.id).toBe("lead"); expect(stripTerminalSequences(narrow.line)).toContain("Changes");
+});
+
+test("`/` is never a view key: filters and job search take F3", () => {
+  for (const context of CONTEXTS) for (const selection of [undefined, ["output", "stop", "peek", "follow", "search", "background"]]) {
+    expect(contextHints(state(context, { selection })).some(hint => hint.key === "/")).toBeFalse();
+  }
+  for (const context of ["changes", "inbox"] as const) expect(contextHints(state(context)).find(hint => hint.id === "filter")?.key).toBe("F3");
+  expect(contextHints(state("agents", { selection: ["output", "search"] })).find(hint => hint.id === "search")?.key).toBe("F3");
+  const keys = keyGroups({ taskBound: true, answer: true, jobs: true, queueControl: true, lifecycle: true }).flatMap(group => group.rows).map(row => row.key);
+  expect(keys).not.toContain("/"); expect(keys).toContain("F3");
+});
+
+test("F1 lists each view's F-key with its Alt+digit, and the Scroll and Exit groups", () => {
+  const groups = keyGroups({ taskBound: false, answer: true, jobs: false, queueControl: false, lifecycle: false });
+  const views = groups.find(group => group.title === "Views")!.rows.map(row => row.key);
+  expect(views).toEqual(["F9/Alt+1", "F8/Alt+2", "F7/Alt+3", "F11/Alt+4"]);
+  for (const title of ["Scroll", "Exit"]) expect(groups.some(group => group.title === title)).toBeTrue();
+  const exit = (build: boolean) => keyGroups({ taskBound: false, answer: false, jobs: false, queueControl: false, lifecycle: false, build })
+    .find(group => group.title === "Exit")!.rows.map(row => row.key);
+  expect(exit(true)).toContain("/finish"); expect(exit(false)).not.toContain("/finish");
+  expect(exit(false)).toContain("Ctrl+D");
+  // Exit rows are reference only: Enter in F1 never replays Ctrl+C or Ctrl+D.
+  expect(groups.find(group => group.title === "Exit")!.rows.every(row => row.data === undefined)).toBeTrue();
+  // A user binding on Alt+2 takes it away from the views.
+  const previous = getKeybindings();
+  setKeybindings(new KeybindingsManager({ "app.thinking.toggle": "alt+2" }));
+  try { expect(viewKey(1)).toBeUndefined(); expect(viewKey(0)).toBe("alt+1"); } finally { setKeybindings(previous); }
 });

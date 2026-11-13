@@ -59,8 +59,8 @@ test("panel layout streams a held reply and tool output, keeps one binding throu
     mode = new sdk.InteractiveMode(host.runtime, { terminal, tuiMode: "fullscreen", readOnlyQueue: true, verbose: false, mainView: transcript => panels.mainView(transcript) });
     await mode.init(); host.markAttached("interactive");
     void mode.run().catch(error => { throw error; });
-    await physical.untilVisible("WORKER  ● g1"); // the status bar's role pill and bound dot
-    physical.send("\x1b[20~"); // task-bound sessions open on Task; F9 shows the transcript
+    await physical.untilVisible("WORKER  ● bound"); // the status bar's role pill and bound dot
+    physical.send("\x1b[20~"); // F9: Chat, where every session starts; the transcript stays in front
     expect(terminal.mainColumns).toBe(105);
     const initial = binding();
     expect(initial).toMatchObject({ generation: 1, bound: true, boundId: bound, currentId: bound, turn: { current: 0, open: false } });

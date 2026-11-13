@@ -2,14 +2,16 @@
 // rail (34 columns from 105), the collapsed navigation row above the composer and the drawer that
 // row opens. Selection is keyed per tab and the page window keeps it in view with the least
 // movement, so new items never move it. Every state carries a glyph or word next to its colour. The
-// only key cap is `Ctrl+B` beside the toggle; nothing here fills a background except the selected row.
+// only key cap is the sidebar toggle's (`Ctrl+B`, or the key Panels chose); nothing here fills a
+// background except the selected row. Until the owner picks a tab the sidebar shows the most useful
+// one (`autoTab`), and never changes it while it has the focus.
 import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import type { TodoProgress } from "./todo-widget.ts";
 import { keyCap, rule, spinner } from "./frame.ts";
 import { COMPACT_COLUMNS } from "./header.ts";
 import { splitRow } from "./panels-chrome.ts";
 import {
-  pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_SELECTED, PANEL_SUCCESS, PANEL_TEXT,
+  pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_ERROR, PANEL_LINE, PANEL_MUTED, PANEL_SELECTED, PANEL_SUCCESS, PANEL_TEXT,
   PANEL_WARNING, RESET,
 } from "./panels-view.ts";
 
@@ -86,6 +88,16 @@ export function sideSummary(source: SideSource, tiny: boolean): Readonly<Record<
     files: files.state === "error" ? "!" : files.state === "choose" ? "?" : "",
     plan: steps.length ? `${steps.filter(step => step.status.state === "done").length}/${steps.length}` : "",
   };
+}
+
+/**
+ * The tab the sidebar shows while the owner has not picked one: Context while an agent or job is live,
+ * else Plan when the plan has steps, else Context.
+ */
+export function autoTab(source: SideSource): SideTab {
+  const live = (source.agents ?? []).some(agent => !agent.settled) || (source.jobs ?? []).some(job => !job.settled);
+  if (live) return "context";
+  return source.plan.progress?.phases.some(phase => phase.steps.length > 0) ? "plan" : "context";
 }
 
 // One body line: `left` starts at the glyph column (column 1); a function receives the cells it may use.
@@ -201,7 +213,18 @@ function planBlocks(source: SideSource, fold: boolean): Block[] {
   if (!steps.length) return [note("no plan yet")];
   const waits = new Map(progress?.waits?.map(wait => [wait.step, wait.on.kind] as const) ?? []);
   const done = steps.filter(step => step.status.state === "done").length;
-  const blocks: Block[] = [{ rows: [{ left: PANEL_MUTED + `${done}/${steps.length} done` + (stale ? PANEL_WARNING + " · stale" : "") }] }];
+  const head = PANEL_MUTED + `${done}/${steps.length} done` + (stale ? PANEL_WARNING + " · stale" : "");
+  // The wait marks shown on the right are explained in the heading: on a row of their own, or after the
+  // count when finished steps fold under pressure.
+  const marks = new Set(steps.filter(step => !fold || step.status.state !== "done").flatMap(step => {
+    const kind = waits.get(step.id);
+    return kind === "owner" || kind === "event" ? [kind] : [];
+  }));
+  const blocks: Block[] = [!marks.size || !fold ? { rows: [{ left: head }] } : { rows: [{ left: (room: number) => {
+    const text = waitLegend(marks, room - visibleWidth(head) - 3);
+    return head + (text ? PANEL_MUTED + " · " + text : "");
+  } }] }];
+  if (marks.size && !fold) blocks.push({ rows: [{ left: (room: number) => waitLegend(marks, room) }] });
   // Under pressure finished steps fold into one line so the open ones stay in view.
   if (fold && done) blocks.push({ rows: [{ left: PANEL_SUCCESS + "✓" + PANEL_MUTED + ` ${done} done` }] });
   let running = 0;
@@ -220,6 +243,21 @@ function planBlocks(source: SideSource, fold: boolean): Block[] {
     }
   }
   return blocks;
+}
+
+/** Wordings of the wait legend, longest first; each kind keeps its mark (`?` in warning, `…` muted). */
+const LEGEND: Readonly<Record<"owner" | "event", readonly string[]>> = {
+  owner: ["waits for you", "for you", "you"], event: ["waits for an event", "for an event", "event"],
+};
+/** The longest legend for the wait kinds `shown` that fits `room` cells, or nothing. */
+function waitLegend(shown: ReadonlySet<"owner" | "event">, room: number): string {
+  for (let at = 0; at < 3; at++) {
+    const parts = (["owner", "event"] as const).filter(kind => shown.has(kind)).map(kind =>
+      (kind === "owner" ? PANEL_WARNING + "?" : PANEL_MUTED + "…") + " " + PANEL_MUTED + (LEGEND[kind][at] ?? ""));
+    const text = parts.join(PANEL_MUTED + " · ");
+    if (parts.length && visibleWidth(text) <= room) return text;
+  }
+  return "";
 }
 
 const lineCount = (blocks: readonly Block[]) => blocks.reduce((n, block) => n + block.rows.length, 0);
@@ -277,9 +315,10 @@ function compose(left: readonly Segment[], right: readonly Segment[], cells: num
   return { line: paint(text, cells, PANEL_BG), hits };
 }
 const space = (cells: number): Segment => ({ text: " ".repeat(cells), width: cells });
-/** The toggle at a row's right edge: `▸`, `▴` or `▾`, after the `Ctrl+B` key cap when `capped`; all of it clicks. */
-function toggle(arrow: string, capped: boolean): Segment[] {
-  return [...(capped ? [seg(keyCap("Ctrl+B"), " Ctrl+B ", { toggle: true })] : []), seg(PANEL_MUTED + " " + arrow, " " + arrow, { toggle: true })];
+/** The toggle at a row's right edge: `▸`, `▴` or `▾`, after the toggle key's cap when `key` is given; all of it clicks. */
+function toggle(arrow: string, key?: string): Segment[] {
+  const label = key === undefined ? "" : plainLabel(key);
+  return [...(label ? [seg(keyCap(label), ` ${label} `, { toggle: true })] : []), seg(PANEL_MUTED + " " + arrow, " " + arrow, { toggle: true })];
 }
 /** The first `[left, right]` pair that fits `cells` (one-cell margins, one cell between them), else the last. */
 function choose(variants: readonly (readonly [readonly Segment[], readonly Segment[]])[], cells: number): { line: string; hits: SideHit[] } {
@@ -291,6 +330,29 @@ function ruled(lines: readonly string[], hits: ReadonlyMap<number, readonly Side
   if (rows !== undefined && rows < RULE_ROWS) return { lines: [...lines], hits };
   return { lines: [paint(rule(cells), cells, PANEL_BG), ...lines], hits: new Map([...hits].map(([row, list]) => [row + 1, list])) };
 }
+/**
+ * One row that is its own rule: `─ ` then the first variant that fits, the rest of the row `─` in the line
+ * colour up to the toggle and a one-cell margin. Hits are the variant's, moved past the lead-in.
+ */
+function inRule(variants: readonly (readonly [readonly Segment[], readonly Segment[]])[], cells: number): { line: string; hits: SideHit[] } {
+  const lead = 2, room = cells - lead - 1;
+  const [left, right] = variants.find(([l, r]) => width(l) + width(r) + 2 + (width(r) ? 1 : 0) <= room) ?? variants[variants.length - 1] ?? [[], []] as const;
+  const fill = Math.max(0, room - width(left) - width(right) - (width(right) ? 1 : 0) - 1);
+  const hits: SideHit[] = [];
+  let column = lead;
+  for (const part of left) {
+    if (part.hit) hits.push({ ...part.hit, from: column, to: column + part.width });
+    column += part.width;
+  }
+  column = cells - 1 - width(right);
+  right.forEach((part, at) => {
+    if (part.hit && column >= 0) hits.push({ ...part.hit, from: column, to: at === right.length - 1 ? cells : column + part.width });
+    column += part.width;
+  });
+  const text = PANEL_LINE + "─ " + left.map(part => part.text).join("") + PANEL_BG + " " + PANEL_LINE + "─".repeat(fill)
+    + (width(right) ? PANEL_BG + " " + right.map(part => part.text).join("") : "") + PANEL_BG + " ";
+  return { line: paint(text, cells, PANEL_BG), hits };
+}
 function pagerSegments(pager: Pager): Segment[] {
   const back = pager.first > 0, next = pager.last < pager.count - 1;
   const range = pager.first === pager.last ? `${pager.first + 1}` : `${pager.first + 1}–${pager.last + 1}`;
@@ -300,15 +362,28 @@ function pagerSegments(pager: Pager): Segment[] {
 }
 
 export class Sidebar {
-  tab: SideTab = "context";
   focused = false;
   drawer = false;
+  /** The cap the toggle draws: the sidebar key Panels chose (`Ctrl+B`, or `Alt+B` where Ctrl+B is herdr's prefix). */
+  toggleKey = "Ctrl+B";
+  /** The owner's explicit choice (a tab click, F6, arrows, the palette); once made it stays. */
+  private picked: SideTab | undefined;
+  /** The automatic tab while nothing is picked; it follows `autoTab` only while the sidebar has no focus. */
+  private auto: SideTab = "context";
   private readonly states: Record<SideTab, TabState> = { context: Sidebar.state(), files: Sidebar.state(), plan: Sidebar.state() };
   /** Tab hits drawn by the collapsed row (a click opens the drawer) and by the open drawer (the active tab closes it). */
   private readonly opening = new WeakSet<SideHit>();
   private readonly closing = new WeakSet<SideHit>();
 
   constructor(private readonly changed: () => void) {}
+
+  /** The tab shown: the owner's pick, else the automatic one. Setting it is an explicit pick. */
+  get tab(): SideTab { return this.picked ?? this.auto; }
+  set tab(value: SideTab) { this.picked = value; }
+  /** Follows `autoTab` until the owner picks a tab; a focused sidebar keeps its tab, so its selection never moves. */
+  private follow(source: SideSource): void {
+    if (this.picked === undefined && !this.focused) this.auto = autoTab(source);
+  }
 
   private static state(): TabState {
     return { key: undefined, index: 0, offset: 0, align: undefined, first: 0, last: 0, firstKey: undefined, lastKey: undefined, capacity: Infinity };
@@ -322,10 +397,11 @@ export class Sidebar {
   rail(source: SideSource, cells: number, height: number, resizing?: number): SideFrame {
     const lines: string[] = [], hits = new Map<number, SideHit[]>();
     if (height <= 0) return { lines, hits };
+    this.follow(source);
     const head = resizing === undefined
-      ? choose([[this.rowSegments(undefined, 1), toggle("▸", true)], [this.rowSegments(undefined, 1), toggle("▸", false)],
-        [this.initials(true), toggle("▸", false)]], cells)
-      : compose([seg(PANEL_BLUE + `⇔ ${resizing} cols`, `⇔ ${resizing} cols`)], toggle("▸", false), cells);
+      ? choose([[this.rowSegments(undefined, 1), toggle("▸", this.toggleKey)], [this.rowSegments(undefined, 1), toggle("▸")],
+        [this.initials(true), toggle("▸")]], cells)
+      : compose([seg(PANEL_BLUE + `⇔ ${resizing} cols`, `⇔ ${resizing} cols`)], toggle("▸"), cells);
     lines.push(head.line); hits.set(0, head.hits);
     const blank = paint("", cells, PANEL_BG);
     const capacity = height - lines.length;
@@ -346,19 +422,22 @@ export class Sidebar {
   /**
    * The collapsed navigation row under its rule: muted labels with their summaries in text, and
    * `[Ctrl+B] ▴` at the right (`▴` alone when tiny). The rule goes when the terminal has fewer than
-   * 16 `rows`.
+   * 16 `rows`. A row without any summary takes one row: its labels and toggle sit inside the rule.
    */
   row(source: SideSource, cells: number, tiny: boolean, rows?: number): SideFrame {
-    const summary = sideSummary(source, tiny), short = sideSummary(source, true), plain = toggle("▴", false);
+    this.follow(source);
+    const summary = sideSummary(source, tiny), short = sideSummary(source, true), plain = toggle("▴");
     // While a helper, child or job is at work the Context summary leads with the shared spinner.
     const spin = (source.agents ?? []).some(agent => !agent.settled) || (source.jobs ?? []).some(job => !job.settled);
+    const capped = tiny ? [] : [[this.rowSegments(summary, 2, spin), toggle("▴", this.toggleKey)] as [Segment[], Segment[]]];
     const variants: [readonly Segment[], readonly Segment[]][] = tiny
       ? [[this.rowSegments(summary, 2, spin), plain], [this.rowSegments(undefined, 2), plain], [this.initials(false), plain]]
-      : [[this.rowSegments(summary, 2, spin), toggle("▴", true)], [this.rowSegments(summary, 2, spin), plain], [this.rowSegments(short, 2, spin), plain],
+      : [...capped, [this.rowSegments(summary, 2, spin), plain], [this.rowSegments(short, 2, spin), plain],
         [this.rowSegments(undefined, 2), plain], [this.initials(false), plain]];
-    const row = choose(variants, cells);
+    const empty = !spin && !summary.context && !summary.files && !summary.plan;
+    const row = empty && (rows === undefined || rows >= RULE_ROWS) ? inRule(variants, cells) : choose(variants, cells);
     for (const hit of row.hits) if (hit.tab) this.opening.add(hit);
-    return ruled([row.line], new Map([[0, row.hits]]), cells, rows);
+    return empty ? { lines: [row.line], hits: new Map([[0, row.hits]]) } : ruled([row.line], new Map([[0, row.hits]]), cells, rows);
   }
 
   /**
@@ -366,8 +445,12 @@ export class Sidebar {
    * right (`▾` alone below 64 columns), then the active tab's body for `drawerRows(rows)` rows at most.
    */
   drawerFrame(source: SideSource, cells: number, rows: number): SideFrame {
+    this.follow(source);
     const capacity = drawerRows(rows), body = this.body(source, cells, capacity, true);
-    const right = (capped: boolean) => body.pager ? [...pagerSegments(body.pager), space(1), ...toggle("▾", capped)] : toggle("▾", capped);
+    const right = (capped: boolean) => {
+      const end = toggle("▾", capped ? this.toggleKey : undefined);
+      return body.pager ? [...pagerSegments(body.pager), space(1), ...end] : end;
+    };
     const variants: [readonly Segment[], readonly Segment[]][] = [
       ...(cells >= COMPACT_COLUMNS ? [[this.rowSegments(undefined, 2), right(true)] as [Segment[], Segment[]]] : []),
       [this.rowSegments(undefined, 2), right(false)], [this.initials(true), right(false)]];

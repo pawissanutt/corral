@@ -15,6 +15,10 @@
 //       ...(state === "failed" ? { outcome: firstLine(resultText(call.result)) } : {}) };
 //   };
 // Register it through a `PresenterModule` in `src/ui/tool-rendering.ts`; nested rows use `rowLine`.
+//
+// Folding: a settled successful row without body offers the transcript a group member (`groupMember()` on the row
+// component) when its renderers carry a `RowGrouping` (tool-group.ts). Pi's transcript folds a run of members of one
+// kind into the group row the grouping draws; the rows themselves stay as they are.
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
 
@@ -100,6 +104,8 @@ export interface CallInput {
    */
   readonly totals?: { readonly lines?: number; readonly bytes?: number };
   readonly toolCallId: string;
+  /** The call never ran: the owner stopped the turn before it started. */
+  readonly notRun?: boolean;
 }
 export type Presenter = (call: CallInput) => RowModel;
 /** What the kit itself needs from the host. */
@@ -381,7 +387,59 @@ export function rowBlock(model: RowModel, width: number, now: number, expanded: 
 type RenderContext = Parameters<NonNullable<ToolRenderers["renderCall"]>>[2];
 interface CallFields {
   readonly args: Record<string, unknown>; readonly argsComplete: boolean; readonly executionStarted: boolean;
-  readonly expanded: boolean; readonly cwd: string; readonly toolCallId: string;
+  readonly expanded: boolean; readonly cwd: string; readonly toolCallId: string; readonly notRun: boolean;
+}
+
+/** One settled row as a fold sees it. */
+export interface GroupEntry { readonly model: RowModel; readonly call: CallInput }
+/** Which rows are of one kind and from how many consecutive rows they fold. */
+export interface GroupKind { readonly key: string; readonly min: number }
+/** How the rows of one tool fold (tool-group.ts). */
+export interface RowGrouping {
+  /** The kind of a settled successful collapsed row without body; undefined when it never folds. */
+  kind(entry: GroupEntry): GroupKind | undefined;
+  /** The group row of `entries` (oldest first, all of one kind) on a row `room` cells wide. */
+  summary(entries: readonly GroupEntry[], room: number): RowModel;
+}
+/** What a group row draws, as Pi's transcript takes it. */
+export interface GroupRow {
+  readonly lines: readonly string[];
+  handleMouse?(event: TuiMouseEvent): TuiMouseEventResult | undefined;
+}
+/** A row's membership of a fold, as Pi's transcript asks for it (`TranscriptGroupMember`). */
+export interface GroupMember {
+  readonly key: string;
+  readonly min: number;
+  render(run: readonly GroupMember[], width: number): GroupRow;
+}
+
+/** The group row of `entries` drawn with the kit at `width`, inset like the rows it folds. */
+function groupRow(grouping: RowGrouping, entries: readonly GroupEntry[], width: number, inset: number, now: number): GroupRow {
+  const pad = Math.max(0, Math.min(inset, Math.floor((width - 1) / 2))), room = Math.max(1, width - pad * 2);
+  const model = grouping.summary(entries, room);
+  const block = rowBlock(model, room, now, false, timeOf(model, now));
+  const lines = block.lines.map(line => " ".repeat(pad) + line);
+  const view = block.view, open = model.view;
+  if (!view || !open) return { lines };
+  return {
+    lines,
+    handleMouse: event => {
+      if (event.type !== "click" || event.button !== "left" || event.y !== 0) return undefined;
+      if (event.x < view.from + pad || event.x >= view.to + pad) return undefined;
+      open.open();
+      return { handled: true };
+    },
+  };
+}
+
+/** One settled row's membership of a fold; the transcript hands every member of a run to the first one's `render`. */
+class RowMember implements GroupMember {
+  constructor(readonly key: string, readonly min: number, readonly entry: GroupEntry, private readonly grouping: RowGrouping,
+    private readonly inset: number) {}
+  render(run: readonly GroupMember[], width: number): GroupRow {
+    const entries = run.flatMap(member => member instanceof RowMember ? [member.entry] : []);
+    return groupRow(this.grouping, entries, width, this.inset, Date.now());
+  }
 }
 
 /** One tool call's row: recomputed at render time while it is writing, running or live, cached once settled. */
@@ -394,9 +452,11 @@ class ToolRow implements Component {
   private startedAt: number | undefined;
   private inset = 1;
   private cached: RowModel | undefined;
+  private member: RowMember | undefined;
   private view: { readonly from: number; readonly to: number; readonly open: () => void } | undefined;
   private hold: { readonly id: string; readonly release: () => void } | undefined;
-  constructor(private readonly name: string, private readonly present: Presenter, private readonly deps: RowDeps) {}
+  constructor(private readonly name: string, private readonly present: Presenter, private readonly deps: RowDeps,
+    private readonly grouping?: RowGrouping) {}
 
   setCall(fields: CallFields, inset: number): void {
     this.fields = fields; this.inset = inset; this.cached = undefined;
@@ -449,11 +509,35 @@ class ToolRow implements Component {
     return { handled: true };
   }
   invalidate(): void { this.cached = undefined; }
+  /**
+   * The row's group member while it may fold: settled (its model cached), successful, collapsed, without body and not
+   * held live, of a kind the grouping names. Pi asks only rows it already found settled and collapsed.
+   */
+  groupMember(): GroupMember | undefined {
+    const grouping = this.grouping, call = grouping ? this.call() : undefined;
+    if (!grouping || !call || call.expanded || call.partial || call.isError || call.notRun || !call.result) return undefined;
+    const model = this.model(call);
+    if (this.member?.entry.model === model) return this.member;
+    this.member = undefined;
+    if (model !== this.cached || model.state !== "ok" || model.body?.length || model.live) return undefined;
+    const kind = grouping.kind({ model, call });
+    if (kind) this.member = new RowMember(kind.key, kind.min, { model, call }, grouping, this.inset);
+    return this.member;
+  }
 }
 
-/** `present(call)` as the kit draws it: a call whose arguments are still streaming always reads `writing`. */
+/**
+ * `present(call)` as the kit draws it: a call whose arguments are still streaming always reads `writing`; a call that
+ * never ran reads `○ <verb> <target> · not run` and nothing more.
+ */
 export function presentCall(present: Presenter, call: CallInput): RowModel {
   const presented = present(call);
+  if (call.notRun) {
+    return {
+      state: "waiting", verb: presented.verb, outcome: "not run",
+      ...(presented.target ? { target: presented.target } : {}), ...(presented.targetClip ? { targetClip: presented.targetClip } : {}),
+    };
+  }
   return !call.argsComplete && !call.result && presented.state === "running" ? { ...presented, state: "writing" } : presented;
 }
 
@@ -463,14 +547,15 @@ const rows = new WeakMap<object, ToolRow>();
 /**
  * Pi renderers (`renderShell: "self"`) that draw `present(call)` with the kit for tool `name`. The call renderer
  * returns the row; the result renderer records the result on it and draws nothing, so the row is one component
- * that Pi's click toggles and Ctrl+O expands, with Pi's image rows still appended below it.
+ * that Pi's click toggles and Ctrl+O expands, with Pi's image rows still appended below it. With `grouping`, a
+ * settled row offers the transcript a group member, so runs of one kind fold.
  */
-export function rowRenderers(present: Presenter, deps: RowDeps, name: string): ToolRenderers {
+export function rowRenderers(present: Presenter, deps: RowDeps, name: string, grouping?: RowGrouping): ToolRenderers {
   const rowOf = (context: RenderContext): ToolRow => {
     const state: unknown = context.state;
-    if (state === null || typeof state !== "object") return new ToolRow(name, present, deps);
+    if (state === null || typeof state !== "object") return new ToolRow(name, present, deps, grouping);
     let row = rows.get(state);
-    if (!row) { row = new ToolRow(name, present, deps); rows.set(state, row); }
+    if (!row) { row = new ToolRow(name, present, deps, grouping); rows.set(state, row); }
     return row;
   };
   return {
@@ -479,7 +564,7 @@ export function rowRenderers(present: Presenter, deps: RowDeps, name: string): T
       const row = rowOf(context);
       row.setCall({
         args: recordOf(args) ?? {}, argsComplete: context.argsComplete, executionStarted: context.executionStarted,
-        expanded: context.expanded, cwd: context.cwd, toolCallId: context.toolCallId,
+        expanded: context.expanded, cwd: context.cwd, toolCallId: context.toolCallId, notRun: context.notRun === true,
       }, context.outputPad);
       return row;
     },

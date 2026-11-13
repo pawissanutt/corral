@@ -26,6 +26,10 @@ export function hiddenThinkingLabel(): string {
   return key ? `thinking hidden · ${keyLabel(key)} shows it` : "thinking hidden";
 }
 
+/** Syntax tokens draw no colour of their own: a fenced code block paints its code in `mdCodeBlock` around them. */
+const SYNTAX_TOKENS = ["syntaxComment", "syntaxKeyword", "syntaxFunction", "syntaxVariable", "syntaxString", "syntaxNumber",
+  "syntaxType", "syntaxOperator", "syntaxPunctuation"] as const;
+
 /**
  * Packaged host theme only: ambient theme discovery remains disabled. Every surface Pi paints is the one
  * canvas background (assistant text, tool cards, custom messages) except the user message bubble and the
@@ -36,9 +40,13 @@ export function panelTheme(ThemeCtor: ThemeClass, mode: ReturnType<Theme["getCol
   // Set all syntax/markdown tokens too: dark-theme inherited colors are unreadable on light panels.
   const fg = Object.fromEntries(Object.keys(DRACULA_FG).map(key => [key, p.text])) as typeof DRACULA_FG;
   const bg = Object.fromEntries(Object.keys(DRACULA_BG).map(key => [key, p.background])) as typeof DRACULA_BG;
-  return new ThemeCtor({ ...fg, accent: p.accent, border: p.line, borderAccent: p.accent, borderMuted: p.line,
+  // An empty colour is the default foreground, which the panel canvas sets to the text colour: highlighted code reads
+  // as plain text in a tool row and in the code colour inside a Markdown code block.
+  const syntax = Object.fromEntries(SYNTAX_TOKENS.map(key => [key, ""]));
+  return new ThemeCtor({ ...fg, ...syntax, accent: p.accent, border: p.line, borderAccent: p.accent, borderMuted: p.line,
     muted: p.muted, dim: p.muted, success: p.success, warning: p.warning, error: p.error,
-    mdLink: p.accent, mdCode: p.code, mdHeading: p.head, toolTitle: p.accent, toolDiffAdded: p.success, toolDiffRemoved: p.error,
+    mdLink: p.accent, mdCode: p.code, mdCodeBlock: p.code, mdCodeBlockBorder: p.muted, mdHeading: p.head,
+    toolTitle: p.accent, toolDiffAdded: p.success, toolDiffRemoved: p.error,
     thinkingText: p.muted,
     searchMatchText: p.text, scrollbarTrack: p.line, scrollbarThumb: p.rule,
   }, { ...bg, userMessageBg: p.bubble, selectedBg: p.selected, searchMatchBg: p.selected }, mode,

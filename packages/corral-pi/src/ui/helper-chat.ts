@@ -14,7 +14,7 @@ import {
 import type { HelperMessage } from "../extensions/subagent/inspection.ts";
 import type { ConversationSource } from "./agents-model.ts";
 import { userLabel } from "./panels-theme.ts";
-import { plainLabel, PANEL_BUBBLE, PANEL_MUTED, PANEL_TEXT } from "./panels-view.ts";
+import { plainLabel, PANEL_BUBBLE, PANEL_MUTED, PANEL_TEXT, PANEL_WARNING } from "./panels-view.ts";
 import { presenterFor, type ToolRenderDeps } from "./tool-rendering.ts";
 import { baseState, firstLine, presentCall, resultText, rowLine, type CallInput, type Presenter, type RowModel } from "./tool-row.ts";
 
@@ -26,6 +26,10 @@ export interface HelperChatStyle {
 }
 /** The prompt bubble's label (`brief from parent`) and the muted lines under the prompt inside it. */
 export interface PromptBubble { readonly label: string; readonly notes?: readonly string[] }
+/** An owner's steer: its text and when it was sent; without a time it is drawn after the replies. */
+export interface Steer { readonly text: string; readonly at?: number }
+/** The owner's steers of one conversation and the label of their bubbles (`you → picker-ui`). */
+export interface Steers { readonly label: string; readonly items: readonly Steer[] }
 
 const RESET = "\x1b[0m";
 /** The widest a bubble grows, as the mock's `.msg`. */
@@ -112,6 +116,15 @@ function bubbleRows(lines: readonly string[], width: number, pad: number): strin
 export function bubble(label: string, text: string, width: number, notes: readonly string[] = []): string[] {
   return bubbleRows([PANEL_MUTED + label + " " + PANEL_TEXT + text, ...notes.map(note => PANEL_MUTED + note)], width, 1);
 }
+/**
+ * What the retention limit took from a conversation: the count of earlier messages dropped when it is known
+ * (`12 earlier messages were dropped by the retention limit`), otherwise that some content was omitted.
+ */
+export function retentionNote(source: { readonly dropped?: number }): string {
+  const dropped = source.dropped ?? 0;
+  return dropped > 0 ? `${dropped} earlier ${dropped === 1 ? "message was" : "messages were"} dropped by the retention limit`
+    : "Some content was omitted by the retention limit";
+}
 /** The call-site hint of a Code Mode script: the tools it calls, in order of first use (`read, bash`). */
 function callSites(code: string): string {
   const names = [...code.matchAll(/\btools\.([A-Za-z_$][\w$]*)\s*\(/g)].map(match => match[1]!);
@@ -174,11 +187,12 @@ export class HelperChat {
     private readonly style?: () => HelperChatStyle) {}
   /**
    * The conversation rows for `width`: the prompt bubble (labelled `bubble.label`, default `prompt`) with its notes
-   * inside, then replies and tool lines in order, a blank row before each run of tool lines that follows the
-   * prompt or a reply.
+   * inside, the retention note when the limit dropped or clipped content, then replies and tool lines in order, a
+   * blank row before each run of tool lines that follows the prompt or a reply. Each steer sits before the first
+   * message that started after it was sent; steers sent after every message, and steers without a time, follow.
    */
   renderHelper(helper: ConversationSource, width: number,
-    options: { readonly bubble?: PromptBubble; readonly now?: number } = {}): string[] {
+    options: { readonly bubble?: PromptBubble; readonly now?: number; readonly steers?: Steers } = {}): string[] {
     const style = this.style?.() ?? { outputPad: 1, markdownTheme: getMarkdownTheme(), markdownTransformers: [], renderers: () => undefined };
     const label = options.bubble?.label ?? "prompt", transformers = style.markdownTransformers;
     // The host hands out fresh wrapper functions with every presentation, so the chain is keyed by its length.
@@ -197,12 +211,23 @@ export class HelperChat {
     };
     append(this.prompt);
     rows.push(...bubbleRows((options.bubble?.notes ?? []).map(note => PANEL_MUTED + note), width, style.outputPad));
+    // The note stands where the dropped messages were: right under the prompt, wrapped under its text, not its glyph.
+    if (helper.truncated) rows.push("", ...wrapTextWithAnsi(retentionNote(helper), Math.max(1, width - 3))
+      .map((line, index) => " " + PANEL_WARNING + (index === 0 ? "! " : "  ") + line + RESET));
     const live = helper.phase === "running" || helper.phase === "needs", now = options.now ?? Date.now();
     let lastLine = false;
+    const timed = (options.steers?.items ?? []).filter(steer => steer.at !== undefined).sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+    let steered = 0;
+    const steer = (item: Steer) => {
+      if (options.steers) rows.push("", ...bubble(options.steers.label, item.text, width));
+      lastLine = false;
+    };
     const retained = new Set<string>();
     const messages: readonly HelperMessage[] = helper.result !== undefined && !helper.messages.some(message => message.kind === "assistant" && (message.textBlocks?.join("") ?? message.text).trim() === helper.result)
       ? [...helper.messages, { id: "returned-result", kind: "assistant", text: helper.result, stopReason: "pending" }] : helper.messages;
     messages.forEach(message => {
+      const started = message.at;
+      if (started !== undefined) while (steered < timed.length && (timed[steered]!.at ?? 0) <= started) steer(timed[steered++]!);
       retained.add(message.id);
       const key = JSON.stringify([message.text, message.textBlocks, message.arguments, message.argsComplete, message.partial, message.phase, message.stopReason, message.errorMessage, message.hasToolCalls]);
       let cached = this.cached.get(message.id);
@@ -242,6 +267,8 @@ export class HelperChat {
       cached = { component, key, mode: args.mode, argsComplete: args.complete };
       this.cached.set(message.id, cached); append(component, message.id); lastLine = false;
     });
+    while (steered < timed.length) steer(timed[steered++]!);
+    for (const item of options.steers?.items ?? []) if (item.at === undefined) steer(item);
     for (const id of this.cached.keys()) if (!retained.has(id)) this.cached.delete(id);
     for (const id of this.opened) if (!retained.has(id)) this.opened.delete(id);
     return rows;

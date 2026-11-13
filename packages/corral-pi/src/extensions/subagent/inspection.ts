@@ -22,6 +22,8 @@ export interface HelperMessage {
   /** True when text is a live result tail, rather than the final result. */
   readonly partial?: boolean;
   readonly phase?: "requested" | "running" | "completed" | "error";
+  /** When the projection first saw this message (epoch ms); absent in projections that predate it. */
+  readonly at?: number;
 }
 export interface HelperInspection {
   readonly request: string; readonly kind: AuxiliaryKind; readonly model: string; readonly generation: number;
@@ -32,6 +34,8 @@ export interface HelperInspection {
   /** Latest visible activity tail, retained independently of clipped transcript heads. */
   readonly latestActivity?: string;
   readonly truncated: boolean;
+  /** Messages dropped from the front of `messages` by the retention limit; absent when none were. */
+  readonly dropped?: number;
   readonly inspectionError?: string;
 }
 type MutableMessage = { -readonly [K in keyof HelperMessage]: HelperMessage[K] };
@@ -61,7 +65,7 @@ export class AuxiliaryHistory {
   private notificationError: string | undefined;
   private readonly listeners = new Set<() => void>();
   private disposed = false;
-  constructor(private readonly changed: () => void = () => {}) {}
+  constructor(private readonly changed: () => void = () => {}, private readonly now: () => number = Date.now) {}
   subscribe(changed: () => void): () => void {
     if (!this.disposed) this.listeners.add(changed);
     return () => { this.listeners.delete(changed); };
@@ -83,7 +87,7 @@ export class AuxiliaryHistory {
     return text.slice(0, HELPER_TEXT_LIMIT);
   }
   begin(request: string, kind: AuxiliaryKind, model: string, generation: number, prompt: string, serviceTier?: "priority"): void {
-    const entry: Retained = { request, kind, model, generation, ...(serviceTier ? { serviceTier } : {}), prompt: "", phase: "preparing", createdAt: Date.now(), messages: [], sequence: 0, size: 0, truncated: false };
+    const entry: Retained = { request, kind, model, generation, ...(serviceTier ? { serviceTier } : {}), prompt: "", phase: "preparing", createdAt: this.now(), messages: [], sequence: 0, size: 0, truncated: false };
     entry.prompt = this.clip(entry, prompt);
     this.entries.set(request, entry);
     while (this.entries.size > HELPER_HISTORY_LIMIT) {
@@ -95,7 +99,7 @@ export class AuxiliaryHistory {
   phase(request: string, phase: "queued" | "running"): void {
     const entry = this.entries.get(request); if (!entry || entry.endedAt !== undefined) return;
     entry.phase = phase;
-    if (phase === "running") entry.startedAt = Date.now();
+    if (phase === "running") entry.startedAt = this.now();
     this.notify();
   }
   observe(request: string, event: HelperEvent): void {
@@ -106,14 +110,14 @@ export class AuxiliaryHistory {
       case "assistant_start":
         entry.assistant = `assistant-${++entry.sequence}`;
         entry.assistantLine = "";
-        entry.messages.push({ id: entry.assistant, kind: "assistant", text: "" });
+        entry.messages.push({ id: entry.assistant, kind: "assistant", text: "", at: this.now() });
         break;
       case "assistant_delta":
       case "assistant_end": {
         let message = entry.messages.find(message => message.id === entry.assistant);
         if (!message) {
           entry.assistant = `assistant-${++entry.sequence}`;
-          message = { id: entry.assistant, kind: "assistant", text: "" }; entry.messages.push(message);
+          message = { id: entry.assistant, kind: "assistant", text: "", at: this.now() }; entry.messages.push(message);
         }
         const before = messageSize(message);
         const activity = event.type === "assistant_end" ? event.text : (entry.assistantLine ?? "") + event.text;
@@ -142,7 +146,7 @@ export class AuxiliaryHistory {
         const before = message ? messageSize(message) : 0;
         const tool = event.name.slice(0, 80).replace(/[\r\n\u2028\u2029]/g, " ");
         entry.latestActivity = `${tool}: ${activityLine(event.text ?? "", 198 - tool.length) || event.phase}`;
-        if (!message) { message = { id, kind: "tool", tool: this.clip(entry, event.name), text: "" }; entry.messages.push(message); }
+        if (!message) { message = { id, kind: "tool", tool: this.clip(entry, event.name), text: "", at: this.now() }; entry.messages.push(message); }
         message.phase = event.phase;
         if (event.arguments !== undefined) message.arguments = this.clip(entry, event.arguments);
         if (event.argsComplete !== undefined) message.argsComplete = event.argsComplete;
@@ -157,7 +161,7 @@ export class AuxiliaryHistory {
       }
     }
     while (entry.messages.length > 64 || entry.size > TRANSCRIPT_LIMIT) {
-      entry.size -= messageSize(entry.messages.shift()!); entry.truncated = true;
+      entry.size -= messageSize(entry.messages.shift()!); entry.truncated = true; entry.dropped = (entry.dropped ?? 0) + 1;
     }
     this.notify();
   }
@@ -167,7 +171,7 @@ export class AuxiliaryHistory {
   }
   finish(request: string, outcome: Outcome, result?: string): void {
     const entry = this.entries.get(request); if (!entry || entry.endedAt !== undefined) return;
-    entry.phase = outcome; entry.endedAt = Date.now();
+    entry.phase = outcome; entry.endedAt = this.now();
     if (result !== undefined) entry.result = this.clip(entry, result);
     this.notify();
   }

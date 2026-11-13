@@ -55,14 +55,14 @@ test("native panels retain real streaming, composing, binding, modal isolation a
     const running = mode.run();
     // Stop is explicit below; no Ctrl+D/process.exit is sent to the test runner.
     void running.catch(error => { throw error; });
-    await physical.untilVisible("WORKER  ● g1"); // the status bar's role pill and bound dot
-    physical.send("\x1b[20~"); // task-bound sessions open on Task; F9 shows the transcript
+    await physical.untilVisible("WORKER  ● bound"); // the status bar's role pill and bound dot
+    physical.send("\x1b[20~"); // F9: Chat, where every session starts; the transcript stays in front
     expect(terminal.mainColumns).toBe(105);
     const image = new Image(readFileSync(new URL("./fixtures/images/zoom.png", import.meta.url)).toString("base64"), "image/png", { fallbackColor: text => text }, { filename: "zoom.png" });
     expect(image.handleMouse({ type: "click", button: "left", x: 0, y: 0, screenX: 0, screenY: 0, width: 60, height: 20, shift: false, alt: false, ctrl: false })?.handled).toBeTrue();
     await physical.until("zoom.png"); expect(panels.workbench.images.isOpen).toBeTrue();
     physical.send("\x1b[<0;40;23M"); physical.send("\x1b[<0;40;23m");
-    await physical.untilVisible("WORKER  ● g1"); // the status bar's role pill and bound dot
+    await physical.untilVisible("WORKER  ● bound"); // the status bar's role pill and bound dot
     expect(panels.workbench.images.isOpen).toBeFalse();
     image.handleMouse({ type: "click", button: "left", x: 0, y: 0, screenX: 0, screenY: 0, width: 60, height: 20, shift: false, alt: false, ctrl: false });
     await physical.until("960×480"); physical.send("IMAGE_DRAFT"); await physical.until("IMAGE_DRAFT");

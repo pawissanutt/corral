@@ -44,7 +44,7 @@ test("a non-Git launch directory reads as an explicit, readable unavailable stat
   expect(files).toContain("Git unavailable"); expect(files).toContain("Not a Git repository"); expect(files).not.toContain("Command failed");
   const root = native.workbench.mount(new Text("transcript", 0, 0));
   const tabs = plain(renderLayoutFrame(root, 105, 46, () => {}).lines).find(line => line.includes("F7"));
-  expect(tabs).toMatch(/Changes\s+!/);
+  expect(tabs).toMatch(/Changes\s+git\?/);
   native.dispose();
 });
 

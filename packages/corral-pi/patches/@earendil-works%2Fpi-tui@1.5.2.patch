@@ -1,5 +1,11 @@
+diff --git a/node_modules/@earendil-works/pi-tui/.bun-tag-7cb5a9121b71fd68 b/.bun-tag-7cb5a9121b71fd68
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@earendil-works/pi-tui/.bun-tag-806e85a16d2bedc7 b/.bun-tag-806e85a16d2bedc7
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/components/image.d.ts b/dist/components/image.d.ts
-index 7223aa9..8966fc5 100644
+index 7223aa9097336854f5cf326a3d5c753441a68dbf..8966fc510b2fdfa69ad1c0920c8a8fb86147c17b 100644
 --- a/dist/components/image.d.ts
 +++ b/dist/components/image.d.ts
 @@ -1,5 +1,5 @@
@@ -27,7 +33,7 @@ index 7223aa9..8966fc5 100644
      render(width: number): string[];
  }
 diff --git a/dist/components/image.js b/dist/components/image.js
-index 78719cd..ae543c6 100644
+index 78719cdf0b8c336512256fed7054f06c8bd77c87..ae543c62186b10d7d785116cb65b465ef70d7992 100644
 --- a/dist/components/image.js
 +++ b/dist/components/image.js
 @@ -1,6 +1,13 @@
@@ -57,8 +63,404 @@ index 78719cd..ae543c6 100644
      /** Get the Kitty image ID used by this image (if any). */
      getImageId() {
          return this.imageId;
+diff --git a/dist/components/markdown.d.ts b/dist/components/markdown.d.ts
+index f7da0060a11fd291a66e16dcb34b1c11db79c09a..fe729165facacb60394e3a3e49c949a0981440e2 100644
+--- a/dist/components/markdown.d.ts
++++ b/dist/components/markdown.d.ts
+@@ -83,6 +83,12 @@ export declare class Markdown implements Component {
+     private getStylePrefix;
+     private getDefaultInlineStyleContext;
+     private renderToken;
++    /**
++     * A fenced code block: the language as a label row in the border style, never the fence itself, then the code
++     * indented by codeBlockIndent. Text the highlighter leaves uncoloured keeps the codeBlock style. A line too long for
++     * the width continues on the next rows at its own indentation plus a hanging indent.
++     */
++    private renderCodeBlock;
+     private renderInlineTokens;
+     private getOrderedListMarker;
+     private getUnorderedListMarker;
+@@ -101,6 +107,11 @@ export declare class Markdown implements Component {
+      * consistently with the rest of the renderer.
+      */
+     private wrapCellText;
++    /**
++     * A table narrower than 50 columns: each row becomes a block of `<header>  <cell>` rows, with a blank row between
++     * records.
++     */
++    private renderStackedTable;
+     /**
+      * Render a table with width-aware cell wrapping.
+      * Cells that don't fit are wrapped to multiple lines.
+diff --git a/dist/components/markdown.js b/dist/components/markdown.js
+index ed2a34767da9ae4add2033304368b4d17c65362d..0e480668db4d03bbde70d3c6839e4c13dfbbe91c 100644
+--- a/dist/components/markdown.js
++++ b/dist/components/markdown.js
+@@ -2,7 +2,7 @@ import { Marked, Tokenizer } from "marked";
+ import markedCjkFriendly from "marked-cjk-friendly";
+ import { renderLatex } from "../latex.js";
+ import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.js";
+-import { applyBackgroundToLine, cjkPunctuationRegex, flattenLines, visibleWidth, wrapTextWithAnsi } from "../utils.js";
++import { applyBackgroundToLine, cjkPunctuationRegex, extractAnsiCode, flattenLines, getGraphemeSegmenter, visibleWidth, wrapTextWithAnsi } from "../utils.js";
+ const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
+ class MarkdownTokenizer extends Tokenizer {
+     url(src) {
+@@ -207,6 +207,158 @@ markdownParser.use({
+     tokenizer: { emStrong: markedCjkFriendly().tokenizer?.emStrong },
+     extensions: [...LATEX_MARKDOWN_EXTENSIONS],
+ });
++/** A word wider than its row (a URL or a path) breaks after one of these when one falls in the last third of the row. */
++const WORD_BREAK_AFTER = new Set(["/", "-"]);
++const isNewline = (segment) => segment === "\n" || segment === "\r" || segment === "\r\n";
++/** `line` with a run of `width` spaces inserted at each string offset in `marks` (ascending), up to offset `end`. */
++function insertBreakMarks(line, marks, width, end = line.length) {
++    const gap = " ".repeat(width);
++    let marked = "";
++    let from = 0;
++    for (const mark of marks) {
++        marked += line.slice(from, mark) + gap;
++        from = mark;
++    }
++    return marked + line.slice(from, end);
++}
++/**
++ * Mark where wrapTextWithAnsi() breaks the words of `line` that are wider than `width`, such as URLs and paths. The
++ * wrapper moves such a word to a row of its own and cuts it every `width` columns. Here a cut moves back to just after
++ * a "/" or "-" that ends the row in its last third, and the word's first part stays on the row it starts on when it can
++ * break there too. A mark is a run of `width` spaces: the wrapper always breaks there and drops it, closing and
++ * reopening styles and hyperlinks as at any other break. Words with wide graphemes or with no such boundary are left to
++ * the wrapper.
++ */
++function markWordBreaks(line, width) {
++    if (width < 3 || visibleWidth(line) <= width) {
++        return line;
++    }
++    const cells = [];
++    for (let i = 0; i < line.length;) {
++        const ansi = extractAnsiCode(line, i);
++        if (ansi) {
++            i += ansi.length;
++            continue;
++        }
++        let end = i + 1;
++        while (end < line.length && line.charCodeAt(end) !== 0x1b)
++            end++;
++        for (const { segment, index } of getGraphemeSegmenter().segment(line.slice(i, end))) {
++            cells.push({ segment, end: i + index + segment.length });
++        }
++        i = end;
++    }
++    const lastThird = Math.ceil((width * 2) / 3);
++    const marks = [];
++    // Columns of leading spaces before the first word of an input line.
++    let lead = 0;
++    let textBefore = false;
++    for (let at = 0; at < cells.length;) {
++        const segment = cells[at].segment;
++        if (isNewline(segment)) {
++            lead = 0;
++            textBefore = false;
++            at++;
++            continue;
++        }
++        if (segment === " ") {
++            if (!textBefore)
++                lead++;
++            at++;
++            continue;
++        }
++        let end = at;
++        let wordWidth = 0;
++        let narrow = true;
++        while (end < cells.length && cells[end].segment !== " " && !isNewline(cells[end].segment)) {
++            const cellWidth = visibleWidth(cells[end].segment);
++            narrow &&= cellWidth === 1;
++            wordWidth += cellWidth;
++            end++;
++        }
++        if (narrow && wordWidth > width) {
++            // The column the word starts at: after the leading spaces, or after the wrapped text before it.
++            let column = lead;
++            if (textBefore) {
++                const rows = wrapTextWithAnsi(insertBreakMarks(line, marks, width, cells[at - 1].end), width);
++                let spaces = 0;
++                while (cells[at - 1 - spaces]?.segment === " ")
++                    spaces++;
++                column = visibleWidth(rows[rows.length - 1] ?? "") + spaces;
++                // A word that starts past the row's last column wraps to a new row by itself.
++                if (column >= width)
++                    column = 0;
++            }
++            const cuts = [];
++            let start = at;
++            let ownRow = false;
++            let boundary = false;
++            while (column < width && end - start > width - column) {
++                let cut = 0;
++                for (let k = start + width - column - 1; k >= start && column + k + 1 - start >= lastThird; k--) {
++                    if (WORD_BREAK_AFTER.has(cells[k].segment)) {
++                        cut = k + 1;
++                        break;
++                    }
++                }
++                if (cut === 0 && textBefore && start === at && column > 0) {
++                    // No boundary on the row the word starts on: it starts a row of its own, as the wrapper does.
++                    ownRow = true;
++                    column = 0;
++                    continue;
++                }
++                boundary ||= cut > 0;
++                cuts.push(cut || start + width - column);
++                start = cuts[cuts.length - 1];
++                column = 0;
++            }
++            if (boundary) {
++                if (ownRow)
++                    marks.push(cells[at - 1].end);
++                for (const cut of cuts)
++                    marks.push(cells[cut - 1].end);
++            }
++        }
++        textBefore = true;
++        at = end;
++    }
++    return marks.length === 0 ? line : insertBreakMarks(line, marks, width);
++}
++/** wrapTextWithAnsi() that breaks a long URL or path at a "/" or "-" near the end of the row rather than mid-word. */
++function wrapProse(line, width) {
++    return wrapTextWithAnsi(markWordBreaks(line, width), width);
++}
++/** A wrapped code row continues this many columns deeper than the line it belongs to. */
++const CODE_HANG = 2;
++/** Below this many columns a table stacks each row as `<header>  <cell>` pairs instead of drawing a grid. */
++const STACKED_TABLE_WIDTH = 50;
++/** An SGR sequence that ends a highlighted token's foreground: a default-foreground code (Theme.fg) or a full reset. */
++const FOREGROUND_END = /\x1b\[(?:22;39|39|0)?m/g;
++const SGR = /\x1b\[[0-9;:]*m/g;
++/**
++ * Paint a highlighted code line in `prefix`, the codeBlock colour, wherever a token ends its own colour, so text the
++ * highlighter leaves uncoloured reads as code. A default-foreground code turns into the prefix, and a prefix that
++ * repeats the colour already in force is dropped.
++ */
++function paintCode(line, prefix) {
++    const painted = prefix + line.replace(FOREGROUND_END, (end) => {
++        if (end === "\x1b[39m")
++            return prefix;
++        return end === "\x1b[22;39m" ? `\x1b[22m${prefix}` : end + prefix;
++    });
++    let painting = false;
++    const compact = painted.replace(SGR, (sgr) => {
++        if (sgr !== prefix) {
++            painting = false;
++            return sgr;
++        }
++        if (painting)
++            return "";
++        painting = true;
++        return sgr;
++    });
++    return `${compact}\x1b[39m`;
++}
+ export class Markdown {
+     text;
+     paddingX; // Left/right padding
+@@ -332,7 +484,7 @@ export class Markdown {
+                 lines.push(line);
+                 continue;
+             }
+-            for (const wrappedLine of wrapTextWithAnsi(line, contentWidth)) {
++            for (const wrappedLine of wrapProse(line, contentWidth)) {
+                 const lineWithMargins = leftMargin + wrappedLine + rightMargin;
+                 if (bgFn) {
+                     lines.push(applyBackgroundToLine(lineWithMargins, width, bgFn));
+@@ -478,27 +630,7 @@ export class Markdown {
+                 break;
+             }
+             case "code": {
+-                const indent = this.theme.codeBlockIndent ?? "  ";
+-                lines.push(this.theme.codeBlockBorder(`\`\`\`${token.lang || ""}`));
+-                if (this.theme.highlightCode) {
+-                    const key = `${token.lang ?? ""}\0${token.text}`;
+-                    let highlighted = this.blockHighlightedCode?.get(key);
+-                    if (!highlighted) {
+-                        highlighted = this.theme.highlightCode(token.text, token.lang);
+-                        this.blockHighlightedCode?.set(key, highlighted);
+-                    }
+-                    for (const hlLine of highlighted) {
+-                        lines.push(`${indent}${hlLine}`);
+-                    }
+-                }
+-                else {
+-                    // Split code by newlines and style each line
+-                    const codeLines = token.text.split("\n");
+-                    for (const codeLine of codeLines) {
+-                        lines.push(`${indent}${this.theme.codeBlock(codeLine)}`);
+-                    }
+-                }
+-                lines.push(this.theme.codeBlockBorder("```"));
++                lines.push(...this.renderCodeBlock(token, width));
+                 if (nextTokenType && nextTokenType !== "space") {
+                     lines.push(""); // Add spacing after code blocks (unless space token follows)
+                 }
+@@ -562,7 +694,7 @@ export class Markdown {
+                 }
+                 for (const quoteLine of renderedQuoteLines) {
+                     const styledLine = applyQuoteStyle(quoteLine);
+-                    const wrappedLines = wrapTextWithAnsi(styledLine, quoteContentWidth);
++                    const wrappedLines = wrapProse(styledLine, quoteContentWidth);
+                     for (const wrappedLine of wrappedLines) {
+                         lines.push(this.theme.quoteBorder("│ ") + wrappedLine);
+                     }
+@@ -596,6 +728,51 @@ export class Markdown {
+         }
+         return lines;
+     }
++    /**
++     * A fenced code block: the language as a label row in the border style, never the fence itself, then the code
++     * indented by codeBlockIndent. Text the highlighter leaves uncoloured keeps the codeBlock style. A line too long for
++     * the width continues on the next rows at its own indentation plus CODE_HANG.
++     */
++    renderCodeBlock(token, width) {
++        const lines = [];
++        if (token.lang) {
++            lines.push(this.theme.codeBlockBorder(token.lang));
++        }
++        const source = token.text.split("\n");
++        let code;
++        if (this.theme.highlightCode) {
++            const key = `${token.lang ?? ""}\0${token.text}`;
++            let highlighted = this.blockHighlightedCode?.get(key);
++            if (!highlighted) {
++                highlighted = this.theme.highlightCode(token.text, token.lang);
++                this.blockHighlightedCode?.set(key, highlighted);
++            }
++            const prefix = this.getStylePrefix(this.theme.codeBlock);
++            code = prefix
++                ? highlighted.map((line) => paintCode(line, prefix))
++                : highlighted;
++        }
++        else {
++            code = source.map((line) => this.theme.codeBlock(line));
++        }
++        const indent = this.theme.codeBlockIndent ?? "  ";
++        const room = Math.max(1, width - visibleWidth(indent));
++        for (let i = 0; i < code.length; i++) {
++            const line = code[i];
++            if (visibleWidth(line) <= room) {
++                lines.push(indent + line);
++                continue;
++            }
++            const ownIndent = /^ */.exec(source[i] ?? "")?.[0].length ?? 0;
++            const hang = Math.min(ownIndent + CODE_HANG, Math.floor(room / 3));
++            const rows = wrapProse(line, room - hang);
++            const hangIndent = indent + " ".repeat(hang);
++            for (let row = 0; row < rows.length; row++) {
++                lines.push((row === 0 ? indent : hangIndent) + rows[row]);
++            }
++        }
++        return lines;
++    }
+     renderInlineTokens(tokens, styleContext) {
+         let result = "";
+         const resolvedStyleContext = styleContext ?? this.getDefaultInlineStyleContext();
+@@ -743,7 +920,7 @@ export class Markdown {
+                 }
+                 const itemLines = this.renderToken(itemToken, itemWidth, undefined, styleContext);
+                 for (const line of itemLines) {
+-                    for (const wrappedLine of wrapTextWithAnsi(line, itemWidth)) {
++                    for (const wrappedLine of wrapProse(line, itemWidth)) {
+                         const linePrefix = renderedAnyLine ? continuationPrefix : firstPrefix;
+                         lines.push(linePrefix + wrappedLine);
+                         renderedAnyLine = true;
+@@ -776,17 +953,70 @@ export class Markdown {
+     /**
+      * Wrap a table cell to fit into a column.
+      *
+-     * Delegates to wrapTextWithAnsi() so ANSI codes + long tokens are handled
++     * Delegates to wrapProse() so ANSI codes + long tokens are handled
+      * consistently with the rest of the renderer.
+      */
+     wrapCellText(text, maxWidth, stylePrefix = "") {
+-        const lines = wrapTextWithAnsi(text, Math.max(1, maxWidth));
++        const lines = wrapProse(text, Math.max(1, maxWidth));
+         return lines.map((line, index) => {
+             // Reset text styles after each non-final fragment, then restore the surrounding style before padding and borders.
+             const styleReset = index < lines.length - 1 ? "\x1b[22;23;24;25;27;28;29;39m" : "";
+             return `${line}${styleReset}${stylePrefix}`;
+         });
+     }
++    /**
++     * A table narrower than STACKED_TABLE_WIDTH: each row becomes a block of `<header>  <cell>` rows, the header bold in a
++     * column as wide as the longest header (at most a third of the width), with a blank row between records. When that
++     * leaves the cells under 12 columns, each header takes its own row and its cell follows, indented two columns. A
++     * table without body rows yet (such as one still streaming) shows its headers, bold, one per row.
++     */
++    renderStackedTable(token, width, styleContext) {
++        const stylePrefix = styleContext?.stylePrefix;
++        const headers = token.header.map((cell) => this.renderInlineTokens(cell.tokens || [], styleContext));
++        const labelWidth = Math.min(Math.max(...headers.map((header) => visibleWidth(header))), Math.floor(width / 3));
++        const cellWidth = width - labelWidth - 2;
++        const beside = labelWidth > 0 && cellWidth >= 12;
++        const lines = [];
++        if (token.rows.length === 0) {
++            for (const header of headers) {
++                for (const label of this.wrapCellText(header, width, stylePrefix)) {
++                    lines.push(this.theme.bold(label));
++                }
++            }
++            return lines;
++        }
++        for (let r = 0; r < token.rows.length; r++) {
++            if (r > 0) {
++                lines.push("");
++            }
++            const row = token.rows[r];
++            for (let c = 0; c < headers.length; c++) {
++                const header = headers[c];
++                const cell = this.renderInlineTokens(row[c]?.tokens || [], styleContext);
++                if (!header) {
++                    lines.push(...this.wrapCellText(cell, width, stylePrefix));
++                }
++                else if (!beside) {
++                    for (const label of this.wrapCellText(header, width, stylePrefix)) {
++                        lines.push(this.theme.bold(label));
++                    }
++                    for (const text of this.wrapCellText(cell, width - 2, stylePrefix)) {
++                        lines.push(`  ${text}`);
++                    }
++                }
++                else {
++                    const labels = this.wrapCellText(header, labelWidth, stylePrefix);
++                    const texts = this.wrapCellText(cell, cellWidth, stylePrefix);
++                    for (let i = 0; i < Math.max(labels.length, texts.length); i++) {
++                        const label = labels[i] ?? "";
++                        const padding = " ".repeat(Math.max(0, labelWidth - visibleWidth(label)));
++                        lines.push(`${label ? this.theme.bold(label + padding) : padding}  ${texts[i] ?? ""}`);
++                    }
++                }
++            }
++        }
++        return lines;
++    }
+     /**
+      * Render a table with width-aware cell wrapping.
+      * Cells that don't fit are wrapped to multiple lines.
+@@ -797,6 +1027,13 @@ export class Markdown {
+         if (numCols === 0) {
+             return lines;
+         }
++        if (availableWidth < STACKED_TABLE_WIDTH) {
++            const stackedLines = this.renderStackedTable(token, availableWidth, styleContext);
++            if (nextTokenType && nextTokenType !== "space") {
++                stackedLines.push(""); // Add spacing after table
++            }
++            return stackedLines;
++        }
+         // Calculate border overhead: "│ " + (n-1) * " │ " + " │"
+         // = 2 + (n-1) * 3 + 2 = 3n + 1
+         const borderOverhead = 3 * numCols + 1;
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index b7a963c..5694ee2 100644
+index b7a963c09ad68b1ad6ebf3f191c78603c5988ed2..5694ee27be1004ed5c1a8073d358e53ad2ee0e8a 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
 @@ -5,7 +5,7 @@ export { Box } from "./components/box.ts";
@@ -71,7 +473,7 @@ index b7a963c..5694ee2 100644
  export { Loader, type LoaderIndicatorOptions } from "./components/loader.ts";
  export { type DefaultTextStyle, Markdown, type MarkdownOptions, type MarkdownTheme } from "./components/markdown.ts";
 diff --git a/dist/index.js b/dist/index.js
-index 59f005c..d4793bf 100644
+index 59f005cb5972e69d173a90ce07d31199cfd4272a..d4793bf89f07c7337be13ecf4c02b0500d5d4961 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -9,7 +9,7 @@ export { Box } from "./components/box.js";

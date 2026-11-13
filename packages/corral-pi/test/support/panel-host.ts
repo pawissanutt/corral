@@ -72,8 +72,8 @@ export async function startPanelHost(extend?: (...args: Parameters<Extend>) => v
       userPresentation: presentHostNotice });
     await mode.init(); host.markAttached("interactive");
     void mode.run().catch(error => { throw error; });
-    await physical.untilVisible("WORKER  ● g1"); // the status bar's role pill and bound dot
-    physical.send("\x1b[20~"); // task-bound sessions open on Task; F9 shows the transcript
+    await physical.untilVisible("WORKER  ● bound"); // the status bar's role pill and bound dot
+    physical.send("\x1b[20~"); // F9: Chat, where every session starts; the transcript stays in front
     const view: Component | undefined = transcript;
     if (!(view instanceof ScrollView)) throw new Error("transcript is not a ScrollView");
     if (!chatPresentation) throw new Error("Native chat presentation was not supplied");

@@ -12,9 +12,10 @@ import { buildFixtureInstall } from "./support/fixture-install.ts";
 import { writeFakeCorral } from "./support/fake-corral.ts";
 import { startPanelHost, type PanelHost } from "./support/panel-host.ts";
 import { nextEvent, within } from "./support/wait.ts";
+import { keyData } from "../src/ui/keymap.ts";
 
 // T-688: stable reading and focus in the production panel shell (real host, editor and transcript).
-const KEY = { pageUp: "\x1b[5~", pageDown: "\x1b[6~", top: "\x1b[1;5H", bottom: "\x1b[1;5F", ctrlB: "\x02" };
+const KEY = { pageUp: "\x1b[5~", pageDown: "\x1b[6~", top: "\x1b[1;5H", bottom: "\x1b[1;5F" };
 const GRAPHEMES = "界面 👩‍💻 café ｗｉｄｅ";
 const paragraph = (index: number) => {
   const id = `P${String(index).padStart(2, "0")}`;
@@ -115,7 +116,8 @@ test("follow pauses for reading through a stream and relocation; jump-to-live is
     }
     for (const wide of [false, true]) {
       mark = h.physical.writes.length;
-      h.physical.send(KEY.ctrlB);
+      // The sidebar key the host chose: Ctrl+B, or Alt+B inside herdr while Ctrl+B is its prefix.
+      h.physical.send(keyData(h.panels.sidebarToggle) ?? "");
       await h.physical.whenWritten(() => h.panels.wide === wide && h.physical.writes.length > mark, "manual rail toggle frame");
       await frame(h, screen => screen.includes("Jump to latest"), "manual relocation frame");
       expect(readingAnchor(h)).toBe(anchor);

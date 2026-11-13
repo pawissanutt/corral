@@ -18,6 +18,21 @@ export interface PanelSurface {
   layoutChanged(): void;
 }
 
+/**
+ * A legacy Alt chord (`ESC b`, `ESC 1`, `ESC ⏎`, `ESC Tab`, `ESC Space`, `ESC Backspace`) in the Kitty keyboard
+ * protocol's `CSI <codepoint>;<modifiers>u` form, the only one Pi accepts for these while that protocol is active:
+ * Alt, plus Shift for an upper-case letter. Any other input is returned unchanged.
+ */
+export function kittyAlt(data: string): string {
+  if (data.length !== 2 || data[0] !== "\x1b") return data;
+  const key = data.charAt(1);
+  if (key === "\r" || key === "\t" || key === "\x7f") return `\x1b[${key.charCodeAt(0)};3u`;
+  // `ESC [` and `ESC O` start other sequences; other control characters have no Kitty key of their own here.
+  if (key < " " || key > "~" || key === "[" || key === "O") return data;
+  const upper = key >= "A" && key <= "Z";
+  return `\x1b[${(upper ? key.toLowerCase() : key).charCodeAt(0)};${upper ? 4 : 3}u`;
+}
+
 export class PanelTerminal implements Terminal {
   private readonly canvas = new PanelCanvas();
   private fullscreen = true;
@@ -49,9 +64,13 @@ export class PanelTerminal implements Terminal {
       onResize();
     });
   }
-  /** Input as if typed: the panels first, then Pi. Footer and keys-list clicks replay their key this way. */
+  /** Input as if typed: the panels first, then Pi. */
   replay(data: string): void {
     if (!this.surface.handleInput(data)) this.onInput?.(data);
+  }
+  /** A key a footer hint or a keys-list row runs, in the encoding the active keyboard protocol accepts. */
+  replayKey(data: string): void {
+    this.replay(this.kittyProtocolActive ? kittyAlt(data) : data);
   }
   stop(): void {
     this.canvas.reset();
@@ -74,6 +93,8 @@ export class PanelTerminal implements Terminal {
   clearFromCursor(): void { this.write("\x1b[J"); }
   clearScreen(): void { this.write("\x1b[2J\x1b[H"); }
   setTitle(title: string): void { this.physical.setTitle(title); }
+  /** One terminal bell, straight to the terminal: it is not frame content. */
+  bell(): void { this.physical.write("\x07"); }
   setProgress(active: boolean): void { this.physical.setProgress(active); }
   setProgramStatus(status: ProgramStatus): void { this.physical.setProgramStatus(status); }
 }

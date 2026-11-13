@@ -2,14 +2,15 @@
 // Below SPLIT_MIN main-view columns the list collapses to a one-line picker above the same detail. The workbench
 // draws this view VIEW_INSET cells narrower than the main view, so the threshold adds them back.
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { Text, matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { Role } from "../roles/types.ts";
 import { DecisionInbox, inboxIdentity, type InboxItem } from "./decision-inbox.ts";
 import { ago, bold, chip, chipRows, clock, field, listRow, sectionRule, toneColor, wrap, type Tone } from "./panel-parts.ts";
 import { splitRow } from "./panels-chrome.ts";
-import { box, pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_MUTED, PANEL_RULE, PANEL_TEXT, PANEL_WARNING, RESET } from "./panels-view.ts";
+import { pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_MUTED, PANEL_RULE, PANEL_TEXT, PANEL_WARNING, RESET } from "./panels-view.ts";
 import { LIST_WIDTH, SPLIT_MIN } from "./proof-view.ts";
 import { VIEW_INSET } from "./frame.ts";
+import { openPager } from "./pager.ts";
 
 const fit = (text: string, width: number) => stripTerminalSequences(truncateToWidth(plainLabel(text), Math.max(0, width), "…"));
 const stateOf = (item: InboxItem): readonly [glyph: string, tone: Tone] => item.pending ? ["⚑", "warn"] : ["·", "none"];
@@ -37,11 +38,14 @@ export class InboxView implements Component {
   /** True while the read-only detail sheet is open; the footer then lists the pager's keys. */
   sheetOpen = false;
   private hits = new Map<number, string>(); readonly rows = new Map<string, number>();
-  /** `notice` shows a refusal (closed, stale or out-of-scope item) where the panels show their feedback. */
+  /**
+   * `notice` shows a refusal (closed, stale or out-of-scope item) where the panels show their feedback; `focused`
+   * says whether the view has the keys, which draws the selection bar in accent instead of muted.
+   */
   constructor(readonly store: DecisionInbox, private readonly role: Role, private readonly project: string,
     private readonly canInteract: () => boolean, private readonly changed: () => void,
     private readonly focus: () => void, private readonly legend: () => boolean = () => false,
-    private readonly notice: (text: string) => void = () => {}) {}
+    private readonly notice: (text: string) => void = () => {}, private readonly focused: () => boolean = () => true) {}
   bind(ui: ExtensionUIContext): void { this.ui = ui; }
   render(width: number): string[] {
     const lines: string[] = []; this.hits.clear(); this.rows.clear();
@@ -82,7 +86,9 @@ export class InboxView implements Component {
     for (const item of items) {
       const [glyph, tone] = stateOf(item), state = `${toneColor(tone)}${glyph} ${fit(item.state, 12)}${PANEL_TEXT}`;
       const label = `${PANEL_TEXT}${fit(item.task, 12)} ${PANEL_MUTED}${fit(item.kind, LIST_WIDTH - 3 - 15 - visibleWidth(state))}${PANEL_TEXT}`;
-      left.push({ text: listRow(label, state, item === current, LIST_WIDTH), id: inboxIdentity(item) });
+      const row = listRow(label, state, item === current, LIST_WIDTH);
+      // listRow draws the bar in accent; an unfocused view keeps the bar but mutes it.
+      left.push({ text: item === current && !this.focused() ? row.replace(PANEL_BLUE + "▌", PANEL_MUTED + "▌") : row, id: inboxIdentity(item) });
     }
     if (!items.length) left.push({ text: listRow(`${PANEL_MUTED}none${PANEL_TEXT}`, "", false, LIST_WIDTH) });
     const detailWidth = Math.max(20, width - LIST_WIDTH - 2);
@@ -103,10 +109,21 @@ export class InboxView implements Component {
     this.store.select(key);
     return { handled: true };
   }
+  /**
+   * Selects the first pending item in canonical order (the reader lists pending items first; items carry no time,
+   * so this is the oldest the data can tell), clearing a filter that hides it. False when nothing is pending.
+   */
+  selectFirstPending(): boolean {
+    const item = this.store.snapshot?.items.find(entry => entry.pending);
+    if (!item) return false;
+    if (!this.store.visible.includes(item)) this.store.query = "";
+    this.store.select(inboxIdentity(item));
+    return true;
+  }
   handleInput(data: string): boolean {
     if (data === "h") { this.store.history = !this.store.history; this.changed(); return true; }
     if (data === "r") { void this.store.refresh(); return true; }
-    if (data === "/") { void this.search(); return true; }
+    if (matchesKey(data, "f3")) { void this.search(); return true; }
     if (data === "a") { void this.inspect(true); return true; }
     if (matchesKey(data, "enter")) { void this.inspect(false); return true; }
     return false;
@@ -133,29 +150,8 @@ export class InboxView implements Component {
       "Inspect: " + item.inspect, "", ...(flow ? [flow] : [item.response ? "An existing answer route is available. Close this sheet, then press a to revalidate and open its instructions."
         : "No answer route: closed, already resolved or inspection-only condition."]), "", "Nothing was sent or authorized."];
     this.sheetOpen = true; this.changed();
-    try {
-      await ui.custom<void>((tui, _theme, _keys, done) => {
-      let offset = 0, max = 0;
-      const scroll = (delta: number) => { offset = Math.max(0, Math.min(max, offset + delta)); tui.requestRender(); };
-      return {
-        render(width) {
-          const height = Math.max(5, Math.floor(tui.terminal.rows * 0.8));
-          const rows = source.flatMap(line => new Text(line.replace(/[\u0000-\u001f\u007f-\u009f]/g, " "), 0, 0).render(Math.max(1, width - 4)));
-          max = Math.max(0, rows.length - height + 2); offset = Math.min(offset, max);
-          return box(flow ? "Established answer flow · NOT SENT" : "Decision inspection · READ ONLY", rows.slice(offset, offset + height - 2), width, height, true);
-        },
-        handleInput(data) {
-          if (matchesKey(data, "escape") || data === "q") { done(); return; }
-          if (matchesKey(data, "up")) scroll(-1);
-          if (matchesKey(data, "down")) scroll(1);
-          if (matchesKey(data, "pageUp")) scroll(-8);
-          if (matchesKey(data, "pageDown")) scroll(8);
-        },
-        handleMouse(event) { if (event.type === "wheel") { scroll(event.wheelDelta ?? 0); return { handled: true }; } return undefined; },
-        invalidate() {},
-      };
-      }, { overlay: true, overlayOptions: { width: "90%", maxHeight: "85%", anchor: "center" } });
-    } finally { this.sheetOpen = false; }
+    try { await openPager(ui, { title: flow ? "Established answer flow · NOT SENT" : "Decision inspection · READ ONLY", lines: source, wrap: true }); }
+    finally { this.sheetOpen = false; }
     this.changed();
   }
   invalidate(): void {}

@@ -1,6 +1,6 @@
 // The composer's own chrome: a rounded box one cell in from each terminal edge, its title set into the top
 // border, the `›` prompt before the draft and the model/effort bar inside. Key hints live in the footer.
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, renderFakeCursor, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { splitRow } from "./panels-chrome.ts";
 import { pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_LINE, PANEL_MUTED, PANEL_TEXT } from "./panels-view.ts";
 import type { PanelSnapshot } from "./panels-view.ts";
@@ -57,35 +57,44 @@ export function composerBottom(width: number, focused: boolean, right = ""): str
   const tail = right && inner >= visibleWidth(right) + 6 ? ` ${right} ─` : "";
   return `${PANEL_BG} ${color}╰${"─".repeat(Math.max(0, inner - 2 - visibleWidth(tail)))}${PANEL_MUTED}${tail.slice(0, -1)}${color}${tail.slice(-1)}╯${PANEL_BG} ${PANEL_TEXT}`;
 }
+/** The zero-width markers Pi's editor draws around its cursor cell, which the TUI turns into reverse video. */
+const [FAKE_START = "", FAKE_END = ""] = renderFakeCursor("\u0000").split("\u0000");
+
 /**
  * One editor row inside the box. `row` is the editor's own line, which starts with `left` blank cells of
  * padding and ends with at least two blank cells; the margin, `│` and `prompt` replace the left padding and
  * the last two cells become `│` and the margin, so pointer columns keep their place. Below 12 cells the
- * editor cannot keep that padding and the row stays as it is.
+ * editor cannot keep that padding and the row stays as it is. `focused` means the composer has the keys:
+ * otherwise the `›` is muted and the row carries no cursor (neither the terminal's nor the drawn cell), so
+ * the one cursor on screen is where the next key goes.
  */
 export function composerRow(row: string, left: number, width: number, focused: boolean, prompt: boolean): string {
   if (width < 12 || left < COMPOSER_INSET) return row;
   const lead = left - COMPOSER_INSET;
-  const mark = prompt ? PANEL_BLUE + "›" + PANEL_TEXT : " ";
+  const mark = prompt ? (focused ? PANEL_BLUE : PANEL_MUTED) + "›" + PANEL_TEXT : " ";
   const prefix = `${PANEL_BG} ${border(focused)}│${PANEL_TEXT} ${lead > 0 ? mark + " ".repeat(lead - 1) : ""}`;
-  const body = row.slice(left), cut = body.endsWith("  ") ? body.slice(0, -2) : truncateToWidth(body, Math.max(0, width - left - 2), "");
+  const text = focused ? row : row.replaceAll(CURSOR_MARKER, "").replaceAll(FAKE_START, "").replaceAll(FAKE_END, "");
+  const body = text.slice(left), cut = body.endsWith("  ") ? body.slice(0, -2) : truncateToWidth(body, Math.max(0, width - left - 2), "");
   const fill = " ".repeat(Math.max(0, width - left - 2 - visibleWidth(cut)));
   return `${prefix}${cut}${fill}${border(focused)}│${PANEL_BG} ${PANEL_TEXT}`;
 }
 
 /**
- * The bar row inside the box: model ▾ and effort ↻ on the left, `↓ n more` on the right when the editor hides
- * lines. The hit ranges are cells of the full row, from the same measurement that lays the row out.
+ * The bar row inside the box: model ▾ and `· effort <level> ↻` on the left, `↓ n more` on the right when the
+ * editor hides lines. The word `effort` goes before the model name would clip. The hit ranges are cells of the
+ * full row, from the same measurement that lays the row out.
  */
 export function composerBar(snapshot: PanelSnapshot | null, width: number, hidden: number, focused: boolean): {
   readonly line: string; readonly model?: ComposerHit; readonly effort?: ComposerHit;
 } {
   const full = snapshot?.model;
   const model = full ? plainLabel(full.slice(full.indexOf("/") + 1)) + " ▾" : "Model unavailable";
-  const effort = snapshot ? ` · ${plainLabel(snapshot.effort)}${snapshot.effortAvailable ? " ↻" : ""}` : "";
   const more = hidden > 0 ? `↓ ${hidden} more` : "";
-  const inner = Math.max(0, width - 2 * COMPOSER_INSET);
-  const room = Math.max(0, inner - visibleWidth(effort) - (more ? visibleWidth(more) + 2 : 0));
+  const inner = Math.max(0, width - 2 * COMPOSER_INSET), moreCells = more ? visibleWidth(more) + 2 : 0;
+  const level = snapshot ? `${plainLabel(snapshot.effort)}${snapshot.effortAvailable ? " ↻" : ""}` : "";
+  const worded = snapshot ? ` · effort ${level}` : "";
+  const effort = inner - visibleWidth(worded) - moreCells >= visibleWidth(model) ? worded : snapshot ? ` · ${level}` : "";
+  const room = Math.max(0, inner - visibleWidth(effort) - moreCells);
   const label = pad(model, Math.min(room, visibleWidth(model))).trimEnd();
   const modelEnd = COMPOSER_INSET + visibleWidth(label), effortEnd = modelEnd + visibleWidth(effort);
   const color = border(focused);

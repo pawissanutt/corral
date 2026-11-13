@@ -3,9 +3,10 @@ import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getCapabilities, setCapabilities, visibleWidth, type ImageSource } from "@earendil-works/pi-tui";
+import { getCapabilities, setCapabilities, stripTerminalSequences, visibleWidth, type ImageSource } from "@earendil-works/pi-tui";
 import { ArtifactView, COMPARE_ROW_MIN, type ArtifactCatalog } from "./artifact-view.ts";
 import { VIEW_INSET } from "./frame.ts";
+import { SPLIT_MIN } from "./proof-view.ts";
 
 const identity = { store: "s", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 1 };
 const HEAD = "b".repeat(40), OLD = "a".repeat(40);
@@ -38,7 +39,8 @@ function harness(catalog: unknown, extra: { exportSession?: () => Promise<string
     openImage: source => { images.push(source); return true; }, bound: () => true, changed: () => {}, canInteract: () => true, ...extra });
   return { view, calls, images, reads: () => reads };
 }
-const text = (view: ArtifactView, width = 140) => view.render(width).map(row => row.trimEnd()).join(" ").replace(/\s+/g, " ");
+/** The view's text at a stacked width (list above detail), so detail rows read in order. */
+const text = (view: ArtifactView, width = 100) => view.render(width).map(row => stripTerminalSequences(row).trimEnd()).join(" ").replace(/\s+/g, " ");
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 test("catalog renders provenance without reading files or starting viewers", async () => {
@@ -49,17 +51,17 @@ test("catalog renders provenance without reading files or starting viewers", asy
     for (let i = 0; i < 50; i++) { view.render(140); view.render(52); }
     expect(reads()).toBe(1); expect(calls).toEqual([]); expect(images).toEqual([]);
     const wide = text(view);
-    expect(wide).toContain("GAP: newest 5 artifact rows only");
-    expect(wide).toContain(`registered against ${OLD} (differs from bound HEAD at read · historical; freshness not evaluated)`);
-    expect(wide).toContain("Candidate: artifact rows record none");
+    expect(wide).toContain("GAP: newest 5 rows only");
+    expect(wide).toContain(`registered against HEAD ${OLD.slice(0, 12)} (differs from bound HEAD at read · historical; freshness not evaluated)`);
+    expect(wide).toContain("Candidate none recorded · only evidence links carry a registration HEAD");
     expect(wide).toContain("bytes not re-hashed");
     view.handleInput("j");
     expect(text(view)).toContain("same SHA as bound HEAD at read; freshness not evaluated) · recorded hash MISMATCH");
     view.handleInput("j");
     expect(text(view)).toContain("ABSENT: no snapshot file or live blob at read");
-    expect(text(view)).toContain("Evidence: none of R1 names this snapshot · association unknown");
+    expect(text(view)).toContain("none of R1 names this snapshot · association unknown");
     view.handleInput("j"); view.handleInput("j");
-    expect(text(view)).toContain("Evidence: unknown · run R2 evidence not read");
+    expect(text(view)).toContain("unknown · run R2 evidence not read");
     expect(view.render(52).every(row => visibleWidth(row) <= 52)).toBe(true);
     expect(calls).toEqual([]);
   } finally { rmSync(store, { recursive: true, force: true }); }
@@ -85,7 +87,7 @@ test("Enter opens images with verified bytes, text fallback without graphics, an
     view.handleInput("j"); view.handleInput("\r"); await settle(); await settle();
     expect(calls).toEqual(["show T-001:R1:2222-report.md"]);
     expect(text(view)).toContain("body line");
-    expect(text(view)).not.toContain("\u001b[31m");
+    expect(view.render(100).join("")).not.toContain("\u001b[31m");
     view.handleInput("j"); view.handleInput("\r"); await settle();
     expect(text(view)).toContain("Unavailable · not opened");
     view.handleInput("j"); view.handleInput("\r"); await settle();
@@ -138,13 +140,13 @@ test("comparison uses only explicit selection order and never infers before/afte
     expect(text(view)).toContain("Two artifacts already selected");
     view.handleInput("c");
     const wide = text(view);
-    expect(wide).toContain("Comparison · A and B in your selection order · no before/after, candidate order or freshness implied");
+    expect(wide).toContain("A and B in your selection order · no before/after, candidate order or freshness implied");
     expect(wide).toContain("Registered bytes differ (different SHA256)");
-    expect(wide).toContain("Title: A 2222-report.md │ B 1111-shot.png");
-    expect(text(view, 60)).toContain("Title B: 1111-shot.png");
+    expect(wide).toContain("Title 2222-report.md │ 1111-shot.png");
+    expect(text(view, 60)).toContain("Title B 1111-shot.png");
     // One row per field from COMPARE_ROW_MIN main-view columns; the workbench renders the view VIEW_INSET narrower.
-    expect(text(view, COMPARE_ROW_MIN - VIEW_INSET)).toContain("Title: A 2222-report.md │ B 1111-shot.png");
-    expect(text(view, COMPARE_ROW_MIN - VIEW_INSET - 1)).toContain("Title B: 1111-shot.png");
+    expect(text(view, COMPARE_ROW_MIN - VIEW_INSET)).toContain("Title 2222-report.md │ 1111-shot.png");
+    expect(text(view, COMPARE_ROW_MIN - VIEW_INSET - 1)).toContain("Title B 1111-shot.png");
     expect(wide).not.toMatch(/\b(before|after):/i);
     view.handleInput("k"); view.handleInput("k"); view.handleInput("m");
     expect(view.compare).toBe(false);
@@ -188,5 +190,34 @@ test("openPath opens the artifact registered at that path, not the catalog's fir
     await view.openPath("artifacts/T-001/R1/missing.log");
     expect(calls).toHaveLength(1);
     expect(view.notice).toContain("not opened");
+  } finally { rmSync(store, { recursive: true, force: true }); }
+});
+
+test("from SPLIT_MIN the list sits beside the detail; state words line up under their header; back link and legend", async () => {
+  const { store, catalog } = fixture();
+  try {
+    let legend = false;
+    const view = new ArtifactView({ identity, load: async () => catalog, openImage: () => true, bound: () => true, changed: () => {}, canInteract: () => true, legend: () => legend });
+    await view.refresh();
+    for (const width of [138, SPLIT_MIN - VIEW_INSET, SPLIT_MIN - VIEW_INSET - 1, 59, 44]) {
+      const rows = view.render(width).map(row => stripTerminalSequences(row));
+      for (const row of view.render(width)) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+      expect(rows.some(row => row.includes("┬"))).toBe(width + VIEW_INSET >= SPLIT_MIN);
+      expect(rows[0]?.startsWith("‹ Proof · Artifacts")).toBe(true);
+      // The absent row says ABSENT under the state header; the selected row carries the bar.
+      const header = rows.find(row => /^ +(kind +)?title/.test(row)) ?? "";
+      // Titles clip to their column, so the absent row is found by the start of its title.
+      const absent = rows.find(row => row.includes("3333-gone")) ?? "";
+      expect(absent.slice(header.indexOf("state")).startsWith("! ABSENT")).toBe(true);
+      expect(rows.some(row => row.startsWith("▌") && row.includes("1111-shot.png"))).toBe(true);
+    }
+    expect(view.backAt(0, 0)).toBe(true); expect(view.backAt("‹ Proof".length - 1, 0)).toBe(true);
+    expect(view.backAt("‹ Proof".length, 0)).toBe(false); expect(view.backAt(0, 1)).toBe(false);
+    // The full digest appears once, on its own detail row; the caveat is one line until `?` shows the legend.
+    expect(text(view, 138).split(sha(png)).length).toBe(2);
+    expect(text(view)).toContain("not live"); expect(text(view)).not.toContain("never on focus or selection");
+    legend = true;
+    expect(text(view)).toContain("Viewers start only on Enter or o, never on focus or selection");
+    expect(text(view)).toContain(`Bound worktree HEAD ${HEAD} at read · a SHA, not a freshness verdict`);
   } finally { rmSync(store, { recursive: true, force: true }); }
 });

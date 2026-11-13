@@ -3,6 +3,8 @@ export type Appearance = "dark" | "light" | "contrast";
 export type Density = "comfortable" | "compact";
 /** `still` replaces the spinner with a steady `●` and redraws once a second, so elapsed times still advance. */
 export type Motion = "animate" | "still";
+/** `on` rings the terminal bell once when the session starts needing the owner; off by default. */
+export type Bell = "off" | "on";
 /**
  * The packaged palettes. `background` is the one surface of the whole screen; `raised` (cards' header rows,
  * popups, toasts), `key` (key caps), `dialog` (a docked dialog's header row), `bubble` (user messages) and

@@ -61,6 +61,16 @@ export function titleText(identity: HostIdentity): string {
   return identity.task ? `${identity.task} ${identity.role}` : `corral ${identity.role}`;
 }
 
+/** What the session needs from its owner, as the terminal title leads with it. */
+export type TitleAttention = "needs-you" | "working" | "idle";
+/**
+ * The terminal title with the state first, so a herdr tab or window title says what needs attention:
+ * `▲ needs you · <base>`, `● working · <base>`, or `<base>` alone while idle.
+ */
+export function sessionTitle(base: string, attention: TitleAttention): string {
+  return attention === "needs-you" ? `▲ needs you · ${base}` : attention === "working" ? `● working · ${base}` : base;
+}
+
 export function bindingStatus(bound: boolean, generation: number, theme: Style): string {
   return bound ? theme.fg("success", `● corral g${generation}`) : theme.fg("warning", "○ corral unbound");
 }

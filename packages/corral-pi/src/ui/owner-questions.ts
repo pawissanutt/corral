@@ -1,39 +1,154 @@
 // Deferred owner questions stay beside the composer, independently of transcript/panel output, in the same
 // docked dialog form as every other question the owner is asked. Asking never opens UI. Only the owner's
-// command, shortcut or click opens the answer dialog.
+// command, key or click opens the answer dialog. With native panels the card is a dock item the panels
+// focus like the docked build choice; plain hosts keep it as a widget of its own.
 import type { ExtensionAPI, ExtensionContext, ExtensionUIContext, SessionProjection } from "@earendil-works/pi-coding-agent";
-import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import { decodeKittyPrintable, matchesKey, type Component, type KeyId, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { askDialog, sequential } from "../host/ask-user.ts";
 import type { ChoiceAnswer, PendingQuestion, PendingQuestions } from "../host/pending-questions.ts";
-import { choiceLines } from "./build/choice-dock.ts";
+import { choiceLines, PASTE_START } from "./build/choice-dock.ts";
+import { freeKey, keyLabel } from "./keymap.ts";
 
 export const QUESTIONS_COMMAND = "questions";
-export const QUESTIONS_SHORTCUT = "ctrl+shift+q";
+/**
+ * The owner-question key ("answer"), unshifted so every terminal delivers it as itself. Not Alt+Q: Pi's
+ * Windows and WSL table binds Alt+Q to pulling back queued input.
+ */
+export const QUESTIONS_KEY: KeyId = "alt+a";
+/** Alt+A unless the owner bound it to an editor or app action. */
+export function questionsKey(): KeyId | undefined {
+  return freeKey(QUESTIONS_KEY);
+}
 const plain = (value: string) => value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
 /** Questions listed in the dock; the header counts the rest. */
 const LISTED = 3;
 
 /**
- * The waiting questions as a docked dialog: the count in the header, how to answer as its note, and one
- * option per question, the question on its label row and under it the full id the owner answers by
- * (`/questions <id>`). `hits` maps a line to the question drawn on it.
+ * The waiting questions as a docked dialog: the count in the header, how to answer as its note (shortening
+ * to `/questions`, which shows at every width), and one option per question, the question on its label row
+ * and under it the full id the owner answers by (`/questions <id>`). `selected` marks a question while the
+ * card has the keys; `short` gives each question one row. `hits` maps a line to the question drawn on it.
  */
-export function ownerQuestionLines(pending: readonly PendingQuestion[], width: number):
-  { readonly lines: string[]; readonly hits: ReadonlyMap<number, string> } {
+export function ownerQuestionLines(pending: readonly PendingQuestion[], width: number, selected = -1,
+  maxRows = 3 + LISTED * 4, short = false): { readonly lines: string[]; readonly hits: ReadonlyMap<number, string> } {
   if (!pending.length) return { lines: [], hits: new Map() };
   const listed = pending.slice(0, LISTED), count = pending.length;
+  const key = questionsKey(), cap = key ? keyLabel(key) : undefined;
   const frame = choiceLines({
     key: "owner-questions",
     title: count === 1 ? "An owner question is waiting" : `${count} owner questions are waiting`,
     short: count === 1 ? "Question waiting" : `${count} questions waiting`,
-    meta: "click, /questions or Ctrl+Shift+Q to answer",
+    metaFit: cap ? [`click, /questions or ${cap} to answer`, `/questions or ${cap}`, "/questions"]
+      : ["click or /questions to answer", "/questions"],
     stacked: true,
     options: listed.map(q => ({ label: plain(q.questions[0]!.question),
       detail: q.status === "answered" ? `${q.id} · answer recorded; delivery pending` : `/questions ${q.id}` })),
-  }, -1, width, 3 + listed.length * 4, false);
+  }, selected, width, maxRows, short);
   const hits = new Map<number, string>();
   for (const [line, option] of frame.hits) hits.set(line, listed[option]!.id);
   return { lines: frame.lines, hits };
+}
+
+/** What the panels' dock reads from the owner questions. */
+export interface QuestionSource {
+  /** Pending questions and answers still being delivered, oldest first. */
+  waiting(): readonly PendingQuestion[];
+  /** Opens that pending question's answer dialog, or the list of pending questions without an id. */
+  open(id?: string): void;
+  /** `listener` runs whenever the waiting questions change; returns its removal. */
+  subscribe(listener: () => void): () => void;
+}
+
+export interface QuestionDockHost {
+  source(): QuestionSource | undefined;
+  /** A click focused the card: the other dock items and views give up the keys. */
+  focus(): void;
+  /** Esc, Tab, typing or an opened question: the composer has the keys again. */
+  focusComposer(): void;
+  changed(): void;
+}
+
+/**
+ * The owner-question card as a dock item, under the docked choice's rules: Alt+Down or a click gives it the
+ * keys, ↑↓ select, Enter or a digit opens that question, Esc returns to the composer. Function keys, view keys
+ * and Alt chords pass through; a printable key is typing and goes to the composer.
+ */
+export class QuestionDock implements Component {
+  focused = false;
+  selected = 0;
+  private maxRows = 3 + LISTED * 4;
+  private short = false;
+  private hits: ReadonlyMap<number, string> = new Map();
+
+  constructor(private readonly host: QuestionDockHost) {}
+
+  /** Questions waiting, listed or not. */
+  get waiting(): number { return this.host.source()?.waiting().length ?? 0; }
+
+  setLimit(maxRows: number, short: boolean): void { this.maxRows = maxRows; this.short = short; }
+
+  handleKey(data: string): boolean {
+    if (!this.focused) return false;
+    const listed = this.listed();
+    if (!listed.length) { this.focused = false; return false; }
+    // Pasted text is typing: the composer takes it, so a later Enter sends the draft instead of opening a question.
+    if (data.startsWith(PASTE_START)) { this.leave(); return false; }
+    const ch = decodeKittyPrintable(data) ?? data;
+    if (matchesKey(data, "escape") || matchesKey(data, "tab")) { this.leave(); return true; }
+    if (matchesKey(data, "up") || matchesKey(data, "down")) {
+      this.selected = (this.selected + (matchesKey(data, "up") ? -1 : 1) + listed.length) % listed.length;
+      this.host.changed(); return true;
+    }
+    if (matchesKey(data, "enter")) { this.openAt(listed, this.selected); return true; }
+    if (/^[0-9]$/.test(ch)) {
+      const index = Number(ch) - 1;
+      if (index >= 0 && index < listed.length) this.openAt(listed, index);
+      return true;
+    }
+    if (ch.startsWith("\x1b") || /^[\u0000-\u001f\u007f]$/.test(ch)) return false;
+    this.leave();
+    return false;
+  }
+
+  render(width: number): string[] {
+    const waiting = this.host.source()?.waiting() ?? [];
+    if (!waiting.length) { this.hits = new Map(); this.focused = false; return []; }
+    this.selected = Math.min(this.selected, Math.min(LISTED, waiting.length) - 1);
+    const frame = ownerQuestionLines(waiting, width, this.focused ? this.selected : -1, this.maxRows, this.short);
+    this.hits = frame.hits;
+    return frame.lines;
+  }
+
+  /** A click gives the card the keys and selects a question; a click on the selected question opens it. */
+  handleMouse(event: TuiMouseEvent): { readonly handled: boolean } | undefined {
+    if (event.type !== "click" || event.button !== "left") return { handled: true };
+    const listed = this.listed(), id = this.hits.get(event.y), index = listed.findIndex(q => q.id === id);
+    if (index >= 0 && this.focused && index === this.selected) { this.openAt(listed, index); return { handled: true }; }
+    if (index >= 0) this.selected = index;
+    this.focused = true;
+    this.host.focus();
+    this.host.changed();
+    return { handled: true };
+  }
+
+  invalidate(): void {}
+
+  private listed(): readonly PendingQuestion[] { return (this.host.source()?.waiting() ?? []).slice(0, LISTED); }
+
+  private leave(): void {
+    this.focused = false;
+    this.host.focusComposer();
+    this.host.changed();
+  }
+
+  /** A pending question opens its answer dialog; one whose answer is being delivered opens the list. */
+  private openAt(listed: readonly PendingQuestion[], index: number): void {
+    const question = listed[index];
+    if (!question) return;
+    this.selected = index;
+    this.leave();
+    this.host.source()?.open(question.status === "pending" ? question.id : undefined);
+  }
 }
 
 export const OWNER_QUESTION_STATE = "corral_owner_question_state";
@@ -63,9 +178,25 @@ export class OwnerQuestionUi {
   // Typed drafts survive Escape and reopening for this session; an answered question drops its own.
   private readonly drafts = new Map<string, string[]>();
   busy = false;
+  /** True once the panels took the card into their dock: no widget of its own. */
+  private docked = false;
+  private readonly listeners = new Set<() => void>();
   constructor(private readonly questions: PendingQuestions, private readonly eligible: () => boolean,
     private readonly persist: (message: { customType: string; content: string; display: boolean }) => void,
     private readonly claudeRoute: () => boolean = () => false) {}
+
+  /** Hands the card to the native panels' dock; call before `session_start`. */
+  dock(): QuestionSource {
+    this.docked = true;
+    return {
+      waiting: () => this.visible(),
+      open: id => {
+        const ctx = this.ctx;
+        if (ctx) void this.open(ctx, id).catch(error => ctx.ui.notify(String(error), "error"));
+      },
+      subscribe: listener => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; },
+    };
+  }
 
   install(pi: ExtensionAPI): void {
     pi.on("ui_prompt_start", () => { this.busy = true; });
@@ -82,13 +213,16 @@ export class OwnerQuestionUi {
         await this.open(ctx, args.trim() || undefined);
       },
     });
-    pi.registerShortcut(QUESTIONS_SHORTCUT, { description: "Reopen pending owner questions", handler: ctx => this.open(ctx) });
+    const key = questionsKey();
+    if (key) pi.registerShortcut(key, { description: "Reopen pending owner questions", handler: ctx => this.open(ctx) });
     pi.on("session_start", (_event, ctx) => {
       this.epoch++;
       this.opening = false;
       this.questions.restore();
       if (ctx.hasUI && ctx.mode === "tui") {
         this.ctx = ctx; this.ui = ctx.ui;
+      }
+      if (ctx.hasUI && ctx.mode === "tui" && !this.docked) {
         let hits: ReadonlyMap<number, string> = new Map();
         ctx.ui.setWidget("corral-owner-questions", tui => ({
           render: width => {
@@ -164,6 +298,7 @@ export class OwnerQuestionUi {
       this.timer = setTimeout(() => { this.questions.expire(); this.refresh(); }, Math.max(1, next - Date.now()));
       this.timer.unref();
     }
+    for (const listener of this.listeners) listener();
   }
 
   private async open(ctx: ExtensionContext, id?: string): Promise<void> {

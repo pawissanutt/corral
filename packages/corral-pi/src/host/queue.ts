@@ -210,7 +210,7 @@ export class HostQueue {
     return this.options.session().agent.getQueuedMessages().flatMap(message => {
       const item = this.objects.get(message);
       return item?.state === "queued" && item.mode !== "prompt"
-        ? [{ key: item.item, text: item.text, policy: item.mode, editable: item.origin === "pane" }]
+        ? [{ key: item.item, text: item.text, policy: item.mode, editable: item.origin === "pane", origin: item.origin }]
         : [];
     });
   }

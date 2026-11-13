@@ -137,7 +137,7 @@ function shell(columns: number, rows: number, build: Build, extra: Partial<Panel
   const answers = { confirm: false, select: undefined as string | undefined };
   const ui = {
     theme: { getColorMode: () => "truecolor", fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text },
-    setTheme() {}, setHeader() {}, notify() {}, setWorkingVisible() {}, setHiddenThinkingLabel() {},
+    setTheme() {}, setHeader() {}, setTitle() {}, notify() {}, setWorkingVisible() {}, setHiddenThinkingLabel() {},
     setEditorComponent: (factory: (tui: unknown, theme: unknown, keys: unknown) => ShellEditor) => {
       editor = factory(tui, editorTheme, BINDINGS);
       editor.focused = true;
@@ -209,10 +209,10 @@ test("the composer is a rounded box with its title in the top border, `›` befo
       expect(lines[top + 3]).toMatch(/^ ╰─+╯ $/);
       // The composer has the focus: its border is accent.
       expect(raw[top]).toContain(PANEL_BLUE + "╭");
-      // Then the status bar with the BUILD pill and `○ unbound` (the word from 105 columns), a rule and the footer.
-      expect(lines[top + 4]).toContain(columns >= 64 ? " BUILD " : " B ");
-      expect(lines[top + 4]).toContain("○"); expect(lines[top + 4]).not.toContain("●");
-      if (columns >= 105) expect(lines[top + 4]).toContain("○ unbound");
+      // Then the status bar with the BUILD pill (`BLD` below 64 columns) and no binding segment, a rule and the footer.
+      expect(lines[top + 4]).toContain(columns >= 64 ? " BUILD " : " BLD ");
+      expect(lines[top + 4]).not.toContain("○"); expect(lines[top + 4]).not.toContain("●");
+      expect(lines[top + 4]).not.toContain("unbound");
       expect(raw[top + 4]).toContain(PANEL_ON_ACCENT);
       expect(lines[top + 5]).toBe("─".repeat(columns));
       expect(lines[top + 6]).toMatch(/F1\s+(keys|more)\s*$/);
@@ -274,16 +274,19 @@ test("the exit dialog docks on pending; Esc leaves the header prompt, whose clic
     build.s.exit = { phase: "pending" }; build.fire();
     expect(h.panels.focus).toBe("choice");
     expect(plain(h.dock.render(105))).toContain("How should this leave");
-    // Esc leaves the exit prompt in header row 1 at once; the notice it posts is a toast at the top right of the main view.
+    // Esc leaves the exit prompt in header row 1 at once; the notice it posts says how to reopen the choice.
     expect(h.panels.handleInput(KEY.esc)).toBeTrue();
     expect(h.panels.focus).toBe("composer"); expect(plain(h.dock.render(105))).not.toContain("How should this leave");
     await settle();
     const toast = h.toasts.at(-1), notice = h.panels.workbench.currentNotice;
-    expect(notice).toBeDefined(); expect(toast?.hidden).toBeFalse(); expect(toast?.options.nonCapturing).toBeTrue();
+    expect(notice?.text).toContain("F2 Finish");
+    // Where the header has no room for it, the toast is sized from its wrapped text and never takes the focus.
+    expect(toast?.hidden).toBeFalse(); expect(toast?.options.nonCapturing).toBeTrue();
     expect(toast?.options.row).toBe(h.panels.workbench.bodyTop());
     const box = toast!.lines().map(line => stripTerminalSequences(line));
-    expect(box).toHaveLength(3); expect(box[0]!.startsWith("╭")).toBeTrue(); expect(box[1]).toContain(notice!.text.slice(0, 20));
-    expect(plain(h.frame().lines.slice(0, 1))).not.toContain(notice!.text.slice(0, 20));
+    expect(box[0]!.startsWith("╭")).toBeTrue(); expect(box.join(" ")).toContain("F2 Finish");
+    // The notice holds header row 1's state place while it shows; once it leaves, the exit prompt is back there.
+    h.panels.workbench.clearNotice(notice!);
     const frame = h.frame(), x = column(frame, 0, "exit choice pending");
     expect(x).toBeGreaterThan(0);
     expect(click(frame, x, 0)).toBeTrue();
@@ -292,6 +295,21 @@ test("the exit dialog docks on pending; Esc leaves the header prompt, whose clic
     expect(build.s.calls).toEqual([]); expect(h.panels.workbench.currentNotice?.text).toContain("unavailable");
     expect(h.panels.handleInput("1")).toBeTrue(); await settle();
     expect(build.s.calls).toEqual(["choose keep"]);
+  } finally { h.stop(); }
+});
+
+test("a docked exit choice lets view keys through, and a letter is typing: it reaches the composer while the dialog stays docked", () => {
+  const build = fakeBuild(work);
+  const h = shell(140, 46, build);
+  try {
+    build.s.exit = { phase: "pending" }; build.fire();
+    expect(h.panels.focus).toBe("choice");
+    expect(h.panels.handleInput(KEY.f7)).toBeTrue(); expect(h.panels.workbench.view).toBe("changes");
+    expect(plain(h.dock.render(105))).toContain("How should this leave");
+    // Alt+Down gives the docked dialog the keys again; a letter then leaves it for the composer.
+    expect(h.panels.handleInput("\x1b[1;3B")).toBeTrue(); expect(h.panels.focus).toBe("choice");
+    expect(h.panels.handleInput("w")).toBeFalse(); expect(h.panels.focus).toBe("composer");
+    expect(plain(h.dock.render(105))).toContain("How should this leave"); expect(build.s.calls).toEqual([]);
   } finally { h.stop(); }
 });
 

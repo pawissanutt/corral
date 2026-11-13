@@ -245,6 +245,8 @@ export interface ListOptions {
   readonly color?: (hue: number) => string;
   /** Paths keep only their last two segments (narrow main areas). */
   readonly short?: boolean;
+  /** The selection bar in accent while the view has the keys, muted otherwise; absent reads as focused. */
+  readonly focused?: boolean;
 }
 /**
  * The file rows, each exactly `width` cells, as the mock's `.f`: `▌ ●● ! app/src/api/client.ts   +9 −2`. The bar
@@ -265,7 +267,7 @@ export function listLines(m: ChangesModel, width: number, options: ListOptions =
     if (selected) selectedRow = lines.length;
     const dots: Seg[] = (file.who ?? []).map(id => { const author = authorOf(m, id); return [author ? color(author.hue) : PANEL_MUTED, "●"] as Seg; });
     const flag = file.outside?.length ? `also edited by ${file.outside.map(label).join(", ")}` : (file.who?.length ?? 0) >= 2 ? `edited by ${names(file.who ?? [])}` : undefined;
-    const left: Seg[] = [[PANEL_BLUE, selected ? "▌" : " "], [PANEL_TEXT, " "],
+    const left: Seg[] = [[options.focused === false ? PANEL_MUTED : PANEL_BLUE, selected ? "▌" : " "], [PANEL_TEXT, " "],
       ...(authored ? [...(dots.length ? dots : [[PANEL_TEXT, " "] as Seg]), [PANEL_TEXT, " "] as Seg] : []),
       ...(flag ? [[PANEL_WARNING, "!"] as Seg, [PANEL_TEXT, " "] as Seg] : [])];
     const right = counts(file), room = width - segWidth(left) - (right.length ? segWidth(right) + 1 : 0);
@@ -373,6 +375,8 @@ export interface ChangesHost {
   color?(hue: number): string;
   /** Terminal rows, which cap the stacked file block; the layout viewport height is used without it. */
   rows?(): number;
+  /** True while the view has the keys: the selection bar is accent then, muted otherwise. Absent reads as focused. */
+  focused?(): boolean;
 }
 /** Owns the Changes components; the workbench keeps selection, patch acceptance and key handling. */
 export class ChangesView {
@@ -461,7 +465,7 @@ export class ChangesView {
   /** The side-by-side file column, left of the `│` rule: margin, chips and file rows, one blank cell. */
   private renderList(width: number): string[] {
     const model = this.host.model(), inner = Math.max(1, width - 2);
-    const chips = authorChips(model, inner, this.color), frame = listLines(model, inner, { color: this.color });
+    const chips = authorChips(model, inner, this.color), frame = listLines(model, inner, { color: this.color, focused: this.host.focused?.() ?? true });
     const offset = chips.lines.length;
     this.listChips = chips.hits;
     this.listHits = new Map([...frame.hits].map(([row, path]) => [row + offset, path]));
@@ -483,7 +487,7 @@ export class ChangesView {
    */
   private renderStacked(width: number): string[] {
     const m = this.host.model(), inner = innerOf(width);
-    const chips = authorChips(m, inner, this.color), frame = listLines(m, inner, { color: this.color, short: this.shortPaths });
+    const chips = authorChips(m, inner, this.color), frame = listLines(m, inner, { color: this.color, short: this.shortPaths, focused: this.host.focused?.() ?? true });
     const cap = Math.max(1, this.stackCap - chips.lines.length), total = frame.lines.length, last = Math.max(0, total - cap);
     let top = Math.min(this.stackTop, last);
     if (frame.selectedRow >= 0) {

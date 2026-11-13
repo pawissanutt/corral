@@ -24,22 +24,24 @@ import { agentColor } from "./agent-hues.ts";
 import { InspectionStore } from "./inspection.ts";
 import { renderProof, SPLIT_MIN } from "./proof-view.ts";
 import { proofItems, type SectionId } from "./proof-parts.ts";
-import { usageLines } from "./usage-view.ts";
+import { usageBackAt, usageLines } from "./usage-view.ts";
 import { TaskStore, taskHeadline, taskLines } from "./task-view.ts";
 import { DecisionInbox, inboxIdentity } from "./decision-inbox.ts";
 import { InboxView } from "./inbox-view.ts";
 import { HistoryNavigator, type HistoryRead } from "./history.ts";
 import {
-  boardBadge, changesBadge, chromeTier, headerFrame, mainTabs, proofBadge, tabRow, tabSpec, COMPACT_COLUMNS, NOTICE_MS, SHORT_ROWS,
+  boardBadge, changesBadge, headerFrame, mainTabs, proofBadge, tabRow, tabSpec, COMPACT_COLUMNS, NOTICE_MS, SHORT_ROWS,
   type HeaderHit, type HeaderInput, type HeaderStatus, type Notice, type TabHit, type TabId, type TabSpec,
 } from "./header.ts";
-import type { HintState, KeyContext } from "./keymap.ts";
+import { FILTER_KEY, keyLabel, piKey, viewKey, type HintState, type KeyContext } from "./keymap.ts";
+import { emptyChatLines, jumpLabel, labelJumpControl, TranscriptWatch } from "./chat-overlay.ts";
+import { openPager } from "./pager.ts";
 import type { BuildController } from "./build/build-controller.ts";
 import { BoardView, boardDetailLines, type BoardAction } from "./build/board-view.ts";
 import { childIdOf, childKey } from "./build/contract.ts";
 import { childActions, childAuthors, fleetExtras, steerable } from "./build/fleet-rows.ts";
 import type { SideSource } from "./sidebar.ts";
-import { pad, plainLabel, styledPanelLine, PANEL_BG, PANEL_BLUE, PANEL_LINE, PANEL_TEXT, type PanelSnapshot } from "./panels-view.ts";
+import { plainLabel, styledPanelLine, PANEL_BG, PANEL_BLUE, PANEL_LINE, PANEL_TEXT, type PanelSnapshot } from "./panels-view.ts";
 import { rule, spinner, VIEW_INSET } from "./frame.ts";
 
 /** Below this many terminal rows the rule under the tab row goes first. */
@@ -93,10 +95,17 @@ export function plainClick(event: TuiMouseEvent): boolean {
   return event.type === "click" && event.button === "left" && !event.shift && !event.alt && !event.ctrl && (event.clickCount ?? 1) === 1;
 }
 export type MainView = "task" | "conversation" | "agents" | "agent" | "changes" | "evidence" | "inbox" | "graph" | "timeline" | "usage" | "artifacts" | "board";
-/** The tab a view highlights: one agent's conversation highlights Agents, Graph and Timeline highlight Task, Artifacts highlights Proof. */
-const TAB_OF: Readonly<Record<MainView, TabId | undefined>> = {
+/**
+ * The tab a view highlights: one agent's conversation highlights Agents, Graph and Timeline highlight Task,
+ * Artifacts highlights Proof, Usage highlights Chat.
+ */
+const TAB_OF: Readonly<Record<MainView, TabId>> = {
   task: "task", graph: "task", timeline: "task", conversation: "conversation", agents: "agents", agent: "agents",
-  changes: "changes", evidence: "evidence", artifacts: "evidence", inbox: "inbox", usage: undefined, board: "board",
+  changes: "changes", evidence: "evidence", artifacts: "evidence", inbox: "inbox", usage: "conversation", board: "board",
+};
+/** A sub-view's place, read on its highlighted tab when the row has room and in the footer's lead. */
+const PLACE: Readonly<Partial<Record<MainView, string>>> = {
+  graph: "Task › Graph", timeline: "Task › Events", artifacts: "Proof › Artifacts", usage: "Chat › Usage",
 };
 /** The footer and F1 context of each view while it has the focus. */
 const CONTEXT_OF: Readonly<Record<MainView, KeyContext>> = {
@@ -104,18 +113,10 @@ const CONTEXT_OF: Readonly<Record<MainView, KeyContext>> = {
   changes: "changes", evidence: "proof", artifacts: "artifacts", inbox: "inbox", usage: "usage", board: "board",
 };
 const LETTERS: Readonly<Record<string, string>> = { Conflict: "U", New: "?", Renamed: "R", Deleted: "D", Added: "A", Modified: "M" };
-/**
- * The letters each view defines. While the view has the focus, a defined letter that the current selection
- * does not offer does nothing; only letters a view does not define go on to the composer.
- */
-const VIEW_LETTERS: Readonly<Record<MainView, string>> = {
-  task: "rgl", conversation: "", agents: "jkstxmpbf/?", agent: "tsxm", changes: "jknpaf/cor", evidence: "jkar?",
-  artifacts: "jkmcoxr", inbox: "jkhar/?", usage: "cr", graph: "jkr", timeline: "jkrhc", board: "jknpr",
-};
-/** Letters a build session adds: `a` answers a child's question in the agents table and in its conversation. */
-const BUILD_LETTERS: Readonly<Partial<Record<MainView, string>>> = { agents: "a", agent: "a" };
-/** A child conversation's own keys. */
+/** A child conversation's own keys; each acts only while the child's row offers it, else the letter is typing. */
 const CHILD_KEYS: Readonly<Record<string, "answer" | "steer" | "cancel" | "model">> = { a: "answer", s: "steer", x: "cancel", m: "model" };
+/** The most recent notices `recentNotices()` keeps for the F2 pager. */
+const NOTICE_LOG = 50;
 
 /** Why this build session cannot file board tasks, or undefined when it can. */
 export function boardUnavailable(state: BuildPanelState | undefined): string | undefined {
@@ -212,6 +213,16 @@ export class NativeWorkbench {
   /** Read-only pagers (job output, peek, transcript) this workbench has open. */
   private pagers = 0;
   private transcript: ScrollView | undefined; private transcriptWidth = 0;
+  /** Chat's empty state, new-rows count and unread mark (chat-overlay.ts); undefined until Pi mounts its transcript. */
+  private watch: TranscriptWatch | undefined;
+  /** The same new-rows count for the open agent conversation, which follows its end too. */
+  private childWatch: TranscriptWatch | undefined;
+  /** The main view's width in the last frame: at another width both conversations rewrap and their counts restart. */
+  private watchedWidth = 0;
+  /** Pi's renderer, whose jump-to-latest control carries the new-rows count. */
+  private chatTui: InteractiveChatPresentation["tui"] | undefined;
+  /** Set by a click on the Inbox chip: the Inbox scrolls its selected row into view after it next renders. */
+  private revealInbox = false;
   private timer: ReturnType<typeof setInterval> | undefined;
   private debounce: ReturnType<typeof setTimeout> | undefined;
   private chatPresentation: (() => InteractiveChatPresentation) | undefined;
@@ -231,11 +242,18 @@ export class NativeWorkbench {
   private readonly launchRoot: string;
   private shownNotice: Notice | undefined;
   private noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly notices: { readonly at: number; readonly text: string; readonly tone: Notice["tone"] }[] = [];
+  /** Whether the last header frame drew the current notice in its state place. */
+  private noticeDrawn = false;
   /** Rows of the header in the last frame: the rail starts below them, the tab row and its rule. */
   private headerRows = 0;
   get scopeLabel(): string { return this.review.scopeRequired ? "Choose project" : this.projectName ?? this.review.name; }
-  /** The panel-originated notice the toast at the top right of the main view shows, if any. */
+  /** The panel-originated notice of the moment, if any: header row 1 shows it, or the toast when the header could not. */
   get currentNotice(): Notice | undefined { return this.shownNotice; }
+  /** True when the last header frame drew the current notice; the panels' toast shows it only while this is false. */
+  get noticeInHeader(): boolean { return this.shownNotice !== undefined && this.noticeDrawn; }
+  /** The last NOTICE_LOG notices with their time, oldest first, for the F2 `Recent notices` pager. */
+  recentNotices(): readonly { readonly at: number; readonly text: string; readonly tone: Notice["tone"] }[] { return this.notices; }
   /** True while a pager or detail sheet the workbench opened is on screen; the footer lists its keys. */
   get pagerOpen(): boolean { return this.pagers > 0 || this.inboxView.sheetOpen; }
   /** Runs `show` (a read-only overlay) with the pager marked open. */
@@ -246,13 +264,16 @@ export class NativeWorkbench {
   constructor(private readonly options: WorkbenchOptions) {
     this.history = new HistoryNavigator(options.readHistory, options.canInteract);
     this.images = new NativeImageViewer(() => options.canInteract(), () => { this.focused = this.images.isOpen || this.view !== "conversation"; options.changed(); });
-    this.lifecycle = new LifecycleView(options.identity, options.lifecycle, () => options.snapshot()?.agents, () => options.snapshot()?.bound ?? false, options.changed, options.canInteract, () => options.snapshot()?.inspector);
+    const focused = () => this.focused;
+    this.lifecycle = new LifecycleView(options.identity, options.lifecycle, () => options.snapshot()?.agents, () => options.snapshot()?.bound ?? false, options.changed,
+      options.canInteract, () => options.snapshot()?.inspector, { legend: () => this.legend, rows: () => this.lifecycleScroll?.viewportHeight ?? 0, focused });
     this.inspection = new InspectionStore(options.identity, options.inspection, () => options.changed());
     this.artifacts = new ArtifactView({ identity: options.identity, load: options.artifacts, viewer: options.artifactViewer, exportSession: options.exportSession,
-      openImage: source => this.images.activate(source), bound: () => options.snapshot()?.bound ?? false, changed: options.changed, canInteract: options.canInteract });
+      openImage: source => this.images.activate(source), bound: () => options.snapshot()?.bound ?? false, changed: options.changed, canInteract: options.canInteract,
+      legend: () => this.legend, focused });
     this.task = new TaskStore(options.identity, options.readTask, () => options.changed());
-    // Task-bound roles open on their task; assistant and PM open on Chat. Typing still reaches the editor.
-    if (this.task.bound) this.view = "task";
+    // Every role starts on Chat with the keys in the composer, so the first typed word is never a view key; a
+    // dispatched role's empty Chat says it waits for corral's first instruction. F5 or Alt+1 opens Task.
     this.projectName = options.identity.project || undefined;
     this.review = new ReviewStore(options.projectDir ?? options.cwd, () => options.changed(), options.inspection && options.identity.task && options.identity.run ? async () => {
       await this.inspection.refresh();
@@ -263,12 +284,12 @@ export class NativeWorkbench {
     this.launchRoot = this.review.root;
     this.inbox = new DecisionInbox(options.readInbox, options.changed);
     this.inboxView = new InboxView(this.inbox, options.identity.role, options.identity.project, options.canInteract, options.changed,
-      () => this.focusMain(), () => this.legend, text => this.notice(text, "warning"));
+      () => this.focusMain(), () => this.legend, text => this.notice(text, "warning"), focused);
     this.agentsView = new AgentsView({
       model: () => this.agentsModel(), now: () => Date.now(), short: () => this.size(0).rows < SHORT_ROWS,
       legend: () => this.legend, freeze: () => this.jobFreeze, color: agentColor,
       click: event => options.canInteract() && plainClick(event), focus: () => { this.focusMain(); options.changed(); },
-      act: (action, key) => this.agentAction(action, key),
+      act: (action, key) => this.agentAction(action, key), focused,
     });
     const build = options.build, controller = options.buildController;
     if (build && controller) {
@@ -285,7 +306,7 @@ export class NativeWorkbench {
         unavailable: () => boardUnavailable(options.snapshot()?.build),
         now: () => Date.now(), short: () => this.size(0).rows < SHORT_ROWS,
         click: event => options.canInteract() && plainClick(event), focus: () => { this.focusMain(); options.changed(); },
-        act: (action, id) => this.boardAction(action, id),
+        act: (action, id) => this.boardAction(action, id), focused,
       });
     }
   }
@@ -323,13 +344,13 @@ export class NativeWorkbench {
     const size = this.size(width);
     return { short: size.rows < SHORT_ROWS, tiny: size.columns < COMPACT_COLUMNS };
   }
-  /** Rows above an expanded image: the header only, since the tab row hides while the image is open. */
+  /** Rows above an expanded image: the header only when short, since the tab row hides while the image is open. */
   private chromeRows(width: number): number {
-    const { short, tiny } = this.compact(width);
-    return short || tiny ? 1 : 2;
+    return this.compact(width).short ? 1 : 2;
   }
   setView(view: MainView): void {
-    if (this.view === "agent" && view !== "agent") this.conversation?.remember();
+    if (this.view === "agent" && view !== "agent") { this.conversation?.remember(); this.leaveChild(); }
+    if (view === "conversation") this.watch?.back();
     this.images.close();
     this.view = view; this.focused = view !== "conversation";
     if (this.focused) this.options.onFocusMain?.();
@@ -361,16 +382,28 @@ export class NativeWorkbench {
   }
   /** One agent's conversation in the reading area, where it was last read. */
   openAgent(key: string): void {
-    if (this.view === "agent") this.conversation?.remember();
+    if (this.view === "agent") { this.conversation?.remember(); if (key !== this.agentKey) this.leaveChild(); }
     this.agentsView.select(key); this.agentKey = key;
-    this.conversation?.restore(key);
+    // Another agent (or the same one, read again) starts its new-rows count from what it shows now.
+    this.conversation?.restore(key); this.childWatch?.rewrapped();
     this.setView("agent");
   }
-  /** A build child's conversation; a child that can take a message becomes the composer's receiver. */
+  /**
+   * A build child's conversation; a child that can take a message becomes the composer's receiver, and a notice
+   * says so. Leaving the conversation for any other view gives the message back to the parent (`leaveChild`).
+   */
   openChild(id: string): void {
     const build = this.options.build, child = build?.fleet.snapshot().children.find(entry => entry.id === id);
     this.openAgent(childKey(id));
-    if (build && child && steerable(child)) build.setTarget(id);
+    if (!build || !child || !steerable(child) || build.target() === id) return;
+    build.setTarget(id);
+    if (build.target() === id) this.notice(`Messages now go to ${plainLabel(id)}`);
+  }
+  /** The open child conversation is left: while that child receives the message, the parent receives it again. */
+  private leaveChild(): void {
+    const build = this.options.build, id = this.agentKey === undefined ? undefined : childIdOf(this.agentKey);
+    if (!build || id === undefined || build.target() !== id) return;
+    if (this.options.buildController) this.options.buildController.reset(); else build.setTarget("parent");
   }
   /** F9: Chat, and in a build session the parent receives the message again. */
   chat(): void {
@@ -381,12 +414,25 @@ export class NativeWorkbench {
   openTab(id: TabId): void {
     if (id === "agents") this.openAgents(); else if (id === "conversation") this.chat(); else this.setView(id);
   }
-  /** Panel feedback as a toast for NOTICE_MS; Pi's own notifications keep their native place. */
+  /**
+   * Panel feedback for NOTICE_MS, in header row 1's state place (or the panels' toast when the header could not
+   * draw it), and kept with its time in `recentNotices()`. Pi's own notifications keep their native place.
+   */
   notice(text: string, tone: Notice["tone"] = "text"): void {
     clearTimeout(this.noticeTimer);
-    this.shownNotice = { text: plainLabel(text), tone };
-    this.noticeTimer = setTimeout(() => { this.noticeTimer = undefined; this.shownNotice = undefined; this.options.changed(); }, NOTICE_MS);
+    const notice: Notice = { text: plainLabel(text), tone };
+    this.shownNotice = notice; this.noticeDrawn = false;
+    this.notices.push({ at: Date.now(), text: notice.text, tone });
+    if (this.notices.length > NOTICE_LOG) this.notices.splice(0, this.notices.length - NOTICE_LOG);
+    this.noticeTimer = setTimeout(() => this.clearNotice(notice), NOTICE_MS);
     this.noticeTimer.unref();
+    this.options.changed();
+  }
+  /** Takes `notice` off the screen before its time, if it is still the one shown; the log keeps it. */
+  clearNotice(notice: Notice): void {
+    if (this.shownNotice !== notice) return;
+    clearTimeout(this.noticeTimer); this.noticeTimer = undefined;
+    this.shownNotice = undefined; this.noticeDrawn = false;
     this.options.changed();
   }
   agentsModel(): AgentsModel {
@@ -467,9 +513,9 @@ export class NativeWorkbench {
   private pendingInbox(): number {
     return this.inbox.snapshot?.items.filter(item => item.pending).length ?? 0;
   }
-  private headerInput(width: number): HeaderInput {
+  private headerInput(): HeaderInput {
     const snapshot = this.options.snapshot(), controller = this.options.buildController;
-    if (this.options.build && controller && snapshot?.build) return this.buildHeader(snapshot, snapshot.build, controller, width);
+    if (this.options.build && controller && snapshot?.build) return this.buildHeader(snapshot, snapshot.build, controller);
     const identity = this.options.identity, r = this.review, pending = this.pendingInbox();
     const state: HeaderInput["state"] = !snapshot ? "Unavailable" : snapshot.streaming ? "Working" : "Idle";
     const head = taskHeadline(identity, this.task);
@@ -481,7 +527,8 @@ export class NativeWorkbench {
     const mark = this.options.mark?.();
     return {
       title: target(identity), state, context,
-      ...(pending ? { attention: { text: `⚑ ${pending}`, tone: "warning" as const } } : {}),
+      ...(pending ? { attention: { text: `⚑ ${pending} decision${pending === 1 ? "" : "s"}`, short: `⚑ ${pending}`, tone: "warning" as const } } : {}),
+      ...(this.shownNotice ? { notice: this.shownNotice } : {}),
       ...(mark ? { mark } : {}),
     };
   }
@@ -489,28 +536,30 @@ export class NativeWorkbench {
    * A build session's header: `build · <name>`, the `▲ n needs you` chip, the exit status in place of the
    * state word, and row 2 with the project, the worktree and the exit policy.
    */
-  private buildHeader(snapshot: PanelSnapshot, build: BuildPanelState, controller: BuildController, width: number): HeaderInput {
-    const session = build.session, { tiny } = this.compact(width), r = this.review, mark = this.options.mark?.();
+  private buildHeader(snapshot: PanelSnapshot, build: BuildPanelState, controller: BuildController): HeaderInput {
+    const session = build.session, r = this.review, mark = this.options.mark?.();
     const live = build.fleet.children.some(child => LIVE_CHILD_STATES.includes(child.state));
     const asking = controller.questions().length;
     const docked = controller.dialog()?.key.startsWith("exit:") ?? false;
     const status = exitStatus(build.exit.phase, docked);
     const place = session.here ? `checkout (${plainLabel(session.branch ?? "detached")})` : plainLabel(relative(session.repoRoot, session.worktree) || ".");
     const policy = POLICY[build.settings.exitPolicy];
-    const narrow = chromeTier(this.size(width).columns) === "narrow";
     const elsewhere = r.scopeRequired || this.realRoot(r.root) !== this.realRoot(session.worktree);
+    const scope = elsewhere ? `Changes: ${this.scopeLabel} · ` : "";
     return {
       title: `build · ${plainLabel(session.name)}`, state: snapshot.streaming || live ? "Working" : "Idle",
-      context: {
-        left: `${plainLabel(session.project ?? basename(session.repoRoot))} · ${place}`,
-        right: (elsewhere ? `Changes: ${this.scopeLabel} · ` : "") + (narrow ? policy.short : policy.long),
-      },
-      ...(asking ? { attention: { text: tiny ? `▲ ${asking}` : `▲ ${asking} needs you`, tone: "warning" as const } } : {}),
+      context: { left: `${plainLabel(session.project ?? basename(session.repoRoot))} · ${place}`, right: scope + policy.long, rightShort: scope + policy.short },
+      ...(asking ? { attention: { text: `▲ ${asking} needs you`, short: `▲ ${asking}`, tone: "warning" as const } } : {}),
       ...(status ? { status } : {}),
+      ...(this.shownNotice ? { notice: this.shownNotice } : {}),
       // Children at work while the parent is idle still spin the state word, without a turn time.
       ...(mark ? { mark } : live ? { mark: { glyph: PANEL_BLUE + spinner(Date.now()) } } : {}),
     };
   }
+  /**
+   * The tab row's specs: count badges, the unread mark on Chat while the transcript grew behind another view, and
+   * the open sub-view's place on its tab (`Task › Events`), which gives way to the tab's own label when tight.
+   */
   private tabSpecs(): TabSpec[] {
     const r = this.review, data = this.inspection.current;
     const live = liveCount(this.agentsModel()), pending = this.pendingInbox();
@@ -528,7 +577,11 @@ export class NativeWorkbench {
         }
       }
     };
-    return mainTabs(this.options.identity).map(id => tabSpec(id, badge(id)));
+    const unread = this.view !== "conversation" && (this.watch?.unread() ?? false), place = PLACE[this.view];
+    return mainTabs(this.options.identity).map(id => {
+      const spec = tabSpec(id, badge(id), id === "conversation" && unread);
+      return place && id === TAB_OF[this.view] ? { ...spec, label: place, short: spec.label } : spec;
+    });
   }
   private chrome(): { readonly header: Component; readonly tabs: Component } {
     let hits: readonly TabHit[] = [];
@@ -536,25 +589,34 @@ export class NativeWorkbench {
     const header: Component = {
       render: width => {
         // Renders before the transcript, so a paused reader keeps the same passage at a new width.
-        this.anchorTranscript(this.mainWidth(width));
+        const main = this.mainWidth(width);
+        if (this.watchedWidth && this.watchedWidth !== main) { this.watch?.rewrapped(); this.childWatch?.rewrapped(); }
+        this.watchedWidth = main;
+        this.anchorTranscript(main);
         this.options.live?.(liveCount(this.agentsModel()) > 0);
-        const frame = headerFrame(this.headerInput(width), width, this.compact(width));
-        headerHits = frame.hits; this.headerRows = frame.lines.length;
+        // Pi's jump-to-latest control carries the count of rows that arrived below a paused reader.
+        this.chatTui ??= this.chatPresentation?.().tui;
+        if (this.chatTui && this.watch) labelJumpControl(this.chatTui, this.jumpText);
+        const frame = headerFrame(this.headerInput(), width, this.compact(width));
+        headerHits = frame.hits; this.headerRows = frame.lines.length; this.noticeDrawn = frame.noticeShown;
         return frame.lines;
       },
-      // Build sessions only: the attention chip docks the oldest question, the pending exit status reopens its choice.
+      // The attention chip docks the oldest question (build) or opens the Inbox on its oldest pending item; a
+      // pending exit status reopens its choice.
       handleMouse: event => {
-        const controller = this.options.buildController;
-        if (!controller || !this.options.canInteract() || !plainClick(event)) return undefined;
+        if (!this.options.canInteract() || !plainClick(event)) return undefined;
         const hit = headerHits.find(item => item.row === event.y && event.x >= item.from && event.x < item.to);
-        if (!hit) return undefined;
-        controller.open(hit.id === "attention" ? "question" : "exit");
+        const controller = this.options.buildController;
+        if (hit && controller) controller.open(hit.id === "attention" ? "question" : "exit");
+        else if (hit?.id === "attention") this.openPending();
+        else return undefined;
         return { handled: true };
       }, invalidate() {},
     };
     const tabs: Component = {
       render: width => {
-        const row = tabRow(this.tabSpecs(), TAB_OF[this.view], width);
+        // The open tab's key cap is accent only while its view has the keys (Chat: while the composer has them).
+        const row = tabRow(this.tabSpecs(), TAB_OF[this.view], width, this.view === "conversation" || this.focused);
         hits = row.hits;
         return [row.line];
       },
@@ -568,6 +630,24 @@ export class NativeWorkbench {
     };
     return { header, tabs };
   }
+  /** The Inbox on its oldest pending item, scrolled into view after the next render; nothing when nothing is pending. */
+  private openPending(): void {
+    if (!this.inboxView.selectFirstPending()) return;
+    this.revealInbox = true;
+    this.setView("inbox");
+  }
+  /** The scroll view whose end the jump control and End reach: Chat's transcript, or the open agent conversation. */
+  private activeWatch(): TranscriptWatch | undefined {
+    if (this.images.isOpen) return undefined;
+    return this.view === "conversation" ? this.watch : this.view === "agent" ? this.childWatch : undefined;
+  }
+  /** End jumps while the draft is empty, and in an agent conversation that has the keys; elsewhere it is the editor's. */
+  private endJumps(): boolean { return (this.view === "agent" && this.focused) || !this.ui?.getEditorText(); }
+  /** The jump control's words: the rows that arrived below the reader of the open conversation, and the key that jumps. */
+  private readonly jumpText = (): string => {
+    const bottom = piKey("tui.altScreen.bottom");
+    return jumpLabel(this.activeWatch()?.newRows ?? 0, this.endJumps() ? "End" : bottom && keyLabel(bottom));
+  };
   /**
    * Runs in the header's render, before Pi lays out the transcript at a new width. A reader
    * who paused follow keeps the same passage; following readers stay live through Pi itself.
@@ -585,14 +665,14 @@ export class NativeWorkbench {
   }
   mount(transcript: Component, presentation?: () => InteractiveChatPresentation): Component {
     this.chatPresentation = presentation;
-    if (transcript instanceof ScrollView) this.transcript = transcript;
+    if (transcript instanceof ScrollView) { this.transcript = transcript; this.watch = new TranscriptWatch(transcript); }
     const terminal = this.options.terminal;
     this.changes = new ChangesView({ model: () => this.changesModel(), click: event => this.options.canInteract() && plainClick(event),
       focus: () => { this.focusMain(); this.options.changed(); }, step: delta => void this.selectRelative(delta),
       select: path => void this.review.select(path).then(() => { this.acceptPatch(); this.changesScroll?.scrollToStart(); }),
       pickHunk: index => { this.hunk = index; this.options.changed(); }, color: agentColor,
       ...(this.options.build ? { authors: () => this.changeAuthors() } : {}),
-      ...(terminal ? { rows: () => this.size(0).rows } : {}) });
+      ...(terminal ? { rows: () => this.size(0).rows } : {}), focused: () => this.focused });
     this.changesScroll = this.changes.diff;
     const chat = new HelperChat(() => this.chatPresentation?.().tui, this.options.cwd, presentation);
     chat.expandTools(this.toolsExpanded);
@@ -600,39 +680,59 @@ export class NativeWorkbench {
       click: event => this.options.canInteract() && plainClick(event), focus: () => { this.focusMain(); this.options.changed(); },
       back: () => this.openAgents(), ...(this.childActs ? { answer: (key: string) => this.agentAction("answer", key) } : {}) });
     if (this.agentKey !== undefined) this.conversation.restore(this.agentKey);
+    this.childWatch = new TranscriptWatch(this.conversation.scroll);
     // Task, Proof, lifecycle, Usage, Artifacts and Inbox draw from their first column: `inset` puts them one cell in, as the frame is.
     this.evidenceScroll = new ScrollView(inset({ render: width => this.renderEvidence(width), handleMouse: event => {
       if (!this.options.canInteract() || !plainClick(event)) return undefined;
       const index = this.criterionHits.get(event.y); if (index !== undefined) this.criterionIndex = index;
       this.focusMain(); this.options.changed(); return { handled: true };
     }, invalidate() {} }), { primary: true, follow: "none", scrollbar: "auto" });
+    // Sub-views: a click on the back line (`‹ Task`, `‹ Proof`, `‹ Chat`) goes back as Esc does.
     this.lifecycleScroll = new ScrollView(inset({ render: width => this.lifecycle.render(width), handleMouse: event => {
+      const back = this.lifecycle.back;
+      if (this.options.canInteract() && plainClick(event) && event.y === back.row && event.x >= back.from && event.x < back.to) { this.back(); return { handled: true }; }
       const result = this.lifecycle.handleMouse(event);
       if (result?.handled) { this.focusMain(); this.options.changed(); }
       return result;
     }, invalidate() {} }), { primary: true, follow: "none", scrollbar: "auto" });
     this.usageScroll = new ScrollView(inset({ render: width => {
       const snapshot = this.options.snapshot();
-      return usageLines(this.inspection, snapshot?.budget, snapshot?.bound ?? false, width, this.usageChart)
-        .flatMap(row => new Text((row.heading ? PANEL_BLUE : PANEL_TEXT) + row.text, 0, 0).render(width));
+      return usageLines(this.inspection, snapshot?.budget, snapshot?.bound ?? false, width, this.usageChart, this.legend).map(row => row.text);
+    }, handleMouse: event => {
+      if (!this.options.canInteract() || !plainClick(event)) return undefined;
+      if (usageBackAt(event.x, event.y)) this.back(); else { this.focusMain(); this.options.changed(); }
+      return { handled: true };
     }, invalidate() {} }), { primary: true, follow: "none", scrollbar: "auto" });
     this.artifactScroll = new ScrollView(inset({ render: width => this.artifacts.render(width), handleMouse: event => {
+      if (this.options.canInteract() && plainClick(event) && this.artifacts.backAt(event.x, event.y)) { this.back(); return { handled: true }; }
       const result = this.artifacts.handleMouse(event);
       if (result?.handled) { this.focusMain(); this.options.changed(); }
       return result;
     }, invalidate() {} }), { primary: true, follow: "none", scrollbar: "auto" });
-    this.inboxScroll = new ScrollView(inset(this.inboxView), { primary: true, follow: "none", scrollbar: "auto" });
+    // After a click on the Inbox chip, the selected pending item scrolls into view once its row is known.
+    this.inboxScroll = new ScrollView(inset({ render: width => {
+      const lines = this.inboxView.render(width), current = this.inbox.current;
+      const row = this.revealInbox && current ? this.inboxView.rows.get(inboxIdentity(current)) : undefined;
+      if (row !== undefined) { this.revealInbox = false; queueMicrotask(() => { this.inboxScroll?.scrollTo(row, { disableFollow: true }); this.options.changed(); }); }
+      return lines;
+    }, handleMouse: event => this.inboxView.handleMouse(event), invalidate: () => this.inboxView.invalidate() }), { primary: true, follow: "none", scrollbar: "auto" });
     this.taskScroll = new ScrollView(inset({ render: width => taskLines(this.options.identity, this.task)
       .flatMap(row => new Text(styledPanelLine(row), 0, 0).render(width)), handleMouse: event => {
       if (!this.options.canInteract() || !plainClick(event)) return undefined;
       this.focusMain(); this.options.changed(); return { handled: true };
     }, invalidate() {} }), { primary: true, follow: "none", scrollbar: "auto" });
+    // An empty Chat says who receives the message and how to send, find the keys and quit; it goes with the first row.
+    const send = piKey("tui.input.submit"), quit = piKey("app.clear");
+    const emptyChat: Component = { render: width => emptyChatLines({ identity: this.options.identity, ...(send ? { send: keyLabel(send) } : {}),
+      ...(quit ? { quit: keyLabel(quit) } : {}) }, width), invalidate() {} };
     const chrome = this.chrome();
     const views = new class extends VStack {
       // Laid out by height only: the rail's row beside it never needs this stack's natural height.
       override render(): string[] { return []; }
     }([
       { component: this.taskScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "task" && !this.images.isOpen },
+      { component: emptyChat, basis: "auto", shrink: 0,
+        visible: viewport => this.view === "conversation" && !this.images.isOpen && (this.watch?.empty(viewport.width) ?? false) },
       { component: transcript, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "conversation" && !this.images.isOpen },
       { component: this.images, basis: 0, grow: 1, minSize: 1, visible: viewport => {
         this.images.setViewportHeight(Math.max(0, viewport.height - this.chromeRows(viewport.width))); return this.images.isOpen;
@@ -677,7 +777,7 @@ export class NativeWorkbench {
   }
   private renderEvidence(width: number): string[] {
     this.criterionIndex = Math.max(0, Math.min(this.criterionIndex, this.proofRows() - 1));
-    const frame = renderProof(this.inspection, this.criterionIndex, width, this.legend, this.proofOpen, Date.now(), this.proofWide);
+    const frame = renderProof(this.inspection, this.criterionIndex, width, this.legend, this.proofOpen, Date.now(), this.proofWide, this.focused);
     this.criterionHits = frame.hits;
     return frame.lines;
   }
@@ -709,20 +809,8 @@ export class NativeWorkbench {
       if (this.scopeAbort.signal.aborted) return;
       const shown = this.view === "agent" ? this.agentKey : this.agentsView.entry()?.row.key;
       if (shown !== key || !this.agentRow(key)?.capabilities.transcript) throw new Error("Agent selection or binding changed during read");
-      // Read-only bounded text, never an SDK switchSession/open/resume call.
-      await this.inPager(() => ui.custom<void>((tui, _theme, _keys, done) => {
-        const content = new Text(text.slice(0, 32 * 1024).replace(/[\u0000-\u001f\u007f-\u009f]/g, char => char === "\n" ? char : " "), 0, 0);
-        let offset = 0, max = 0;
-        return { render: width => {
-          const lines = content.render(width), height = Math.max(1, Math.floor(tui.terminal.rows * 0.8) - 2);
-          max = Math.max(0, lines.length - height); offset = Math.max(0, Math.min(max, offset));
-          return [pad(`Transcript · ${plainLabel(row.name)} · read-only`, width), ...lines.slice(offset, offset + height)];
-        }, handleInput: data => {
-            if (matchesKey(data, "escape") || data === "q") { done(); return; }
-            if (matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "pageUp") || matchesKey(data, "pageDown")) offset = Math.max(0, Math.min(max, offset + (matchesKey(data, "up") ? -1 : matchesKey(data, "down") ? 1 : matchesKey(data, "pageUp") ? -10 : 10)));
-            tui.requestRender();
-          }, invalidate() { content.invalidate(); } };
-      }, { overlay: true, overlayOptions: { width: "90%", maxHeight: "85%", anchor: "center" } }));
+      // Read-only bounded text, never an SDK switchSession/open/resume call; the pager replaces control characters.
+      await this.inPager(() => openPager(ui, { title: `Transcript · ${plainLabel(row.name)} · read-only`, lines: text.slice(0, 32 * 1024).split("\n"), wrap: true }));
     } catch (error) {
       if (!this.scopeAbort.signal.aborted) this.notice(`Transcript unavailable: ${plainLabel(error instanceof Error ? error.message : String(error))}`, "warning");
     } finally { this.readingTranscript = false; this.options.changed(); }
@@ -822,20 +910,31 @@ export class NativeWorkbench {
   }
   /** The footer and F1 context of the open view while it has the focus. */
   mainContext(): KeyContext { return this.images.isOpen ? "image" : CONTEXT_OF[this.view]; }
-  /** What the footer hints for `context`; the panels own the focus and the queue. */
-  hintState(context: KeyContext, queue: HintState["queue"]): HintState {
+  /** Where the open view is, as the footer's lead and the tab label name it: `Changes`, `Task › Events`, `Agents › alpha`. */
+  private place(): string {
+    const tab = tabSpec(TAB_OF[this.view]).label;
+    if (this.view === "agent") { const row = this.agentRow(this.agentKey); return row ? `${tab} › ${row.name}` : tab; }
+    return PLACE[this.view] ?? tab;
+  }
+  /**
+   * What the footer hints for `context`; the panels own the focus, the queue and the owner-question dock
+   * (`questions` waiting). A view that has the keys leads its footer with its name.
+   */
+  hintState(context: KeyContext, queue: HintState["queue"], questions = 0): HintState {
     const identity = this.options.identity, build = this.options.build, controller = this.options.buildController;
     const selection = context === "agents" || context === "agent" ? this.agentsView.actions() : context === "board" ? this.boardView?.actions() : undefined;
     const target = controller?.target();
+    const lead = this.focused && !this.images.isOpen && this.view !== "conversation" && context === CONTEXT_OF[this.view] ? this.place() : undefined;
     return {
       context, streaming: this.options.snapshot()?.streaming ?? false, queue, chat: this.view === "conversation" && !this.images.isOpen,
       mode: { taskBound: !!identity.task, answer: identity.role === "pm" || identity.role === "assistant", lifecycle: !!identity.task },
-      ...(selection ? { selection } : {}),
+      ...(selection ? { selection } : {}), ...(questions > 0 ? { questions } : {}), ...(lead !== undefined ? { lead } : {}),
       authors: (this.shownChanges?.authors.length ?? 0) > 0, legend: this.legend, history: this.inbox.history,
       ...(this.view === "timeline" ? { timelineSource: this.lifecycle.source } : {}),
       ...(build && controller ? { build: {
         ...(target ? { target } : {}), steerable: build.fleet.snapshot().children.some(steerable),
         proposed: build.board.proposed() !== undefined, choices: controller.dialog()?.options.length ?? 0,
+        exit: controller.dialog()?.key.startsWith("exit:") ?? false,
       } } : {}),
     };
   }
@@ -905,8 +1004,16 @@ export class NativeWorkbench {
     scroll.scrollBy(matchesKey(data, "pageUp") ? -12 : 12); this.options.changed();
     return true;
   }
+  /**
+   * Keys for the main area. View keys (F-keys and Alt+1..Alt+6 in tab order) work from anywhere; End jumps a paused
+   * Chat to its latest row while the draft is empty. A view that has the keys runs only the keys it offers now:
+   * Esc goes back, Tab gives the keys to the composer, Enter without an action does nothing, `/` always starts a
+   * command in the composer, and any other typing (a letter the view does not offer included) goes to the composer.
+   */
   handleInput(data: string): boolean {
     const tabs = mainTabs(this.options.identity);
+    const alt = tabs.findIndex((_, index) => { const key = viewKey(index); return key !== undefined && matchesKey(data, key); });
+    if (alt >= 0) { this.openTab(tabs[alt]!); return true; }
     if (matchesKey(data, "f9")) { this.chat(); return true; }
     if (matchesKey(data, "f5") && tabs.includes("task")) { this.setView("task"); return true; }
     if (matchesKey(data, "f7")) { this.setView("changes"); return true; }
@@ -915,33 +1022,37 @@ export class NativeWorkbench {
     if (matchesKey(data, "f10") && tabs.includes("board")) { this.setView("board"); return true; }
     if (matchesKey(data, "f11") && tabs.includes("inbox")) { this.setView("inbox"); return true; }
     if (this.images.isOpen && matchesKey(data, "escape")) { this.images.close(); return true; }
+    // End: the open conversation (Chat or one agent's) back to its latest row, as the jump control says.
+    const active = this.activeWatch();
+    if (active && !active.following && matchesKey(data, "end") && this.endJumps()) { active.jump(); this.options.changed(); return true; }
     if (!this.focused || this.view === "conversation") return false;
     if (matchesKey(data, "escape")) { this.back(); return true; }
+    if (matchesKey(data, "tab")) { this.focused = false; this.options.changed(); return true; }
+    if (data === "/") { this.focused = false; this.options.changed(); return false; }
     const view = this.view;
     if (view === "task" && tabs.includes("task") && (data === "g" || data === "l")) { this.setView(data === "g" ? "graph" : "timeline"); return true; }
     if ((view === "graph" || view === "timeline") && this.lifecycle.handleInput(data)) { this.lifecycleScroll?.scrollTo(0, { disableFollow: true }); return true; }
-    if (view === "inbox" && this.inboxView.handleInput(data)) return true;
-    if (view === "agents") {
-      if (this.agentsView.handleKey(data)) { this.options.changed(); return true; }
-      // `t` on an agent whose transcript is not offered says why instead of typing.
-      const entry = this.agentsView.entry();
-      if (data === "t" && entry?.kind === "agent") { void this.openAgentTranscript(entry.row.key); return true; }
-    }
+    // The answer flow is offered to PM and assistant only; for any other role `a` is typing.
+    const answers = this.options.identity.role === "pm" || this.options.identity.role === "assistant";
+    if (view === "inbox" && (data !== "a" || answers) && this.inboxView.handleInput(data)) return true;
+    if (view === "agents" && this.agentsView.handleKey(data)) { this.options.changed(); return true; }
     if (view === "board" && this.boardView?.handleKey(data)) { this.options.changed(); return true; }
     if (view === "agent") {
       if (getKeybindings().matches(data, "app.tools.expand")) {
         this.toolsExpanded = !this.toolsExpanded; this.conversation?.expandTools(this.toolsExpanded); this.options.changed(); return true;
       }
       // A build child's own keys: answer, steer, cancel and model, each only while its row offers it.
-      const key = this.agentKey, action = this.childActs && key !== undefined && childIdOf(key) !== undefined ? CHILD_KEYS[data] : undefined;
-      if (key !== undefined && action) { if (this.agentsView.actions().includes(action)) this.agentAction(action, key); return true; }
-      if (data === "t") { void this.openAgentTranscript(this.agentKey); return true; }
+      const key = this.agentKey, offered = this.agentsView.actions();
+      const action = this.childActs && key !== undefined && childIdOf(key) !== undefined ? CHILD_KEYS[data] : undefined;
+      if (key !== undefined && action && offered.includes(action)) { this.agentAction(action, key); return true; }
+      if (data === "t" && offered.includes("transcript")) { void this.openAgentTranscript(this.agentKey); return true; }
     }
     if (view === "evidence" && data === "a") { this.setView("artifacts"); return true; }
     if (view === "evidence" && matchesKey(data, "enter")) { this.proofEnter(); return true; }
     if (view === "artifacts" && this.artifacts.handleInput(data)) { this.artifactScroll?.scrollTo(0, { disableFollow: true }); return true; }
-    if (matchesKey(data, "enter") || matchesKey(data, "tab")) { this.focused = false; this.options.changed(); return true; }
-    if ((view === "evidence" || view === "agents" || view === "inbox") && data === "?") { this.legend = !this.legend; this.options.changed(); return true; }
+    if (matchesKey(data, "enter")) return true; // No Enter action here: nothing happens, Tab gives the keys to the composer.
+    if ((view === "evidence" || view === "agents" || view === "inbox" || view === "artifacts" || view === "usage" || view === "graph" || view === "timeline")
+      && data === "?") { this.legend = !this.legend; this.options.changed(); return true; }
     if (view === "usage" && data === "c") { this.usageChart = !this.usageChart; this.options.changed(); return true; }
     const scroll = this.scrollOf(view);
     if (view === "inbox" && (data === "j" || data === "k" || matchesKey(data, "up") || matchesKey(data, "down"))) {
@@ -961,17 +1072,17 @@ export class NativeWorkbench {
     if ((view === "evidence" || view === "usage") && data === "r") { void this.inspection.refresh(true); return true; }
     if (view === "task" && data === "r") { void this.task.refresh(true); return true; }
     if (view === "changes") {
-      if (data === "/") { void this.search(); return true; }
+      if (matchesKey(data, FILTER_KEY)) { void this.search(); return true; }
       if (data === "o") { void this.repository(); return true; }
       if (data === "c") { const choices = this.review.comparisons; const next = choices[(choices.indexOf(this.review.comparison) + 1) % choices.length]; if (next) { this.lastPatch = ""; void this.review.setComparison(next); } return true; }
       if (data === "r") { this.inspection.invalidate(); void this.review.refresh().then(() => this.acceptPatch()); return true; }
       if (data === "n" || data === "p") { this.moveHunk(data === "n" ? 1 : -1); return true; }
       if (data === "a") { this.askHunk(); return true; }
-      if (data === "f") { this.changes?.cycleFilter(); this.options.changed(); return true; }
+      // Filtering by agent is offered only while the comparison has authors.
+      if (data === "f" && (this.shownChanges?.authors.length ?? 0) > 0) { this.changes?.cycleFilter(); this.options.changed(); return true; }
     }
-    if (data.length === 1 && (VIEW_LETTERS[view] + (this.options.build ? BUILD_LETTERS[view] ?? "" : "")).includes(data)) return true; // Defined here, not offered now.
-    if (data.startsWith("\x1b")) return false; // Terminal replies/focus events are not typing.
-    this.focused = false; return false;
+    if (data.startsWith("\x1b")) return false; // Terminal replies, focus events and unbound chords are not typing.
+    this.focused = false; this.options.changed(); return false;
   }
   dispose(): void {
     clearInterval(this.timer); clearTimeout(this.debounce); clearTimeout(this.noticeTimer);
