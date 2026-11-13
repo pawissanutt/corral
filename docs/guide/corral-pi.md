@@ -1730,7 +1730,11 @@ host it starts depends on where it runs and its flags:
 
 | Command | Opens |
 |---|---|
-| `corral pi` on a terminal in a herdr pane inside a workspace | the [launcher](assistants.md#the-launcher): an assistant, the PM (continuing its conversation) or a stopped assistant to resume |
+| `corral pi` on a terminal in a herdr pane inside a workspace | the [launcher](assistants.md#the-launcher): a build session, an assistant, the PM (continuing its conversation) or a stopped assistant or build session to resume |
+| `corral pi --build` | an untethered build session in a new worktree `<repo>/.worktrees/build-<name>` on branch `build/<name>`, in any Git repository, inside a workspace or not |
+| `corral pi --build --here` | a build session that writes in the current checkout and branch instead |
+| `corral pi --build --name <name>` | a build session named `<name>` (1 to 40 lowercase letters, digits and `-`, not starting with `-`) instead of a generated name |
+| `corral pi --resume B-<id>` | that build session again, continuing its conversation in the same worktree |
 | `corral pi --assistant`, or `corral pi` there without a terminal | a new [assistant session](assistants.md) in this pane |
 | `corral pi --resume A-<n>` | that assistant's next generation in this pane |
 | `corral pi --pm` | a fresh PM conversation in this pane (below) |
@@ -1738,10 +1742,20 @@ host it starts depends on where it runs and its flags:
 | `corral pi` outside a workspace, or `corral pi --bare` | plain Pi; outside a workspace with a one-line notice |
 
 The launch line names what opened (`assistant A-1 (role assistant) in pane ...`). `--pm`,
-`--assistant`, `--resume`, `--task` and `--over-cap` outside a workspace refuse
+`--assistant`, `--resume A-<n>`, `--task` and `--over-cap` outside a workspace refuse
 `not_in_workspace`; `--bare`, `--pm` and `--resume` exclude one another, and `--assistant`
-excludes all three. Any of these flags, `--task` or `--over-cap` skips the launcher. Assistants,
-their soft cap and their resume are described in [assistant sessions](assistants.md).
+excludes all three. Any of these flags, `--build`, `--task` or `--over-cap` skips the launcher.
+Assistants, their soft cap and their resume are described in [assistant sessions](assistants.md).
+
+A build session runs the corral-pi host as the `build` role without binding to corral: it
+records no assistant, task or run and writes nothing under `.corral/`. Its record and transcript
+live under the corral-pi data directory (`build/B-<id>/`), and it writes only in its worktree, or
+in the current checkout with `--here`. Outside a Git repository `--build` refuses
+`not_a_repository`. `--build` excludes `--bare`, `--pm`, `--assistant`, `--task`, `--over-cap`
+and `-c`; `--here` and `--name` need `--build` and do not combine with `--resume`, and
+`--build --resume` accepts only a `B-<id>`. The parent agent runs the assistant profile's model
+inside a workspace and the provider's default (`openai-codex` unless `--provider` says otherwise)
+outside one; `--model`, `--provider` and `--effort` replace those for this launch.
 
 **Bound PM in this pane.** `corral pi --pm [--model M] [--provider P] [--effort E]`, run in a
 herdr pane inside a corral workspace, makes that pane the PM pane. corral resolves `pm.agent` through

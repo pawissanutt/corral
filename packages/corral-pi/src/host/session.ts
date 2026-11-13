@@ -37,6 +37,7 @@ import { investigationTool } from "../roles/assistant/investigate.ts";
 import { AssistantShell, assistantShellBackend, requireVerifiedPlanningDrain } from "../roles/assistant/shell.ts";
 import type { HostIdentity, RoleContext } from "../roles/types.ts";
 import type { BuildContext } from "../build/types.ts";
+import { createBuildControls, type BuildControls } from "../build/host-controls.ts";
 import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from "../tools/corral.ts";
 import { corralToolNames, defineCorralTool } from "../tools/define.ts";
 import { installChrome } from "../ui/chrome.ts";
@@ -344,10 +345,12 @@ export class HostSession {
   private readonly permissions: BashPermissions | undefined;
   private readonly checkpoints: Checkpoints | undefined;
   private readonly auxiliary: AuxiliaryRuntime | undefined;
+  private readonly buildControls: BuildControls | undefined;
   private readonly shadow: ShadowDispatcher | undefined;
   private nextTurnInbox = false;
   private readonly planReviews: PlanReviews | undefined;
   private auxiliaryModels: Models | undefined;
+  private buildProviders: readonly string[] = [];
   private searchModels: Models | undefined;
   private readonly budget: RunBudget;
   private ledger: TodoLedger | undefined;
@@ -420,8 +423,21 @@ export class HostSession {
         idle: () => this.bound && !this.closing && !this.open && !this.session.isBashRunning,
         request: () => { this.closing = true; options.resumeAssistant?.(); },
       }) : undefined;
+    this.buildControls = options.build ? createBuildControls({
+      sdk: options.sdk, context: options.build,
+      models: () => {
+        if (!this.auxiliaryModels) throw new Error("build model runtime is not ready");
+        return this.auxiliaryModels;
+      },
+      approved: () => this.buildProviders,
+      parent: { provider: this.provider, model: options.model.startsWith(`${this.provider}/`) ? options.model.slice(this.provider.length + 1) : options.model, effort: options.effort },
+      agentDir: options.agentDir,
+      localTools: () => this.localTools.filter(tool => !this.buildControls?.tools.includes(tool)).map(tool => this.planningTool(tool)),
+      shellRefusal: options.modules.role.shellRefusal, changed: () => this.panels?.refresh(),
+    }) : undefined;
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
       identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
+      ...(this.buildControls ? { build: this.buildControls.ui } : {}),
       queueControl: {
         enabled: () => this.queue.controlEnabled,
         edit: key => this.queue.edit(key),
@@ -515,7 +531,7 @@ export class HostSession {
     }
     let browser: ReturnType<typeof browserSettings>;
     try {
-      browser = browserSettings(options.identity.role === "build" ? "assistant" : options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
+      browser = browserSettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
     } catch (error) {
       throw new Error(`module_invalid: ${error instanceof Error ? error.message : error}`);
     }
@@ -637,7 +653,7 @@ export class HostSession {
       },
       error: error => { options.events.emit("local_plan_review_error", { message: error instanceof Error ? error.message : String(error) }); },
     }) : undefined;
-    const dialogEnabled = askUserEnabled(options.identity.role === "build" ? "assistant" : options.identity.role, options.capabilities?.enabled ?? []);
+    const dialogEnabled = askUserEnabled(options.identity.role, options.capabilities?.enabled ?? []);
     this.ownerQuestions = dialogEnabled ? new PendingQuestions({
       session: () => options.sessionManager.getSessionId(), generation: options.identity.generation,
       entries: () => options.sessionManager.getEntries(),
@@ -681,6 +697,7 @@ export class HostSession {
       ...(this.auxiliary && auxiliary.oracle ? [oracleTool(this.auxiliary)] : []),
       ...(this.auxiliary && auxiliary.expert ? [expertTool(this.auxiliary)] : []),
       ...(browser ? browserTools(browser, { cwd: options.cwd, registerCapability }) : [])];
+    if (this.buildControls) this.localTools = [...this.localTools, ...this.buildControls.tools];
     const local = this.localTools.map((tool) => tool.name);
     const mcp = options.capabilities?.enabled.includes("mcp.enabled") === true;
     if (mcp !== (options.capabilities?.mcp !== undefined)) {
@@ -696,7 +713,7 @@ export class HostSession {
       enableSkillCommands: options.capabilities?.enabled.includes("skills") === true && options.guidance !== undefined,
     };
     try {
-      this.controls = parseControls(options.identity.role === "build" ? "worker" : options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
+      this.controls = parseControls(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
     } catch (error) {
       throw new Error(`module_invalid: ${error instanceof Error ? error.message : error}`);
     }
@@ -952,7 +969,7 @@ export class HostSession {
     }
     const localModels = local ? await createLocalModels(local, options.model, options.network.fetch) : undefined;
     const subscriptions = await subscriptionRoutes(options.modules.auth, route.id,
-      options.binding ? "worker" : options.identity.role === "build" ? "assistant" : options.identity.role);
+      options.binding ? "worker" : options.identity.role);
     const models = localModels?.models ?? await createModelCatalog(subscriptions.credentials, {
       providers: subscriptions.providers,
     });
@@ -986,6 +1003,7 @@ export class HostSession {
       }
     }
     host.auxiliaryModels = models;
+    host.buildProviders = subscriptions.providers;
     if (options.capabilities?.enabled.includes("web.enabled") && options.capabilities.web?.search_provider === "subscription") {
       const providers = subscriptions.providers.filter((id) => id === "openai-codex" || id === "anthropic");
       const search = await createModelCatalog(subscriptions.credentials, { providers });
@@ -1240,6 +1258,11 @@ export class HostSession {
       return refuse(event.reason === "new" ? "a new session" : "switching or importing a session", ctx.ui);
     });
     pi.on("session_before_fork", (_event, ctx) => refuse("forking the session", ctx.ui));
+    if (this.buildControls) {
+      const { exit, board } = this.buildControls;
+      pi.registerCommand("finish", { description: "Choose what happens to this build branch", handler: async () => { exit.open(); } });
+      pi.registerCommand("board", { description: "Refresh this build session's board tasks", handler: async () => { await board.refresh(); } });
+    }
     if (this.exportable()) {
       pi.registerCommand(EXPORT_COMMAND, {
         description: "Attach this session's current branch to corral as an offline HTML artifact",
@@ -1556,6 +1579,14 @@ export class HostSession {
     });
   }
 
+  /** A child-targeted composer never submits its text to the parent conversation. */
+  async deliverBuildInput(text: string): Promise<boolean> {
+    const controls = this.buildControls;
+    const target = controls?.ui.target();
+    if (!controls || target === "parent" || !target || this.closing || !this.bound) return false;
+    return controls.fleet.steer(target, text);
+  }
+
   markAttached(mode: "interactive" | "headless"): void {
     this.attached = mode;
     this.options.events.emit(mode);
@@ -1599,6 +1630,7 @@ export class HostSession {
     const aborted = this.session.abort();
     await this.planReviews?.close();
     await this.auxiliary?.close();
+    await this.buildControls?.close();
     await this.jobs?.shutdown();
     await this.assistantShell?.close();
     await aborted;
@@ -1757,6 +1789,7 @@ export class HostSession {
     const jobs: PanelJob[] | null = this.jobs ? [...this.jobs.inspection().map(detail => ({ job: detail.job, state: detail.state, detail })),
       ...this.commands?.recovered() ?? []] : null;
     return {
+      ...(this.buildControls ? { build: this.buildControls.panelState() } : {}),
       budget: (this.options.capabilities?.catalog ?? 0) >= 7 ? this.budget.state() : undefined,
       bound: this.bound, model: session.model ? `${session.model.provider}/${session.model.id}` : null,
       effort: session.thinkingLevel, effortAvailable: session.supportsThinking(),

@@ -108,6 +108,33 @@ describe("build exits", () => {
     } finally { control.close(); }
   });
 
+  test("outside-workspace exit lifecycle and reads remain usable without corral", async () => {
+    const initial = context("review");
+    let commands = 0;
+    const control = createExit({ context: { ...initial, session: { ...initial.session, workspaceRoot: undefined } },
+      run: async () => { commands++; throw new Error("Unexpected corral command"); }, git: git(),
+      fleet: () => fleet, save() {}, changed() {} });
+    const unsubscribe = control.subscribe(() => {});
+    expect(control.state().phase).toBe("none");
+    control.open();
+    expect(control.state().phase).toBe("pending");
+    await control.summary();
+    const options = control.options();
+    for (const choice of ["land", "ship"]) {
+      expect(options.find(option => option.choice === choice)?.unavailable).toBe("This session is outside a corral workspace.");
+    }
+    expect(options.filter(option => !option.unavailable).map(option => option.choice)).toEqual(["keep", "iterate"]);
+    expect((await control.choose("ship")).phase).toBe("failed");
+    expect((await control.choose("iterate")).phase).toBe("none");
+    expect((await control.choose("keep")).phase).toBe("kept");
+    unsubscribe();
+    control.close();
+    control.close();
+    expect(control.state().phase).toBe("kept");
+    expect(control.options().map(option => option.choice)).toEqual(["keep", "land", "ship", "iterate"]);
+    expect(commands).toBe(0);
+  });
+
   test("policy, empty branches and dirty worktrees disable the appropriate exits", async () => {
     for (const [policy, dirty, commits, expected] of [
       ["review", false, 1, ["land"]], ["none", false, 1, ["land", "ship"]],

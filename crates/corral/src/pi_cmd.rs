@@ -1,10 +1,11 @@
 //! `corral pi`: start the corral-pi host from nothing. In a workspace on a terminal it opens the
-//! launcher, which asks whether to open an assistant, the PM or a stopped assistant to resume;
-//! `--assistant`, `--pm` and `--resume A-<n>` open one directly, and a plain `corral pi` without a
-//! terminal opens an assistant. Outside a workspace, or with `--bare`, it starts plain Pi. Handler
-//! bodies live in `corral_ops::agent::pi`.
+//! launcher, which asks whether to open a build session, an assistant, the PM or a stopped session
+//! to resume; `--build`, `--assistant`, `--pm` and `--resume A-<n>`/`B-<id>` open one directly, and
+//! a plain `corral pi` without a terminal opens an assistant. Outside a workspace only `--build`
+//! (and `--resume B-<id>`) start the corral-pi host; plain `corral pi` there, or `--bare`, starts
+//! plain Pi. Handler bodies live in `corral_ops::agent::pi` and `corral_ops::agent::pi_build`.
 use std::io::IsTerminal;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use clap::Args;
@@ -12,6 +13,7 @@ use corral_core::Store;
 use corral_ops::Ctx;
 use corral_ops::agent::hooks::pm::Overrides;
 use corral_ops::agent::pi::{self, BareArgs};
+use corral_ops::agent::pi_build::{self, BuildArgs, BuildSessionSummary};
 use corral_tui::launcher::{self, LauncherEntry, Section};
 
 use crate::entry::Entry;
@@ -27,12 +29,26 @@ pub struct PiArgs {
     /// Open an assistant directly, without the launcher
     #[arg(long, conflicts_with_all = ["bare", "pm", "resume"])]
     assistant: bool,
+    /// Open an untethered build session: parallel agents in one worktree, nothing reaches the board until you choose an exit
+    #[arg(long, conflicts_with_all = ["bare", "pm", "assistant", "task", "over_cap", "continue_session"])]
+    build: bool,
+    /// Write in the current checkout and branch instead of a new build worktree
+    #[arg(long, requires = "build", conflicts_with = "resume")]
+    here: bool,
+    /// Name the build session; a new worktree is `.worktrees/build-<NAME>` on branch `build/<NAME>`
+    #[arg(
+        long,
+        value_name = "NAME",
+        requires = "build",
+        conflicts_with = "resume"
+    )]
+    name: Option<String>,
     /// Continue the previous PM conversation instead of starting fresh
     #[arg(short = 'c', long = "continue", requires = "pm",
         conflicts_with_all = ["bare", "resume", "over_cap", "task"])]
     continue_session: bool,
-    /// Resume stopped assistant session A-<n> in this pane, fencing its previous generation (inside an assistant, /resume picks one)
-    #[arg(long, value_name = "A-N", conflicts_with = "over_cap")]
+    /// Resume stopped assistant session A-<n> (fencing its previous generation) or build session B-<id> in this pane (inside an assistant, /resume picks one)
+    #[arg(long, value_name = "ID", conflicts_with = "over_cap")]
     resume: Option<String>,
     /// Open an assistant even when assistant.max_live assistants are already live
     #[arg(long)]
@@ -65,16 +81,37 @@ pub enum Invocation {
         over_cap: bool,
     },
     Resume(String),
+    /// An untethered build session: a new one, or `resume` (`B-<id>`) continues a recorded one.
+    Build {
+        here: bool,
+        name: Option<String>,
+        resume: Option<String>,
+    },
 }
 
 pub const BARE_NOTICE: &str =
     "corral pi: no corral workspace here; starting bare Pi (no store, binding or corral tools)";
 
-/// The invocation split: outside a workspace only plain Pi can start; a plain `corral pi` on a
-/// terminal (stdin and stdout both) asks with the launcher.
+/// The invocation split: a build session needs only a Git repository (checked when it starts);
+/// otherwise outside a workspace only plain Pi can start, and a plain `corral pi` on a terminal
+/// (stdin and stdout both) asks with the launcher.
 pub fn invocation(args: &PiArgs, in_workspace: bool, terminal: bool) -> Result<Invocation> {
     if args.bare {
         return Ok(Invocation::Bare { notice: false });
+    }
+    let resumes_build = args.resume.as_deref().is_some_and(is_build_session);
+    if args.build || resumes_build {
+        if let Some(id) = args.resume.as_deref().filter(|_| !resumes_build) {
+            bail!(
+                "corral pi refused: usage_error: --build resumes only build sessions (B-<id>); \
+                 resume {id} with `corral pi --resume {id}`"
+            );
+        }
+        return Ok(Invocation::Build {
+            here: args.here,
+            name: args.name.clone(),
+            resume: args.resume.clone(),
+        });
     }
     if !in_workspace {
         if args.pm
@@ -84,8 +121,9 @@ pub fn invocation(args: &PiArgs, in_workspace: bool, terminal: bool) -> Result<I
             || args.task.is_some()
         {
             bail!(
-                "corral pi refused: not_in_workspace: --pm, --assistant, --resume, --task and \
-                 --over-cap need a corral workspace; run them inside one, or `corral pi --bare`"
+                "corral pi refused: not_in_workspace: --pm, --assistant, --resume A-<n>, --task \
+                 and --over-cap need a corral workspace; run them inside one, or `corral pi \
+                 --build` or `corral pi --bare` here"
             );
         }
         return Ok(Invocation::Bare { notice: true });
@@ -108,6 +146,11 @@ pub fn invocation(args: &PiArgs, in_workspace: bool, terminal: bool) -> Result<I
     })
 }
 
+/// Build session ids are `B-` plus the host's lowercase base36; assistants are `A-<n>`.
+fn is_build_session(id: &str) -> bool {
+    id.starts_with("B-")
+}
+
 pub fn run(start: &Path, args: PiArgs, entry: &Entry) -> Result<()> {
     let terminal = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let invocation = invocation(&args, Store::find_root(start).is_ok(), terminal)?;
@@ -128,13 +171,19 @@ pub fn run(start: &Path, args: PiArgs, entry: &Entry) -> Result<()> {
                 effort: overrides.effort,
             })
         }
+        Invocation::Build { here, name, resume } => start_build(overrides, here, name, resume),
         Invocation::Launcher => {
             let ctx = entry.open(start)?;
-            let Some(id) = launcher::pick(&launcher_entries(&ctx)?)? else {
+            let Some((id, option)) = launcher::pick(&launcher_entries(start, &ctx)?)? else {
                 return Ok(());
             };
-            let (next, continue_session) = chosen(&id)?;
+            let (next, continue_session) = chosen(&id, option)?;
             overrides.continue_session = continue_session;
+            if let Invocation::Build { here, name, resume } = next {
+                // The build host never uses the store: release it before the host replaces us.
+                drop(ctx);
+                return start_build(overrides, here, name, resume);
+            }
             open(start, &ctx, next, &overrides, None)
         }
         direct => open(
@@ -145,6 +194,23 @@ pub fn run(start: &Path, args: PiArgs, entry: &Entry) -> Result<()> {
             args.task.as_deref(),
         ),
     }
+}
+
+/// Starts the untethered build host; `corral_ops::agent::pi_build` refuses outside a Git repository.
+fn start_build(
+    overrides: Overrides,
+    here: bool,
+    name: Option<String>,
+    resume: Option<String>,
+) -> Result<()> {
+    pi_build::build(&BuildArgs {
+        model: overrides.model,
+        provider: overrides.provider,
+        effort: overrides.effort,
+        here,
+        name,
+        resume,
+    })
 }
 
 /// Opens a bound session: the PM, a new assistant (with optional task focus) or a resumed one.
@@ -161,27 +227,97 @@ fn open(
             pi::assistant_focused(start, ctx, overrides, over_cap, task)
         }
         Invocation::Resume(id) => pi::resume_assistant(ctx, &id, overrides),
-        other @ (Invocation::Bare { .. } | Invocation::Launcher) => {
+        other @ (Invocation::Bare { .. } | Invocation::Launcher | Invocation::Build { .. }) => {
             bail!("corral pi: {other:?} does not open a bound session")
         }
     }
 }
 
+const BUILD_ROW: &str = "build";
 const ASSISTANT_ROW: &str = "assistant";
 const PM_ROW: &str = "pm";
-/// Stopped assistants the launcher lists, newest first.
+/// The Build row's option that writes in the current checkout (`--here`).
+const BUILD_HERE: usize = 1;
+/// Stopped sessions the launcher lists, newest first.
 const RESUME_ROWS: usize = 8;
 
-/// The launcher's rows: start an assistant or the PM, or resume one of the newest stopped
-/// assistants (those `corral pi --resume` accepts: open, with no running host).
-fn launcher_entries(ctx: &Ctx) -> Result<Vec<LauncherEntry>> {
+/// The Build row: a new worktree by default, or the current checkout ([`BUILD_HERE`]).
+fn build_entry() -> LauncherEntry {
+    LauncherEntry {
+        id: BUILD_ROW.into(),
+        section: Section::Start,
+        key: Some('b'),
+        name: "Build".into(),
+        detail: "untethered · parallel agents · nothing reaches the board until you ship".into(),
+        options: vec![
+            "new worktree  .worktrees/build-<name>".into(),
+            "here  the current checkout and branch".into(),
+        ],
+    }
+}
+
+/// A recorded build session's Resume row: its name, project (or directory), age and, once it has
+/// exited, how.
+fn build_resume_entry(session: &BuildSessionSummary, now: jiff::Timestamp) -> LauncherEntry {
+    let place = match (&session.project, session.repo_root.file_name()) {
+        (Some(project), _) => project.clone(),
+        (None, Some(dir)) => dir.to_string_lossy().into_owned(),
+        (None, None) => session.repo_root.display().to_string(),
+    };
+    let mut detail = format!("{} · {place}", session.name);
+    if let Ok(updated) = session.updated.parse::<jiff::Timestamp>() {
+        let age = corral_core::age_text(now.duration_since(updated).as_secs());
+        detail.push_str(&format!(" · {age} ago"));
+    }
+    let exited = match session.exited.as_deref() {
+        Some("keep") => Some("kept"),
+        Some("ship") => Some("shipped"),
+        Some("land") => Some("landed"),
+        _ => None,
+    };
+    if let Some(word) = exited {
+        detail.push_str(&format!(" · {word}"));
+    }
+    LauncherEntry {
+        id: session.id.clone(),
+        section: Section::Resume,
+        key: None,
+        name: "build".into(),
+        detail,
+        options: Vec::new(),
+    }
+}
+
+/// The Git top-level of `start`, resolved; `None` outside a repository.
+fn git_top_level(start: &Path) -> Option<PathBuf> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(start)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let top = String::from_utf8(output.stdout).ok()?;
+    PathBuf::from(top.trim_end_matches('\n'))
+        .canonicalize()
+        .ok()
+}
+
+/// The launcher's rows: start a build session, an assistant or the PM, or resume one of the newest
+/// stopped sessions: assistants `corral pi --resume` accepts (open, with no running host) and the
+/// build sessions recorded for a repository inside this workspace or the current one.
+fn launcher_entries(start: &Path, ctx: &Ctx) -> Result<Vec<LauncherEntry>> {
     let mut entries = vec![
+        build_entry(),
         LauncherEntry {
             id: ASSISTANT_ROW.into(),
             section: Section::Start,
             key: Some('a'),
             name: "Assistant".into(),
             detail: "board-aware · scratch worktrees · owner actions on your instruction".into(),
+            options: Vec::new(),
         },
         LauncherEntry {
             id: PM_ROW.into(),
@@ -189,6 +325,7 @@ fn launcher_entries(ctx: &Ctx) -> Result<Vec<LauncherEntry>> {
             key: Some('p'),
             name: "PM".into(),
             detail: "workspace coordinator · continues the previous conversation".into(),
+            options: Vec::new(),
         },
     ];
     let mut stopped: Vec<_> = corral_ops::assistant_stats(&ctx.store, None)?
@@ -197,6 +334,7 @@ fn launcher_entries(ctx: &Ctx) -> Result<Vec<LauncherEntry>> {
         .collect();
     stopped.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));
     let now = jiff::Timestamp::now();
+    let mut resume = Vec::new();
     for row in stopped.into_iter().take(RESUME_ROWS) {
         let project = ctx.store.get_assistant(&row.session)?.project;
         let title = if !row.summary.is_empty() {
@@ -208,22 +346,59 @@ fn launcher_entries(ctx: &Ctx) -> Result<Vec<LauncherEntry>> {
         };
         let age = corral_core::age_text(now.duration_since(row.last_activity).as_secs());
         let project = project.as_deref().unwrap_or("workspace");
-        entries.push(LauncherEntry {
-            id: row.session.clone(),
-            section: Section::Resume,
-            key: None,
-            name: row.session,
-            detail: format!("{title} · {project} · {age} ago"),
-        });
+        resume.push((
+            row.last_activity,
+            LauncherEntry {
+                id: row.session.clone(),
+                section: Section::Resume,
+                key: None,
+                name: row.session,
+                detail: format!("{title} · {project} · {age} ago"),
+                options: Vec::new(),
+            },
+        ));
     }
+    let workspace = ctx.store.root();
+    let top = git_top_level(start);
+    for session in pi_build::list_sessions(&corral_ops::agent::install::data_root()?) {
+        let Ok(updated) = session.updated.parse::<jiff::Timestamp>() else {
+            continue;
+        };
+        let repo = session
+            .repo_root
+            .canonicalize()
+            .unwrap_or_else(|_| session.repo_root.clone());
+        if repo.starts_with(workspace) || top.as_deref() == Some(repo.as_path()) {
+            resume.push((updated, build_resume_entry(&session, now)));
+        }
+    }
+    resume.sort_by(|a, b| b.0.cmp(&a.0));
+    entries.extend(resume.into_iter().take(RESUME_ROWS).map(|(_, entry)| entry));
     Ok(entries)
 }
 
-/// What the launcher's row stands for, and whether it continues the previous PM conversation.
-fn chosen(id: &str) -> Result<(Invocation, bool)> {
+/// What the launcher's row (with its chosen option) stands for, and whether it continues the
+/// previous PM conversation.
+fn chosen(id: &str, option: usize) -> Result<(Invocation, bool)> {
     Ok(match id {
+        BUILD_ROW => (
+            Invocation::Build {
+                here: option == BUILD_HERE,
+                name: None,
+                resume: None,
+            },
+            false,
+        ),
         ASSISTANT_ROW => (Invocation::Assistant { over_cap: false }, false),
         PM_ROW => (Invocation::Pm, true),
+        _ if is_build_session(id) => (
+            Invocation::Build {
+                here: false,
+                name: None,
+                resume: Some(id.to_owned()),
+            },
+            false,
+        ),
         _ if id.starts_with("A-") => (Invocation::Resume(id.to_owned()), false),
         _ => bail!("corral pi: the launcher returned an unknown row {id}"),
     })
@@ -245,78 +420,138 @@ mod tests {
         Cli::try_parse_from(std::iter::once("pi").chain(argv.iter().copied())).map(|cli| cli.pi)
     }
 
+    fn build(here: bool, name: Option<&str>, resume: Option<&str>) -> Invocation {
+        Invocation::Build {
+            here,
+            name: name.map(Into::into),
+            resume: resume.map(Into::into),
+        }
+    }
+
     #[test]
     fn the_invocation_split_follows_flags_workspace_and_terminal() {
         use Invocation::*;
-        // (argv, in a workspace, on a terminal, what opens; None refuses not_in_workspace)
-        let cases: &[(&[&str], bool, bool, Option<Invocation>)] = &[
-            (&[], true, true, Some(Launcher)),
+        // (argv, in a workspace, on a terminal, what opens or the refusal code)
+        let cases: &[(&[&str], bool, bool, Result<Invocation, &str>)] = &[
+            (&[], true, true, Ok(Launcher)),
             (
                 &["--model", "m", "--effort", "high"],
                 true,
                 true,
-                Some(Launcher),
+                Ok(Launcher),
             ),
-            (&[], true, false, Some(Assistant { over_cap: false })),
+            (&[], true, false, Ok(Assistant { over_cap: false })),
             (
                 &["--assistant"],
                 true,
                 true,
-                Some(Assistant { over_cap: false }),
+                Ok(Assistant { over_cap: false }),
             ),
             (
                 &["--assistant"],
                 true,
                 false,
-                Some(Assistant { over_cap: false }),
+                Ok(Assistant { over_cap: false }),
             ),
             (
                 &["--assistant", "--over-cap"],
                 true,
                 true,
-                Some(Assistant { over_cap: true }),
+                Ok(Assistant { over_cap: true }),
             ),
             (
                 &["--over-cap"],
                 true,
                 true,
-                Some(Assistant { over_cap: true }),
+                Ok(Assistant { over_cap: true }),
             ),
             (
                 &["--over-cap"],
                 true,
                 false,
-                Some(Assistant { over_cap: true }),
+                Ok(Assistant { over_cap: true }),
             ),
-            (&["--pm"], true, true, Some(Pm)),
-            (&["--pm", "-c"], true, true, Some(Pm)),
-            (&["--pm", "--continue"], true, false, Some(Pm)),
+            (&["--pm"], true, true, Ok(Pm)),
+            (&["--pm", "-c"], true, true, Ok(Pm)),
+            (&["--pm", "--continue"], true, false, Ok(Pm)),
             (
                 &["--task", "T-42"],
                 true,
                 true,
-                Some(Assistant { over_cap: false }),
+                Ok(Assistant { over_cap: false }),
             ),
-            (&["--task", "T-42"], false, true, None),
-            (&["--resume", "A-1"], true, true, Some(Resume("A-1".into()))),
-            (&["--bare"], true, true, Some(Bare { notice: false })),
-            (&["--bare"], false, false, Some(Bare { notice: false })),
-            (&[], false, true, Some(Bare { notice: true })),
-            (&[], false, false, Some(Bare { notice: true })),
-            (&["--model", "m"], false, true, Some(Bare { notice: true })),
-            (&["--pm"], false, true, None),
-            (&["--assistant"], false, true, None),
-            (&["--resume", "A-1"], false, true, None),
-            (&["--over-cap"], false, true, None),
+            (&["--task", "T-42"], false, true, Err("not_in_workspace")),
+            (&["--resume", "A-1"], true, true, Ok(Resume("A-1".into()))),
+            (&["--resume", "A-3"], true, false, Ok(Resume("A-3".into()))),
+            (&["--build"], true, true, Ok(build(false, None, None))),
+            (&["--build"], true, false, Ok(build(false, None, None))),
+            (
+                &["--build", "--here"],
+                true,
+                true,
+                Ok(build(true, None, None)),
+            ),
+            (
+                &["--build", "--name", "x"],
+                true,
+                true,
+                Ok(build(false, Some("x"), None)),
+            ),
+            (
+                &["--build", "--model", "m"],
+                true,
+                true,
+                Ok(build(false, None, None)),
+            ),
+            (&["--build"], false, true, Ok(build(false, None, None))),
+            (
+                &["--build", "--here", "--name", "x"],
+                false,
+                false,
+                Ok(build(true, Some("x"), None)),
+            ),
+            (
+                &["--resume", "B-abc123"],
+                true,
+                true,
+                Ok(build(false, None, Some("B-abc123"))),
+            ),
+            (
+                &["--resume", "B-abc123"],
+                false,
+                true,
+                Ok(build(false, None, Some("B-abc123"))),
+            ),
+            (
+                &["--build", "--resume", "B-abc123"],
+                true,
+                true,
+                Ok(build(false, None, Some("B-abc123"))),
+            ),
+            (
+                &["--build", "--resume", "A-3"],
+                true,
+                true,
+                Err("usage_error"),
+            ),
+            (&["--bare"], true, true, Ok(Bare { notice: false })),
+            (&["--bare"], false, false, Ok(Bare { notice: false })),
+            (&[], false, true, Ok(Bare { notice: true })),
+            (&[], false, false, Ok(Bare { notice: true })),
+            (&["--model", "m"], false, true, Ok(Bare { notice: true })),
+            (&["--pm"], false, true, Err("not_in_workspace")),
+            (&["--assistant"], false, true, Err("not_in_workspace")),
+            (&["--resume", "A-1"], false, true, Err("not_in_workspace")),
+            (&["--over-cap"], false, true, Err("not_in_workspace")),
         ];
         for (argv, in_workspace, terminal, expected) in cases {
             let args = parse(argv).unwrap();
             let got = invocation(&args, *in_workspace, *terminal);
             match expected {
-                Some(expected) => assert_eq!(&got.unwrap(), expected, "{argv:?} {terminal}"),
-                None => {
+                Ok(expected) => assert_eq!(&got.unwrap(), expected, "{argv:?} {terminal}"),
+                Err(code) => {
                     let error = got.unwrap_err().to_string();
-                    assert!(error.contains("not_in_workspace"), "{argv:?}: {error}");
+                    assert!(error.contains(code), "{argv:?}: {error}");
                 }
             }
         }
@@ -324,15 +559,46 @@ mod tests {
 
     #[test]
     fn launcher_rows_open_what_their_flags_open() {
+        // Build's first option is a new worktree (`--build`), its second the checkout (`--here`).
+        let options = build_entry().options;
+        assert_eq!(options.len(), 2);
+        assert!(options[BUILD_HERE].starts_with("here"));
         assert_eq!(
-            chosen(ASSISTANT_ROW).unwrap(),
+            chosen(BUILD_ROW, 0).unwrap(),
+            (build(false, None, None), false)
+        );
+        assert_eq!(
+            chosen(BUILD_ROW, BUILD_HERE).unwrap(),
+            (build(true, None, None), false)
+        );
+        assert_eq!(
+            chosen(ASSISTANT_ROW, 0).unwrap(),
             (Invocation::Assistant { over_cap: false }, false)
         );
         // The PM row says it continues the previous conversation: `--pm -c`.
-        assert_eq!(chosen(PM_ROW).unwrap(), (Invocation::Pm, true));
+        assert_eq!(chosen(PM_ROW, 0).unwrap(), (Invocation::Pm, true));
         assert_eq!(
-            chosen("A-7").unwrap(),
+            chosen("A-7", 0).unwrap(),
             (Invocation::Resume("A-7".into()), false)
+        );
+        // A build Resume row is `--resume B-<id>`.
+        let session = BuildSessionSummary {
+            id: "B-abc123".into(),
+            name: "checkout-copy".into(),
+            repo_root: "/work/mitiplay".into(),
+            worktree: "/work/mitiplay/.worktrees/build-checkout-copy".into(),
+            here: false,
+            project: None,
+            updated: "2026-11-12T10:00:00Z".into(),
+            exited: Some("ship".into()),
+        };
+        let now: jiff::Timestamp = "2026-11-12T10:23:00Z".parse().unwrap();
+        let row = build_resume_entry(&session, now);
+        assert_eq!(row.name, "build");
+        assert_eq!(row.detail, "checkout-copy · mitiplay · 23m ago · shipped");
+        assert_eq!(
+            chosen(&row.id, 0).unwrap(),
+            (build(false, None, Some("B-abc123")), false)
         );
     }
 
@@ -355,6 +621,19 @@ mod tests {
             &["--resume", "A-1", "-c"],
             &["--over-cap", "-c"],
             &["--task", "T-42", "-c"],
+            &["--build", "--bare"],
+            &["--build", "--pm"],
+            &["--build", "--assistant"],
+            &["--build", "--task", "T-42"],
+            &["--build", "--over-cap"],
+            &["--build", "-c"],
+            &["--build", "--pm", "-c"],
+            &["--here"],
+            &["--name", "x"],
+            &["--resume", "B-abc123", "--here"],
+            &["--resume", "B-abc123", "--name", "x"],
+            &["--build", "--here", "--resume", "B-abc123"],
+            &["--build", "--name", "x", "--resume", "B-abc123"],
         ] {
             assert!(parse(argv).is_err(), "{argv:?}");
         }

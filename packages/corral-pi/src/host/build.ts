@@ -15,6 +15,7 @@ import { runHost } from "./main.ts";
 
 // Everything here runs in the host, its own managed processes, or the local receipt plane.
 // write_permissions needs assistant scratch ownership; checkpoints needs a worker run;
+// hooks is a worker-only control;
 // session_export needs corral artifacts; headless needs a bound launcher lifecycle;
 // shadow and expert need PM state; role_enabled is planning-role admission;
 // llama_cpp.enabled needs a generation-bound local inference route. budget is not an
@@ -23,7 +24,7 @@ import { runHost } from "./main.ts";
 // into the bound project's context-file and prompt-template discovery policy.
 export const BUILD_CAPABILITY_KEYS: readonly string[] = [
   "todo", "queue_control", "web.enabled", "mcp.enabled", "compaction", "browser", "subagents", "oracle",
-  "ask_user", "codemode", "tool_search", "lsp", "skills", "hooks", "bash_rules", "background_shell",
+  "ask_user", "codemode", "tool_search", "lsp", "skills", "bash_rules", "background_shell",
 ];
 
 export async function buildCommand(argv: readonly string[], assets: string): Promise<void> {

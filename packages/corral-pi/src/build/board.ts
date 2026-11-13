@@ -118,7 +118,7 @@ export function createBoard(options: {
     changed(); schedule();
   }
   function refresh(): Promise<void> {
-    available();
+    if (!root) return Promise.resolve();
     if (refreshing) return refreshing;
     refreshing = doRefresh().finally(() => { refreshing = undefined; });
     return refreshing;
@@ -156,23 +156,22 @@ export function createBoard(options: {
     schedule(); return statuses;
   }
   return {
-    tasks() { available(); return statuses; },
-    proposed() { available(); return proposed; },
-    propose(plan) { available(); validatePlan(plan); proposed = structuredClone(plan); changed(); },
+    tasks() { return statuses; },
+    proposed() { return proposed; },
+    propose(plan) { if (!root) return; validatePlan(plan); proposed = structuredClone(plan); changed(); },
     async preview(plan): Promise<BoardPreview> {
       const cwd = available();
       const result = await json<ImportResult>(options.run, ["import", await writePlan(plan), "--dry-run", "--json"], cwd);
       return { tracker: result.tracker.id, tasks: result.tasks.map((task, index) => ({ key: plan.tasks[index]!.key, id: task.id, title: task.title, depends: task.depends_on ?? [] })) };
     },
     file(plan, start) {
-      available();
       if (filing) return filing;
       filing = file(plan, start).finally(() => { filing = undefined; });
       return filing;
     },
-    dismiss() { available(); proposed = undefined; changed(); },
+    dismiss() { if (!root) return; proposed = undefined; changed(); },
     refresh,
-    close() { available(); closed = true; clearTimeout(timer); },
-    subscribe(listener) { available(); listeners.add(listener); return () => { listeners.delete(listener); }; },
+    close() { if (!root) return; closed = true; clearTimeout(timer); },
+    subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
   };
 }
