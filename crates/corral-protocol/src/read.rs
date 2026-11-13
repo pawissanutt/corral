@@ -10,6 +10,8 @@ pub const READ_V1: &str = "read.v1";
 pub enum ReadKind {
     PmNext,
     PmBrief,
+    AgentPmBrief,
+    AgentPmNext,
     BoardReadback,
     #[serde(other)]
     Other,

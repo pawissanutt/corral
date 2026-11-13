@@ -33,7 +33,7 @@ fn bad(reason: &str) -> anyhow::Error {
 
 /// Add observational metadata only when it fits, never rebudgeting or changing the card.
 /// Native card bounding changes presentation, not the identity fields hashed here.
-pub(super) fn with_brief_digest(
+pub(crate) fn with_brief_digest(
     mut brief: serde_json::Value,
     card: &crate::PmAction,
 ) -> Result<serde_json::Value> {

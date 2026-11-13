@@ -573,6 +573,8 @@
         "enum": [
           "pm_next",
           "pm_brief",
+          "agent_pm_brief",
+          "agent_pm_next",
           "board_readback",
           "other"
         ],

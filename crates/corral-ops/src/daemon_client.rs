@@ -498,12 +498,20 @@ pub fn health(store: &Store) -> Health {
         .unwrap_or_else(Health::down)
 }
 
+#[cfg(all(test, unix))]
+thread_local! {
+    // Agent read tests use private sockets without mutating the process-wide XDG environment.
+    pub(crate) static SERVED_SOCKET: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// Best effort: any daemon or protocol failure falls back to an in-process read.
 pub fn served(store: &Store, kind: ReadKind) -> Option<Vec<u8>> {
-    Client::connect(store)
-        .ok()
-        .flatten()?
-        .read(kind)
-        .ok()
-        .flatten()
+    #[cfg(all(test, unix))]
+    let client = SERVED_SOCKET
+        .with_borrow(|socket| socket.as_ref().map(|socket| Client::connect_at(socket)))
+        .unwrap_or_else(|| Client::connect(store));
+    #[cfg(not(all(test, unix)))]
+    let client = Client::connect(store);
+    client.ok().flatten()?.read(kind).ok().flatten()
 }

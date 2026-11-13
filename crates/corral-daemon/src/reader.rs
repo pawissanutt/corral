@@ -183,6 +183,8 @@ where
         let label = match kind {
             ReadKind::PmNext => "reader.pm_next",
             ReadKind::PmBrief => "reader.pm_brief",
+            ReadKind::AgentPmBrief => "reader.agent_pm_brief",
+            ReadKind::AgentPmNext => "reader.agent_pm_next",
             ReadKind::BoardReadback => "reader.board",
             ReadKind::Other => bail!("unknown read kind"),
         };
@@ -346,6 +348,10 @@ fn compute(ctx: &Ctx, kind: ReadKind, attention: Option<AttentionBoard>) -> Resu
         }
         ReadKind::PmBrief => serde_json::to_vec(&corral_ops::pm_read::brief(ctx)?)
             .context("encoding PM brief readout"),
+        ReadKind::AgentPmBrief => serde_json::to_vec(&corral_ops::pm_read::agent_brief(ctx)?)
+            .context("encoding agent PM brief readout"),
+        ReadKind::AgentPmNext => serde_json::to_vec(&corral_ops::pm_read::agent_next(ctx)?)
+            .context("encoding agent PM next readout"),
         ReadKind::BoardReadback => {
             serde_json::to_vec(&corral_ops::pm_read::board_readback(ctx, attention)?)
                 .context("encoding board read-back")
@@ -444,7 +450,13 @@ mod tests {
     #[test]
     fn pm_read_kinds_are_never_recomputed_unasked() {
         let base = Instant::now();
-        for kind in [ReadKind::PmNext, ReadKind::PmBrief, ReadKind::Other] {
+        for kind in [
+            ReadKind::PmNext,
+            ReadKind::PmBrief,
+            ReadKind::AgentPmBrief,
+            ReadKind::AgentPmNext,
+            ReadKind::Other,
+        ] {
             for age in [1, 31, 121] {
                 assert!(!warm_due(
                     kind,

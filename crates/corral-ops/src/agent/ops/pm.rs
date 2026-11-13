@@ -756,47 +756,24 @@ fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Va
                 }
                 return page(lessons, 0, 100);
             }
-            // Share CLI priority and effective authority, but select within approved projects.
-            // This projects a readback only; it never invokes pm_act or sync.
-            let next = crate::pm_workset::next_for_projects(ctx, &projects)?;
+            let kind = if op == AgentOp::ReadNext {
+                corral_protocol::read::ReadKind::AgentPmNext
+            } else {
+                corral_protocol::read::ReadKind::AgentPmBrief
+            };
+            // Only the default workspace scope is shared. Authentication, liveness,
+            // payload validation and the response receipt remain in this process.
+            if project == super::super::hooks::pm::WORKSPACE
+                && let Some(result) = crate::daemon_client::served(&ctx.store, kind)
+                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            {
+                return Ok(result);
+            }
             if op == AgentOp::ReadNext {
-                return super::pm_bound::bounded_next(&next, corral_core::agent::RESULT_MAX_BYTES);
+                crate::pm_read::agent_next_for_projects(ctx, &projects)
+            } else {
+                crate::pm_read::agent_brief_for_projects(ctx, project, &projects)
             }
-            let mut counts = std::collections::BTreeMap::new();
-            let status_counts = ctx
-                .store
-                .view()?
-                .aggregates(&[corral_core::backend::AggregateName::StatusCounts])?
-                .status_counts;
-            for count in status_counts {
-                if count.n > 0 && projects.contains(&count.project) {
-                    *counts.entry(count.status).or_insert(0u64) += count.n;
-                }
-            }
-            // This is the same pending projection as questions::list(..., false):
-            // native owners only, semantic closure applied, no task-history hydration.
-            let mut heads = ctx.store.unfinished_native_heads()?;
-            heads.retain(|head| head.project.as_ref().is_some_and(|p| projects.contains(p)));
-            heads.sort_by(|a, b| (a.num, &a.id).cmp(&(b.num, &b.id)));
-            let mut pending = Vec::new();
-            for head in heads {
-                pending.extend(crate::questions::recorded_pending_views_ref(&head)?);
-            }
-            let questions: Vec<_> = pending
-                .into_iter()
-                .filter(|q| q.pending)
-                .map(|q| {
-                    json!({"task":q.task,"key":q.question.key,
-                    "revision":q.question.revision,"kind":q.question.kind,
-                    "state":q.effective_state,"blocking":q.question.blocking})
-                })
-                .collect();
-            let brief = super::pm_bound::bounded_brief(
-                &next,
-                json!({"project":project,"counts":counts,"questions":questions}),
-                corral_core::agent::RESULT_MAX_BYTES,
-            )?;
-            super::pm_shadow::with_brief_digest(brief, &next)
         }
         _ => Err(super::unavailable(op, OWNER)),
     }

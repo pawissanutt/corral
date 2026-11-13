@@ -666,3 +666,7 @@ fn typed_reads_are_scoped_bounded_and_do_not_write_receipts() {
     assert_eq!(before, pm_state::load(&fx.ctx.store).unwrap().unwrap());
     assert_eq!(bytes, ts::task_bytes(&fx, &task.id));
 }
+
+#[cfg(unix)]
+#[path = "pm_served_tests.rs"]
+mod served_reads;
