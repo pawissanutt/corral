@@ -263,6 +263,15 @@ try:
 
     stage = "1 quiet passes"
     settle()
+    # Warm the daemon's reader before measuring, and drain its first full frame's
+    # spans into a pass record. Classic/reader has no separate timing writer:
+    # timing::pass snapshots process-wide counters, INCLUDING the reader thread
+    # (timing.rs snapshot/record). With no command/PM clients in this window,
+    # classic.* identifies frame work without pretending to have per-read records.
+    classic()
+    settle()
+    quiet_start = len(passes())
+    quiet_started = time.monotonic()
     before = feed()
     sampled = []
     for _ in range(3):
@@ -274,6 +283,46 @@ try:
     require(before[1] == after[1], f"quiet passes changed application sequence: {before} -> {after}")
     print(f"check 1: {len(sampled)} quiet incremental passes, git=0, application seq={before[1]}"
           f" unchanged (raw {before[0]}->{after[0]}; leases/app-commands excluded)", flush=True)
+
+    # Keep the frame warm with no writes across its 15 s gauges and 30 s attention
+    # periods. Natural passes may run clock-driven steps, so require three quiet
+    # passes, not that every pass in this longer window is sync.quiet.
+    stage = "1 quiet classic frame reuse"
+    while time.monotonic() - quiet_started < 31.5:
+        require(daemon.poll() is None, f"daemon exited {daemon.returncode}")
+        time.sleep(0.1)
+    # Flush all reader-thread spans since the previous pass, including work that
+    # finished between passes. No daemon command records overlap this window.
+    next_pass()
+    window = passes()[quiet_start:]
+    quiet_records = [r for r in window if quiet(r)]
+    require(len(quiet_records) >= 3, f"fewer than three quiet frame-window passes: {window!r}")
+    require(all(r["git_calls"] == 0 for r in quiet_records),
+            f"quiet frame-window pass ran git: {quiet_records!r}")
+    require(feed()[1] == before[1], f"quiet classic window changed application sequence: {before} -> {feed()}")
+    for forbidden in ("pm.workset", "board.workset"):
+        require(not any(n(r, forbidden) for r in window),
+                f"quiet classic window recomputed {forbidden}: {window!r}")
+    refreshes = sum(n(r, "classic.tick") for r in window)
+    parts = {}
+    for record in window:
+        for name, value in record["spans"].items():
+            if (name.startswith(("classic.", "board.frame.", "reader."))
+                    or name == "sync.attention_phase_reconcile") and name not in (
+                "classic.tick", "classic.encode",
+            ):
+                parts[name] = parts.get(name, 0) + value["n"]
+    require(refreshes > 0 and parts.get("classic.resources", 0) > 0,
+            f"no positive gauges refresh observation: ticks={refreshes}, parts={parts!r}")
+    attention_refreshes = (parts.get("classic.attention", 0)
+                           + parts.get("sync.attention_phase_reconcile", 0))
+    require(attention_refreshes > 0,
+            f"no positive 30s attention refresh observation: {parts!r}")
+    print(f"check 1 frame reuse: {len(quiet_records)} quiet passes over"
+          f" {time.monotonic() - quiet_started:.2f}s, classic refresh attempts={refreshes},"
+          f" recomputed parts={json.dumps(parts, sort_keys=True)};"
+          " pm.workset=0 board.workset=0; 15s gauges and 30s attention covered",
+          flush=True)
 
     stage = "2 audit mixed burst"
     audit = runtime / "sync-audit-on"
