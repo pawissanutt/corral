@@ -633,6 +633,7 @@ fn workspace_and_project_per_tier_policies_control_retention() {
             path: ".".into(),
             default_profile: None,
             base: None,
+            build_exit: None,
             review: Default::default(),
         },
     );

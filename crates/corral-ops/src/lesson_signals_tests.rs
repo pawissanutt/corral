@@ -553,6 +553,7 @@ fn landed_files_follow_rename_config_and_repeat_without_git_when_settings_free()
             dispatch: Default::default(),
             default_profile: None,
             base: None,
+            build_exit: None,
             review: Default::default(),
             artifact_retention: None,
             post_land: vec![],

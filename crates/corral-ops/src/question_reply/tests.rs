@@ -233,6 +233,7 @@ esac
                 path: cwd.display().to_string(),
                 default_profile: None,
                 base: None,
+                build_exit: None,
                 review: Default::default(),
                 artifact_retention: None,
                 post_land: Vec::new(),

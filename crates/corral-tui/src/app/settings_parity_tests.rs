@@ -44,6 +44,7 @@ impl Fixture {
                     path: name.into(),
                     base: None,
                     default_profile: None,
+                    build_exit: None,
                     review: ReviewOverride::default(),
                 },
             );

@@ -250,6 +250,7 @@ fn delegated_pm_attributes_settled_needs_me_without_coding_or_gate_retry() {
             dispatch: Default::default(),
             default_profile: None,
             base: None,
+            build_exit: None,
             review: Default::default(),
             artifact_retention: None,
             post_land: Vec::new(),

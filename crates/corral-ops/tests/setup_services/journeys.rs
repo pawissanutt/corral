@@ -58,6 +58,7 @@ fn project(review: ReviewOverride) -> Project {
         path: ".".into(),
         default_profile: None,
         base: None,
+        build_exit: None,
         review,
         dispatch: Default::default(),
         artifact_retention: None,

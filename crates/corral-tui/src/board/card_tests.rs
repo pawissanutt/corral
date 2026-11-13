@@ -434,6 +434,7 @@ pub(crate) fn configure_project(fx: &mut Fixture, name: &str, path: &str) {
             path: path.into(),
             default_profile: None,
             base: None,
+            build_exit: None,
             review: Default::default(),
         },
     );

@@ -126,6 +126,7 @@ fn fixture(children: usize, terminal: usize) -> Fx {
             dispatch: Default::default(),
             default_profile: None,
             base: None,
+            build_exit: None,
             review: Default::default(),
             artifact_retention: None,
             post_land: vec![],

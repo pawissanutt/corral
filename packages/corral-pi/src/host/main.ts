@@ -7,14 +7,17 @@
 import { mkdirSync } from "node:fs";
 import { ProcessTerminal } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { startBridge } from "../bridge/server.ts";
 import { attestSourceDrain } from "../bridge/source-drain.ts";
 import { EventLog } from "../bridge/events.ts";
 import { COMMANDS } from "../bridge/protocol.ts";
 import { CorralClient, sha256Hex } from "../tools/corral.ts";
-import { readLaunchMessage } from "./config.ts";
+import { readLaunchMessage, type HostConfig } from "./config.ts";
+import type { BuildContext } from "../build/types.ts";
+import { saveSession } from "../build/session-store.ts";
+import type { HostIdentity } from "../roles/types.ts";
 import { openSession, withRecoveryContext } from "./lifecycle.ts";
 import { loadModules } from "./modules.ts";
 import { loadPeerLookup } from "./peer.ts";
@@ -44,8 +47,15 @@ function launchFd(argv: readonly string[]): number {
   return value;
 }
 
-async function main(): Promise<void> {
-  const config = readLaunchMessage(launchFd(process.argv));
+export async function main(): Promise<void> {
+  await runHost(readLaunchMessage(launchFd(process.argv)));
+}
+
+export async function runHost(config: HostConfig, overrides: {
+  client?: (identity: HostIdentity, sessionId: () => string) => CorralClient;
+  bridge?: false;
+  build?: BuildContext;
+} = {}): Promise<void> {
   const provider = config.provider ?? "openai-codex";
   admitConnection(provider, config.binding);
   restrictEnvironment(process.env, provider);
@@ -56,7 +66,7 @@ async function main(): Promise<void> {
   const modules = withRecoveryContext(await loadModules(config.assets, config.identity.role, provider));
   const events = new EventLog(config.identity.generation);
   const rawFetch = globalThis.fetch.bind(globalThis);
-  const subscriptions = await subscriptionRoutes(modules.auth, provider, config.identity.role);
+  const subscriptions = await subscriptionRoutes(modules.auth, provider, overrides.build ? "assistant" : config.identity.role);
   const send = modules.auth.transport?.(authContext(provider)) ?? rawFetch;
   let aws: AwsRoute | undefined;
   let rules: readonly DestinationRule[] | undefined;
@@ -105,7 +115,7 @@ async function main(): Promise<void> {
       process.exit(2);
     }); });
   };
-  const client = new CorralClient({
+  const client = overrides.client?.(config.identity, () => host?.sessionId() ?? "") ?? new CorralClient({
     corral: config.corral, root: config.root, identity: config.identity, hostCap: config.secrets.hostCap,
     sessionId: () => host?.sessionId() ?? "",
   });
@@ -121,6 +131,7 @@ async function main(): Promise<void> {
     ...(config.guidance ? { guidance: config.guidance } : {}),
     root: config.root, exportDir: join(config.sessionDir, "exports"), runtimeDir: config.runtimeDir,
     modules, client, events, network,
+    ...(overrides.build ? { build: overrides.build } : {}),
     ...(config.identity.role === "assistant" && process.argv.includes("--assistant-new")
       ? { relinkAssistant: () => restart(RELINK_ASSISTANT_EXIT),
         ...(!headlessEnabled(config.capabilities) ? { newAssistant: () => restart(NEW_ASSISTANT_EXIT),
@@ -132,7 +143,7 @@ async function main(): Promise<void> {
   });
   const session = host;
   let terminal: InstanceType<typeof sdk.InteractiveMode> | undefined;
-  const bridge = await startBridge({
+  const bridge = overrides.bridge === false ? undefined : await startBridge({
     path: join(config.runtimeDir, "host.sock"),
     ctlCap: config.secrets.ctlCap,
     generation: config.identity.generation,
@@ -156,7 +167,7 @@ async function main(): Promise<void> {
       shutdown: () => {
         events.emit("shutdown");
         terminal?.stop();
-        void session.drained().then(() => session.close()).then(() => bridge.close()).then(() => process.exit(0));
+        void session.drained().then(() => session.close()).then(() => bridge?.close()).then(() => process.exit(0));
       },
     },
   });
@@ -166,10 +177,18 @@ async function main(): Promise<void> {
     await session.close();
     await session.runtime.dispose();
     await session.drained();
-    await bridge.close();
+    await bridge?.close();
     process.exit(code); // 75 = /new, 76 = relink, 77 = /resume; none is an ordinary quit.
   }
   await session.hello(config.secrets.bindNonce, config.pane, sha256Hex(config.secrets.ctlCap));
+  if (overrides.build) {
+    const record = overrides.build.session;
+    const state = session.state().session;
+    if (!state || typeof state !== "object" || !("file" in state) || typeof state.file !== "string") {
+      throw new Error("Build session has no transcript");
+    }
+    saveSession(dirname(dirname(overrides.build.dir)), { ...record, sessionFile: state.file, updated: new Date().toISOString() });
+  }
   if (headlessEnabled(config.capabilities)) {
     await attachHeadless(session, events, (line) => process.stdout.write(line));
     return;
@@ -184,10 +203,10 @@ async function main(): Promise<void> {
   await terminal.init();
   session.markAttached("interactive");
   try { await terminal.run(); }
-  finally { await session.close(); await bridge.close(); }
+  finally { await session.close(); await bridge?.close(); }
 }
 
-main().catch((error: unknown) => {
+if (import.meta.main) main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`corral-pi host stopped: ${message}\n`);
   process.exit(2);

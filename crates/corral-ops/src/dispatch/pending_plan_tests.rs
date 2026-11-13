@@ -60,6 +60,7 @@ fn fixture() -> (tempfile::TempDir, Ctx, Task) {
             path: "app".into(),
             default_profile: None,
             base: None,
+            build_exit: None,
             review: Default::default(),
             artifact_retention: None,
             post_land: Vec::new(),

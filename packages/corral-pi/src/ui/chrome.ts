@@ -30,11 +30,11 @@ export const STATUS_ALERTS = "corral-2-alerts";
 
 const ROLE_LABEL: Record<Role, string> = {
   worker: "WORKER", reviewer: "REVIEWER", pm: "PM", planner: "PLANNER", plan_reviewer: "PLAN REVIEWER",
-  assistant: "ASSISTANT",
+  assistant: "ASSISTANT", build: "BUILD",
 };
 const ROLE_COLOR: Record<Role, "accent" | "warning" | "success"> = {
   worker: "accent", reviewer: "warning", pm: "success", planner: "accent", plan_reviewer: "warning",
-  assistant: "success",
+  assistant: "success", build: "accent",
 };
 
 export function target(identity: HostIdentity): string {

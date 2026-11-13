@@ -36,7 +36,7 @@ export function snapshotLedger(value: unknown, identity: HostIdentity): LedgerSn
     const { todo, todo_requests } = PmSnapshot.parse(value).container;
     return { progress: todo, continued: todo_requests?.continued ?? null };
   }
-  if (identity.role === "assistant") {
+  if (identity.role === "assistant" || identity.role === "build") {
     const { todo, todo_requests } = AssistantSnapshot.parse(value).container.state;
     return { progress: todo ?? null, continued: todo_requests?.continued ?? null };
   }

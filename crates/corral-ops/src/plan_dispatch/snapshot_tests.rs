@@ -17,6 +17,7 @@ fn planner_launch_consumes_persisted_snapshot_after_profile_deletion() {
             dispatch: Default::default(),
             default_profile: None,
             base: None,
+            build_exit: None,
             review: Default::default(),
             artifact_retention: None,
             post_land: vec![],

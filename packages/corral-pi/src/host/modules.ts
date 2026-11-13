@@ -19,6 +19,7 @@ const ROLE_OWNERS: Record<Role, string> = {
   planner: "plan-roles",
   plan_reviewer: "plan-roles",
   assistant: "assistant-role",
+  build: "build-role",
 };
 
 /** The role module's directory under src/roles; Rust's `AgentRole::module_dir` matches it. */

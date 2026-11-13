@@ -307,6 +307,7 @@ fn capture_pills_and_save_button() {
             path: p.into(),
             default_profile: None,
             base: None,
+            build_exit: None,
             review: ReviewOverride::default(),
         };
         ctx.store.config.projects.insert(p.into(), project);

@@ -20,7 +20,7 @@ export function browserSettings(
   role: Role, enabled: readonly string[], settings: Readonly<Record<string, unknown>> | undefined,
 ): BrowserSettings | undefined {
   if (!enabled.includes("browser")) return undefined;
-  if (role !== "worker" && role !== "assistant" && role !== "pm") throw new Error(`browser is not available to the ${role} role`);
+  if (role !== "worker" && role !== "assistant" && role !== "build" && role !== "pm") throw new Error(`browser is not available to the ${role} role`);
   const parsed = BrowserSettingsSchema.safeParse(settings?.browser);
   if (!parsed.success) throw new Error("capabilities.settings.browser is missing or malformed");
   return parsed.data;
