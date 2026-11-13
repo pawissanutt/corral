@@ -4,7 +4,7 @@ import type {
   ExitControl, ExitOption, ExitState,
 } from "../../build/types.ts";
 import { BuildController } from "./build-controller.ts";
-import { BUILD_BOARD_ENTRY, BUILD_EXIT_ENTRY } from "./build-entries.ts";
+import { BUILD_BOARD_ENTRY, BUILD_EXIT_ENTRY, BUILD_FINISH_ENTRY } from "./build-entries.ts";
 import type { BuildEntry } from "./build-entries.ts";
 
 const ENTER = "\r", ESC = "\x1b";
@@ -40,6 +40,8 @@ function harness() {
     tasks: [] as BoardTaskStatus[], steer: true, answer: true, draft: "", focus: "composer", calls: [] as string[],
     notices: [] as { text: string; tone: string }[], posts: [] as BuildEntry<unknown>[],
     preview: Promise.withResolvers<BoardPreview>(),
+    /** Called where the host notifies exit subscribers and where the panels post an entry. */
+    changed: undefined as (() => void) | undefined, posted: undefined as (() => void) | undefined,
   };
   const live = (id: string) => s.children.some(entry => entry.id === id && ["queued", "running", "needs"].includes(entry.state));
   const summary: BuildSummary = { branch: "build/x", base: "a", head: "b", commits: 2, files: 3, added: 10, removed: 1, dirty: false, slices: [], outside: [] };
@@ -50,10 +52,11 @@ function harness() {
     choose: async (choice: ExitChoice) => {
       s.calls.push(`choose ${choice}`);
       s.exit = choice === "iterate" ? { phase: "none" } : { phase: "kept", record: { choice, at: "now" }, detail: "kept" };
+      s.changed?.();
       return s.exit;
     },
     subscribe: () => () => {},
-    open: () => { s.exit = { phase: "pending" }; },
+    open: () => { s.exit = { phase: "pending" }; s.changed?.(); },
   };
   const ui: BuildUi = {
     fleet: {
@@ -96,7 +99,7 @@ function harness() {
     draft: () => s.draft, setDraft: text => { s.draft = text; },
     focusComposer: () => { s.focus = "composer"; }, focusDock: () => { s.focus = "choice"; },
     notice: (text, tone) => { s.notices.push({ text, tone }); },
-    post: entry => { s.posts.push(entry); },
+    post: entry => { s.posts.push(entry); s.posted?.(); },
     showBoard: () => { s.calls.push("board"); },
     openChild: id => { s.calls.push(`open ${id}`); },
     color: () => "", now: () => 1000, changed: () => {},
@@ -249,4 +252,28 @@ test("a settled exit posts one conversation entry", async () => {
   expect(s.calls).toEqual(["choose keep"]);
   controller.sync(); controller.sync();
   expect(s.posts.filter(entry => entry.customType === BUILD_EXIT_ENTRY)).toHaveLength(1);
+});
+
+test("one choice posts one exit entry, after earlier dismissals and with syncs from every host callback", async () => {
+  const { s, controller, key } = harness();
+  s.children = [child("alpha", "done"), child("beta", "done")];
+  // The panels sync on every exit change and may sync again while an entry is posted.
+  s.changed = () => controller.sync();
+  s.posted = () => controller.sync();
+  expect(controller.openFinish()).toBeTrue();
+  for (const [width, rows, short] of [[140, 26, false], [80, 5, true], [52, 5, true]] as const) {
+    controller.open("exit");
+    controller.dock.setLimit(rows, short);
+    controller.dock.render(width);
+    key(ESC);
+    expect(s.exit.phase).toBe("pending");
+  }
+  controller.open("exit");
+  controller.dock.guard(0);
+  key("1"); key("1"); key(ENTER);
+  await settle();
+  controller.sync(); controller.sync();
+  expect(s.calls.filter(call => call.startsWith("choose"))).toEqual(["choose keep"]);
+  expect(s.posts.filter(entry => entry.customType === BUILD_EXIT_ENTRY)).toHaveLength(1);
+  expect(s.posts.filter(entry => entry.customType === BUILD_FINISH_ENTRY)).toHaveLength(1);
 });

@@ -273,6 +273,11 @@ pub fn build_command(
     };
     let (provider, model, effort) = model(&config, workspace.is_some(), args)?;
     super::hooks::preflight::credential(data_root, Some(require_provider(&provider)?.vendor))?;
+    let aws = if workspace.is_some() && provider == "amazon-bedrock" {
+        super::aws_profile::read_binding(data_root)?
+    } else {
+        None
+    };
     let snapshot = config.agent.capabilities.resolve_for(
         AgentRole::Assistant,
         project.as_ref().map(|(name, _, _)| name.as_str()),
@@ -318,6 +323,9 @@ pub fn build_command(
     }
     if let Some(effort) = effort {
         message["effort"] = json!(effort);
+    }
+    if let Some(aws) = aws {
+        message["aws"] = json!(aws);
     }
     let bytes = serde_json::to_vec(&message)?;
     if bytes.len() > MESSAGE_MAX_BYTES {
@@ -477,3 +485,66 @@ fn read_session(dir: &Path) -> Option<(jiff::Timestamp, BuildSessionSummary)> {
 #[cfg(all(test, target_os = "linux"))]
 #[path = "pi_build_tests.rs"]
 mod tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[test]
+fn workspace_bedrock_launch_forwards_the_validated_binding() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut fx = crate::agent::hooks::pm::tests::fixture();
+    let data = tempfile::tempdir().unwrap();
+    let assets = fx.ctx.store.config.agent.assets_dir.as_ref().unwrap();
+    std::fs::create_dir_all(assets.join("src/host")).unwrap();
+    std::fs::write(assets.join(BUILD_ENTRY), "export {}").unwrap();
+    std::fs::write(
+        assets.join("compat.json"),
+        r#"{"verdict":"GO","bun":{"range":">=1.4.0 <2.0.0"}}"#,
+    )
+    .unwrap();
+    let profile = fx.ctx.store.config.profiles.get_mut("pm-pi").unwrap();
+    profile.vendor = Some("amazon-bedrock".into());
+    profile.model = Some("us.anthropic.claude-sonnet-4-5-20250929-v1:0".into());
+    fx.ctx.store.save_config().unwrap();
+    let auth = data.path().join("auth");
+    std::fs::create_dir_all(&auth).unwrap();
+    std::fs::set_permissions(&auth, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let binding = auth.join("amazon-bedrock.json");
+    std::fs::write(
+        &binding,
+        r#"{"type":"aws_profile","profile":"build-dev","region":"us-west-2"}"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&binding, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let bun = data.path().join("bun");
+    crate::agent::test_support::write_executable(&bun, "#!/bin/sh\necho 1.4.2\n");
+    let (_, reader) = build_command(
+        data.path(),
+        &BuildArgs::default(),
+        &fx.root().join("app"),
+        Some(bun.clone()),
+        Some(fx.root()),
+    )
+    .unwrap();
+    let message: serde_json::Value = serde_json::from_reader(reader).unwrap();
+    assert_eq!(message["provider"], "amazon-bedrock");
+    assert_eq!(
+        message["aws"],
+        json!({"profile":"build-dev", "region":"us-west-2"})
+    );
+
+    std::fs::write(
+        &binding,
+        r#"{"type":"aws_profile","profile":"build-dev","region":"cn-north-1"}"#,
+    )
+    .unwrap();
+    assert!(
+        build_command(
+            data.path(),
+            &BuildArgs::default(),
+            &fx.root().join("app"),
+            Some(bun),
+            Some(fx.root()),
+        )
+        .is_err()
+    );
+}

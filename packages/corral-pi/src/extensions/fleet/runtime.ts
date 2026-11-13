@@ -150,7 +150,9 @@ export class FleetRuntime implements FleetControl {
     if (entry.handle) entry.value.usage = entry.handle.usage();
     entry.question?.reject(new Error(error ?? "Child finished")); entry.question = undefined;
     entry.history.finish(entry.spec.id, state === "done" ? "completed" : "uncertain", report);
-    this.touch(entry); entry.settled.resolve();
+    this.touch(entry);
+    // A running cancellation is visible immediately, but its caller still owns the cleanup wait.
+    if (state !== "cancelled" || entry.value.startedAt === undefined) entry.settled.resolve();
   }
   private pump(): void {
     if (this.pumping || this.closed) return;
@@ -208,9 +210,21 @@ export class FleetRuntime implements FleetControl {
         if (!live(entry)) entry.controller.abort();
         const result = await entry.handle.done;
         if (live(entry)) this.finish(entry, result.failed ? "failed" : "done", result.failed, result.report);
-        else { entry.value.usage = entry.handle.usage(); entry.value.report = result.report.slice(0, 32768); this.touch(entry); }
+        else entry.value.report = result.report.slice(0, 32768);
       } catch (error) { this.finish(entry, "failed", error instanceof Error ? error.message : String(error)); }
-      finally { this.active--; this.pump(); }
+      finally {
+        try {
+          if (entry.value.state === "cancelled") {
+            this.refreshUsage(entry);
+            entry.value.endedAt = this.now();
+            this.touch(entry);
+          }
+        } finally {
+          this.active--;
+          entry.settled.resolve();
+          this.pump();
+        }
+      }
     })();
     this.jobs.add(job);
     void job.finally(() => { this.jobs.delete(job); });

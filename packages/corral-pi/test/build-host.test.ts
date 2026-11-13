@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LocalControlPlane, LocalRefusal } from "../src/build/control-plane.ts";
@@ -8,6 +8,8 @@ import { readBuildLaunch } from "../src/build/launch.ts";
 import { createSession, listSessions, loadSession, saveSession, sessionDir } from "../src/build/session-store.ts";
 import { prepareWorktree } from "../src/build/worktree.ts";
 import type { BuildLaunch } from "../src/build/types.ts";
+import { buildHostConfig, validateBuildResume } from "../src/host/build.ts";
+import { parseLaunchMessage } from "../src/host/config.ts";
 
 const temporary: string[] = [];
 function directory(): string {
@@ -122,6 +124,28 @@ test("build launches validate paths, exit policy, profile models and rich snapsh
   expect(() => readWire(dir, { ...valid, name: "x".repeat(65536) })).toThrow("bound");
 });
 
+test("Bedrock build launches preserve the ordinary launch AWS binding through host configuration", () => {
+  const dir = directory();
+  const aws = { profile: "dev.team+build@company", region: "us-west-2" };
+  const message = { ...wire(dir), provider: "amazon-bedrock", model: "anthropic.claude-sonnet-4", aws };
+  const launch = readWire(dir, message);
+  const ordinary = {
+    ...message, role: "worker", store: "st-demo", project: "demo", generation: 1, pane: "p",
+    secrets: { host_cap: "h".repeat(64), ctl_cap: "c".repeat(64), bind_nonce: "n".repeat(64) },
+    cwd: dir, root: dir, runtime_dir: dir, session_dir: dir,
+  };
+  const record = createSession(launch, { worktree: dir, branch: null, base: null });
+  expect(launch.aws).toEqual(aws);
+  expect(buildHostConfig(launch, record, dir).aws).toEqual(parseLaunchMessage(JSON.stringify(ordinary)).aws);
+  expect(readWire(dir, { ...message, aws: null }).aws).toBeUndefined();
+  expect(readWire(dir, { ...message, aws: undefined }).aws).toBeUndefined();
+  for (const invalid of [[], "dev", {}, { profile: "", region: "us-west-2" }, { profile: "dev team", region: "us-west-2" },
+    { profile: "x".repeat(65), region: "us-west-2" }, { profile: "dev", region: "US-WEST-2" }, { profile: "dev", region: "unknown-region" }]) {
+    expect(() => readWire(dir, { ...message, aws: invalid })).toThrow();
+    expect(() => parseLaunchMessage(JSON.stringify({ ...ordinary, aws: invalid }))).toThrow();
+  }
+});
+
 test("build session records round trip privately and list newest first, skipping broken records", () => {
   const dir = directory();
   const launch = readWire(dir, wire(dir));
@@ -158,4 +182,42 @@ test("worktree preparation creates one branch, refuses collisions and leaves her
   expect([git("worktree", "list", "--porcelain"), git("show-ref"), git("status", "--porcelain")]).toEqual(before);
   git("checkout", "--detach", "HEAD");
   expect(prepareWorktree(dir, "unused", true).branch).toBeNull();
+});
+
+test("resume refuses a switched branch or a replaced repository without rewriting the record", () => {
+  const root = directory();
+  const repo = join(root, "repo");
+  const other = join(root, "other");
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+  for (const path of [repo, other]) {
+    mkdirSync(path);
+    git(path, "init", "--initial-branch=main");
+    git(path, "-c", "user.name=Build Test", "-c", "user.email=build@example.test", "commit", "--allow-empty", "-m", "base");
+  }
+  const launch = readWire(root, { ...wire(repo), data_root: root });
+  const record = createSession(launch, prepareWorktree(repo, "resume", false));
+  saveSession(root, record);
+  const file = join(sessionDir(root, record.id), "session.json");
+  const saved = readFileSync(file, "utf8");
+  expect(validateBuildResume(record)).toBeUndefined();
+  git(record.worktree, "checkout", "-b", "unexpected");
+  expect(() => validateBuildResume(record)).toThrow("branch differs");
+  git(record.worktree, "checkout", "build/resume");
+  expect(validateBuildResume({ ...record, repoRoot: record.worktree })).toBeUndefined();
+  expect(validateBuildResume({ ...record, here: true, worktree: repo, branch: "old-branch" })).toBeUndefined();
+  git(repo, "worktree", "remove", "--force", record.worktree);
+  symlinkSync(other, record.worktree, "dir");
+  try {
+    validateBuildResume(record);
+    throw new Error("Expected resume refusal");
+  } catch (error) {
+    expect(error instanceof Error && "code" in error && error.code).toBe("build_resume_refused");
+    expect(error instanceof Error && error.message).toContain(record.worktree);
+    expect(error instanceof Error && error.message).toContain("Git common directory differs");
+  }
+  rmSync(record.worktree);
+  mkdirSync(record.worktree);
+  git(record.worktree, "init", "--initial-branch=main");
+  expect(() => validateBuildResume(record)).toThrow("Git common directory differs");
+  expect(readFileSync(file, "utf8")).toBe(saved);
 });

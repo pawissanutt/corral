@@ -1,6 +1,7 @@
 import { closeSync, readSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import { isProviderId } from "../auth/providers.ts";
+import type { AwsBinding } from "../auth/aws.ts";
+import { isAwsRegion, isProviderId } from "../auth/providers.ts";
 import { capabilityGuidance, capabilitySet, LaunchMessageInvalid } from "../host/config.ts";
 import { EXIT_POLICIES, type BuildLaunch, type ExitPolicy } from "./types.ts";
 
@@ -77,6 +78,16 @@ export function readBuildLaunch(fd: number): BuildLaunch {
   const capabilities = capabilitySet(wire.capabilities);
   const guidance = capabilityGuidance(wire.guidance ?? wire.capabilities);
   if (wire.guidance != null && (!guidance || Array.isArray(wire.guidance))) throw new LaunchMessageInvalid("guidance is malformed");
+  let aws: AwsBinding | undefined;
+  if (wire.aws != null) {
+    const binding = object(wire.aws, "aws");
+    // The bound launch uses the same non-secret aws: { profile, region } wire binding.
+    const region = text(binding, "region", 32);
+    if (!/^[a-z0-9-]+$/.test(region) || !isAwsRegion(region)) throw new LaunchMessageInvalid("region is missing or malformed");
+    const profile = text(binding, "profile", 64);
+    if (!/^[A-Za-z0-9_.+=,@-]{1,64}$/.test(profile)) throw new LaunchMessageInvalid("profile is missing or malformed");
+    aws = { profile, region };
+  }
   return {
     version: 1, assets: path(wire, "assets"), dataRoot: path(wire, "data_root"), corral: path(wire, "corral"),
     repoRoot: path(wire, "repo_root"), here: wire.here, provider: wire.provider, model: model(wire, false),
@@ -84,6 +95,7 @@ export function readBuildLaunch(fd: number): BuildLaunch {
     ...(project !== undefined ? { project } : {}), ...(wire.name != null ? { name: text(wire, "name", 256) } : {}),
     ...(resume ? { resume } : {}), ...(wire.effort != null ? { effort: token(wire, "effort") } : {}),
     ...(capabilities ? { capabilities } : {}), ...(guidance ? { guidance } : {}),
+    ...(aws ? { aws } : {}),
     settings: { exitPolicy: settings.exit_policy as ExitPolicy, maxParallel: settings.max_parallel as number, profiles },
   };
 }

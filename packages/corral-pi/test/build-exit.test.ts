@@ -13,10 +13,10 @@ function context(policy: ExitPolicy = "gate"): BuildContext {
     here: false, branch: "build/parser", base,
   } };
 }
-function git(dirty = false, commits = 2, calls: string[][] = []): Run {
+function git(dirty = false, commits = 2, calls: string[][] = [], branch: string | null = "build/parser"): Run {
   return async argv => {
     calls.push([...argv]);
-    const stdout = argv[0] === "rev-parse" ? (argv[1] === "HEAD" ? head : "build/parser")
+    const stdout = argv[0] === "rev-parse" ? (argv[1] === "HEAD" ? head : branch ?? "HEAD")
       : argv[0] === "rev-list" ? String(commits) : argv[0] === "diff" ? "4\t2\tsrc/parser.ts\n-\t-\timage.png\n"
       : argv[0] === "status" ? (dirty ? " M src/parser.ts\n" : "") : "";
     return { code: 0, stdout, stderr: "" };
@@ -154,7 +154,7 @@ describe("build exits", () => {
     for (const [branch, integration, blocked] of [[null, "main", true], ["main", "main", true], ["feature", undefined, true], ["feature", "main", false]] as const) {
       const initial = context();
       const control = createExit({ context: { ...initial, session: { ...initial.session, here: true, branch } }, integrationBranch: async () => integration,
-        run: async () => { throw new Error("Unexpected corral command"); }, git: git(), fleet: () => fleet, save() {}, changed() {} });
+        run: async () => { throw new Error("Unexpected corral command"); }, git: git(false, 2, [], branch), fleet: () => fleet, save() {}, changed() {} });
       try { await control.summary(); expect(Boolean(control.options().find(option => option.choice === "ship")?.unavailable)).toBe(blocked); }
       finally { control.close(); }
     }
@@ -167,9 +167,71 @@ describe("build exits", () => {
         expect(argv).toEqual(["--root", "/workspace", "config", "get", "projects"]);
         expect(options.cwd).toBe("/workspace");
         return { code: 0, stdout: '[app]\nbase = "main"\n', stderr: "" };
-      }, git: git(), fleet: () => fleet, save() {}, changed() {} });
+      }, git: git(false, 2, [], "main"), fleet: () => fleet, save() {}, changed() {} });
     try { await control.summary(); expect(control.options().find(option => option.choice === "ship")?.unavailable).toContain("base branch"); }
     finally { control.close(); }
+  });
+
+  test("here exit admission follows the current branch instead of the launch branch", async () => {
+    for (const [launchBranch, currentBranch, blocked] of [
+      ["feature", "main", true], ["main", "feature", false], ["feature", null, true],
+    ] as const) {
+      const initial = context(), events: string[] = [];
+      const control = createExit({ context: { ...initial, session: { ...initial.session, here: true, branch: launchBranch } },
+        integrationBranch: async () => "main", run: scripted(submission(), events), git: git(false, 2, [], currentBranch),
+        fleet: () => fleet, save() {}, changed() {} });
+      try {
+        await control.summary();
+        expect(Boolean(control.options().find(option => option.choice === "ship")?.unavailable)).toBe(blocked);
+        expect((await control.choose("ship")).phase).toBe(blocked ? "failed" : "shipped");
+        expect(events.length).toBe(blocked ? 0 : 3);
+      } finally { control.close(); }
+    }
+  });
+
+  test("failed waiver and sync persist their step and resume without a second submission", async () => {
+    const waiver = { argv: ["waive-review", "T-7", "--reason", "build session exit: project policy requires the gate only"] };
+    const sync = { argv: ["sync"] };
+    for (const failedStep of ["waive-review", "sync"] as const) {
+      let saved: ExitRecord | undefined;
+      const save = (record: ExitRecord) => { saved = JSON.parse(JSON.stringify(record)) as ExitRecord; };
+      const error = `${failedStep}_refused: the owner must resolve this refusal`;
+      const events: string[] = [];
+      const initial = createExit({ context: context(), run: scripted([
+        ...submission(), ...(failedStep === "sync" ? [waiver] : []),
+        { ...(failedStep === "sync" ? sync : waiver), error },
+      ], events), git: git(), fleet: () => fleet, save, changed() {} });
+      let detail: string | undefined;
+      try {
+        expect((await initial.choose("land")).phase).toBe("failed");
+        detail = initial.state().detail;
+        expect(detail).toContain(error);
+        expect(detail).toContain("A-42");
+        expect(detail).toContain("/repo/.worktrees/A-42-build-b-one");
+        expect(saved?.task).toBe("T-7");
+      } finally { initial.close(); }
+      const resumedEvents: string[] = [];
+      const initialContext = context();
+      const resumed = createExit({ context: { ...initialContext, session: { ...initialContext.session, exit: saved! } },
+        run: scripted([...(failedStep === "waive-review" ? [waiver] : []), sync,
+          { argv: ["show", "T-7", "--json"], value: { id: "T-7", status: "done", landed: { sha: head } } },
+        ], resumedEvents), git: async () => { throw new Error("Unexpected Git command after submission"); },
+        fleet: () => fleet, save, changed() {} });
+      try {
+        expect(resumed.state().phase).toBe("failed");
+        expect(resumed.state().detail).toBe(detail);
+        expect(resumed.options().find(option => option.choice === "land")?.unavailable).toBeUndefined();
+        await resumed.choose("land");
+        await settled(resumed);
+        expect(resumed.state().phase).toBe("landed");
+        expect(resumedEvents.map(event => event.split(" ")[0])).toEqual(failedStep === "waive-review" ? ["waive-review", "sync", "show"] : ["sync", "show"]);
+      } finally { resumed.close(); }
+      const landed = createExit({ context: { ...initialContext, session: { ...initialContext.session, exit: saved! } },
+        run: async () => { throw new Error("Unexpected corral command for a landed exit"); }, git: git(),
+        fleet: () => fleet, save, changed() {} });
+      try { expect(landed.state().phase).toBe("landed"); expect((await landed.choose("land")).phase).toBe("landed"); }
+      finally { landed.close(); }
+    }
   });
 
   test("land fails visibly when the gate fails or Review ends without a landing", async () => {

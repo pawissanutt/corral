@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { Box, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { BuildPanelState, ChildSnapshot, ExitState, FleetSnapshot } from "../../build/types.ts";
 import { agentColor } from "../agent-hues.ts";
-import { exitEntry } from "./build-entries.ts";
+import { boardEntry, buildEntryRenderer, exitEntry, finishEntry } from "./build-entries.ts";
 import type { BuildCardSource } from "./contract.ts";
 import { buildToolRenderers } from "./tool-renderers.ts";
 
@@ -89,4 +89,31 @@ test("an exit entry tells the parent which exit the owner chose and how it ended
   expect(shipped.content).toContain("Ship through the board");
   expect(shipped.content).toContain("The gate failed for T-963");
   expect(shipped.display).toBeTrue();
+});
+
+test("conversation entries start in the same column as the task card and stay within the row", () => {
+  const children = [child("alpha", "done"), child("beta", "done")];
+  const fake = fakeSource(() => ({ children, maxParallel: 3, startedAt: NOW - 60_000 }));
+  const args = { agents: children.map(item => ({ id: item.id, title: item.title, brief: "b", owns: [] })) };
+  const firstColumn = (lines: readonly string[]) => stripTerminalSequences(lines[0] ?? "").search(/\S/);
+  const kept: ExitState = { phase: "kept", record: { choice: "keep", at: "t" }, detail: "The worktree and branch are kept." };
+  const entries = [
+    finishEntry("finish-1"),
+    exitEntry({ choice: "keep", label: "Keep on the branch", detail: "d" }, kept),
+    boardEntry([{ id: "T-971", title: "Slot manifest", status: "Backlog", phase: "backlog", depends: [], updatedAt: NOW }], false),
+  ];
+  const renderer = buildEntryRenderer(() => fake.source);
+  for (const width of [40, 80, 140]) {
+    // Pi draws a tool card inside its tool box, which insets it by the output padding on both sides.
+    const box = new Box(1, 0);
+    box.addChild(buildToolRenderers("task", () => fake.source)!.renderCall!(args, undefined as never, context(args)));
+    const card = box.render(width);
+    for (const entry of entries) {
+      const message = { role: "custom" as const, ...entry, timestamp: NOW };
+      const lines = renderer(message, { expanded: false, outputPad: 1 } as never, undefined as never)!.render(width);
+      expect(lines.length).toBeGreaterThan(0);
+      expect(firstColumn(lines)).toBe(firstColumn(card));
+      for (const line of [...lines, ...card]) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
+  }
 });

@@ -47,17 +47,19 @@ function titleRow(dialog: ChoiceDialog, width: number, joined: string | undefine
   const base = plainLabel(width < SHORT_TITLE && dialog.short ? dialog.short : dialog.title);
   const title = joined ? `${base}: ${joined}` : base;
   const meta = width >= META && dialog.meta ? plainLabel(dialog.meta) : "";
-  // `╭─ ` title ` ` dashes [` meta `] `─╮`: the title keeps its cells first, the meta takes what is left.
-  const titleCells = Math.min(visibleWidth(title), Math.max(0, width - 6));
-  const metaRoom = width - 6 - titleCells - 3;
-  const metaCells = meta && metaRoom >= 8 ? Math.min(visibleWidth(meta), metaRoom) : 0;
-  const metaPart = metaCells ? " " + PANEL_MUTED + fit(meta, metaCells) + " " + PANEL_BLUE : "";
-  const dashes = Math.max(0, width - 6 - titleCells - (metaCells ? metaCells + 2 : 0));
-  let shown = fit(title, titleCells);
+  // `╭─ ` title ` ` dashes [` meta `] `─╮`, measured from the drawn text: the title keeps its cells first, the
+  // meta takes what is left with an ellipsis and is dropped below 8 cells, and the row always ends with `─╮`.
+  const head = fit(title, Math.min(visibleWidth(title), Math.max(0, width - 6)));
+  const used = 3 + visibleWidth(head) + 1;
+  const room = width - used - 1 - 2 - 2;
+  const tail = meta && room >= 8 ? fit(meta, Math.min(visibleWidth(meta), room)) : "";
+  const dashes = Math.max(0, width - used - 2 - (tail ? visibleWidth(tail) + 2 : 0));
+  let shown = head;
   if (dialog.titleColor) {
     const space = shown.indexOf(" ");
     shown = space < 0 ? dialog.titleColor + shown : dialog.titleColor + shown.slice(0, space) + PANEL_TEXT + shown.slice(space);
   } else shown = PANEL_TEXT + shown;
+  const metaPart = tail ? " " + PANEL_MUTED + tail + " " + PANEL_BLUE : "";
   return PANEL_BLUE + "╭─ " + BOLD + shown + NORMAL + " " + PANEL_BLUE + "─".repeat(dashes) + metaPart + "─╮" + RESET;
 }
 

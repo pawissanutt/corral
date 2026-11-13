@@ -1,5 +1,6 @@
 // The shared contract of build mode (`corral pi --build`). Types and constants only: nothing here
 // imports the host session, the SDK runtime or the UI, so every build module can depend on it.
+import type { AwsBinding } from "../auth/aws.ts";
 import type { HelperMessage } from "../extensions/subagent/inspection.ts";
 
 /** What landing through corral requires for a project: independent review, the gate alone, or no corral exit. */
@@ -51,6 +52,8 @@ export interface BuildLaunch {
   readonly model: string;
   readonly effort?: string;
   readonly capabilities?: unknown;
+  /** Required when the profile's provider is Amazon Bedrock; the same field the bound launch carries. */
+  readonly aws?: AwsBinding;
   readonly guidance?: unknown;
   readonly settings: BuildSettings;
 }
