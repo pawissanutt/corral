@@ -55,6 +55,9 @@ pub struct Config {
     pub limits: Limits,
     #[serde(default)]
     pub resources: crate::ResourcesCfg,
+    /// `[load_sandbox]`: opt-in repository load-test prompts and container cleanup.
+    #[serde(default)]
+    pub load_sandbox: LoadSandboxCfg,
     #[serde(default)]
     pub dispatch: DispatchCfg,
     /// Project key -> project. Keys are what tasks reference in `project:`.
@@ -113,6 +116,13 @@ pub struct Config {
     /// use the built-in routing (`corral_ops::viewers`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub viewers: BTreeMap<String, String>,
+}
+
+/// Store-level integration with a repository-provided load sandbox; disabled by default.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LoadSandboxCfg {
+    pub enabled: bool,
 }
 
 /// `[lessons]`: no schedule or model/profile is inferred when omitted.
@@ -596,6 +606,7 @@ impl Config {
             pricing: BTreeMap::new(),
             limits: Limits::default(),
             resources: crate::ResourcesCfg::default(),
+            load_sandbox: LoadSandboxCfg::default(),
             dispatch: DispatchCfg::default(),
             projects,
             defaults: Defaults::default(),

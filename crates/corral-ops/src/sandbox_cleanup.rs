@@ -53,6 +53,9 @@ fn remember_empty_listing(key: PathBuf, owners: BTreeSet<String>) {
 /// A reap failure is an observed external outcome, not part of the preceding task transaction.
 /// Ownership/issuer checks stay in `reap`; failed cleanup retains that debt for later recovery.
 pub(crate) fn retire_superseded(ctx: &Ctx, task: &str, run: &str) -> Result<()> {
+    if !ctx.store.config.load_sandbox.enabled {
+        return Ok(());
+    }
     let head = ctx.store.head(task)?;
     let intent = head
         .run_head(run)?
@@ -82,17 +85,25 @@ thread_local! {
 /// One listing regardless of historical run count. Never call under an inventory lease.
 /// Contending hook passes skip rather than queue behind an external container runtime.
 pub(crate) fn sweep(ctx: &Ctx) -> Result<()> {
+    if !ctx.store.config.load_sandbox.enabled {
+        return Ok(());
+    }
     let _span = corral_core::timing::span("sync.sandbox_cleanup_sweep");
     #[cfg(test)]
     let bin = PODMAN
         .with(|slot| slot.borrow().clone())
         .unwrap_or_else(|| "podman".into());
+    #[cfg(test)]
+    let bin = bin.as_str();
     #[cfg(not(test))]
-    let bin = "podman".to_owned();
-    sweep_with(ctx, &bin)
+    let bin = "podman";
+    sweep_with(ctx, bin)
 }
 
 fn sweep_with(ctx: &Ctx, podman: &str) -> Result<()> {
+    if !ctx.store.config.load_sandbox.enabled {
+        return Ok(());
+    }
     let Some(_flight) = ctx.store.try_lock("sandbox-sweep")? else {
         return Ok(());
     };
@@ -261,18 +272,38 @@ fn validate_marker(marker: &str) -> Result<()> {
 }
 
 pub(crate) fn reap(ctx: &Ctx, task: &str, run: &str) -> Result<()> {
+    if !ctx.store.config.load_sandbox.enabled {
+        return Ok(());
+    }
     reap_scope(ctx, task, Some(run))
 }
 
 pub(crate) fn reap_task(ctx: &Ctx, task: &str) -> Result<()> {
+    if !ctx.store.config.load_sandbox.enabled {
+        return Ok(());
+    }
     reap_scope(ctx, task, None)
 }
 
 fn reap_scope(ctx: &Ctx, task: &str, run: Option<&str>) -> Result<()> {
-    reap_scope_with(ctx, task, run, "podman")
+    if !ctx.store.config.load_sandbox.enabled {
+        return Ok(());
+    }
+    #[cfg(test)]
+    let bin = PODMAN
+        .with(|slot| slot.borrow().clone())
+        .unwrap_or_else(|| "podman".into());
+    #[cfg(test)]
+    let bin = bin.as_str();
+    #[cfg(not(test))]
+    let bin = "podman";
+    reap_scope_with(ctx, task, run, bin)
 }
 
 fn reap_scope_with(ctx: &Ctx, task: &str, run: Option<&str>, podman: &str) -> Result<()> {
+    if !ctx.store.config.load_sandbox.enabled {
+        return Ok(());
+    }
     // Inventory actual cleanup debt, never every retained owner file or task/run history.
     // A label alone grants no authority: each opaque marker must have its canonical issuer.
     let output = match Command::new(podman)

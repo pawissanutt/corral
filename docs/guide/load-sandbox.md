@@ -1,5 +1,31 @@
 # Load sandbox
 
+This integration is **opt-in**, intended for developing corral itself. The script
+belongs to this repository; corral does not require Podman in other projects.
+`load_sandbox.enabled` defaults to `false`. Enable it in the store configuration:
+
+```bash
+corral config set load_sandbox.enabled true
+corral config get load_sandbox.enabled
+```
+
+Equivalent TOML:
+
+```toml
+[load_sandbox]
+enabled = true
+```
+
+This store-level setting enables both container cleanup (sync, task cleanup and
+retry) and load-testing guidance in newly rendered worker/reviewer prompts.
+With it off, cleanup never scans sandbox owner files or starts Podman. Installed
+skills and Pi assets are store-independent: guidance comes from the rendered run
+or review prompt Pi already receives, not from a separate host setting.
+There is no per-project override. Disabling it does not stop containers already
+running; the script still removes its own container on exit.
+
+The following shared-host rule applies to this repository:
+
 Intentional load generation on the shared host is forbidden. Workers, reviewers and
 gates must use `scripts/load-sandbox.sh` as the **only allowed way to load-test**.
 Never start host CPU/memory burners, spin loops, `stress-ng`, or parallel stress

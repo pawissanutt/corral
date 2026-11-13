@@ -3,7 +3,7 @@ name: corral-worker
 description: Procedure for a dispatched corral coding run - implement one task in its worktree, run the gate, attach evidence and finish with corral done. Use when your prompt carries a corral Run contract.
 ---
 <!-- managed by `corral skill install`; local edits are overwritten -->
-<!-- corral-skill: corral-worker version=0.4.0 sha256=f6e52e7d082aa92f1041e1c89de4c9d797c014f394b46068b44833616fc24675 -->
+<!-- corral-skill: corral-worker version=0.4.0 sha256=20d820ca4084d510471cc2f8da6b937d0a561efab2a8e3655eb1bf31aeae63af -->
 
 # corral worker
 
@@ -39,15 +39,6 @@ cases in the explicit slow profile with a one-line reason and an owning-module t
 Review the gate's added-test count and added suite seconds; over 30 seconds requires a
 `Test-cost justification:` line in the change report naming the defect and cheaper
 alternatives considered. Never relax a failing test to go green.
-
-## Load testing: container only
-
-Never generate intentional load on the shared host: no host CPU/memory burners,
-spin loops, `stress-ng`, or parallel stress harnesses. The only allowed way to
-load-test is `scripts/load-sandbox.sh --cpus 2 --memory 2g --pids-limit 256 --burners 2 -- COMMAND`
-(one Podman container, maximum 4 CPUs, removed on exit/interrupt). If unavailable,
-report the blocked check; never fall back to host load. See `docs/guide/load-sandbox.md`.
-This does not authorize an extra gate or a different tier.
 
 ## Lifecycle
 
@@ -119,7 +110,7 @@ no new tests; never pin wording with a test.
 
 ### Flaky-test fix
 
-Reproduce first: run the test in a loop inside `scripts/load-sandbox.sh`, record the failure rate and keep that log. Find the cause,
+Reproduce first: run the test in the project's prescribed test environment, record the failure rate and keep that log. Find the cause,
 then make the test deterministic by waiting on the exact event, using a barrier or injecting a clock.
 Never add sleeps, raise timeouts or budgets, add retries, or skip or ignore the test. Prove it with a
 red log that reproduces the failure before the fix and an N/N stress log after it.

@@ -174,6 +174,27 @@ fn review_prompt_has_spec_acceptance_gate_and_verdict_footer() {
 }
 
 #[test]
+fn review_prompt_sandbox_guidance_requires_store_opt_in() {
+    let (_tmp, mut ctx, id, _worktree) = task_in_review();
+    let task = ctx.store.get(&id).unwrap();
+    let run = run_head(task.current_run().unwrap());
+    for custom in [false, true] {
+        if custom {
+            std::fs::write(
+                ctx.store.dir().join("prompts").join("review.md"),
+                "Custom review contract\n",
+            )
+            .unwrap();
+        }
+        for enabled in [false, true] {
+            ctx.store.config.load_sandbox.enabled = enabled;
+            let prompt = corral_ops::review_prompt(&ctx, &task, &run).unwrap();
+            assert_eq!(prompt.contains("scripts/load-sandbox.sh"), enabled);
+        }
+    }
+}
+
+#[test]
 fn review_prompt_template_is_overridable() {
     let (_tmp, ctx, id, _worktree) = task_in_review();
     std::fs::write(

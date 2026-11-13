@@ -5,6 +5,7 @@ const DEFAULT_TEMPLATE: &str = include_str!("../../assets/review.md");
 /// The review prompt for the task's run, as markdown: the `review.md` template override when present, else the
 /// built-in template. Placeholders: {{id}} {{title}} {{run}} {{branch}} {{base}} {{worktree}} {{spec}}
 /// {{summary}} {{gate}} {{diff_cmd}} {{artifacts}} {{agents_md}} {{notes_file}} {{verdict_cmd}}.
+/// {{load_sandbox}} carries opt-in repository load-testing guidance.
 /// A routed review always appends its versioned contract, even under a custom template, and a
 /// tiered run's review always appends one authoritative Gate contract (review) section.
 pub fn review_prompt<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHead) -> Result<String> {
@@ -26,6 +27,10 @@ pub fn review_prompt<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHead) ->
         task.body().trim_end().to_string()
     };
     let values = [
+        (
+            "load_sandbox",
+            crate::prompt::load_sandbox_text(&ctx.store.config).to_string(),
+        ),
         ("id", task.id().clone()),
         ("title", task.title().clone()),
         ("run", run.id.clone()),
@@ -76,6 +81,9 @@ pub fn review_prompt<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHead) ->
         }),
     ];
     let mut prompt = fill(&template, &values);
+    if !template.contains("{{load_sandbox}}") {
+        prompt.push_str(crate::prompt::load_sandbox_text(&ctx.store.config));
+    }
     if let Some(contract) = &gate_contract {
         prompt.push_str(&gate_contract_section(contract));
     }

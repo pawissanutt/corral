@@ -39,15 +39,6 @@ Review the gate's added-test count and added suite seconds; over 30 seconds requ
 `Test-cost justification:` line in the change report naming the defect and cheaper
 alternatives considered. Never relax a failing test to go green.
 
-## Load testing: container only
-
-Never generate intentional load on the shared host: no host CPU/memory burners,
-spin loops, `stress-ng`, or parallel stress harnesses. The only allowed way to
-load-test is `scripts/load-sandbox.sh --cpus 2 --memory 2g --pids-limit 256 --burners 2 -- COMMAND`
-(one Podman container, maximum 4 CPUs, removed on exit/interrupt). If unavailable,
-report the blocked check; never fall back to host load. See `docs/guide/load-sandbox.md`.
-This does not authorize an extra gate or a different tier.
-
 ## Lifecycle
 
 1. **Orient** (contract step 1). Read the task with `corral show <id> --json`, the pitfalls captured
@@ -118,7 +109,7 @@ no new tests; never pin wording with a test.
 
 ### Flaky-test fix
 
-Reproduce first: run the test in a loop inside `scripts/load-sandbox.sh`, record the failure rate and keep that log. Find the cause,
+Reproduce first: run the test in the project's prescribed test environment, record the failure rate and keep that log. Find the cause,
 then make the test deterministic by waiting on the exact event, using a barrier or injecting a clock.
 Never add sleeps, raise timeouts or budgets, add retries, or skip or ignore the test. Prove it with a
 red log that reproduces the failure before the fix and an N/N stress log after it.

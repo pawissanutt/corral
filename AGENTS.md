@@ -123,6 +123,7 @@ hard maximum 4; default 2g memory and 256 PIDs), then forcibly removes it on suc
 failure, or interruption. Never fall back to host load if Podman/cgroups are unavailable;
 report the blocked check instead. This does not authorize an extra gate or change its tier.
 See [load sandbox](docs/guide/load-sandbox.md) for image prerequisites and smoke checks.
+The product setting `load_sandbox.enabled` must be on for corral's sandbox cleanup and prompt text.
 
 ## herdr in tests
 

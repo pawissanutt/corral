@@ -104,6 +104,7 @@ if os.environ['CORRAL_RETRY_CLEANUP_FAIL'] == '1':
     fx.done();
     let run = fx.run().id;
     fx.ctx.store.config.dispatch.paused = true;
+    fx.ctx.store.config.load_sandbox.enabled = true;
     fx.ctx.store.save_config().unwrap();
     std::fs::write(
         boundary.join("context.json"),

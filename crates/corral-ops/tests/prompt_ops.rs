@@ -136,6 +136,25 @@ fn contract_renders_review_gate_artifact_command_and_placeholders() {
 }
 
 #[test]
+fn run_prompt_sandbox_guidance_requires_store_opt_in() {
+    let (tmp, mut ctx) = workspace();
+    let task = task(&ctx);
+    let run = run(tmp.path(), Some("corral-pi"));
+    for custom in [false, true] {
+        if custom {
+            let path = ctx.store.dir().join("prompts").join("run.md");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "Custom run contract\n").unwrap();
+        }
+        for enabled in [false, true] {
+            ctx.store.config.load_sandbox.enabled = enabled;
+            let prompt = corral_ops::task_prompt(&ctx, &task, &run).unwrap();
+            assert_eq!(prompt.contains("scripts/load-sandbox.sh"), enabled);
+        }
+    }
+}
+
+#[test]
 fn run_contract_gate_commands_execute_with_project_environment() {
     // Given a minimal template and project-local environment with shell-sensitive values.
     let (tmp, mut ctx) = workspace();
