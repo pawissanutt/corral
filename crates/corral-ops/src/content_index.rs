@@ -52,6 +52,11 @@ pub(crate) enum Source {
     Artifact(Artifact),
     Text(String),
     File(std::path::PathBuf),
+    FileRange {
+        path: std::path::PathBuf,
+        offset: u64,
+        len: u64,
+    },
 }
 
 pub(crate) struct Record {
@@ -266,6 +271,15 @@ fn extract(ctx: &Ctx, record: &mut Record) -> Result<()> {
     match &record.source {
         Source::Text(text) => {
             bytes.extend_from_slice(&text.as_bytes()[..text.len().min(DOCUMENT_BYTES + 1)])
+        }
+        Source::FileRange { path, offset, len } => {
+            use std::io::{Seek, SeekFrom};
+            let mut file = File::open(path).context("opening packed search text")?;
+            file.seek(SeekFrom::Start(*offset))
+                .context("seeking packed search text")?;
+            file.take((*len).min((DOCUMENT_BYTES + 1) as u64))
+                .read_to_end(&mut bytes)
+                .context("extracting packed search text")?;
         }
         Source::File(path) => {
             File::open(path)
@@ -559,7 +573,7 @@ fn build_locked(
                 Source::Artifact(artifact) => Some(crate::content_refresh::file_stamp(
                     &ctx.store.dir().join(&artifact.path),
                 )?),
-                Source::Text(_) | Source::File(_) => None,
+                Source::Text(_) | Source::File(_) | Source::FileRange { .. } => None,
             };
         }
         if let Some(cached) = previous
@@ -639,4 +653,46 @@ fn build_locked(
         crate::content_refresh::write_cursor(&dir, seq)?;
     }
     Ok(Snapshot { records })
+}
+
+/// Pin the encoded bytes and their current metadata only while opening a source.
+/// Retention can rename/unlink after this returns; the reader owns the stable handle.
+pub(crate) fn search_artifact_reader(
+    ctx: &Ctx,
+    owner: &str,
+    artifact: &Artifact,
+) -> Result<Option<Box<dyn Read>>> {
+    if ctx.store.is_snapshot() {
+        // Logical query metadata can remain pinned, but retention's encoding must be read
+        // on the live store while holding its short opening guard.
+        let live = Ctx {
+            store: corral_core::Store::open_unobserved(ctx.store.root())
+                .context("opening live artifact encoding metadata")?,
+            ..ctx.clone()
+        };
+        return search_artifact_reader(&live, owner, artifact);
+    }
+    let _storage = crate::artifact_storage::storage_lock(ctx)?;
+    let current = if owner.starts_with("A-") {
+        ctx.store
+            .get_assistant(owner)?
+            .artifacts
+            .into_iter()
+            .find(|current| current.path == artifact.path)
+    } else if let Some(key) = ctx.store.record::<crate::artifact_storage::KeyDoc>(
+        crate::artifact_storage::ARTIFACT_KEYS,
+        &artifact.path,
+    )? {
+        ctx.store.artifact_row(&key.task, &key.row)?
+    } else if owner.starts_with("T-") && ctx.store.head_if_exists(owner)?.is_none() {
+        None
+    } else {
+        // Imported copies may predate keyed artifact records. GC publishes a key when
+        // it changes their encoding, so an unkeyed copy still uses its recorded metadata.
+        Some(artifact.clone())
+    };
+    let Some(current) = current.filter(|current| current.purged_at.is_none()) else {
+        return Ok(None);
+    };
+    crate::artifact_storage::artifact_reader(ctx, &current).map(Some)
 }

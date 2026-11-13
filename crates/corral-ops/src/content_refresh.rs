@@ -183,14 +183,18 @@ pub(crate) fn fingerprint(ctx: &Ctx, tasks: &[Task]) -> Result<String> {
 /// (`content_index::follow`). A missing or unreadable index, a pruned feed (gap) or a budget
 /// overflow rebuilds from that same view. The caller's listing is not read: a listing older
 /// than the view would let a refresh acknowledge changes it never indexed.
+/// Successful prefix refreshes also schedule catalog maintenance on the live store;
+/// catalog construction never retains this refresh's read view.
 pub fn refresh_search_index_with_tasks(ctx: &Ctx, _tasks: &[Task]) -> Result<()> {
     if follow_index(ctx, false)? {
-        return Ok(());
+        return crate::content_index::catalog::Catalog::maintain(ctx);
     }
-    let (view_ctx, seq) = crate::content_index::one_view(ctx)?;
-    let tasks = view_ctx.store.list()?;
-    crate::content_index::refresh_snapshot(&view_ctx, &tasks, seq)?;
-    Ok(())
+    {
+        let (view_ctx, seq) = crate::content_index::one_view(ctx)?;
+        let tasks = view_ctx.store.list()?;
+        crate::content_index::refresh_snapshot(&view_ctx, &tasks, seq)?;
+    }
+    crate::content_index::catalog::Catalog::maintain(ctx)
 }
 
 /// Brings the index to the feed position of one read view by following the feed from its
@@ -342,7 +346,13 @@ pub(crate) fn refresh_after_sync(ctx: &Ctx, _tasks: &[Task], _before: &str) -> R
 /// index is current after the pass, but it never queues for another refresher: queued passes
 /// held read views on the index lock (pinning the WAL). A pass deferred because another
 /// process holds the index leaves the cursor in place, so the next pass follows every change.
+/// Successful passes schedule deduplicated background catalog maintenance without waiting
+/// for catalog batches or retaining the prefix refresh's read view.
 pub(crate) fn refresh_after_sync_if_due(ctx: &Ctx, _tasks: &[Task], _before: &str) -> Result<bool> {
     let _span = corral_core::timing::span("sync.refresh_after_sync_if_due");
-    follow_index(ctx, true)
+    let followed = follow_index(ctx, true)?;
+    if followed {
+        crate::content_index::catalog::Catalog::maintain(ctx)?;
+    }
+    Ok(followed)
 }

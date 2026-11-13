@@ -123,7 +123,7 @@ fn warm_search_reads_only_matching_overflow_blobs_at_two_catalog_sizes() {
         }
         let options = ContentSearch::default();
         let query = "generic_worker_gate_wait_collects_once";
-        search_content(&ctx, query, &options).unwrap();
+        drain_catalog(&ctx);
         let before = work::snapshot();
         let parses = work::count(Work::EventParse);
         let extractions = CATALOG_EXTRACTIONS.get();
@@ -188,4 +188,110 @@ fn streamed_task_search_preserves_legacy_ranking_after_catalog_changes() {
             );
         }
     }
+}
+
+fn drain_catalog(ctx: &crate::Ctx) {
+    for _ in 0..128 {
+        if super::catalog::advance_batch(ctx).unwrap() {
+            return;
+        }
+    }
+    panic!("tiny catalog fixture did not become ready within 128 batches");
+}
+
+#[test]
+fn interrupted_catalog_build_resumes_instead_of_restarting() {
+    use corral_core::{Status, Store};
+
+    let fixture = || {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = crate::resources::FixedResourceProbe::ctx(Store::init(dir.path()).unwrap());
+        let task = ctx
+            .store
+            .create("resume fixture", None, Status::Ready, "body needle")
+            .unwrap();
+        for i in 0..3 {
+            let source = dir.path().join(format!("evidence-{i}.log"));
+            std::fs::write(&source, format!("artifact needle {i}\n")).unwrap();
+            crate::add_artifact(&ctx, &task.id, &source, None, None).unwrap();
+        }
+        (dir, ctx)
+    };
+    let (_uninterrupted_dir, uninterrupted) = fixture();
+    let before = CATALOG_EXTRACTIONS.get();
+    drain_catalog(&uninterrupted);
+    let total = CATALOG_EXTRACTIONS.get() - before;
+    assert!(total > 1, "fixture must exercise multiple lexical sources");
+
+    let (_interrupted_dir, interrupted) = fixture();
+    let before = CATALOG_EXTRACTIONS.get();
+    let mut started = false;
+    for _ in 0..128 {
+        let ready = super::catalog::advance_batch(&interrupted).unwrap();
+        if CATALOG_EXTRACTIONS.get() > before {
+            assert!(!ready, "source work must checkpoint before publication");
+            started = true;
+            break;
+        }
+        assert!(
+            !ready,
+            "catalog became ready without extracting its sources"
+        );
+    }
+    assert!(started, "no lexical source checkpoint was reached");
+    super::catalog::interrupt_after_batches(1);
+    assert!(
+        super::catalog::advance_batch(&interrupted).is_err(),
+        "fault must fire after the next durable batch"
+    );
+    let checkpointed = CATALOG_EXTRACTIONS.get() - before;
+    assert!(checkpointed > 0);
+    assert!(
+        checkpointed < total,
+        "fault must leave source work to resume"
+    );
+
+    let before_resume = CATALOG_EXTRACTIONS.get();
+    drain_catalog(&interrupted);
+    assert_eq!(
+        CATALOG_EXTRACTIONS.get() - before_resume,
+        total - checkpointed,
+        "resuming must extract only sources absent from the durable checkpoint"
+    );
+}
+
+#[test]
+fn query_during_incomplete_catalog_returns_the_same_hits_as_warm() {
+    use crate::{ContentSearch, search_content};
+    use corral_core::{Status, Store};
+
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = crate::resources::FixedResourceProbe::ctx(Store::init(dir.path()).unwrap());
+    let task = ctx
+        .store
+        .create("parity fixture", None, Status::Ready, "body needle")
+        .unwrap();
+    let source = dir.path().join("evidence.log");
+    std::fs::write(&source, "artifact needle\n").unwrap();
+    let artifact = crate::add_artifact(&ctx, &task.id, &source, None, None).unwrap();
+    let options = ContentSearch::default();
+    let query = || serde_json::to_value(search_content(&ctx, "needle", &options).unwrap()).unwrap();
+    let cold = query();
+    assert!(
+        !super::catalog::advance_batch(&ctx).unwrap(),
+        "first batch must leave the fixture catalog incomplete"
+    );
+    let partial = query();
+    drain_catalog(&ctx);
+    let warm = query();
+    let hits = warm.as_array().unwrap();
+    let artifact_ref = corral_core::PinRef::of_artifact(&task.id, &artifact).to_string();
+    assert!(hits.iter().any(|hit| hit["reference"] == artifact_ref));
+    assert!(hits.iter().any(|hit| {
+        hit["snippet"]
+            .as_str()
+            .is_some_and(|snippet| snippet.contains("body needle"))
+    }));
+    assert_eq!(cold, warm);
+    assert_eq!(partial, warm);
 }

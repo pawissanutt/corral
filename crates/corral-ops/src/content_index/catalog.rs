@@ -8,32 +8,42 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use corral_core::query::Query;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::{Cache, Document, INDEX_BYTES, Record, Source, TEXT_BUDGET, VERSION, digest, postings};
 use crate::Ctx;
 
 #[path = "catalog_error.rs"]
 mod error;
+#[path = "catalog_fallback.rs"]
+mod fallback;
 #[path = "catalog_order.rs"]
 mod order;
 #[path = "catalog_refresh.rs"]
 mod refresh;
 use error::Corrupt;
+#[cfg(test)]
+pub(crate) use refresh::advance_batch;
+#[cfg(test)]
+pub(crate) use refresh::interrupt_after_batches;
+#[path = "catalog_metadata.rs"]
+mod metadata;
+// Emergency safety cutover: never wait for or depend on catalog construction in production.
+// Unit regressions can explicitly advance and exercise complete generations.
+pub(super) const BACKGROUND_CATALOG_BUILD_ENABLED: bool = false;
 pub(crate) use error::{is_corrupt, repair};
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub(super) struct Manifest {
     version: u32,
     after: u64,
     events_after: u64,
-    event_bytes: u64,
-    events_file: String,
-    tasks: BTreeSet<String>,
-    assistants: bool,
-    #[serde(default)]
+    tasks: BTreeMap<String, String>,
+    events: Vec<String>,
+    assistants: Option<String>,
     overflow_binary: BTreeSet<String>,
-    #[serde(default)]
-    prefix_stamp: String,
+    prefix_file: String,
+    extras: BTreeMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -45,102 +55,73 @@ pub(crate) struct Entry {
     fallback: Option<Vec<u64>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 enum IndexedSource {
     Artifact(corral_core::Artifact),
     Text(String),
     Event(u64),
+    Slice { file: String, offset: u64, len: u64 },
 }
 
 pub(crate) struct Catalog {
     root: PathBuf,
+    objects: PathBuf,
     manifest: Manifest,
     cache: Cache,
+    temporary: Option<tempfile::TempDir>,
 }
 
 impl Catalog {
-    /// Caller holds index then storage. Every refresh is based on one frozen store view.
-    pub fn open(ctx: &Ctx, reindex: bool) -> Result<Self> {
-        match Self::open_once(ctx, reindex) {
-            Err(error) if is_corrupt(&error) => {
-                error::invalidate_locked(ctx)?;
-                Self::open_once(ctx, reindex)
-            }
-            result => result,
+    /// Never waits for a build. Only complete, current immutable generations serve hits.
+    pub fn open(ctx: &Ctx, reindex: bool) -> Result<Option<Self>> {
+        let _span = corral_core::timing::span("search.index_open_refresh");
+        if !BACKGROUND_CATALOG_BUILD_ENABLED && !cfg!(test) {
+            return Ok(None);
         }
+        if reindex {
+            refresh::request_reindex(ctx)?;
+            refresh::schedule(ctx, true)?;
+            return Ok(None);
+        }
+        let ready = refresh::published(ctx)?;
+        if ready.is_none() {
+            refresh::schedule(ctx, true)?;
+        }
+        Ok(ready)
     }
 
-    fn open_once(ctx: &Ctx, reindex: bool) -> Result<Self> {
-        let _span = corral_core::timing::span("search.index_open_refresh");
-        let root = ctx.store.cache_root()?.join("search-catalog");
-        fs::create_dir_all(&root).context("creating search catalog")?;
-        let path = root.join("manifest.json");
-        let manifest: Manifest = match File::open(&path) {
-            Ok(file) => serde_json::from_reader(BufReader::new(file)).unwrap_or_default(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Manifest::default(),
-            Err(e) => return Err(e).context("opening search catalog manifest"),
-        };
-        let (view, seq) = super::one_view(ctx)?;
-        let mut previous = match File::open(ctx.store.cache_root()?.join("content-search.json")) {
-            Ok(file)
-                if file
-                    .metadata()
-                    .context("reading search index metadata")?
-                    .len()
-                    <= INDEX_BYTES =>
-            {
-                super::read_cache(file)
-            }
-            Ok(_) => Cache::default(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Cache::default(),
-            Err(e) => return Err(e).context("opening previous search index"),
-        };
-        if previous.version != VERSION {
-            previous = Cache::default();
+    pub fn fallback(ctx: &Ctx, reindex: bool) -> Result<Self> {
+        fallback::build(ctx, reindex)
+    }
+
+    /// The daemon and CLI schedule a worker, never a full synchronous source scan.
+    pub fn maintain(ctx: &Ctx) -> Result<()> {
+        if !BACKGROUND_CATALOG_BUILD_ENABLED {
+            return Ok(());
         }
-        let mut catalog = Self {
-            root,
-            manifest,
-            cache: previous,
-        };
-        let old_events = catalog.manifest.events_file.clone();
-        let changed = refresh::refresh(&view, seq, &mut catalog, reindex)?;
-        let prefix_path = ctx.store.cache_root()?.join("content-search.json");
-        let stamp = crate::content_refresh::file_stamp(&prefix_path)?;
-        if changed || catalog.cache.version != VERSION || stamp != catalog.manifest.prefix_stamp {
-            catalog.rebuild_prefixes(&view, reindex)?;
-            // Publishing the cursor last makes a crashed refresh replayable.
-            let bytes = serde_json::to_vec(&catalog.manifest)
-                .context("encoding search catalog manifest")?;
-            crate::artifact_storage::replace(&path, &bytes)?;
-            if !old_events.is_empty() && old_events != catalog.manifest.events_file {
-                let old = catalog.root.join(&old_events);
-                if old.is_file() {
-                    fs::remove_file(old).context("removing replaced event search catalog")?;
-                }
-            }
-        }
-        Ok(catalog)
+        refresh::schedule(ctx, false)
     }
 
     fn visit_entries(&self, mut visit: impl FnMut(Entry) -> Result<()>) -> Result<()> {
-        for task in &self.manifest.tasks {
+        for path in self.manifest.tasks.values() {
             entries(
-                File::open(self.root.join(format!("{task}.jsonl")))
-                    .context("opening task search catalog")?,
+                File::open(self.root.join(path)).context("opening task search catalog")?,
                 &mut visit,
             )?;
         }
-        if self.manifest.assistants {
+        if let Some(path) = &self.manifest.assistants {
             entries(
-                File::open(self.root.join("assistants.jsonl"))
-                    .context("opening assistant search catalog")?,
+                File::open(self.root.join(path)).context("opening assistant search catalog")?,
                 &mut visit,
             )?;
         }
-        let file = File::open(self.root.join(&self.manifest.events_file))
-            .context("opening event search catalog")?;
-        entries(file.take(self.manifest.event_bytes), visit)
+        for path in &self.manifest.events {
+            entries(
+                File::open(self.root.join(path)).context("opening event search catalog")?,
+                &mut visit,
+            )?;
+        }
+        Ok(())
     }
 
     pub fn idfs(&self, query: &Query) -> Vec<u64> {
@@ -148,11 +129,12 @@ impl Catalog {
             .content_terms()
             .iter()
             .map(|(term, _, _)| {
+                let tokens: Vec<_> = super::words(term).collect();
                 let matching = self
                     .cache
                     .postings
                     .iter()
-                    .filter(|(word, _)| super::words(term).any(|t| word.contains(&t)))
+                    .filter(|(word, _)| tokens.iter().any(|token| word.contains(token)))
                     .flat_map(|(_, ids)| ids.iter())
                     .collect::<BTreeSet<_>>()
                     .len();
@@ -171,6 +153,9 @@ impl Catalog {
             .flat_map(|(term, _, _)| super::words(term))
             .collect();
         self.visit_entries(|entry| {
+            if entry.terms.is_none() && entry.fallback.is_none() {
+                return visit(&entry);
+            }
             let matches = entry.terms.as_ref().map_or_else(
                 || {
                     positive.iter().all(|word| {
@@ -206,7 +191,7 @@ impl Catalog {
         let source = match &entry.source {
             IndexedSource::Artifact(artifact) => Source::Artifact(artifact.clone()),
             IndexedSource::Text(key) => {
-                let path = self.root.join(format!("{key}.body"));
+                let path = self.objects.join(format!("{key}.body"));
                 if !document.complete && !document.binary && !path.is_file() {
                     return Err(Corrupt.into());
                 }
@@ -216,6 +201,11 @@ impl Catalog {
                 Source::Text(String::new())
             }
             IndexedSource::Event(seq) => Source::Text(event_text(ctx, *seq)?),
+            IndexedSource::Slice { file, offset, len } => Source::FileRange {
+                path: self.root.join(file),
+                offset: *offset,
+                len: *len,
+            },
         };
         Ok(Record { document, source })
     }
@@ -236,8 +226,11 @@ impl Catalog {
         artifact: &corral_core::Artifact,
         terms: &[&str],
     ) -> Result<bool> {
+        if self.temporary.is_some() {
+            return Ok(true);
+        }
         let key = format!("a-{}", digest(&artifact.sha256));
-        let Some(indexed) = lexical(&self.root, &key)? else {
+        let Some(indexed) = lexical(&self.objects, &key)? else {
             return Ok(true);
         };
         Ok(terms
@@ -257,33 +250,33 @@ impl Catalog {
     }
 
     pub fn task_ids(&self) -> impl Iterator<Item = &String> {
-        self.manifest.tasks.iter()
+        self.manifest.tasks.keys()
     }
 
     pub fn task_text(&self, id: &str) -> Result<String> {
-        match fs::read_to_string(self.root.join(format!("{id}.extra"))) {
+        let path = self.manifest.extras.get(id).ok_or(Corrupt)?;
+        match fs::read_to_string(self.root.join(path)) {
             Ok(text) => Ok(text),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(Corrupt.into()),
             Err(error) => Err(error).context("reading task search supplemental text"),
         }
     }
 
-    fn rebuild_prefixes(&mut self, ctx: &Ctx, reindex: bool) -> Result<()> {
+    fn rebuild_prefixes(&mut self, ctx: &Ctx, reindex: bool, publish: bool) -> Result<()> {
         let _span = corral_core::timing::span("search.prefix_refresh");
-        let parent = self.root.parent().context("search catalog has no parent")?;
         let mut previous = std::mem::take(&mut self.cache);
         if reindex {
             previous = Cache::default();
         }
         previous.postings.clear();
         let mut descriptors = order::Order::new(&self.root);
-        self.visit_entries(|entry| descriptors.push(entry.document, entry.lexical))?;
+        self.visit_entries(|entry| descriptors.push(entry.document, entry.lexical, entry.source))?;
         let mut descriptors = descriptors.sorted()?;
         let mut budget = TEXT_BUDGET;
         let mut documents = BTreeMap::new();
         let mut extra = BTreeMap::<String, String>::new();
         self.manifest.overflow_binary.clear();
-        while let Some(order::Descriptor(mut doc, key)) = descriptors.next()? {
+        while let Some(order::Descriptor(mut doc, _key, source)) = descriptors.next()? {
             doc.complete = false;
             doc.binary = false;
             if let Some(cached) = previous.documents.get(&doc.reference).filter(|cached| {
@@ -294,7 +287,7 @@ impl Catalog {
                 doc.binary = cached.binary;
                 doc.file_stamp.clone_from(&cached.file_stamp);
             } else if budget > 0 && documents.len() < 4096 {
-                let text = prefix(ctx, &self.root, &key)?;
+                let text = prefix_source(ctx, &self.root, &doc.task, &source)?;
                 doc.text = text.text;
                 doc.complete = text.complete;
                 doc.binary = text.binary;
@@ -315,12 +308,10 @@ impl Catalog {
                 text.push_str(&doc.text);
             }
         }
-        for id in &self.manifest.tasks {
+        for id in self.manifest.tasks.keys() {
             let text = extra.remove(id).unwrap_or_default();
-            crate::artifact_storage::replace(
-                &self.root.join(format!("{id}.extra")),
-                text.as_bytes(),
-            )?;
+            let path = immutable_file(&self.root, text.as_bytes())?;
+            self.manifest.extras.insert(id.clone(), path);
         }
         let mut cache = Cache {
             version: VERSION,
@@ -341,16 +332,10 @@ impl Catalog {
             }
             cache.postings = postings(&cache.documents);
         };
-        // Keep existing board/finder readers on the same extracted-text scoring cache.
-        crate::artifact_storage::replace(&parent.join("content-search.json"), &bytes)?;
-        self.manifest.prefix_stamp =
-            crate::content_refresh::file_stamp(&parent.join("content-search.json"))?;
-        // This complete prefix projection belongs to the same frozen view as the catalog.
-        // Publish its feed position too, so the existing refresher does not rebuild it.
-        crate::content_refresh::write_cursor(
-            parent,
-            corral_core::backend::ChangeSeq(self.manifest.after),
-        )?;
+        self.manifest.prefix_file = immutable_file(&self.root, &bytes)?;
+        if publish {
+            publish_prefixes(ctx, &bytes, self.manifest.after)?;
+        }
         self.cache = cache;
         Ok(())
     }
@@ -413,7 +398,11 @@ fn write_record(
             }
             (IndexedSource::Text(key.clone()), key)
         }
-        Source::File(_) => anyhow::bail!("catalog refresh requires canonical source text"),
+        Source::File(_) => {
+            let key = format!("t-{}", record.document.fingerprint);
+            (IndexedSource::Text(key.clone()), key)
+        }
+        Source::FileRange { .. } => anyhow::bail!("packed fallback source cannot be indexed"),
     };
     let event = matches!(&source, IndexedSource::Event(_));
     let indexed = if !reindex && !event {
@@ -434,11 +423,19 @@ fn write_record(
             } else {
                 match &record.source {
                     Source::Artifact(artifact) => {
-                        crate::artifact_storage::artifact_reader(ctx, artifact)?
+                        let Some(reader) =
+                            super::search_artifact_reader(ctx, &record.document.task, artifact)?
+                        else {
+                            return Ok(());
+                        };
+                        reader
                     }
                     Source::Text(text) => Box::new(text.as_bytes()),
-                    Source::File(_) => {
-                        anyhow::bail!("catalog refresh requires canonical source text")
+                    Source::File(path) => {
+                        Box::new(File::open(path).context("opening catalog source text")?)
+                    }
+                    Source::FileRange { .. } => {
+                        anyhow::bail!("packed fallback source cannot be indexed")
                     }
                 }
             };
@@ -494,17 +491,40 @@ fn event_text(ctx: &Ctx, seq: u64) -> Result<String> {
     Ok(event.event.detail.to_string())
 }
 
-fn prefix(ctx: &Ctx, root: &Path, key: &str) -> Result<super::ExtractedText> {
-    if let Some(seq) = key.strip_prefix("e-") {
-        let text = event_text(ctx, seq.parse().context("invalid indexed event key")?)?;
-        return Ok(super::extract_bytes(text.as_bytes()));
-    }
-    let text = lexical(root, key)?.ok_or(Corrupt)?;
-    Ok(super::ExtractedText {
-        text: text.prefix,
-        complete: text.complete,
-        binary: text.binary,
-    })
+fn prefix_source(
+    ctx: &Ctx,
+    root: &Path,
+    owner: &str,
+    source: &IndexedSource,
+) -> Result<super::ExtractedText> {
+    use std::io::{Seek, SeekFrom};
+    let reader: Box<dyn Read> = match source {
+        IndexedSource::Artifact(artifact) => {
+            super::search_artifact_reader(ctx, owner, artifact)?
+                .context("artifact was purged while extracting a prefix")?
+        }
+        IndexedSource::Text(key) => Box::new(
+            File::open(root.join("objects").join(format!("{key}.body")))
+                .context("opening catalog prefix source")?,
+        ),
+        IndexedSource::Event(seq) => {
+            return Ok(super::extract_bytes(event_text(ctx, *seq)?.as_bytes()));
+        }
+        IndexedSource::Slice { file, offset, len } => {
+            let mut reader =
+                File::open(root.join(file)).context("opening packed catalog prefix")?;
+            reader
+                .seek(SeekFrom::Start(*offset))
+                .context("seeking packed catalog prefix")?;
+            Box::new(reader.take(*len))
+        }
+    };
+    let mut bytes = Vec::new();
+    reader
+        .take((super::DOCUMENT_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .context("extracting catalog prefix")?;
+    Ok(super::extract_bytes(&bytes))
 }
 
 fn replace_cache(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -517,4 +537,92 @@ fn replace_cache(path: &Path, bytes: &[u8]) -> Result<()> {
     file.persist(path)
         .context("publishing derived search text")?;
     Ok(())
+}
+
+fn load_prefix_cache(ctx: &Ctx) -> Result<Cache> {
+    match File::open(ctx.store.cache_root()?.join("content-search.json")) {
+        Ok(file)
+            if file
+                .metadata()
+                .context("reading prefix cache metadata")?
+                .len()
+                <= INDEX_BYTES =>
+        {
+            let cache = super::read_cache(file);
+            Ok(if cache.version == VERSION {
+                cache
+            } else {
+                Cache::default()
+            })
+        }
+        Ok(_) => Ok(Cache::default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Cache::default()),
+        Err(error) => Err(error).context("opening search prefixes"),
+    }
+}
+
+fn immutable_file(root: &Path, bytes: &[u8]) -> Result<String> {
+    let name = format!("part-{:x}", Sha256::digest(bytes));
+    let path = root.join(&name);
+    if fs::read(&path).ok().as_deref() != Some(bytes) {
+        replace_cache(&path, bytes)?;
+    }
+    Ok(name)
+}
+
+fn publish_prefixes(ctx: &Ctx, bytes: &[u8], after: u64) -> Result<()> {
+    let lock = super::index_lock(ctx)?;
+    match lock.try_lock() {
+        Ok(()) => {
+            let root = ctx.store.cache_root()?;
+            crate::artifact_storage::replace(&root.join("content-search.json"), bytes)?;
+            crate::content_refresh::write_cursor(&root, corral_core::backend::ChangeSeq(after))
+        }
+        Err(fs::TryLockError::WouldBlock) => Ok(()),
+        Err(fs::TryLockError::Error(error)) => Err(error).context("publishing search prefixes"),
+    }
+}
+
+fn metadata_entry(root: &Path, record: Record) -> Result<Entry> {
+    let (source, key) = match record.source {
+        Source::Artifact(artifact) => {
+            let key = format!("a-{}", digest(&artifact.sha256));
+            (IndexedSource::Artifact(artifact), key)
+        }
+        Source::Text(_) if record.document.reference.starts_with("events:") => {
+            let seq = record
+                .document
+                .reference
+                .trim_start_matches("events:")
+                .parse()
+                .context("invalid metadata event reference")?;
+            (IndexedSource::Event(seq), format!("e-{seq}"))
+        }
+        Source::Text(text) => {
+            let key = format!("t-{}", digest(&text));
+            let path = root.join("objects").join(format!("{key}.body"));
+            if fs::read(&path).ok().as_deref() != Some(text.as_bytes()) {
+                replace_cache(&path, text.as_bytes())?;
+            }
+            (IndexedSource::Text(key.clone()), key)
+        }
+        Source::File(_) | Source::FileRange { .. } => {
+            anyhow::bail!("metadata requires canonical text")
+        }
+    };
+    Ok(Entry {
+        document: record.document,
+        source,
+        lexical: key,
+        terms: None,
+        fallback: None,
+    })
+}
+
+fn write_metadata(root: &Path, record: Record, writer: &mut impl Write) -> Result<()> {
+    let entry = metadata_entry(root, record)?;
+    serde_json::to_writer(&mut *writer, &entry).context("writing source metadata")?;
+    writer
+        .write_all(b"\n")
+        .context("terminating source metadata")
 }

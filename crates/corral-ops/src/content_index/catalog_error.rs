@@ -20,16 +20,11 @@ pub(crate) fn is_corrupt(error: &anyhow::Error) -> bool {
 }
 
 pub(crate) fn repair(ctx: &Ctx) -> Result<()> {
-    let _index = crate::content_index::lock(ctx)?;
-    invalidate_locked(ctx)
-}
-
-pub(super) fn invalidate_locked(ctx: &Ctx) -> Result<()> {
-    let path = ctx
-        .store
-        .cache_root()?
-        .join("search-catalog")
-        .join("manifest.json");
+    // Published partitions are immutable; invalidation needs no serving-index lock.
+    let root = ctx.store.cache_root()?.join("search-catalog");
+    std::fs::create_dir_all(&root).context("creating catalog repair directory")?;
+    crate::artifact_storage::replace(&root.join("restart"), b"canonical")?;
+    let path = root.join("manifest.json");
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),

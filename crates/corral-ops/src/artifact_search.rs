@@ -14,6 +14,7 @@ pub struct ArtifactSearch {
 
 impl ArtifactSearch {
     /// Loads the shared extracted-text cache without creating a separate finder index.
+    /// A cold or outdated catalog falls back without waiting for background construction.
     ///
     /// # Errors
     /// Returns an error if tasks, snapshots or the derived cache cannot be read.
@@ -28,11 +29,15 @@ impl ArtifactSearch {
     }
 
     fn load_once(ctx: &Ctx) -> Result<Self> {
-        let _index = content_index::lock(ctx)?;
-        let _storage = crate::artifact_storage::storage_lock(ctx)?;
-        let (view_ctx, _) = content_index::one_view(ctx)?;
-        let catalog = Catalog::open(&view_ctx, false)?;
-        let records = catalog.artifact_records(&view_ctx)?;
+        let published = Catalog::open(ctx, false)?;
+        let _fallback = published
+            .is_none()
+            .then(|| corral_core::timing::span("search.fallback"));
+        let catalog = match published {
+            Some(catalog) => catalog,
+            None => Catalog::fallback(ctx, false)?,
+        };
+        let records = catalog.artifact_records(ctx)?;
         Ok(Self { records, catalog })
     }
 

@@ -61,6 +61,7 @@ pub struct ContentHit {
 
 /// Searches the shared extracted-text index, streaming overflow documents when necessary.
 /// The index is a derived cache; tasks, artifact snapshots and events are never modified.
+/// A cold or outdated catalog uses query-local fallback data while its builder runs.
 pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result<Vec<ContentHit>> {
     match search_content_once(ctx, input, options) {
         Err(error) if crate::content_index::catalog::is_corrupt(&error) => {
@@ -94,12 +95,14 @@ fn search_content_once(ctx: &Ctx, input: &str, options: &ContentSearch) -> Resul
         .map(|s| cutoff(s, now))
         .transpose()?;
     let _span = corral_core::timing::span("search.content");
-    // Index before storage; both refresh and candidate reads use one store view.
-    let _index = content_index::lock(ctx)?;
-    let _storage = crate::artifact_storage::storage_lock(ctx)?;
-    let (view_ctx, _) = content_index::one_view(ctx)?;
-    let ctx = &view_ctx;
-    let catalog = Catalog::open(ctx, options.reindex)?;
+    let published = Catalog::open(ctx, options.reindex)?;
+    let _fallback = published
+        .is_none()
+        .then(|| corral_core::timing::span("search.fallback"));
+    let catalog = match published {
+        Some(catalog) => catalog,
+        None => Catalog::fallback(ctx, options.reindex)?,
+    };
     let pins: BTreeSet<_> = ctx
         .store
         .pins()?
