@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import selectors
 import shutil
 import signal
@@ -19,6 +20,7 @@ import subprocess
 import tempfile
 import termios
 import time
+import unicodedata
 
 parser = argparse.ArgumentParser()
 parser.add_argument('output', type=Path)
@@ -35,6 +37,82 @@ master = slave = watch = None
 proc = None
 selector = selectors.DefaultSelector()
 log = bytearray()
+INCOMPLETE = re.compile(r'\x1b(?:\[[0-?]*[ -/]*|[\]_P^](?:[^\x07\x1b]|\x1b(?!\\))*\x1b?|[()])?\Z', re.S)
+TOKEN = re.compile(r'\x1b\[([<=>?]?)([\d;:]*)[ -/]*([@-~])|\x1b[\]_P^].*?(?:\x07|\x1b\\)|\x1b[()].|\x1b.|[\x00-\x1f\x7f]|[^\x00-\x1f\x7f\x1b]+', re.S)
+# The status bar's role badge, then the binding dot (● bound, ○ not bound), possibly with styling between.
+BOUND = re.compile(rb'\xe2\x96\x8cASSISTANT(?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f')
+
+
+class Screen:
+    """Cell model of the alternate-screen frames pi-tui and PanelTerminal emit, for reading pointer targets."""
+
+    def __init__(self, columns, rows):
+        self.columns, self.rows, self.row, self.col, self.saved = columns, rows, 0, 0, (0, 0)
+        self.cells = [[' '] * columns for _ in range(rows)]
+        self.pending = ''
+
+    def resize(self, columns, rows):
+        self.cells = [[(self.cells[r][c] if r < len(self.cells) and c < len(self.cells[r]) else ' ') for c in range(columns)] for r in range(rows)]
+        self.columns, self.rows = columns, rows
+        # The cursor stays inside the new grid until the next frame positions it.
+        self.row, self.col = min(self.row, rows - 1), min(self.col, columns)
+
+    def feed(self, data):
+        data = self.pending + data
+        tail = INCOMPLETE.search(data)  # A PTY read can end inside an escape sequence; finish it next read.
+        self.pending, data = (data[tail.start():], data[:tail.start()]) if tail else ('', data)
+        for match in TOKEN.finditer(data):
+            token = match.group(0)
+            if match.group(3) is not None:
+                self.csi(match.group(1), match.group(2), match.group(3))
+            elif token == '\x1b7': self.saved = (self.row, self.col)
+            elif token == '\x1b8': self.row, self.col = self.saved
+            elif token == '\r': self.col = 0
+            elif token == '\n': self.row = min(self.rows - 1, self.row + 1)
+            elif not token.startswith('\x1b') and not (len(token) == 1 and (ord(token) < 32 or token == '\x7f')): self.print(token)
+
+    def csi(self, prefix, params, final):
+        if prefix: return
+        values = [int(value.split(':')[0] or 0) for value in params.split(';')]
+        first = values[0] if values else 0
+        if final in 'Hf':
+            self.row = max(0, min(self.rows - 1, (first or 1) - 1))
+            self.col = max(0, min(self.columns - 1, ((values[1] if len(values) > 1 else 0) or 1) - 1))
+        elif final == 'K':
+            span = range(self.columns) if first == 2 else range(self.col + 1) if first == 1 else range(self.col, self.columns)
+            for col in span: self.cells[self.row][col] = ' '
+        elif final == 'J' and first in (2, 3):
+            self.cells = [[' '] * self.columns for _ in range(self.rows)]
+
+    def print(self, text):
+        joined = False
+        for char in text:
+            lead = self.col - 1
+            if lead > 0 and self.cells[self.row][lead] == '': lead -= 1  # Zero-width marks join a wide lead cell.
+            if char in '\u200d\ufe0f' or unicodedata.combining(char):
+                joined = joined or char == '\u200d'
+                if lead >= 0: self.cells[self.row][lead] += char
+                continue
+            width = 2 if unicodedata.east_asian_width(char) in 'WF' else 1
+            if joined:  # The joined emoji shares its sequence's existing cell pair.
+                joined = False
+                if lead >= 0: self.cells[self.row][lead] += char
+                continue
+            if self.col + width > self.columns: continue
+            self.cells[self.row][self.col] = char
+            if width == 2: self.cells[self.row][self.col + 1] = ''
+            self.col += width
+
+    def lines(self, end=None): return [''.join(row[:end]).rstrip() for row in self.cells]
+
+    def column(self, row, needle):
+        """The cell column where `needle` starts on `row`, or None."""
+        line = ''.join(self.cells[row])
+        index = line.find(needle)
+        if index < 0: return None
+        return sum(2 if unicodedata.east_asian_width(c) in 'WF' else 0 if (c in '\u200d\ufe0f' or unicodedata.combining(c)) else 1 for c in line[:index])
+
+
 try:
     env = {key: value for key, value in os.environ.items() if not key.startswith(('HERDR_', 'CORRAL_', 'PI_'))}
     env.update(HOME=str(work / 'home'), XDG_CONFIG_HOME=str(work / 'config'), XDG_DATA_HOME=str(work / 'data'),
@@ -74,6 +152,8 @@ process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ??
         raise RuntimeError('owned fixture event watch unavailable')
     selector.register(master, selectors.EVENT_READ, 'terminal')
     selector.register(watch, selectors.EVENT_READ, 'fixture')
+    screen = Screen(140, 46)
+    decoder = __import__('codecs').getincrementaldecoder('utf-8')('replace')
     def setup():
         os.setsid()
         fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
@@ -94,7 +174,7 @@ process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ??
                 else:
                     try: chunk = os.read(master, 65536)
                     except OSError: chunk = b''
-                    log.extend(chunk)
+                    log.extend(chunk); screen.feed(decoder.decode(chunk))
                     if not chunk and not predicate(): raise AssertionError('Host exited: ' + reason)
     def text(value, after=0): return value.encode() in log[after:]
     def send(value): os.write(master, value)
@@ -104,25 +184,44 @@ process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ??
         scenes.append(dict(name=name, columns=columns, rows=rows))
     def resize(columns, rows):
         fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
+        screen.resize(columns, rows)
         os.kill(proc.pid, signal.SIGWINCH)
+    def click(col, row): send(f'\x1b[<0;{col + 1};{row + 1}M\x1b[<0;{col + 1};{row + 1}m'.encode())
+    def main_columns():
+        # The rail paints its own tab row on the top line, ending with its ▸ toggle.
+        return screen.columns - 35 if screen.columns >= 105 and screen.lines()[0].endswith('▸') else screen.columns
+    def tab(label, key):
+        """Row and cell of a main view tab's label, read from the rendered tab row."""
+        for row, line in enumerate(screen.lines(main_columns())):
+            if key in line and label in line: return row, screen.column(row, label)
+        return None
+    def item(key):
+        """Row and cell of the Inbox list row whose task is `key`'s task: left of the list/detail rule."""
+        task = key.split('/')[0]
+        for row, line in enumerate(screen.lines(main_columns())):
+            left = line.split('│')[0]
+            if '│' in line and task in left and 'F11' not in line: return row, screen.column(row, task)
+        return None
     def prompt_ends():
         path = work / 'ui-events.jsonl'
         return len(path.read_text().splitlines()) if path.exists() else 0
     scenes = []
-    until(lambda: text('Bound to Corral') and text('ASSISTANT'), 'production host ready')
+    until(lambda: BOUND.search(log) is not None, 'production host bound')
     send(b'Keep unsent native draft')
     until(lambda: text('Keep unsent native draft'), 'actual composer draft')
     mark = len(log); send(b'\x1b[23~')
-    until(lambda: text('Canonical attention', mark) and text('T-001/R1/Q1', mark), 'F11 reads canonical store')
+    until(lambda: text('read only', mark) and text('T-001/R1/Q1', mark), 'F11 reads canonical store')
     frame('inbox-keyboard')
     mark = len(log); send(b'h')
-    until(lambda: text('All states', mark) and text('answered', mark), 'history navigation')
+    until(lambda: text('all states', mark) and text('answered', mark), 'history navigation')
     frame('inbox-history')
-    # Click the native main-view bar after returning to Conversation.
+    # Click the Inbox tab, at the cell the rendered tab row shows it, after returning to Chat.
     mark = len(log); send(b'\x1b[20~')
-    until(lambda: text('Conversation F9', mark) and log.endswith(b'\x1b[?2026l'), 'Conversation rendered before mouse click')
-    mark = len(log); send(b'\x1b[<0;60;1M\x1b[<0;60;1m')
-    until(lambda: text('Canonical attention', mark), 'mouse opens Inbox')
+    until(lambda: text('Chat', mark) and log.endswith(b'\x1b[?2026l'), 'Chat rendered before mouse click')
+    target = tab('Inbox', 'F11')
+    assert target, 'Inbox tab not on screen'
+    mark = len(log); click(target[1], target[0])
+    until(lambda: text('read only', mark), 'mouse opens Inbox')
     closed = prompt_ends(); send(b'/')
     until(lambda: text('Filter canonical inbox'), 'native filter dialog')
     mark = len(log); send(b'T-001/R1/Q1\r')
@@ -131,25 +230,27 @@ process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ??
     until(lambda: text('Decision inspection', mark) and text('Revision: 1', mark), 'Enter inspects exact identity')
     frame('inbox-inspect')
     mark = len(log); send(b'\x1b')
-    until(lambda: text('Filter: T-001/R1/Q1', mark) and log.endswith(b'\x1b[?2026l'), 'inspection closed')
+    until(lambda: text('filter T-001/R1/Q1', mark) and log.endswith(b'\x1b[?2026l'), 'inspection closed')
     mark = len(log); send(b'a')
     until(lambda: text('Established answer flow', mark) and text('NOT SENT', mark), 'answer route instructions, no mutation')
     frame('inbox-answer-flow')
     mark = len(log); send(b'\x1b')
-    until(lambda: text('Filter: T-001/R1/Q1', mark) and log.endswith(b'\x1b[?2026l'), 'answer flow closed')
+    until(lambda: text('filter T-001/R1/Q1', mark) and log.endswith(b'\x1b[?2026l'), 'answer flow closed')
     mark = len(log); resize(52, 24)
-    until(lambda: text('READ ONLY', mark) and text('Keep unsent native draft', mark), 'narrow inbox and preserved draft')
+    until(lambda: text('read only', mark) and text('Keep unsent native draft', mark), 'narrow inbox and preserved draft')
     frame('inbox-small', 52, 24)
     mark = len(log); resize(140, 46)
     until(lambda: text('Keep unsent native draft', mark), 'wide draft continuity')
-    # Mouse focuses a literal rendered item row; Enter must still inspect that same Q1.
-    mark = len(log); send(b'\x1b[<0;10;11M\x1b[<0;10;11m\r')
+    # Mouse focuses the rendered Q1 list row; Enter must still inspect that same Q1.
+    until(lambda: item('T-001/R1/Q1') is not None, 'wide Inbox list row')
+    row = item('T-001/R1/Q1')
+    mark = len(log); click(row[1], row[0]); send(b'\r')
     until(lambda: text('Decision inspection', mark) and text('T-001/R1/Q1', mark), 'mouse selection then keyboard inspection')
     frame('inbox-mouse')
     mark = len(log); send(b'\x1b')
-    until(lambda: text('Filter: T-001/R1/Q1', mark) and log.endswith(b'\x1b[?2026l'), 'mouse inspection closed')
+    until(lambda: text('filter T-001/R1/Q1', mark) and log.endswith(b'\x1b[?2026l'), 'mouse inspection closed')
     mark = len(log); send(b'\x1b[20~')
-    until(lambda: text('Conversation F9', mark) and log.endswith(b'\x1b[?2026l'), 'return to composer')
+    until(lambda: text('Chat', mark) and log.endswith(b'\x1b[?2026l'), 'return to composer')
     send(b'\x15\x04')
     until(lambda: b'\x1b[?1049l' in log, 'terminal restored')
     proc.wait(timeout=10)
@@ -157,7 +258,8 @@ process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ??
     after = fingerprint()
     assert before == after, 'inspection changed canonical workspace bytes'
     calls = [json.loads(json.loads(line)['stdin']) for line in (work/'calls.jsonl').read_text().splitlines()]
-    assert all(call['op'] in ['hello', 'event'] for call in calls), 'unexpected mutation operation'
+    # The assistant host refreshes its planning state read-only after hello; any other operation fails.
+    assert all(call['op'] in ['hello', 'event'] or (call['op'] == 'assistant_plan' and call['payload'].get('action') == 'read') for call in calls), 'unexpected mutation operation'
     assert not any(call['payload'].get('kind') == 'owner_input' for call in calls), 'inspection fabricated owner input'
     reads = (work/'inbox-reads.jsonl').read_text().splitlines()
     (args.output/'canonical-hashes.json').write_text(json.dumps(dict(before=before, after=after), indent=2))

@@ -20,16 +20,16 @@ const requested = process.argv.includes("--resume") ? new Map([
   ["compact-chart-top", "Token bars"], ["compact-budget", "Budget accounting unavailable"],
   ["draft-usage-top", "RETAINED_USAGE_DRAFT"], ["draft-return", "RETAINED_USAGE_DRAFT"],
 ]) : process.argv.includes("--appearance") ? new Map([
-  ["dark-140x46", "Bound to Corral"], ["light-selected-140x46", "Bound to Corral"],
-  ["contrast-selected-140x46", "Bound to Corral"], ["dark-selected-140x46", "Bound to Corral"],
-  ["compact-140x46", "Bound to Corral"], ["role-disabled-140x46", "Role worker cannot answer"],
+  ["dark-140x46", "WORKER ●"], ["light-selected-140x46", "WORKER ●"],
+  ["contrast-selected-140x46", "WORKER ●"], ["dark-selected-140x46", "WORKER ●"],
+  ["compact-140x46", "WORKER ●"], ["role-disabled-140x46", "Role worker cannot answer"],
   ["effort-52x24", "Cycle effort"], ["native-model-selector-52x24", "Only showing models"],
 ]) : process.argv.includes("--artifacts-real") ? new Map([
   ["real-artifacts", "Evidence: unknown"], ["real-absent-open", "Unavailable · not opened"], ["real-html-browser", "Browser requested"],
-  ["real-report-opened", "REAL_REPORT_BODY"], ["real-image-fallback", "Graphics unavailable"], ["real-image-viewer", "Esc close"],
+  ["real-report-opened", "REAL_REPORT_BODY"], ["real-image-fallback", "Graphics unavailable"], ["real-image-viewer", "×"],
   ["real-compare", "Registered bytes differ"], ["real-compact-compare", "Comparison"],
 ]) : process.argv.includes("--artifacts") ? new Map([
-  ["wide-artifacts", "Artifacts · read-only catalog"], ["wide-image-fallback", "Graphics unavailable"], ["wide-image-viewer", "Esc close"],
+  ["wide-artifacts", "Artifacts · read-only catalog"], ["wide-image-fallback", "Graphics unavailable"], ["wide-image-viewer", "×"],
   ["wide-report-opened", "FIXTURE_REPORT_BODY"], ["wide-absent-open", "Unavailable · not opened"], ["wide-html-browser", "Browser requested"],
   ["wide-other-run", "Evidence: unknown"], ["wide-compare", "Comparison · A and B"], ["compact-compare", "Comparison"],
   ["compact-export-refused", "Session export refused"], ["stale-disconnected-retained", "STALE / disconnected"],
@@ -40,9 +40,9 @@ const requested = process.argv.includes("--resume") ? new Map([
   ["stale-disconnected-retained", "STALE / disconnected"],
   ["wide-session-event-selected", "Inspect session"],
 ]) : new Map([
-  ["scoped-agents-wide", "Scoped agents"], ["scoped-agents-narrow", "Scoped agents"],
-  ["existing-transcript-wide", "Transcript"], ["existing-transcript-narrow", "Transcript"],
-  ["real-job-running", "armed locally"], ["real-job-line-match", "match observed"], ["real-job-exited", "exit 7"],
+  ["agents-wide", "helper calls and jobs"], ["agents-narrow", "host observations"],
+  ["real-job-running", "MONITOR_READY/ armed"], ["real-job-line-match", "MONITOR_READY/ matched"],
+  ["real-job-output", "retained output"], ["real-job-exited", "exit 7"],
 ]);
 if (result.graphics) for (const name of result.graphics === "kitty" ? ["wide-image-fallback", "real-image-fallback"] : ["wide-image-viewer", "real-image-viewer"]) requested.delete(name);
 const [js, css] = await Promise.all([

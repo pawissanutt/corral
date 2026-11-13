@@ -49,6 +49,8 @@ class Screen:
     def resize(self, columns, rows):
         self.cells = [[(self.cells[r][c] if r < len(self.cells) and c < len(self.cells[r]) else ' ') for c in range(columns)] for r in range(rows)]
         self.columns, self.rows, self.cleared = columns, rows, False
+        # The cursor stays inside the new grid until the next frame positions it.
+        self.row, self.col = min(self.row, rows - 1), min(self.col, columns)
 
     def feed(self, data):
         data = self.pending + data
@@ -168,11 +170,25 @@ try:
                     if not predicate() and host.poll() is not None: raise AssertionError('Host exited: ' + reason)
 
     def main_columns():
-        rail = screen.columns >= 105 and all(screen.cells[r][screen.columns - 34] in '┌│└' for r in range(screen.rows))
+        # The rail paints its own tab row on the top line, ending with its ▸ toggle.
+        rail = screen.columns >= 105 and screen.lines()[0].endswith('▸')
         return screen.columns - 35 if rail else screen.columns
 
     def visible(text): return text in '\n'.join(screen.lines(main_columns()))
     def on_screen(text): return text in '\n'.join(screen.lines())
+
+    def bound():
+        # The status bar's role badge carries the binding dot: ● bound, ○ not bound.
+        return any(re.search(r'▌WORKER\s*●', line) for line in screen.lines())
+
+    def palette_open():
+        # The palette's filter row: its › prompt, with the session scope (role · project) on the right.
+        return any(line.startswith('›') and 'worker · demo' in line for line in screen.lines(main_columns()))
+
+    def sidebar_row():
+        for line in screen.lines(main_columns()):
+            if all(word in line for word in ('Context', 'Files', 'Plan')) and '▴' in line: return line
+        return None
 
     captures = []
     # Replay the actual PTY output with its original geometry changes, preserving SGR colors.
@@ -195,39 +211,39 @@ try:
         os.kill(host.pid, signal.SIGWINCH)
     def palette(query):
         send('\x1bOQ')
-        until(lambda: on_screen('Corral actions'), 'F2 opens native palette')
+        until(palette_open, 'F2 opens the actions palette')
         if query: send(query)
-        until(lambda: on_screen('Search: ' + query), 'keyboard search ' + query)
-    until(lambda: on_screen('Bound to Corral'), 'production host ready')
+        until(lambda: any('›' in line and query in line for line in screen.lines(main_columns())), 'keyboard search ' + query)
+    until(bound, 'production host bound')
     save('dark-140x46')
     palette('answer')
     until(lambda: on_screen('Role worker cannot answer'), 'bound role-disabled answer route')
     save('role-disabled-140x46')
     send('\r')
     send('x')
-    until(lambda: on_screen('No matching actions'), 'disabled Enter did not close or dispatch')
+    until(lambda: on_screen('no action matches'), 'disabled Enter did not close or dispatch')
     send('\x1b')
-    until(lambda: not on_screen('Corral actions'), 'Esc cancels search')
+    until(lambda: not palette_open(), 'Esc cancels search')
     checks.append('F2 searches bound-role actions; disabled Enter does not dispatch; Esc cancels')
     for appearance in ['light', 'contrast', 'dark']:
         palette('appearance.' + appearance)
         send('\r')
-        until(lambda: not on_screen('Corral actions'), appearance + ' selected')
+        until(lambda: not palette_open(), appearance + ' selected')
         save(appearance + '-selected-140x46')
         checks.append('selected packaged ' + appearance + ' using real keyboard search/Enter')
     palette('density.compact')
     send('\r')
-    until(lambda: not on_screen('Corral actions'), 'compact selected')
+    until(lambda: not palette_open(), 'compact selected')
     save('compact-140x46')
     resize(52, 24)
-    until(lambda: screen.cleared and on_screen('F6 inspect'), 'minimum-width inline layout')
+    until(lambda: screen.cleared and sidebar_row() is not None, 'minimum-width layout with the collapsed sidebar row')
     palette('effort')
     save('effort-52x24')
     send('\x1b')
-    until(lambda: not on_screen('Corral actions'), 'cancel minimum width palette')
+    until(lambda: not palette_open(), 'cancel minimum width palette')
     palette('app.model.select')
     send('\r')
-    until(lambda: not on_screen('Corral actions') and on_screen('Only showing models'), 'existing native model selector')
+    until(lambda: not palette_open() and on_screen('Only showing models'), 'existing native model selector')
     save('native-model-selector-52x24')
     send('\x1b')
     until(lambda: not on_screen('Only showing models'), 'native selector cancel')

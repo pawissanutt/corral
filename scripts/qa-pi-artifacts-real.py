@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import selectors
 import shutil
 import signal
@@ -34,6 +35,8 @@ log = bytearray()
 scenes = []
 resizes = []
 size = dict(columns=140, rows=46)
+# The status bar's role badge, then the binding dot (● bound, ○ not bound), possibly with styling between.
+BOUND = re.compile(rb'\xe2\x96\x8cWORKER(?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f')
 try:
     env = {k: v for k, v in os.environ.items() if not k.startswith(('HERDR_', 'CORRAL_', 'PI_')) and k not in ('TERM_PROGRAM', 'KITTY_WINDOW_ID')}
     env['PI_IMAGE_PROTOCOL'] = args.graphics
@@ -89,14 +92,17 @@ os.execv(target, [target, *argv])
     os.close(slave); slave = None; os.close(read_fd)
     os.write(write_fd, json.dumps(launch).encode()); os.close(write_fd)
     selector = selectors.DefaultSelector(); selector.register(master, selectors.EVENT_READ)
+    def seen(text, mark):
+        return text.search(log, mark) is not None if isinstance(text, re.Pattern) else text.encode() in log[mark:]
+    def label(text): return text.pattern.decode(errors='replace') if isinstance(text, re.Pattern) else text
     def until(text, mark=0):
         deadline = time.monotonic() + 20
-        while text.encode() not in log[mark:]:
+        while not seen(text, mark):
             events = selector.select(max(0, deadline - time.monotonic()))
-            if not events: raise AssertionError('Timeout waiting for ' + text)
+            if not events: raise AssertionError('Timeout waiting for ' + label(text))
             try: chunk = os.read(master, 65536)
             except OSError: chunk = b''
-            if not chunk: raise AssertionError(f'Host exited (code {proc.poll()}) before {text!r}; last output: {bytes(log[-600:])!r}')
+            if not chunk: raise AssertionError(f'Host exited (code {proc.poll()}) before {label(text)!r}; last output: {bytes(log[-600:])!r}')
             log.extend(chunk)
     def send(data): os.write(master, data)
     def scene(name, text, data=None, resize=None):
@@ -115,10 +121,10 @@ os.execv(target, [target, *argv])
         (args.output / (name + '.ansi')).write_bytes(log)
         scenes.append(dict(name=name, offset=mark, bytes=len(log), columns=size['columns'], rows=size['rows'], input_hex=data.hex() if data else None, resize=resize, asserted=text))
         if name == args.fail_after: raise AssertionError('injected failure after ' + name)
-    until('Bound to Corral')
+    until(BOUND)
     def routed(): return [json.loads(line) for line in (work / 'routed.jsonl').read_text().splitlines()]
     def real_calls(kind): return [c['argv'] for c in routed() if c['real'] and kind in c['argv']]
-    scene('real-evidence', 'Evidence', b'\x1b[21~')
+    scene('real-evidence', 'Proof', b'\x1b[21~')
     scene('real-artifacts', 'Evidence: unknown · run R2 evidence not read', b'a')
     assert ('Bound worktree HEAD ' + head).encode() in log, 'real bound worktree HEAD shown'
     assert real_calls('inspect') and not real_calls('artifact'), routed()
@@ -133,7 +139,8 @@ os.execv(target, [target, *argv])
     if args.graphics == 'none':
         scene('real-image-fallback', 'Graphics unavailable in this terminal', b'\r')
     else:
-        scene('real-image-viewer', 'click / Esc close', b'\r')
+        # The expanded image's footer offers F9 back to chat; the artifacts footer does not.
+        scene('real-image-viewer', 'chat', b'\r')
         scene('real-image-closed', 'Bytes at open match the registered SHA256', b'\x1b')
     assert b'Bytes at open match the registered SHA256' in log
     scene('real-mark-a', 'Selected for comparison: A', b'm')

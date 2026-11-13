@@ -95,7 +95,9 @@ try:
 
 
     import re
-    until(lambda: text('Bound to Corral') and text('WORKER'), 'native editor ready')
+    # The status bar's role badge, then the binding dot (● bound, ○ not bound), possibly with styling between.
+    bound = re.compile(rb'\xe2\x96\x8cWORKER(?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f')
+    until(lambda: bound.search(log) is not None, 'native editor ready and bound')
     send(b'/fixture-workbench-image\r')
     send(b'Read the owned image.\r')
     until(lambda: any(call['payload'].get('kind')=='turn_ended' for call in calls()), 'actual image read completes')
@@ -110,13 +112,15 @@ try:
     until(lambda: placement() is not None, 'native Kitty image placement')
     save_frame('image-inline')
     row,col=placement()
-    send(f'\x1b[<0;{col+2};{row+1}M\x1b[<0;{col+2};{row+1}m'.encode())
-    until(lambda: text('click / Esc close'), 'inline image mouse click expands image')
-    save_frame('image-expanded')
-    send(b'\x1b[<0;40;23M\x1b[<0;40;23m')
+    mark=len(log); send(f'\x1b[<0;{col+2};{row+1}M\x1b[<0;{col+2};{row+1}m'.encode())
     def image_columns():
         matches=re.findall(rb'\x1b_Ga=[Tp],[^\x1b;]*?c=(\d+)',bytes(log))
         return int(matches[-1]) if matches else None
+    # The expanded view's title row names the image and its pixel size; the new placement is wider than the inline 60 cells.
+    until(lambda: re.search(rb'\d\xc3\x97\d', log[mark:]) is not None and image_columns() not in (None, 60), 'inline image mouse click expands image')
+    save_frame('image-expanded')
+    row,col=placement()  # The expanded image's own placement.
+    send(f'\x1b[<0;{col+2};{row+1}M\x1b[<0;{col+2};{row+1}m'.encode())
     until(lambda: image_columns()==60, 'second image click restores original inline image')
     save_frame('image-closed')
     send(b'\x15\x04')

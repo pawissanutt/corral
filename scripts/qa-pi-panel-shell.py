@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """T-688: drive the production host/main.ts panel shell in an owned PTY with real keys and SGR mouse input.
 
-Offline fixture I/O only (fake provider transport and control plane, private HOME/XDG, PTY and socket).
-Checks stable reading through a held stream and 140/80/52 relocation, explicit jump-to-live by keyboard
-and pointer without taking inspector focus, short-terminal compact paging by keyboard and pointer,
-dialog isolation and clean terminal restoration. Writes cumulative ANSI and screen-text captures.
-Never targets an owner, PM or worker pane.
+Offline fixture I/O only (fake provider transport and control plane, private HOME/XDG, PTY and socket,
+and an owned Git repository in the private launch directory). Checks stable reading through a held
+stream and 140/80/52 relocation, explicit jump-to-live by keyboard and pointer while the sidebar keeps
+the focus, the 80x14 sidebar drawer paging by keyboard and pointer, dialog isolation and clean terminal
+restoration. Writes cumulative ANSI and screen-text captures. Never targets an owner, PM or worker pane.
 """
 import argparse
 import ctypes
@@ -53,6 +53,8 @@ class Screen:
     def resize(self, columns, rows):
         self.cells = [[(self.cells[r][c] if r < len(self.cells) and c < len(self.cells[r]) else ' ') for c in range(columns)] for r in range(rows)]
         self.columns, self.rows, self.cleared = columns, rows, False
+        # The cursor stays inside the new grid until the next frame positions it.
+        self.row, self.col = min(self.row, rows - 1), min(self.col, columns)
 
     def feed(self, data):
         data = self.pending + data
@@ -113,12 +115,29 @@ class Screen:
                 return row, sum(2 if unicodedata.east_asian_width(c) in 'WF' else 0 if (c in '\u200d\ufe0f' or unicodedata.combining(c)) else 1 for c in line[:index])
         return None
 
+    def column(self, row, needle):
+        """The cell column where `needle` starts on `row`, or None."""
+        line = ''.join(self.cells[row])
+        index = line.find(needle)
+        if index < 0: return None
+        return sum(2 if unicodedata.east_asian_width(c) in 'WF' else 0 if (c in '\u200d\ufe0f' or unicodedata.combining(c)) else 1 for c in line[:index])
+
 
 try:
     env = {key: value for key, value in os.environ.items() if not key.startswith(('HERDR_', 'CORRAL_', 'PI_'))}
     env.update(HOME=str(work / 'home'), XDG_CONFIG_HOME=str(work / 'config'), XDG_DATA_HOME=str(work / 'data'),
                XDG_STATE_HOME=str(work / 'state'), XDG_CACHE_HOME=str(work / 'cache'), TERM='xterm-256color')
     installed = json.loads(subprocess.check_output(['bun', '--no-env-file', str(package / 'test/support/prepare-workbench.ts'), str(work)], cwd=repo, env=env))
+    # An owned Git repository in the private launch directory: six committed files changed in the working
+    # tree give the sidebar's Files tab enough items for the 80x14 drawer to page.
+    NOTES = [f'qa-{index}.md' for index in range(1, 7)]
+    git = ['git', '-c', 'user.name=QA', '-c', 'user.email=qa@example.invalid', '-c', 'core.hooksPath=/dev/null', '-C', str(work)]
+    subprocess.run(git + ['init', '-q'], check=True, env=env)
+    (work / '.gitignore').write_text('*\n!.gitignore\n!qa-*.md\n')
+    for name in NOTES: (work / name).write_text(name + ' base\n')
+    subprocess.run(git + ['add', '.gitignore', *NOTES], check=True, env=env)
+    subprocess.run(git + ['commit', '-qm', 'fixture base'], check=True, env=env)
+    for name in NOTES: (work / name).write_text(name + ' changed\n')
     os.mkfifo(work / 'reading-gate')
     gate = os.open(work / 'reading-gate', os.O_RDWR)  # Holds a writer open: the host's read waits for our EOF.
     launch = dict(version=1, store='st-0123456789abcdef', project='demo', role='worker', task='T-001', run='R1',
@@ -172,15 +191,49 @@ try:
                     if not predicate() and host.poll() is not None: raise AssertionError('Host exited: ' + reason)
 
     def main_columns():
-        rail = screen.columns >= 105 and all(screen.cells[r][screen.columns - 34] in '┌│└' for r in range(screen.rows))
+        # The rail paints its own tab row on the top line, ending with its ▸ toggle.
+        rail = screen.columns >= 105 and screen.lines()[0].endswith('▸')
         return screen.columns - 35 if rail else screen.columns
 
     def visible(text): return text in '\n'.join(screen.lines(main_columns()))
     def on_screen(text): return text in '\n'.join(screen.lines())
 
+    def bound():
+        # The status bar's role badge carries the binding dot: ● bound, ○ not bound.
+        return any(re.search(r'▌WORKER\s*●', line) for line in screen.lines())
+
+    def footer():
+        """The footer hint row: the last non-empty row of the main column."""
+        rows = [line for line in screen.lines(main_columns()) if line.strip()]
+        return rows[-1] if rows else ''
+
+    def sidebar_focused():
+        words = footer().split()
+        return '←→' in words and 'tab' in words
+
+    def sidebar_row():
+        """The collapsed sidebar row (▴) or the open drawer's tab row (▾) above the composer."""
+        for row, line in enumerate(screen.lines(main_columns())):
+            if all(word in line for word in ('Context', 'Files', 'Plan')) and ('▴' in line or '▾' in line):
+                return row, line
+        return None
+
+    def drawer_open(): return '▾' in (sidebar_row() or (0, ''))[1]
+
+    COMPARISONS = ('candidate', 'since session', 'working tree', 'unstaged', 'staged')
+
+    def comparison():
+        """The comparison the Changes chip row names, or None outside Changes."""
+        for line in screen.lines(main_columns()):
+            for name in COMPARISONS:
+                if name + ' ▾' in line: return name
+        return None
+
     def anchor():
         lines = screen.lines(main_columns())
-        top = 2
+        tabs = next((row for row, line in enumerate(lines) if 'F9' in line), None)
+        if tabs is None: raise AssertionError('no main view tab row\n' + '\n'.join(lines))
+        top = tabs + 1  # The transcript starts below the header rows and the tab row.
         while top < len(lines) and not lines[top].strip(): top += 1
         for row in range(top, len(lines)):
             marker = re.search(r'P(\d\d)(E| )', lines[row])
@@ -209,17 +262,35 @@ try:
         os.kill(host.pid, signal.SIGWINCH)
 
     def pager():
+        """The drawer pager `‹ a–b/n ›`, with the cells of its ‹ and › read from the rendered row."""
         for row, line in enumerate(screen.lines()):
             match = re.search(r'‹ (\d+)(?:–(\d+))?/(\d+) ›', line)
-            found = screen.find(match.group(0)) if match else None
-            if match and found:
-                start = found[1]
+            start = screen.column(row, match.group(0)) if match else None
+            if match and start is not None:
                 return dict(row=row, first=int(match.group(1)), last=int(match.group(2) or match.group(1)), total=int(match.group(3)),
                             prev=start, next=start + len(match.group(0)) - 1)
         return None
 
+    def drawer_body():
+        """Which of the three rows below the drawer's tab row list a changed file."""
+        found = sidebar_row()
+        lines = screen.lines(main_columns())
+        if not found: return []
+        return [any(name in line for name in NOTES) for line in lines[found[0] + 1:found[0] + 4]]
+
     checks = []
-    until(lambda: on_screen('Bound to Corral'), 'production panel host ready')
+    until(bound, 'production panel host bound')
+    # F7, then `c` from the committed candidate (this fixture supplies no inspection) to the session comparison.
+    send('\x1b[18~')
+    until(lambda: comparison() is not None, 'Changes comparison chip')
+    for _ in COMPARISONS:
+        if comparison() == 'since session': break
+        before = comparison(); send('c')
+        until(lambda: comparison() not in (None, before), 'next comparison after c')
+    until(lambda: comparison() == 'since session' and all(visible(name) for name in NOTES), 'session comparison lists the owned changes')
+    send('\x1b[20~')
+    until(lambda: comparison() is None, 'F9 returns to Chat')
+    checks.append(f'F7 and c select the session comparison: {len(NOTES)} owned working-tree changes')
     send('/fixture-panel-reading\r')
     send('Stream the reading fixture.\r')
     until(lambda: visible('P40E'), 'live end of the first streamed delta')
@@ -245,56 +316,67 @@ try:
         save(f'reading-{columns}x{rows}')
     checks.append('140→80→52→140 relocation keeps the same paragraph at the top, the draft and the jump control')
     send('\x02')
-    until(lambda: main_columns() == 140 and visible('Jump to latest'), 'manual inline toggle at 140 columns')
+    until(lambda: main_columns() == 140 and visible('Jump to latest') and sidebar_row() is not None, 'Ctrl+B hides the rail at 140 columns')
     assert anchor() == reading, ('manual toggle moved the reader', anchor())
     save('reading-manual-inline-140x46')
     send('\x02')
     until(lambda: main_columns() == 105 and visible('Jump to latest'), 'rail restored')
     assert anchor() == reading
-    checks.append('Ctrl+B manual inline/rail transitions keep the same paragraph')
+    checks.append('Ctrl+B hides the rail into the collapsed sidebar row and restores it; the same paragraph stays at the top')
     resize(80, 34)
-    until(lambda: screen.cleared and on_screen('F6 inspect'), 'narrow frame')
+    until(lambda: screen.cleared and sidebar_row() is not None and visible('Jump to latest'), 'narrow frame with the collapsed sidebar row')
     send('\x1b[17~')
-    until(lambda: on_screen('↑↓ Enter · Esc'), 'focused inline inspector')
-    send('\x1b[5~\x1b[1;5F')  # PageUp then Ctrl+End while the inspector has focus.
+    until(lambda: sidebar_focused() and drawer_open(), 'F6 focuses the sidebar and opens its drawer')
+    send('\x1b[1;5F')  # Ctrl+End while the sidebar has the focus.
     until(lambda: visible('LIVE_TAIL') and not visible('Jump to latest'), 'keyboard jump to live')
-    assert on_screen('↑↓ Enter · Esc'), 'inspector lost focus on keyboard jump'
+    assert sidebar_focused(), 'sidebar lost focus on keyboard jump'
     save('jump-keyboard-80x34')
-    checks.append('narrow: PageUp/Ctrl+End scroll and jump to live while the inspector keeps focus')
+    checks.append('narrow: F6 opens the drawer with sidebar focus; Ctrl+End jumps to live while the sidebar keeps it')
     resize(140, 46)
-    until(lambda: screen.cleared and visible('LIVE_TAIL') and on_screen('tabs · ↑/↓'), 'wide focused rail at live')
+    until(lambda: screen.cleared and visible('LIVE_TAIL') and main_columns() == 105 and sidebar_focused(), 'wide rail with sidebar focus at live')
     for _ in range(8): send('\x1b[<64;30;12M')
     until(lambda: visible('Jump to latest message'), 'wheel pauses follow')
     target = screen.find('Jump to latest message')
     assert target, 'jump control not on screen'
     click(target[1] + 2, target[0])
     until(lambda: visible('LIVE_TAIL') and not visible('Jump to latest'), 'pointer jump to live')
-    assert on_screen('tabs · ↑/↓') and on_screen(DRAFT), 'pointer jump changed focus or draft'
+    assert sidebar_focused() and on_screen(DRAFT), 'pointer jump changed focus or draft'
     save('jump-pointer-140x46')
-    checks.append('wide: wheel pauses follow; clicking the jump control resumes it with rail focus and draft intact')
+    checks.append('wide: wheel pauses follow; clicking the jump control resumes it with sidebar focus and draft intact')
     resize(80, 14)
-    until(lambda: screen.cleared and pager() is not None, 'short-terminal compact pager')
+    until(lambda: screen.cleared and sidebar_row() is not None, 'short terminal with the sidebar drawer')
+    send('\x1b')  # Esc gives the focus back and closes the drawer F6 opened.
+    until(lambda: sidebar_row() is not None and not drawer_open() and not sidebar_focused(), 'collapsed sidebar row at 80x14')
+    row, _ = sidebar_row()
+    click(screen.column(row, 'Files'), row)
+    until(lambda: drawer_open() and pager() is not None, 'Files tab click opens the drawer with its pager')
     start = pager()
-    assert start and start['first'] == 1 and start['total'] > 1, start
+    assert start['first'] == 1 and start['total'] == len(NOTES), start
+    send('\x1b[17~')
+    until(sidebar_focused, 'F6 focuses the open drawer')
     save('pager-80x14')
     send('\x1b[B')
     until(lambda: (pager() or {}).get('first') == 2, 'keyboard next item')
-    click(start['prev'], start['row'])
-    until(lambda: (pager() or {}).get('first') == 1, 'pointer previous item')
-    click(start['next'], start['row'])
-    until(lambda: (pager() or {}).get('first') == 2, 'pointer next item')
+    assert (pager() or {}).get('last') == 3 and drawer_body() == [True, True, False], ('drawer body is not two file rows', pager(), drawer_body())
+    now = pager(); click(now['prev'], now['row'])
+    until(lambda: (pager() or {}).get('first') == 1, 'pointer previous page')
+    now = pager(); click(now['next'], now['row'])
+    until(lambda: (pager() or {}).get('first') == 2, 'pointer next page')
     save('pager-pointer-80x14')
-    checks.append(f'80x14: compact pager ‹ n/{start["total"]} ›: Down and ‹/› clicks move the same item')
+    checks.append(f'80x14: a Files tab click opens the drawer with two body rows and its pager ‹ n/{start["total"]} ›; Down and ‹/› clicks move the same item')
+    before = pager()
     send('\x15/fixture-native-confirm\r')
     until(lambda: on_screen('Native permission fixture'), 'native dialog')
-    click(start['next'], start['row']); send('\x1b[17~\x02')
+    click(before['next'], before['row']); send('\x1b[17~\x02')
     save('dialog-80x14')
     send('\x1b')
     until(lambda: on_screen('NATIVE_CANCELLED'), 'dialog cancelled by Esc')
-    checks.append('dialog owns input: pager click, F6 and Ctrl+B underneath it change nothing; Esc cancels')
+    after = pager()
+    assert drawer_open() and after and (after['first'], after['total']) == (before['first'], before['total']), ('input under the dialog changed the drawer', before, after)
+    checks.append('dialog owns input: a pager click, F6 and Ctrl+B underneath it change nothing; Esc cancels')
     send('\x1b[17~')
-    until(lambda: (pager() or {}).get('first') == 2, 'same inspector item after the dialog')
-    assert (pager() or {}).get('last') == 2, ('Ctrl+B under the dialog expanded the inspector', pager())
+    until(sidebar_focused, 'F6 focuses the drawer after the dialog')
+    assert (pager() or {}).get('first') == 2 and drawer_body() == [True, True, False], ('F6 after the dialog moved the drawer', pager())
     save('after-dialog-80x14')
     send('\x15\x04')
     until(lambda: b'\x1b[?1049l' in log, 'terminal restored')
@@ -308,7 +390,7 @@ try:
     (args.output / 'pty-session.ansi').write_bytes(log)
     (args.output / 'captures.json').write_text(json.dumps(captures, indent=2))
     result = dict(status='PASS', production_entrypoint='src/host/main.ts', input='real PTY key sequences and SGR mouse reports',
-                  provider='offline fixture transport and fake control plane', checks=checks)
+                  provider='offline fixture transport, fake control plane and an owned Git repository', checks=checks)
     (args.output / 'result.json').write_text(json.dumps(result, indent=2)); print(json.dumps(result, indent=2))
 finally:
     if proc and proc.poll() is None:

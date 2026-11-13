@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import selectors
 import shutil
 import signal
@@ -31,6 +32,8 @@ log = bytearray()
 scenes = []
 resizes = []
 size = dict(columns=140, rows=46)
+# The status bar's role badge, then the binding dot (● bound, ○ not bound), possibly with styling between.
+BOUND = re.compile(rb'\xe2\x96\x8cASSISTANT(?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f')
 SESSIONS = [
     dict(session='A-1', ended=None, live=True, focus='workspace', summary='this conversation', last_activity='2026-11-06T10:00:00Z'),
     dict(session='A-2', ended=None, live=False, focus='workspace', summary='storage spike: compare sqlite page sizes', last_activity='2026-11-06T09:00:00Z'),
@@ -82,13 +85,15 @@ process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ??
         except OSError: chunk = b''
         if not chunk: raise EOFError
         log.extend(chunk); return True
+    def seen(text, mark):
+        return text.search(log, mark) is not None if isinstance(text, re.Pattern) else text.encode() in log[mark:]
     def until(text, mark=0, seconds=20):
         deadline = time.monotonic() + seconds
-        while text.encode() not in log[mark:]:
+        while not seen(text, mark):
             remaining = deadline - time.monotonic()
-            if remaining <= 0: raise AssertionError('Timeout waiting for ' + text)
+            if remaining <= 0: raise AssertionError('Timeout waiting for ' + (text.pattern.decode(errors='replace') if isinstance(text, re.Pattern) else text))
             try: pump(remaining)
-            except EOFError: raise AssertionError('Host exited before ' + text)
+            except EOFError: raise AssertionError('Host exited before ' + (text.pattern.decode(errors='replace') if isinstance(text, re.Pattern) else text))
     def settle():
         # A complete synchronized frame, then a short quiet period so later repaints are included.
         while not log.endswith(b'\x1b[?2026l'):
@@ -117,7 +122,7 @@ process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ??
         except AssertionError: send(b'\r')
     def calls():
         return [json.loads(json.loads(line)['stdin']) for line in (work / 'calls.jsonl').read_text().splitlines()]
-    until('ASSISTANT'); until(' g1'); settle()
+    until(BOUND); settle()
     scene('conversation', 'FAKE_TRANSPORT_OK', b'Reply to start a returnable conversation\r')
     mark = len(log); resume_command()
     scene('picker-wide', 'stopped · resumable', mark=mark)
@@ -149,7 +154,8 @@ process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ??
     request = json.loads((work / 'run/resume-request.json').read_text())
     assert request == dict(version=1, assistant='A-1', generation=1, target='A-2'), request
     after = calls()
-    assert all(c['op'] in ('hello', 'event') for c in after), after
+    # The assistant host refreshes its planning state read-only after hello; any other operation fails.
+    assert all(c['op'] in ('hello', 'event') or (c['op'] == 'assistant_plan' and c['payload'].get('action') == 'read') for c in after), after
     assert all(c['identity']['generation'] == 1 and c['identity'].get('assistant') == 'A-1' for c in after)
     assert not any(c['op'] == 'event' and c['payload'].get('kind') == 'owner_input' and 'resume' in json.dumps(c['payload']) for c in after)
     kinds = [c['payload'].get('kind') for c in after if c['op'] == 'event']
@@ -165,7 +171,7 @@ process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ??
                           'Esc cancels: host keeps running, editor accepts the draft, no switch request, generation 1 unchanged',
                           '80x24 rows keep activity and availability within the width (ASCII and CJK summaries)',
                           'live target refused visibly with no request', 'selecting stopped A-2 writes generation-scoped request and exits 77',
-                          'only hello/event bridge calls, all generation 1'],
+                          'only hello/event and read-only assistant_plan calls, all generation 1'],
                   scenes=scenes)
     (output / 'result.json').write_text(json.dumps(result, indent=2))
     print(json.dumps({k: v for k, v in result.items() if k != 'scenes'}, indent=2))

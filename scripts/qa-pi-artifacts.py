@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import selectors
 import shutil
 import signal
@@ -31,6 +32,8 @@ log = bytearray()
 scenes = []
 resizes = []
 size = dict(columns=140, rows=46)
+# The status bar's role badge, then the binding dot (● bound, ○ not bound), possibly with styling between.
+BOUND = re.compile(rb'\xe2\x96\x8cWORKER(?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f')
 try:
     env = {k: v for k, v in os.environ.items() if not k.startswith(('HERDR_', 'CORRAL_', 'PI_')) and k not in ('TERM_PROGRAM', 'KITTY_WINDOW_ID')}
     env['PI_IMAGE_PROTOCOL'] = args.graphics
@@ -70,13 +73,16 @@ try:
     os.close(slave); slave = None; os.close(read_fd)
     os.write(write_fd, json.dumps(launch).encode()); os.close(write_fd)
     selector = selectors.DefaultSelector(); selector.register(master, selectors.EVENT_READ)
+    def seen(text, mark):
+        return text.search(log, mark) is not None if isinstance(text, re.Pattern) else text.encode() in log[mark:]
+    def label(text): return text.pattern.decode(errors='replace') if isinstance(text, re.Pattern) else text
     def until(text, mark=0):
         deadline = time.monotonic() + 20
-        while text.encode() not in log[mark:]:
+        while not seen(text, mark):
             events = selector.select(max(0, deadline - time.monotonic()))
-            if not events: raise AssertionError('Timeout waiting for ' + text)
+            if not events: raise AssertionError('Timeout waiting for ' + label(text))
             chunk = os.read(master, 65536)
-            if not chunk: raise AssertionError('Host exited before ' + text)
+            if not chunk: raise AssertionError('Host exited before ' + label(text))
             log.extend(chunk)
     def send(data): os.write(master, data)
     def scene(name, text, data=None, resize=None):
@@ -94,16 +100,17 @@ try:
             log.extend(os.read(master, 65536))
         (args.output / (name + '.ansi')).write_bytes(log)
         scenes.append(dict(name=name, offset=mark, bytes=len(log), columns=size['columns'], rows=size['rows'], input_hex=data.hex() if data else None, resize=resize, asserted=text))
-    until('Bound to Corral')
+    until(BOUND)
     viewer_log = Path(installed['corral']).parent / 'viewer-calls.jsonl'
     def viewer_calls(): return [json.loads(line) for line in viewer_log.read_text().splitlines()] if viewer_log.exists() else []
-    scene('wide-evidence', 'Evidence', b'\x1b[21~')
+    scene('wide-evidence', 'Proof', b'\x1b[21~')
     scene('wide-artifacts', 'differs from bound HEAD at read', b'a')
     assert viewer_calls() == [], 'focus/render must not start a viewer'
     if args.graphics == 'none':
         scene('wide-image-fallback', 'Graphics unavailable in this terminal', b'\r')
     else:
-        scene('wide-image-viewer', 'click / Esc close', b'\r')
+        # The expanded image's footer offers F9 back to chat; the artifacts footer does not.
+        scene('wide-image-viewer', 'chat', b'\r')
         scene('wide-image-closed', 'Bytes at open match the registered SHA256', b'\x1b')
     scene('wide-report-selected', 'recorded hash MISMATCH', b'j')
     assert viewer_calls() == [], 'selection must not start a viewer'
