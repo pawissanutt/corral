@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
-import { ChangesView, changeTree, changesModel, diffLines, miniBar, type ChangesModel } from "./changes-view.ts";
+import { ChangesView, LIST_WIDTH, changesModel, diffLines, filterRow, type ChangeAuthor, type ChangesHost, type ChangesModel } from "./changes-view.ts";
 import { ReviewStore, comparisonLabel } from "./review-store.ts";
 
 const PATCH = [
@@ -18,35 +18,26 @@ const MODEL: ChangesModel = {
   updated: "updated 1s ago", query: "", notes: [], hunk: 1, selected: "src/a/one.rs",
   files: [{ path: "src/a/one.rs", letter: "M", added: 3, removed: 2 }, { path: "src/a/two.rs", letter: "A", added: 1, removed: 0 },
     { path: "README.md", letter: "M", added: 1, removed: 1 }],
+  total: 3, authors: [], filter: "all",
   others: [{ label: "working tree", count: 0 }, { label: "staged", count: 0 }],
   diff: { kind: "patch", path: "src/a/one.rs", status: "M", text: PATCH },
 };
 const plain = (lines: readonly string[]) => lines.map(line => stripTerminalSequences(line));
-function frame(width: number): string[] {
-  const view = new ChangesView({ model: () => MODEL, click: () => false, focus() {}, select() {}, step() {}, pickHunk() {} });
-  renderLayoutFrame(view.root, width, 20, () => {});
-  return renderLayoutFrame(view.root, width, 20, () => {}).lines;
+const host = (model: () => ChangesModel, extra: Partial<ChangesHost> = {}): ChangesHost =>
+  ({ model, click: () => false, focus() {}, select() {}, step() {}, pickHunk() {}, ...extra });
+function frame(width: number, view = new ChangesView(host(() => MODEL)), height = 20): string[] {
+  renderLayoutFrame(view.root, width, height, () => {});
+  return renderLayoutFrame(view.root, width, height, () => {}).lines;
 }
-
-test("tree groups files by directory in path order, root files under ./", () => {
-  expect(changeTree(MODEL.files).map(group => [group.dir, group.files.map(file => file.path)])).toEqual([
-    ["src/a/", ["src/a/one.rs", "src/a/two.rs"]], ["./", ["README.md"]]]);
-});
-
-test("mini bar scales to the largest file and keeps one cell for any non-zero side", () => {
-  expect(miniBar(15, 3, 18)).toEqual({ plus: 5, minus: 1 });
-  expect(miniBar(3, 1, 18)).toEqual({ plus: 1, minus: 1 });
-  expect(miniBar(0, 0, 18)).toEqual({ plus: 0, minus: 0 });
-});
+const gutterCells = (rows: readonly string[], text: string) => rows.find(row => row.includes(text))?.split("│")[0]?.replace(/^[▏ ]/, "").trim().split(/\s+/);
 
 test("diff rows carry old/new gutter numbers and hunk bars carry n/m, with sources at the @@ lines", () => {
   const result = diffLines(MODEL, 90), rows = plain(result.lines);
-  const cells = (text: string) => rows.find(row => row.includes(text))?.split("│")[0]?.replace(/^[▏ ]/, "").trim().split(/\s+/);
-  expect(cells("keep")).toEqual(["10", "10"]);
-  expect(cells("old")).toEqual(["11"]);
-  expect(cells("more")).toEqual(["12"]);
-  expect(cells("tail")).toEqual(["12", "13"]);
-  expect(cells("end")).toEqual(["41", "42"]);
+  expect(gutterCells(rows, "keep")).toEqual(["10", "10"]);
+  expect(gutterCells(rows, "old")).toEqual(["11"]);
+  expect(gutterCells(rows, "more")).toEqual(["12"]);
+  expect(gutterCells(rows, "tail")).toEqual(["12", "13"]);
+  expect(gutterCells(rows, "end")).toEqual(["41", "42"]);
   expect(result.hunkRows.map(row => rows[row]?.match(/hunk (\d+)\/(\d+)/)?.slice(1))).toEqual([["1", "2"], ["2", "2"]]);
   expect(result.hunkSources.map(index => PATCH.split("\n")[index]?.startsWith("@@"))).toEqual([true, true]);
   // The focus edge follows the selected hunk (index 1), not the first one.
@@ -54,16 +45,112 @@ test("diff rows carry old/new gutter numbers and hunk bars carry n/m, with sourc
   expect(rows[result.hunkRows[0] ?? -1]?.startsWith("▌")).toBeFalse();
 });
 
-test("at >=105 cols the tree sits beside the diff; below it a one-line picker replaces the tree", () => {
-  const wide = plain(frame(140));
-  expect(wide.some(row => row.includes("src/a/") && row.includes("│"))).toBeTrue();
-  expect(wide.some(row => row.includes("‹ 1/3 ›"))).toBeFalse();
-  for (const width of [80, 52]) {
-    const narrow = plain(frame(width));
-    expect(narrow[1]).toContain("‹ 1/3 ›");
-    expect(narrow.some(row => row.trim() === "src/a/")).toBeFalse();
+test("below 80 columns the diff keeps one gutter: new line numbers, and the old number on removed lines", () => {
+  const rows = plain(diffLines(MODEL, 60).lines);
+  expect(gutterCells(rows, "keep")).toEqual(["10"]);
+  expect(gutterCells(rows, "old")).toEqual(["11"]);
+  expect(gutterCells(rows, "new")).toEqual(["11"]);
+  expect(gutterCells(rows, "more")).toEqual(["12"]);
+  expect(gutterCells(rows, "tail")).toEqual(["13"]);
+  expect(gutterCells(rows, "gone")).toEqual(["40"]);
+  expect(gutterCells(rows, "end")).toEqual(["42"]);
+});
+
+test("at 90+ columns the list sits beside the diff; below 90 the list stacks above it and keeps the selected file in view", () => {
+  for (const width of [140, 90]) {
+    const rows = plain(frame(width)), selected = rows.find(row => row.startsWith("▌ M src/a/one.rs"));
+    expect(selected?.indexOf("│")).toBe(LIST_WIDTH - 1);
+    expect(rows.some(row => row.startsWith("─ "))).toBeFalse();
   }
-  for (const width of [140, 104, 80, 52, 30]) for (const line of frame(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+  for (const width of [89, 52]) {
+    // Below 60 columns paths keep their last two segments.
+    const rows = plain(frame(width)), list = rows.findIndex(row => row.startsWith(width < 60 ? "▌ M a/one.rs" : "▌ M src/a/one.rs"));
+    const rule = rows.findIndex(row => row.startsWith("─ 3 files +5 −3")), header = rows.findIndex(row => row.includes("modified"));
+    expect(list).toBe(1);
+    expect(rows[list]).not.toContain("│");
+    expect(rule).toBe(4);
+    expect(header).toBeGreaterThan(rule);
+  }
+  // Twenty files, three list rows on a very short terminal: the selection is shown wherever it sits.
+  const files = Array.from({ length: 20 }, (_, i) => ({ path: `src/deep/f${String(i).padStart(2, "0")}.rs`, letter: "M", added: i, removed: 1 }));
+  let selected = "src/deep/f15.rs";
+  const view = new ChangesView(host(() => ({ ...MODEL, files, total: 20, selected }), { rows: () => 14 }));
+  for (const [path, range] of [["src/deep/f15.rs", "14–16/20"], ["src/deep/f00.rs", "1–3/20"], ["src/deep/f19.rs", "18–20/20"]] as const) {
+    selected = path;
+    const rows = plain(frame(52, view)), rule = rows.findIndex(row => row.startsWith("─ 20 files"));
+    expect(rule).toBe(4);
+    expect(rows.slice(1, rule).some(row => row.startsWith("▌ M deep/" + path.slice(9)))).toBeTrue();
+    expect(rows[rule]).toContain(range);
+  }
+});
+
+test("every Changes row stays within the pane, with and without authors", () => {
+  const authors: ChangeAuthor[] = [
+    { id: "slots", label: "host-slots-with-a-long-name", hue: 0, paths: new Map([["src/a/one.rs", false], ["README.md", true]]) },
+    { id: "ui", label: "picker-ui", hue: 1, paths: new Map([["src/a/two.rs", false], ["README.md", false]]) },
+  ];
+  const withAuthors: ChangesModel = { ...MODEL,
+    files: [{ ...MODEL.files[0]!, who: ["slots"] }, { ...MODEL.files[1]!, who: ["ui"] }, { ...MODEL.files[2]!, who: ["slots", "ui"], outside: ["slots"] }],
+    authors: [{ id: "slots", label: authors[0]!.label, hue: 0, count: 2 }, { id: "ui", label: "picker-ui", hue: 1, count: 2 }] };
+  const plainView = () => new ChangesView(host(() => MODEL));
+  const authored = () => new ChangesView(host(() => withAuthors, { authors: () => authors, color: () => "\x1b[35m" }));
+  for (const make of [plainView, authored]) for (const width of [34, 52, 89, 90, 140]) for (const height of [12, 20, 40]) {
+    for (const row of frame(width, make(), height)) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+  }
+  for (const width of [10, 34, 52]) expect(visibleWidth(filterRow(withAuthors, width, () => "").line)).toBeLessThanOrEqual(width);
+});
+
+test("an author filter shows only that author's files and marks edits outside its paths", async () => {
+  const root = mkdtempSync(join(tmpdir(), "changes-authors-"));
+  const git = (...args: string[]) => execFileSync("git", ["-C", root, "-c", "core.hooksPath=/dev/null", ...args], { encoding: "utf8" });
+  const store = new ReviewStore(root, () => {});
+  const authors: ChangeAuthor[] = [
+    { id: "slots", label: "host-slots", hue: 0, paths: new Map([["a.txt", false], ["c.txt", true]]) },
+    { id: "ui", label: "picker-ui", hue: 1, paths: new Map([["b.txt", false], ["c.txt", false]]) },
+  ];
+  try {
+    git("init", "-q"); git("config", "user.name", "Fixture"); git("config", "user.email", "fixture@example.invalid");
+    for (const name of ["a.txt", "b.txt", "c.txt"]) writeFileSync(join(root, name), "one\n");
+    git("add", "."); git("commit", "-qm", "base");
+    for (const name of ["a.txt", "b.txt", "c.txt"]) writeFileSync(join(root, name), "two\n");
+    await store.refresh();
+    const selections: string[] = [];
+    const shown = { root, path: store.selected, comparison: comparisonLabel(store.comparison), text: "", head: store.head, base: undefined, file: undefined };
+    const model = (filter: string, named = authors) => changesModel(store, shown, "fixture", 0, Date.now(), named, filter);
+    // The reader had b.txt selected.
+    const view: ChangesView = new ChangesView(host(() => ({ ...model(view.filter), selected: "b.txt" }),
+      { authors: () => authors, select: path => { selections.push(path); } }));
+
+    const all = model("all");
+    expect(all.files.map(file => file.path)).toEqual(["a.txt", "b.txt", "c.txt"]);
+    expect(all.authors.map(author => [author.label, author.count])).toEqual([["host-slots", 2], ["picker-ui", 2]]);
+    const row = filterRow(all, 140, () => ""), line = stripTerminalSequences(row.line);
+    const chips: Record<string, string> = { all: "all 3", slots: "host-slots 2", ui: "picker-ui 2" };
+    expect(row.hits.map(hit => line.slice(hit.from, hit.to))).toEqual(row.hits.map(hit => chips[hit.id]));
+    expect(row.hits.map(hit => hit.id)).toEqual(["all", "slots", "ui"]);
+
+    view.cycleFilter();
+    expect(view.filter).toBe("slots");
+    // The filter hides the selected b.txt, so the selection moves to the first shown file.
+    expect(selections).toEqual(["a.txt"]);
+    const slots = model("slots");
+    expect(slots.files.map(file => file.path)).toEqual(["a.txt", "c.txt"]);
+    expect(slots.total).toBe(3);
+    const rows = plain(frame(140, view));
+    expect(rows[1]).toContain("host-slots 2");
+    expect(rows.some(r => /^[▌ ] M .*b\.txt/.test(r.slice(0, LIST_WIDTH)))).toBeFalse();
+    expect(rows.some(r => /^  M ● a\.txt/.test(r) && !r.slice(0, LIST_WIDTH).includes("!"))).toBeTrue();
+    const c = rows.findIndex(r => /^  M ●● ! c\.txt/.test(r));
+    expect(c).toBeGreaterThan(0);
+    expect(rows[c + 1]).toContain("also edited by host-slots");
+
+    view.cycleFilter(); view.cycleFilter();
+    expect(view.filter).toBe("all");
+    // Hosts that name no authors get no filter row and no author marks.
+    expect(model("slots", []).files.map(file => [file.path, file.who, file.outside]))
+      .toEqual([["a.txt", undefined, undefined], ["b.txt", undefined, undefined], ["c.txt", undefined, undefined]]);
+    expect(plain(frame(140, new ChangesView(host(() => model("all", [])))))[1]?.startsWith(" 3 files")).toBeTrue();
+  } finally { store.dispose(); rmSync(root, { recursive: true, force: true }); }
 });
 
 test("other-comparison counts come from the worktree status, not the current comparison's file list", async () => {

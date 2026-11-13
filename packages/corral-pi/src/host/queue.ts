@@ -223,6 +223,9 @@ export class HostQueue {
     return item?.origin === "pane" && item.state === "queued" && item.message ? item : undefined;
   }
 
+  /** Whether the owner may edit, reorder or remove queued input in this session. */
+  get controlEnabled(): boolean { return this.options.interactive() && this.options.enabled(); }
+
   async remove(key: string): Promise<boolean> {
     if (!this.controllable(key)) return false;
     return this.mutate(key, `pane-g${this.options.generation}-${++this.operationCounter}`, "pane", "remove").outcome === "withdrawn";

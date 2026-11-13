@@ -3,7 +3,8 @@ import {
   type MarkdownTransformer, type ToolRenderers,
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, type Component, type MarkdownTheme, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import type { HelperInspection, HelperMessage } from "../extensions/subagent/inspection.ts";
+import type { HelperMessage } from "../extensions/subagent/inspection.ts";
+import type { ConversationSource } from "./agents-model.ts";
 
 export interface HelperChatStyle {
   readonly outputPad: 0 | 1;
@@ -44,7 +45,7 @@ export class HelperChat {
   private expanded = false;
   constructor(private readonly tui: () => TUI | undefined, private readonly cwd: string,
     private readonly style?: () => HelperChatStyle) {}
-  renderHelper(helper: HelperInspection, width: number): string[] {
+  renderHelper(helper: ConversationSource, width: number): string[] {
     const style = this.style?.() ?? { outputPad: 1, markdownTheme: getMarkdownTheme(), markdownTransformers: [], renderers: () => undefined };
     const styleKey = `${style.outputPad}/${style.markdownTheme.codeBlockIndent ?? ""}`;
     if (this.request !== helper.request || this.styleKey !== styleKey || this.transformers.length !== style.markdownTransformers.length

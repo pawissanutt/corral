@@ -1,0 +1,212 @@
+import { expect, test } from "bun:test";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import type { QueueControl, QueuedItem } from "../host/queue-control.ts";
+import { QueueDock, queueCapacity } from "./queue-dock.ts";
+
+const item = (key: string, text: string, editable = true, policy: QueuedItem["policy"] = "follow_up"): QueuedItem =>
+  ({ key, text, policy, editable });
+/** Key and pointer operations run detached; a fixed number of microtask turns lets them settle. */
+async function settle(): Promise<void> {
+  for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+}
+/** A host call that waits until the test opens it. */
+function gated() {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  return { gate: promise, release: resolve };
+}
+const click = (x: number, y: number): TuiMouseEvent =>
+  ({ type: "click", button: "left", x, y, screenX: x, screenY: y, width: 120, height: 6, shift: false, alt: false, ctrl: false });
+const SHIFT_UP = "\x1b[1;2A";
+
+/** A host whose control really withdraws, removes and reorders, recording every call. */
+function harness(initial: readonly QueuedItem[], options: { readonly control?: boolean; readonly enabled?: boolean;
+  readonly gate?: Promise<void>; readonly refuse?: boolean } = {}) {
+  const state = { items: [...initial], draft: "", calls: [] as string[], notices: [] as { text: string; tone: string }[], composer: 0 };
+  const done = async <T>(value: T): Promise<T> => { await options.gate; return value; };
+  const control: QueueControl = {
+    enabled: () => options.enabled !== false,
+    edit: async key => {
+      state.calls.push(`edit ${key}`);
+      await options.gate;
+      const found = state.items.find(entry => entry.key === key);
+      if (!found) return undefined;
+      state.items = state.items.filter(entry => entry !== found);
+      return found.text;
+    },
+    remove: async key => {
+      state.calls.push(`remove ${key}`);
+      if (options.refuse) return done(false);
+      state.items = state.items.filter(entry => entry.key !== key);
+      return done(true);
+    },
+    move: async (key, delta) => {
+      state.calls.push(`move ${key} ${delta}`);
+      const editable = state.items.filter(entry => entry.editable), at = editable.findIndex(entry => entry.key === key);
+      const other = editable[at + delta];
+      if (at < 0 || !other) return done(false);
+      const a = state.items.indexOf(editable[at]!), b = state.items.indexOf(other);
+      [state.items[a], state.items[b]] = [state.items[b]!, state.items[a]!];
+      return done(true);
+    },
+  };
+  const dock = new QueueDock({
+    items: () => state.items,
+    control: () => options.control === false ? undefined : control,
+    draft: () => state.draft,
+    setDraft: text => { state.draft = text; },
+    focusComposer: () => { state.composer++; },
+    notice: (text, tone) => { state.notices.push({ text, tone }); },
+    changed: () => {},
+  });
+  return { dock, state };
+}
+const screen = (lines: readonly string[]) => lines.map(line => stripTerminalSequences(line));
+/** The cell column of `glyph` on the row that shows `text`. */
+function cell(dock: QueueDock, width: number, text: string, glyph: string): { x: number; y: number } {
+  const rows = screen(dock.render(width)), y = rows.findIndex(row => row.includes(text));
+  const at = rows[y]!.lastIndexOf(glyph);
+  expect(at).toBeGreaterThanOrEqual(rows[y]!.indexOf(text));
+  return { x: visibleWidth(rows[y]!.slice(0, at)), y };
+}
+
+test("edit puts the withdrawn text before the draft and keeps what was typed while it ran", async () => {
+  const { gate, release } = gated();
+  const { dock, state } = harness([item("a", "first queued"), item("b", "second queued")], { gate });
+  state.draft = "half-written";
+  dock.focusLast();
+  expect(dock.handleKey("\r")).toBeTrue();
+  state.draft = "half-written reply";
+  release(); await settle();
+  expect(state.calls).toEqual(["edit b"]);
+  expect(state.draft).toBe("second queued\n\nhalf-written reply");
+  expect(dock.focused).toBeFalse();
+  expect(state.composer).toBeGreaterThan(0);
+
+  const blank = harness([item("a", "only item")]);
+  blank.state.draft = "  \n";
+  expect(await blank.dock.editLast()).toBeTrue();
+  expect(blank.state.draft).toBe("only item");
+  expect(blank.dock.focused).toBeFalse();
+});
+
+test("move keeps every item, the selection follows the moved key, and a pending call blocks others", async () => {
+  const { gate, release } = gated();
+  const { dock, state } = harness([item("a", "alpha"), item("b", "bravo"), item("c", "charlie", true, "steer")], { gate });
+  dock.focusLast();
+  expect(dock.handleKey(SHIFT_UP)).toBeTrue();
+  expect(dock.busy).toBeTrue();
+  expect(screen(dock.render(100)).find(row => row.includes("charlie"))).toContain("…");
+  dock.handleKey("x"); dock.handleKey("K");
+  release(); await settle();
+  expect(state.calls).toEqual(["move c -1"]);
+  expect(state.items.map(entry => entry.key)).toEqual(["a", "c", "b"]);
+  expect(dock.selected).toBe("c");
+  const rows = screen(dock.render(100));
+  for (const text of ["alpha", "bravo", "charlie"]) expect(rows.some(row => row.includes(text))).toBeTrue();
+  expect(rows.find(row => row.includes("▌"))).toContain("charlie");
+  expect(rows.findIndex(row => row.includes("charlie"))).toBeLessThanOrEqual(rows.findIndex(row => row.includes("bravo")));
+  dock.handleKey("J"); await settle();
+  expect(state.items.map(entry => entry.key)).toEqual(["a", "b", "c"]);
+  expect(dock.selected).toBe("c");
+});
+
+test("items that are not the owner's never render their text and never reach control", async () => {
+  const items = [item("n1", "WAKE secret-payload", false, "steer"), item("a", "alpha"), item("n2", "secret-two", false)];
+  const keyed = harness(items);
+  for (const width of [30, 60, 120]) {
+    const rows = screen(keyed.dock.render(width));
+    expect(rows.join("\n")).not.toContain("secret");
+    expect(rows.at(-1)).toMatch(/\b2\b/);
+  }
+  keyed.dock.focusLast();
+  keyed.dock.selected = "n1";
+  keyed.dock.handleKey("k"); keyed.dock.handleKey("j"); keyed.dock.handleKey("J");
+  keyed.dock.handleKey("x"); await settle();
+  expect(keyed.state.calls).toEqual(["remove a"]);
+
+  const clicked = harness(items);
+  for (const width of [40, 120]) {
+    const height = clicked.dock.render(width).length;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) { clicked.dock.render(width); clicked.dock.handleMouse(click(x, y)); await settle(); }
+    }
+  }
+  expect(clicked.state.calls.length).toBeGreaterThan(0);
+  expect(clicked.state.calls.some(call => call.includes("n1") || call.includes("n2"))).toBeFalse();
+});
+
+test("a refused call leaves the rows as reported and raises a notice; disabled control offers nothing", async () => {
+  const refused = harness([item("a", "alpha"), item("b", "bravo")], { refuse: true });
+  refused.dock.focusLast(); refused.dock.handleKey("x"); await settle();
+  expect(refused.state.calls).toEqual(["remove b"]);
+  expect(refused.state.items).toHaveLength(2);
+  const rows = screen(refused.dock.render(100));
+  expect(rows.some(row => row.includes("bravo"))).toBeTrue();
+  expect(refused.state.notices).toHaveLength(1);
+  expect(refused.state.notices[0]!.tone).toBe("warning");
+  // A refusal while control is enabled does not take the controls away.
+  expect(refused.dock.controllable).toBeTrue();
+  expect(rows.some(row => row.includes("×"))).toBeTrue();
+
+  for (const options of [{ enabled: false }, { control: false }]) {
+    const off = harness([item("a", "alpha")], options);
+    expect(off.dock.controllable).toBeFalse();
+    expect(screen(off.dock.render(100)).some(row => row.includes("×"))).toBeFalse();
+    off.dock.focusLast(); off.dock.handleKey("x"); off.dock.handleKey("\r"); await settle();
+    expect(await off.dock.editLast()).toBeFalse();
+    expect(off.state.calls).toEqual([]);
+    expect(off.state.items).toHaveLength(1);
+    expect(off.state.notices.length).toBeGreaterThan(0);
+    expect(off.state.notices[0]!.text).not.toBe(refused.state.notices[0]!.text);
+  }
+});
+
+test("control hit ranges trigger the same calls as the keys at 40 and 120 columns", async () => {
+  const items = [item("a", "alpha"), item("b", "bravo"), item("c", "charlie")];
+  const actions = [
+    { keys: ["\r"], glyph: (width: number) => width < 84 ? "✎" : "edit" },
+    { keys: [SHIFT_UP], glyph: () => "↑" },
+    { keys: ["J"], glyph: () => "↓" },
+    { keys: ["\x1b[3~"], glyph: () => "×" },
+  ];
+  for (const width of [40, 120]) {
+    for (const action of actions) {
+      const byKey = harness(items), byClick = harness(items);
+      byKey.dock.focusLast(); byKey.dock.handleKey("k");
+      expect(byKey.dock.selected).toBe("b");
+      for (const key of action.keys) byKey.dock.handleKey(key);
+      const { x, y } = cell(byClick.dock, width, "bravo", action.glyph(width));
+      expect(byClick.dock.handleMouse(click(x, y))?.handled).toBeTrue();
+      await settle();
+      expect(byKey.state.calls).toHaveLength(1);
+      expect(byClick.state.calls).toEqual(byKey.state.calls);
+    }
+    const select = harness(items);
+    const { x, y } = cell(select.dock, width, "alpha", "alpha");
+    select.dock.handleMouse(click(x, y));
+    expect(select.dock.focused).toBeTrue();
+    expect(select.dock.selected).toBe("a");
+    expect(select.state.calls).toEqual([]);
+  }
+});
+
+test("every dock line fits from 30 to 140 columns and long queues stay within capacity", async () => {
+  expect([queueCapacity(14), queueCapacity(24), queueCapacity(46)]).toEqual([2, 3, 5]);
+  const { gate, release } = gated();
+  const items = [item("a", "界".repeat(80), true, "steer"), item("b", "x".repeat(300)), item("c", "tab\there\x1b[2Jnewline\nend"),
+    item("d", "short"), item("n", "notice", false)];
+  const { dock } = harness(items, { gate });
+  dock.focusLast(); dock.handleKey("k");
+  void dock.editLast();
+  for (const rows of [14, 24, 46]) {
+    dock.setCapacity(rows);
+    for (let width = 30; width <= 140; width++) {
+      const lines = dock.render(width);
+      expect(lines.length).toBeLessThanOrEqual(1 + queueCapacity(rows) + 1);
+      for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      expect(lines.join("")).not.toContain("\x1b[2J");
+    }
+  }
+  release(); await settle();
+});
