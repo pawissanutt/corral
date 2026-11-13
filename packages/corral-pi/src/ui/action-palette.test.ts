@@ -21,7 +21,7 @@ test("search uses labels, shortcuts, scope and disabled reasons; cancel never di
   palette.focused = true;
   palette.handleInput("worker answer");
   expect(palette.matches.map(a => a.id)).toEqual(["answer"]);
-  expect(palette.render(80).join("\n")).toContain("Disabled: Role worker cannot answer");
+  expect(palette.render(80).join("\n")).toContain("unavailable: Role worker cannot answer");
   palette.handleInput("\r"); expect(chosen).toBeUndefined();
   palette.handleInput("\x1b"); expect(chosen).toBeUndefined();
 });
@@ -38,7 +38,7 @@ test("keyboard selection returns only explicit handlers; dynamic disabled state 
 test("palette clips wide glyphs and state labels at minimum widths and supports no-match search", () => {
   const palette = new ActionPalette([action("界面 👩‍💻 inspect"), action("cycle effort", "Effort unavailable")], theme, () => {}, () => {});
   for (const width of [1, 20, 52, 80]) for (const line of palette.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-  palette.handleInput("unknown action"); expect(palette.render(52).join("\n")).toContain("No matching actions");
+  palette.handleInput("unknown action"); expect(palette.render(52).join("\n")).toContain("no action matches");
 });
 
 test("production catalog disables effort when capability is unavailable or unknown", () => {
@@ -49,7 +49,7 @@ test("production catalog disables effort when capability is unavailable or unkno
     expect(effort?.disabled()).toBe("Effort unavailable for current model");
     const palette = new ActionPalette(panels.actions(), theme, () => { throw new Error("disabled action dispatched"); }, () => {});
     palette.handleInput("cycle effort");
-    expect(palette.render(100).join("\n")).toContain("Disabled: Effort unavailable for current model");
+    expect(palette.render(100).join("\n")).toContain("unavailable: Effort unavailable for current model");
     palette.handleInput("\r");
   } finally { panels.dispose(); }
 });

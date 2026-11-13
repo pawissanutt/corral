@@ -421,6 +421,7 @@ export class HostSession {
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
       identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
       queueControl: {
+        enabled: () => this.queue.controlEnabled,
         edit: key => this.queue.edit(key),
         remove: key => this.queue.remove(key),
         move: (key, delta) => this.queue.move(key, delta),

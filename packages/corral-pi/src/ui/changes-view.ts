@@ -1,20 +1,32 @@
-// Changes (F7) split layout: one chip row, a directory tree beside the diff, key hints pinned below.
-// Below SPLIT_MIN columns the tree collapses to a one-line file picker above the diff.
-// Presentation only: every value comes from the ReviewStore read and the displayed patch.
-import { dirname } from "node:path";
+// Changes (F7): one comparison chip row, an author filter row when the host supplies authors, then the body.
+// At SPLIT_MIN columns and above the flat file list sits beside the diff; below it a capped list stacks above
+// a summary rule and the diff. Presentation only: every value comes from the ReviewStore read and the displayed patch.
 import { HStack, ScrollView, VStack, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { relevantFile, type Comparison } from "./panels-git.ts";
 import { comparisonLabel, fileStatus, type ReviewStore } from "./review-store.ts";
 import { plainLabel, type PanelFile, PANEL_BG, PANEL_TEXT, PANEL_MUTED, PANEL_BLUE, PANEL_RULE, PANEL_SUCCESS, PANEL_WARNING, PANEL_ERROR, PANEL_SELECTED, PANEL_TINT, RESET } from "./panels-view.ts";
 
-/** Main-area width at which the tree sits beside the diff; below it a one-line picker is used. */
-export const SPLIT_MIN = 105;
+/** Main-area width at which the file list sits beside the diff; below it the list stacks above the diff. */
+export const SPLIT_MIN = 90;
+/** Width of the side-by-side file list, including its right rule. */
 export const LIST_WIDTH = 42;
-const BAR_CELLS = 6;
-const BG_OFF = "\x1b[49m", BOLD = "\x1b[1m", NORMAL = "\x1b[22m";
+/** Diff pane width at which old and new line numbers both show; below it only one gutter. */
+const TWO_GUTTERS = 80;
+/** Stacked list width below which paths keep only their last two segments. */
+const SHORT_PATHS = 60;
+const BG_OFF = "\x1b[49m", BOLD = "\x1b[1m", NORMAL = "\x1b[22m", UNDERLINE = "\x1b[4m", NO_UNDERLINE = "\x1b[24m";
+
+/** Stacked list rows for the terminal height: 9, 5 when short (< 28 rows), 3 when very short (< 20 rows). */
+const stackRows = (rows: number) => rows < 20 ? 3 : rows < 28 ? 5 : 9;
 
 export type Tone = "ok" | "warn" | "error" | "accent" | "muted";
-export interface ChangeRow { readonly path: string; readonly letter: string; readonly added: number | null | undefined; readonly removed: number | null | undefined }
+/** One changed file. `who` lists the authors that edited it; `outside` those whose edit is outside their own paths. */
+export interface ChangeRow {
+  readonly path: string; readonly letter: string; readonly added: number | null | undefined; readonly removed: number | null | undefined;
+  readonly who?: readonly string[]; readonly outside?: readonly string[];
+}
+/** An agent that edits files in this worktree; `paths` maps each edited path to true when it lies outside the agent's own files. */
+export interface ChangeAuthor { readonly id: string; readonly label: string; readonly hue: number; readonly paths: ReadonlyMap<string, boolean> }
 export type ChangesDiff =
   | { readonly kind: "patch"; readonly path: string; readonly status: string; readonly text: string; readonly notice?: string }
   | { readonly kind: "message"; readonly lines: readonly string[] };
@@ -24,13 +36,20 @@ export interface ChangesModel {
   readonly state: { readonly text: string; readonly tone: Tone };
   readonly scope: string;
   readonly updated: string;
+  /** The files shown: the comparison's files, narrowed by the author filter. */
   readonly files: readonly ChangeRow[];
+  /** The comparison's file count before the author filter. */
+  readonly total: number;
   readonly selected: string | undefined;
   readonly query: string;
   readonly others: readonly { readonly label: string; readonly count: number | undefined }[];
   readonly notes: readonly string[];
   readonly diff: ChangesDiff;
   readonly hunk: number;
+  /** Authors with at least one file in this comparison (or the active filter), in host order. */
+  readonly authors: readonly { readonly id: string; readonly label: string; readonly hue: number; readonly count: number }[];
+  /** `all`, or the id of the author whose files are shown. */
+  readonly filter: string;
 }
 /** The patch the workbench last accepted; it stays on screen until a matching newer read is applied. */
 export interface DisplayedPatch { readonly root: string | undefined; readonly path: string | undefined; readonly comparison: string; readonly text: string; readonly head: string | undefined; readonly base: string | undefined; readonly file: PanelFile | undefined }
@@ -47,8 +66,9 @@ export function ago(ms: number): string {
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 172800 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
 }
 
-/** Everything the view shows, read once from the store and the displayed patch. */
-export function changesModel(r: ReviewStore, shown: DisplayedPatch, scopeLabel: string, hunk: number, now: number): ChangesModel {
+/** Everything the view shows, read once from the store and the displayed patch; `filter` narrows the files to one author's. */
+export function changesModel(r: ReviewStore, shown: DisplayedPatch, scopeLabel: string, hunk: number, now: number,
+  authors: readonly ChangeAuthor[] = [], filter = "all"): ChangesModel {
   const label = comparisonLabel(r.comparison);
   const sameScope = shown.root === r.root && shown.path === r.selected && shown.comparison === label;
   const head = sameScope ? shown.head : r.head, base = sameScope ? shown.base : r.comparison === "session" ? r.sessionBase : r.candidateBase;
@@ -60,19 +80,26 @@ export function changesModel(r: ReviewStore, shown: DisplayedPatch, scopeLabel: 
     : r.comparison !== "candidate" ? { text: "uncommitted", tone: "muted" }
     : r.worktree === undefined ? { text: "committed", tone: "muted" }
     : r.worktree.length ? { text: "committed · worktree dirty", tone: "warn" } : { text: "committed · clean", tone: "ok" };
-  const files = r.visible.map(file => {
+  const all: ChangeRow[] = r.visible.map(file => {
     const stat = r.stats.get(file.path);
-    return { path: file.path, letter: LETTERS[fileStatus(file)] ?? "M", added: stat?.added, removed: stat?.removed };
+    const who = authors.filter(author => author.paths.has(file.path)).map(author => author.id);
+    const outside = authors.filter(author => author.paths.get(file.path) === true).map(author => author.id);
+    return { path: file.path, letter: LETTERS[fileStatus(file)] ?? "M", added: stat?.added, removed: stat?.removed,
+      ...(who.length ? { who } : {}), ...(outside.length ? { outside } : {}) };
   });
+  const active = authors.some(author => author.id === filter) ? filter : "all";
+  const writers = authors.map(author => ({ id: author.id, label: plainLabel(author.label), hue: author.hue, count: all.filter(file => file.who?.includes(author.id)).length }))
+    .filter(author => author.count > 0 || author.id === active);
+  const files = active === "all" ? all : all.filter(file => file.who?.includes(active));
   const others = r.comparisons.filter(value => value !== r.comparison).map(value => ({ label: NAMES[value],
     count: value === "candidate" || value === "session" ? undefined : r.worktree?.filter(file => relevantFile(file, value)).length }));
   const notes = [...(r.error ? ["STALE / unavailable: " + plainLabel(r.error)] : []), ...(r.limitNotice ? [r.limitNotice] : [])];
   const model = { comparison: NAMES[r.comparison], range, state, scope: `${plainLabel(scopeLabel)} @ ${plainLabel(r.branch)}`,
     updated: r.checkedAt ? `updated ${ago(now - r.checkedAt)} ago` : r.refreshing ? "checking Git…" : "not loaded",
-    files, selected: r.selected, query: r.query, others, notes, hunk };
+    files, total: all.length, selected: r.selected, query: r.query, others, notes, hunk, authors: writers, filter: active };
   const message = (...lines: string[]): ChangesModel => ({ ...model, diff: { kind: "message", lines } });
   if (r.scopeRequired) return message("Choose a project", "Workspace-wide changes are not shown.",
-    "Press o to choose a project or your scratch worktree.", "This is a read-only view; your session stays bound to Corral.");
+    "Pick a project or your scratch worktree to see its changes.", "This is a read-only view; your session stays bound to Corral.");
   const file = r.current;
   if (!file) return message(r.refreshing ? "Loading comparison…" : r.error ?? (r.selected ? "Selected file is no longer in this comparison." : "No changes in this comparison."));
   if (r.patchPath !== r.selected || r.patchComparison !== r.comparison) return message("Loading selected diff…");
@@ -81,24 +108,7 @@ export function changesModel(r: ReviewStore, shown: DisplayedPatch, scopeLabel: 
   if (!r.patchSnapshot && unavailable) return message(plainLabel(r.patch));
   const stale = r.patch !== shown.text || r.patchSnapshot?.head !== shown.head || r.patchSnapshot?.base !== shown.base;
   return { ...model, diff: { kind: "patch", path: file.path, status: LETTERS[fileStatus(shown.file ?? file)] ?? "M", text: shown.text,
-    ...(stale ? { notice: "New diff available (content or identity) · r to apply; current hunk/scroll preserved" } : {}) } };
-}
-
-/** Files grouped by directory, in Git's path order; root files group under `./`. */
-export function changeTree(files: readonly ChangeRow[]): { readonly dir: string; readonly files: readonly ChangeRow[] }[] {
-  const groups = new Map<string, ChangeRow[]>();
-  for (const file of files) {
-    const dir = dirname(file.path) === "." ? "./" : dirname(file.path) + "/";
-    const group = groups.get(dir) ?? []; group.push(file); groups.set(dir, group);
-  }
-  return [...groups].map(([dir, rows]) => ({ dir, files: rows }));
-}
-/** Cells of the +/− mini bar, scaled to the largest file; any non-zero side keeps at least one cell. */
-export function miniBar(added: number, removed: number, largest: number, cells = BAR_CELLS): { readonly plus: number; readonly minus: number } {
-  const scale = (n: number) => n > 0 ? Math.max(1, Math.round(n / Math.max(1, largest) * cells)) : 0;
-  let plus = scale(added), minus = scale(removed);
-  while (plus + minus > cells) { if (plus >= minus) plus--; else minus--; }
-  return { plus, minus };
+    ...(stale ? { notice: "New diff available (content or identity) · the current hunk and scroll stay until it is applied" } : {}) } };
 }
 
 type Seg = readonly [style: string, text: string];
@@ -111,9 +121,10 @@ export function clip(text: string, width: number, keep: "head" | "tail" = "head"
   for (const char of chars) { const w = visibleWidth(char); if (used + w > width - 1) break; out.push(char); used += w; }
   return keep === "tail" ? "…" + out.reverse().join("") : out.join("") + "…";
 }
+const segWidth = (segs: readonly Seg[]) => segs.reduce((n, [, text]) => n + visibleWidth(text), 0);
 /** One row exactly `width` cells wide: left segments clipped to fit, right segments right-aligned. */
 function line(left: readonly Seg[], right: readonly Seg[], width: number, base: string): string {
-  const rightWidth = right.reduce((n, [, text]) => n + visibleWidth(text), 0);
+  const rightWidth = segWidth(right);
   const showRight = rightWidth > 0 && rightWidth + 1 <= width;
   const room = showRight ? width - rightWidth - 1 : width;
   let out = base, used = 0;
@@ -123,6 +134,16 @@ function line(left: readonly Seg[], right: readonly Seg[], width: number, base: 
   }
   if (showRight) { out += " ".repeat(width - used - rightWidth) + right.map(([style, text]) => style + text + base).join(""); used = width; }
   return out + " ".repeat(Math.max(0, width - used));
+}
+/** `─ 3 files +18 −4 ─────── 4–8/12 ─`: a rule carrying a summary, the right part dropped first when space runs out. */
+function ruleLine(left: readonly Seg[], right: readonly Seg[], width: number): string {
+  const base = NORMAL + PANEL_BG, lead: Seg = [PANEL_RULE, "─ "];
+  const fill = (showRight: boolean) => width - 3 - segWidth(left) - (showRight ? segWidth(right) + 3 : 0);
+  const showRight = right.length > 0 && fill(true) >= 1;
+  const n = fill(showRight);
+  if (n < 1) return line([lead, ...left], [], width, base) + RESET;
+  const segs: Seg[] = [lead, ...left, [PANEL_RULE, " " + "─".repeat(n)], ...(showRight ? [[PANEL_RULE, " "] as Seg, ...right, [PANEL_RULE, " ─"] as Seg] : [])];
+  return base + segs.map(([style, text]) => style + text + base).join("") + RESET;
 }
 function wrap(text: string, width: number): string[] {
   const rows: string[] = []; let row = "", used = 0;
@@ -134,18 +155,14 @@ function wrap(text: string, width: number): string[] {
   return [...rows, row];
 }
 const code = (text: string) => text.replace(/\t/g, "    ").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
-const counts = (file: ChangeRow) => file.added === null ? "bin" : file.added === undefined ? "" : `+${file.added} −${file.removed ?? 0}`;
 const totals = (files: readonly ChangeRow[]): Seg[] => {
   const add = files.reduce((n, f) => n + (f.added ?? 0), 0), del = files.reduce((n, f) => n + (f.removed ?? 0), 0);
   return [[PANEL_SUCCESS, `+${add}`], [PANEL_TEXT, " "], [PANEL_ERROR, `−${del}`]];
 };
 const filesLabel = (m: ChangesModel) => `${m.files.length} file${m.files.length === 1 ? "" : "s"}${m.query ? ` · /${plainLabel(m.query)}` : ""}`;
-function barSegs(file: ChangeRow, largest: number): Seg[] {
-  const bar = miniBar(file.added ?? 0, file.removed ?? 0, largest);
-  return [[PANEL_SUCCESS, " ".repeat(BAR_CELLS - bar.plus - bar.minus) + "▮".repeat(bar.plus)], [PANEL_ERROR, "▮".repeat(bar.minus)]];
-}
+const authorOf = (m: ChangesModel, id: string) => m.authors.find(author => author.id === id);
 
-/** `candidate ▾  aece0a19 → 7c41d0e2  committed · clean  corral @ task/T-796 … updated 12s ago`. */
+/** The comparison chips: `candidate ▾  aece0a19 → 7c41d0e2  committed · clean  corral @ task/T-796 … updated 12s ago`. */
 export function chipRow(m: ChangesModel, width: number): string {
   const chip = (text: string, back: string, color: string): Seg => [back + color, ` ${text} `];
   const gap: Seg = [PANEL_TEXT, " "];
@@ -161,63 +178,119 @@ export function chipRow(m: ChangesModel, width: number): string {
   }
   return "";
 }
-const HINTS: readonly (readonly [key: string, full: string, brief: string])[] = [["j/k", "file", "file"], ["n/p", "hunk", "hunk"],
-  ["a", "ask about hunk (adds to draft, not sent)", "ask"], ["/", "filter", "filter"], ["c", "comparison", "compare"], ["o", "repository", "repo"], ["Esc", "chat", "chat"]];
-/** Key hints for the bottom row, shortening from full labels to bare keys before anything is cut. */
-export function hintLine(width: number): string {
-  const forms = [HINTS.map(([key, full]) => `${key} ${full}`).join(" · "), HINTS.map(([key, , brief]) => `${key} ${brief}`).join(" · "), HINTS.map(([key]) => key).join(" ")];
-  const text = forms.find(form => visibleWidth(form) + 2 <= width) ?? forms[forms.length - 1] ?? "";
-  return line([[PANEL_MUTED, "  " + text]], [], width, NORMAL + PANEL_BG) + RESET;
-}
 
-export interface ListFrame { readonly lines: string[]; readonly hits: ReadonlyMap<number, string>; readonly selectedRow: number }
-/** The left pane: totals, the directory tree with mini bars, then the other comparisons. */
-export function listLines(m: ChangesModel, width: number): ListFrame {
-  const lines: string[] = [], hits = new Map<number, string>(); let selectedRow = -1;
-  const body = width - 1, edge = PANEL_BG + PANEL_RULE + "│" + RESET;
-  const push = (left: readonly Seg[], right: readonly Seg[] = [], base = PANEL_BG) => lines.push(line(left, right, body, NORMAL + base) + edge);
-  push([[PANEL_TEXT, " " + filesLabel(m)]], m.files.length ? [...totals(m.files), [PANEL_TEXT, " "]] : []);
-  push([]);
-  const largest = Math.max(1, ...m.files.map(f => (f.added ?? 0) + (f.removed ?? 0)));
-  const countWidth = Math.max(0, ...m.files.map(f => visibleWidth(counts(f))));
-  for (const group of changeTree(m.files)) {
-    push([[PANEL_MUTED, " " + clip(plainLabel(group.dir), body - 2, "tail")]]);
-    for (const file of group.files) {
-      const selected = file.path === m.selected, tone = WORDS[file.letter]?.[1] ?? "warn";
-      if (selected) selectedRow = lines.length;
-      hits.set(lines.length, file.path);
-      push([[PANEL_BLUE, selected ? "▌" : " "], [fg(tone), file.letter + " "], [selected ? BOLD + PANEL_TEXT : PANEL_TEXT, plainLabel(file.path.slice(file.path.lastIndexOf("/") + 1))]],
-        [...barSegs(file, largest), [PANEL_MUTED, " " + counts(file).padStart(countWidth) + " "]], selected ? PANEL_SELECTED : PANEL_BG);
+/** A filter chip's columns on the filter row, `to` exclusive. */
+export interface FilterHit { readonly from: number; readonly to: number; readonly id: string }
+/**
+ * `all 9 · host-slots 2 · picker-ui 3`: one chip per author in its hue, the active one bold and underlined.
+ * Counts drop before chips do; when chips still overflow, `all` and the active chip stay and the rest fold into `+n`.
+ */
+export function filterRow(m: ChangesModel, width: number, color: (hue: number) => string): { line: string; hits: FilterHit[] } {
+  const chips = [{ id: "all", label: "all", count: m.total, color: PANEL_TEXT },
+    ...m.authors.map(author => ({ id: author.id, label: author.label, count: author.count, color: color(author.hue) }))];
+  const SEP = " · ", lead = 1;
+  const text = (chip: (typeof chips)[number], counts: boolean) => counts ? `${chip.label} ${chip.count}` : chip.label;
+  const span = (list: readonly (typeof chips)[number][], counts: boolean, more: number) => lead
+    + list.reduce((n, chip, i) => n + (i ? SEP.length : 0) + visibleWidth(text(chip, counts)), 0) + (more ? SEP.length + `+${more}`.length : 0);
+  let shown = chips, counts = true;
+  if (span(chips, true, 0) > width) {
+    counts = false;
+    if (span(chips, false, 0) > width) {
+      const keep = new Set(chips.filter(chip => chip.id === "all" || chip.id === m.filter));
+      for (const chip of chips) {
+        if (keep.has(chip)) continue;
+        const next = chips.filter(c => keep.has(c) || c === chip);
+        if (span(next, false, chips.length - next.length) <= width) keep.add(chip);
+      }
+      shown = chips.filter(chip => keep.has(chip));
     }
   }
-  if (!m.files.length) push([[m.state.tone === "error" ? PANEL_ERROR : PANEL_MUTED, " " + (m.state.tone === "error" ? "Git unavailable · r to retry" : m.query ? "No matching files · / to search" : "No changes")]]);
-  if (m.others.length) {
-    push([]); push([[PANEL_MUTED, " other comparisons  "], [PANEL_TEXT, "c"]]);
-    for (const other of m.others) push([[PANEL_MUTED, " " + other.label]], [[PANEL_MUTED, (other.count === undefined ? "—" : String(other.count)) + " "]]);
+  const more = chips.length - shown.length, base = NORMAL + PANEL_BG, hits: FilterHit[] = [];
+  let out = base + " ", used = lead;
+  for (const [i, chip] of shown.entries()) {
+    if (i) { const sep = clip(SEP, width - used); out += PANEL_MUTED + sep + base; used += visibleWidth(sep); }
+    const label = clip(text(chip, counts), width - used); if (!label) break;
+    const on = chip.id === m.filter;
+    out += chip.color + (on ? BOLD + UNDERLINE : "") + label + NO_UNDERLINE + base;
+    hits.push({ from: used, to: used + visibleWidth(label), id: chip.id }); used += visibleWidth(label);
   }
-  for (const note of m.notes) for (const row of wrap(note, body - 2)) push([[PANEL_MUTED, " " + row]]);
-  return { lines, hits, selectedRow };
+  if (more) { const tail = clip(`${SEP}+${more}`, width - used); out += PANEL_MUTED + tail + base; used += visibleWidth(tail); }
+  return { line: out + " ".repeat(Math.max(0, width - used)) + RESET, hits };
 }
 
-/** Below SPLIT_MIN: `‹ 1/2 › M receipts_tests.rs ▮▮▮▮▮▮ +15 −3 … 2 files +18 −4`. */
-export function pickerLine(m: ChangesModel, width: number): string {
-  const index = m.files.findIndex(f => f.path === m.selected), file = m.files[index];
-  if (!file) return line([[PANEL_MUTED, " " + filesLabel(m) + " · j/k choose"]], [], width, NORMAL + PANEL_BG) + RESET;
-  const [, tone] = WORDS[file.letter] ?? ["modified", "warn"];
-  const largest = Math.max(1, ...m.files.map(f => (f.added ?? 0) + (f.removed ?? 0)));
-  const right: Seg[] = width >= 72 ? [[PANEL_MUTED, filesLabel(m) + " "], ...totals(m.files), [PANEL_TEXT, " "]] : [];
-  return line([[PANEL_BLUE, " ‹ "], [PANEL_MUTED, `${index + 1}/${m.files.length}`], [PANEL_BLUE, " › "], [fg(tone), file.letter + " "],
-    [BOLD + PANEL_TEXT, plainLabel(file.path.slice(file.path.lastIndexOf("/") + 1))], [PANEL_TEXT, "  "],
-    ...barSegs(file, largest), [PANEL_MUTED, " " + counts(file)]], right, width, NORMAL + PANEL_BG) + RESET;
+export interface ListFrame {
+  readonly lines: string[]; readonly hits: ReadonlyMap<number, string>;
+  /** First row of the selected file, or -1; with `selectedSpan` its rows (the file row and any `also edited by` row). */
+  readonly selectedRow: number; readonly selectedSpan: number;
+}
+export interface ListOptions {
+  /** Stacked above the diff: file rows only, the full width, no right rule, header or other comparisons. */
+  readonly stacked?: boolean;
+  readonly color?: (hue: number) => string;
+}
+/**
+ * The flat file list: `▌ M ●● ! src/a/one.rs   +3 −2`, with the status letter, author dots in their hue,
+ * `!` and an `also edited by …` row for edits outside an author's own paths. As a side pane it adds the
+ * file count and totals above and the other comparisons below.
+ */
+export function listLines(m: ChangesModel, width: number, options: ListOptions = {}): ListFrame {
+  const lines: string[] = [], hits = new Map<number, string>(); let selectedRow = -1, selectedSpan = 0;
+  const stacked = options.stacked ?? false, color = options.color ?? (() => PANEL_TEXT);
+  const body = stacked ? width : width - 1, edge = stacked ? "" : PANEL_BG + PANEL_RULE + "│" + RESET;
+  const push = (left: readonly Seg[], right: readonly Seg[] = [], base = PANEL_BG) => lines.push(line(left, right, body, NORMAL + base) + (stacked ? RESET : edge));
+  if (!stacked) { push([[PANEL_TEXT, " " + filesLabel(m)]], m.files.length ? [...totals(m.files), [PANEL_TEXT, " "]] : []); push([]); }
+  const plus = (f: ChangeRow) => `+${f.added ?? 0}`, minus = (f: ChangeRow) => `−${f.removed ?? 0}`;
+  const numeric = m.files.filter(f => typeof f.added === "number");
+  const plusWidth = Math.max(0, ...numeric.map(f => plus(f).length)), minusWidth = Math.max(0, ...numeric.map(f => minus(f).length));
+  const countWidth = Math.max(3, numeric.length ? plusWidth + 1 + minusWidth : 0);
+  const counts = (f: ChangeRow): Seg[] => {
+    if (typeof f.added === "number") return [[PANEL_TEXT, " ".repeat(countWidth - plusWidth - 1 - minusWidth)], [PANEL_SUCCESS, plus(f).padStart(plusWidth)], [PANEL_TEXT, " "], [PANEL_ERROR, minus(f).padStart(minusWidth)], [PANEL_TEXT, " "]];
+    const word = f.added === null ? "bin" : f.letter === "?" || f.letter === "A" ? "new" : "";
+    return [[PANEL_MUTED, word.padStart(countWidth) + " "]];
+  };
+  const shortPaths = stacked && width < SHORT_PATHS;
+  for (const file of m.files) {
+    const selected = file.path === m.selected, tone = WORDS[file.letter]?.[1] ?? "warn", base = selected ? PANEL_SELECTED : PANEL_BG;
+    if (selected) selectedRow = lines.length;
+    const dots: Seg[] = (file.who ?? []).map(id => { const author = authorOf(m, id); return [author ? color(author.hue) : PANEL_MUTED, "●"] as Seg; });
+    const prefix: Seg[] = [[PANEL_BLUE, selected ? "▌" : " "], [PANEL_TEXT, " "], [fg(tone), file.letter], [PANEL_TEXT, " "],
+      ...(dots.length ? [...dots, [PANEL_TEXT, " "] as Seg] : []), ...(file.outside?.length ? [[PANEL_WARNING, "!"] as Seg, [PANEL_TEXT, " "] as Seg] : [])];
+    const right = counts(file), room = body - segWidth(prefix) - segWidth(right) - 1;
+    const path = plainLabel(shortPaths ? file.path.split("/").slice(-2).join("/") : file.path);
+    hits.set(lines.length, file.path);
+    push([...prefix, [selected ? BOLD + PANEL_TEXT : PANEL_TEXT, clip(path, room, "tail")]], right, base);
+    if (file.outside?.length) {
+      const names = file.outside.map(id => plainLabel(authorOf(m, id)?.label ?? id)).join(", ");
+      hits.set(lines.length, file.path);
+      push([[PANEL_TEXT, " ".repeat(Math.min(segWidth(prefix), Math.max(0, body - 8)))], [PANEL_WARNING, "also edited by " + names]], [], base);
+    }
+    if (selected) selectedSpan = lines.length - selectedRow;
+  }
+  if (!m.files.length) {
+    const empty = m.state.tone === "error" ? "Git unavailable" : m.filter !== "all" ? "No files from this author in this comparison" : m.query ? "No matching files" : "No changes";
+    push([[m.state.tone === "error" ? PANEL_ERROR : PANEL_MUTED, " " + empty]]);
+  }
+  if (!stacked) {
+    if (m.others.length) {
+      push([]); push([[PANEL_MUTED, " other comparisons"]]);
+      for (const other of m.others) push([[PANEL_MUTED, " " + other.label]], [[PANEL_MUTED, (other.count === undefined ? "—" : String(other.count)) + " "]]);
+    }
+    for (const note of m.notes) for (const row of wrap(note, body - 2)) push([[PANEL_MUTED, " " + row]]);
+  }
+  return { lines, hits, selectedRow, selectedSpan };
 }
 
 const HUNK = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$/;
 export interface DiffFrame { readonly lines: string[]; readonly hunkRows: number[]; readonly hunkSources: number[] }
-/** The right pane: file header, hunk separator bars, old/new gutter and tinted add/remove rows. */
-export function diffLines(m: ChangesModel, width: number): DiffFrame {
+/**
+ * The diff: file header (with its authors when known), hunk separator bars and tinted add/remove rows.
+ * At TWO_GUTTERS columns and above each row carries old and new line numbers; below it one gutter holds
+ * the new line number, and removed lines show their old number.
+ */
+export function diffLines(m: ChangesModel, width: number, color: (hue: number) => string = () => PANEL_TEXT): DiffFrame {
   const lines: string[] = [], hunkRows: number[] = [], hunkSources: number[] = [];
   const plain = NORMAL + BG_OFF, inner = Math.max(1, width - 1);
-  const say = (color: string, text: string) => { for (const row of wrap(plainLabel(text), inner - 1)) lines.push(line([[color, " " + row]], [], width, plain) + RESET); };
+  const say = (tint: string, text: string) => { for (const row of wrap(plainLabel(text), inner - 1)) lines.push(line([[tint, " " + row]], [], width, plain) + RESET); };
   for (const note of m.notes) say(PANEL_ERROR, note);
   const d = m.diff;
   if (d.kind === "message") { for (const [i, text] of d.lines.entries()) say(i ? PANEL_MUTED : PANEL_TEXT, text); return { lines, hunkRows, hunkSources }; }
@@ -227,13 +300,16 @@ export function diffLines(m: ChangesModel, width: number): DiffFrame {
   const added = body.filter(row => row.startsWith("+")).length, removed = body.filter(row => row.startsWith("-")).length;
   const total = source.filter(row => HUNK.test(row)).length;
   const highest = Math.max(0, ...source.map(row => HUNK.exec(row)).map(h => h ? Math.max(Number(h[1]) + Number(h[2] ?? 1), Number(h[3]) + Number(h[4] ?? 1)) : 0));
-  const digits = Math.max(4, String(highest).length), current = Math.max(0, Math.min(total - 1, m.hunk));
+  const two = width >= TWO_GUTTERS, digits = Math.max(two ? 4 : 3, String(highest).length), current = Math.max(0, Math.min(total - 1, m.hunk));
   const [word, tone] = WORDS[d.status] ?? ["modified", "warn"];
+  const who: Seg[] = (m.files.find(file => file.path === d.path)?.who ?? []).flatMap(id => {
+    const author = authorOf(m, id); return author ? [[PANEL_TEXT, "  "] as Seg, [color(author.hue), "● " + author.label] as Seg] : [];
+  });
   lines.push(line([[BOLD + PANEL_BLUE, " " + clip(plainLabel(d.path), Math.max(8, inner - 34), "tail")], [PANEL_TEXT, "  "], [bg(tone) + fg(tone), ` ${word} `],
-    [PANEL_TEXT, " "], [PANEL_SUCCESS, `+${added}`], [PANEL_TEXT, " "], [PANEL_ERROR, `−${removed}`], [PANEL_MUTED, `  · ${total} hunk${total === 1 ? "" : "s"}`]], [], width, plain) + RESET);
+    [PANEL_TEXT, " "], [PANEL_SUCCESS, `+${added}`], [PANEL_TEXT, " "], [PANEL_ERROR, `−${removed}`], [PANEL_MUTED, `  · ${total} hunk${total === 1 ? "" : "s"}`], ...who], [], width, plain) + RESET);
   if (d.notice) say(PANEL_BLUE, d.notice);
   let oldNo: number | undefined, newNo: number | undefined, hunk = -1;
-  const gutter = (a: string, b: string) => `${a.padStart(digits)} ${b.padStart(digits)} `;
+  const gutter = (old: string, now: string) => two ? `${old.padStart(digits)} ${now.padStart(digits)} ` : `${(now || old).padStart(digits)} `;
   const edge = (on: boolean) => BG_OFF + (on ? PANEL_BLUE + "▏" : " ");
   source.forEach((raw, index) => {
     const h = HUNK.exec(raw);
@@ -268,19 +344,33 @@ export interface ChangesHost {
   click(event: TuiMouseEvent): boolean;
   focus(): void;
   select(path: string): void;
+  /** Moves the file selection by `delta` files. */
   step(delta: number): void;
   pickHunk(index: number): void;
+  /** Agents that edit this worktree; the author filter row shows only when this returns at least one. */
+  authors?(): readonly ChangeAuthor[];
+  /** ANSI foreground for an author hue. */
+  color?(hue: number): string;
+  /** Terminal rows, which cap the stacked file list; the layout viewport height is used without it. */
+  rows?(): number;
 }
 /** Owns the Changes components; the workbench keeps selection, patch acceptance and key handling. */
 export class ChangesView {
   readonly diff: ScrollView; readonly list: ScrollView; readonly root: Component;
   hunkRows: number[] = []; hunkSources: number[] = [];
+  /** `all`, or the author id whose files the host should show (passed to `changesModel`). */
+  filter = "all";
   private listHits: ReadonlyMap<number, string> = new Map();
+  private stackHits: ReadonlyMap<number, string> = new Map();
+  private filterHits: readonly FilterHit[] = [];
   private shownSelection: string | undefined;
-  private pickerNext = 0;
+  private stackTop = 0;
+  private stackCap = stackRows(Number.MAX_SAFE_INTEGER);
+  private readonly color: (hue: number) => string;
   constructor(private readonly host: ChangesHost) {
+    this.color = hue => host.color?.(hue) ?? PANEL_TEXT;
     this.diff = new ScrollView({ render: width => {
-      const frame = diffLines(host.model(), width);
+      const frame = diffLines(host.model(), width, this.color);
       this.hunkRows = frame.hunkRows; this.hunkSources = frame.hunkSources;
       return frame.lines;
     }, handleMouse: event => {
@@ -296,41 +386,82 @@ export class ChangesView {
       return { handled: true };
     }, invalidate() {} }, { follow: "none", scrollbar: "auto" });
     const chips: Component = { render: width => [chipRow(host.model(), width)], invalidate() {} };
-    const picker: Component = { render: width => {
-      const model = host.model();
-      this.pickerNext = 4 + `${model.files.findIndex(f => f.path === model.selected) + 1}/${model.files.length}`.length;
-      return [pickerLine(model, width)];
+    const filters: Component = { render: width => {
+      const row = filterRow(host.model(), width, this.color);
+      this.filterHits = row.hits;
+      return [row.line];
     }, handleMouse: event => {
       if (!host.click(event)) return undefined;
-      host.focus(); if (event.x <= 2) host.step(-1); else if (Math.abs(event.x - this.pickerNext) <= 1) host.step(1);
+      host.focus(); const hit = this.filterHits.find(h => event.x >= h.from && event.x < h.to); if (hit) this.setFilter(hit.id);
       return { handled: true };
     }, invalidate() {} };
-    const hints: Component = { render: width => [hintLine(width)], invalidate() {} };
-    const split = new HStack([
-      { component: this.list, basis: LIST_WIDTH, shrink: 0, visible: viewport => viewport.width >= SPLIT_MIN },
+    const stacked: Component = { render: width => this.renderStacked(width), handleMouse: event => {
+      if (!host.click(event)) return undefined;
+      host.focus(); const path = this.stackHits.get(event.y); if (path) host.select(path);
+      return { handled: true };
+    }, invalidate() {} };
+    const column = new VStack([
+      { component: stacked, basis: "auto", shrink: 0, visible: viewport => {
+        if (viewport.width >= SPLIT_MIN) return false;
+        this.stackCap = stackRows(host.rows?.() ?? viewport.height);
+        return true;
+      } },
       { component: this.diff, basis: 0, grow: 1, minSize: 1 },
+    ]);
+    const body = new HStack([
+      { component: this.list, basis: LIST_WIDTH, shrink: 0, visible: viewport => viewport.width >= SPLIT_MIN },
+      { component: column, basis: 0, grow: 1, minSize: 1 },
     ]);
     this.root = new VStack([
       { component: chips, basis: 1, shrink: 0 },
-      { component: picker, basis: 1, shrink: 0, visible: viewport => viewport.width < SPLIT_MIN },
-      { component: split, basis: 0, grow: 1, minSize: 1 },
-      { component: hints, basis: 1, shrink: 0 },
+      { component: filters, basis: 1, shrink: 0, visible: () => (host.authors?.().length ?? 0) > 0 },
+      { component: body, basis: 0, grow: 1, minSize: 1 },
     ]);
   }
+  /** `f`: the next author filter after the current one, back to `all` after the last author. */
+  cycleFilter(): void {
+    const ids = ["all", ...this.host.model().authors.map(author => author.id)];
+    this.setFilter(ids[(ids.indexOf(this.filter) + 1) % ids.length] ?? "all");
+  }
+  /** Shows one author's files (or `all`); a selection the filter hides moves to the first shown file. */
+  setFilter(id: string): void {
+    this.filter = id;
+    const m = this.host.model(), first = m.files[0];
+    if (first && !m.files.some(file => file.path === m.selected)) this.host.select(first.path);
+  }
   private renderList(width: number): string[] {
-    const model = this.host.model(), frame = listLines(model, width);
+    const model = this.host.model(), frame = listLines(model, width, { color: this.color });
     this.listHits = frame.hits;
     // Keep a newly selected file in view without fighting a reader who scrolled the list.
     if (model.selected !== this.shownSelection && frame.selectedRow >= 0) {
       this.shownSelection = model.selected;
       const top = this.list.scrollTop, height = this.list.viewportHeight;
-      if (height > 0 && (frame.selectedRow < top || frame.selectedRow >= top + height)) {
+      if (height > 0 && (frame.selectedRow < top || frame.selectedRow + frame.selectedSpan > top + height)) {
         this.list.updateLayout(frame.lines.length, height, () => {});
         this.list.scrollTo(Math.max(0, frame.selectedRow - Math.floor(height / 2)), { disableFollow: true });
       }
     }
-    // The pane rule runs the full height even when the tree is shorter than the viewport.
+    // The pane rule runs the full height even when the list is shorter than the viewport.
     const blank = PANEL_BG + " ".repeat(Math.max(0, width - 1)) + PANEL_RULE + "│" + RESET;
     return [...frame.lines, ...Array.from({ length: Math.max(0, this.list.viewportHeight - frame.lines.length) }, () => blank)];
+  }
+  /** The stacked list: at most `stackCap` rows, moved the least distance that keeps the selected file whole, then the summary rule. */
+  private renderStacked(width: number): string[] {
+    const m = this.host.model(), frame = listLines(m, width, { stacked: true, color: this.color });
+    const cap = Math.max(1, this.stackCap), total = frame.lines.length, last = Math.max(0, total - cap);
+    let top = Math.min(this.stackTop, last);
+    if (frame.selectedRow >= 0) {
+      const end = frame.selectedRow + Math.max(1, frame.selectedSpan);
+      if (frame.selectedRow < top) top = frame.selectedRow;
+      else if (end > top + cap) top = Math.min(frame.selectedRow, end - cap);
+    }
+    top = Math.max(0, Math.min(top, last));
+    this.stackTop = top;
+    const hits = new Map<number, string>();
+    for (const [row, path] of frame.hits) if (row >= top && row < top + cap) hits.set(row - top, path);
+    this.stackHits = hits;
+    const shown = [...new Set(hits.values())].map(path => m.files.findIndex(file => file.path === path)).filter(index => index >= 0);
+    const range: Seg[] = total > cap && shown.length ? [[PANEL_MUTED, `${Math.min(...shown) + 1}–${Math.max(...shown) + 1}/${m.files.length}`]] : [];
+    return [...frame.lines.slice(top, top + cap), ruleLine([[PANEL_MUTED, filesLabel(m)], [PANEL_TEXT, " "], ...totals(m.files)], range, width)];
   }
 }
