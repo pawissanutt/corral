@@ -16,6 +16,10 @@ use crate::Ctx;
 #[path = "sandbox_cleanup_tests.rs"]
 mod tests;
 
+/// How long an empty listing stands for an unchanged owner set. Longer than the daemon's
+/// slowest pass interval (60 s), or every pass would list again.
+const RECHECK: Duration = Duration::from_secs(300);
+
 struct Memo {
     owners: BTreeSet<String>,
     listed: Instant,
@@ -26,7 +30,7 @@ impl Memo {
         self.owners == *owners
             && now
                 .checked_duration_since(self.listed)
-                .is_some_and(|age| age < Duration::from_secs(60))
+                .is_some_and(|age| age < RECHECK)
     }
 }
 
