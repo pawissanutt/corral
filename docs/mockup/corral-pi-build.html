@@ -53,6 +53,9 @@ code{font:inherit;color:var(--code)}
 .tabs .tab.on{color:var(--text);font-weight:700;text-decoration:underline;text-decoration-color:var(--accent);text-underline-offset:5px;text-decoration-thickness:2px}
 .tabs .tab.on kbd{background:var(--accent);color:#10131a}
 .tabs .cnt{background:var(--sel);color:var(--text);padding:0 .6ch;border-radius:3px;font-weight:400}
+.tabs .tab.on.unf kbd{background:var(--key);color:var(--muted)}
+.tabs .dot{color:var(--accent)}
+.tabs .cnt.wa{color:var(--warn)}.tabs .cnt.ok{color:var(--ok)}.tabs .cnt.er{color:var(--err)}
 .tabs .sep{color:var(--line)}
 .tabs .sp{flex:1}
 .term[data-tier=tiny] .tabs{gap:0;padding-left:8px;padding-right:8px}
@@ -67,6 +70,8 @@ code{font:inherit;color:var(--code)}
 .term[data-tier=tiny] .main{padding:6px 10px}
 .bar{color:transparent}
 .sel>.bar{color:var(--accent)}
+/* a selection bar is accent only while its view or dock has the keys */
+.term[data-focus=composer] .main .sel>.bar,.term:not([data-focus=dialog]):not([data-focus=questions]) .dock .sel>.bar{color:var(--muted)}
 /* sidebar: a rail when the pane is wide enough, one navigation row above the composer when it is not */
 .rtabs{display:flex;gap:10px;padding:0 10px 4px;white-space:nowrap;overflow:hidden}
 .rtabs .on{color:var(--accent);font-weight:700;text-decoration:underline;text-underline-offset:4px}
@@ -127,6 +132,48 @@ code{font:inherit;color:var(--code)}
 .tl .tlr{display:grid;grid-template-columns:11ch minmax(0,1fr);column-gap:1ch;white-space:nowrap;overflow:hidden}
 .tl.bare .tlr{grid-template-columns:1ch minmax(0,1fr)}
 .tl .tq{color:#596072}
+/* rows phase A added: host notices and marks as quiet rows, thinking, fenceless code, the compaction divider */
+.nr,.mk{margin:10px 0}
+.think{color:var(--muted);font-style:italic;margin-top:10px;white-space:normal;max-width:96ch}
+.think b{font-weight:700}
+.cb{white-space:pre;color:var(--code);overflow:hidden;margin:10px 0}
+.cb .lang{color:var(--muted)}
+.cdiv{margin:10px 0;color:var(--muted);cursor:pointer}
+.cdiv .dl{display:flex;gap:1ch;white-space:nowrap;overflow:hidden}
+.cdiv .dl::after{content:'';flex:1;min-width:2ch;border-top:1px solid var(--line);align-self:center}
+.cdiv .rl{color:var(--line)}
+.cdiv .nt,.cdiv .sum{padding-left:3ch}
+.cdiv .sum{white-space:pre-wrap;color:var(--text);margin-top:10px}
+.lde{margin:0 0 10px;white-space:nowrap;overflow:hidden}
+.lde .ac{cursor:pointer}
+.ans .q{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ans .c{font-weight:700}
+.ans .c.hang{padding-left:13ch}
+.err{margin:10px 0;max-width:96ch}
+.err .s{padding-left:2ch;text-indent:-2ch}
+.err .n{color:var(--muted);padding-left:2ch}
+.jump{position:absolute;bottom:6px;left:50%;transform:translateX(-50%);background:var(--sel);padding:0 1ch;border-radius:3px;white-space:nowrap;cursor:pointer;z-index:3}
+.jump:empty{display:none}
+/* list plus detail: Task › Events */
+.bk{display:flex;justify-content:space-between;gap:2ch;white-space:nowrap}
+.lchips{display:flex;flex-wrap:wrap;gap:0 1ch;align-items:center;margin-top:2px}
+.lchip{background:var(--raised);padding:0 1ch}
+.lchips .sp{flex:1}
+.lcw{display:grid;grid-template-columns:42ch minmax(0,1fr);border-top:1px solid var(--line);margin-top:4px}
+.lcw.one{grid-template-columns:minmax(0,1fr)}
+.lcw .ls{border-right:1px solid var(--line);min-width:0}
+.lcw.one .ls{border-right:0;border-bottom:1px solid var(--line)}
+.lcw .dt{padding-left:1ch;min-width:0}
+.lcw.one .dt{padding-left:0}
+.ev .tr{grid-template-columns:1ch 3ch 8ch minmax(0,1fr) 3ch}
+.fd{display:grid;grid-template-columns:var(--lw,7ch) minmax(0,1fr);column-gap:1ch}
+.fd>span:first-child{color:var(--muted)}
+.srule{display:flex;gap:1ch;color:var(--muted);font-weight:700;margin-top:4px}
+.srule::after{content:'';flex:1;border-top:1px solid var(--line);align-self:center}
+/* the framed pager: title and position set into its top border */
+.backdrop.mid{align-items:center;padding:0}
+.pgr{white-space:pre;background:var(--bg);overflow:hidden}
+.pgr .bd{color:var(--accent)}
 /* changes */
 .chg{display:grid;grid-template-columns:46ch minmax(0,1fr);height:100%;min-height:0}
 .chg .files{border-right:1px solid var(--line);padding-right:8px;overflow:auto;min-height:0}
@@ -168,6 +215,9 @@ code{font:inherit;color:var(--code)}
 .cline{display:flex;gap:1ch}
 .cline input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--text);font:inherit;padding:0}
 .cline input::placeholder{color:#8f97a6}
+.cline .pr{color:var(--muted)}
+.term[data-focus=composer] .cline .pr{color:var(--accent)}
+.term:not([data-focus=composer]) #draft{caret-color:transparent}
 .cbar{display:flex;justify-content:space-between;gap:2ch;color:var(--muted);white-space:nowrap;overflow:hidden}
 .term[data-short="1"] .cbar{display:none}
 .term[data-short="1"] .composer{margin-top:9px;margin-bottom:3px;padding-bottom:4px}
@@ -188,7 +238,7 @@ code{font:inherit;color:var(--code)}
 .pop .grp{padding:6px 12px 0 2ch;color:var(--head);font-weight:700}
 .pop .kr{display:grid;grid-template-columns:2ch 11ch minmax(0,1fr);padding:1px 12px 1px 0}
 .toast{position:absolute;top:8px;right:14px;z-index:4;pointer-events:none;max-width:calc(100% - 28px)}
-.toast .tin{display:block;background:var(--raised);border:1px solid var(--rule);border-radius:6px;padding:2px 10px;animation:slide .22s cubic-bezier(.16,1,.3,1)}
+.toast .tin{display:block;background:var(--raised);border:1px solid var(--rule);border-radius:6px;padding:2px 10px;max-width:76ch;white-space:normal;animation:slide .22s cubic-bezier(.16,1,.3,1)}
 @keyframes slide{from{transform:translateX(10px);opacity:.3}}
 @media (prefers-reduced-motion:reduce){.dlg,.toast .tin{animation:none}.spin::before{animation:none;content:'●'}}
 /* launch */
@@ -223,10 +273,10 @@ body.embed .term{border:0;border-radius:0}
 </style>
 </head>
 <body>
-<h1>corral pi: build mode</h1>
-<p class="lede">Interactive mock of the proposed untethered build host. Click the terminal and drive it with the keys in its footer, or use the scene buttons. Change the pane size, or drag the pane's bottom-right corner, and the layout re-flows. Data is simulated; nothing here is implemented.</p>
+<h1>corral pi: the workbench</h1>
+<p class="lede">Interactive mock of the corral pi workbench: the build host, plus one bound worker for the rows and views every role shares. Click the terminal and drive it with the keys in its footer, or use the scene buttons. Change the pane size, or drag the pane's bottom-right corner, and the layout re-flows. Data is simulated.</p>
 <div class="strip" id="strip">
-  <b>Scenes</b>
+  <b>Build</b>
   <button type="button" data-s="launch">Launch</button>
   <button type="button" data-s="chat">Fan-out</button>
   <button type="button" data-s="fleet">Fleet</button>
@@ -236,10 +286,15 @@ body.embed .term{border:0;border-radius:0}
   <button type="button" data-s="finish">Finish</button>
   <button type="button" data-s="board">Board fan-out</button>
   <button type="button" data-s="keys">Keys</button>
+  <button type="button" data-s="pager">Pager</button>
+  <b>Worker</b>
+  <button type="button" data-s="worker">Transcript rows</button>
+  <button type="button" data-s="events">Task › Events</button>
   <b>Simulate</b>
   <button type="button" class="sim" data-s="pause" id="pauseBtn">Pause</button>
   <button type="button" class="sim" data-s="ask">An agent asks</button>
   <button type="button" class="sim" data-s="skip">Skip to finished</button>
+  <button type="button" class="sim" data-s="herdr" id="herdrBtn">Ctrl+B is herdr's prefix</button>
   <button type="button" class="sim" data-s="reset">Reset</button>
 </div>
 <div class="strip" id="sizes">
@@ -261,13 +316,13 @@ body.embed .term{border:0;border-radius:0}
       <span id="probe">0000000000</span>
       <div class="head" id="head"></div>
       <div class="tabs" id="tabs"></div>
-      <div class="body"><div class="mainwrap"><div class="main" id="main"></div><div class="toast" id="toast" role="status"></div></div><div class="side" id="side"></div></div>
+      <div class="body"><div class="mainwrap"><div class="main" id="main"></div><div class="jump" id="jump" data-a="jump"></div><div class="toast" id="toast" role="status"></div></div><div class="side" id="side"></div></div>
       <div class="inl" id="inl"></div>
       <div class="dock" id="dock"></div>
       <div class="composer" id="composer">
         <div class="ctitle" id="ctitle"></div>
         <div class="cind" id="cind" role="status"></div>
-        <div class="cline"><span class="ac">›</span><input id="draft" autocomplete="off" spellcheck="false" aria-label="Message"></div>
+        <div class="cline"><span class="pr">›</span><input id="draft" autocomplete="off" spellcheck="false" aria-label="Message"></div>
         <div class="cbar" id="cbar"></div>
       </div>
       <div class="status" id="status"></div>
@@ -363,21 +418,26 @@ const LAUNCH=[
  {id:'r3',name:'A-29',desc:'Arrival layout notes · mitiplay · suspended yesterday'},
 ];
 const WHERE=['new worktree  .worktrees/build-<name>','here  the current checkout and branch'];
+/* The sidebar key: Ctrl+B, or Alt+B when the session runs in herdr and Ctrl+B is herdr's prefix. Every cap draws it. */
+const sideKeyId=()=>S&&S.herdr?'Alt+b':'Ctrl+b',SK=()=>S&&S.herdr?'Alt+B':'Ctrl+B';
 const TIERS={
- wide:'conversation and the 34-column sidebar; tables show every column (Ctrl+B collapses the sidebar)',
- mid:'conversation and the 34-column sidebar (Ctrl+B collapses it)',
- narrow:'under 105 columns the sidebar folds to one row above the composer; Ctrl+B opens it as a drawer',
- tiny:'compact: sidebar row above the composer, rows fold to two lines, footer keeps the essentials'};
+ wide:()=>`conversation and the 34-column sidebar; tables show every column (${SK()} collapses the sidebar)`,
+ mid:()=>`conversation and the 34-column sidebar (${SK()} collapses it)`,
+ narrow:()=>`under 105 columns the sidebar folds to one row above the composer; ${SK()} opens it as a drawer`,
+ tiny:()=>'compact: sidebar row above the composer, rows fold to two lines, footer keeps the essentials'};
 const NOTES={
  launch:['Launch',[['new','One launcher instead of flags. <code>corral pi</code> asks what to open and lists what can be resumed, whatever kind of session it was.'],['new','Build is a third kind of session: no assistant record, no scratch record, no task. It writes to a plain Git worktree it creates, or to the checkout if you choose "here".'],['today','<code>corral pi</code>, <code>--pm</code>, <code>--pm -c</code>, <code>--resume A-&lt;n&gt;</code>, <code>--bare</code>, <code>--over-cap</code>; three of them exclude one another, and bare has only seven tools.']]],
- chat:['Fan-out in the conversation',[['new','The parent splits the request and starts write-capable agents. Each gets a brief, a profile and a set of files it owns. They share one worktree.'],['new','The task block in the conversation is the live list of slices: state, what each delivers, profile and time. Nothing sits above the tabs.'],['today','While the parent works, the composer\'s top border carries the working indicator at its right: <code>⠹ Working · running task · 40s · esc stop</code> in a wide pane, then <code>⠹ running task · 40s</code>, <code>⠹ task · 40s</code> and <code>⠹ 40s</code> as the pane narrows (compact times such as <code>1m04s</code> below 64 columns). It never covers <code>Message → receiver</code>, and an idle session shows nothing there. The header state word gets the same spinner and the turn time, <code>⠹ Working · 1m 20s</code>. After 60 s without model data it reads <code>! no data from the model for 1m 04s</code>; with reduced motion the spinner is <code>●</code>.'],['today','Each tool call is one row: state glyph, the verb in accent, what it touches, <code>·</code> the outcome, and the time right-aligned in muted. A running call counts up; a call whose arguments still stream reads <code>writing</code>, and a <code>write</code> shows its newest lines as they arrive. A failure adds at most 3 muted rows with its reason or output tail; cut output ends with a muted <code>… n more rows</code>.'],['today','Rows never print a key or the word click. A click on a row, or <kbd>Ctrl+O</kbd> for every row, opens what it hides; the Chat footer names the key as <code>Ctrl+O expand</code>, the first hint a narrow footer drops. A row says what it hides only as a muted count (<code>41 more lines</code>), and only when its outcome does not already state it.'],['today','A Code Mode cell is one group: <code>✓ code 3 calls ✓2 · read ×2, bash · ✗1</code> with <code>cell 3</code> and its time on the right, then the calls it actually made, indented and drawn like direct calls. A failure the script caught keeps the cell at <code>✓</code> with <code>✗1</code> in the error tone. Calls still running show at most 3 rows, then <code>… n more running</code>.'],['today','A command sent to the background keeps its row live (<code>running in the background</code>, its job id, the elapsed time and a link to Fleet) until it exits. The completion the host delivers is one quiet row, <code>✓ job j1-2 exited 0 · 4.1 KB output</code>, not a <code>you</code> bubble.'],['new','The sidebar keeps its three tabs. Context lists the agents still at work with their current step, then running jobs, then one line of completed names. Plan is the session ledger, including the steps no agent owns.'],['today','The sidebar already folds this way: a 34-column rail from 105 columns, one navigation row below that, <kbd>Ctrl+B</kbd> to switch. In the mock <kbd>F6</kbd> only changes the tab; today it moves focus into the sidebar.'],['today','<code>explore</code> only: read-only, one-shot, one model, 120 s by default. Nothing that writes runs in parallel.']]],
- fleet:['Fleet',[['new','One table answers "who is doing what, for how long, at what cost". <kbd>F8</kbd> focuses it; arrows select; Enter opens that agent\'s conversation.'],['new','The timeline shows when each agent waited, ran, asked and finished. A dotted run is a wait, so a dependency such as tests waiting for host-slots is visible.'],['new','<kbd>s</kbd> points the composer at the selected agent, <kbd>x</kbd> cancels it, <kbd>m</kbd> changes its model for the next request.'],['today','F8 lists helpers and jobs, but a helper cannot be steered, cancelled alone or given a different model.']]],
- child:['One agent',[['new','The agent\'s own conversation replaces the reading area. The composer target switches to it, so Enter steers this agent and not the parent.'],['new','The brief states what the agent owns and what it cannot do: no board access, no nested agents.'],['today','Helper conversations are read-only; follow-up to a child is not provided.']]],
- changes:['Changes',[['new','Filter the diff by agent. Each file carries the colour of who touched it. A file edited by two agents is marked, and so is an edit outside the set of files an agent was given.'],['new','Below about 90 columns the file list stacks above the diff instead of beside it.'],['risk','A shared worktree makes overlap possible. The mock flags it and leaves the decision to you; it does not block the edit.'],['today','Changes shows the working tree as one diff with no author.']]],
+ chat:['Fan-out in the conversation',[['new','The parent splits the request and starts write-capable agents. Each gets a brief, a profile and a set of files it owns. They share one worktree.'],['new','The task block in the conversation is the live list of slices: state, what each delivers, profile and time. Nothing sits above the tabs.'],['today','While the parent works, the composer\'s top border carries the working indicator at its right: <code>⠹ Working · running task · 40s · esc stop</code> in a wide pane, then <code>⠹ running task · 40s</code>, <code>⠹ task · 40s</code> and <code>⠹ 40s</code> as the pane narrows (compact times such as <code>1m04s</code> below 64 columns). It never covers <code>Message → receiver</code>, and an idle session shows nothing there. The header state word gets the same spinner and the turn time, <code>⠹ Working · 1m 20s</code>. After 60 s without model data it reads <code>! no data from the model for 1m 04s</code>; with reduced motion the spinner is <code>●</code>.'],['today','Each tool call is one row: state glyph, the verb in accent, what it touches, <code>·</code> the outcome, and the time right-aligned in muted. A running call counts up; a call whose arguments still stream reads <code>writing</code>, and a <code>write</code> shows its newest lines as they arrive. A failure adds at most 3 muted rows with its reason or output tail; cut output ends with a muted <code>… n more rows</code>.'],['today','Rows never print a key or the word click. A click on a row, or <kbd>Ctrl+O</kbd> for every row, opens what it hides; the Chat footer names the key as <code>Ctrl+O expand</code>, the first hint a narrow footer drops. A row says what it hides only as a muted count (<code>41 more lines</code>), and only when its outcome does not already state it.'],['today','A Code Mode cell is one group: <code>✓ code 3 calls ✓2 · read ×2, bash · ✗1</code> with <code>cell 3</code> and its time on the right, then the calls it actually made, indented and drawn like direct calls. A failure the script caught keeps the cell at <code>✓</code> with <code>✗1</code> in the error tone. Calls still running show at most 3 rows, then <code>… n more running</code>.'],['today','A command sent to the background keeps its row live (<code>running in the background</code>, its job id, the elapsed time and a link to Fleet) until it exits; then it reads like any finished call, <code>✓ bash … · exit 0</code> with its time and the Fleet link, and no job id. The completion the host delivers is one quiet row, <code>✓ job j1-2 exited 0 · 4.1 kB output</code>, not a <code>you</code> bubble.'],['today','Chat keeps your place: scrolled up, rows that arrive are counted on the jump control, <code>↓ 7 new rows · End</code> (<code>Ctrl+End</code> while the draft has text). While another view is open the Chat tab carries a <code>•</code> once the conversation grows.'],['new','The sidebar keeps its three tabs. Context lists the agents still at work with their current step, then running jobs, then one line of completed names. Plan is the session ledger, including the steps no agent owns.'],['today','The sidebar already folds this way: a 34-column rail from 105 columns, one navigation row below that, and one key to switch it: <kbd>Ctrl+B</kbd>, or <kbd>Alt+B</kbd> when the session runs in herdr and Ctrl+B is herdr\'s prefix (simulate it with the dashed button); every cap draws the chosen key. In the mock <kbd>F6</kbd> only changes the tab; today it moves focus into the sidebar.'],['today','<code>explore</code> only: read-only, one-shot, one model, 120 s by default. Nothing that writes runs in parallel.']]],
+ fleet:['Fleet',[['new','One table answers "who is doing what, for how long, at what cost". <kbd>F8</kbd> or <kbd>Alt+2</kbd> opens it with the keys; arrows select; Enter opens that agent\'s conversation; <kbd>Esc</kbd> goes back to Chat.'],['new','The timeline shows when each agent waited, ran, asked and finished. A dotted run is a wait, so a dependency such as tests waiting for host-slots is visible.'],['new','<kbd>s</kbd> points the composer at the selected agent, <kbd>x</kbd> cancels it, <kbd>m</kbd> changes its model for the next request.'],['today','F8 lists helpers and jobs, but a helper cannot be steered, cancelled alone or given a different model.']]],
+ child:['One agent',[['new','The agent\'s own conversation replaces the reading area. The composer target switches to it, so Enter steers this agent and not the parent.'],['today','Opening it says so in a notice, <code>Messages now go to picker-ui</code>; leaving the conversation for any other view gives the message back to the parent.'],['new','The brief states what the agent owns and what it cannot do: no board access, no nested agents.'],['today','Helper conversations are read-only; follow-up to a child is not provided.']]],
+ changes:['Changes',[['new','Filter the diff by agent. Each file carries the colour of who touched it. A file edited by two agents is marked, and so is an edit outside the set of files an agent was given.'],['new','Below about 90 columns the file list stacks above the diff instead of beside it.'],['today','<kbd>F3</kbd> filters paths; <kbd>/</kbd> always starts a command in the composer.'],['risk','A shared worktree makes overlap possible. The mock flags it and leaves the decision to you; it does not block the edit.'],['today','Changes shows the working tree as one diff with no author.']]],
  queue:['Input queue',[['new','Queued input is visible above the composer. Each item can be edited, reordered or removed, and names who receives it.'],['new','The composer always shows its target and what Enter will do: send, steer, or steer one agent. <kbd>Alt+T</kbd> changes the target.'],['today','The composer reports counts only; "queued input has no edit, cancel or reorder controls" (pi-panels guide).']]],
- finish:['Finish',[['new','One result card: time and cost per slice, the size of the change, anything flagged and what was not checked. Then one choice, in the same dialog style as every other question.'],['new','The exits come from the project\'s policy. mitiplay allows landing on the gate alone. A project set to review would show option 2 as unavailable and say why.'],['new','"Ship through the board" is the only point where corral records anything. The session itself stays untethered.'],['today','While a docked choice waits for you, the composer border reads <code>▲ waiting for you · 15s</code>, then <code>▲ you · 15s</code> and <code>▲ 15s</code> as the pane narrows. Once you choose and the session is idle, the border carries nothing.'],['today','Scratch, commit, <code>finish</code>, task, gate, mandatory independent review, land. Review can be waived only by the owner, one run at a time.']]],
+ finish:['Finish',[['new','One result card: time and cost per slice, the size of the change, anything flagged and what was not checked. Then one choice, in the same dialog style as every other question.'],['new','The exits come from the project\'s policy. mitiplay allows landing on the gate alone. A project set to review would show option 2 as unavailable and say why.'],['new','"Ship through the board" is the only point where corral records anything. The session itself stays untethered.'],['today','While a docked choice waits for you, the composer border reads <code>▲ waiting for you · 15s</code>, then <code>▲ you · 15s</code> and <code>▲ 15s</code> as the pane narrows. Once you choose and the session is idle, the border carries nothing.'],['today','The docked choice keeps ↑↓, Enter, digits and Esc; Tab or any letter goes to the composer, F-keys still switch views (<kbd>F7</kbd> to check the changes), and <kbd>Alt+↓</kbd> gives the keys back to the choice. Esc leaves a notice, <code>No exit chosen. Nothing was filed or landed · F2 Finish reopens it</code>.'],['today','Scratch, commit, <code>finish</code>, task, gate, mandatory independent review, land. Review can be waived only by the owner, one run at a time.']]],
  board:['Board fan-out',[['new','A plan becomes N tasks with dependency edges in one confirmed action. The preview is what <code>corral import --dry-run</code> returns; nothing is written before you confirm.'],['new','Board (<kbd>F10</kbd>) follows the runs this session filed: waiting on a dependency or a slot, running, in gate, in review, landed.'],['new','Your confirmation starts exactly the listed tasks. It is not a standing grant.'],['today','File each task, set dependencies, queue or dispatch each one, then watch the board in another pane.']]],
- keys:['Keys and actions',[['new','The footer always shows the keys that work right now, and each hint is clickable. A narrow pane keeps the most relevant ones and <kbd>F1</kbd>.'],['new','<kbd>F1</kbd> lists everything; <kbd>F2</kbd> searches actions and says why one is unavailable.'],['today','F2 and <code>/actions</code> exist; the footer does not list keys, and F6 to F11 have to be remembered.']]],
+ keys:['Keys and actions',[['today','The footer shows the keys that work right now, and each hint is clickable. While a view has the keys it leads with <code>keys → Fleet · Tab to type</code> (<code>→ Fleet</code> when narrow); <kbd>F2</kbd> stays whenever it fits and <kbd>F1</kbd> always ends the row.'],['today','<kbd>F9</kbd>, <kbd>F8</kbd>, <kbd>F7</kbd> and <kbd>F10</kbd> open the views, and so do <kbd>Alt+1</kbd> to <kbd>Alt+4</kbd> in tab order. <kbd>Tab</kbd> hands the keys back to the composer, a letter a view does not use is typed into it, and <kbd>/</kbd> always starts a command. Filters and job search are <kbd>F3</kbd>.'],['today','<kbd>Esc</kbd> in a view goes back to Chat. While a turn runs the header says <code>Back in Chat · esc again stops the turn</code>, and a second Esc within 0.6 s is ignored.'],['today','Without the keys the composer has no cursor and a muted <code>›</code>; the open tab\'s key cap turns muted and selection bars lose their accent. Notices take the header\'s state place when they fit; a longer one is a toast.'],['today','<kbd>F1</kbd> lists every key in groups (Views as <code>F9/Alt+1</code>, Message, Scroll, Fleet, Changes, Board, Sidebar, Queue, Exit, Anywhere) and shows its position in the title row; <kbd>F2</kbd> searches actions, says why one is unavailable, and has <code>Recent notices</code> and <code>Bell: off</code>.']]],
+ pager:['Pager',[['today','Job output, peek, receipts, task and agent details, the Inbox sheet, the transcript reader and F2 Recent notices share one framed pager: the title and the position (<code>197–214 / 214</code>) are set into its accent top border. ↑↓, PgUp/PgDn, Home/End and the wheel scroll it; q or Esc closes it. It opens at the newest line.']]],
+ worker:['Rows every role shares',[['today','Host events are one quiet row each, never a <code>you</code> bubble: <code>○ corral · T-950 run R2 · the agent follows its prompt file T-950-R2.md</code> for a dispatch prompt, <code>✗ gate quick failed · T-950 R2 · attempt 50202f08</code> for a gate wake, <code>→ PM answered T-950/R2/Q1 · …</code> with the answer in the text colour, <code>○ auto-continue 1 of 3 · plan P2 still has open steps · next …</code>. A click or <kbd>Ctrl+O</kbd> shows the delivered text.'],['today','An answer to the agent\'s question stays the owner\'s bubble: <code>you answered</code> and the question muted on one row, the chosen option in bold under it.'],['today','Every run ends with one muted row and the time of day at the right: <code>✓ done · 3m 12s · 9 tool calls · $0.31</code>, <code>○ waiting for … · the agent resumes when it finishes</code>, or <code>○ run ended · 48s · 4 tool calls · $0.08</code>, which never names the cause: the row above it does (<code>○ stopped by you · 2 tool calls did not run</code>, <code>○ stopped: the run budget was reached</code>, <code>○ stopped by corral</code>, or a failure\'s <code>✗</code> sentence). A model change reads <code>○ model → gpt-6.1-sol · effort high (was claude-opus-5.5 · medium)</code>. A narrow row drops re-billed tokens first and clips the lead last. Build sessions are never bound and draw no run-end rows.'],['today','A compaction keeps the transcript: one divider, <code>── context compacted · 483k → 38k tokens · 14:02</code>, and a muted note; a click shows the summary the agent keeps. A long session opens on its newest part under <code>↑ load earlier · 2,222 earlier messages</code>.'],['today','A failed turn is one <code>✗</code> sentence that says whether anything was lost, then one muted next step; the raw error is a click away. Calls a stopped turn never ran read <code>○ … · not run</code>.'],['today','Consecutive settled rows of one kind fold into one: <code>✓ read ×6 · shard.rs, cache.rs, …</code>, <code>✓ Plan 5/7 · done: … · started: …</code>. Thinking sits directly above the tool row it leads to. A code block has no fences: a muted language row, then the code indented by 2.'],['today','Waiting owner questions are a dock item above the composer: the count, <code>click, /questions or Alt+A to answer</code>, and per question its <code>/questions &lt;id&gt;</code>. <kbd>Alt+A</kbd> or <kbd>Alt+↓</kbd> gives it the keys.'],['today','Tabs carry badges in words (<code>git?</code>, <code>gate ✓ · reviewed</code>, shortening to <code>gate ✓</code>), the header <code>⚑ 3 decisions</code> for the Inbox, and the status bar <code>WORKER ● bound · gen 1</code> (the generation from 105 columns, <code>WRK</code> below 64). Every role opens on Chat with the keys in the composer.']]],
+ events:['Task › Events',[['today','Graph and Events are list plus detail: a back line <code>‹ Task · Events</code> (a click goes back), one chip row with the source, the position and the end sequence beside the read time and <code>r reread</code>, one muted caveat, then the list beside its selected event from 105 columns, stacked below.'],['today','The detail is label and value rows: the time as local time and the recorded timestamp, task and run, actor and source, then the event\'s fields flattened (<code>gate.stats.passed</code>, <code>failures[0].test</code>). <kbd>?</kbd> shows every other caveat; <kbd>h</kbd> switches to the host log.'],['today','The open sub-view names itself on its tab, <code>Task › Events</code>, and the footer leads with <code>keys → Task › Events · Tab to type</code>.']]],
 };
 
 const $=id=>document.getElementById(id),draft=$('draft'),term=$('term');
@@ -400,22 +460,28 @@ const nm=k=>`<span class="b" style="color:${k.c}">${k.id}</span>`;
 const BARS=' ▁▂▃▄▅▆▇';
 const pulse=(k,n)=>k.pulse.slice(-n).map(v=>BARS[v]).join('').padStart(n,' ');
 /* The sidebar follows today's workbench: a 34-column rail from 105 columns, one navigation row above the composer
-   below that. Ctrl+B collapses the rail to that row, or opens the row into a compact drawer. */
+   below that. The sidebar key collapses the rail to that row, or opens the row into a compact drawer. */
 const isLive=k=>['running','needs','queued'].includes(k.st);
 const hasSide=()=>S.view!=='launch';
 const railOn=()=>hasSide()&&!small()&&S.side!==false;
 const drawerOn=()=>hasSide()&&!railOn()&&S.drawer;
 
 function reset(){
+  const herdr=S?S.herdr:false;
   kids=KIDS.map(k=>{const done=k.kind==='explore';return {...k,st:done?'done':'queued',el:done?k.dur:0,cost:done?k.rate*k.dur:0,ctx:done?22:6,steers:[],hist:'',pulse:[]};});
-  S={view:'launch',last:'',overlay:null,di:0,focus:'list',phase:'idle',clock:0,tl:0,sel:1,target:'parent',queue:[],qid:1,log:[],filter:'all',file:0,
-     launch:{row:1,where:0},playing:true,jobs:[],board:null,bsel:0,pq:'',pi:0,model:0,effort:2,side:null,rail:'context',drawer:false,toast:'',quiet:false,
-     wait:0,bgDone:[],taskAt:0,checksAt:0};
+  S={role:'build',herdr,view:'launch',last:'',overlay:null,under:null,di:0,focus:'list',phase:'idle',clock:0,tl:0,sel:1,target:'parent',queue:[],qid:1,log:[],filter:'all',file:0,
+     launch:{row:1,where:0},playing:true,jobs:[],board:null,bsel:0,pq:'',pi:0,model:0,effort:2,side:null,rail:'context',drawer:false,toast:null,quiet:false,
+     wait:0,bgDone:[],taskAt:0,checksAt:0,notices:[],follow:true,seenH:0,seenLog:0,pg:null,proposed:false,bell:'off',escAt:0,
+     wq:-1,wOlder:false,wUnread:false,wsent:[],cx:false,esel:3,evRead:Date.now(),legend:false};
   draft.value='';
 }
-function toast(text){
+/* A notice: kept with its time for F2 Recent notices, drawn in the header's state place when it fits whole, else a toast. */
+const clockText=s=>[Math.floor(s/3600)%24,Math.floor(s/60)%60,s%60].map(n=>String(n).padStart(2,'0')).join(':');
+function toast(text,tone){
   if(S.quiet)return;
-  S.toast=text;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{S.toast='';render();},3200);
+  tone=tone||'text';
+  S.notices.push({at:clockText(14*3600+Math.floor(S.clock)),text,tone});if(S.notices.length>50)S.notices.shift();
+  S.toast={text,tone};clearTimeout(toastTimer);toastTimer=setTimeout(()=>{S.toast=null;render();},3200);
 }
 function begin(text){
   S.phase='running';S.view='chat';S.focus='composer';S.clock=S.tl=S.taskAt=40;
@@ -454,7 +520,7 @@ function step(){
     if(j){j.st='running';j.el+=STEP;if(j.el>=j.dur){j.el=j.dur;j.st='done';}}
     if(S.jobs.every(j=>j.st==='done')){
       if(S.phase==='checks'){S.phase='done';S.log.push({k:'result'});openDialog('exit',1);}
-      else{S.phase='landed';S.log.push({k:'note',tone:'ok',text:'✓ Landed on main at 3f2a9c1 · worktree removed · branch build/save-slots deleted'});toast('Landed on main');}
+      else{S.phase='landed';S.log.push({k:'note',tone:'ok',text:'✓ Landed on main at 3f2a9c1 · worktree removed · branch build/save-slots deleted'});toast('Landed on main','success');}
     }
   }
   // A background command that exits leaves one notice row in the conversation.
@@ -467,8 +533,18 @@ function finishNow(){
   if(kid(ASK.kid).st==='needs')answer(2);
   S.quiet=true;for(let i=0;i<400&&S.phase!=='done';i++)step();S.quiet=false;
 }
-function openDialog(name,di){S.overlay=name;S.di=di||0;S.focus='dialog';S.wait=0;}
-function closeOverlay(){S.overlay=null;S.focus=S.view==='launch'?'list':'composer';}
+/* Popups (keys, palette, pager) sit over a docked choice and give it back when they close. */
+const POP=['keys','palette','pager'],popup=()=>POP.includes(S.overlay);
+function openDialog(name,di){
+  if(POP.includes(name)){if(S.overlay&&!popup())S.under=S.overlay;S.overlay=name;return;}
+  S.overlay=name;S.di=di||0;S.focus='dialog';S.wait=0;
+}
+function closeOverlay(){
+  if(popup()&&S.under){S.overlay=S.under;S.under=null;return;}
+  S.overlay=null;S.under=null;
+  if(S.view==='launch')S.focus='list';else if(S.focus==='dialog')S.focus='composer';
+}
+function openPager(title,lines){openDialog('pager');S.pg={title,lines,off:lines.length,max:0,page:1};}
 function chooseExit(i){
   const c=EXITS[i];closeOverlay();S.log.push({k:'user',text:c.label,choice:true});
   if(c.id==='keep'){S.phase='kept';S.log.push({k:'note',tone:'mu',text:'Kept on build/save-slots in .worktrees/build-save-slots · nothing filed · resume it from the launcher'});}
@@ -479,27 +555,27 @@ function chooseExit(i){
   if(c.id==='iterate'){S.phase='open';S.log.push({k:'note',tone:'mu',text:'Session stays open. The exit choice comes back when you say done, or from F2 → Finish.'});}
 }
 function simAsk(){
-  const k=kid(ASK.kid);
+  const k=kid(ASK.kid);if(S.role!=='build'){S.role='build';S.rail='context';}
   if(S.phase==='idle'){begin(DEMO);advance(8);}
   if(k.st==='needs'){openDialog('ask',0);return;}
   if(k.st!=='running'){toast('picker-ui is not running. Reset to replay this.');return;}
   k.st='needs';S.view=S.view==='launch'?'chat':S.view;openDialog('ask',0);
 }
 function answer(i){
-  const k=kid(ASK.kid);closeOverlay();k.st='running';k.steers.push('Answer: '+ASK.opts[i][0]);S.toast='';
+  const k=kid(ASK.kid);closeOverlay();k.st='running';k.steers.push('Answer: '+ASK.opts[i][0]);S.toast=null;
   S.log.push({k:'note',tone:'wa',text:`▲ ${k.id} asked: ${ASK.q}`});
   S.log.push({k:'note',tone:'ac',text:`→ ${k.id}: ${ASK.opts[i][0]}`});
 }
 function ensureBoard(){if(!S.board)S.board={tasks:[]};}
 function planBoard(){
   if(S.phase==='idle'){begin(DEMO);advance(8);}
-  S.view='chat';
+  S.view='chat';S.proposed=true;
   S.log.push({k:'user',text:'Export and import of slots is too big for this session. Put it on the board.'},
    {k:'asst',html:'Five tasks, three dependency edges. This is the preview from <code>corral import --dry-run</code>; nothing is written yet.'});
   openDialog('boardplan',0);
 }
 function fileBoard(i){
-  closeOverlay();
+  closeOverlay();S.proposed=false;
   if(i===2){S.log.push({k:'note',tone:'mu',text:'Nothing filed. Say what to change in the plan.'});return;}
   ensureBoard();for(const p of PLAN)if(!S.board.tasks.some(t=>t.id===p.id))S.board.tasks.push({...p,st:i===0?'ready':'backlog',el:0,g:0,r:0});
   S.log.push({k:'user',text:i===0?'File and start':'File only',choice:true},
@@ -512,12 +588,13 @@ function boardStep(){
     if(t.st==='ready'){if(t.dep.every(landed)&&B.filter(x=>x.st==='running').length<SLOTS)t.st='running';}
     else if(t.st==='running'){t.el+=STEP;if(t.el>=t.dur)t.st='gating';}
     else if(t.st==='gating'){t.g+=STEP;if(t.g>=25)t.st='reviewing';}
-    else if(t.st==='reviewing'){t.r+=STEP;if(t.r>=40){t.st='landed';toast(t.id+' landed');}}
+    else if(t.st==='reviewing'){t.r+=STEP;if(t.r>=40){t.st='landed';toast(t.id+' landed','success');}}
   }
 }
 function enqueue(text,target){S.queue.push({id:S.qid++,text,target});}
 function send(){
   const v=draft.value.trim();if(!v)return;draft.value='';
+  if(S.role==='worker'){S.wsent.push(v);return;}
   if(S.phase==='idle'){begin(v);return;}
   if(S.target==='parent'){
     S.log.push({k:'user',text:v});
@@ -564,7 +641,7 @@ function rowHTML(m,W){
   if(tot()>W)verb=clipEnd(verb,Math.max(1,verb.length-(tot()-W)));
   const tone=TONE[m.tone||({failed:'error',unknown:'warning',needs:'warning'}[m.st]||'muted')];
   const parts=[right,tip,time].filter(Boolean).map(p=>`<span class="mu">${h(p)}</span>`);
-  if(view)parts.push(`<span class="ac" data-k="F8">${h(view)}</span>`);
+  if(view)parts.push(`<span class="ac" ${m.va?`data-a="${m.va[0]}" data-v="${m.va[1]}"`:'data-k="F8"'}>${h(view)}</span>`);
   return `<div class="trow"><span class="tl0">${GLYPH[m.st]} <span class="ac">${h(verb)}</span>${target?' '+h(target):''}${outcome?`<span class="mu"> · </span><span class="${tone}">${h(outcome)}</span>`:''}</span>${parts.length?`<span class="tr0">${parts.join('  ')}</span>`:''}</div>`
    +(m.body||[]).map(b=>`<div class="tb ${TONE[b.tone||'muted']}">${h(b.text)||' '}</div>`).join('');
 }
@@ -576,7 +653,7 @@ const CELL={label:'cell 3',ms:374,summary:'read ×2, bash',calls:[
  {st:'failed',verb:'bash',target:'cat crates/host/src/slots.rs',outcome:'exit 1',ms:150,body:[{text:'cat: crates/host/src/slots.rs: No such file or directory'}]}]};
 const FAILED={st:'failed',verb:'bash',target:'cargo test -p host slots',outcome:'exit 101',time:'3.1s',
  body:[{text:'error: no test target named `slots` in package `host`'},{text:'help: available test targets: api, routes'}]};
-const BG=[{id:'j1-2',cmd:'pnpm --dir app install',from:30,to:70,out:'4.1 KB'},{id:'j1-3',cmd:'cargo build -p host',from:35,to:230,out:'18.4 KB'}];
+const BG=[{id:'j1-2',cmd:'pnpm --dir app install',from:30,to:70,out:'4.1 kB'},{id:'j1-3',cmd:'cargo build -p host',from:35,to:230,out:'18.4 kB'}];
 const NOTE_FILE='docs/plans/save-slots.md',NOTE_FROM=40,NOTE_LINES=['# Save slots: build plan','','One worktree, four slices; each owns its files.','',
  '## host-slots','- list, create and delete over an atomic manifest','## app-store','- typed client and store for /slots',
  '## picker-ui','- SlotPicker on arrival, keyboard reachable','## tests','- route tests and store tests','','Checks: cargo test -p host slots, pnpm tsc'];
@@ -591,7 +668,7 @@ function cellHTML(W){
 /* A backgrounded bash call stays live until its job exits, then reads as an ordinary finished call. */
 function bgModel(j){
   if(S.clock<j.to)return{st:'running',verb:'bash',target:j.cmd,outcome:'running in the background',right:j.id,time:runT(S.clock-j.from),view:'Fleet'};
-  return{st:'ok',verb:'bash',target:j.cmd,outcome:'exit 0',right:j.id,time:durT((j.to-j.from)*1000)};
+  return{st:'ok',verb:'bash',target:j.cmd,outcome:'exit 0',time:durT((j.to-j.from)*1000),view:'Fleet'};
 }
 /* `write` while its content streams: the newest 8 lines under the row (padded, so the row grows once) and `writing` in
    the time slot; once done, one row with its stat. */
@@ -608,10 +685,159 @@ function noticeHTML(id){
   const j=BG.find(x=>x.id===id);
   return `<div class="trows"><div class="trow"><span class="tl0"> <span class="ok">✓</span> <span class="mu">${h(`job ${j.id} exited 0 · ${j.out} output`)}</span></span></div></div>`;
 }
+/* ---------- a bound worker: the rows and views every role shares ---------- */
+let NIH=false,LH=19.5;
+const NG={text:'',success:'✓ ',warning:'! ',error:'✗ '},TC={text:'',success:'ok',warning:'wa',error:'er'};
+/* Host notices (host-notices.ts, host-envelopes.ts): the state glyph, muted words and ` · ` facts, then a quote such as a
+   PM answer in the text tone, on one clipped row with no time. A click or Ctrl+O shows the delivered text. */
+const NOTICE={ok:['✓','ok'],failed:['✗','er'],unknown:['!','wa'],event:['○','mu'],sent:['→','ac'],owner:['▲','wa']};
+function noticeRow(st,words,detail,quote){
+  const[g,c]=NOTICE[st];
+  return `<div class="trows nr"><div class="trow"><span class="tl0"><span class="${c}">${g}</span> <span class="mu">${h(words)}${detail?' · '+h(detail):''}${quote?' · ':''}</span>${quote?h(quote):''}</span></div></div>`;
+}
+/* Transcript marks (mark-rows.ts): the glyph, a lead, facts in drop order and the time of day at the right. A narrow row
+   drops re-billed tokens, then tool calls, the time, the duration, the resume hint and the cost; the lead clips last.
+   A run that was stopped or failed ends in `○ run ended`; the row above it names the cause. */
+const DROP={rebilled:1,calls:2,time:3,duration:4,hint:5,cost:6};
+const MARK={
+ waiting:{g:'○',gc:'mu',lead:[['waiting for gate quick on T-950 R2','']],pieces:[['the agent resumes when it finishes',DROP.hint],['4m 21s',DROP.duration],['14 tool calls',DROP.calls],['$0.42',DROP.cost],['120k tokens re-billed',DROP.rebilled]],time:'13:58'},
+ model:{g:'○',gc:'mu',lead:[['model → ','mu'],['gpt-6.1-sol','']],pieces:[['effort high',DROP.duration],['(was claude-opus-5.5 · medium)',DROP.rebilled,' ']],time:'14:09'},
+ failed:{g:'○',gc:'mu',lead:[['run ended','mu']],pieces:[['1m 5s',DROP.duration],['3 tool calls',DROP.calls],['$0.12',DROP.cost]],time:'14:10'},
+ done:{g:'✓',gc:'ok',lead:[['done','mu']],pieces:[['3m 12s',DROP.duration],['9 tool calls',DROP.calls],['$0.31',DROP.cost]],time:'14:21'},
+ stopped:{g:'○',gc:'mu',lead:[['run ended','mu']],pieces:[['48s',DROP.duration],['4 tool calls',DROP.calls],['$0.08',DROP.cost]],time:'14:33'},
+};
+function markHTML(m,W){
+  const pieces=[...m.pieces];let time=m.time;
+  const wid=()=>2+m.lead.reduce((n,s)=>n+s[0].length,0)+pieces.reduce((n,p)=>n+(p[2]??' · ').length+p[0].length,0)+(time?2+time.length:0);
+  for(const r of[...new Set([...pieces.map(p=>p[1]),DROP.time])].sort((a,b)=>a-b)){
+    if(wid()<=W)break;
+    for(let i=pieces.length-1;i>=0&&wid()>W;i--)if(pieces[i][1]===r)pieces.splice(i,1);
+    if(wid()>W&&r===DROP.time)time='';
+  }
+  return `<div class="trows mk"><div class="trow"><span class="tl0"><span class="${m.gc}">${m.g}</span> ${m.lead.map(([t,c])=>`<span class="${c}">${h(t)}</span>`).join('')}<span class="mu">${pieces.map(p=>h((p[2]??' · ')+p[0])).join('')}</span></span>${time?`<span class="tr0 mu">${time}</span>`:''}</div></div>`;
+}
+/* A failed turn (error-copy.ts): one ✗ sentence that says whether anything was lost, then one muted next step. */
+function errHTML(sentence,step){return `<div class="err"><div class="s"><span class="er">✗</span> ${h(sentence)}</div><div class="n">${h(step)}</div></div>`;}
+/* A group row's list (tool-group.ts): as many whole names as fit, then `, … n more`. */
+function listing(names,budget){
+  for(let n=names.length;n>1;n--){const t=names.slice(0,n).join(', ')+(n<names.length?`, … ${names.length-n} more`:'');if(t.length<=budget)return t;}
+  const more=names.length>1?`, … ${names.length-1} more`:'';return clipMid(names[0],Math.max(4,budget-more.length))+more;
+}
+const READS=['shard.rs','cache.rs','witness.rs','keys.rs','fixture.rs','lib.rs'];
+const SUMMARY='## Goal\nT-950 R2: cache keys carry the witness shard id and the quick gate passes.\n\n## Done\n- CacheKey::new(shard, digest) in crates/witness/src/cache.rs\n- regression test witness_cache::evicts_stale_shard\n\n## Next\n- rerun the quick gate, then finish the run';
+/* The compaction divider (compaction-summary-message.js): the label shortens with the width; a click shows the summary. */
+function cdivHTML(W){
+  const F=['context compacted · 483k → 38k tokens · 14:02','context compacted · 483k → 38k · 14:02','compacted · 483k → 38k · 14:02','compacted · 483k → 38k','compacted'];
+  const label=F.find(f=>f.length<=W-6)||'compacted';
+  return `<div class="cdiv" data-a="cdiv"><div class="dl"><span class="rl">──</span><span>${label}</span></div><div class="nt">Everything above stays readable; the agent keeps only ${S.cx?'the summary below.':'a 120-line summary.'}</div>${S.cx?`<div class="sum">${h(SUMMARY)}</div>`:''}</div>`;
+}
+/* One worker run as the transcript draws it after phase A: host rows, marks, a compaction, an error, groups and a stop. */
+function workerChatHTML(){
+  const W=Math.max(20,MC-1),o=[];
+  o.push(`<div class="lde"><span class="ac" data-a="earlier">↑ load earlier</span><span class="mu"> · ${(S.wOlder?2214:2222).toLocaleString('en-US')} earlier messages</span></div>`);
+  if(S.wOlder)o.push(`<div class="msg">Run R1 came back from review: the reviewer wants the shard id in the cache key.</div>`,noticeRow('failed','changes requested on T-950 R1 · round 1','the reviewer (implementation-review) requested changes'));
+  o.push(noticeRow('event','corral · T-950 run R2 · the agent follows its prompt file T-950-R2.md'));
+  o.push(`<div class="msg">Reading the cache and its callers first.</div>`);
+  o.push(`<div class="trows">${rowHTML({st:'ok',verb:'read',target:'×6',outcome:listing(READS,W-20),time:'1.2s'},W)}${rowHTML({st:'ok',verb:'Plan',target:'5/7',outcome:'done: Add regression · started: Implement verification',view:'Plan',va:['rail','plan']},W)}</div>`);
+  o.push(`<div class="msg">Cache keys now carry the witness shard id. Starting the quick gate; it reports back when it finishes.</div>`);
+  o.push(markHTML(MARK.waiting,W));
+  o.push(cdivHTML(W));
+  o.push(noticeRow('failed','gate quick failed · T-950 R2 · attempt 50202f08'));
+  o.push(`<div class="trows"><div class="think"><b>thinking</b> The quick tier failed in witness_cache::evicts_stale_shard; the fixture still builds its keys without the shard id.</div>${rowHTML({st:'ok',verb:'read',target:'crates/witness/tests/cache.rs:40-88',mid:1,outcome:'49 lines',time:'0.1s'},W)}</div>`);
+  o.push(`<div class="msg">The fixture builds its keys the old way:<div class="cb"><span class="lang">rust</span>\n  let key = CacheKey::legacy(digest);\n  assert!(cache.get(&amp;key).is_none());</div>It needs <code>CacheKey::new(shard, digest)</code>, like the cache itself.</div>`);
+  o.push(markHTML(MARK.model,W));
+  o.push(errHTML('The model provider is overloaded or limiting requests (HTTP 529). Nothing was lost.','Send a message to retry in a moment, or choose another model.'));
+  o.push(markHTML(MARK.failed,W));
+  o.push(`<div class="msg user"><span class="who">you</span> Try again.</div>`);
+  o.push(noticeRow('sent','PM answered T-950/R2/Q1',null,'Keep reading old keys for one release; new writes use the shard id.'));
+  o.push(`<div class="msg user ans"><div class="q mu">you answered Should the migration keep reading keys written before the shard id?</div><div class="c${MC>=62?' hang':''}">Keep reading them for one release</div></div>`);
+  o.push(`<div class="trows">${rowHTML({st:'ok',verb:'edit',target:'crates/witness/tests/cache.rs',mid:1,outcome:'+3 −3 in 2 hunks',time:'0.2s'},W)}${rowHTML({st:'ok',verb:'bash',target:'cargo test -p witness cache',outcome:'exit 0',time:'41s'},W)}</div>`);
+  o.push(markHTML(MARK.done,W));
+  o.push(noticeRow('event','auto-continue 1 of 3 · plan P2 still has open steps','next s6: Rerun the quick gate'));
+  o.push(`<div class="trows"><div class="think"><b>thinking</b> Record the receipt rule, then rerun the quick gate.</div>${rowHTML({st:'waiting',verb:'edit',target:'crates/witness/src/receipt.rs',mid:1,outcome:'not run'},W)}${rowHTML({st:'waiting',verb:'bash',target:'just quick',outcome:'not run'},W)}<div class="trow"><span class="tl0 mu">○ stopped by you · 2 tool calls did not run</span></div></div>`);
+  o.push(markHTML(MARK.stopped,W));
+  o.push(...S.wsent.map(t=>`<div class="msg user"><span class="who">you</span> ${h(t)}</div>`));
+  return o.join('');
+}
+function taskHTML(){
+  return `<div class="bk"><span class="b el">T-950 · Witness shard cache</span><span class="mu">● running · P1 · xs</span></div>`
+   +`<div class="empty"><p>The bound task's spec, plan and criteria draw here as today's Task view has them; this mock draws only its Events sub-view.</p></div>`
+   +`<div class="btns"><span class="btn" data-a="gotask"><kbd>l</kbd> events</span><span class="btn" data-k="g"><kbd>g</kbd> graph</span></div>`;
+}
+/* Canonical task events: number, local time, kind, run (– for a task-wide event), and the event's own detail. */
+const EVENTS=[
+ [398,'13:41:07','dispatched','R2',{profile:'deep',harness:'omp',worktree:'.worktrees/T-950'}],
+ [399,'13:41:12','started','R2',{pane:'w4:p1'}],
+ [403,'13:58:30','gate','R2',{gate:{tier:'quick',attempt:'50202f08',state:'started'}}],
+ [405,'14:06:44','gate','R2',{gate:{tier:'quick',attempt:'50202f08',result:'fail',stats:{passed:211,failed:1}},failures:[{test:'witness_cache::evicts_stale_shard',file:'crates/witness/tests/cache.rs'}]}],
+ [406,'14:07:02','question','R2',{id:'T-950/R2/Q1',to:'pm'}],
+ [408,'14:12:19','answer','R2',{id:'T-950/R2/Q1',by:'pm',revision:1}],
+ [410,'14:20:51','progress','R2',{plan:'P2',done:5,steps:7}],
+ [411,'14:24:05','edited','–',{field:'priority',before:'P2',after:'P1'}],
+ [412,'14:31:40','checkpoint','R2',{n:4,head:'9c41e7a2'}],
+];
+const LEGEND=['Read-only · T-950 / R2 · No queue, move or dispatch controls.','Canonical task events · a separate source from host/session events, never merged or timestamp-sorted.','Source: canonical database events · append sequence (not timestamp-sorted) · end sequence 412.','Bound task/run events and task-wide events only · host/session events are a separate source.','Complete bounded task page at read boundary; other scopes are not included.','Canonical snapshot at last reconcile · not a live subscription.','Times are local; the detail adds the recorded timestamp. – in the run column marks a task-wide event. Values over 2048 characters end in "… [detail excerpt]".'];
+function flat(v,k,out){out=out||[];if(v===null||typeof v!=='object'){out.push([k,String(v)]);return out;}if(Array.isArray(v)){v.forEach((x,i)=>flat(x,`${k}[${i}]`,out));return out;}for(const[n,x]of Object.entries(v))flat(x,k?`${k}.${n}`:n,out);return out;}
+const hm=d=>String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+/* Task › Events (lifecycle-view.ts): back line, chip row with the read note, one caveat, then list plus label/value detail. */
+function eventsHTML(){
+  const E=EVENTS,sel=S.esel=Math.max(0,Math.min(S.esel,E.length-1)),e=E[sel],wide=MC>=105;
+  const ago=Math.max(0,Math.round((Date.now()-S.evRead)/1000)),since=ago<60?ago+'s ago':Math.floor(ago/60)+'m ago';
+  const read=MC>=72?`read ${hm(new Date(S.evRead))} (${since}) · r reread`:MC>=50?`read ${since} · r reread`:'r reread';
+  let o=`<div class="bk"><span><span class="ac" data-a="back" data-v="task">‹ Task</span><span class="mu"> · </span><span class="b">Events</span></span>${MC>=44?'<span class="mu el">T-950 / R2 · read-only</span>':''}</div>`;
+  o+=`<div class="lchips"><span class="lchip">canonical</span><span class="lchip">${sel+1}/${E.length} events</span><span class="lchip">end #412</span><span class="sp"></span><span class="mu">${read}</span></div>`;
+  o+=`<div class="mu el">Canonical task events in append order · never merged with host events or timestamp-sorted</div>`;
+  if(S.legend)o+=LEGEND.map(t=>`<div class="mu">${h(t)}</div>`).join('');
+  const list=`<div class="ev"><div class="tr th"><span></span><span class="r">#</span><span>time</span><span>kind</span><span>run</span></div>`+E.map((x,i)=>`<div class="tr${i===sel?' sel':''}" data-a="evsel" data-v="${i}"><span class="bar">▌</span><span class="r mu">${x[0]}</span><span class="mu">${x[1]}</span><span class="el">${x[2]}</span><span class="mu">${x[3]}</span></div>`).join('')+`</div>`;
+  const pairs=flat(e[4],''),lw=Math.min(18,Math.max(5,...pairs.map(p=>p[0].length)));
+  const fd=(l,v,w)=>`<div class="fd" style="--lw:${w}ch"><span>${h(l)}</span><span>${h(v)}</span></div>`;
+  const utc=`2026-11-13T${String(+e[1].slice(0,2)-1).padStart(2,'0')}${e[1].slice(2)}Z`;
+  const detail=`<div class="b">${e[2]}<span class="mu" style="font-weight:400"> · #${e[0]}</span></div>`+fd('Time',`${e[1]} local · ${utc}`,7)
+   +fd('Task',`T-950 · run ${e[3]==='–'?'task-wide':e[3]}`,7)+fd('Actor',e[3]==='–'?'owner · via tui':'agent · via run:R2',7)+fd('Source',`events@${e[0]}`,7)
+   +`<div class="srule">DETAIL</div>`+pairs.map(([k,v])=>k.length<=lw?fd(k,v,lw):`<div class="mu el">${h(k)}</div>`+fd('',v,2)).join('');
+  return o+`<div class="lcw${wide?'':' one'}"><div class="ls">${list}</div><div class="dt">${detail}</div></div>`;
+}
+/* The worker's sidebar: Plan is the automatic tab while the plan has steps and nothing else is live. */
+const WPLAN=[['✓','Read the cache and its callers'],['✓','Add the shard id to CacheKey'],['✓','Migrate the fixture'],['✓','Add regression'],['✓','Implement verification'],['○','Rerun the quick gate','…'],['○','Confirm the receipt rule','?']];
+function workerSide(){
+  if(S.rail==='context')return '<div class="none">no agents or jobs yet</div>';
+  if(S.rail==='files')return '<div class="none"><span class="wa">!</span> Git unavailable</div>';
+  const room=(railOn()?31:COLS-6)-10,L=['waits for you · … waits for an event','for you · … for an event','you · … event'].find(x=>x.length+2<=room);
+  return `<h4 style="display:flex;justify-content:space-between;gap:1ch"><span>5/7 done</span>${L?`<span><span class="wa">?</span> ${L}</span>`:''}</h4>`
+   +WPLAN.map(([g,t,w])=>`<div class="it${g==='✓'?' mu':''}"><span></span><span class="${g==='✓'?'ok':'mu'}">${g}</span><span class="el">${t}</span><span class="${w==='?'?'wa':'mu'}">${w||''}</span></div>`).join('');
+}
+/* Owner questions as a dock item (owner-questions.ts): the count, how to answer, and per question its id. */
+const QUESTIONS=[{q:'Should the receipt count the quick tier as passing when only the migration tests were skipped?',id:'rq-6f1c0a9e4b7d2c815e3a90f4d6b8c217'},
+ {q:'Keep CacheKey::legacy public for one more release?',id:'rq-b03e7d51c9a24f68e1d0753a9c4b2f86'}];
+function questionCard(){
+  const n=QUESTIONS.length,title=DC<70?(n===1?'Question waiting':`${n} questions waiting`):(n===1?'An owner question is waiting':`${n} owner questions are waiting`);
+  const notes=['click, /questions or Alt+A to answer','/questions or Alt+A','/questions'],note=notes.find(x=>x.length<=DC-6-title.length)||notes[2];
+  return `<div class="dlg"><div class="dt"><span class="b el">${title}</span><span class="mu" style="flex:0 0 auto">${note}</span></div><div class="opts">`
+   +QUESTIONS.map((x,i)=>`<div class="opt two${S.focus==='questions'&&i===S.wq?' sel':''}" data-a="qcard" data-v="${i}"><span class="bar">▌</span><span class="ac">${i+1}</span><span class="b">${h(x.q)}</span><span class="mu od">/questions ${x.id}</span></div>`).join('')+`</div></div>`;
+}
+/* The framed pager (pager.ts): a rounded accent box, the bold title and the muted position `a–b / n` in the top border. */
+const JOB_TITLE='Job j1-3 · retained output · 214 lines';
+function jobLines(){
+  const C=['serde','tokio','hyper','axum','rusqlite','zstd','sha2','tracing','clap','anyhow'],o=[];
+  for(let i=0;i<213;i++)o.push(`   Compiling ${C[i%C.length]}${i>=C.length?'-'+Math.floor(i/C.length):''} v0.${(i*7)%23}.${i%10}`);
+  o.push('    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3m 15s');
+  return o;
+}
+function pagerHTML(){
+  const P=S.pg,W=Math.max(20,Math.floor(COLS*.9)),inner=W-4,n=P.lines.length,body=Math.max(1,Math.min(Math.max(1,Math.floor(ROWS*.8)-2),n));
+  P.max=Math.max(0,n-body);P.off=Math.max(0,Math.min(P.max,P.off));P.page=Math.max(1,body-1);
+  const last=Math.min(n,P.off+body)-1,pos=!n?'0 / 0':P.off===last?`${P.off+1} / ${n}`:`${P.off+1}–${last+1} / ${n}`;
+  const spot=pos.length+3<=W-8?pos:'',sw=spot?spot.length+3:0,room=W-6-sw,label=room>=3?clipEnd(P.title,room):'';
+  const used=1+(label?3+label.length:1)+sw+1;
+  const top=`<span class="bd">╭─${label?' ':''}</span>${label?`<b>${h(label)}</b><span class="bd"> </span>`:''}<span class="bd">${'─'.repeat(Math.max(1,W-used))}</span>${spot?` <span class="mu">${h(spot)}</span><span class="bd"> ─</span>`:''}<span class="bd">╮</span>`;
+  const rows=(n?P.lines.slice(P.off,P.off+body):['· no lines']).map(l=>`<span class="bd">│</span> ${h(clipEnd(l,inner).padEnd(inner))} <span class="bd">│</span>`);
+  return `<div class="backdrop mid" data-a="noop"><div class="pgr">${[top,...rows,`<span class="bd">╰${'─'.repeat(W-2)}╯</span>`].join('\n')}</div></div>`;
+}
+function jumpEnd(){const m=$('main');S.follow=true;m.scrollTop=m.scrollHeight;}
 /* What the parent is doing, as src/ui/activity.ts reports it: waiting for you while a docked choice needs you, running
    the task call during the fan-out, running bash during the checks; nothing otherwise. Times are simulated seconds. */
 function parentPhase(){
-  if(S.view==='launch')return null;
+  if(S.view==='launch'||S.role==='worker')return null;
   if(dialogDef())return{owner:true,el:S.wait};
   if(S.phase==='running')return{long:'running task',short:'task',el:S.clock-S.taskAt};
   if(S.phase==='checks')return{long:'running bash',short:'bash',el:S.clock-S.checksAt};
@@ -650,24 +876,75 @@ function kact(k){
   {const w=k.after.find(a=>kid(a).st!=='done');return w?'waits for '+w:'waits for a free slot';}
 }
 const nfiles=k=>liveFiles().filter(f=>f.who.includes(k.id)).length;
+/* Header row 1: the title, the attention chip (its long form when it fits) and the state word, or a notice in its place
+   when the notice fits whole. Row 2 (context, muted, clipped) shows whenever the terminal has 28 rows, at every width. */
 function headHTML(){
+  NIH=false;
   if(S.view==='launch')return `<div class="row"><span class="ac b">corral / pi</span><span class="mu el">~/miti-workspace/mitiplay</span></div>`;
-  const need=count('needs'),pend=S.phase==='open'||S.phase==='done'&&!S.overlay;
-  const long={idle:'Idle',done:'Idle',open:'Idle',kept:'Idle · kept on branch',gating:'Working · gate',landed:'Idle · landed',shipped:'Idle · handed to the board'}[S.phase];
-  const brief={idle:'idle',done:'idle',open:'idle',kept:'kept',gating:'gate',landed:'landed',shipped:'on board'}[S.phase];
-  // While the parent runs, the state word gets the spinner (▲ while a choice waits for you) and the turn time (not when tiny).
-  const run=S.phase==='running'||S.phase==='checks';
-  const state=run?`${dialogDef()?'<span class="wa">▲</span>':`<span class="ac">${SPIN}</span>`} <span class="mu">${small()?'working':'Working'}${tiny()?'':' · '+elapsedLabel(S.clock)}</span>`:`<span class="mu">${small()?brief:long}</span>`;
-  let o=`<div class="row"><span class="ac b el">${tiny()?'build · save-slots':'corral / build · save-slots'}</span><span>${need&&S.overlay!=='ask'?`<span class="chipw" data-a="reask">▲ ${need}${tiny()?'':' needs you'}</span> `:''}${pend?`<span class="wa" data-a="finish">${small()?'choose exit':'exit choice pending'}</span>`:state}</span></div>`;
-  if(!SHORT&&!tiny())o+=`<div class="row mu"><span class="el">mitiplay · .worktrees/build-save-slots</span><span>${T==='narrow'?'exit: gate':'exit policy: gate allowed'}</span></div>`;
+  const inner=COLS-3;let title,chip='',chipS='',chipA='',stPlain,stHTML,row2;
+  if(S.role==='worker'){
+    title=(tiny()?'':'corral / ')+'T-950 · R2';chip='⚑ 3 decisions';chipS='⚑ 3';chipA='inbox';
+    stPlain=small()?'idle':'Idle';stHTML=`<span class="mu">${stPlain}</span>`;
+    row2=['T-950 · Witness shard cache','● running · P1 · xs','● running · P1 · xs'];
+  }else{
+    const need=count('needs'),pend=S.phase==='open'||S.phase==='done'&&!dialogDef();
+    const long={idle:'Idle',done:'Idle',open:'Idle',kept:'Idle · kept on branch',gating:'Working · gate',landed:'Idle · landed',shipped:'Idle · handed to the board'}[S.phase];
+    const brief={idle:'idle',done:'idle',open:'idle',kept:'kept',gating:'gate',landed:'landed',shipped:'on board'}[S.phase];
+    title=tiny()?'build · save-slots':'corral / build · save-slots';
+    if(need&&S.overlay!=='ask'){chip=`▲ ${need} needs you`;chipS=`▲ ${need}`;chipA='reask';}
+    // While the parent runs, the state word gets the spinner (▲ while a choice waits for you) and the turn time (not when tiny).
+    if(pend){stPlain=small()?'choose exit':'exit choice pending';stHTML=`<span class="wa" data-a="finish">${stPlain}</span>`;}
+    else if(S.phase==='running'||S.phase==='checks'){const word=(small()?'working':'Working')+(tiny()?'':' · '+elapsedLabel(S.clock));stPlain='x '+word;
+      stHTML=`${dialogDef()?'<span class="wa">▲</span>':`<span class="ac">${SPIN}</span>`} <span class="mu">${word}</span>`;}
+    else{stPlain=small()?brief:long;stHTML=`<span class="mu">${stPlain}</span>`;}
+    row2=['mitiplay · .worktrees/build-save-slots','exit policy: gate allowed','exit: gate'];
+  }
+  const keep=Math.min(title.length,24),cw=s=>s?s.length+1:0;
+  if(S.toast&&S.toast.text.length+cw(chipS)+2+keep<=inner){NIH=true;stPlain=S.toast.text;stHTML=`<span class="${TC[S.toast.tone]}">${h(S.toast.text)}</span>`;}
+  const ct=chip&&cw(chip)+stPlain.length+2+keep<=inner?chip:chipS;
+  let o=`<div class="row"><span class="ac b el">${title}</span><span>${ct?`<span class="chipw" data-a="${chipA}">${ct}</span> `:''}${stHTML}</span></div>`;
+  if(!SHORT){const r=row2[0].length+2+row2[1].length<=inner?row2[1]:row2[2];o+=`<div class="row mu"><span class="el">${row2[0]}</span><span class="el" style="flex:0 1 auto">${r}</span></div>`;}
   return o;
 }
+/* The tab specs: key, label (the open sub-view's place, `Task › Events`, with the tab's own label as its short form),
+   the unread dot on Chat, and badges in words. */
+function tabSpecs(){
+  if(S.role==='worker'){
+    const ev=S.view==='events';
+    return{active:ev||S.view==='task'?'task':S.view,tabs:[
+     {id:'task',key:'F5',label:ev?'Task › Events':'Task',short:ev?'Task':''},
+     {id:'chat',key:'F9',label:'Chat',unread:S.view!=='chat'&&S.wUnread},
+     {id:'fleet',key:'F8',label:'Fleet',badge:{t:'2'}},
+     {id:'changes',key:'F7',label:'Changes',short:'Diff',badge:{t:'git?',c:'wa'}},
+     {id:'proof',key:'F10',label:'Proof',badge:{t:'gate ✓ · reviewed',s:'gate ✓',c:'ok'}},
+     {id:'inbox',key:'F11',label:'Inbox',badge:{t:'3'}}]};
+  }
+  const n=S.board?S.board.tasks.filter(t=>t.st!=='landed').length:0,files=liveFiles().length;
+  return{active:S.view==='child'?'fleet':S.view,tabs:[
+   {id:'chat',key:'F9',label:'Chat',unread:S.view!=='chat'&&S.log.length>S.seenLog},
+   {id:'fleet',key:'F8',label:'Fleet'},
+   {id:'changes',key:'F7',label:'Changes',short:'Diff',badge:files?{t:String(files)}:null},
+   {id:'board',key:'F10',label:'Board',badge:n?{t:String(n)}:null}]};
+}
+/* Fit order (header.ts tabRow): long badges shorten, then the separators go, then Changes reads Diff, then inactive tabs
+   lose their labels (a badge stays on the bare cap, `F11 3`); badges go last, warnings kept first; the dot never goes. */
 function tabsHTML(){
-  const cur=S.view==='child'?'fleet':S.view,n=S.board?S.board.tasks.filter(t=>t.st!=='landed').length:0;
-  // Below 50 columns only the open view keeps its name; the others stay reachable by key and click.
-  const tab=(v,label,k,cnt)=>`<span class="tab${cur===v?' on':''}" data-k="${k}"><kbd>${k}</kbd>${COLS<50&&cur!==v?'':' '+label}${cnt&&!tiny()?` <span class="cnt">${cnt}</span>`:''}</span>`;
-  const sep=tiny()?'':'<span class="sep">│</span>';
-  return tab('chat','Chat','F9')+sep+tab('fleet','Fleet','F8')+sep+tab('changes',tiny()?'Diff':'Changes','F7',liveFiles().length)+sep+tab('board','Board','F10',n);
+  const{tabs,active}=tabSpecs(),focused=S.view==='chat'?S.focus==='composer':S.focus==='list',room=COLS-3;
+  const FITS=[{long:1,rules:1},{rules:1},{},{short:1},{short:1,only:1}];
+  const piece=(t,f,badged)=>{
+    const on=t.id===active,label=f.only&&!on?'':f.short&&t.short?t.short:t.label,b=badged&&t.badge?(f.long?t.badge.t:t.badge.s||t.badge.t):'';
+    return{w:t.key.length+2+(label?1+label.length:0)+(t.unread?2:0)+(b?3+b.length:0),
+      html:`<span class="tab${on?' on':''}${on&&!focused?' unf':''}" data-k="${t.key}"><kbd>${t.key}</kbd>${label?' '+h(label):''}${t.unread?' <span class="dot">•</span>':''}${b?` <span class="cnt ${t.badge.c||''}">${h(b)}</span>`:''}</span>`};
+  };
+  const lay=(f,badged)=>{const p=tabs.map(t=>piece(t,f,badged.has(t.id))),gap=f.rules?3:1;return{p,gap,w:p.reduce((n,x)=>n+x.w,0)+gap*Math.max(0,p.length-1)};};
+  const all=new Set(tabs.filter(t=>t.badge).map(t=>t.id));
+  let L=FITS.map(f=>lay(f,all)).find(l=>l.w<=room);
+  if(!L){
+    const last=FITS[4],kept=new Set(),alarm=t=>t.badge&&(t.badge.c==='wa'||t.badge.c==='er');
+    for(const t of[...tabs.filter(alarm),...tabs.filter(t=>t.badge&&!alarm(t))]){kept.add(t.id);if(lay(last,kept).w>room)kept.delete(t.id);}
+    L=lay(last,kept);
+  }
+  return L.p.map(x=>x.html).join(L.gap===3?'<span class="sep">│</span>':'');
 }
 function toolLine(a,st){
   const i=a.indexOf(' '),g=st==='ok'?'<span class="ok">✓</span>':`<span class="ac">${SPIN}</span>`;
@@ -804,7 +1081,7 @@ function launchHTML(){
   });
   return o+`<div class="lopt"><span class="mu">Project</span><span>mitiplay <span class="mu">from this directory</span></span><span class="mu">Writes to</span><span data-k="ArrowRight"><span class="ac">‹</span> ${h(WHERE[S.launch.where])} <span class="ac">›</span></span><span class="mu">Models</span><span>openai-codex ✓ &nbsp; anthropic ✓${two?'':' <span class="mu">agents may use either</span>'}</span></div></div>`;
 }
-function mainHTML(){return{launch:launchHTML,chat:chatHTML,fleet:fleetHTML,child:childHTML,changes:changesHTML,board:boardHTML}[S.view]();}
+function mainHTML(){return S.role==='worker'?{chat:workerChatHTML,task:taskHTML,events:eventsHTML}[S.view]():{launch:launchHTML,chat:chatHTML,fleet:fleetHTML,child:childHTML,changes:changesHTML,board:boardHTML}[S.view]();}
 /* Plan is the session ledger: the slices plus the steps no agent owns. */
 function planSteps(){
   const past=['done','open','kept','gating','landed','shipped'].includes(S.phase),left=['kept','landed','shipped'].includes(S.phase);
@@ -815,6 +1092,7 @@ function planSteps(){
 const sideTabs=(open,sum)=>['context','files','plan'].map(t=>`<span class="${open&&S.rail===t?'on':'mu'}" data-a="rail" data-v="${t}">${t[0].toUpperCase()+t.slice(1)}${sum&&sum[t]?` <span style="color:var(--text)">${sum[t]}</span>`:''}</span>`).join('');
 /* One tab's content, shared by the rail and the drawer. */
 function sideBody(){
+  if(S.role==='worker')return workerSide();
   if(S.phase==='idle')return `<div class="none">${{context:'no agents or jobs yet',files:'no changes yet',plan:'no plan yet'}[S.rail]}</div>`;
   if(S.rail==='files')return liveFiles().map((f,i)=>`<div class="it" data-a="gofile" data-v="${i}"><span></span><span>${f.who.map(id=>`<span style="color:${kid(id).c}">●</span>`).join('')}</span><span class="el">${outside(f).length?'<span class="wa">!</span> ':''}${h(f.p.split('/').slice(-2).join('/'))}</span><span>&nbsp;<span class="ok">+${f.add}</span> <span class="er">−${f.del}</span></span></div>`).join('')||'<div class="none">no changes yet</div>';
   if(S.rail==='plan'){
@@ -828,30 +1106,33 @@ function sideBody(){
   return o;
 }
 function railHTML(){
-  return `<div class="rtabs">${sideTabs(true)}<span class="sp"></span><span class="mu" data-k="Ctrl+b"><kbd>Ctrl+B</kbd> ▸</span></div><div class="sb">${sideBody()}</div>`;
+  return `<div class="rtabs">${sideTabs(true)}<span class="sp"></span><span class="mu" data-k="${sideKeyId()}"><kbd>${SK()}</kbd> ▸</span></div><div class="sb">${sideBody()}</div>`;
 }
 /* Collapsed, the three tabs rest on one row above the composer; opened, the row grows a drawer. A dialog owns the space. */
 function inlineHTML(){
   if(!hasSide()||railOn()||dialogDef())return '';
-  const open=drawerOn(),run=count('running'),need=count('needs'),wait=count('queued'),P=planSteps(),idle=S.phase==='idle';
-  const sum=open||idle?null:{context:tiny()?(run+need?String(run+need):''):[run&&run+' running',need&&need+' asking',wait&&wait+' waiting'].filter(Boolean).join(' · '),plan:`${P.filter(s=>s[1]==='ok').length}/${P.length}`};
-  return `<div class="rtabs">${sideTabs(open,sum)}<span class="sp"></span><span class="mu" data-k="Ctrl+b">${tiny()?'':'<kbd>Ctrl+B</kbd> '}${open?'▾':'▴'}</span></div>`+(open?`<div class="drawer sb">${sideBody()}</div>`:'');
+  const open=drawerOn(),run=count('running'),need=count('needs'),wait=count('queued'),w=S.role==='worker',idle=!w&&S.phase==='idle',P=w?[]:planSteps();
+  const sum=open||idle?null:w?{context:'',plan:'5/7'}:{context:tiny()?(run+need?String(run+need):''):[run&&run+' running',need&&need+' asking',wait&&wait+' waiting'].filter(Boolean).join(' · '),plan:`${P.filter(s=>s[1]==='ok').length}/${P.length}`};
+  return `<div class="rtabs">${sideTabs(open,sum)}<span class="sp"></span><span class="mu" data-k="${sideKeyId()}">${tiny()?'':`<kbd>${SK()}</kbd> `}${open?'▾':'▴'}</span></div>`+(open?`<div class="drawer sb">${sideBody()}</div>`:'');
 }
+/* The docked choice, also while a popup sits over it. Esc leaves it waiting and says how to reopen it. */
 function dialogDef(){
-  if(S.overlay==='exit')return{title:DC<70?'How should this leave?':'How should this leave the build session?',meta:'mitiplay policy: gate allowed, review optional',opts:EXITS.map(e=>[e.label,e.desc]),pick:chooseExit,
-    esc(){closeOverlay();S.phase='open';toast('No exit chosen. Nothing was filed or landed.');}};
-  if(S.overlay==='ask')return{title:'picker-ui asks',meta:'frontend · claude-opus-5.5 · paused until you answer',body:h(ASK.q),opts:ASK.opts,pick:answer,esc(){closeOverlay();toast('picker-ui keeps waiting. Click ▲ to answer.');}};
-  if(S.overlay==='boardplan'){
+  const ov=popup()?S.under:S.overlay;
+  if(ov==='exit')return{title:DC<70?'How should this leave?':'How should this leave the build session?',meta:'mitiplay policy: gate allowed, review optional',opts:EXITS.map(e=>[e.label,e.desc]),pick:chooseExit,
+    esc(){closeOverlay();S.phase='open';toast('No exit chosen. Nothing was filed or landed · F2 Finish reopens it');}};
+  if(ov==='ask')return{title:'picker-ui asks',meta:'frontend · claude-opus-5.5 · paused until you answer',body:h(ASK.q),opts:ASK.opts,pick:answer,esc(){closeOverlay();toast(`${ASK.kid} keeps waiting · F2 Answer ${ASK.kid}'s question reopens it`);}};
+  if(ov==='boardplan'){
     const d=DC>=104?'full':DC>=60?'med':'min',starts=(p,i)=>p.dep.length?'after '+p.dep.join(', '):i<3?'now':'when a slot frees';
     return{title:'File this plan on the board?',meta:'mitiplay · 5 tasks · 3 dependency edges · preview only',
     body:`<div class="plan ${d}">`+(d==='full'?`<div class="tr th"><span>task</span><span>title</span><span>kind</span><span>profile</span><span>starts</span></div>`:'')+PLAN.map((p,i)=>`<div class="tr"><span class="b">${p.id}</span><span class="el">${h(p.title)}</span>${d==='full'?`<span class="mu">${p.kind}</span><span class="mu">${p.profile}</span>`:''}${d==='min'?'':`<span class="mu el">${starts(p,i)}</span>`}</div>`).join('')+`</div>`,
     opts:[['File and start','your confirmation starts these 5 tasks only; 2 slots, the rest wait'],['File only','they land in Backlog; you start them from the board'],['Edit the plan','back to the conversation; nothing is written']],pick:fileBoard,
-    esc(){closeOverlay();toast('Nothing filed.');}};
+    esc(){closeOverlay();toast('Nothing filed. The plan still waits · F10 Board, then p, reopens it');}};
   }
   return null;
 }
 function dockHTML(){
   let o='';const d=dialogDef(),two=DC<84;
+  if(S.role==='worker'&&S.view!=='launch')o+=questionCard();
   if(d)o+=`<div class="dlg"><div class="dt"><span class="b el">${d.title}</span>${DC<96?'':`<span class="mu el">${d.meta}</span>`}</div>${d.body?`<div class="db">${d.body}</div>`:''}<div class="opts">`
    +d.opts.map((x,i)=>`<div class="opt${two?' two':''}${i===S.di?' sel':''}" data-a="pick" data-v="${i}"><span class="bar">▌</span><span class="ac">${i+1}</span><span class="b">${h(x[0])}</span>${two&&SHORT?'':`<span class="mu od${two?'':' el'}">${h(x[1])}</span>`}</div>`).join('')+`</div></div>`;
   if(S.queue.length){
@@ -868,114 +1149,208 @@ function enterDoes(){
 }
 function statusHTML(){
   if(S.view==='launch')return '';
-  const pct=Math.min(71,18+Math.round(S.clock/14)),cells=small()?8:12,fill=Math.round(cells*pct/100),sep='<span class="sep">│</span>';
-  const badge=`<span class="chipb">${tiny()?'B':'BUILD'}</span>&nbsp;<span class="wa">○</span>${small()?'':'&nbsp;<span class="mu">unbound</span>'}`;
+  const w=S.role==='worker',pct=w?34:Math.min(71,18+Math.round(S.clock/14)),cells=small()?8:12,fill=Math.round(cells*pct/100),sep='<span class="sep">│</span>';
+  // A build session is never bound, so it has no binding segment; a bound role reads ● bound, the generation from 105 columns.
+  const badge=`<span class="chipb">${w?(tiny()?'WRK':'WORKER'):(tiny()?'BLD':'BUILD')}</span>`+(w?`&nbsp;<span class="ok">●</span>&nbsp;<span class="mu">bound${small()?'':' · gen 1'}</span>`:'');
   const meter=`ctx&nbsp;<span class="ac">${'▰'.repeat(fill)}</span><span style="color:var(--line)">${'▱'.repeat(cells-fill)}</span> ${pct}%${tiny()?'':small()?` ${pct*2}k/200k`:` · ${(pct*2).toFixed(1)}k / 200k`}`;
-  return `<div class="srow">${badge}${sep}${money(totalCost())}${sep}${meter}</div>`;
+  // In a short terminal the composer bar folds away and its model and effort follow the meter: the word effort goes first, then the effort.
+  const model=w?'gpt-6.1-sol':MODELS[S.model],eff=w?'high':EFFORT[S.effort];
+  const fold=SHORT?`${sep}${model}${tiny()?'':`<span class="mu"> · ${small()?'':'effort '}${eff}</span>`}`:'';
+  return `<div class="srow">${badge}${sep}${money(w?.42:totalCost())}${sep}${meter}${fold}</div>`;
 }
-/* Contextual hints first; the footer keeps as many as the pane has room for and always ends with F1. */
+/* Footer hints as keymap.ts: a focused view's lead, the contextual hints in priority order, then F2 and F1. */
+const H=(k,l,s,n)=>({k,l,s,n});
+function place(){
+  if(S.role==='worker')return{events:'Task › Events',task:'Task'}[S.view];
+  return S.view==='child'?'Fleet › '+kids[S.sel].id:{fleet:'Fleet',changes:'Changes',board:'Board'}[S.view];
+}
 function hints(){
-  if(S.overlay==='keys')return[['Escape','close']];
-  if(S.overlay==='palette')return[['ud','select'],['Enter','run'],['Escape','close']];
-  if(S.overlay)return[['ud','select'],['Enter','choose'],['num','1-'+dialogDef().opts.length],['Escape','not now']];
-  if(S.view==='launch')return[['ud','select'],['Enter','open'],['lr','where it writes'],['b','build'],['a','assistant'],['p','PM']];
-  // In Chat the rows' expand key comes last among the composer's hints, so a narrow footer drops it first.
-  if(S.focus==='composer')return[['Enter',enterDoes()],['Alt+Enter','queue'],['Alt+t','target'],['Alt+ArrowUp','edit queued'],...(S.view==='chat'?[['Ctrl+o','expand']]:[])];
-  if(S.view==='fleet')return[['ud','select'],['Enter','open'],['s','steer'],['x','cancel'],['m','model'],['Escape','composer']];
-  if(S.view==='child')return[['Escape','fleet'],['s','steer'],['x','cancel'],['m','model']];
-  if(S.view==='changes')return[['ud','file'],['f','by agent'],['Escape','composer']];
-  if(S.view==='board')return[['ud','task'],['n','plan tasks'],['Escape','composer']];
-  return[];
+  if(S.overlay==='keys')return[H('Enter','run'),H('Escape','close')];
+  if(S.overlay==='palette')return[H('ud','select'),H('Enter','run'),H('Escape','close')];
+  if(S.overlay==='pager')return[H('ud','scroll'),H('pg','page'),H('Escape','close')];
+  if(S.view==='launch')return[H('ud','select'),H('Enter','open'),H('lr','where it writes'),H('b','build'),H('a','assistant'),H('p','PM')];
+  const d=dialogDef(),w=S.role==='worker';
+  // The docked choice: choose, then the way out, so a narrow footer never drops Esc; digits pick directly.
+  if(S.focus==='dialog'&&d){const n=d.opts.length;return[H('Enter','choose'),H('Escape','not now'),H('ud','select'),...(S.overlay==='exit'?[H('F7','changes')]:[]),H('num','pick',null,n>1?'1-'+n:'1')];}
+  if(S.focus==='questions')return[H('ud','select'),H('Enter','open'),H('Escape','composer'),H('num','open',null,QUESTIONS.length>1?'1-'+QUESTIONS.length:'1')];
+  if(S.focus==='composer'){
+    // While the agent works, stop comes right after Enter; in Chat the rows' expand key comes last, so a narrow footer drops it first.
+    const run=!w&&['running','checks','gating'].includes(S.phase),x=S.view==='chat'?[H('Ctrl+o','expand')]:[];
+    if(w)return[H('Enter','send'),H('Alt+ArrowDown','questions'),...x];
+    if(S.target!=='parent')return[H('Enter','steer '+S.target,'steer'),...(run?[H('Escape','stop')]:[]),H('Alt+t','target','to'),...x];
+    const q=S.queue.length?[H('Alt+ArrowUp','edit queued','edit'),H('Alt+ArrowDown','queue')]:[];
+    return run?[H('Enter','steer'),H('Escape','stop'),H('Alt+Enter','queue'),H('Alt+t','target','to'),...q,...x]:[H('Enter','send'),H('Alt+t','target','to'),...q,...x];
+  }
+  const p=place();if(!p)return[];
+  const v={fleet:[H('ud','select'),H('Enter','open'),...(kids[S.sel].st==='needs'?[H('a','answer')]:[]),H('s','steer'),H('x','cancel'),H('m','model'),H('Escape','chat')],
+    child:[H('Escape','fleet'),H('s','steer'),H('x','cancel'),H('m','model'),H('Ctrl+o','tools')],
+    changes:[H('jk','file'),H('f','by agent'),H('F3','filter'),H('Escape','chat')],
+    board:[H('ud','task'),...(S.proposed?[H('p','review plan','plan')]:[]),H('Enter','details'),H('Escape','chat'),H('n','plan tasks','plan')],
+    task:[H('ud','scroll'),H('r','refresh'),H('g','graph'),H('l','events'),H('Escape','chat')],
+    events:[H('jk','select'),H('Escape','task'),H('r','reconcile'),H('h','host'),H('?',S.legend?'hide':'legend')]}[S.view]||[];
+  return[H('lead',`keys → ${p} · Tab to type`,`→ ${p}`,p),...v];
 }
-const keyLabel=k=>({Enter:'⏎',Escape:'esc','Alt+Enter':'Alt+⏎','Alt+ArrowUp':'Alt+↑','Alt+t':'Alt+T','Ctrl+b':'Ctrl+B','Ctrl+o':'Ctrl+O'}[k]??k);
+const keyLabel=k=>({Enter:'⏎',Escape:'esc','Alt+Enter':'Alt+⏎','Alt+ArrowUp':'Alt+↑','Alt+ArrowDown':'Alt+↓','Alt+t':'Alt+T','Alt+a':'Alt+A','Alt+b':'Alt+B','Ctrl+b':'Ctrl+B','Ctrl+o':'Ctrl+O'}[k]??k);
+function hintW(x,sh){
+  if(x.k==='lead')return x.l.length;
+  const l=sh?x.s??x.l:x.l,key={ud:'↑↓',jk:'j/k',lr:'←→',pg:'PgUp/PgDn',num:x.n}[x.k]??keyLabel(x.k);
+  return key.length+2+(l?1+l.length:0);
+}
+function hintHTML(x,sh){
+  const l=sh&&x.k!=='lead'?x.s??x.l:x.l;
+  if(x.k==='lead')return `<span class="mu" data-k="Tab">${h(l).replace(h(x.n),`<span style="color:var(--text)">${h(x.n)}</span>`)}</span>`;
+  if(x.k==='ud')return `<span><kbd data-k="ArrowUp">↑</kbd><kbd data-k="ArrowDown">↓</kbd> <span data-k="ArrowDown">${l}</span></span>`;
+  if(x.k==='lr')return `<span><kbd data-k="ArrowLeft">←</kbd><kbd data-k="ArrowRight">→</kbd> <span data-k="ArrowRight">${l}</span></span>`;
+  if(x.k==='jk')return `<span data-k="j"><kbd>j/k</kbd> ${l}</span>`;
+  if(x.k==='pg')return `<span data-k="PageDown"><kbd>PgUp/PgDn</kbd> ${l}</span>`;
+  if(x.k==='num')return `<span><kbd>${x.n}</kbd> ${l}</span>`;
+  return `<span data-k="${x.k}"><kbd>${keyLabel(x.k)}</kbd>${l?' '+l:''}</span>`;
+}
+const better=(a,b)=>{const i=a.findIndex((v,j)=>v!==b[j]);return i>=0&&a[i]>b[i];};
+/* Every row that fits is scored, in order: the essential hints (the first, and Esc or stop right after it) show; the lead
+   shows; F2 shows; the lead reads in full; as many hints as possible; full labels. F1 reads `keys`, or `more` once something dropped. */
 function footHTML(){
-  let H=hints();const base=!S.overlay&&S.view!=='launch';
-  if(T==='narrow')H=H.slice(0,4);if(tiny())H=H.slice(0,2);
-  if(base)H=[...H,...(small()?[]:[['F2','actions']]),['F1',small()?'more':'keys']];
-  return H.map(([k,l])=>k==='ud'?`<span><kbd data-k="ArrowUp">↑</kbd><kbd data-k="ArrowDown">↓</kbd> <span data-k="ArrowDown">${l}</span></span>`
-    :k==='lr'?`<span><kbd data-k="ArrowLeft">←</kbd><kbd data-k="ArrowRight">→</kbd> <span data-k="ArrowRight">${l}</span></span>`
-    :k==='num'?`<span><kbd>${l}</kbd> pick</span>`:`<span data-k="${k}"><kbd>${keyLabel(k)}</kbd> ${l}</span>`).join('');
+  const all=hints(),base=!popup()&&S.view!=='launch',gap=tiny()?1:2,room=COLS-3;
+  const lead=all[0]&&all[0].k==='lead'?all[0]:null,rest=lead?all.slice(1):all;
+  const out=rest.slice(0,3).findIndex(x=>x.k==='Escape'),needed=Math.min(rest.length,out<0?1:out+1);
+  const leads=lead?[lead,{...lead,l:lead.s},null]:[null],f2=base?H('F2','actions'):null;
+  const meas=(xs,sh)=>xs.reduce((n,x)=>n+hintW(x,sh),0)+gap*Math.max(0,xs.length-1);
+  let best=null;
+  for(const sh of[false,true])for(const[form,ld]of leads.entries())for(const wf2 of f2?[true,false]:[false])
+    for(let c=rest.length;c>=0;c--){
+      const xs=[...(ld?[ld]:[]),...rest.slice(0,c),...(wf2?[f2]:[]),...(base?[H('F1',c===rest.length&&(wf2||!f2)?'keys':'more')]:[])];
+      if(meas(xs,sh)>room)continue;
+      const sc=[c>=needed?1:0,ld?1:0,wf2?1:0,form===0?1:0,c,sh?0:1];
+      if(!best||better(sc,best.sc))best={xs,sh,sc};
+      break;
+    }
+  return (best?best.xs:base?[H('F1','')]:[]).map(x=>hintHTML(x,best&&best.sh)).join('');
 }
 function actions(){
-  const busy=S.phase==='running'||S.phase==='checks'||S.phase==='gating';
-  return[
-   ['Open chat','F9','F9'],['Open fleet','F8','F8'],['Open changes','F7','F7'],['Open board','F10','F10'],
-   ['Collapse or expand the sidebar','Ctrl+B','Ctrl+b'],['Sidebar: next tab','F6','F6'],
-   ['Queue the draft as a follow-up','Alt+⏎','Alt+Enter',draft.value.trim()?'':'the composer is empty'],
-   ['Edit the last queued input','Alt+↑','Alt+ArrowUp',S.queue.length?'':'nothing is queued'],
-   ['Change who receives the message','Alt+T','Alt+t'],
-   ['Finish: choose how this leaves the session','','finish',S.phase==='idle'?'nothing was built yet':busy?'agents or checks are still running':''],
-   ['Plan board tasks from this conversation','','planboard'],
-   ['Pause or resume every agent','','pause',S.phase==='running'?'':'no agent is running'],
-   ['Show keys','F1','F1'],
-  ].filter(a=>a[0].toLowerCase().includes(S.pq.toLowerCase()));
+  const busy=S.phase==='running'||S.phase==='checks'||S.phase==='gating',w=S.role==='worker',notices=S.notices.length?'':'No notices yet in this session';
+  const bell=v=>[`Bell: ${v}${S.bell===v?' (current)':''}`,'','bell.'+v];
+  const A=w?[['Open task','F5','F5'],['Open chat','F9','F9'],['Collapse or expand the sidebar',SK(),sideKeyId()],['Sidebar: next tab','F6','F6'],
+    ['Answer waiting owner questions','Alt+A','Alt+a'],['Recent notices','','notices',notices],bell('off'),bell('on'),['Show keys','F1','F1']]
+   :[['Open chat','F9','F9'],['Open fleet','F8','F8'],['Open changes','F7','F7'],['Open board','F10','F10'],
+    ['Collapse or expand the sidebar',SK(),sideKeyId()],['Sidebar: next tab','F6','F6'],
+    ['Queue the draft as a follow-up','Alt+⏎','Alt+Enter',draft.value.trim()?'':'the composer is empty'],
+    ['Edit the last queued input','Alt+↑','Alt+ArrowUp',S.queue.length?'':'nothing is queued'],
+    ['Change who receives the message','Alt+T','Alt+t'],
+    ...(kid(ASK.kid).st==='needs'?[[`Answer ${ASK.kid}'s question`,'','reask']]:[]),
+    ['Finish: choose how this leaves the session','','finish',S.phase==='idle'?'nothing was built yet':busy?'agents or checks are still running':''],
+    ['Plan board tasks from this conversation','','planboard'],
+    ['Pause or resume every agent','','pause',S.phase==='running'?'':'no agent is running'],
+    ['Recent notices','','notices',notices],bell('off'),bell('on'),['Show keys','F1','F1']];
+  return A.filter(a=>a[0].toLowerCase().includes(S.pq.toLowerCase()));
+}
+/* F1 as keyGroups in keymap.ts: only the keys this mode offers; views as `F9/Alt+1` in tab order. */
+function keyGroups(){
+  const w=S.role==='worker';
+  const V=w?[['F5','Task: the bound task, its plan and criteria'],['F9','Chat: the conversation'],['F8','Fleet: helper calls and jobs, focus the list'],['F7','Changes: files and diffs in the chosen comparison'],['F10','Proof: criteria, gate and review'],['F11','Inbox: decisions waiting for the owner']]
+   :[['F9','Chat: the conversation'],['F8','Fleet: every agent, focus the list'],['F7','Changes: files and diffs, filtered by agent'],['F10','Board: tasks this session filed']];
+  return[['Views',V.map(([k,l],i)=>[k,l,`${k}/Alt+${i+1}`])],
+   ['Message',w?[['Enter','Send; steer while the agent works'],['Alt+Enter','Queue as a follow-up'],['Escape','Stop the running turn'],['Ctrl+o','Expand or collapse tool output']]
+     :[['Enter','Send; steer while something runs; steers the chosen agent when one receives'],['Alt+Enter','Queue a follow-up for the parent'],['Alt+t','Change the receiver: parent or one running agent'],['Escape','Stop the running turn'],['Alt+ArrowUp','Pull the last queued input back to edit'],['Ctrl+o','Expand or collapse tool output']]],
+   ['Scroll',[['End','Chat: latest message, when the draft is empty'],['Wheel','Scroll whatever is under the pointer']]],
+   ['Fleet',w?[['ArrowDown','Select an agent or job'],['Enter','Open its conversation, or a job\'s output'],['t','Read-only transcript, when the agent has one'],['x','Stop the selected job (asks first)'],['p','Peek at the job\'s current logs'],['f','Follow the job\'s output on or off'],['F3','Search the job\'s output'],['b','Move the job to the background'],['Escape','Back to Chat; from a conversation, back to Fleet']]
+     :[['ArrowDown','Select an agent'],['Enter','Open its conversation'],['a','Answer its question'],['s','Point the composer at it'],['x','Cancel it (asks first); its edits stay'],['m','Change its model from its next request'],['t','Read-only transcript, when the agent has one'],['Escape','Back to Chat; from a conversation, back to Fleet']]],
+   ['Changes',[['j','Next or previous file','j/k'],['n','Next or previous hunk','n/p'],['a','Ask about the hunk (added to the draft, not sent)'],['F3','Filter paths'],['c','Choose the comparison'],['o','Choose the project or worktree'],...(w?[]:[['f','Filter by agent']]),['r','Refresh']]],
+   ...(w?[['Task',[['ArrowDown','Scroll'],['r','Refresh'],['g','Lifecycle graph'],['l','Lifecycle events'],['h/c','Events: host log or canonical record'],['?','Graph and events: show or hide the legend']]],
+     ['Proof',[['j','Select a criterion','j/k'],['Enter','Open its detail'],['a','Artifacts'],['?','Show or hide the legend, here and in Artifacts'],['r','Refresh']]],
+     ['Inbox',[['j','Select an item','j/k'],['Enter','Inspect it'],['h','History or pending'],['F3','Filter'],['r','Reread'],['?','Legend']]]]
+    :[['Board',[['ArrowDown','Select a task'],['Enter','Details'],['n','Plan board tasks from this conversation'],['p','Review the proposed plan'],['r','Refresh status']]]]),
+   ['Sidebar',[[sideKeyId(),'Collapse to one row, or open it'],['F6','Focus the sidebar; again for the next tab'],['←→','Switch tab: Context, Files, Plan'],['Escape','Back to the composer']]],
+   ...(w?[]:[['Queue',[['Alt+ArrowDown','Focus the queue'],['Enter','Pull the item back to edit'],['Shift+↑↓','Move it earlier or later'],['x','Remove it; it is not sent'],['Escape','Back to the composer']]]]),
+   ['Exit',[...(w?[]:[['/finish','Choose what happens to this build branch']]),['/questions','Answer owner questions the agent deferred']]],
+   ['Anywhere',[['F2','Search actions; unavailable ones say why'],['F1','This list; F1 or esc closes it'],['Tab','From a view: back to the composer to type'],...(w?[['Alt+a','Answer waiting owner questions']]:[])]]];
 }
 function popHTML(){
+  if(S.overlay==='pager')return pagerHTML();
   if(S.overlay==='palette'){
     const A=actions();S.pi=Math.max(0,Math.min(S.pi,A.length-1));
-    return `<div class="backdrop" data-a="close"><div class="pop" data-a="noop"><div class="pt"><span class="el"><span class="ac">›</span> ${h(S.pq)}<span class="ac">▏</span><span class="mu">${S.pq?'':'type to filter actions'}</span></span><span class="mu">build · mitiplay</span></div>`
+    return `<div class="backdrop" data-a="close"><div class="pop" data-a="noop"><div class="pt"><span class="el"><span class="ac">›</span> ${h(S.pq)}<span class="ac">▏</span><span class="mu">${S.pq?'':'type to filter actions'}</span></span><span class="mu">${S.role==='worker'?'worker · T-950':'build · mitiplay'}</span></div>`
      +(A.map((a,i)=>`<div class="pr${i===S.pi?' sel':''}${a[3]?' off':''}" data-a="prun" data-v="${i}"><span class="bar">▌</span><span>${a[0]}${a[3]?` <span class="wa">· unavailable: ${a[3]}</span>`:''}</span><span>${a[1]?`<kbd>${a[1]}</kbd>`:''}</span></div>`).join('')||'<div class="pr off"><span></span><span>no action matches</span></div>')+`</div></div>`;
   }
   if(S.overlay==='keys'){
-    const G=[['Views',[['F9','Chat'],['F8','Fleet: every agent, focus the list'],['F7','Changes, filtered by agent'],['F10','Board: tasks this session filed'],['Ctrl+b','Sidebar: collapse to one row, or open it'],['F6','Sidebar: next tab (Context, Files, Plan)']]],
-     ['Message',[['Enter','Send; steer while something runs'],['Alt+Enter','Queue as a follow-up'],['Alt+ArrowUp','Pull the last queued input back to edit'],['Alt+t','Change the receiver: parent or one agent']]],
-     ['A focused list',[['ArrowDown','Select; Enter opens'],['s','Steer the selected agent'],['x','Cancel the selected agent'],['m','Change its model'],['Escape','Back to the composer']]],
-     ['Anywhere',[['F2','Search actions; unavailable ones say why'],['F1','This list']]]];
-    return `<div class="backdrop" data-a="close"><div class="pop" data-a="noop"><div class="pt"><span class="b">Keys</span><span class="mu" data-a="close"><kbd>esc</kbd> close</span></div>`
-     +G.map(([t,rows])=>`<div class="grp">${t}</div>`+rows.map(([k,l])=>`<div class="kr" data-a="keyrow" data-v="${k}"><span></span><span><kbd>${k==='ArrowDown'?'↑↓':keyLabel(k)}</kbd></span><span>${l}</span></div>`).join('')).join('')+`</div></div>`;
+    return `<div class="backdrop" data-a="close"><div class="pop" data-a="noop"><div class="pt"><span><span class="b">Keys</span>&nbsp;&nbsp;&nbsp;<span class="mu" id="kpos"></span></span><span class="mu" data-a="close"><kbd>esc</kbd> close</span></div>`
+     +keyGroups().map(([t,rows])=>`<div class="grp">${t}</div>`+rows.map(([k,l,lab])=>`<div class="kr" data-a="keyrow" data-v="${k}"><span></span><span><kbd>${lab||(k==='ArrowDown'?'↑↓':keyLabel(k))}</kbd></span><span>${l}</span></div>`).join('')).join('')+`</div></div>`;
   }
   return '';
 }
+/* The keys list's position in its title row: the rows shown and how many there are. */
+function keysPos(){
+  const p=$('pop').querySelector('.pop'),o=$('kpos');if(!p||!o)return;
+  const n=p.querySelectorAll('.grp,.kr').length,first=Math.floor(p.scrollTop/LH),last=Math.min(n,first+Math.max(1,Math.floor(p.clientHeight/LH)-2));
+  o.textContent=`${first+1}–${last} / ${n}`;
+}
 function notesHTML(){
-  const key=S.overlay==='exit'||['done','open','kept','gating','landed','shipped'].includes(S.phase)&&S.view==='chat'&&!S.overlay?'finish':S.overlay==='boardplan'?'board':S.overlay==='keys'||S.overlay==='palette'?'keys':S.queue.length&&S.view==='chat'?'queue':S.view;
-  const[title,rows]=NOTES[key];
+  const key=S.overlay==='pager'?'pager':S.role==='worker'?(S.view==='events'?'events':'worker'):S.overlay==='exit'||['done','open','kept','gating','landed','shipped'].includes(S.phase)&&S.view==='chat'&&!S.overlay?'finish':S.overlay==='boardplan'?'board':S.overlay==='keys'||S.overlay==='palette'?'keys':S.queue.length&&S.view==='chat'?'queue':S.view;
+  const[title,rows]=NOTES[key]||NOTES.chat;
   return `<h2>${title}: what changes</h2><ul>`+rows.map(([t,x])=>`<li><span class="tag ${t}">${t}</span><span>${x}</span></li>`).join('')+`</ul>`;
 }
 function setHTML(el,html){if(el._h===html)return false;const st=el.scrollTop;el.innerHTML=html;el._h=html;el.scrollTop=st;return true;}
 function render(){
   const rail=railOn();
   MC=COLS-(rail?34:0)-4;DC=COLS-4;D=MC>=112?'full':MC>=60?'med':'min';
-  Object.assign(term.dataset,{view:S.view,focus:S.focus,tier:T,side:rail?'1':'0',short:SHORT?'1':'0',dialog:dialogDef()?'1':'0'});
+  Object.assign(term.dataset,{view:S.view,focus:popup()?'popup':S.focus,tier:T,side:rail?'1':'0',short:SHORT?'1':'0',dialog:dialogDef()?'1':'0'});
   term.style.setProperty('--sd',-(performance.now()%900)+'ms');
+  if(S.view==='chat'&&S.role==='build')S.seenLog=S.log.length;
   setHTML($('head'),headHTML());setHTML($('tabs'),tabsHTML());
-  const changed=setHTML($('main'),mainHTML());
-  if(S.view!==S.last){$('main').scrollTop=0;S.last=S.view;}
+  const main=$('main'),changed=setHTML(main,mainHTML());
+  if(S.view!==S.last){main.scrollTop=0;S.last=S.view;}
   setHTML($('side'),rail?railHTML():'');setHTML($('inl'),inlineHTML());
   const docked=setHTML($('dock'),dockHTML());
-  const tc=S.target==='parent'?'var(--accent)':kid(S.target).c;
-  setHTML($('ctitle'),`<span class="mu">Message</span> <span data-k="Alt+t" style="color:${tc}">→ ${S.target}</span>`);
+  // The composer names its receiver while a child is steerable or receives (BuildController.composerTarget).
+  const tc=S.target==='parent'?'var(--accent)':kid(S.target).c,to=S.role==='build'&&(S.target!=='parent'||kids.some(k=>k.st==='running'||k.st==='needs'));
+  setHTML($('ctitle'),`<span class="mu">Message</span>${to?` <span data-k="Alt+t" style="color:${tc}">→ ${S.target}</span>`:''}`);
   setHTML($('cind'),indicatorHTML());
-  setHTML($('cbar'),`<span class="el"><span data-a="model" style="color:var(--text)">${MODELS[S.model]} ▾</span> · <span data-a="effort">${EFFORT[S.effort]} ↻</span></span>`);
-  draft.placeholder=S.phase==='idle'?'Describe what to build':'';
-  setHTML($('status'),statusHTML());setHTML($('foot'),footHTML());setHTML($('pop'),popHTML());setHTML($('toast'),S.toast?`<span class="tin">${h(S.toast)}</span>`:'');
+  // The bar reads `model ▾ · effort high ↻`; the word effort drops first when the row is short.
+  const model=S.role==='worker'?'gpt-6.1-sol':MODELS[S.model],eff=S.role==='worker'?'high':EFFORT[S.effort],worded=COLS-6-(model.length+2)>=(` · effort ${eff} ↻`).length;
+  setHTML($('cbar'),`<span class="el"><span data-a="model" style="color:var(--text)">${model} ▾</span> · <span data-a="effort">${worded?'effort ':''}${eff} ↻</span></span>`);
+  draft.placeholder=S.role==='build'&&S.phase==='idle'?'Describe what to build':'';
+  setHTML($('status'),statusHTML());setHTML($('foot'),footHTML());setHTML($('pop'),popHTML());
+  setHTML($('toast'),S.toast&&!NIH?`<span class="tin"><span class="${TC[S.toast.tone]}">${h(NG[S.toast.tone]+S.toast.text)}</span></span>`:'');
   if(!EMBED){
     setHTML($('notes'),notesHTML());
-    setHTML($('sizeinfo'),`<b>${COLS} × ${ROWS}</b> · ${T}${SHORT?' + short':''}: ${TIERS[T]}${SHORT?'; second header row and model bar fold away':''}`);
-    $('pauseBtn').textContent=S.playing?'Pause':'Resume';
+    setHTML($('sizeinfo'),`<b>${COLS} × ${ROWS}</b> · ${T}${SHORT?' + short':''}: ${TIERS[T]()}${SHORT?'; the second header row folds away and the model and effort move to the status bar':''}`);
+    $('pauseBtn').textContent=S.playing?'Pause':'Resume';$('herdrBtn').classList.toggle('on',S.herdr);
   }
-  // The dock, status and footer resize the reading area: follow the conversation only once they have rendered.
-  if(S.view==='chat'&&(changed||docked))$('main').scrollTop=$('main').scrollHeight;
+  // Chat follows the end only while the reader is there; scrolled up, new rows are counted on the jump control.
+  if(S.view==='chat'){
+    if(S.follow&&(changed||docked))main.scrollTop=main.scrollHeight;
+    if(S.follow)S.seenH=main.scrollHeight;
+    const n=S.follow?0:Math.max(0,Math.round((main.scrollHeight-S.seenH)/LH));
+    setHTML($('jump'),S.follow?'':`${n?`↓ ${n} new ${n===1?'row':'rows'}`:'↓ Jump to latest message'} · ${draft.value?'Ctrl+End':'End'}`);
+  }else setHTML($('jump'),'');
   // A dialog taller than its share of the pane scrolls; keep the selected option in view.
   const dock=$('dock'),opt=dock.querySelector('.opt.sel');
   if(opt){const r=opt.getBoundingClientRect(),R=dock.getBoundingClientRect();if(r.bottom>R.bottom)dock.scrollTop+=r.bottom-R.bottom;else if(r.top<R.top)dock.scrollTop-=R.top-r.top;}
+  if(S.overlay==='keys')keysPos();
 }
 /* Tiers follow what fits, measured in terminal cells: the sidebar is a rail from 105 columns (as in today's workbench), compact below 64. */
 function measure(){
-  const cw=$('probe').getBoundingClientRect().width/10,lh=parseFloat(getComputedStyle(term).lineHeight);
-  COLS=Math.floor(term.clientWidth/cw);ROWS=Math.floor(term.clientHeight/lh);
+  const cw=$('probe').getBoundingClientRect().width/10;LH=parseFloat(getComputedStyle(term).lineHeight);
+  COLS=Math.floor(term.clientWidth/cw);ROWS=Math.floor(term.clientHeight/LH);
   T=COLS>=150?'wide':COLS>=105?'mid':COLS>=64?'narrow':'tiny';SHORT=ROWS<28;
   $('dock').style.maxHeight=Math.floor(term.clientHeight*.58)+'px';
   render();
   if(EMBED)parent.postMessage({mock:'size',id:Q.get('id'),cols:COLS,rows:ROWS,tier:T+(SHORT?' + short':'')},'*');
 }
-/* Focus follows an action the reader took, never the simulation tick. */
+/* Focus follows an action the reader took, never the simulation tick. Without the keys the composer shows no cursor. */
 function syncFocus(){
-  const typing=S.focus==='composer'&&S.view!=='launch'&&!S.overlay;
+  const typing=S.focus==='composer'&&S.view!=='launch'&&!popup();
   (typing?draft:$('wrap')).focus({preventScroll:true});
 }
 
 /* ---------- input: one intent, two inputs ---------- */
-function go(view,focus){S.view=view;S.focus=focus;}
+function go(view,focus){
+  // Opening a running child's conversation makes it the receiver and says so; leaving it for any other view gives the message back.
+  const k=kids[S.sel];
+  if(S.view==='child'&&view!=='child'&&S.target===k.id)S.target='parent';
+  if(view==='child'&&S.view!=='child'&&['running','needs'].includes(k.st)&&S.target!==k.id){S.target=k.id;toast('Messages now go to '+k.id);}
+  S.view=view;S.focus=focus;
+  if(view==='chat'){S.follow=true;S.wUnread=false;}
+}
 function cycleTarget(){
   const L=['parent',...kids.filter(k=>k.st==='running'||k.st==='needs'||k.st==='queued').map(k=>k.id)];
   S.target=L[(L.indexOf(S.target)+1)%L.length]||'parent';S.focus='composer';
@@ -992,28 +1367,55 @@ function launchOpen(){
   else toast(r.id==='assistant'||r.id==='pm'?`${r.name} opens as it does today; this mock covers Build.`:'Resume is not part of this mock.');
 }
 function runAction(cmd){
-  if(cmd==='finish')finishNow();else if(cmd==='planboard')planBoard();else if(cmd==='pause')S.playing=!S.playing;else key(cmd);
+  if(cmd==='finish')finishNow();else if(cmd==='planboard')planBoard();else if(cmd==='pause')S.playing=!S.playing;
+  else if(cmd==='notices')openPager(`Recent notices · ${S.notices.length}`,S.notices.map(n=>`${n.at}  ${NG[n.tone].trim()||'○'} ${n.text}`));
+  else if(cmd==='reask'){if(kid(ASK.kid).st==='needs')openDialog('ask',0);}
+  else if(cmd.startsWith('bell.'))S.bell=cmd.slice(5);
+  else key(cmd);
 }
+/* Popups own every key: the keys list closes, the palette filters, the pager scrolls and closes on q or Esc. */
 function overlayKey(k){
   if(S.overlay==='keys'){closeOverlay();return true;}
-  if(S.overlay==='palette'){
-    const A=actions();
-    if(k==='Escape')closeOverlay();
-    else if(k==='ArrowDown')S.pi=Math.min(A.length-1,S.pi+1);
-    else if(k==='ArrowUp')S.pi=Math.max(0,S.pi-1);
-    else if(k==='Backspace')S.pq=S.pq.slice(0,-1);
-    else if(k==='Enter'){const a=A[S.pi];if(a&&!a[3]){closeOverlay();runAction(a[2]);}}
-    else if(k.length===1){S.pq+=k;S.pi=0;}
+  if(S.overlay==='pager'){
+    const P=S.pg;
+    if(k==='Escape'||k==='q')closeOverlay();
+    else if(k==='ArrowDown')P.off++;else if(k==='ArrowUp')P.off--;
+    else if(k==='PageDown')P.off+=P.page;else if(k==='PageUp')P.off-=P.page;
+    else if(k==='Home')P.off=0;else if(k==='End')P.off=P.max;
     else return false;
     return true;
   }
+  const A=actions();
+  if(k==='Escape')closeOverlay();
+  else if(k==='ArrowDown')S.pi=Math.min(A.length-1,S.pi+1);
+  else if(k==='ArrowUp')S.pi=Math.max(0,S.pi-1);
+  else if(k==='Backspace')S.pq=S.pq.slice(0,-1);
+  else if(k==='Enter'){const a=A[S.pi];if(a&&!a[3]){closeOverlay();runAction(a[2]);}}
+  else if(k.length===1){S.pq+=k;S.pi=0;}
+  else return false;
+  return true;
+}
+/* A docked choice keeps ↑↓, Enter, digits and Esc; Tab or a letter hands the keys to the composer, and F-keys, Alt
+   chords and control keys pass through to the workbench. */
+function dialogKey(k){
   const d=dialogDef(),n=d.opts.length;
-  if(k==='ArrowDown'||k==='j')S.di=(S.di+1)%n;
-  else if(k==='ArrowUp'||k==='k')S.di=(S.di+n-1)%n;
+  if(k==='ArrowDown')S.di=(S.di+1)%n;
+  else if(k==='ArrowUp')S.di=(S.di+n-1)%n;
   else if(k==='Enter')d.pick(S.di);
   else if(/^[1-9]$/.test(k)&&+k<=n)d.pick(+k-1);
   else if(k==='Escape')d.esc();
-  else return false;
+  else if(k==='Tab')S.focus='composer';
+  else if(k.length===1){S.focus='composer';draft.value+=k;}
+  else return mainKey(k);
+  return true;
+}
+function questionKey(k){
+  if(k==='ArrowDown')S.wq=Math.min(QUESTIONS.length-1,S.wq+1);
+  else if(k==='ArrowUp')S.wq=Math.max(0,S.wq-1);
+  else if(k==='Enter'||/^[1-9]$/.test(k)&&+k<=QUESTIONS.length)toast('The answer dialog is not part of this mock.');
+  else if(k==='Escape'||k==='Tab')S.focus='composer';
+  else if(k.length===1){S.focus='composer';draft.value+=k;}
+  else return mainKey(k);
   return true;
 }
 function launchKey(k){
@@ -1033,7 +1435,8 @@ function listKey(k){
     const kd=kids[S.sel],live=['running','needs','queued'].includes(kd.st);
     if(down&&S.view==='fleet')S.sel=Math.min(kids.length-1,S.sel+1);
     else if(up&&S.view==='fleet')S.sel=Math.max(0,S.sel-1);
-    else if(k==='Enter'&&S.view==='fleet')S.view='child';
+    else if(k==='Enter'&&S.view==='fleet')go('child','list');
+    else if(k==='a'&&kd.st==='needs')openDialog('ask',0);
     else if(k==='s'){if(live){S.target=kd.id;S.focus='composer';}else toast(kd.id+' is not running; nothing to steer.');}
     else if(k==='x')cancelKid(kd);
     else if(k==='m'){if(live){kd.model=MODELS[(MODELS.indexOf(kd.model)+1)%MODELS.length];toast(`${kd.id} uses ${kd.model} from its next request`);}}
@@ -1043,45 +1446,90 @@ function listKey(k){
   if(S.view==='changes'){
     if(down)S.file++;else if(up)S.file=Math.max(0,S.file-1);
     else if(k==='f'){const W=['all',...kids.filter(x=>!x.kind&&liveFiles().some(f=>f.who.includes(x.id))).map(x=>x.id)];S.filter=W[(W.indexOf(S.filter)+1)%W.length];S.file=0;}
+    else if(k==='F3')toast('Filtering paths is not part of this mock.');
     else return false;
     return true;
   }
   if(S.view==='board'){
     if(down)S.bsel++;else if(up)S.bsel=Math.max(0,S.bsel-1);
     else if(k==='n')planBoard();
-    else if(k==='Enter'||k==='a'||k==='o')toast('Opens the task, its pane or the corral board; not part of this mock.');
+    else if(k==='p'&&S.proposed)openDialog('boardplan',0);
+    else if(k==='Enter')toast('Task details are not part of this mock.');
     else return false;
+    return true;
+  }
+  if(S.view==='task'){
+    if(k==='l')go('events','list');else if(k==='g'||k==='r')toast('Not part of this mock.');
+    else return false;
+    return true;
+  }
+  if(S.view==='events'){
+    if(down)S.esel=Math.min(EVENTS.length-1,S.esel+1);
+    else if(up)S.esel=Math.max(0,S.esel-1);
+    else if(k==='?')S.legend=!S.legend;
+    else if(k==='r')S.evRead=Date.now();
+    else if(k==='h')toast('The host log source is not part of this mock.');
+    else if(k!=='Enter')return false;
     return true;
   }
   return false;
 }
-function key(k){
-  let ok=true;
-  if(S.overlay)ok=overlayKey(k);
-  else if(S.view==='launch')ok=launchKey(k);
-  else switch(k){
-    case 'F9':go('chat','composer');break;
-    case 'F8':go('fleet','list');break;
-    case 'F7':go('changes','list');break;
-    case 'F10':go('board','list');break;
-    case 'F1':openDialog('keys');break;
-    case 'F2':openDialog('palette');S.pq='';S.pi=0;break;
-    case 'Alt+Enter':{const v=draft.value.trim();if(v){enqueue(v,S.target);draft.value='';}else toast('Nothing to queue: the composer is empty.');break;}
-    case 'Alt+ArrowUp':{const q=S.queue.pop();if(q){draft.value=q.text;S.target=q.target;S.focus='composer';}else toast('Nothing is queued.');break;}
-    case 'Alt+t':cycleTarget();break;
-    case 'Ctrl+b':if(small())S.drawer=!S.drawer;else S.side=S.side===false?null:false;break;
-    case 'F6':{const L=['context','files','plan'];S.rail=L[(L.indexOf(S.rail)+1)%3];if(small())S.drawer=true;else S.side=null;break;}
-    case 'Escape':if(S.view==='child')go('fleet','list');else if(S.focus==='list')S.focus='composer';else ok=false;break;
-    case 'Enter':if(S.focus==='composer'){send();break;}
-    default:ok=S.focus==='list'?listKey(k):false;
+/* Esc means back in views and stop in Chat: after an Esc that navigated, another within 0.6 s is ignored. */
+function escKey(){
+  const busy=S.role==='build'&&['running','checks','gating'].includes(S.phase),now=performance.now();
+  if(S.view==='child'){go('fleet','list');S.escAt=now;return true;}
+  if(S.view==='events'){go('task','list');S.escAt=now;return true;}
+  if(S.view!=='chat'||S.focus!=='composer'){go('chat','composer');S.escAt=now;if(busy)toast('Back in Chat · esc again stops the turn');return true;}
+  if(now-S.escAt<600)return true;
+  if(busy){toast('Stopping the turn is not part of this mock.');return true;}
+  return false;
+}
+function mainKey(k){
+  const w=S.role==='worker',V=w?['F5','F9','F8','F7','F10','F11']:['F9','F8','F7','F10'];
+  const alt=/^Alt\+([1-9])$/.exec(k);
+  if(alt){const f=V[+alt[1]-1];return f?mainKey(f):false;}
+  const elsewhere=v=>{toast(`${v} in a worker session is not part of this mock.`);return true;};
+  switch(k){
+    case 'F9':go('chat','composer');return true;
+    case 'F8':if(w)return elsewhere('Fleet');go('fleet','list');return true;
+    case 'F7':if(w)return elsewhere('Changes');go('changes','list');return true;
+    case 'F10':if(w)return elsewhere('Proof');go('board','list');return true;
+    case 'F11':return w?elsewhere('Inbox'):false;
+    case 'F5':if(!w)return false;go('task','list');return true;
+    case 'F1':openDialog('keys');return true;
+    case 'F2':openDialog('palette');S.pq='';S.pi=0;return true;
+    case 'Alt+Enter':{if(w)return false;const v=draft.value.trim();if(v){enqueue(v,S.target);draft.value='';}else toast('Nothing to queue: the composer is empty.');return true;}
+    case 'Alt+ArrowUp':{if(w)return false;const q=S.queue.pop();if(q){draft.value=q.text;S.target=q.target;S.focus='composer';}else toast('Nothing is queued.');return true;}
+    case 'Alt+ArrowDown':if(dialogDef()){S.focus='dialog';return true;}if(w){S.focus='questions';S.wq=Math.max(0,S.wq);return true;}return false;
+    case 'Alt+a':if(!w)return false;S.focus='questions';S.wq=Math.max(0,S.wq);return true;
+    case 'Alt+t':if(w)return false;cycleTarget();return true;
+    case 'Ctrl+b':case 'Alt+b':if(k!==sideKeyId())return false;if(small())S.drawer=!S.drawer;else S.side=S.side===false?null:false;return true;
+    case 'F6':{const L=['context','files','plan'];S.rail=L[(L.indexOf(S.rail)+1)%3];if(small())S.drawer=true;else S.side=null;return true;}
+    case 'Tab':if(S.focus==='composer')return false;S.focus='composer';return true;
+    case 'End':if(S.view==='chat'&&S.focus==='composer'&&!draft.value){jumpEnd();return true;}break;
+    case 'Escape':return escKey();
+    case 'Enter':if(S.focus==='composer'){send();return true;}break;
   }
+  if(S.focus!=='list')return false;
+  if(listKey(k))return true;
+  // `/` always starts a command, and a letter the view does not use is typed into the composer.
+  if(k.length===1){S.focus='composer';draft.value+=k;return true;}
+  return false;
+}
+function key(k){
+  let ok;
+  if(popup())ok=overlayKey(k);
+  else if(S.view==='launch')ok=launchKey(k);
+  else if(S.focus==='dialog'&&dialogDef())ok=dialogKey(k);
+  else if(S.focus==='questions'&&S.role==='worker')ok=questionKey(k);
+  else ok=mainKey(k);
   if(ok){render();syncFocus();}
   return ok;
 }
 function act(a,v){
   const q=()=>S.queue.findIndex(x=>x.id===+v);
   switch(a){
-    case 'sel':if(+v===S.sel&&S.focus==='list')S.view='child';else{S.sel=+v;S.focus='list';}break;
+    case 'sel':if(+v===S.sel&&S.focus==='list')go('child','list');else{S.sel=+v;S.focus='list';}break;
     case 'open':S.sel=+v;go('child','list');break;
     case 'reask':if(kid(ASK.kid).st==='needs')openDialog('ask',0);break;
     case 'rail':if(railOn())S.rail=v;else if(!small()){S.rail=v;S.side=null;}else if(S.drawer&&S.rail===v)S.drawer=false;else{S.rail=v;S.drawer=true;}break;
@@ -1090,10 +1538,10 @@ function act(a,v){
     case 'file':S.file=+v;S.focus='list';break;
     case 'bsel':S.bsel=+v;S.focus='list';break;
     case 'lrow':if(+v===S.launch.row)launchOpen();else S.launch.row=+v;break;
-    case 'pick':if(+v===S.di)dialogDef().pick(+v);else S.di=+v;break;
+    case 'pick':S.focus='dialog';if(+v===S.di)dialogDef().pick(+v);else S.di=+v;break;
     case 'prun':{const A=actions(),x=A[+v];if(x&&!x[3]){closeOverlay();runAction(x[2]);}break;}
     case 'keyrow':closeOverlay();key(v);break;
-    case 'close':if(S.overlay==='keys'||S.overlay==='palette')closeOverlay();break;
+    case 'close':if(popup())closeOverlay();break;
     case 'noop':return;
     case 'planboard':planBoard();break;
     case 'finish':finishNow();break;
@@ -1104,26 +1552,45 @@ function act(a,v){
     case 'qdown':{const i=q();if(i>=0&&i<S.queue.length-1)S.queue.splice(i+1,0,S.queue.splice(i,1)[0]);break;}
     case 'qdel':{const i=q();if(i>=0)S.queue.splice(i,1);break;}
     case 'nomock':toast('Opens the task, its pane or the corral board; not part of this mock.');break;
+    case 'jump':jumpEnd();break;
+    case 'earlier':S.wOlder=true;break;
+    case 'cdiv':S.cx=!S.cx;break;
+    case 'evsel':S.esel=+v;S.focus='list';break;
+    case 'back':go(v,'list');break;
+    case 'gotask':go('events','list');break;
+    case 'inbox':toast('Opens the Inbox on its oldest pending item; not part of this mock.');break;
+    case 'qcard':if(S.focus==='questions'&&+v===S.wq)questionKey('Enter');else{S.focus='questions';S.wq=+v;}break;
   }
   render();syncFocus();
 }
 function scene(s,quiet){
   if(s==='reset'||s==='launch')reset();
   else if(s==='pause')S.playing=!S.playing;
+  else if(s==='herdr')S.herdr=!S.herdr;
   else if(s==='ask')simAsk();
-  else if(s==='skip'){if(S.phase==='idle')begin(DEMO);S.view='chat';finishNow();}
+  else if(s==='worker'||s==='events'){
+    while(S.overlay)closeOverlay();
+    S.role='worker';S.target='parent';S.wq=-1;S.rail='plan';
+    if(s==='worker')go('chat','composer');
+    else{S.wUnread=true;S.evRead=Date.now()-120000;S.view='events';S.focus='list';}
+  }
   else{
-    if(S.phase==='idle'){begin(DEMO);advance(8);}
-    if(S.overlay)closeOverlay();
-    if(s==='chat')go('chat','composer');
-    if(s==='fleet'){advance(6);go('fleet','list');}
-    if(s==='child'){S.sel=3;go('child','list');}
-    if(s==='changes'){if(S.phase==='running'&&S.clock<150)advance(14);go('changes','list');}
-    if(s==='queue'){go('chat','composer');if(!S.queue.length){enqueue('also add an empty state for zero slots','parent');enqueue('use the existing Button, not a new one','picker-ui');}draft.value='keep slot names editable';}
-    if(s==='finish'){go('chat','composer');finishNow();}
-    if(s==='board')planBoard();
-    if(s==='boardlive'){planBoard();fileBoard(0);advance(10);}
-    if(s==='keys')openDialog('keys');
+    if(S.role!=='build'){S.role='build';S.rail='context';go('chat','composer');}
+    if(s==='skip'){if(S.phase==='idle')begin(DEMO);S.view='chat';finishNow();}
+    else{
+      if(S.phase==='idle'){begin(DEMO);advance(8);}
+      while(S.overlay)closeOverlay();
+      if(s==='chat')go('chat','composer');
+      if(s==='fleet'){advance(6);go('fleet','list');}
+      if(s==='child'){S.sel=3;go('child','list');}
+      if(s==='changes'){if(S.phase==='running'&&S.clock<150)advance(14);go('changes','list');}
+      if(s==='queue'){go('chat','composer');if(!S.queue.length){enqueue('also add an empty state for zero slots','parent');enqueue('use the existing Button, not a new one','picker-ui');}draft.value='keep slot names editable';}
+      if(s==='finish'){go('chat','composer');finishNow();}
+      if(s==='board')planBoard();
+      if(s==='boardlive'){planBoard();fileBoard(0);advance(10);}
+      if(s==='keys')openDialog('keys');
+      if(s==='pager'){go('chat','composer');openPager(JOB_TITLE,jobLines());}
+    }
   }
   render();if(!quiet)syncFocus();
 }
@@ -1153,23 +1620,32 @@ $('strip').addEventListener('click',e=>{const b=e.target.closest('button');if(b)
 term.addEventListener('click',e=>{
   const a=e.target.closest('[data-a],[data-k]');
   if(a){if(a.dataset.a)act(a.dataset.a,a.dataset.v);else key(a.dataset.k);return;}
-  if(e.target.closest('#composer')&&!S.overlay&&S.view!=='launch'){S.focus='composer';render();}
+  if(e.target.closest('#composer')&&!popup()&&S.view!=='launch'){S.focus='composer';render();}
   syncFocus();
 });
 wrap.addEventListener('keydown',e=>{
+  if(e.ctrlKey&&e.key==='End'){if(S.view==='chat'){jumpEnd();render();e.preventDefault();}return;}
   if(e.metaKey||e.ctrlKey&&e.key.toLowerCase()!=='b')return;
   const k=e.ctrlKey?'Ctrl+b':e.altKey?'Alt+'+(e.key.length===1?e.key.toLowerCase():e.key):e.key;
-  const typing=document.activeElement===draft&&!S.overlay&&S.view!=='launch';
-  if(typing&&!/^(F\d+|Enter|Escape|Alt\+.+|Ctrl\+b)$/.test(k))return;
+  const typing=document.activeElement===draft&&S.focus==='composer'&&!popup()&&S.view!=='launch';
+  if(typing&&!/^(F\d+|Enter|Escape|Alt\+.+|Ctrl\+b|End)$/.test(k))return;
+  if(typing&&k==='End'&&draft.value)return;
   if(key(k))e.preventDefault();
 });
+$('main').addEventListener('scroll',()=>{
+  if(S.view!=='chat')return;
+  const m=$('main'),f=m.scrollTop+m.clientHeight>=m.scrollHeight-4;
+  if(f!==S.follow){S.follow=f;if(f)S.seenH=m.scrollHeight;render();}
+});
+term.addEventListener('wheel',e=>{if(S.overlay!=='pager')return;e.preventDefault();S.pg.off+=e.deltaY>0?3:-3;render();},{passive:false});
+term.addEventListener('scroll',e=>{if(e.target.classList&&e.target.classList.contains('pop'))keysPos();},true);
 draft.addEventListener('input',()=>render());
 if(EMBED)document.body.classList.add('embed');
 reset();
 new ResizeObserver(measure).observe(term);
 measure();
 if(Q.get('scene'))scene(Q.get('scene'),true);
-setInterval(()=>{if(S.playing&&S.view!=='launch'&&S.phase!=='idle'){step();render();}},TICK_MS);
+setInterval(()=>{if(S.playing&&S.role==='build'&&S.view!=='launch'&&S.phase!=='idle'){step();render();}},TICK_MS);
 </script>
 </body>
 </html>
