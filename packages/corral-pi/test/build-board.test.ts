@@ -141,13 +141,28 @@ describe("board import", () => {
     } finally { board.close(); await rm(dir, { recursive: true, force: true }); }
   });
 
-  test("every outside-workspace entry rejects before running corral", async () => {
+  test("outside-workspace lifecycle and reads are safe while imports reject asynchronously", async () => {
+    let changed = 0, commands = 0;
     const outside = createBoard({ context: { ...context(), session: { ...context().session, workspaceRoot: undefined } },
-      run: async () => { throw new Error("Unexpected corral command"); }, tmpDir: "/unused", changed() {} });
-    for (const action of [() => outside.tasks(), () => outside.proposed(), () => outside.propose(plan), () => outside.dismiss(), () => outside.subscribe(() => {}), () => outside.refresh(), () => outside.file(plan, true), () => outside.close()]) {
-      expect(action).toThrow("Board plans require a corral workspace.");
-    }
-    await expect(outside.preview(plan)).rejects.toThrow("Board plans require a corral workspace.");
+      run: async () => { commands++; throw new Error("Unexpected corral command"); }, tmpDir: "/unused", changed() { changed++; } });
+    const unsubscribe = outside.subscribe(() => {});
+    expect(outside.tasks()).toEqual([]);
+    expect(outside.proposed()).toBeUndefined();
+    outside.propose({ ...plan, tasks: [] });
+    expect(outside.proposed()).toBeUndefined();
+    outside.dismiss();
+    await outside.refresh();
+    const preview = outside.preview(plan);
+    const filing = outside.file(plan, true);
+    await expect(preview).rejects.toThrow("Board plans require a corral workspace.");
+    await expect(filing).rejects.toThrow("Board plans require a corral workspace.");
+    unsubscribe();
+    outside.close();
+    outside.close();
+    expect(outside.tasks()).toEqual([]);
+    expect(outside.proposed()).toBeUndefined();
+    expect(changed).toBe(0);
+    expect(commands).toBe(0);
   });
 });
 

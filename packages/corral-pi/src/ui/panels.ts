@@ -3,6 +3,7 @@ import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionUIContext, InteractiveChatPresentation } from "@earendil-works/pi-coding-agent";
 import { decodeKittyPrintable, isKeyRelease, matchesKey, TuiAltScreen, visibleWidth, type Component, type Terminal, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
+import type { BuildUi } from "../build/types.ts";
 import { PanelTerminal, PANEL_BREAKPOINT, PANEL_WIDTH, RAIL_MIN, RAIL_MAX, MIN_MAIN, type PanelSurface } from "./panel-terminal.ts";
 import { NativeWorkbench, plainClick, type MainView } from "./workbench.ts";
 import type { HistoryRead } from "./history.ts";
@@ -26,6 +27,7 @@ import { openOutputPager } from "./job-detail.ts";
 import { pad, plainLabel, setPanelAppearance, PANEL_MUTED, type PanelSnapshot } from "./panels-view.ts";
 
 export interface NativePanelsOptions {
+  readonly build?: BuildUi;
   readonly identity: HostIdentity;
   readonly cwd: string;
   readonly inspection?: () => Promise<unknown>;

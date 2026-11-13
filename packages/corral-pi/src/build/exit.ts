@@ -71,7 +71,7 @@ export function createExit(options: {
     return [
       { choice: "keep", label: "Keep on the branch", detail: "Keep this worktree and its branch without creating a corral task." },
       { choice: "land", label: "Land after the gate", detail: "Submit the branch and waive independent review after the required gate.",
-        unavailable: context.settings.exitPolicy === "review" ? "Project policy requires independent review." : reason },
+        unavailable: root && context.settings.exitPolicy === "review" ? "Project policy requires independent review." : reason },
       { choice: "ship", label: "Ship through the board", detail: "Submit the branch for the gate and independent review.", unavailable: reason },
       { choice: "iterate", label: "Keep iterating", detail: "Return to the build session without choosing an exit." },
     ];

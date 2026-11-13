@@ -1,4 +1,5 @@
-//! Untethered build launches: read configuration and credentials without opening a store.
+//! Untethered build launches: read configuration and credentials without opening a store, and list
+//! the build sessions the host recorded so the launcher can offer them for resume.
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -331,6 +332,101 @@ pub fn build(args: &BuildArgs) -> Result<()> {
 #[cfg(not(unix))]
 pub fn build(_args: &BuildArgs) -> Result<()> {
     platform()
+}
+
+/// A build session the host recorded in `<data_root>/build/<id>/session.json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildSessionSummary {
+    pub id: String,
+    pub name: String,
+    pub repo_root: PathBuf,
+    pub worktree: PathBuf,
+    pub here: bool,
+    pub project: Option<String>,
+    pub updated: String,
+    /// The exit choice (`keep`, `ship`, `land`, `iterate`) once one is recorded.
+    pub exited: Option<String>,
+}
+
+/// The largest `session.json` [`list_sessions`] reads.
+const SESSION_MAX_BYTES: u64 = 64 * 1024;
+/// The most recently modified session directories [`list_sessions`] reads.
+const SESSION_DIRS: usize = 32;
+
+/// The fields of the host's camelCase `BuildSessionRecord` the launcher needs.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionRecord {
+    id: String,
+    name: String,
+    updated: String,
+    repo_root: PathBuf,
+    worktree: PathBuf,
+    here: bool,
+    project: Option<String>,
+    session_file: Option<String>,
+    exit: Option<SessionExit>,
+}
+
+#[derive(serde::Deserialize)]
+struct SessionExit {
+    choice: String,
+}
+
+/// The resumable build sessions under `data_root`, newest `updated` first. Only the
+/// [`SESSION_DIRS`] most recently modified session directories are read; a record that is
+/// unreadable, larger than [`SESSION_MAX_BYTES`], malformed, filed under another id or without a
+/// parent transcript (`sessionFile`) is skipped.
+pub fn list_sessions(data_root: &Path) -> Vec<BuildSessionSummary> {
+    let Ok(entries) = std::fs::read_dir(data_root.join("build")) else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<_> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let meta = entry.metadata().ok()?;
+            meta.is_dir().then(|| (meta.modified().ok(), entry.path()))
+        })
+        .collect();
+    dirs.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut sessions: Vec<_> = dirs
+        .into_iter()
+        .take(SESSION_DIRS)
+        .filter_map(|(_, dir)| read_session(&dir))
+        .collect();
+    sessions.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.id.cmp(&a.1.id)));
+    sessions.into_iter().map(|(_, session)| session).collect()
+}
+
+fn read_session(dir: &Path) -> Option<(jiff::Timestamp, BuildSessionSummary)> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(dir.join("session.json"))
+        .ok()?
+        .take(SESSION_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > SESSION_MAX_BYTES {
+        return None;
+    }
+    let record: SessionRecord = serde_json::from_slice(&bytes).ok()?;
+    if record.session_file.is_none() || dir.file_name() != Some(std::ffi::OsStr::new(&record.id)) {
+        return None;
+    }
+    let updated = record.updated.parse::<jiff::Timestamp>().ok()?;
+    Some((
+        updated,
+        BuildSessionSummary {
+            id: record.id,
+            name: record.name,
+            repo_root: record.repo_root,
+            worktree: record.worktree,
+            here: record.here,
+            project: record.project,
+            updated: record.updated,
+            exited: record.exit.map(|exit| exit.choice),
+        },
+    ))
 }
 
 #[cfg(all(test, target_os = "linux"))]

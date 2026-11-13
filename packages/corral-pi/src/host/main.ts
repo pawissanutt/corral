@@ -66,7 +66,7 @@ export async function runHost(config: HostConfig, overrides: {
   const modules = withRecoveryContext(await loadModules(config.assets, config.identity.role, provider));
   const events = new EventLog(config.identity.generation);
   const rawFetch = globalThis.fetch.bind(globalThis);
-  const subscriptions = await subscriptionRoutes(modules.auth, provider, overrides.build ? "assistant" : config.identity.role);
+  const subscriptions = await subscriptionRoutes(modules.auth, provider, config.identity.role);
   const send = modules.auth.transport?.(authContext(provider)) ?? rawFetch;
   let aws: AwsRoute | undefined;
   let rules: readonly DestinationRule[] | undefined;

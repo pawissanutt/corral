@@ -279,3 +279,60 @@ fn old_source_installation_refuses_build_and_unknown_profile_provider_refuses_us
     let error = build_command(data.path(), &args, &cwd, None, Some(fx.root())).unwrap_err();
     assert_eq!(code(&error), Some("usage_error"));
 }
+
+fn session_file(data: &Path, id: &str, body: &str) {
+    let dir = data.join("build").join(id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("session.json"), body).unwrap();
+}
+
+fn session_record(id: &str, updated: &str) -> Value {
+    json!({
+        "version": 1, "id": id, "name": "checkout-copy", "created": "2026-11-01T09:00:00.000Z",
+        "updated": updated, "repoRoot": "/repo", "worktree": "/repo/.worktrees/build-checkout-copy",
+        "branch": "build/checkout-copy", "base": "abc123", "here": false,
+        "sessionFile": format!("/data/build/{id}/parent.jsonl"),
+    })
+}
+
+#[test]
+fn list_sessions_reads_host_records_newest_first_and_skips_unresumable_ones() {
+    let data = tempfile::tempdir().unwrap();
+    assert!(list_sessions(data.path()).is_empty());
+    let older = session_record("B-older1", "2026-11-02T10:00:00.000Z");
+    session_file(data.path(), "B-older1", &older.to_string());
+    let mut newer = session_record("B-newer1", "2026-11-03T10:00:00.000Z");
+    newer["here"] = json!(true);
+    newer["worktree"] = json!("/repo");
+    newer["project"] = json!("app");
+    newer["workspaceRoot"] = json!("/ws");
+    newer["exit"] = json!({"choice": "ship", "at": "2026-11-03T10:00:00.000Z", "task": "T-9"});
+    session_file(data.path(), "B-newer1", &newer.to_string());
+    let mut untranscribed = session_record("B-nofile1", "2026-11-04T10:00:00.000Z");
+    untranscribed.as_object_mut().unwrap().remove("sessionFile");
+    session_file(data.path(), "B-nofile1", &untranscribed.to_string());
+    session_file(data.path(), "B-broken1", "{\"id\": \"B-broken1\"");
+    let sessions = list_sessions(data.path());
+    let ids: Vec<_> = sessions.iter().map(|session| session.id.as_str()).collect();
+    assert_eq!(ids, ["B-newer1", "B-older1"]);
+    assert_eq!(
+        sessions[0],
+        BuildSessionSummary {
+            id: "B-newer1".into(),
+            name: "checkout-copy".into(),
+            repo_root: "/repo".into(),
+            worktree: "/repo".into(),
+            here: true,
+            project: Some("app".into()),
+            updated: "2026-11-03T10:00:00.000Z".into(),
+            exited: Some("ship".into()),
+        }
+    );
+    assert_eq!(
+        sessions[1].worktree,
+        PathBuf::from("/repo/.worktrees/build-checkout-copy")
+    );
+    assert!(!sessions[1].here);
+    assert_eq!(sessions[1].project, None);
+    assert_eq!(sessions[1].exited, None);
+}

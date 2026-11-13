@@ -30,6 +30,10 @@ corral pi --over-cap           # one more than assistant.max_live
 corral pi --resume A-1         # A-1's next generation, in this pane
 corral pi --task T-42          # new assistant with read-only task context
 corral pi --pm                 # the PM instead (see the corral-pi guide)
+corral pi --build              # an untethered build session in .worktrees/build-<name>
+corral pi --build --here       # a build session in the current checkout and branch
+corral pi --build --name x     # a build session named x
+corral pi --resume B-<id>      # that build session again
 corral pi --bare               # plain Pi; also what `corral pi` does outside a workspace
 ```
 
@@ -47,18 +51,27 @@ vendor and login preflight as any corral-pi launch. The assistant needs no appro
 scope: it is not bound to a project and has no board authority of its own.
 
 Outside a workspace, `corral pi` prints a one-line notice that no corral workspace was found
-and starts plain Pi; `--pm`, `--assistant`, `--resume`, `--task` and `--over-cap` there refuse
-`not_in_workspace`.
+and starts plain Pi; `--pm`, `--assistant`, `--resume A-<n>`, `--task` and `--over-cap` there
+refuse `not_in_workspace`. `--build` and `--resume B-<id>` need only a Git repository; build
+sessions are described in the [corral-pi guide](corral-pi.md#starting-pi-yourself-corral-pi).
 
 ### The launcher
 
 Plain `corral pi` in a workspace, with stdin and stdout both on a terminal, asks what to open:
 
-- **Start**: **Assistant** (key `a`) opens a new assistant as `--assistant` does; **PM** (key
-  `p`) opens the PM and continues its previous conversation, as `--pm -c` does.
-- **Resume**: the eight most recently active stopped assistants, the sessions
-  `corral pi --resume` accepts (open, with no running host), newest first. Each row shows
-  `A-<n>`, its summary (or its task focus), its project and how long ago it was last active.
+- **Start**: **Build** (key `b`, selected first) opens a build session as `--build` does;
+  **Assistant** (key `a`) opens a new assistant as `--assistant` does; **PM** (key `p`) opens
+  the PM and continues its previous conversation, as `--pm -c` does. While Build is selected, a
+  line under it shows where it writes, `‹ new worktree  .worktrees/build-<name> ›` or
+  `‹ here  the current checkout and branch ›` (`--build --here`); `←→` switch between them,
+  and a click on that line moves to the other.
+- **Resume**: the eight most recently active stopped sessions, newest first: assistants
+  `corral pi --resume` accepts (open, with no running host) and build sessions recorded for a
+  repository inside this workspace or the current Git repository. An assistant row shows
+  `A-<n>`, its summary (or its task focus), its project and how long ago it was last active; a
+  build row shows `build`, the session name, its project (or the repository's directory name),
+  how long ago it was last updated and, once it has ended, `kept`, `shipped` or `landed`.
+  Opening a build row is `--resume B-<id>`.
 
 `↑↓` or `j`/`k` select a row, `⏎` opens it, a row's key opens that row directly, and `q`, `Esc`
 or `Ctrl+C` leave without opening anything (exit status 0, no message). A click selects a row,
@@ -66,7 +79,8 @@ a click on the selected row opens it, and each key in the footer can be clicked.
 columns each row folds to two lines. `--model`, `--provider` and `--effort` given with plain
 `corral pi` apply to whichever row opens.
 
-Any of `--assistant`, `--pm`, `--resume`, `--task`, `--over-cap` or `--bare` skips the launcher.
+Any of `--build`, `--assistant`, `--pm`, `--resume`, `--task`, `--over-cap` or `--bare` skips
+the launcher.
 Without a terminal (a script or a pipe), plain `corral pi` opens an assistant as
 `--assistant` does, so scripts that start an assistant should pass `--assistant`.
 
