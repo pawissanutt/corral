@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Replay actual accounting in an owned production-host PTY; offline transport only."""
+"""Replay actual collector inspection JSON in an owned production-host PTY; offline transport only.
+
+The source positional argument is required recorded accounting, not a fabricated usage fixture.
+Checks the aligned Usage table, optional token bars, reading rules and unavailable legacy budget.
+"""
 import argparse
 import fcntl
 import json
@@ -31,8 +35,8 @@ proc = None
 master = slave = None
 log = bytearray()
 scenes, resizes = [], []
-# The status bar: the role pill ` WORKER `, then the binding dot and generation (`● g1` bound, `○` not), styling between.
-BOUND = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* g1\b')
+# Bound role, explicit binding word and full-width generation, allowing ANSI styling.
+BOUND = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* bound(?:\x1b\[[\d;:]*m)* \xc2\xb7 (?:\x1b\[[\d;:]*m)*gen 1\b')
 size = dict(columns=180, rows=38)
 try:
     env = {k: v for k, v in os.environ.items() if not k.startswith(('HERDR_', 'CORRAL_', 'PI_'))}
@@ -57,14 +61,15 @@ try:
     os.write(write_fd, json.dumps(launch).encode()); os.close(write_fd)
     selector = selectors.DefaultSelector(); selector.register(master, selectors.EVENT_READ)
     def seen(text, mark):
-        return text.search(log, mark) is not None if isinstance(text, re.Pattern) else text.encode() in log[mark:]
+        if isinstance(text, (tuple, list)): return all(seen(part, mark) for part in text)
+        return text.search(log, mark) is not None if isinstance(text, re.Pattern) else text.encode() in re.sub(rb'\x1b\[[\d;:]*m', b'', log[mark:])
     def until(text, mark=0):
         deadline = time.monotonic() + 30
         while not seen(text, mark):
             events = selector.select(max(0, deadline - time.monotonic()))
-            if not events: raise AssertionError('Timeout waiting for ' + (text.pattern.decode(errors='replace') if isinstance(text, re.Pattern) else text))
+            if not events: raise AssertionError('Timeout waiting for ' + (text.pattern.decode(errors='replace') if isinstance(text, re.Pattern) else str(text)))
             chunk = os.read(master, 65536)
-            if not chunk: raise AssertionError('Host exited before ' + (text.pattern.decode(errors='replace') if isinstance(text, re.Pattern) else text))
+            if not chunk: raise AssertionError('Host exited before ' + (text.pattern.decode(errors='replace') if isinstance(text, re.Pattern) else str(text)))
             log.extend(chunk)
     def send(data): os.write(master, data)
     def scene(name, text, data=None, resize=None):
@@ -85,21 +90,23 @@ try:
     until(BOUND)
     # Local fake transport, not a provider: establish a retained conversation and editor draft.
     scene('conversation-before', 'FAKE_TRANSPORT_OK', b'Usage capture conversation\r')
-    scene('wide-source-table', 'Measured usage', b'/panels usage\r')
-    scene('wide-chart-toggle', 'Token bars', b'c')
-    scene('wide-source-restored', 'No model rows', b'c')
+    scene('wide-source-table', '‹ Chat · Usage', b'/panels usage\r')
+    scene('wide-chart-toggle', 'token bars', b'c')
+    scene('wide-source-restored', 'API-equiv. USD', b'c')
+    scene('wide-reading-rules', ('No model rows means', 'per-response/model accounting', 'unavailable, not no usage.'), b'?')
+    scene('wide-reading-rules-closed', 'API-equiv. USD', b'?')
     # End reaches the genuine legacy/unavailable budget state, without supplying invented limits.
-    scene('wide-budget', 'Budget accounting unavailable', b'\x1b[6~' * 8)
+    scene('wide-budget', 'accounting unavailable / legacy', b'\x1b[6~' * 8)
     scene('compact-chart', '', resize=(52, 38))
-    scene('compact-chart-top', 'Token bars', b'\x1b[5~' * 12 + b'c')
-    scene('compact-budget', 'Budget accounting unavailable', b'\x1b[6~' * 12)
+    scene('compact-chart-top', 'token bars', b'\x1b[5~' * 12 + b'c')
+    scene('compact-budget', 'accounting unavailable / legacy', b'\x1b[6~' * 12)
     scene('conversation-return', 'Usage capture conversation', b'\x1b[20~')
     scene('draft-retained', 'RETAINED_USAGE_DRAFT', b'RETAINED_USAGE_DRAFT')
     # Reopen Usage through the F2 actions palette: its own filter field, so the editor draft stays untouched.
     scene('draft-usage-action', 'type to filter actions', b'\x1bOQ')
     scene('draft-usage-query', '', b'usage')
     scene('draft-in-usage', 'unavailable', b'\r')
-    scene('draft-usage-top', 'Measured usage', b'\x1b[5~' * 12)
+    scene('draft-usage-top', '‹ Chat · Usage', b'\x1b[5~' * 12)
     scene('draft-return', 'Usage capture conversation', b'\x1b[20~')
     calls = [json.loads(json.loads(line)['stdin']) for line in (work / 'calls.jsonl').read_text().splitlines()]
     assert all(c['op'] in ('hello', 'event') for c in calls), calls

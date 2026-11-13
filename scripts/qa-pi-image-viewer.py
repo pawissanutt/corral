@@ -95,8 +95,8 @@ try:
 
 
     import re
-    # The status bar: the role pill ` WORKER `, then the binding dot and generation (`● g1` bound, `○` not), styling between.
-    bound = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* g1\b')
+    # Bound role, explicit binding word and full-width generation, allowing ANSI styling.
+    bound = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* bound(?:\x1b\[[\d;:]*m)* \xc2\xb7 (?:\x1b\[[\d;:]*m)*gen 1\b')
     until(lambda: bound.search(log) is not None, 'native editor ready and bound')
     send(b'/fixture-workbench-image\r')
     send(b'Read the owned image.\r')

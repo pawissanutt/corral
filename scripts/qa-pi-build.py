@@ -46,9 +46,8 @@ checks: list[str] = []
 resizes = [dict(offset=0, columns=140, rows=46)]
 INCOMPLETE = re.compile(r'\x1b(?:\[[0-?]*[ -/]*|[\]_P^](?:[^\x07\x1b]|\x1b(?!\\))*\x1b?|[()])?\Z', re.S)
 TOKEN = re.compile(r'\x1b\[([<=>?]?)([\d;:]*)[ -/]*([@-~])|\x1b[\]_P^].*?(?:\x07|\x1b\\)|\x1b[()].|\x1b.|[\x00-\x1f\x7f]|[^\x00-\x1f\x7f\x1b]+', re.S)
-# The status bar: the role pill ` BUILD `, then the binding. A build session has no corral binding and reads
-# `○ unbound` (the word from 105 columns), never a generation.
-UNBOUND = re.compile(r'^  BUILD  ○ unbound(?: │|$)')
+# A build session has the BUILD pill followed directly by cost, never a binding segment.
+UNBOUND = re.compile(r'^  BUILD  │ \$\d+\.\d{2} │ ctx ')
 # The braille spinner a running agent shows in its state cell.
 SPIN = '[⠋⠙⠹⠸⠼⠴⠦⠧]'
 EXITS = ('Keep on the branch', 'Land after the gate', 'Ship through the board', 'Keep iterating')
@@ -295,7 +294,7 @@ try:
             check(refused, f'{size}: exit option "{label}" keeps its row and is marked unavailable')
 
     # Scene 1: ready.
-    until(status_unbound, 'the status bar shows the BUILD pill with ○ unbound', timeout=60)
+    until(status_unbound, 'the BUILD status has cost and context but no binding segment', timeout=60)
     until(lambda: tab_row() is not None and header() is not None, 'the header with "build · qa" and the tab row')
     save('01-ready-140x46', 'ready')
     check(header() is not None and 'corral / build · qa' in header(), 'header row 1 reads "corral / build · qa"')
@@ -307,7 +306,7 @@ try:
     check(re.search(r'F10\s*Board', tabs) is not None, 'Board sits on F10')
     check(row_with('qa-repo · .worktrees/build-qa', 'exit policy: review required') is not None,
           'header row 2 names the repository, the session worktree and the exit policy')
-    check(status_unbound(), 'the status bar shows the BUILD pill and "○ unbound": a build session has no corral binding')
+    check(status_unbound(), 'BUILD goes directly to cost and context, without a binding segment')
     check(worktree.is_dir() and git('rev-parse', '--abbrev-ref', 'HEAD', cwd=worktree) == 'build/qa',
           'the entry created the private worktree .worktrees/build-qa on branch build/qa')
 

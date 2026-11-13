@@ -39,8 +39,8 @@ selector = selectors.DefaultSelector()
 log = bytearray()
 INCOMPLETE = re.compile(r'\x1b(?:\[[0-?]*[ -/]*|[\]_P^](?:[^\x07\x1b]|\x1b(?!\\))*\x1b?|[()])?\Z', re.S)
 TOKEN = re.compile(r'\x1b\[([<=>?]?)([\d;:]*)[ -/]*([@-~])|\x1b[\]_P^].*?(?:\x07|\x1b\\)|\x1b[()].|\x1b.|[\x00-\x1f\x7f]|[^\x00-\x1f\x7f\x1b]+', re.S)
-# The status bar: the role pill ` ASSISTANT `, then the binding dot and generation (`● g1` bound, `○` not), styling between.
-BOUND = re.compile(rb' ASSISTANT (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* g1\b')
+# Bound role, explicit binding word and full-width generation, allowing ANSI styling.
+BOUND = re.compile(rb' ASSISTANT (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* bound(?:\x1b\[[\d;:]*m)* \xc2\xb7 (?:\x1b\[[\d;:]*m)*gen 1\b')
 
 
 class Screen:
@@ -229,7 +229,7 @@ process.stdout.write(result.stdout ?? ""); process.stderr.write(result.stderr ??
     assert target, 'Inbox tab not on screen'
     mark = len(log); click(target[1], target[0])
     until(lambda: text('read only', mark), 'mouse opens Inbox')
-    closed = prompt_ends(); send(b'/')
+    closed = prompt_ends(); send(b'\x1bOR')  # F3 filters; slash starts a command.
     until(lambda: text('Filter canonical inbox'), 'native filter dialog')
     mark = len(log); send(b'T-001/R1/Q1\r')
     until(lambda: prompt_ends() > closed and text('Keep unsent native draft', mark), 'filter closed without submitting draft')

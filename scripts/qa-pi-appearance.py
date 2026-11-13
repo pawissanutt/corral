@@ -185,8 +185,8 @@ try:
     def on_screen(text): return text in '\n'.join(screen.lines())
 
     def bound():
-        # The status bar: the role pill ` WORKER `, then the binding dot and generation: `● g1` bound, `○` not.
-        return any(re.match(r'  WORKER  ● g1\b', line) for line in screen.lines())
+        # Explicit binding word and generation at this driver's 140-column startup.
+        return any(re.match(r'  WORKER  ● bound · gen 1\b', line) for line in screen.lines())
 
     def palette_row():
         # The F2 popup is centred on the whole screen, over the rail: its filter row is `│ › query … role · project │`.
@@ -224,6 +224,7 @@ try:
         if query: send(query)
         until(lambda: query in (palette_row() or ''), 'keyboard search ' + query)
     until(bound, 'production host bound')
+    assert on_screen(' · effort medium ↻'), 'the composer explicitly labels its effort control'
     save('dark-140x46')
     palette('answer')
     # The popup is at most 78 cells wide: the answer row's reason is clipped after the role it names.

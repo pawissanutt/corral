@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Owned production Pi PTY: real keyboard history reads over a copied recorded task.
+"""Owned production Pi PTY: keyboard history reads over a copied recorded task.
+
+Requires the pi_history_copy seed executable and a recorded task JSON, not fabricated history.
 No model calls or owner panes. Only the offline host hello/events use a fake adapter.
 """
 import argparse
@@ -34,8 +36,8 @@ selector = selectors.DefaultSelector()
 master = slave = watch = None
 proc = None
 log = bytearray()
-# The status bar: the role pill ` ASSISTANT `, then the binding dot and generation (`● g1` bound, `○` not), styling between.
-BOUND = re.compile(rb' ASSISTANT (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* g1\b')
+# Bound role, explicit binding word and full-width generation, allowing ANSI styling.
+BOUND = re.compile(rb' ASSISTANT (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* bound(?:\x1b\[[\d;:]*m)* \xc2\xb7 (?:\x1b\[[\d;:]*m)*gen 1\b')
 try:
     env = {key: value for key, value in os.environ.items() if not key.startswith(('HERDR_', 'CORRAL_', 'PI_'))}
     env.update(HOME=str(work/'home'), XDG_CONFIG_HOME=str(work/'config'), XDG_DATA_HOME=str(work/'data'),

@@ -35,8 +35,8 @@ log = bytearray()
 scenes = []
 resizes = []
 size = dict(columns=140, rows=46)
-# The status bar: the role pill ` WORKER `, then the binding dot and generation (`● g1` bound, `○` not), styling between.
-BOUND = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* g1\b')
+# Bound role, explicit binding word and full-width generation, allowing ANSI styling.
+BOUND = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* bound(?:\x1b\[[\d;:]*m)* \xc2\xb7 (?:\x1b\[[\d;:]*m)*gen 1\b')
 try:
     env = {k: v for k, v in os.environ.items() if not k.startswith(('HERDR_', 'CORRAL_', 'PI_')) and k not in ('TERM_PROGRAM', 'KITTY_WINDOW_ID')}
     env['PI_IMAGE_PROTOCOL'] = args.graphics
@@ -93,8 +93,9 @@ os.execv(target, [target, *argv])
     os.write(write_fd, json.dumps(launch).encode()); os.close(write_fd)
     selector = selectors.DefaultSelector(); selector.register(master, selectors.EVENT_READ)
     def seen(text, mark):
-        return text.search(log, mark) is not None if isinstance(text, re.Pattern) else text.encode() in log[mark:]
-    def label(text): return text.pattern.decode(errors='replace') if isinstance(text, re.Pattern) else text
+        if isinstance(text, (tuple, list)): return all(seen(part, mark) for part in text)
+        return text.search(log, mark) is not None if isinstance(text, re.Pattern) else text.encode() in re.sub(rb'\x1b\[[\d;:]*m', b'', log[mark:])
+    def label(text): return text.pattern.decode(errors='replace') if isinstance(text, re.Pattern) else str(text)
     def until(text, mark=0):
         deadline = time.monotonic() + 20
         while not seen(text, mark):
@@ -125,17 +126,18 @@ os.execv(target, [target, *argv])
     def routed(): return [json.loads(line) for line in (work / 'routed.jsonl').read_text().splitlines()]
     def real_calls(kind): return [c['argv'] for c in routed() if c['real'] and kind in c['argv']]
     scene('real-evidence', 'Proof', b'\x1b[21~')
-    scene('real-artifacts', 'Evidence: unknown · run R2 evidence not read', b'a')
-    assert ('Bound worktree HEAD ' + head).encode() in log, 'real bound worktree HEAD shown'
+    scene('real-artifacts', 'unknown · run R2 evidence not read', b'a')
+    scene('real-head-legend', 'Bound worktree HEAD ' + head, b'?')
+    scene('real-head-legend-closed', 'Catalog at last reconcile, not live', b'?')
     assert real_calls('inspect') and not real_calls('artifact'), routed()
     scene('real-absent', 'ABSENT: no snapshot file or live blob', b'j')
     scene('real-absent-open', 'Unavailable · not opened', b'\r')
-    scene('real-html-selected', 'page.html · report · run R1', b'j')
+    scene('real-html-selected', ('page.html   ✓ present', 'Kind       report', 'Run        R1'), b'j')
     assert not real_calls('artifact'), 'selection must not start a viewer'
     scene('real-html-browser', 'Browser requested', b'o')
-    scene('real-report-selected', 'differs from bound HEAD at read', b'j')
+    scene('real-report-selected', ('differs from', 'bound HEAD at read · historical'), b'j')
     scene('real-report-opened', 'REAL_REPORT_BODY', b'\r')
-    scene('real-image-selected', 'same SHA as bound HEAD at read', b'j')
+    scene('real-image-selected', ('same SHA as', 'bound HEAD at read'), b'j')
     if args.graphics == 'none':
         scene('real-image-fallback', 'Graphics unavailable in this terminal', b'\r')
     else:
@@ -143,11 +145,12 @@ os.execv(target, [target, *argv])
         scene('real-image-viewer', 'chat', b'\r')
         scene('real-image-closed', 'Bytes at open match the registered SHA256', b'\x1b')
     assert b'Bytes at open match the registered SHA256' in log
-    scene('real-mark-a', 'Selected for comparison: A', b'm')
+    scene('real-mark-a', 'A résumé.png', b'm')
     send(b'k')
-    scene('real-mark-b', ' · B ' + task + ':R1:', b'm')
+    scene('real-mark-b', 'B my report.md', b'm')
     scene('real-compare', 'Registered bytes differ (different SHA256)', b'c')
-    scene('real-compact-compare', 'Title B: my report.md', resize=(52, 30))
+    scene('real-compact-compare-top', 'COMPARE', resize=(52, 30))
+    scene('real-compact-compare', 'Title B     my report.md', b'\x1b[6~')
     viewers = [c['argv'][2:] for c in routed() if c['real'] and 'artifact' in c['argv']]
     assert [(v[1], v[2].rsplit(':', 1)[0]) for v in viewers] == [('serve', task + ':R1'), ('show', task + ':R1'), ('show', task + ':R1')], viewers
     assert viewers[1][2].endswith('-my report.md') and viewers[2][2].endswith('-résumé.png'), viewers

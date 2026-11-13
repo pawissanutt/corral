@@ -206,8 +206,8 @@ try:
     def on_screen(text): return text in '\n'.join(screen.lines())
 
     def bound():
-        # The status bar: the role pill ` WORKER `, then the binding dot and generation: `● g1` bound, `○` not.
-        return any(re.match(r'  WORKER  ● g1\b', line) for line in screen.lines())
+        # Explicit binding word and generation at this driver's 140-column startup.
+        return any(re.match(r'  WORKER  ● bound · gen 1\b', line) for line in screen.lines())
 
     def footer():
         """The footer hint row: the last non-empty row, full width under the rule above it."""
@@ -303,6 +303,11 @@ try:
     # names it; `c` steps to the session comparison, whose row names that.
     send('\x1b[18~')
     until(lambda: changes_open() and comparison() == 'candidate', 'Changes on the candidate: its comparison row names it')
+    assert footer().lstrip().startswith('keys →'), 'view focus must label who owns the keys'
+    send('\t')
+    until(lambda: not changes_open() and 'send' in footer().split(), 'Tab gives the composer its keys back')
+    send('\x1b[18~')
+    until(changes_open, 'F7 returns the keys to Changes')
     for _ in COMPARISONS:
         if comparison() == 'since session': break
         before = comparison(); send('c')

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Drive the real production host/main.ts in an owned PTY. Offline fixture I/O only."""
+"""Production-host PTY proof: bound Chat startup, F3 filtering, Tab focus and persistent run-end rows.
+
+Offline fixture I/O only; owned Git changes and background jobs still exercise the real workbench.
+"""
 import argparse
 import ctypes
 import fcntl
@@ -29,8 +32,8 @@ master = slave = watch = None
 proc = None
 selector = selectors.DefaultSelector()
 log = bytearray()
-# The status bar: the role pill ` WORKER `, then the binding dot and generation (`● g1` bound, `○` not), styling between.
-BOUND = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* g1\b')
+# Bound role, explicit binding word and full-width generation; ANSI styling may separate each cell.
+BOUND = re.compile(rb' WORKER (?:\x1b\[[\d;:]*m| )*\xe2\x97\x8f(?:\x1b\[[\d;:]*m)* bound(?:\x1b\[[\d;:]*m)* \xc2\xb7 (?:\x1b\[[\d;:]*m)*gen 1\b')
 # The Changes comparison row's label: the comparison's name, then its ▾. A task-bound session opens on the committed
 # candidate, whose row always shows (its exact base and head stay on screen); other comparisons name themselves too.
 CHIP = re.compile(rb'(candidate|since session|working tree|unstaged|staged) \xe2\x96\xbe')
@@ -156,6 +159,8 @@ try:
     with open(work / 'indicator-gate', 'w') as gate: gate.write('go\n')
     until(lambda: text('INDICATOR_RELEASED', mark) and turns_settled(), 'released reply ends its turn')
     until(lambda: re.search(r'✓ done · \d', composer_top(mark) or '') is not None, 'turn end: the border reads ✓ done with the time')
+    until(lambda: re.search(rb' \xe2\x9c\x93 done \xc2\xb7 [^\x1b]*\b\d{2}:\d{2}\b', SGR.sub(b'', log[mark:])) is not None,
+          'the transcript keeps a quiet run-end row with its clock time, separate from the composer indicator')
     mark=len(log)
     until(lambda: re.fullmatch(r'╭─ Message ─+╮', composer_top(mark) or '') is not None, 'idle: the border has no indicator')
     save_frame('indicator-idle')
@@ -168,7 +173,7 @@ try:
         mark=comparison('working tree', mark)
         until(lambda: text('quietHours',mark), 'persistent Changes with real diff')
         save_frame('changes-wide')
-        closed=prompt_ends(); send(b'/')
+        closed=prompt_ends(); send(b'\x1bOR')  # F3 filters; slash always starts a command.
         until(lambda: text('Filter changed paths'), 'native path search')
         mark=len(log); send(b'notification\r')
         until(lambda: prompt_ends()>closed and QUERY.search(log,mark) is not None and text('notification.ts',mark) and text('Keep native draft',mark) and log.endswith(b'\x1b[?2026l'), 'filtered change list (the /query row, then the matching file) and restored editor')
@@ -200,7 +205,7 @@ try:
         until(lambda: text('Keep native draft',mark) and text('unstaged ▾',mark) and text('"updated"',mark) and log.endswith(b'\x1b[?2026l'), 'wide draft continuity and the loaded unstaged comparison')
         save_frame('comparison')
     # Return to actual editor and submit one scripted offline provider sequence.
-    send(b'\r\x15/fixture-workbench-jobs\r')
+    send(b'\t\x15/fixture-workbench-jobs\r')
     send(b'Start the owned background scenario.\r')
     until(lambda: any(call.get('op')=='job_monitor' or call['payload'].get('on')=='line' for call in calls()), 'line monitor registration')
     mark=len(log); send(b'\x1b[19~')  # F8: the agents view; with no helper calls its first entry is the job row.
@@ -258,7 +263,8 @@ try:
     if proc.returncode != 0: raise AssertionError('host exit '+str(proc.returncode))
     (args.output/'pty-session.ansi').write_bytes(log)
     result=dict(status='PASS',production_entrypoint='src/host/main.ts',provider='offline fixtures; real owned Git and jobs',
-                checks=['native real composer', 'working indicator in the composer border moves within 300 ms while a turn runs, reads ✓ done at its end, then is absent when idle',
+                checks=['native real composer', 'quiet transcript run-end row with clock time after the held reply',
+                        'working indicator in the composer border moves within 300 ms while a turn runs, reads ✓ done at its end, then is absent when idle',
                         'F8 agents view selects the job row; Enter opens its output pager', 'real background job output', 'armed and matched watch in the job detail', 'exit code 7, not task/gate PASS',
                         'job completion notice drawn as one row (✗ job j1-1 exited 7)', 'failed job_start row reads ✗ with its reason (exit 7)', 'permission cancellation', 'clean terminal exit']
                         + ([] if args.activity_only else ['persistent Changes, not modal', 'native path search', 'external refresh preserves hunk until applied', 'hunk reference without autosend', '140→80→52→140 draft retention', 'explicit comparison']))

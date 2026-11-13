@@ -15,32 +15,32 @@ const requested = process.argv.includes("--resume") ? new Map([
   ["picker-cancelled", "RESUME_DRAFT_AFTER_CANCEL"], ["picker-compact-80x24", "stopped · resumable"],
   ["refused-live", "running in another pane"], ["picker-select-a2", "A-2"],
 ]) : process.argv.includes("--usage") ? new Map([
-  ["wide-source-table", "Scope │ Input"], ["wide-chart-toggle", "Token bars"],
-  ["wide-source-restored", "Scope │ Input"], ["wide-budget", "Budget accounting unavailable"],
-  ["compact-chart-top", "Token bars"], ["compact-budget", "Budget accounting unavailable"],
+  ["wide-source-table", "‹ Chat · Usage"], ["wide-chart-toggle", "token bars"],
+  ["wide-source-restored", "API-equiv. USD"], ["wide-budget", "accounting unavailable / legacy"],
+  ["compact-chart-top", "token bars"], ["compact-budget", "accounting unavailable / legacy"],
   ["draft-usage-top", "RETAINED_USAGE_DRAFT"], ["draft-return", "RETAINED_USAGE_DRAFT"],
 ]) : process.argv.includes("--appearance") ? new Map([
   // The status bar: the role pill, then the binding dot and generation.
-  ["dark-140x46", "WORKER  ● g1"], ["light-selected-140x46", "WORKER  ● g1"],
-  ["contrast-selected-140x46", "WORKER  ● g1"], ["dark-selected-140x46", "WORKER  ● g1"],
+  ["dark-140x46", "WORKER  ● bound · gen 1"], ["light-selected-140x46", "WORKER  ● bound · gen 1"],
+  ["contrast-selected-140x46", "WORKER  ● bound · gen 1"], ["dark-selected-140x46", "WORKER  ● bound · gen 1"],
   // The F2 popup is at most 78 cells wide: the answer row's reason is clipped after the role it names.
-  ["compact-140x46", "WORKER  ● g1"], ["role-disabled-140x46", "unavailable: Role worker"],
+  ["compact-140x46", "WORKER  ● bound · gen 1"], ["role-disabled-140x46", "unavailable: Role worker"],
   ["effort-52x24", "Cycle effort"], ["native-model-selector-52x24", "Only showing models"],
 ]) : process.argv.includes("--artifacts-real") ? new Map([
-  ["real-artifacts", "Evidence: unknown"], ["real-absent-open", "Unavailable · not opened"], ["real-html-browser", "Browser requested"],
+  ["real-artifacts", "unknown · run R2 evidence not read"], ["real-absent-open", "Unavailable · not opened"], ["real-html-browser", "Browser requested"],
   ["real-report-opened", "REAL_REPORT_BODY"], ["real-image-fallback", "Graphics unavailable"], ["real-image-viewer", "×"],
-  ["real-compare", "Registered bytes differ"], ["real-compact-compare", "Comparison"],
+  ["real-compare", "Registered bytes differ"], ["real-compact-compare", "Title B     my report.md"],
 ]) : process.argv.includes("--artifacts") ? new Map([
-  ["wide-artifacts", "Artifacts · read-only catalog"], ["wide-image-fallback", "Graphics unavailable"], ["wide-image-viewer", "×"],
+  ["wide-artifacts", "‹ Proof · Artifacts"], ["wide-image-fallback", "Graphics unavailable"], ["wide-image-viewer", "×"],
   ["wide-report-opened", "FIXTURE_REPORT_BODY"], ["wide-absent-open", "Unavailable · not opened"], ["wide-html-browser", "Browser requested"],
-  ["wide-other-run", "Evidence: unknown"], ["wide-compare", "Comparison · A and B"], ["compact-compare", "Comparison"],
+  ["wide-other-run", "unknown · run R2 evidence not read"], ["wide-compare", "A and B in your selection order"], ["compact-compare", "Title B     2222-report.md"],
   ["compact-export-refused", "Session export refused"], ["stale-disconnected-retained", "STALE / disconnected"],
 ]) : process.argv.includes("--lifecycle") ? new Map([
-  ["wide-graph", "Task graph:"], ["wide-selected-missing", "Inspect canonical task T-999"],
-  ["compact-list", "Dependency list"], ["compact-selected-prerequisite", "Inspect canonical task T-002"],
-  ["compact-timeline", "Lifecycle timeline"], ["wide-timeline", "Lifecycle timeline"],
-  ["stale-disconnected-retained", "STALE / disconnected"],
-  ["wide-session-event-selected", "Inspect session"],
+  ["wide-graph", "Task graph:"], ["wide-selected-missing", "T-999 ! missing"],
+  ["compact-list", "Dependency list"], ["compact-selected-prerequisite", "T-002 ○ backlog"],
+  ["compact-timeline", "‹ Task · Events"], ["wide-timeline", "‹ Task · Events"],
+  ["stale-disconnected-retained", "STALE · read failed"],
+  ["wide-session-event-selected", "/ #2"],
 ]) : new Map([
   ["agents-wide", "No agents yet."], ["agents-narrow", "No agents yet."],
   ["real-job-running", "MONITOR_READY/ armed"], ["real-job-line-match", "MONITOR_READY/ matched"],
@@ -96,8 +96,8 @@ try {
     if (scene.name === "draft-return") {
       assert(visible.includes("Usage capture conversation") && visible.includes("FAKE_TRANSPORT_OK"), "Same retained conversation must accompany the draft");
     }
-    if (scene.name === "draft-usage-top") assert(visible.includes("Measured usage"), "Draft must remain while Usage is open");
-    if (scene.name === "wide-source-restored") assert(!visible.includes("Token bars"), "Chart off restores source-only presentation");
+    if (scene.name === "draft-usage-top") assert(visible.includes("‹ Chat · Usage"), "Draft must remain while Usage is open");
+    if (scene.name === "wide-source-restored") assert(!visible.includes("token bars"), "Chart off restores source-only presentation");
     await writeFile(join(directory, scene.name + ".screen.txt"), visible + "\n");
     if (process.argv.includes("--appearance") && scene.name.includes("selected-140x46")) {
       // One background everywhere: the packaged appearance's `background`, blank canvas cells included.
