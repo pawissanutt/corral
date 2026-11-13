@@ -316,6 +316,29 @@ fn malformed_resource_records_fail_instead_of_resetting_hysteresis() {
 }
 
 #[test]
+fn samples_inside_an_unchanged_latch_do_not_rewrite_the_observation() {
+    // Given a fresh store, a healthy sample writes nothing.
+    let (_tmp, mut ctx) = fixture();
+    let seq = ctx.store.view().unwrap().seq();
+    assert!(!sample(&mut ctx, 0.2, 200, 200).held);
+    assert_eq!(ctx.store.view().unwrap().seq(), seq);
+    // When a hold is latched, a different load inside the same hold writes nothing.
+    assert!(sample(&mut ctx, 2.0, 200, 200).held);
+    let held = ctx.store.view().unwrap().seq();
+    assert!(sample(&mut ctx, 1.5, 200, 200).held);
+    assert_eq!(ctx.store.view().unwrap().seq(), held);
+    // Then recovery still persists the cleared latch.
+    assert!(!sample(&mut ctx, 0.5, 200, 200).held);
+    assert!(
+        !OBSERVATIONS
+            .load(&ctx.store, "state")
+            .unwrap()
+            .unwrap()
+            .held
+    );
+}
+
+#[test]
 fn alert_raise_and_recovery_commit_task_record_and_event_together() {
     use corral_core::Status;
 

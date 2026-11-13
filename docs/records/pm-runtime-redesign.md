@@ -684,6 +684,11 @@ All without a host already running:
 | Provider outage | Causes stay open; the service, not the model, reports the backlog |
 | Event storm | Cause keys collapse it; coalescing bounds the turns |
 
+November 12, 2026: the supervisor heartbeat record is now rewritten only when its content
+changes, so its `at` means the last change, not the last pass. `pm brief` health counts
+`age_secs` from the later of that `at` and the daemon's runtime heartbeat file, which every
+pass touches without a store write.
+
 ## Measures of success (Part 1)
 
 | Measure | Today | Target |

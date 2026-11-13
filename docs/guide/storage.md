@@ -169,8 +169,10 @@ cargo test -p corral-core --test backend_conformance_sqlite
   `delete(hash)`; `list(after, limit)` for GC. References are typed `BlobRef`s serialized as
   `blob:sha256:<64 hex>`. Any stored document holding one keeps the blob alive; a bare hash
   without the prefix isn't a reference.
-- **Change feed**: every committed operation gets the next `ChangeSeq` with the scopes it
-  touched (Task, Record, Events, Artifact, Blob, Scratch, Lifecycle, Condition, Aggregate).
+- **Change feed**: every committed operation that writes gets the next `ChangeSeq` with the
+  scopes it touched (Task, Record, Events, Artifact, Blob, Scratch, Lifecycle, Condition,
+  Aggregate). One that writes nothing (clearing a condition that is not open, a blob
+  reservation refused during deletion) gets no entry and returns the current seq.
   Entries are kept for at least 7 days.
 
 ### The store gate

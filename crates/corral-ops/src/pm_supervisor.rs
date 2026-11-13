@@ -14,7 +14,6 @@ use crate::Ctx;
 
 const HEARTBEAT: RecordArea<Heartbeat> = RecordArea::new("pm-supervisor");
 const INPUT_LIMIT: RecordArea<u32> = RecordArea::new("pm-supervisor");
-const INTERVAL: i64 = 10;
 pub(crate) const BACKOFF: i64 = 300;
 pub const LOCKS: [&str; 4] = [
     "artifact-storage",
@@ -198,19 +197,38 @@ fn decide(s: &Snapshot) -> Action {
     }
 }
 
-/// Read-only projection for `pm brief`; absence distinguishes an unwatched store.
+/// Read-only projection for `pm brief`; absence distinguishes an unwatched store. The record
+/// is rewritten only when its content changes, so `age_secs` counts from the later of its
+/// last write and the daemon's per-pass runtime heartbeat, which follows every supervising
+/// pass without a store write.
 pub(crate) fn health(ctx: &Ctx) -> Result<Value> {
     let Some(heartbeat) = HEARTBEAT.load(&ctx.store, "heartbeat")? else {
         return Ok(Value::Null);
     };
+    let alive = match loop_touched(ctx)? {
+        Some(touched) => touched.max(heartbeat.at),
+        None => heartbeat.at,
+    };
     let age = Timestamp::now()
         .as_second()
-        .saturating_sub(heartbeat.at.as_second())
+        .saturating_sub(alive.as_second())
         .max(0);
     let mut value = serde_json::to_value(heartbeat)?;
     value["age_secs"] = json!(age);
     value["usage_guard"] = crate::pm_usage_guard::health(ctx)?;
     Ok(value)
+}
+
+/// When the daemon loop last finished a pass, from its runtime heartbeat file.
+fn loop_touched(ctx: &Ctx) -> Result<Option<Timestamp>> {
+    let path = crate::daemon_client::heartbeat_path(&ctx.store);
+    match std::fs::metadata(&path).and_then(|meta| meta.modified()) {
+        Ok(modified) => Timestamp::try_from(modified)
+            .map(Some)
+            .with_context(|| format!("reading the time of {}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
+    }
 }
 
 /// Bounded daemon readback; computed off the socket request path.
@@ -271,15 +289,18 @@ pub(crate) fn input_limit(ctx: &Ctx, generation: u32) -> Result<()> {
 }
 
 /// Run only after reconciliation in `corral daemon run`, never in hooks or one-shot sync.
+/// The heartbeat record is written only when its content (anything but `at`) changes or an
+/// attempt is recorded; loop liveness is the daemon's runtime heartbeat file.
 pub fn supervise(ctx: &Ctx) -> Result<()> {
+    let _span = corral_core::timing::span("daemon.supervise");
     // Concurrent callers must not race the attempt counter or duplicate diagnostics.
     let Some(_lease) = ctx.store.try_lock("pm-supervisor")? else {
         return Ok(());
     };
     let now = Timestamp::now();
-    let mut heartbeat = HEARTBEAT
-        .load(&ctx.store, "heartbeat")?
-        .unwrap_or_else(|| Heartbeat::new(now));
+    let stored = HEARTBEAT.load(&ctx.store, "heartbeat")?;
+    let stored_doc = stored.as_ref().map(serde_json::to_value).transpose()?;
+    let mut heartbeat = stored.unwrap_or_else(|| Heartbeat::new(now));
     let old_status = heartbeat.status.clone();
     let ownership = crate::session_scope::owns_inventory(ctx);
     heartbeat.owned = ownership.as_ref().copied().unwrap_or(false);
@@ -328,9 +349,17 @@ pub fn supervise(ctx: &Ctx) -> Result<()> {
         heartbeat.status = if heartbeat.owned { "error" } else { "unowned" }.into();
     }
     force |= old_status != heartbeat.status || heartbeat.attempts.last_at == Some(now.as_second());
-    if force || now.as_second().saturating_sub(heartbeat.at.as_second()) >= INTERVAL {
+    heartbeat.pid = std::process::id();
+    let changed = match &stored_doc {
+        Some(stored) => {
+            let mut current = serde_json::to_value(&heartbeat)?;
+            current["at"] = stored["at"].clone();
+            current != *stored
+        }
+        None => true,
+    };
+    if force || changed {
         heartbeat.at = now;
-        heartbeat.pid = std::process::id();
         HEARTBEAT.save(&ctx.store, "heartbeat", &heartbeat)?;
     }
     result

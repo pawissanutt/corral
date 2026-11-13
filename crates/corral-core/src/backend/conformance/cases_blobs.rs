@@ -191,13 +191,15 @@ fn blob_transitions(make: MakeFixture<'_>) -> Result<()> {
         blob(&fx, &h1)?.is_some_and(|r| r.state == BlobState::Deleting),
         "deleting"
     );
+    let before = snapshot(fx.backend.as_ref())?.seq;
     ensure!(
         reserved(&fx, reserve_op(&h1, "t3"))? == ReserveOutcome::Busy,
         "reserve while deleting (barrier 2)"
     );
     ensure!(
-        blob(&fx, &h1)?.is_some_and(|r| r.reservations.len() == 1),
-        "busy reserve wrote nothing"
+        blob(&fx, &h1)?.is_some_and(|r| r.reservations.len() == 1)
+            && snapshot(fx.backend.as_ref())?.seq == before,
+        "busy reserve wrote nothing and appended no change entry"
     );
     refused(
         &fx,

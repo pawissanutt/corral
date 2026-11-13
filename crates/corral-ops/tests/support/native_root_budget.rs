@@ -50,18 +50,28 @@ fn measure(
     drop(hot);
     // Preconditions/effects are observed before the work cells are interpreted.
     assert!(changes.is_empty(), "{changes:?}");
-    let resources: crate::resources::ResourceState = RecordArea::new("resources")
+    // A healthy pass persists no latch: an absent record reads as unlatched, and a present
+    // one must say so.
+    let stored: Option<crate::resources::ResourceState> = RecordArea::new("resources")
         .load(&ctx.store, "state")
-        .unwrap()
         .unwrap();
-    assert!(
-        !resources.held && !resources.severe && resources.reason.is_none(),
-        "{resources:?}"
-    );
+    if let Some(stored) = &stored {
+        assert!(
+            !stored.held && !stored.severe && stored.reason.is_none(),
+            "{stored:?}"
+        );
+    }
     assert_eq!(
         probe.samples() - samples,
         2,
         "observe and attention each run the real volume walk"
+    );
+    // The pass keeps no volatile sample in the store; re-derive it from the same pinned
+    // probe, outside the measured scope, to check what the pass observed.
+    let resources = crate::resources::read_status(ctx).unwrap();
+    assert!(
+        !resources.held && !resources.severe && resources.reason.is_none(),
+        "{resources:?}"
     );
     expected.volumes(&resources.snapshot);
     assert_eq!(resources.snapshot.load_one, 0.0);

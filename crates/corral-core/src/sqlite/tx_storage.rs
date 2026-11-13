@@ -1,11 +1,12 @@
-//! Record, claim, session, condition, lifecycle, lease and import operations.
+//! Record, claim, session, condition, lifecycle, lease and import operations, and the change
+//! entry every applied operation appends.
 
 use rusqlite::params;
 use serde_json::json;
 
 use super::codec::*;
 use super::load::{self, first};
-use super::tx::{Applied, Owner, Tx, require};
+use super::tx::{Applied, Owner, Tx, require, scope_kind};
 use crate::backend::*;
 use crate::blob_ref;
 
@@ -288,6 +289,32 @@ impl Tx<'_> {
         Ok(Outcome::Condition(ConditionOutcome::Cleared { event }))
     }
 
+    /// Appends the operation's change entry and returns its seq. An outcome that wrote
+    /// nothing appends none and returns the current seq, so feed followers see no change.
+    pub(super) fn change_entry(&self, kind: OpKind, outcome: &Outcome) -> Applied<ChangeSeq> {
+        let current = ChangeSeq(load::meta_u64(self.db, "change_seq").or_io()?);
+        if no_op(outcome) {
+            return Ok(current);
+        }
+        let seq = ChangeSeq(current.0 + 1);
+        self.db.execute(
+            "INSERT INTO changes(seq, at, op) VALUES (?1, ?2, ?3)",
+            params![int(seq.0).or_io()?, ts(self.now), name(&kind).or_io()?],
+        )?;
+        for scope in &self.scopes {
+            self.db.execute(
+                "INSERT INTO change_scopes(seq, kind, key) VALUES (?1, ?2, ?3)",
+                params![int(seq.0).or_io()?, scope_kind(scope), json(scope).or_io()?],
+            )?;
+        }
+        self.db.execute(
+            "UPDATE meta SET value = ?1 WHERE key = 'change_seq'",
+            params![seq.0.to_string()],
+        )?;
+        self.hit("change entry")?;
+        Ok(seq)
+    }
+
     pub(super) fn lifecycle(&mut self, op: LifecycleWrite) -> Applied<Outcome> {
         let stored: Option<LifecycleOutcome> = first(
             self.db,
@@ -446,4 +473,14 @@ impl Tx<'_> {
         }
         Ok(Outcome::Applied)
     }
+}
+
+/// Outcomes that write nothing and therefore append no change entry: clearing a condition
+/// that is not open, and a blob reservation refused while the blob is being deleted. Keep in
+/// step with the fake's `no_op`.
+fn no_op(outcome: &Outcome) -> bool {
+    matches!(
+        outcome,
+        Outcome::Condition(ConditionOutcome::NotOpen) | Outcome::Reserved(ReserveOutcome::Busy)
+    )
 }

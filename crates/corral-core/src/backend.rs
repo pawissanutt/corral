@@ -43,7 +43,8 @@ pub trait StoreBackend: Send + Sync + 'static {
         &self,
         max_age: std::time::Duration,
     ) -> Result<Box<dyn ReadView + Send>, ViewError>;
-    /// One serializable unit of work: all of `op` and its change entry, or nothing.
+    /// One serializable unit of work: all of `op` and its change entry, or nothing. An
+    /// operation that writes nothing appends no entry and returns the current seq.
     fn apply(&self, op: Operation) -> Result<Committed, ApplyError>;
     fn check(&self) -> Result<IntegrityReport>;
     /// Copies the database only; blobs are not included (plan section 7, backup).

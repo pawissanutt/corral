@@ -71,7 +71,10 @@ impl ResourceProbe for FixedResourceProbe {
     }
 }
 
-/// Sample and save a coherent observation while holding the cross-process resource lock.
+/// Sample a coherent observation while holding the cross-process resource lock. Only the
+/// decision state (the `held`/`severe` latches and the pressure episode) is persisted, and
+/// only when it changes: the next evaluation reads nothing else from the record, and every
+/// caller uses the returned fresh sample. A missing record reads as unlatched.
 pub fn observe(ctx: &Ctx, now: Timestamp) -> Result<ResourceState> {
     let _span = corral_core::timing::span("sync.observe");
     let lock_path = ctx.store.dir().join("lock/resources.lock");
@@ -86,8 +89,9 @@ pub fn observe(ctx: &Ctx, now: Timestamp) -> Result<ResourceState> {
     let state = evaluate(ctx, now)?;
     let pressure_episode = if state.held {
         match previous
+            .as_ref()
             .filter(|p| p.state.held)
-            .and_then(|p| p.pressure_episode)
+            .and_then(|p| p.pressure_episode.clone())
         {
             Some(episode) => Some(episode),
             None => {
@@ -100,14 +104,24 @@ pub fn observe(ctx: &Ctx, now: Timestamp) -> Result<ResourceState> {
     } else {
         None
     };
-    EPISODE_OBSERVATIONS.save(
-        &ctx.store,
-        "state",
-        &Observation {
-            state: state.clone(),
-            pressure_episode,
-        },
-    )?;
+    let unchanged = match &previous {
+        Some(previous) => {
+            previous.state.held == state.held
+                && previous.state.severe == state.severe
+                && previous.pressure_episode == pressure_episode
+        }
+        None => !state.held && !state.severe,
+    };
+    if !unchanged {
+        EPISODE_OBSERVATIONS.save(
+            &ctx.store,
+            "state",
+            &Observation {
+                state: state.clone(),
+                pressure_episode,
+            },
+        )?;
+    }
     // Closing this non-inherited descriptor releases its advisory lock.
     drop(lock);
     Ok(state)

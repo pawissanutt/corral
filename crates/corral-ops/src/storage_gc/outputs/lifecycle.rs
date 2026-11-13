@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::process::{Command, Stdio};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use corral_core::backend::{ChangeSeq, LifecycleOutcome, LifecycleRow, LifecycleWrite};
 use corral_core::records::RecordArea;
 use jiff::{SignedDuration, Timestamp};
@@ -14,7 +14,6 @@ use crate::Ctx;
 
 const BATCH: u32 = 16;
 const CURSOR: RecordArea<Cursor> = RecordArea::new("output-lifecycle");
-const SCHEDULE: RecordArea<Timestamp> = RecordArea::new("output-lifecycle-schedule");
 
 #[derive(Default, Serialize, Deserialize)]
 struct Cursor {
@@ -23,8 +22,10 @@ struct Cursor {
     pending: BTreeSet<(String, String)>,
 }
 
-/// Cheap async hook. A durable one-minute throttle coalesces short questions and ticks;
-/// crash/restart merely postpones the next bounded pass. The child's own lease excludes overlap.
+/// Cheap async hook. A one-minute throttle coalesces short questions and ticks; it is kept
+/// beside the schedule lock, not in the store, so an idle schedule appends nothing to the
+/// change feed. Crash/restart merely postpones the next bounded pass. The child's own lease
+/// excludes overlap.
 pub(crate) fn schedule(ctx: &Ctx, now: Timestamp) -> Result<()> {
     let _span = corral_core::timing::span("sync.outputs_schedule");
     if ctx.store.config.storage.outputs.is_empty() {
@@ -33,17 +34,18 @@ pub(crate) fn schedule(ctx: &Ctx, now: Timestamp) -> Result<()> {
     let Some(_schedule) = ctx.store.try_lock("output-lifecycle-schedule")? else {
         return Ok(());
     };
-    if SCHEDULE
-        .load(&ctx.store, "next")?
-        .is_some_and(|next| next > now)
-    {
+    let path = ctx.store.dir().join("lock/output-lifecycle-schedule.next");
+    let next = match std::fs::read_to_string(&path) {
+        Ok(text) => text.trim().parse::<Timestamp>().ok(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+    };
+    if next.is_some_and(|next| next > now) {
         return Ok(());
     }
-    SCHEDULE.save(
-        &ctx.store,
-        "next",
-        &now.checked_add(SignedDuration::from_secs(60))?,
-    )?;
+    let next = now.checked_add(SignedDuration::from_secs(60))?;
+    std::fs::write(&path, next.to_string())
+        .with_context(|| format!("writing {}", path.display()))?;
     let mut command = Command::new(std::env::current_exe()?);
     command
         .arg("--root")
@@ -64,8 +66,13 @@ fn discover(ctx: &Ctx, digest: &str) -> Result<Cursor> {
     let mut cursor = CURSOR.load(&ctx.store, "board")?.unwrap_or_default();
     let since =
         (!cursor.policy.is_empty() && cursor.policy == digest).then_some(ChangeSeq(cursor.seq));
-    let board = match ctx.store.board(since) {
-        Ok(board) => board,
+    // Only task changes, a new policy or an unfollowable feed move the cursor; its own saves
+    // are not task changes.
+    let (board, moved) = match ctx.store.board(since) {
+        Ok(board) => {
+            let moved = since.is_none() || !board.heads.is_empty() || !board.left.is_empty();
+            (board, moved)
+        }
         Err(error)
             if error.chain().any(|e| {
                 matches!(
@@ -74,7 +81,7 @@ fn discover(ctx: &Ctx, digest: &str) -> Result<Cursor> {
                 )
             }) =>
         {
-            ctx.store.board(None)?
+            (ctx.store.board(None)?, true)
         }
         Err(error) => return Err(error),
     };
@@ -95,7 +102,9 @@ fn discover(ctx: &Ctx, digest: &str) -> Result<Cursor> {
     cursor.seq = board.seq.0;
     cursor.policy = digest.into();
     // Discover before acting: an interrupted pass owes exactly the same pending decisions.
-    CURSOR.save(&ctx.store, "board", &cursor)?;
+    if moved {
+        CURSOR.save(&ctx.store, "board", &cursor)?;
+    }
     Ok(cursor)
 }
 
@@ -249,6 +258,7 @@ pub fn output_pass(ctx: &Ctx, now: Timestamp) -> Result<()> {
     };
     let digest = super::super::lifecycle::policy_digest(ctx)?;
     let mut cursor = discover(ctx, &digest)?;
+    let before = cursor.pending.len();
     let pending: Vec<_> = cursor
         .pending
         .iter()
@@ -266,7 +276,9 @@ pub fn output_pass(ctx: &Ctx, now: Timestamp) -> Result<()> {
             }
         }
     }
-    CURSOR.save(&ctx.store, "board", &cursor)?;
+    if cursor.pending.len() != before {
+        CURSOR.save(&ctx.store, "board", &cursor)?;
+    }
     for row in ctx
         .store
         .lifecycle_due(now, BATCH)?
