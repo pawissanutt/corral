@@ -161,14 +161,16 @@ logic in the CLI crate. The hardest to route through a daemon are `gate`, `done`
 
 ## Second round on November 13: six items
 
+State at 10:00 UTC, installed build `b950eb8e`:
+
 | Item | State | Checked on the real store |
 |---|---|---|
-| 1. A quiet pass writes nothing to the change feed (`96e91d19`) | on `main`, installed | yes |
-| 2. Podman behind `[load_sandbox] enabled`, default off (`65d98937`) | on `main`, installed | the setting is on for this workspace only, whose repository owns `scripts/load-sandbox.sh` |
-| 3. `corral search --in all` (`17d028cd`, `e1cbcde9`) | on `main`; the streaming search is installed, the catalog is behind `[search] catalog`, default off | yes, both paths |
-| 4. The PM agent's own reads served by the daemon (`fe1bfdd5`) | on `main`, installed | no: the PM was stopped throughout |
-| 5. Commands through the daemon (`9f9bf3f2`): 79 control verbs | on `main`, installed, switched off here with `[daemon] commands = false` | no |
-| 6. Incremental pass and daemon-computed classic board frame | branch `incremental-on-main`, not installed | no |
+| 1. A quiet pass writes nothing to the change feed (`96e91d19`) | installed | yes |
+| 2. Podman behind `[load_sandbox] enabled`, default off (`65d98937`) | installed | the setting is on for this workspace only, whose repository owns `scripts/load-sandbox.sh` |
+| 3. `corral search --in all` (`17d028cd`, `e1cbcde9`, `b950eb8e`) | installed; catalog on here with `[search] catalog = true` | yes, all three paths |
+| 4. The PM agent's own reads served by the daemon (`fe1bfdd5`) | installed | yes, one PM start |
+| 5. Commands through the daemon (`9f9bf3f2`): 79 control verbs | installed, on | one canary command pair; no agent command has gone through it yet |
+| 6. Incremental pass and daemon-computed classic board frame (`866caf93` to `b01b2313`) | installed; the board frame is live; the pass runs in audit mode (`[daemon] pass = "audit"`) | board yes; skipping for five minutes only |
 
 ### Item 1: quiet pass
 
@@ -195,10 +197,13 @@ shared the machine with test suites.
 | Streaming search | copy, three queries | 97 to 423 s | 84 to 146 s | 94 to 109 MB | identical |
 | Streaming search, tasks only | copy | 20 s | 10 s | 175 MB | identical |
 | Catalog ready (`e1cbcde9`) | copy | 15.6 s and 27.1 s | 15 s and 26 s | 74 MB | identical |
-| Catalog ready | live | 38 s | 29 s | 72 MB | identical |
+| Catalog ready | live | 16 s and 38 s | 15 s and 29 s | 72 MB | identical |
+| Catalog current, with query-time reprojection (`b950eb8e`) | live | 21.6 s | 20 s | 111 to 123 MB | identical |
+| Catalog two events behind, plus the delta (`b950eb8e`) | live | 17.8 s and 22.8 s | 17 s and 22 s | 121 MB | identical |
 
-So the installed search no longer fails and no longer needs 2 GB, but it is slower than the
-search before this round. Only the catalog makes it faster, and the catalog is off by default.
+So the search no longer fails and no longer needs 2 GB. Without the catalog it is slower than the
+search before this round; with it, a query takes a quarter to a third of the time. The catalog is
+off by default and on in this workspace.
 
 Catalog cost: the first build took 708 s on the copy (killed with `SIGKILL` after 150 s, then
 resumed to the end) and 546 s on the live store (148 s of CPU, 138 MB), and leaves 4.7 GB of
@@ -206,7 +211,14 @@ derived files under the cache directory for the live store. The daemon reported 
 samples taken during the last 4.3 minutes of the live build; the first five minutes were not
 sampled. With the catalog ready a query spends its time scanning the candidate artifacts (584 and
 2,757 of them for the two queries above), so its cost follows the number of documents that contain
-the terms. How long the catalog takes to catch up after new writes is not measured.
+the terms.
+
+Keeping the catalog exactly current was expensive: catching up after 27 writes took 18 s of wall
+time and 8 s of CPU, and with the PM writing the daemon republished 7 times in 3.6 minutes (30 s
+of CPU), because a catalog one entry behind was not used. `b950eb8e` lets a query use a published
+generation plus the feed since its sequence, and the daemon republish only after 1,024 changed
+source units or 30 minutes. A delta that touches a task partition has been exercised in tests
+only; the live delta was two events.
 
 ### Item 5: commands
 
@@ -243,9 +255,56 @@ test run skips: a board frame computed the PM workset's shortlist on every load 
 calls where the budget allows none). The board's own loads now skip the operating text they never
 showed, and the frame reuses the workset until the store or the attention board changes.
 
-It has not run on the real store. It cannot be tried on a copy, because the copied records name
-the real worktrees. The plan is to install it with `sync-full-on` present, compare the board's
-text, run with `sync-audit-on` over real activity, and only then let it skip.
+### Live rollout (from 07:49 UTC)
+
+The owner chose a staged install of item 6, commands on after a canary, the catalog on, and a PM
+restart. A copy of the store cannot run a pass, because its records name the real worktrees, so
+item 6 went in behind its switches.
+
+| Stage | Result |
+|---|---|
+| Installed with `sync-full-on` | board text identical before and after except the load gauge |
+| `sync-audit-on`, first build, 40 minutes | 260 audited passes, 158,332 step decisions, 141,361 that the rules would have skipped, 5 flagged |
+| Commands on | `pin` and `unpin` of one task ran in the daemon in 10 ms and 4 ms, journaled under `app-commands`, `pins.toml` byte-identical afterwards |
+| Catalog on | the daemon keeps it current; a query takes 16 s; catching up after 27 writes took 18 s of wall time and 8 s of CPU |
+| PM restarted | same conversation; 220k tokens re-billed ($0.42); `read_brief` 0.7 s and `read_next` 1.4 s in a 36 MB process, served by the daemon |
+
+What the audit found, none of it visible in tests:
+
+- A configuration edit that lands during a pass makes one step act on the new configuration while
+  the planner compared the old one. Harmless (the next pass is full), now compared against the
+  configuration the pass runs with.
+- The agent-hooks rule listed `pm*` areas, which does not cover `agent-pm*`: in skipping mode a
+  PM-host write could have waited for the step's 20 s cadence. Every rule was then checked against
+  the areas its callees read; eight more steps gained inputs (`c0793fde`).
+- Two flags were steps acting on their own clock (`LifecycleGc`), which the first audit could not
+  tell from a missed input. The audit now reports three classes: raced, delayed by a cadence, and
+  wrong skip.
+- With a busy PM the rules skipped 2 to 25% of decisions instead of 97%, because PM-host
+  bookkeeping writes marked every task dirty. They now mark only the tasks that read them.
+- The loop woke at every due time (15 s at most) regardless of cost, so full audit passes ran 6 to
+  9 times a minute and the daemon used 20 to 45 s of CPU per minute, against about 4 s before.
+  The wait is CPU-proportional again.
+
+Second build (`c0793fde`, 08:33 UTC): 35 audited passes with no flag of any class, and five
+minutes with skipping on in between. Third build (`b01b2313`, 09:18 UTC): 31 more audited passes,
+no flag. Activity in that time was low: the PM had read the recorded stop and was waiting for the
+owner, so the narrowed per-task rules have not been audited under PM activity. That is why the
+workspace stays in audit mode, now as the setting `[daemon] pass = "audit"`: the switch files live
+in a tmpfs and a reboot would have turned skipping on.
+
+| Measured live | Before | After |
+|---|---|---|
+| Board process: CPU share, memory, `git` calls | 5.9 to 6.2% of a core, 321 MB, 1,234 to 2,453 calls in 43 to 73 minutes | 1.6% of a core, 192 MB, 13 calls in 43 minutes |
+| Board refresh | about 1.0 to 1.9 s to derive a snapshot locally | 85 ms to read a frame, 13 ms to decode, 10 ms to apply |
+| Pass with a live PM, skipping on | 3.1 to 3.5 s (full) | 2.6 s; 564 of 609 decisions skipped |
+| Pass with no PM host, quiet store | 1.4 to 1.8 s every 30 s | not measured live; 47 ms in the isolated smoke |
+
+The pass does not become quiet while a PM host is live: the agent-hooks step probes the host on
+every pass and takes 2.0 s of the 2.6. That cost was there before; it is now most of the pass. The
+daemon's frame refresh recomputed the PM workset about 3.5 times a minute in that window although
+the store had not changed; on the third build it reused the workset 20 times and recomputed it 5
+times in 16 minutes (three store changes, one attention change, one periodic refresh).
 
 ### What went wrong
 
@@ -268,12 +327,22 @@ text, run with `sync-audit-on` over real activity, and only then let it skip.
   could not be told from "no audit".
 - The work-budget tests are ignored by the workspace test run and executed only by the gate, so
   three full test runs passed over a regression the gate caught.
+- **Lesson signals stall the pass for about 50 s**, four times in 45 minutes (07:15, 07:39, 07:50,
+  07:58 UTC), on builds with and without this work: `lessons.likely_files` takes 50 to 170 s
+  instead of 30 to 80 ms. Reading the code: derived lesson rows are kept for one feed sequence
+  at a time, and a reader whose pinned snapshot is older than that sequence deletes and rebuilds
+  them (`lesson_rows_follow.rs`); the sync pass, the board frame and PM reads pin different
+  snapshots, so they can evict each other. Not reproduced, not fixed.
+- Every attention computation stamps each condition's age from the clock, so two boards over the
+  same store never compare equal; anything that caches on the attention board has to leave the age
+  out.
 
 ### What remains
 
 | Open | Needs |
 |---|---|
-| Item 6 on the real store | the staged install above |
-| Item 5 switched on | a canary on the live store, then the config line |
-| Catalog switched on | a measurement of catch-up after writes; 4.7 GB of cache |
-| Items 4 and the cost of a PM turn | a running PM |
+| Pass skipping switched on | audit mode over a period with the PM working and no wrong skip in the journal, then `pass = "incremental"` |
+| The agent-hooks step, 2.0 s of every pass while a PM host is live | not looked at |
+| Lesson-signal stalls of about 50 s | a fix in `lesson_rows_follow.rs`; cause read from code, not reproduced |
+| Daemon and board start | after a restart the first pass spent 49 s in `sync.announce_due` (not traced) and the board waited about 90 s for its first frame; a board started while the daemon was restarting computed its own frame in 301 s at load 230, 178 s of it in the PM workset |
+| Commands under real agent use | watch `command-fallback.json` and the `app-commands` journal once workers and the PM issue routed verbs |
