@@ -57,26 +57,49 @@ sessions are described in the [corral-pi guide](corral-pi.md#starting-pi-yoursel
 
 ### The launcher
 
-Plain `corral pi` in a workspace, with stdin and stdout both on a terminal, asks what to open:
+Plain `corral pi` in a workspace, with stdin and stdout both on a terminal, opens a full-screen
+launcher. Its header reads `corral / pi` with the directory it started in on the right (`~` for
+your home directory); under it the question `What do you want to open?` and the rows, grouped
+under two headings. Each row shows a selection bar, its name, a short description and, when it
+has one, its key as a key cap on the right. The selected row is highlighted.
 
 - **Start**: **Build** (key `b`, selected first) opens a build session as `--build` does;
   **Assistant** (key `a`) opens a new assistant as `--assistant` does; **PM** (key `p`) opens
-  the PM and continues its previous conversation, as `--pm -c` does. While Build is selected, a
-  line under it shows where it writes, `‹ new worktree  .worktrees/build-<name> ›` or
-  `‹ here  the current checkout and branch ›` (`--build --here`); `←→` switch between them,
-  and a click on that line moves to the other.
+  the PM and continues its previous conversation, as `--pm -c` does. Their descriptions read
+  `untethered · parallel agents · nothing reaches the board until you ship`,
+  `board-aware · scratch worktrees · owner actions on your instruction` and
+  `workspace coordinator · continues the previous conversation`.
 - **Resume**: the eight most recently active stopped sessions, newest first: assistants
   `corral pi --resume` accepts (open, with no running host) and build sessions recorded for a
-  repository inside this workspace or the current Git repository. An assistant row shows
-  `A-<n>`, its summary (or its task focus), its project and how long ago it was last active; a
-  build row shows `build`, the session name, its project (or the repository's directory name),
-  how long ago it was last updated and, once it has ended, `kept`, `shipped` or `landed`.
-  Opening a build row is `--resume B-<id>`.
+  repository inside this workspace or the current Git repository. An assistant row is named
+  `A-<n>` and reads its summary (or `focus <task>`, or `no summary recorded`), its project (or
+  `workspace`) and how long ago it was last active; a build row is named `build` and reads the
+  session name, its project (or the repository's directory name), how long ago it was last
+  updated and, once it has ended, `kept`, `shipped` or `landed`. Opening a build row is
+  `--resume B-<id>`.
 
-`↑↓` or `j`/`k` select a row, `⏎` opens it, a row's key opens that row directly, and `q`, `Esc`
-or `Ctrl+C` leave without opening anything (exit status 0, no message). A click selects a row,
-a click on the selected row opens it, and each key in the footer can be clicked. Below 76
-columns each row folds to two lines. `--model`, `--provider` and `--effort` given with plain
+Under the rows a block shows what a build session would open with:
+
+- **Project**: the project this directory belongs to (`<project> from this directory`), or
+  `none · the workspace root`.
+- **Writes to**: `‹ new worktree .worktrees/build-<name> ›` or
+  `‹ here the current checkout and branch ›` (`--build --here`). While Build is selected,
+  `←→` switch between them, and a click on that line moves to the other (a click on `‹` moves
+  back); with another row selected the line shows Build's choice with dimmed chevrons.
+- **Models**: the model providers the session's agents can use, each followed by `✓` when its
+  corral-owned login is present or `no login` when it is missing, then `agents may use either`
+  when there are two or more (not when the rows fold). Without known providers the row is left
+  out.
+
+The footer, under a rule, names the keys as key caps: `↑ ↓ select`, `⏎ open`,
+`← → where it writes` (while Build is selected), `b build`, `a assistant`, `p PM` and
+`esc leave`; below 105 columns it keeps the first four, below 64 columns the first two.
+`↑↓` or `j`/`k` select a row (Home and End the first and last), `⏎` opens it, a row's key opens
+that row directly, and `q`, `Esc` or `Ctrl+C` leave without opening anything (exit status 0, no
+message). A click selects a row, a click on the selected row opens it, the mouse wheel moves the
+selection, and each key cap in the footer can be clicked. Wider terminals center the launcher in
+at most 104 columns. Below 76 columns each row folds: the name and key cap on one line, the
+description wrapped under it. `--model`, `--provider` and `--effort` given with plain
 `corral pi` apply to whichever row opens.
 
 Any of `--build`, `--assistant`, `--pm`, `--resume`, `--task`, `--over-cap` or `--bare` skips
