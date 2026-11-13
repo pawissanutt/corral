@@ -98,3 +98,81 @@ fi
     reap_with(shim.to_str().unwrap(), &"b".repeat(64)).unwrap();
     assert_eq!(std::fs::read_to_string(log).unwrap(), "123456789abc\n");
 }
+
+fn terminal_owner(ctx: &Ctx) {
+    let task = ctx
+        .store
+        .create(
+            "Finished sandbox owner",
+            None,
+            corral_core::Status::Done,
+            "",
+        )
+        .unwrap();
+    let run: corral_core::Run = serde_json::from_value(json!({
+        "id": "R1", "agent": "worker", "worktree": ctx.store.root(),
+        "branch": "main", "base": "main", "base_sha": "abc",
+        "started": "2026-10-15T00:00:00Z", "ended": "2026-10-15T00:01:00Z"
+    }))
+    .unwrap();
+    ctx.store
+        .update(&task.id, |task| {
+            task.runs.push(run);
+            Ok(())
+        })
+        .unwrap();
+    let receipt = crate::launch_exit::receipt(ctx, &task.id, "R1").unwrap();
+    crate::launch_exit::arm(ctx, "true", &receipt).unwrap();
+}
+
+fn empty_sweep_fixture() -> (tempfile::TempDir, Ctx, PathBuf, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx =
+        crate::resources::FixedResourceProbe::ctx(corral_core::Store::init(tmp.path()).unwrap());
+    terminal_owner(&ctx);
+    assert_eq!(terminal_owners(&ctx).unwrap().len(), 1);
+    let shim = tmp.path().join("podman");
+    let log = tmp.path().join("listings");
+    std::fs::write(
+        &shim,
+        format!(
+            "#!/bin/sh\n[ \"$1\" = ps ] || exit 1\necho listed >> '{}'\necho '[]'\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (tmp, ctx, shim, log)
+}
+
+#[test]
+fn unchanged_terminal_owners_do_not_repeat_empty_listing() {
+    let (_tmp, ctx, shim, log) = empty_sweep_fixture();
+    sweep_with(&ctx, shim.to_str().unwrap()).unwrap();
+    sweep_with(&ctx, shim.to_str().unwrap()).unwrap();
+    assert_eq!(std::fs::read_to_string(log).unwrap(), "listed\n");
+}
+
+#[test]
+fn new_terminal_owner_invalidates_empty_listing() {
+    let (_tmp, ctx, shim, log) = empty_sweep_fixture();
+    sweep_with(&ctx, shim.to_str().unwrap()).unwrap();
+    terminal_owner(&ctx);
+    assert_eq!(terminal_owners(&ctx).unwrap().len(), 2);
+    sweep_with(&ctx, shim.to_str().unwrap()).unwrap();
+    assert_eq!(std::fs::read_to_string(log).unwrap(), "listed\nlisted\n");
+}
+
+#[test]
+fn expired_empty_listing_rechecks_for_late_containers() {
+    let (_tmp, ctx, shim, log) = empty_sweep_fixture();
+    sweep_with(&ctx, shim.to_str().unwrap()).unwrap();
+    {
+        let mut memos = SWEEP_MEMOS.lock().unwrap();
+        let memo = memos.get_mut(ctx.store.dir()).unwrap();
+        assert!(!memo.reusable(&memo.owners, memo.listed + Duration::from_secs(60)));
+        memo.listed = Instant::now() - Duration::from_secs(61);
+    }
+    sweep_with(&ctx, shim.to_str().unwrap()).unwrap();
+    assert_eq!(std::fs::read_to_string(log).unwrap(), "listed\nlisted\n");
+}

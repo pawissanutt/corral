@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use anyhow::{Context, Result, bail};
-use corral_core::{Status, Store, TaskFieldsRef, TaskHead};
+use corral_core::{Status, Store, Task, TaskFieldsRef, TaskHead};
 
 /// Heads as `Store::head` returned them, and the dependencies whose whole stored subgraph
 /// was walked without a cycle or a missing head. Every completed node's dependencies are
@@ -36,6 +36,15 @@ fn head_in(graph: &Mutex<Graph>, store: &Store, id: &str) -> Result<Arc<TaskHead
     let head = Arc::new(store.head(id)?);
     lock(graph).heads.insert(id.to_owned(), Arc::clone(&head));
     Ok(head)
+}
+
+/// `head.to_shell_task()`, converted once per pinned pass: a dependency shared by several
+/// Plan members is qualified once per member. A live store converts on every call.
+pub(crate) fn shell(store: &Store, head: &TaskHead) -> Result<Arc<Task>> {
+    store.pass_derived(
+        &format!("dependency-shell\0{}\0{}", head.id, head.rev),
+        || head.to_shell_task(),
+    )
 }
 
 /// Reject malformed graphs before ordinary dependency waiting; Done alone satisfies a dependency.

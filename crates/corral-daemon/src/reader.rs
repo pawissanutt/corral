@@ -14,6 +14,11 @@ use corral_protocol::read::ReadKind;
 use crate::state::Shared;
 
 const MAX_AGE: Duration = Duration::from_secs(10);
+const BOARD_MAX_AGE: Duration = Duration::from_secs(45);
+const WARM_REFRESH_AGE: Duration = Duration::from_secs(30);
+const WARM_FOR: Duration = Duration::from_secs(120);
+const WARM_SPACING: Duration = Duration::from_secs(10);
+const WARM_POLL: Duration = Duration::from_secs(1);
 // Core writes this scope in sqlite/tx_storage.rs and backend/fake/storage.rs.
 // It does not currently export a lease-area constant.
 const LEASE_AREA: &str = "leases";
@@ -22,6 +27,30 @@ const MAX_FRESHNESS_CHANGES: usize = 512;
 struct Cached {
     document: Arc<Document>,
     checked_through: u64,
+}
+
+struct Reader<C, N> {
+    cache: HashMap<ReadKind, Cached>,
+    compute: C,
+    now: N,
+    board_requested: Option<Instant>,
+    warm_started: Option<Instant>,
+    last_poll: Option<Instant>,
+}
+
+fn warm_due(
+    kind: ReadKind,
+    requested: Option<Instant>,
+    started: Option<Instant>,
+    computed: Option<Instant>,
+    changed: bool,
+    now: Instant,
+) -> bool {
+    kind == ReadKind::BoardReadback
+        && requested.is_some_and(|at| now.saturating_duration_since(at) < WARM_FOR)
+        && started.is_none_or(|at| now.saturating_duration_since(at) >= WARM_SPACING)
+        && (changed
+            || computed.is_none_or(|at| now.saturating_duration_since(at) > WARM_REFRESH_AGE))
 }
 
 pub(crate) struct Document {
@@ -48,7 +77,7 @@ pub(crate) fn start(ctx: &Ctx, shared: &Arc<Shared>) -> Result<()> {
 pub(crate) fn start_with_compute(
     ctx: &Ctx,
     shared: &Arc<Shared>,
-    mut compute: impl FnMut(&Ctx, ReadKind, Option<AttentionBoard>) -> Result<Vec<u8>> + Send + 'static,
+    compute: impl FnMut(&Ctx, ReadKind, Option<AttentionBoard>) -> Result<Vec<u8>> + Send + 'static,
 ) -> Result<()> {
     let ctx = Ctx {
         store: Store::open_unobserved(ctx.store.root()).context("opening daemon reader store")?,
@@ -61,15 +90,36 @@ pub(crate) fn start_with_compute(
         .name("corrald-reader".into())
         .spawn(move || {
             let shared = worker_shared;
-            let mut cache = HashMap::<ReadKind, Cached>::new();
+            let mut reader = Reader::new(compute, Instant::now);
+            let mut pending = None;
             while !shared.lock().closed {
-                let job = match receiver.recv_timeout(Duration::from_millis(500)) {
-                    Ok(job) => job,
-                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                let job = match pending
+                    .take()
+                    .map_or_else(|| receiver.recv_timeout(Duration::from_millis(500)), Ok)
+                {
+                    Ok(job) => Some(job),
+                    Err(mpsc::RecvTimeoutError::Timeout) => match receiver.try_recv() {
+                        Ok(job) => Some(job),
+                        Err(mpsc::TryRecvError::Empty) => None,
+                        Err(mpsc::TryRecvError::Disconnected) => break,
+                    },
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 };
-                let result = read(&ctx, &shared, job.kind, &mut cache, &mut compute);
-                let _ = job.reply.send(result);
+                if let Some(job) = job {
+                    let result = reader.read(&ctx, &shared, job.kind);
+                    let _ = job.reply.send(result);
+                } else if let Err(error) =
+                    reader.warm(&ctx, &shared, || match receiver.try_recv() {
+                        Ok(job) => {
+                            pending = Some(job);
+                            false
+                        }
+                        Err(mpsc::TryRecvError::Empty) => true,
+                        Err(mpsc::TryRecvError::Disconnected) => false,
+                    })
+                {
+                    eprintln!("corrald warming board read-back: {error:#}");
+                }
             }
         })
         .context("starting daemon reader")?;
@@ -92,59 +142,141 @@ pub(crate) fn request(shared: &Shared, kind: ReadKind) -> Option<mpsc::Receiver<
     Some(receiver)
 }
 
-fn read(
-    ctx: &Ctx,
-    shared: &Shared,
-    kind: ReadKind,
-    cache: &mut HashMap<ReadKind, Cached>,
-    compute: &mut impl FnMut(&Ctx, ReadKind, Option<AttentionBoard>) -> Result<Vec<u8>>,
-) -> Result<Served> {
-    let view = ctx.store.view().context("polling reader store sequence")?;
-    let seq = view.seq().0;
-    if let Some(cached) = cache.get_mut(&kind)
-        && cached.document.computed.elapsed() < MAX_AGE
-        && unchanged(view.as_ref(), cached.checked_through)
-    {
-        cached.checked_through = seq;
-        return Ok(Served {
-            document: Arc::clone(&cached.document),
-            cached: true,
-        });
+impl<C, N> Reader<C, N>
+where
+    C: FnMut(&Ctx, ReadKind, Option<AttentionBoard>) -> Result<Vec<u8>>,
+    N: Fn() -> Instant,
+{
+    fn new(compute: C, now: N) -> Self {
+        Self {
+            cache: HashMap::new(),
+            compute,
+            now,
+            board_requested: None,
+            warm_started: None,
+            last_poll: None,
+        }
     }
-    let label = match kind {
-        ReadKind::PmNext => "reader.pm_next",
-        ReadKind::PmBrief => "reader.pm_brief",
-        ReadKind::BoardReadback => "reader.board",
-        ReadKind::Other => bail!("unknown read kind"),
-    };
-    let _timing = corral_core::timing::span(label);
-    let attention = if kind == ReadKind::BoardReadback {
-        attention(shared, view.as_ref())
-    } else {
-        None
-    };
-    drop(view);
-    // PM projection prepares derived state before pinning its own view. Keep
-    // this handle live, and cache under the pre-computation sequence so writes
-    // during preparation or evaluation invalidate reuse unless they are leases.
-    let bytes = compute(ctx, kind, attention)?;
-    let document = Arc::new(Document {
-        as_of: jiff::Timestamp::now().to_string(),
-        seq,
-        bytes,
-        computed: Instant::now(),
-    });
-    cache.insert(
-        kind,
-        Cached {
-            document: Arc::clone(&document),
-            checked_through: seq,
-        },
-    );
-    Ok(Served {
-        document,
-        cached: false,
-    })
+
+    fn read(&mut self, ctx: &Ctx, shared: &Shared, kind: ReadKind) -> Result<Served> {
+        let now = (self.now)();
+        if kind == ReadKind::BoardReadback {
+            self.board_requested = Some(now);
+        }
+        self.last_poll = Some(now);
+        let view = ctx.store.view().context("polling reader store sequence")?;
+        let max_age = if kind == ReadKind::BoardReadback {
+            BOARD_MAX_AGE
+        } else {
+            MAX_AGE
+        };
+        if let Some(cached) = self.cache.get_mut(&kind)
+            && now.saturating_duration_since(cached.document.computed) < max_age
+            && unchanged(view.as_ref(), cached.checked_through)
+        {
+            cached.checked_through = view.seq().0;
+            return Ok(Served {
+                document: Arc::clone(&cached.document),
+                cached: true,
+            });
+        }
+        let label = match kind {
+            ReadKind::PmNext => "reader.pm_next",
+            ReadKind::PmBrief => "reader.pm_brief",
+            ReadKind::BoardReadback => "reader.board",
+            ReadKind::Other => bail!("unknown read kind"),
+        };
+        self.refresh(ctx, shared, kind, view, label)
+    }
+
+    fn warm(&mut self, ctx: &Ctx, shared: &Shared, mut idle: impl FnMut() -> bool) -> Result<()> {
+        let now = (self.now)();
+        // Do not even open a store view while cold or rate-limited. Client
+        // requests take priority in the receive loop; only idle time reaches here.
+        if !warm_due(
+            ReadKind::BoardReadback,
+            self.board_requested,
+            self.warm_started,
+            None,
+            true,
+            now,
+        ) || self
+            .last_poll
+            .is_some_and(|at| now.saturating_duration_since(at) < WARM_POLL)
+        {
+            return Ok(());
+        }
+        self.last_poll = Some(now);
+        let view = ctx.store.view().context("polling warm board sequence")?;
+        let cached = self.cache.get_mut(&ReadKind::BoardReadback);
+        let (computed, changed) = match cached {
+            Some(cached) => {
+                let changed = !unchanged(view.as_ref(), cached.checked_through);
+                if !changed {
+                    cached.checked_through = view.seq().0;
+                }
+                (Some(cached.document.computed), changed)
+            }
+            None => (None, true),
+        };
+        if warm_due(
+            ReadKind::BoardReadback,
+            self.board_requested,
+            self.warm_started,
+            computed,
+            changed,
+            now,
+        ) && idle()
+        {
+            self.warm_started = Some((self.now)());
+            self.refresh(
+                ctx,
+                shared,
+                ReadKind::BoardReadback,
+                view,
+                "reader.board.warm",
+            )?;
+        }
+        Ok(())
+    }
+
+    fn refresh(
+        &mut self,
+        ctx: &Ctx,
+        shared: &Shared,
+        kind: ReadKind,
+        view: Box<dyn ReadView + Send>,
+        label: &'static str,
+    ) -> Result<Served> {
+        let _timing = corral_core::timing::span(label);
+        let seq = view.seq().0;
+        let attention = if kind == ReadKind::BoardReadback {
+            attention(shared, view.as_ref())
+        } else {
+            None
+        };
+        drop(view);
+        // Keep the reader handle live so PM projection can prepare derived
+        // state before pinning its own view. Lease-only writes do not invalidate it.
+        let bytes = (self.compute)(ctx, kind, attention)?;
+        let document = Arc::new(Document {
+            as_of: jiff::Timestamp::now().to_string(),
+            seq,
+            bytes,
+            computed: (self.now)(),
+        });
+        self.cache.insert(
+            kind,
+            Cached {
+                document: Arc::clone(&document),
+                checked_through: seq,
+            },
+        );
+        Ok(Served {
+            document,
+            cached: false,
+        })
+    }
 }
 
 /// Lease bookkeeping cannot change a readout. Gaps, failures, backwards views,
@@ -219,5 +351,110 @@ fn compute(ctx: &Ctx, kind: ReadKind, attention: Option<AttentionBoard>) -> Resu
                 .context("encoding board read-back")
         }
         ReadKind::Other => bail!("unknown read kind"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::Fixture;
+    use corral_core::Status;
+    use std::cell::Cell;
+
+    #[test]
+    fn changed_warm_board_is_recomputed_before_the_next_request() {
+        let fixture = Fixture::new();
+        let shared = Shared::new();
+        let base = Instant::now();
+        let clock = Cell::new(base);
+        let calls = Cell::new(0);
+        let mut reader = Reader::new(
+            |ctx: &Ctx, kind, _: Option<AttentionBoard>| {
+                assert!(!ctx.store.is_snapshot());
+                assert_eq!(kind, ReadKind::BoardReadback);
+                calls.set(calls.get() + 1);
+                Ok(b"{}".to_vec())
+            },
+            || clock.get(),
+        );
+        let first = reader
+            .read(&fixture.ctx, &shared, ReadKind::BoardReadback)
+            .unwrap();
+        assert!(!first.cached);
+        fixture
+            .ctx
+            .store
+            .create("Changed", None, Status::Ready, "")
+            .unwrap();
+        clock.set(base + Duration::from_secs(1));
+        reader.warm(&fixture.ctx, &shared, || false).unwrap();
+        assert_eq!(calls.get(), 1, "queued requests must win over warming");
+        clock.set(base + Duration::from_secs(2));
+        reader.warm(&fixture.ctx, &shared, || true).unwrap();
+        assert_eq!(calls.get(), 2);
+        clock.set(base + Duration::from_secs(20));
+        let next = reader
+            .read(&fixture.ctx, &shared, ReadKind::BoardReadback)
+            .unwrap();
+        assert!(next.cached);
+        assert!(next.document.seq > first.document.seq);
+        assert_eq!(calls.get(), 2);
+
+        // Age alone refreshes a warm result even without a store write.
+        clock.set(base + Duration::from_secs(33));
+        reader.warm(&fixture.ctx, &shared, || true).unwrap();
+        assert_eq!(calls.get(), 3);
+        fixture
+            .ctx
+            .store
+            .create("Burst", None, Status::Ready, "")
+            .unwrap();
+        clock.set(base + Duration::from_secs(34));
+        reader.warm(&fixture.ctx, &shared, || true).unwrap();
+        assert_eq!(calls.get(), 3, "warm computations must be spaced");
+        clock.set(base + Duration::from_secs(44));
+        reader.warm(&fixture.ctx, &shared, || true).unwrap();
+        assert_eq!(calls.get(), 4);
+        let last_poll = reader.last_poll;
+        clock.set(base + Duration::from_secs(140));
+        reader.warm(&fixture.ctx, &shared, || true).unwrap();
+        assert_eq!(calls.get(), 4);
+        assert_eq!(reader.last_poll, last_poll, "cold readers must not poll");
+    }
+
+    #[test]
+    fn board_warming_stops_when_no_request_arrived_for_120_seconds() {
+        let base = Instant::now();
+        let due = |requested, now| {
+            warm_due(
+                ReadKind::BoardReadback,
+                requested,
+                None,
+                Some(base),
+                true,
+                now,
+            )
+        };
+        assert!(!due(None, base));
+        assert!(due(Some(base), base + Duration::from_secs(119)));
+        assert!(!due(Some(base), base + Duration::from_secs(120)));
+        assert!(!due(Some(base), base + Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn pm_read_kinds_are_never_recomputed_unasked() {
+        let base = Instant::now();
+        for kind in [ReadKind::PmNext, ReadKind::PmBrief, ReadKind::Other] {
+            for age in [1, 31, 121] {
+                assert!(!warm_due(
+                    kind,
+                    Some(base),
+                    None,
+                    Some(base),
+                    true,
+                    base + Duration::from_secs(age),
+                ));
+            }
+        }
     }
 }

@@ -35,13 +35,17 @@ pub(super) fn prerequisites(
         Some(PlanDeliveryTarget::Integration { branch }) => branch.as_str(),
         Some(PlanDeliveryTarget::Main) | None => "main",
     };
+    // The Plan's repository and proposed base are the same for every dependency: resolve
+    // them once, at the first dependency that needs them, in the original order.
+    let mut plan_base: Option<(std::path::PathBuf, Option<String>)> = None;
+    let memo = crate::integration::git_memo_of(store);
     task.depends_on
         .iter()
         .map(|id| {
             // Shared with dependency_check: one read per pinned pass.
             let dependency_head = crate::queue::dependency_head(store, id)
                 .with_context(|| format!("{}: missing dependency {id}", task.id))?;
-            let mut dependency = dependency_head.to_shell_task()?;
+            let dependency = crate::queue::dependency_shell(store, &dependency_head)?;
             let mut result = PlanPrerequisite {
                 task: dependency.id.clone(),
                 status: dependency.status,
@@ -78,6 +82,7 @@ pub(super) fn prerequisites(
                 // The approval validator uses the final two reviews, the referenced
                 // planner and pending decisions. Supply those keyed rows explicitly;
                 // a shell's empty history is not evidence of an accepted design.
+                let mut dependency = dependency.as_ref().clone();
                 approval_inputs(store, &dependency_head, &mut dependency)?;
                 let design = dependency.plans.last().context("design receipt missing")?;
                 corral_core::plan_policy::validate_approval(
@@ -131,14 +136,21 @@ pub(super) fn prerequisites(
                 result.reason = Some(format!("{id}: no published owned-target integration receipt"));
                 return Ok(result);
             }
-            let repo = store.project_path(
-                plan.project
-                    .as_deref()
-                    .context("execution Plan has no project")?,
-            )?;
-            // Readiness may qualify a new target against the exact base its writer
-            // will use. Owned initialized refs still require their actual Git head.
-            result.proposed_initial_base = crate::plan_target::proposed_initial_base(store, plan)?;
+            let (repo, proposed) = match &plan_base {
+                Some(known) => known.clone(),
+                None => {
+                    let repo = store.project_path(
+                        plan.project
+                            .as_deref()
+                            .context("execution Plan has no project")?,
+                    )?;
+                    // Readiness may qualify a new target against the exact base its writer
+                    // will use. Owned initialized refs still require their actual Git head.
+                    let proposed = crate::plan_target::proposed_initial_base(store, plan)?;
+                    plan_base.insert((repo, proposed)).clone()
+                }
+            };
+            result.proposed_initial_base = proposed;
             let head = match &result.proposed_initial_base {
                 Some(base) => base.clone(),
                 None => match crate::plan_target::branch_head(store, &repo, target) {
@@ -153,7 +165,7 @@ pub(super) fn prerequisites(
                 },
             };
             // A stored inclusion of two full SHAs cannot change; exclusions are rechecked.
-            result.satisfied = crate::integration::git_memo_of(store)
+            result.satisfied = memo
                 .is_ancestor(&repo, sha, &head)
                 .with_context(|| format!("qualifying prerequisite {id} in {target}"))?;
             if !result.satisfied {
@@ -293,27 +305,32 @@ pub(crate) fn check_dispatch_base(store: &Store, task: &Task, base: &str, sha: &
     Ok(())
 }
 
-fn approval(store: &Store, task: &str, run: &str) -> Result<Option<corral_core::Event>> {
+/// The newest valid `approved` event of (`task`, `run`): read once per pinned pass, since
+/// several Plan members name the same dependency; a live store reads it on every call.
+pub(crate) fn approval(store: &Store, task: &str, run: &str) -> Result<Option<corral_core::Event>> {
     use corral_core::backend::{EventQuery, PageReq};
-    store
-        .view()?
-        .events(
-            &EventQuery {
-                task: Some(task.to_owned()),
-                kinds: vec!["approved".into()],
-                run: Some(run.to_owned()),
-                newest_first: true,
-                valid_only: true,
-                ..EventQuery::default()
-            },
-            PageReq::first(1),
-        )?
-        .items
-        .into_iter()
-        .next()
-        .map(crate::approvals::event)
-        .transpose()
-        .map(Option::flatten)
+    let receipt = store.pass_derived(&format!("plan-approval\0{task}\0{run}"), || {
+        store
+            .view()?
+            .events(
+                &EventQuery {
+                    task: Some(task.to_owned()),
+                    kinds: vec!["approved".into()],
+                    run: Some(run.to_owned()),
+                    newest_first: true,
+                    valid_only: true,
+                    ..EventQuery::default()
+                },
+                PageReq::first(1),
+            )?
+            .items
+            .into_iter()
+            .next()
+            .map(crate::approvals::event)
+            .transpose()
+            .map(Option::flatten)
+    })?;
+    Ok(receipt.as_ref().clone())
 }
 
 fn approval_inputs(store: &Store, head: &corral_core::TaskHead, task: &mut Task) -> Result<()> {

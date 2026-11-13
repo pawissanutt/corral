@@ -13,7 +13,7 @@ use crate::{Change, Ctx};
 #[path = "tracker_target.rs"]
 mod target;
 pub use target::PlanPrerequisite;
-pub(crate) use target::{check_dispatch_base, target_blocker};
+pub(crate) use target::{approval, check_dispatch_base, target_blocker};
 
 /// Mutually exclusive work buckets; acceptance does not imply target inclusion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -130,19 +130,27 @@ fn projection(ctx: &Ctx, id: &str) -> Result<(Projection, bool)> {
             if !changed && !unknown.is_empty() {
                 // Membership also depends on absent incoming edges: another owner listing
                 // a member/Plan, or an unlisted child naming a known Plan as parent.
-                // Read only tasks changed since this cursor, on the same pinned view.
-                // Only successful projections are cached, so a removed unknown edge
-                // cannot leave a cached refusal behind.
-                changed = ctx
-                    .store
-                    .heads(&HeadQuery::Ids(unknown.into_iter().collect()))?
-                    .iter()
-                    .any(|task| {
-                        task.parent
+                // Read only tasks changed since this cursor, on the same pinned view; the
+                // trackers of one pass share that read. Only successful projections are
+                // cached, so a removed unknown edge cannot leave a cached refusal behind.
+                let ids: Vec<String> = unknown.into_iter().collect();
+                let relations = ctx.store.pass_derived(
+                    &format!("tracker-changed\0{}", ids.join("\0")),
+                    || {
+                        Ok(ctx
+                            .store
+                            .heads(&HeadQuery::Ids(ids.clone()))?
                             .iter()
-                            .chain(&task.children)
-                            .any(|id| previous.projection.scopes.contains(id))
-                    });
+                            .map(|task| (task.parent.clone(), task.children.clone()))
+                            .collect::<Vec<_>>())
+                    },
+                )?;
+                changed = relations.iter().any(|(parent, children)| {
+                    parent
+                        .iter()
+                        .chain(children)
+                        .any(|id| previous.projection.scopes.contains(id))
+                });
             }
             if changed || !page.more {
                 break;
@@ -206,8 +214,17 @@ pub fn plan_progress_in(ctx: &Ctx, store: &Store, id: &str) -> Result<PlanProgre
         store,
         ..ctx.clone()
     };
+    if fresh.store.is_snapshot() {
+        // The Plan and its open members are re-read by membership, target and admission
+        // checks. Refresh the pass's checked open board once, so those `Store::head` reads
+        // are served from it; a failed refresh only leaves them to read the view.
+        fresh.store.pass_derived("plan-progress-open-board", || {
+            Ok(crate::pm_next::heads::open(&fresh.store).is_ok())
+        })?;
+    }
     let (mut projection, cached) = projection(&fresh, id)?;
     if cached {
+        let _span = corral_core::timing::span("plan.progress.qualification");
         // Git ancestry, target journals and resource admission are live inputs, not task
         // scopes. Refresh only qualification, retaining the task/coverage derivation.
         for (index, child) in &projection.qualification {
@@ -231,7 +248,10 @@ pub fn plan_progress_in(ctx: &Ctx, store: &Store, id: &str) -> Result<PlanProgre
     } = projection;
     // Readiness reads maintained artifact facts, Git refs and checkpoint records, independent
     // of task scopes. Do not memoize acceptance readiness on the task-only feed cursor.
-    let aggregate = crate::plan_acceptance::progress(&fresh, &tracker);
+    let aggregate = {
+        let _span = corral_core::timing::span("plan.progress.aggregate");
+        crate::plan_acceptance::progress(&fresh, &tracker)
+    };
     let recovery = crate::plan_recovery::inventory(&fresh.store, &tracker.id)?;
     Ok(PlanProgress {
         recovery,
