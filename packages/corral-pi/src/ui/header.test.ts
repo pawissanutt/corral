@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { sliceByColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
-import { boardBadge, changesBadge, headerFrame, headerRows, mainTabs, tabRow, tabSpec, type HeaderInput, type TabId, type TabSpec } from "./header.ts";
+import { boardBadge, changesBadge, headerFrame, headerRows, mainTabs, proofBadge, tabRow, tabSpec, type HeaderInput, type TabId, type TabSpec } from "./header.ts";
 import { PANEL_LINE, PANEL_ON_ACCENT } from "./panels-view.ts";
 
 const worker: HostIdentity = { store: "s", project: "demo", role: "worker", task: "T-1", run: "R-1", generation: 1 };
@@ -60,25 +60,26 @@ test("the Board badge counts open tasks, warns on blocked or failed, and shows �
   expect(boardBadge({ open: 0, alert: false, proposed: false })).toBeUndefined();
 });
 
-test("a failed Git read or a missing project reads ! or ?, and the Changes badge never reads 0", () => {
+test("a failed read or a missing project says what it is about, and the Changes badge never reads 0", () => {
   const failed = changesBadge({ checked: true, files: 0, scopeRequired: false, error: true });
   const choose = changesBadge({ checked: false, files: 0, scopeRequired: true, error: false });
-  expect(failed?.text).toBe("!"); expect(choose?.text).toBe("?");
+  const proof = proofBadge({ stale: false, error: true });
+  for (const badge of [failed, choose, proof]) expect(badge?.text).toMatch(/[a-z]{3,}\?$/);
   expect(changesBadge({ checked: false, files: 0, scopeRequired: false, error: false })).toBeUndefined();
   expect(changesBadge({ checked: true, files: 0, scopeRequired: false, error: false })).toBeUndefined();
   expect(changesBadge({ checked: true, files: 4, scopeRequired: false, error: false })?.text).toBe("4");
   const row = stripTerminalSequences(tabRow([tabSpec("conversation"), tabSpec("changes", failed)], "conversation", 104).line);
-  expect(row).toMatch(/Changes\s+!/); expect(row).not.toMatch(/Changes\s+0/);
+  expect(row).toMatch(/Changes\s+git\?/); expect(row).not.toMatch(/Changes\s+0/);
 });
 
-test("the header keeps one row when short or tiny and two otherwise, each exactly the width", () => {
+test("the header keeps one row when short and two otherwise, at every width, each exactly the width", () => {
   const input = { title: "T-1 · R-1", state: "Working" as const, attention: { text: "⚑ 2", tone: "warning" as const },
     context: { left: "Build the slots screen", right: "running · P1 · xs" } };
   for (const width of [30, 63, 64, 104, 150]) {
     const tiny = width < 64;
     for (const short of [false, true]) {
       const rows = headerRows(input, width, { short, tiny });
-      expect(rows).toHaveLength(short || tiny ? 1 : 2);
+      expect(rows).toHaveLength(short ? 1 : 2);
       for (const row of rows) expect(visibleWidth(row)).toBe(width);
     }
   }
@@ -121,6 +122,13 @@ test("a notice still replaces the status for its duration and takes away its hit
   expect(text).not.toContain("exit choice pending");
   expect(hits.some(hit => hit.id === "status")).toBeFalse();
   expect(headerRows(input, 140, { short: false, tiny: false })).toEqual(lines);
+  expect(headerFrame(input, 140, { short: false, tiny: false }).noticeShown).toBeTrue();
+  // A notice that does not fit whole is not clipped into row 1: it is left to the toast, and the status keeps its hit.
+  const long = headerFrame({ ...input, notice: { text: "No exit chosen yet: open F2 and choose Finish to land the build", tone: "warning" } },
+    61, { short: false, tiny: true });
+  expect(long.noticeShown).toBeFalse();
+  expect(stripTerminalSequences(long.lines[0]!)).toContain("choose exit");
+  expect(long.hits.some(hit => hit.id === "status")).toBeTrue();
 });
 
 /** The text of the cells `from`..`to` of a styled line. */
@@ -152,25 +160,59 @@ test("the open tab has the active key cap and an accent-underlined bold label; s
   }
 });
 
-test("wide and narrow rows keep separators and chips; tiny drops them and reads Diff; below 50 only the open tab is named", () => {
-  const tabs = specs(build);
-  for (const width of [185, 140, 105, 92, 80]) {
+test("separators go first, then Changes reads Diff, then inactive labels; counts outlive the labels", () => {
+  const tabs = specs(worker);
+  for (const width of [185, 140, 105, 92, 80, 64, 61, 46]) {
     const text = stripTerminalSequences(tabRow(tabs, "conversation", width).line);
-    expect(text).toContain("│"); expect(text).toContain("Changes"); expect(text).toContain(" 148 ");
+    // Any inactive label gone means the separators and the long Changes label went before it.
+    if (!text.includes("Agents")) { expect(text).not.toContain("│"); expect(text).not.toContain("Changes"); }
+    if (text.includes("Diff")) expect(text).not.toContain("│");
   }
-  for (const width of [61, 52]) {
-    const text = stripTerminalSequences(tabRow(tabs, "conversation", width).line);
-    expect(text).not.toContain("│"); expect(text).toContain("Diff"); expect(text).not.toContain("148");
-    expect(text).toContain("Agents");
-  }
-  const quarter = stripTerminalSequences(tabRow(tabs, "conversation", 46).line);
+  // At 80 columns the six-tab worker has lost its inactive labels, and the counts stay on the bare key caps.
+  const narrow = stripTerminalSequences(tabRow(tabs, "conversation", 80).line);
+  expect(narrow).not.toContain("Inbox"); expect(narrow).toMatch(/F11\s+3/); expect(narrow).toMatch(/F8\s+12/);
+  const quarter = stripTerminalSequences(tabRow(specs(build), "conversation", 46).line);
   expect(quarter).toContain("Chat"); expect(quarter).not.toContain("Agents"); expect(quarter).not.toContain("Board");
   for (const key of ["F9", "F8", "F7", "F10"]) expect(quarter).toContain(key);
 });
 
+test("the unread dot follows Chat's label at every width, and stays on the bare cap at 46 columns", () => {
+  const tabs = mainTabs(worker).map(id => tabSpec(id, BADGES[id], id === "conversation"));
+  for (const width of [140, 92, 61, 46]) {
+    const { line } = tabRow(tabs, "changes", width);
+    expect(stripTerminalSequences(line)).toMatch(/F9 +(Chat )?•/);
+  }
+  expect(stripTerminalSequences(tabRow(mainTabs(worker).map(id => tabSpec(id, BADGES[id])), "changes", 46).line)).not.toContain("•");
+});
+
+test("the Proof badge reads the gate in words and keeps the review only where it fits", () => {
+  const badge = proofBadge({ gate: { result: "fail", fresh: true }, review: { verdict: "approve", fresh: true }, stale: false, error: false });
+  expect(badge?.text).toBe("gate ✗ · reviewed"); expect(badge?.short).toBe("gate ✗"); expect(badge?.tone).toBe("error");
+  const tabs = mainTabs(worker).map(id => tabSpec(id, id === "evidence" ? badge : undefined));
+  expect(stripTerminalSequences(tabRow(tabs, "evidence", 140).line)).toContain("gate ✗ · reviewed");
+  const narrow = stripTerminalSequences(tabRow(tabs, "evidence", 64).line);
+  expect(narrow).toContain("gate ✗"); expect(narrow).not.toContain("reviewed");
+});
+
+test("row 2 stays at 61 columns on a tall terminal, and the attention chip names decisions where it fits", () => {
+  const input: HeaderInput = { title: "corral", state: "Idle", attention: { text: "⚑ 3 decisions", short: "⚑ 3", tone: "warning" },
+    context: { left: "corral · pi-build (ux3)", right: "Changes: other-project" } };
+  const tall = headerFrame(input, 61, { short: false, tiny: true });
+  expect(tall.lines).toHaveLength(2);
+  expect(stripTerminalSequences(tall.lines[1]!)).toContain("corral · pi-build");
+  for (const width of [140, 61, 46, 24]) {
+    const { lines, hits } = headerFrame(input, width, { short: false, tiny: width < 64 });
+    const hit = hits.find(item => item.id === "attention")!;
+    expect(["⚑ 3 decisions", "⚑ 3"]).toContain(cells(lines[0]!, hit.from, hit.to).trim());
+    if (width >= 61) expect(cells(lines[0]!, hit.from, hit.to).trim()).toBe("⚑ 3 decisions");
+  }
+  expect(cells(headerFrame(input, 24, { short: false, tiny: true }).lines[0]!, 0, 24)).not.toContain("decisions");
+});
+
 test("the state word and the status sit at the right edge of the full width, short and lower case below 105 columns", () => {
   const status = { long: "exit choice pending", short: "choose exit", tone: "warning" as const, clickable: true };
-  const base: HeaderInput = { title: "build · save-slots", state: "Working", context: { left: "mitiplay · .worktrees/build-save-slots", right: "exit policy: gate allowed" } };
+  const base: HeaderInput = { title: "build · save-slots", state: "Working",
+    context: { left: "mitiplay · .worktrees/build-save-slots", right: "exit policy: gate allowed", rightShort: "exit: gate" } };
   for (const width of [185, 140, 105, 104, 92, 80, 64, 61, 52, 46]) {
     const tiny = width < 64;
     const working = headerFrame(base, width, { short: false, tiny }).lines;
@@ -178,7 +220,7 @@ test("the state word and the status sit at the right edge of the full width, sho
     expect(text.trimEnd().endsWith(width < 105 ? "working" : "Working")).toBeTrue();
     expect(visibleWidth(text.trimEnd())).toBe(width - 1);
     expect(text.trimStart().startsWith(tiny ? "build · save-slots" : "corral / build · save-slots")).toBeTrue();
-    if (!tiny) expect(stripTerminalSequences(working[1]!).trimEnd().endsWith("exit policy: gate allowed")).toBeTrue();
+    expect(stripTerminalSequences(working[1]!).trimEnd()).toMatch(/(exit policy: gate allowed|exit: gate)$/);
     const pending = headerFrame({ ...base, status }, width, { short: false, tiny });
     expect(stripTerminalSequences(pending.lines[0]!).trimEnd().endsWith(width < 105 ? status.short : status.long)).toBeTrue();
     const hit = pending.hits.find(item => item.id === "status")!;

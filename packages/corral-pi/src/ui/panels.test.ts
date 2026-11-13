@@ -125,19 +125,18 @@ test("the status bar is the one home of session cost and context, with the role 
     expect(screen).toContain("$1.23");
     expect(screen).toContain("●");
     expect(screen).not.toContain("● corral g3");
-    // The role is a filled accent pill: the full word from 64 columns, its initial below.
+    // The role is a filled accent pill: the full word from 64 columns, a three-letter form below.
     expect(bar[0]).toContain(PANEL_ON_ACCENT);
-    expect(screen.startsWith(width >= 64 ? "  WORKER " : "  W ")).toBeTrue();
-    expect(bar).toHaveLength(1);
+    expect(screen.startsWith(width >= 64 ? "  WORKER " : "  WRK ")).toBeTrue();
+    // Extension alerts are never dropped: below 52 columns they take a second row.
+    expect(bar).toHaveLength(width >= 52 ? 1 : 2);
     for (const line of bar) expect(visibleWidth(line)).toBe(width);
     const unbound = stripTerminalSequences(statusBar(identity, { ...snapshot, bound: false }, new Map(), width).join("\n"));
-    expect(unbound).toContain("○");
-    if (width >= 105) expect(unbound).toContain("unbound"); else expect(unbound).not.toContain("unbound");
-    // A build session has no corral binding: `○ unbound`, never a generation.
+    expect(unbound).toContain("○ unbound");
+    // A build session has no corral binding, so it draws no binding segment at all.
     const build = stripTerminalSequences(statusBar({ ...identity, role: "build" as const }, snapshot, new Map(), width).join("\n"));
-    expect(build).toContain(width >= 64 ? "BUILD" : " B ");
-    expect(build).toContain("○"); expect(build).not.toContain("●"); expect(build).not.toMatch(/g\d/);
-    if (width >= 105) expect(build).toContain("○ unbound"); else expect(build).not.toContain("unbound");
+    expect(build).toContain(width >= 64 ? "BUILD" : "BLD");
+    expect(build).not.toContain("○"); expect(build).not.toContain("●"); expect(build).not.toContain("unbound"); expect(build).not.toMatch(/g\d|gen \d/);
   }
 });
 test("context segment shortens in steps, warns at 80% and stays explicit when unknown", () => {

@@ -14,6 +14,8 @@ export interface ChoiceDialog {
   readonly title: string; readonly short?: string; readonly titleColor?: string;
   /** The policy note, muted at the right of the header from 96 columns. */
   readonly meta?: string;
+  /** Instead of `meta`: variants of the note from the longest to the shortest, drawn at every width; the longest that fits shows. */
+  readonly metaFit?: readonly string[];
   /** Question text or preview table, drawn into at most `rows` rows. */
   readonly body?: (width: number, rows: number) => string[];
   readonly options: readonly ChoiceOption[];
@@ -32,6 +34,8 @@ const META_MIN = 8;
 const DETAIL_ROWS = 3;
 /** Enter and digits wait this long after a dialog opened by itself. */
 export const CHOICE_GUARD_MS = 400;
+/** A bracketed paste starts with this: pasted text is typing, never a dock or view key. */
+export const PASTE_START = "\x1b[200~";
 const BOLD = "\x1b[1m", NORMAL = "\x1b[22m";
 
 /** `min(max(4, floor(rows × 0.58)), rows − chromeRows − 2)`. */
@@ -46,19 +50,25 @@ function fit(text: string, width: number): string {
   return out + " ".repeat(Math.max(0, width - visibleWidth(out)));
 }
 
-/** The header: the question in bold (its first word in `titleColor` when set) and the policy note muted at the right. */
+/**
+ * The header: the question in bold (its first word in `titleColor` when set) and the policy note muted at the
+ * right. A `metaFit` note always keeps its shortest variant; the question clips for it.
+ */
 function header(dialog: ChoiceDialog, width: number, joined: string | undefined): { readonly left: string; readonly right?: string } {
   const inner = width - 4;
   const base = plainLabel(width < SHORT_TITLE && dialog.short ? dialog.short : dialog.title);
   const title = joined ? `${base}: ${joined}` : base;
-  const shown = visibleWidth(title) > inner ? fit(title, inner) : title;
+  const notes = dialog.metaFit?.map(plainLabel) ?? [];
+  const reserve = notes.length ? visibleWidth(notes.at(-1)!) + 2 : 0;
+  const shown = visibleWidth(title) > inner - reserve ? fit(title, inner - reserve) : title;
   const space = shown.indexOf(" ");
   const left = BOLD + (dialog.titleColor && space > 0
     ? dialog.titleColor + shown.slice(0, space) + PANEL_TEXT + shown.slice(space)
     : PANEL_TEXT + shown) + NORMAL;
   // The question keeps its cells first; the note takes what is left after a two-cell gap, with an ellipsis.
-  const meta = width >= META && dialog.meta ? plainLabel(dialog.meta) : "";
   const room = inner - visibleWidth(shown) - 2;
+  if (notes.length) return { left, right: PANEL_MUTED + (notes.find(item => visibleWidth(item) <= room) ?? notes.at(-1)!) };
+  const meta = width >= META && dialog.meta ? plainLabel(dialog.meta) : "";
   if (!meta || room < META_MIN) return { left };
   return { left, right: PANEL_MUTED + (visibleWidth(meta) > room ? fit(meta, room) : meta) };
 }
@@ -175,25 +185,39 @@ export class ChoiceDock implements Component {
   /** Ignores Enter and digits until `until` (the 400 ms guard after an automatic open). */
   guard(until: number): void { this.until = until; }
 
-  /** ↑↓ j k (wrap), 1-9, Enter, Esc. Other keys are swallowed while focused, except page keys and control sequences. */
+  /**
+   * ↑↓ (wrap), digits, Enter, Esc. Everything else leaves the dialog docked with its selection: function keys,
+   * view keys, Alt chords, page keys and control keys pass through (false); Tab, a bracketed paste or a printable
+   * key that is not a digit is typing, so the dialog gives up the focus and the text reaches the composer (false).
+   * A later Enter then sends the draft instead of picking an option.
+   */
   handleKey(data: string): boolean {
     if (!this.focused) return false;
     const dialog = this.current();
     if (!dialog) return false;
+    if (data.startsWith(PASTE_START)) { this.blur(); return false; }
     const ch = decodeKittyPrintable(data) ?? data;
     const count = dialog.options.length;
     if (matchesKey(data, "escape")) { this.host.dismiss(); return true; }
-    if (matchesKey(data, "up") || ch === "k") { this.step(-1, count); return true; }
-    if (matchesKey(data, "down") || ch === "j") { this.step(1, count); return true; }
+    if (matchesKey(data, "up")) { this.step(-1, count); return true; }
+    if (matchesKey(data, "down")) { this.step(1, count); return true; }
     if (matchesKey(data, "enter")) { if (Date.now() >= this.until) this.activate(dialog, this.selected); return true; }
-    if (/^[1-9]$/.test(ch)) {
+    // Every digit is the dialog's: one that names no option does nothing rather than reach the composer.
+    if (/^[0-9]$/.test(ch)) {
       const index = Number(ch) - 1;
-      if (Date.now() >= this.until && index < count) this.activate(dialog, index);
+      if (Date.now() >= this.until && index >= 0 && index < count) this.activate(dialog, index);
       return true;
     }
-    if (matchesKey(data, "pageUp") || matchesKey(data, "pageDown") || matchesKey(data, "ctrl+c")) return false;
-    // Unbound special keys and terminal replies are not typing; printable keys never reach the composer.
-    return !ch.startsWith("\x1b");
+    if (matchesKey(data, "tab")) { this.blur(); return true; }
+    if (ch.startsWith("\x1b") || /^[\u0000-\u001f\u007f]$/.test(ch)) return false;
+    this.blur();
+    return false;
+  }
+
+  /** The dialog stays docked and keeps its selection; the composer has the keys again. */
+  private blur(): void {
+    this.focused = false;
+    this.host.changed();
   }
 
   render(width: number): string[] {

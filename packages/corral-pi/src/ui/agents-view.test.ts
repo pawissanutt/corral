@@ -5,7 +5,7 @@ import { agentsModel, type AgentRow, type AgentsModel } from "./agents-model.ts"
 import { agentDensity, renderAgents, AgentsView, type AgentsAction, type AgentsOptions } from "./agents-view.ts";
 import { agentColor } from "./agent-hues.ts";
 import { AGENT_HUES, PACKAGED, type Appearance } from "./appearance.ts";
-import { PANEL_MUTED, type PanelJob, type PanelSnapshot } from "./panels-view.ts";
+import { PANEL_BLUE, PANEL_MUTED, type PanelJob, type PanelSnapshot } from "./panels-view.ts";
 import type { HelperInspection } from "../extensions/subagent/inspection.ts";
 import type { BuildPanelState, ChildSnapshot, FleetSnapshot } from "../build/types.ts";
 import { childKey } from "./build/contract.ts";
@@ -73,6 +73,12 @@ test("selection stays on the same key when a newer helper is inserted above it",
   expect(stripTerminalSequences(frame.lines[frame.selectedRow] ?? "")).toMatch(/^ ▌  ✓  explore\b/);
   view.move(1);
   expect(view.entry()?.row.key).toBe("helper:h-1");
+});
+
+test("the selection bar is accent while the view has the keys and muted while it does not", () => {
+  const model = agentsModel(fixture, NOW);
+  const bar = (focused: boolean) => { const frame = renderAgents(model, "helper:h-2", 140, { ...options(), focused }); return frame.lines[frame.selectedRow] ?? ""; };
+  expect(bar(true)).toContain(PANEL_BLUE + "▌"); expect(bar(false)).toContain(PANEL_MUTED + "▌");
 });
 
 test("every line fits the width, and the table density switches at the mock's 60 and 112 content cells", () => {

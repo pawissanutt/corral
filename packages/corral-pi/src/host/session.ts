@@ -43,10 +43,12 @@ import { corralToolNames, defineCorralTool } from "../tools/define.ts";
 import { installChrome } from "../ui/chrome.ts";
 import { NativePanels } from "../ui/panels.ts";
 import { persistedBases } from "../ui/review-store.ts";
+import { sidebarToggleKey } from "../ui/herdr-keys.ts";
 import type { PanelJob, PanelSnapshot } from "../ui/panels-view.ts";
 import { InspectorActivity } from "../ui/inspector.ts";
 import { buildToolRenderers } from "../ui/build/tool-renderers.ts";
 import { installToolRenderers, type ToolRenderDeps } from "../ui/tool-rendering.ts";
+import { installMarkRows } from "../ui/mark-rows.ts";
 import { TodoLedger, installTodo } from "../ui/todo.ts";
 import { type DueContinuation, RequestContext, continuationText } from "./request.ts";
 import type { HostCapabilities, UiMode } from "./config.ts";
@@ -99,6 +101,9 @@ import { failureClass, messageFailure, withProviderFailures } from "./provider-f
 import { HostQueue } from "./queue.ts";
 import { pmCacheKeyMode } from "../roles/pm/context.ts";
 import { pmCacheKeyStream } from "./pm-cache-key.ts";
+import { recordTranscriptMark, type MarkSink, type ModelMark, type TranscriptMark, type TurnStopCause, type TurnWait } from "./transcript-marks.ts";
+import { TurnFacts, turnWaits } from "./turn-facts.ts";
+import { holdContextOnly } from "./lifecycle.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -130,6 +135,8 @@ export interface HostSessionOptions {
   readonly runtimeDir?: string;
   /** Absent means rich: corral's header, footer status and compact corral_* rendering. */
   readonly ui?: UiMode;
+  /** Presentation-only journal entries; absent for hosts without transcript marks. */
+  readonly marks?: MarkSink;
   readonly modules: LoadedModules;
   readonly client: CorralClient;
   readonly events: EventLog;
@@ -322,6 +329,8 @@ export class HostSession {
   private turn = 0;
   private open = false;
   private cancelRequested: number | undefined;
+  private stopCause: TurnStopCause | undefined;
+  private deliveredTextHashes: Set<string> | undefined;
   private nextTurnOrigin: TurnOrigin | undefined;
   private lastInputSource: string | undefined;
   /** The owner typed into the pane while the current turn was open (a steer into it). */
@@ -371,11 +380,19 @@ export class HostSession {
   private planningRead = 0;
   private readonly planningResources = new Map<string, Promise<AdmissionHandle>>();
   private readonly resourcePublicationFailures = new Map<string, unknown[]>();
+  private readonly marks: MarkSink | undefined;
+  /** The transcript's own sink, once the rich UI registered its mark rows; `options.marks` replaces it. */
+  private markRows: MarkSink | undefined;
+  private readonly turnFacts: TurnFacts;
+  private selection: ModelMark["was"];
+  private readonly monitorFacts = new Map<string, MonitorFact>();
 
   readonly provider: ProviderId;
 
   private constructor(private readonly options: HostSessionOptions) {
     this.provider = options.provider ?? "openai-codex";
+    this.marks = options.ui === "plain" ? undefined : { add: mark => this.addMark(mark) };
+    this.turnFacts = new TurnFacts(this.marks);
     this.queue = new HostQueue({
       generation: options.identity.generation, session: () => this.session,
       enabled: () => (options.capabilities?.catalog ?? 0) >= 10 && options.capabilities?.enabled.includes("queue_control") === true,
@@ -383,7 +400,7 @@ export class HostSession {
       current: () => !this.closing && this.bound && this.session.sessionId === this.boundSessionId,
       turn: next => next || !this.open ? this.turn + 1 : this.turn,
       emit: (kind, data) => options.events.emit(kind, data),
-      fence: () => { this.closing = true; this.writeAbort.abort(); this.session.agent.abort(); },
+      fence: () => { this.stopCause ??= "host"; this.closing = true; this.writeAbort.abort(); this.session.agent.abort(); },
     });
     this.planning = options.identity.role === "assistant" ? new PlanningPolicy({
       read: async () => {
@@ -438,6 +455,8 @@ export class HostSession {
     }) : undefined;
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
       identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
+      sidebarKey: sidebarToggleKey(process.env),
+      ...(this.marks ? { marks: this.marks } : {}),
       ...(this.buildControls ? { build: this.buildControls.ui, deliverBuildInput: (text: string) => this.deliverBuildInput(text) } : {}),
       queueControl: {
         enabled: () => this.queue.controlEnabled,
@@ -486,9 +505,10 @@ export class HostSession {
         return (receipt.result ?? {}) as Record<string, unknown>;
       },
       onStop: () => {
+        if (this.open) this.stopCause ??= "budget";
         if (this.open) this.report("budget_exhausted", { budget: this.budget.state() });
       },
-      cancel: () => { void this.cancel(this.currentTurn()); void this.auxiliary?.cancelAll(); },
+      cancel: () => { void this.cancelRun(this.currentTurn(), "budget"); void this.auxiliary?.cancelAll(); },
     });
     const registerCapability = capabilityRegistry(() => this.session?.sessionFile);
     this.roleContext = {
@@ -553,7 +573,11 @@ export class HostSession {
       jobs: this.jobs, generation: options.identity.generation, worker: options.identity.role === "worker",
       waitMs: JobSettingsSchema.parse(options.guidance?.settings.background_shell).wait_ms,
       journal: fact => options.sessionManager.appendCustomEntry(COMMAND_ENTRY, fact),
-      monitorJournal: fact => options.sessionManager.appendCustomEntry(MONITOR_ENTRY, fact),
+      monitorJournal: fact => {
+        if (!fact.result && !fact.delivered) this.monitorFacts.set(fact.key, fact);
+        else this.monitorFacts.delete(fact.key);
+        options.sessionManager.appendCustomEntry(MONITOR_ENTRY, fact);
+      },
       changed: () => this.panels?.refresh(),
       settled: result => options.events.emit("command_settled", result),
       canNotify: () => !this.open,
@@ -1087,6 +1111,12 @@ export class HostSession {
     } }) : api;
     this.dialogPi = pi;
     registerCacheStats(pi);
+    pi.on("model_select", event => this.modelChanged(`${event.model.provider}/${event.model.id}`,
+      this.session.thinkingLevel, event.source !== "restore"));
+    pi.on("thinking_level_select", event => {
+      const model = this.session.model;
+      if (model) this.modelChanged(`${model.provider}/${model.id}`, event.level);
+    });
     if (policy) pi.on("context_with_system", async event => {
       await policy.refresh();
       const state = policy.snapshot();
@@ -1101,6 +1131,7 @@ export class HostSession {
         message => { this.session.sessionManager.appendCustomMessageEntry(message.customType, message.content, message.display, undefined); },
         () => this.session.model?.api === CLAUDE_SDK_API);
       this.questionUi.install(pi);
+      this.panels?.attachQuestions(this.questionUi.dock());
     }
     // Follows the session's current model, so a mid-session model switch changes the overlay too.
     const calibration = this.options.modules.role.calibration;
@@ -1157,7 +1188,7 @@ export class HostSession {
     this.ledger?.extend(pi);
     this.request = this.ledger && (role === "pm" || role === "assistant") ? new RequestContext(this.ledger,
       (message) => { this.session.sessionManager.appendCustomMessageEntry(message.customType,
-        message.content, message.display, message.details); }) : undefined;
+        message.content, message.display, message.details); }, this.marks) : undefined;
     this.request?.extend(pi);
     for (const spec of specs) {
       const tool = defineCorralTool(spec, {
@@ -1177,6 +1208,7 @@ export class HostSession {
       if (this.ledger) installTodo(pi, this.ledger, this.request === undefined,
         () => !!this.options.identity.task && (this.panels?.wide ?? false));
       this.panels?.install(pi, this.options.sdk);
+      this.markRows = installMarkRows(pi);
       // Every other tool call is one kit row; build cards and corral operations keep their renderers.
       const panels = this.panels;
       const openView: ToolRenderDeps["openView"] = panels ? (view, select) => panels.openView(view, select) : undefined;
@@ -1252,7 +1284,7 @@ export class HostSession {
       const message = `corral: ${operation} is refused while this pane is bound to corral session ${this.boundSessionId}; ` +
         `corral observes and recovers only that session. ${guidance[0]?.toUpperCase()}${guidance.slice(1)}.`;
       this.options.events.emit("session_replacement_refused", { operation, session_id: this.boundSessionId, message });
-      ui.notify(message, "warning");
+      this.notice(message, "warning", ui);
       return { cancel: true };
     };
     pi.on("session_before_switch", (event, ctx) => {
@@ -1260,7 +1292,7 @@ export class HostSession {
           && this.options.newAssistant && ctx.mode === "tui") {
         if (this.closing) return { cancel: true };
         if (!ctx.isIdle() || this.open || this.session.isBashRunning) {
-          ctx.ui.notify("corral: wait for the current work to finish before /new", "warning");
+          this.notice("corral: wait for the current work to finish before /new", "warning", ctx.ui);
           return { cancel: true };
         }
         this.closing = true;
@@ -1283,9 +1315,9 @@ export class HostSession {
         handler: async (_args, ctx) => {
           try {
             const { text, committed } = await this.reportedExport();
-            ctx.ui.notify(text, committed ? "info" : "warning");
+            this.notice(text, committed ? "text" : "warning", ctx.ui);
           } catch (error) {
-            ctx.ui.notify(`corral: session export failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+            this.notice(`corral: session export failed: ${error instanceof Error ? error.message : String(error)}`, "error", ctx.ui);
           }
         },
       });
@@ -1371,8 +1403,56 @@ export class HostSession {
     return await this.journalOwnerInput("confirmation", yes ? "y" : "n", command, requestId) !== undefined;
   }
 
+  /** Never let presentation recording affect prompts, lifecycle receipts or tool results. */
+  private addMark(mark: TranscriptMark): boolean {
+    return recordTranscriptMark(this.options.marks ?? this.markRows, mark, {
+      attached: this.attached, plain: this.options.ui === "plain", bound: this.bound,
+      build: this.options.build !== undefined || this.options.identity.role === "build",
+    });
+  }
+
+  private notice(text: string, tone: "text" | "warning" | "error",
+    ui: { notify(message: string, type?: "info" | "warning" | "error"): void }): void {
+    if (!this.addMark({ kind: "note", at: Date.now(), tone, text })) ui.notify(text, tone === "text" ? "info" : tone);
+  }
+
+  private modelChanged(model: string, effort: string, record = true): void {
+    const was = this.selection;
+    this.selection = { model, effort };
+    if (!record || !was || was.model === model && was.effort === effort) return;
+    if (!this.marks || this.attached === "headless") return;
+    // Rebuilding a session does not emit marks. Initial model/effort setup is not a change after a reply.
+    if (!this.session.sessionManager.getEntries().some(entry => entry.type === "message" && entry.message.role === "assistant")) return;
+    this.addMark({ kind: "model", at: Date.now(), model, effort, was });
+  }
+
+  private currentWaits(): readonly TurnWait[] {
+    const cells = this.code?.state().cells;
+    const ownerKeys = this.options.herdr?.readback().blocked_on;
+    return turnWaits({
+      jobs: this.jobs?.inspection(),
+      questions: this.ownerQuestions?.list(),
+      ownerKeys: Array.isArray(ownerKeys) ? ownerKeys.filter((key): key is string => typeof key === "string") : [],
+      cells: Array.isArray(cells) ? cells.flatMap((cell: unknown) => {
+        if (typeof cell !== "object" || cell === null || !("cell" in cell) || typeof cell.cell !== "string"
+          || !("detached" in cell) || cell.detached !== true) return [];
+        return [{ cell: cell.cell, detached: true }];
+      }) : [],
+      children: [
+        ...(this.auxiliary?.inspection() ?? []).map(child => ({ id: child.request, state: child.state, label: `${child.kind} ${child.request.slice(0, 12)}` })),
+        ...(this.buildControls?.fleet.snapshot().children ?? []).map(child => ({ id: child.id, state: child.state, label: `agent ${child.id}: ${child.title}` })),
+      ],
+      events: [
+        ...(this.request?.waits() ?? []),
+        ...[...this.monitorFacts.values()].filter(fact => !fact.result && !fact.delivered)
+          .map((fact): TurnWait => ({ kind: "event", id: fact.key, label: `monitor ${fact.key} on ${fact.job}` })),
+      ],
+    });
+  }
+
   private watch(session: AgentSession): void {
     this.unsubscribe?.();
+    this.deliveredTextHashes = undefined;
     session.setQueueObserver({
       ...this.queue.observer,
       queue: change => {
@@ -1388,18 +1468,44 @@ export class HostSession {
     this.terminalInputSequence = 0;
     this.terminalInput = undefined;
     observeTerminalInput(session, this.options.events);
+    // Pi's Esc path calls abort directly, before a cancelled retry emits its final event.
+    const abort = session.abort.bind(session);
+    session.abort = () => {
+      if (this.open) this.stopCause ??= this.closing ? "host" : this.budget.state().stopped ? "budget" : "owner";
+      return abort();
+    };
     this.panelStats = undefined;
+    this.selection = session.model ? { model: `${session.model.provider}/${session.model.id}`, effort: session.thinkingLevel } : undefined;
     this.unsubscribe = session.subscribe((event) => {
       if (event.type === "message_end") {
         this.panelStats = undefined;
+        if (event.message.role === "assistant" && event.message.stopReason === "aborted") {
+          this.stopCause ??= this.closing ? "host" : "owner";
+        }
+        if (event.message.role === "assistant" && this.marks && this.attached !== "headless" && this.open) {
+          const message = event.message;
+          const miss = message.stopReason === "error" || message.stopReason === "aborted" ? undefined
+            : this.options.sdk.detectCacheMiss(session.sessionManager.getEntries(), message, session.modelRuntime);
+          this.turnFacts.assistant(this.turn, message.stopReason,
+            message.content.flatMap(part => part.type === "toolCall" ? [part.id] : []),
+            miss && (miss.missedTokens >= 20_000 || miss.missedCost >= 0.1) ? miss.missedTokens : 0);
+        }
         if (event.message.role === "user") {
           const content = event.message.content;
           this.ownerQuestions?.observeUser(typeof content === "string" ? content
             : content.map(p => p.type === "text" ? p.text : "").join(""));
         }
       }
-      if (event.type === "agent_start") this.turnStarted();
-      else if (event.type === "agent_settled") this.turnEnded(event.aborted);
+      if (event.type === "agent_start") {
+        // A retry or a pre-settlement continuation can start another run before agent_settled.
+        if (this.open) this.turnFacts.finish(this.turn);
+        this.turnStarted();
+      } else if (event.type === "agent_end" && this.marks && this.attached !== "headless") {
+        this.turnFacts.end(this.turn, Date.now(), session.getSessionStats().cost, this.currentWaits(),
+          { stopCause: this.stopCause, error: this.budget.state().stopped });
+      } else if (event.type === "tool_execution_start") {
+        this.turnFacts.toolStarted(this.turn, event.toolCallId);
+      } else if (event.type === "agent_settled") this.turnEnded(event.aborted);
       else if (event.type === "queue_update") {
         this.options.events.emit("queue", { steering: event.steering.length, follow_up: event.followUp.length });
       } else if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") {
@@ -1422,6 +1528,8 @@ export class HostSession {
     this.writeAbort = new AbortController();
     this.turn++;
     this.open = true;
+    this.stopCause = this.budget.state().stopped ? "budget" : undefined;
+    if (this.marks && this.attached !== "headless") this.turnFacts.start(this.turn, Date.now(), this.session.getSessionStats().cost);
     const origin: TurnOrigin = this.nextTurnOrigin
       ?? (this.lastInputSource === "interactive" ? { kind: "owner_terminal" } : { kind: "unknown" });
     this.nextTurnOrigin = undefined;
@@ -1464,6 +1572,7 @@ export class HostSession {
   private turnEnded(aborted: boolean): void {
     this.writeAbort.abort();
     if (!this.open) return;
+    if (aborted) this.stopCause ??= this.closing ? "host" : "owner";
     this.open = false;
     const cancelled = this.cancelRequested === this.turn;
     this.cancelRequested = undefined;
@@ -1471,9 +1580,13 @@ export class HostSession {
     this.ownerInput = false;
     if (this.bound) this.checkpoint("end");
     this.costTurn({ phase: "end" });
+    // agent_end normally captured the run already. A startup abort can settle without it.
+    if (this.marks && this.attached !== "headless") this.turnFacts.end(this.turn, Date.now(), this.session.getSessionStats().cost, this.currentWaits(),
+      { stopCause: this.stopCause, error: this.budget.state().stopped });
     this.report("turn_ended", { aborted, cancelled, owner_input: ownerInput });
     this.options.herdr?.turnEnded();
     this.commands?.flush();
+    if (!this.bound) this.turnFacts.finish(this.turn);
   }
 
   private costTurn(marker: { phase: "start"; key: string | null; queued?: true } | { phase: "end" }): void {
@@ -1530,11 +1643,13 @@ export class HostSession {
         } else {
           this.stats.committed++;
           if (payload.kind === "turn_ended" && receipt.state === "committed") {
-            if (await this.relink?.check(() => !this.closing && !this.open && this.turn === turn
-              && !this.session.isStreaming && !this.session.isBashRunning)) return;
+            const relinked = await this.relink?.check(() => !this.closing && !this.open && this.turn === turn
+              && !this.session.isStreaming && !this.session.isBashRunning);
+            if (relinked) { this.turnFacts.finish(turn); return; }
             this.turnRecorded(receipt.result, turn);
           }
         }
+        if (payload.kind === "turn_ended" && receipt.state !== "committed") this.turnFacts.finish(turn);
         return;
       } catch (error) {
         last = error;
@@ -1543,15 +1658,18 @@ export class HostSession {
     }
     this.stats.failed++;
     this.stats.lastError = last instanceof Error ? last.message.slice(0, 256) : String(last);
+    if (payload.kind === "turn_ended") this.turnFacts.finish(turn);
   }
 
   /** Corral's request decision for ended turn `turn`: a stop is shown, a due continuation queued. */
   private turnRecorded(result: unknown, turn: number): void {
     const stopped = this.request?.stopped(result);
+    const continuation = (result as { request?: { continuation?: { state?: string; reason?: string } } } | null)?.request?.continuation;
+    const recorded = this.turnFacts.finish(turn, { continuationStopped: continuation?.state === "stopped" ? continuation.reason : undefined });
     if (stopped) {
       this.options.events.emit("continuation_stopped", { reason: stopped });
-      this.request?.notify(`corral: automatic continuation stopped (${stopped.replace("_", " ")}); `
-        + "the plan still has open steps.");
+      if (!recorded) this.request?.notify(`corral: automatic continuation stopped (${stopped.replace("_", " ")}); `
+        + "the plan still has open steps.", false);
     }
     const due = this.request?.due(result);
     if (due) this.continuations = this.continuations.then(() => this.continueRequest(due, turn));
@@ -1565,7 +1683,10 @@ export class HostSession {
    */
   private async continueRequest(due: DueContinuation, granted: number): Promise<void> {
     const key = due.continuation.key;
-    const skip = (reason: string) => { this.options.events.emit("continuation_skipped", { key, reason }); };
+    const skip = (reason: string) => {
+      this.options.events.emit("continuation_skipped", { key, reason });
+      if (this.marks) this.request?.notify(`corral: automatic continuation refused (${reason.replace(/_/g, " ")})`);
+    };
     const ledger = this.ledger;
     const blocked = () => this.closing ? "closing" : this.open ? "busy"
       : this.budget.state().stopped ? "budget_exhausted" : this.turn !== granted ? "superseded_by_turn" : undefined;
@@ -1624,6 +1745,7 @@ export class HostSession {
   }
 
   close(): Promise<void> {
+    if (this.open) this.stopCause ??= "host";
     this.closing = true;
     this.shadow?.cancel();
     // Close both resource admission barriers synchronously, even if another cleanup fails.
@@ -1732,6 +1854,31 @@ export class HostSession {
     };
   }
 
+  /** Journal provenance, never an interpretation of words that look like a host envelope. */
+  hostDelivered(text: string): boolean {
+    if (!this.deliveredTextHashes) {
+      const hashes = new Set<string>();
+      let delivery = false;
+      for (const entry of this.session.sessionManager.getEntries()) {
+        if (entry.type === "custom" && (entry.customType === "corral_delivery" || entry.customType === "corral_fixture_delivery")) {
+          const data: unknown = entry.data;
+          if (data && typeof data === "object") {
+            const hash = "text_sha256" in data ? data.text_sha256 : "textSha256" in data ? data.textSha256 : undefined;
+            if (typeof hash === "string") hashes.add(hash);
+          }
+          delivery = true;
+        } else if (delivery && entry.type === "message" && entry.message.role === "user") {
+          const content = entry.message.content;
+          hashes.add(sha256Hex(typeof content === "string" ? content
+            : content.filter(part => part.type === "text").map(part => part.text).join("\n")));
+          delivery = false;
+        }
+      }
+      this.deliveredTextHashes = hashes;
+    }
+    return this.deliveredTextHashes.has(sha256Hex(text));
+  }
+
   async submit(input: SubmitInput, requestId: string): Promise<SubmitResult> {
     if (!this.bound) return { disposition: "rejected", reason: "host_not_bound" };
     if (this.closing) return { disposition: "rejected", reason: "host_closing" };
@@ -1743,6 +1890,11 @@ export class HostSession {
         requestId, idempotencyKey: input.idempotencyKey, origin: input.origin, busyPolicy: input.busyPolicy,
         text: input.text, textSha256: sha256Hex(input.text), generation: this.options.identity.generation,
       }, this.deliveryHost());
+      if (this.deliveredTextHashes) {
+        this.deliveredTextHashes.add(sha256Hex(input.text));
+        const split = holdContextOnly(input.text);
+        if (split) this.deliveredTextHashes.add(sha256Hex(split.text));
+      }
     } catch (error) {
       this.queue.observer.lifecycle({ tag: queueTag, event: "rejected", reason: `delivery_refused: ${String(error).slice(0, 256)}` });
       return { disposition: "rejected", reason: `delivery_refused: ${error instanceof Error ? error.message : error}` };
@@ -1784,9 +1936,17 @@ export class HostSession {
     });
   }
 
+  /** Cause of the latest run's stop, cleared when the next run starts. */
+  latestStopCause(): TurnStopCause | undefined { return this.stopCause; }
+
   async cancel(turn: number | undefined): Promise<Record<string, unknown>> {
+    return this.cancelRun(turn, "owner");
+  }
+
+  private async cancelRun(turn: number | undefined, cause: TurnStopCause): Promise<Record<string, unknown>> {
     if (!this.open) return { cancelled: false, reason: "idle" };
     if (turn !== undefined && turn !== this.turn) return { cancelled: false, reason: "turn_not_current", turn: this.turn };
+    this.stopCause ??= cause;
     this.cancelRequested = this.turn;
     const cancelled = this.turn;
     this.options.events.emit("cancel", { turn: cancelled });

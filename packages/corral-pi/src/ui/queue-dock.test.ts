@@ -203,6 +203,8 @@ test("a refused call leaves the rows as reported and raises a notice; disabled c
     const off = harness([item("a", "alpha")], options);
     expect(off.dock.controllable).toBeFalse();
     expect(screen(off.dock.render(100)).some(row => row.includes("×"))).toBeFalse();
+    // Without controls the header says why: editing is off in this session.
+    expect(screen(off.dock.render(100))[0]).toContain("editing is off");
     off.dock.focusLast(); off.dock.handleKey("x"); off.dock.handleKey("\r"); await settle();
     expect(await off.dock.editLast()).toBeFalse();
     expect(off.state.calls).toEqual([]);
@@ -263,8 +265,9 @@ test("every dock line is exactly the width from 30 to 140 columns and long queue
 
 test("each row names its receiver in accent, joined to the text below 84 columns; lines keep the width", () => {
   const items = [item("a", "alpha"), item("b", "bravo")];
+  const enabled: QueueControl = { enabled: () => true, edit: async () => undefined, remove: async () => false, move: async () => false };
   const host = (receiver?: () => string | undefined) => new QueueDock({
-    items: () => items, control: () => undefined, draft: () => "", setDraft: () => {}, focusComposer: () => {},
+    items: () => items, control: () => enabled, draft: () => "", setDraft: () => {}, focusComposer: () => {},
     notice: () => {}, changed: () => {}, ...(receiver ? { receiver } : {}),
   });
   const named = host(() => "the parent"), plain = host(), unset = host(() => undefined);
@@ -282,6 +285,14 @@ test("each row names its receiver in accent, joined to the text below 84 columns
   for (let width = 30; width <= 140; width++) {
     for (const line of named.render(width)) expect(visibleWidth(line)).toBe(width);
   }
+});
+
+test("items that are not the owner's collapse into one read-only row that names where they came from", () => {
+  const items: QueuedItem[] = [item("a", "alpha"), { ...item("i1", "wake", false), origin: "corral-inbox" }, { ...item("i2", "wake", false), origin: "corral-inbox" },
+    { ...item("e1", "note", false), origin: "extension" }];
+  const { dock } = harness(items);
+  const last = screen(dock.render(120)).at(-1)!;
+  expect(last).toContain("2 inbox deliveries"); expect(last).toContain("1 extension notice"); expect(last).toContain("read-only");
 });
 
 test("controls are a key cap and words from 84 columns, glyphs below; impossible moves are dim, remove in error", () => {

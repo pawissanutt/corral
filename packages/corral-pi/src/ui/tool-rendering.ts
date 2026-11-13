@@ -11,6 +11,7 @@ import type { PanelView } from "./panels.ts";
 import type { TodoLedger } from "./todo.ts";
 import { codeCellRenderers } from "./code-cell.ts";
 import { corralPresenters } from "./corral-presenter.ts";
+import { groupingFor } from "./tool-group.ts";
 import { filePresenters } from "./tool-lines-files.ts";
 import { jobPresenters } from "./tool-lines-jobs.ts";
 import { localPresenters } from "./tool-lines-local.ts";
@@ -61,14 +62,15 @@ export function presenterFor(name: string, deps: ToolRenderDeps, label?: string)
 
 /**
  * Registers the one renderer resolver of the rich UI: every tool call is drawn as a kit row, except the build cards,
- * whose registered renderers stay, and Code Mode cells, which draw a group of child rows. Code Mode's import of
- * `presenterFor` back from this module is used only at render time, so the cycle is safe.
+ * whose registered renderers stay, and Code Mode cells, which draw a group of child rows. Kit rows fold into group
+ * rows by kind (tool-group.ts); build cards and Code Mode cells never fold. Code Mode's import of `presenterFor`
+ * back from this module is used only at render time, so the cycle is safe.
  */
 export function installToolRenderers(pi: Pick<ExtensionAPI, "registerToolRenderer">, deps: ToolRenderDeps): void {
   pi.registerToolRenderer((name, next) => {
     if (OWN_CARDS[name] === true) return next();
     if (name === "codemode") return codeCellRenderers(deps);
-    return rowRenderers(presenterFor(name, deps, labelOf(next())), deps, name);
+    return rowRenderers(presenterFor(name, deps, labelOf(next())), deps, name, groupingFor(name));
   });
 }
 

@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { TodoProgress } from "../ui/todo-widget.ts";
 import type { ContinuedState, TodoLedger } from "../ui/todo.ts";
 import { requestCheckpoint, type RequestCheckpoint } from "./request-checkpoint.ts";
+import type { MarkSink, TurnWait } from "./transcript-marks.ts";
 
 export const SUMMARY_MAX_BYTES = 2048;
 const STEPS_SHOWN = 8;
@@ -122,12 +123,25 @@ export class RequestContext {
   private readonly reported = new Set<string>();
   private ui: ExtensionUIContext | undefined;
 
-  constructor(private readonly ledger: TodoLedger, private readonly persist: (message: RequestCheckpoint) => void) {}
+  constructor(private readonly ledger: TodoLedger, private readonly persist: (message: RequestCheckpoint) => void,
+    private readonly marks?: MarkSink) {}
 
   /** The current plan as the model sees it now: the ledger the widget renders. */
   summary(): string | undefined {
     const summary = summarize(this.ledger.current, this.ledger.continued);
     return summary ? summaryText(summary) : undefined;
+  }
+
+  /** Read the already-held ledger only; never refresh it to decide a presentation row. */
+  waits(): readonly TurnWait[] {
+    const current = this.ledger.current;
+    if (!current || this.ledger.unavailable) return [];
+    const active = new Set(current.phases.flatMap(phase => phase.steps.filter(step => open(step.status.state)).map(step => step.id)));
+    return (current.waits ?? []).filter(wait => active.has(wait.step)).map(wait => ({
+      kind: wait.on.kind === "owner" ? "owner" : "event",
+      id: `${current.plan ?? "plan"}:${wait.step}`,
+      label: wait.on.kind === "owner" ? `your answer: ${wait.on.question}` : wait.on.event,
+    }));
   }
 
   extend(pi: ExtensionAPI): void {
@@ -160,7 +174,8 @@ export class RequestContext {
     return due;
   }
 
-  notify(text: string): void {
+  notify(text: string, record = true): void {
+    if (record && this.marks?.add({ kind: "note", at: Date.now(), tone: "warning", text })) return;
     this.ui?.notify(text, "warning");
   }
 

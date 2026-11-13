@@ -4,6 +4,7 @@ import type {
   BoardPlan, BuildPanelState, BuildSummary, BuildUi, ChildSnapshot, ExitControl, ExitOption, ExitPhase, FleetSnapshot,
 } from "../../build/types.ts";
 import { LIVE_CHILD_STATES } from "../../build/types.ts";
+import type { ChildMark, MarkSink } from "../../host/transcript-marks.ts";
 import { PANEL_BLUE } from "../panels-view.ts";
 import { exitDialog, planDialog, questionDialog } from "./build-dialogs.ts";
 import type { PreviewState } from "./build-dialogs.ts";
@@ -31,6 +32,8 @@ export interface BuildControllerHost {
   notice(text: string, tone: "text" | "success" | "warning" | "error"): void;
   /** Appends a conversation entry; the panels post it when the parent is idle. */
   post(entry: BuildEntry<unknown>): void;
+  /** Where a child's question, the owner's answer and a steer are recorded as transcript marks; absent records nothing. */
+  readonly marks?: MarkSink;
   showBoard(): void;
   openChild(id: string): void;
   color(hue: number): string;
@@ -134,7 +137,11 @@ export class BuildController implements BuildCardSource {
     const asking = this.questions(fleet);
     for (const child of asking) {
       const key = questionKey(child.id, child.question!.askedAt);
-      if (!this.seen.has(key)) { this.seen.add(key); arrivals.push({ kind: "question", id: child.id, askedAt: child.question!.askedAt }); }
+      if (!this.seen.has(key)) {
+        this.seen.add(key);
+        arrivals.push({ kind: "question", id: child.id, askedAt: child.question!.askedAt });
+        this.mark("asked", child.id, child.question!.question, child.question!.askedAt);
+      }
     }
     const shown = this.shown;
     if (shown?.kind === "question" && !asking.some(child => child.id === shown.id && child.question!.askedAt === shown.askedAt)) {
@@ -151,8 +158,12 @@ export class BuildController implements BuildCardSource {
 
     const first = arrivals[0];
     if (first && !this.shown && !this.host.overlay() && !this.host.draft().trim()) this.show(first, true);
+    // An arrival that did not dock (a draft, an overlay or another dialog is in the way) still says so.
     for (const arrival of arrivals) {
-      if (arrival.kind === "question" && this.shown !== arrival) this.host.notice(`${arrival.id} asks a question`, "warning");
+      if (this.shown === arrival) continue;
+      if (arrival.kind === "question") this.host.notice(`${arrival.id} asks a question`, "warning");
+      else if (arrival.kind === "exit") this.host.notice("The exit choice is waiting for you", "warning");
+      else this.host.notice("A plan is waiting for you", "warning");
     }
     for (const watcher of [...this.watchers]) watcher.invalidate();
   }
@@ -260,6 +271,7 @@ export class BuildController implements BuildCardSource {
         this.answerFor = undefined;
         this.clearDraft(text);
         this.host.notice(`Answered ${id}`, "success");
+        this.mark("answered", id, text);
       } else {
         this.answerFor = undefined;
         this.host.notice(`${id} no longer waits for an answer`, "warning");
@@ -275,6 +287,7 @@ export class BuildController implements BuildCardSource {
     if (delivered) {
       this.clearDraft(text);
       this.host.notice(`Steered ${id}`, "success");
+      this.mark("steered", id, text);
     } else this.host.notice(`${id} is not running · your message is still in the composer`, "warning");
     this.host.changed();
     return true;
@@ -377,8 +390,10 @@ export class BuildController implements BuildCardSource {
       this.close();
       if (answer) {
         this.answered.add(questionKey(shown.id, shown.askedAt));
-        if (ui.fleet.answer(shown.id, answer.label)) this.host.notice(`Answered ${shown.id}`, "success");
-        else this.host.notice(`${shown.id} no longer waits for an answer`, "warning");
+        if (ui.fleet.answer(shown.id, answer.label)) {
+          this.host.notice(`Answered ${shown.id}`, "success");
+          this.mark("answered", shown.id, answer.label);
+        } else this.host.notice(`${shown.id} no longer waits for an answer`, "warning");
         this.next();
       } else if (!this.point(shown.id, true)) this.host.notice(`${shown.id} no longer waits for an answer`, "warning");
       return;
@@ -481,5 +496,10 @@ export class BuildController implements BuildCardSource {
   /** Clears the composer only when it still holds what was sent, so typing during delivery is kept. */
   private clearDraft(text: string): void {
     if (this.host.draft() === text) this.host.setDraft("");
+  }
+
+  /** Records what passed between the owner and child `child` in the transcript. */
+  private mark(act: ChildMark["act"], child: string, text: string, at = this.host.now()): void {
+    this.host.marks?.add({ kind: "child", at, act, child, text });
   }
 }

@@ -6,8 +6,15 @@ import { keyCap } from "./frame.ts";
 import { pad, PANEL_BG, PANEL_MUTED, PANEL_TEXT, plainLabel, RESET } from "./panels-view.ts";
 
 export type KeyContext = "composer" | "agents" | "agent" | "changes" | "task" | "lifecycle" | "proof" | "artifacts"
-  | "inbox" | "usage" | "image" | "sidebar" | "queue" | "dialog" | "palette" | "keys" | "pager" | "board" | "choice";
-export interface Hint { readonly id: string; readonly key: string; readonly label: string; readonly short?: string; readonly data?: string }
+  | "inbox" | "usage" | "image" | "sidebar" | "queue" | "dialog" | "palette" | "keys" | "pager" | "board" | "choice" | "questions";
+/**
+ * One footer hint: a key cap and its label. A `lead` hint has no cap: it names the view that has the keys
+ * (`keys → Changes · Tab to type`, short `→ Changes`) and a click on it replays Tab.
+ */
+export interface Hint {
+  readonly id: string; readonly key: string; readonly label: string; readonly short?: string; readonly data?: string;
+  readonly lead?: string;
+}
 export interface HintState {
   readonly context: KeyContext;
   readonly mode: { readonly taskBound: boolean; readonly answer: boolean; readonly lifecycle: boolean };
@@ -15,6 +22,10 @@ export interface HintState {
   readonly chat?: boolean;
   readonly streaming: boolean;
   readonly queue: { readonly items: number; readonly editable: number; readonly control: boolean };
+  /** Owner questions waiting in the dock; their card takes the queue's focus key when the queue has nothing to edit. */
+  readonly questions?: number;
+  /** The open view's name while it has the keys (`Changes`, `Task › Events`): the footer leads with it. */
+  readonly lead?: string;
   /** AgentsAction ids offered for the selected row; in `board`, the BoardAction ids offered. */
   readonly selection?: readonly string[];
   readonly authors?: boolean; readonly legend?: boolean; readonly history?: boolean; readonly timelineSource?: "task" | "host";
@@ -22,6 +33,8 @@ export interface HintState {
   readonly build?: {
     readonly target?: { readonly id: string; readonly answer: boolean }; readonly steerable: boolean;
     readonly proposed: boolean; readonly choices: number;
+    /** The docked dialog is the exit choice: Changes is one key away. */
+    readonly exit?: boolean;
   };
 }
 export interface FooterHit { readonly from: number; readonly to: number; readonly hint: Hint }
@@ -75,7 +88,9 @@ export function keyData(binding: string): string | undefined {
 const PI_DEFAULTS: Readonly<Record<string, string>> = {
   "tui.input.submit": "enter", "app.interrupt": "escape", "app.message.followUp": "alt+enter",
   "app.message.dequeue": "alt+up", "app.tools.expand": "ctrl+o", "app.model.select": "ctrl+l", "app.thinking.cycle": "shift+tab",
-  "app.thinking.toggle": "ctrl+t",
+  "app.thinking.toggle": "ctrl+t", "app.model.cycleForward": "ctrl+p", "app.model.cycleBackward": "shift+ctrl+p",
+  "app.clear": "ctrl+c", "app.exit": "ctrl+d", "tui.altScreen.pageUp": "pageUp", "tui.altScreen.pageDown": "pageDown",
+  "tui.altScreen.top": "ctrl+home", "tui.altScreen.bottom": "ctrl+end",
 };
 /** First configured key via getKeybindings(); undefined when the user unbound it. */
 export function piKey(id: string): string | undefined {
@@ -86,7 +101,7 @@ export function piKey(id: string): string | undefined {
 // Bindings scoped to Pi's own selectors, where panel keys are inert, never collide with a panel key.
 const SCOPED = ["app.models.", "app.tree.", "tui.select."];
 /** `key` unless the user bound it to an editor or app action. */
-function freeKey(key: KeyId): KeyId | undefined {
+export function freeKey(key: KeyId): KeyId | undefined {
   for (const [id, bound] of Object.entries(getKeybindings().getResolvedBindings())) {
     if (SCOPED.some(prefix => id.startsWith(prefix))) continue;
     if ((Array.isArray(bound) ? bound : bound ? [bound] : []).some(item => item.toLowerCase() === key)) return undefined;
@@ -101,6 +116,14 @@ export function queueFocusKey(): KeyId | undefined {
 export function targetKey(): KeyId | undefined {
   return freeKey("alt+t");
 }
+const VIEW_KEYS: readonly KeyId[] = ["alt+1", "alt+2", "alt+3", "alt+4", "alt+5", "alt+6"];
+/** Alt+1 to Alt+6 open the main views in tab order, each unless the user bound it to an editor or app action. */
+export function viewKey(index: number): KeyId | undefined {
+  const key = VIEW_KEYS[index];
+  return key === undefined ? undefined : freeKey(key);
+}
+/** The key that filters or searches the focused view (Changes paths, a job's output, the Inbox): `/` stays the composer's. */
+export const FILTER_KEY: KeyId = "f3";
 
 function hint(id: string, binding: string, label: string, short?: string): Hint {
   const data = keyData(binding);
@@ -125,7 +148,7 @@ const AGENT_HINTS: Readonly<Record<string, Hint>> = {
 };
 const JOB_HINTS: Readonly<Record<string, Hint>> = {
   output: ENTER("output"), stop: letter("x", "stop"), peek: letter("p", "peek"), follow: letter("f", "follow"),
-  search: letter("/", "search"), background: letter("b", "background", "bg"),
+  search: hint("search", FILTER_KEY, "search"), background: letter("b", "background", "bg"),
 };
 const AGENT_ORDER = ["open", "answer", "transcript", "steer", "cancel", "model"];
 const JOB_ORDER = ["output", "stop", "peek", "follow", "search", "background"];
@@ -156,19 +179,35 @@ function composerHints(state: HintState): (Hint | undefined)[] {
 function boardHints(state: HintState): (Hint | false | undefined)[] {
   // Without the view's offered actions, a task is assumed selected and the board reachable. Task keys need a task.
   const offered = new Set(state.selection ?? ["details", "refresh", ...(state.build?.proposed ? ["review"] : [])]);
-  return [offered.has("details") && UP_DOWN("task", "task"), offered.has("review") && letter("p", "review plan", "plan"), offered.has("details") && ENTER("details"),
-    offered.has("plan") && letter("n", "plan tasks", "plan"), offered.has("refresh") && letter("r", "refresh"), ESC("chat")];
+  return [offered.has("details") && UP_DOWN("task", "task"), ...escAfterFirst([offered.has("review") && letter("p", "review plan", "plan"),
+    offered.has("details") && ENTER("details"), offered.has("plan") && letter("n", "plan tasks", "plan"), offered.has("refresh") && letter("r", "refresh")], "chat")];
+}
+/** The view's actions with Esc right after the first one offered, so a narrow footer never drops the way out. */
+function escAfterFirst(actions: readonly (Hint | false | undefined)[], back: string): (Hint | false | undefined)[] {
+  const first = actions.findIndex(item => !!item);
+  return first < 0 ? [ESC(back)] : [...actions.slice(0, first + 1), ESC(back), ...actions.slice(first + 1)];
 }
 function queueHints(state: HintState): (Hint | undefined)[] {
-  // Without an editable item and queue control there is nothing the queue keys could do.
-  if (!state.queue.control || state.queue.editable < 1) return [];
   const focus = queueFocusKey();
+  // Without an editable item and queue control there is nothing the queue keys could do; waiting owner questions take the focus key.
+  if (!state.queue.control || state.queue.editable < 1) return [undefined, focus && (state.questions ?? 0) > 0 ? hint("queue.focus", focus, "questions") : undefined];
   return [piHint("app.message.dequeue", "dequeue", "edit queued", "edit"), focus ? hint("queue.focus", focus, "queue") : undefined];
 }
+/** `keys → Changes · Tab to type`, short `→ Changes`: who has the keys and how to type; a click replays Tab. */
+function leadHint(view: string): Hint {
+  const name = plainLabel(view);
+  return { id: "lead", key: "", label: `keys → ${name} · Tab to type`, short: `→ ${name}`, data: "\t", lead: name };
+}
 
-/** The contextual hints of section 5.4, in priority order, without F2 and F1. */
+/** The contextual hints of section 5.4, in priority order, without F2 and F1; a focused view's lead comes first. */
 export function contextHints(state: HintState): Hint[] {
+  const hints = viewHints(state);
+  return state.lead === undefined ? hints : [leadHint(state.lead), ...hints];
+}
+function viewHints(state: HintState): Hint[] {
   const pick = (...hints: (Hint | false | undefined)[]) => hints.filter((h): h is Hint => !!h);
+  const legend = letter("?", state.legend ? "hide" : "legend");
+  const filter = hint("filter", FILTER_KEY, "filter");
   switch (state.context) {
     case "composer":
       return pick(...composerHints(state));
@@ -185,28 +224,33 @@ export function contextHints(state: HintState): Hint[] {
     }
     case "changes":
       return pick(J_K("file", "file"), pair("hunk", "n/p", "n", "hunk"), letter("a", "ask"), state.authors && letter("f", "by agent"),
-        letter("/", "filter"), letter("c", "compare"), letter("o", "project"), letter("r", "refresh"), ESC("chat"));
+        filter, letter("c", "compare"), letter("o", "project"), letter("r", "refresh"), ESC("chat"));
     case "task":
       return pick(UP_DOWN("scroll", "scroll"), letter("r", "refresh"), state.mode.lifecycle && letter("g", "graph"),
         state.mode.lifecycle && letter("l", "events"), ESC("chat"));
     case "lifecycle":
-      return pick(J_K("select", "select"), letter("r", "reconcile"),
-        state.timelineSource === "task" && letter("h", "host"), state.timelineSource === "host" && letter("c", "canonical"), ESC("task"));
+      return pick(J_K("select", "select"), ESC("task"), letter("r", "reconcile"),
+        state.timelineSource === "task" && letter("h", "host"), state.timelineSource === "host" && letter("c", "canonical"), legend);
     case "proof":
-      return pick(J_K("criterion", "criterion"), ENTER("open"), letter("a", "artifacts"), letter("?", state.legend ? "hide" : "legend"),
-        letter("r", "refresh"), ESC("chat"));
+      return pick(J_K("criterion", "criterion"), ENTER("open"), letter("a", "artifacts"), legend, letter("r", "refresh"), ESC("chat"));
     case "artifacts":
-      return pick(J_K("select", "select"), ENTER("open"), letter("m", "mark"), letter("c", "compare"), letter("o", "browse"),
-        letter("x", "export"), letter("r", "refresh"), ESC("proof"));
+      return pick(J_K("select", "select"), ENTER("open"), ESC("proof"), letter("m", "mark"), letter("c", "compare"), letter("o", "browse"),
+        letter("x", "export"), legend, letter("r", "refresh"));
     case "inbox":
       return pick(J_K("select", "select"), ENTER("inspect"), state.mode.answer && letter("a", "answer flow", "answer"),
-        letter("h", state.history ? "pending" : "history"), letter("/", "filter"), letter("r", "reread"), letter("?", "legend"), ESC("chat"));
+        letter("h", state.history ? "pending" : "history"), filter, letter("r", "reread"), letter("?", "legend"), ESC("chat"));
     case "usage":
-      return pick(UP_DOWN("scroll", "scroll"), letter("c", "chart"), letter("r", "refresh"), ESC("chat"));
+      return pick(UP_DOWN("scroll", "scroll"), letter("c", "chart"), legend, letter("r", "refresh"), ESC("chat"));
     case "sidebar":
       return pick(pair("tab", "←→", "\x1b[C", "tab"), UP_DOWN("select", "select"), ENTER("open"), ESC("composer"));
     case "queue":
       return pick(UP_DOWN("select", "select"), ENTER("edit"), pair("move", "Shift+↑↓", "\x1b[1;2B", "move"), letter("x", "remove"), ESC("composer"));
+    case "questions": {
+      // Digits open a question directly; like the choice's pick, the hint names the range and replays nothing.
+      const waiting = Math.min(3, state.questions ?? 0);
+      return pick(UP_DOWN("select", "select"), ENTER("open"), ESC("composer"),
+        waiting > 0 && { id: "pick", key: waiting > 1 ? `1-${waiting}` : "1", label: "open" });
+    }
     case "dialog":
       return pick(UP_DOWN("select", "select"), ENTER("choose"), ESC("cancel"));
     case "palette":
@@ -220,61 +264,74 @@ export function contextHints(state: HintState): Hint[] {
     case "board":
       return pick(...boardHints(state));
     case "choice": {
-      // Digits pick directly; the hint names the range and replays nothing, so a click never picks blindly.
+      // Choose, then the way out, so a narrow footer never drops Esc. Digits pick directly; the hint names the
+      // range and replays nothing, so a click never picks blindly.
       const choices = state.build?.choices ?? 0;
-      return pick(UP_DOWN("select", "select"), ENTER("choose"),
-        choices > 0 && { id: "pick", key: choices > 1 ? `1-${Math.min(9, choices)}` : "1", label: "pick" }, ESC("not now"));
+      return pick(ENTER("choose"), ESC("not now"), UP_DOWN("select", "select"), state.build?.exit && hint("f7", "f7", "changes"),
+        choices > 0 && { id: "pick", key: choices > 1 ? `1-${Math.min(9, choices)}` : "1", label: "pick" });
     }
   }
 }
 
-/** Dialogs, the docked choice dialog, the palette, the keys list and pagers own their keys: their footer has no F2 or F1. */
+/** Dialogs, the palette, the keys list and pagers own their keys: their footer has no F2 or F1. */
 export function footerBase(context: KeyContext): boolean {
-  return context !== "dialog" && context !== "palette" && context !== "keys" && context !== "pager" && context !== "choice";
+  return context !== "dialog" && context !== "palette" && context !== "keys" && context !== "pager";
 }
 
 function hintWidth(item: Hint, short: boolean): number {
+  // The lead has no cap, and its own two forms (full and short) are chosen apart from the other labels.
+  if (item.lead !== undefined) return visibleWidth(item.label);
   const label = short ? item.short ?? item.label : item.label;
   return visibleWidth(item.key) + 2 + (label ? 1 + visibleWidth(label) : 0);
 }
+/** Hints that are never dropped for F2: the first one, and the way out (Esc, or stop) when it is among the first three. */
+function essentials(hints: readonly Hint[]): number {
+  const out = hints.slice(0, 3).findIndex(item => item.id === "escape" || item.id === "interrupt");
+  return Math.min(hints.length, out < 0 ? 1 : out + 1);
+}
 
 /**
- * The footer row: contextual hints, then `F2 actions` (wide and mid) and `F1` when `base`. As many contextual
- * hints as fit the row show, in priority order, at any width; F2 goes before any of them, and short labels are
- * used when they let more hints show. F1 reads `keys` when nothing was dropped and `more` when something was;
- * at worst it is a bare cap.
+ * The footer row: a focused view's lead, the contextual hints, then `F2 actions` and `F1` when `base`. Every
+ * candidate row that fits is scored, in this order: the essential hints (the first, and Esc or stop when it comes
+ * right after the primary action) show; the lead shows; F2 shows; the lead reads in full (`Tab to type`); as many
+ * contextual hints as possible show, in priority order; full labels rather than short ones. F1 reads `keys` when
+ * nothing was dropped and `more` when something was; at worst it is a bare cap.
  */
 export function footerRow(hints: readonly Hint[], tier: ChromeTier, width: number, base: boolean):
   { readonly line: string; readonly hits: readonly FooterHit[] } {
-  const roomy = tier === "wide" || tier === "mid";
   const gap = tier === "tiny" ? 1 : 2;
   const room = Math.max(0, width - 1);
-  const f2 = base && roomy ? hint("f2", "f2", "actions") : undefined;
+  const lead = hints[0]?.lead !== undefined ? hints[0] : undefined;
+  const rest = lead ? hints.slice(1) : hints, needed = essentials(rest);
+  const leads: (Hint | undefined)[] = lead ? [lead, { ...lead, label: lead.short ?? lead.label }, undefined] : [undefined];
+  const f2 = base ? hint("f2", "f2", "actions") : undefined;
   const f1 = (label: string): Hint[] => base ? [hint("f1", "f1", label)] : [];
   const measure = (shown: readonly Hint[], short: boolean) =>
     shown.reduce((sum, item) => sum + hintWidth(item, short), 0) + gap * Math.max(0, shown.length - 1);
-  /** The most contextual hints that fit with `tail` after them. */
-  const most = (short: boolean, tail: readonly Hint[]) => {
-    let count = hints.length;
-    while (count > 0 && measure([...hints.slice(0, count), ...tail], short) > room) count--;
-    return count;
+  const better = (score: readonly number[], than: readonly number[]) => {
+    const at = score.findIndex((value, index) => value !== than[index]);
+    return at >= 0 && score[at]! > than[at]!;
   };
-  let short = false;
-  let shown: Hint[];
-  if (measure([...hints, ...(f2 ? [f2] : []), ...f1("keys")], false) <= room) shown = [...hints, ...(f2 ? [f2] : []), ...f1("keys")];
-  else {
-    const full = most(false, f1("more")), brief = most(true, f1("more"));
-    short = brief > full;
-    const count = short ? brief : full;
-    shown = [...hints.slice(0, count), ...f1(count === hints.length && !f2 ? "keys" : "more")];
-    if (measure(shown, short) > room) shown = f1("");
+  let best: { readonly shown: Hint[]; readonly short: boolean; readonly score: readonly number[] } | undefined;
+  for (const short of [false, true]) for (const [form, shownLead] of leads.entries()) for (const withF2 of f2 ? [true, false] : [false]) {
+    // Most hints first: the first that fits is the best row for this lead, F2 and label length.
+    for (let count = rest.length; count >= 0; count--) {
+      const shown = [...(shownLead ? [shownLead] : []), ...rest.slice(0, count), ...(withF2 && f2 ? [f2] : []),
+        ...f1(count === rest.length && (withF2 || !f2) ? "keys" : "more")];
+      if (measure(shown, short) > room) continue;
+      const score = [count >= needed ? 1 : 0, shownLead ? 1 : 0, withF2 ? 1 : 0, form === 0 ? 1 : 0, count, short ? 0 : 1];
+      if (!best || better(score, best.score)) best = { shown, short, score };
+      break;
+    }
   }
+  const short = best?.short ?? false, shown = best?.shown ?? f1("");
   const hits: FooterHit[] = [];
   const parts: string[] = [];
   let x = 1;
   for (const item of shown) {
-    const label = short ? item.short ?? item.label : item.label;
-    parts.push(keyCap(item.key) + (label ? " " + PANEL_MUTED + label : ""));
+    const label = short && item.lead === undefined ? item.short ?? item.label : item.label;
+    parts.push(item.lead !== undefined ? PANEL_MUTED + label.replace(item.lead, PANEL_TEXT + item.lead + PANEL_MUTED)
+      : keyCap(item.key) + (label ? " " + PANEL_MUTED + label : ""));
     const end = x + hintWidth(item, short);
     if (x < width) hits.push({ from: x, to: Math.min(width, end), hint: item });
     x = end + gap;
@@ -286,10 +343,12 @@ export function footerRow(hints: readonly Hint[], tier: ChromeTier, width: numbe
 /**
  * The F1 keys list for this mode: every group holds only keys the mode offers. Rows with data run on Enter.
  * `build` adds Board and the message receiver, names each agent's own keys, and has no Task, Proof or Inbox.
+ * `sidebarKey` is the chosen sidebar toggle; `questionsKey` the owner-question key when it is free.
  */
 export function keyGroups(mode: {
   readonly taskBound: boolean; readonly answer: boolean; readonly jobs: boolean;
   readonly queueControl: boolean; readonly lifecycle: boolean; readonly build?: boolean;
+  readonly sidebarKey?: KeyId; readonly questionsKey?: KeyId;
 }): KeyGroup[] {
   const row = (binding: string, label: string): KeyRow => {
     const data = keyData(binding);
@@ -299,21 +358,33 @@ export function keyGroups(mode: {
     const key = piKey(id);
     return key ? row(key, label) : undefined;
   };
+  // A Pi key named for reference only: Enter in the list never replays it (Ctrl+C would clear the draft).
+  const piInfo = (id: string, label: string): KeyRow | undefined => {
+    const key = piKey(id);
+    return key ? info(keyLabel(key), label) : undefined;
+  };
   const info = (key: string, label: string): KeyRow => ({ key, label });
   const rows = (...items: (KeyRow | false | undefined)[]) => items.filter((item): item is KeyRow => !!item);
   const focus = mode.queueControl ? queueFocusKey() : undefined;
   const build = mode.build === true, target = build ? targetKey() : undefined;
   const taskBound = mode.taskBound && !build;
+  // The views in tab order (header.ts mainTabs): the F-key, and Alt+n when the terminal and the user leave it free.
+  const views = [
+    taskBound && { key: "f5", label: "Task: the bound task, its plan and criteria" },
+    { key: "f9", label: "Chat: the conversation" },
+    { key: "f8", label: build ? "Agents: every agent, focus the list" : mode.jobs ? "Agents: helper calls and jobs, focus the list" : "Agents: helper calls, focus the list" },
+    { key: "f7", label: build ? "Changes: files and diffs, filtered by agent" : "Changes: files and diffs in the chosen comparison" },
+    taskBound && { key: "f10", label: "Proof: criteria, gate and review" },
+    build && { key: "f10", label: "Board: tasks this session filed" },
+    !build && { key: "f11", label: "Inbox: decisions waiting for the owner" },
+  ].filter((item): item is { key: string; label: string } => !!item);
+  const rail = mode.sidebarKey ?? "ctrl+b", filter = keyLabel(FILTER_KEY);
+  const [pageUp, pageDown, top, bottom] = ["tui.altScreen.pageUp", "tui.altScreen.pageDown", "tui.altScreen.top", "tui.altScreen.bottom"].map(piKey);
   const groups: KeyGroup[] = [
-    { title: "Views", rows: rows(
-      taskBound && row("f5", "Task: the bound task, its plan and criteria"),
-      row("f9", "Chat: the conversation"),
-      row("f8", build ? "Agents: every agent, focus the list" : mode.jobs ? "Agents: helper calls and jobs, focus the list" : "Agents: helper calls, focus the list"),
-      row("f7", build ? "Changes: files and diffs, filtered by agent" : "Changes: files and diffs in the chosen comparison"),
-      taskBound && row("f10", "Proof: criteria, gate and review"),
-      build && row("f10", "Board: tasks this session filed"),
-      !build && row("f11", "Inbox: decisions waiting for the owner"),
-    ) },
+    { title: "Views", rows: views.map((view, index) => {
+      const alt = viewKey(index), base = row(view.key, view.label);
+      return alt ? { ...base, key: `${base.key}/${keyLabel(alt)}` } : base;
+    }) },
     { title: "Message", rows: rows(
       pi("tui.input.submit", build ? "Send; steer while something runs; steers the chosen agent when one receives" : "Send; steer while the agent works"),
       pi("app.message.followUp", build ? "Queue a follow-up for the parent" : "Queue as a follow-up"),
@@ -321,9 +392,17 @@ export function keyGroups(mode: {
       pi("app.interrupt", "Stop the running turn"),
       mode.queueControl && pi("app.message.dequeue", "Pull the last queued input back to edit"),
       pi("app.model.select", "Choose the model"),
+      pi("app.model.cycleForward", "Next model in the cycle"),
+      pi("app.model.cycleBackward", "Previous model in the cycle"),
       pi("app.thinking.cycle", "Cycle the effort"),
       pi("app.thinking.toggle", "Show or hide thinking"),
       pi("app.tools.expand", "Expand or collapse tool output"),
+    ) },
+    { title: "Scroll", rows: rows(
+      pageUp !== undefined && pageDown !== undefined && info(`${keyLabel(pageUp)}/${keyLabel(pageDown)}`, "Scroll Chat or the open view a page"),
+      top !== undefined && bottom !== undefined && info(`${keyLabel(top)}/${keyLabel(bottom)}`, "Chat: first message or latest message"),
+      info("End", "Chat: latest message, when the draft is empty"),
+      info("Wheel", "Scroll whatever is under the pointer"),
     ) },
     { title: "Agents", rows: rows(
       info("↑↓", "Select an agent" + (mode.jobs ? " or job" : "")),
@@ -336,7 +415,7 @@ export function keyGroups(mode: {
       !build && mode.jobs && info("x", "Stop the selected job (asks first)"),
       mode.jobs && info("p", "Peek at the job's current logs"),
       mode.jobs && info("f", "Follow the job's output on or off"),
-      mode.jobs && info("/", "Search the job's output"),
+      mode.jobs && info(filter, "Search the job's output"),
       mode.jobs && info("b", "Move the job to the background"),
       info("esc", "Back to Chat; from a conversation, back to Agents"),
     ) },
@@ -344,7 +423,7 @@ export function keyGroups(mode: {
       info("j/k", "Next or previous file"),
       info("n/p", "Next or previous hunk"),
       info("a", "Ask about the hunk (added to the draft, not sent)"),
-      info("/", "Filter paths"),
+      info(filter, "Filter paths"),
       info("c", "Choose the comparison"),
       info("o", "Choose the project or worktree"),
       build && info("f", "Filter by agent"),
@@ -367,12 +446,13 @@ export function keyGroups(mode: {
       mode.lifecycle && info("g", "Lifecycle graph"),
       mode.lifecycle && info("l", "Lifecycle events"),
       mode.lifecycle && info("h/c", "Events: host log or canonical record"),
+      mode.lifecycle && info("?", "Graph and events: show or hide the legend"),
     ) });
     groups.push({ title: "Proof", rows: rows(
       info("j/k", "Select a criterion"),
       info("⏎", "Open its detail"),
       info("a", "Artifacts"),
-      info("?", "Show or hide the legend"),
+      info("?", "Show or hide the legend, here and in Artifacts"),
       info("r", "Refresh"),
     ) });
   }
@@ -382,16 +462,17 @@ export function keyGroups(mode: {
       info("⏎", "Inspect it"),
       mode.answer && info("a", "Answer flow instructions (nothing is sent)"),
       info("h", "History or pending"),
-      info("/", "Filter"),
+      info(filter, "Filter"),
       info("r", "Reread"),
       info("?", "Legend"),
     ) });
   }
   groups.push({ title: "Sidebar", rows: rows(
-    row("ctrl+b", "Collapse to one row, or open it"),
+    row(rail, "Collapse to one row, or open it"),
     row("f6", "Focus the sidebar; again for the next tab"),
     info("←→", "Switch tab: Context, Files, Plan"),
     info("⏎", "Open the selected item"),
+    info("Alt+,/Alt+.", "Narrow or widen the rail (from 105 columns)"),
     info("esc", "Back to the composer"),
   ) });
   if (mode.queueControl) {
@@ -403,9 +484,17 @@ export function keyGroups(mode: {
       info("esc", "Back to the composer"),
     ) });
   }
+  groups.push({ title: "Exit", rows: rows(
+    build && info("/finish", "Choose what happens to this build branch"),
+    info("/questions", "Answer owner questions the agent deferred"),
+    piInfo("app.clear", "Clear the draft; twice in a row quits"),
+    piInfo("app.exit", "Quit, when the draft is empty"),
+  ) });
   groups.push({ title: "Anywhere", rows: rows(
     row("f2", "Search actions; unavailable ones say why"),
     info("F1", "This list; F1 or esc closes it"),
+    info("Tab", "From a view: back to the composer to type"),
+    mode.questionsKey && row(mode.questionsKey, "Answer waiting owner questions"),
     info("esc", "Close an expanded image; a click on it closes it too"),
   ) });
   return groups.filter(group => group.rows.length > 0);

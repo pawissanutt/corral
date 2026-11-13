@@ -84,7 +84,7 @@ test("the back target covers the rendered ‹ Agents at every width, and a click
   press(range.to - 1, 0); expect(back).toBe(2);
 });
 
-test("a child conversation shows the brief once, the steers after the replies, and its ▲ question line answers", () => {
+test("a child conversation shows the brief once, untimed steers after the replies, and its ▲ question line answers", () => {
   const child: ChildSnapshot = { id: "picker-ui", call: "call-1", title: "Picker", brief: "BRIEF_ONCE_VISIBLE", owns: ["src/picker/"], after: [],
     profile: "default", model: "anthropic/model-a", state: "needs", createdAt: NOW - 9000, startedAt: NOW - 8000, edits: [],
     usage: { input: 1, output: 1, turns: 1 }, steers: ["STEER_ONE_VISIBLE", "STEER_TWO_VISIBLE"], pulse: [], history: "rn",
@@ -123,4 +123,50 @@ test("a child conversation shows the brief once, the steers after the replies, a
   expect(answered).toEqual([]);
   press(ask);
   expect(answered).toEqual([row.key]);
+});
+
+test("steers sit where they were sent, an untimed steer comes last, and the retention note sits under the brief", () => {
+  const child: ChildSnapshot = { id: "picker-ui", call: "call-1", title: "Picker", brief: "BRIEF_VISIBLE", owns: ["src/picker/"], after: [],
+    profile: "default", model: "anthropic/model-a", state: "running", createdAt: NOW - 9000, startedAt: NOW - 8000, edits: [],
+    usage: { input: 1, output: 1, turns: 1 }, steers: ["TIMED_STEER", "UNTIMED_STEER"], steeredAt: [NOW - 5000], pulse: [], history: "rr", dropped: 12,
+    messages: [{ id: "a", kind: "assistant", text: "EARLY_REPLY", stopReason: "stop", at: NOW - 7000 },
+      { id: "b", kind: "assistant", text: "LATE_REPLY", stopReason: "stop", at: NOW - 3000 }] };
+  const row = childRow(child, { children: [child], maxParallel: 3, startedAt: NOW - 9000 }, NOW);
+  const rows = conversation(() => row, new HelperChat(() => undefined, "/tmp")).scroll.render(80).map(line => stripTerminalSequences(line));
+  const at = (needle: string) => rows.findIndex(line => line.includes(needle));
+  const note = rows.findIndex(line => line.trim().startsWith("! 12 earlier messages were dropped"));
+  expect(note).toBe(at("Owns: src/picker/") + 2);
+  expect(at("EARLY_REPLY")).toBeGreaterThan(note);
+  expect(at("TIMED_STEER")).toBeGreaterThan(at("EARLY_REPLY"));
+  expect(at("LATE_REPLY")).toBeGreaterThan(at("TIMED_STEER"));
+  expect(at("UNTIMED_STEER")).toBeGreaterThan(at("LATE_REPLY"));
+  expect(rows.filter(line => line.includes("dropped by the retention limit"))).toHaveLength(1);
+});
+
+test("a running agent's page follows its end until the owner scrolls up; a finished one opens at the top", () => {
+  const replies = (count: number) => Array.from({ length: count }, (_, index) => ({ id: String(index), kind: "assistant" as const,
+    text: `Reply MARK${index}X.\n\n` + "More words here.\n\n".repeat(3), stopReason: "stop" as const }));
+  let row = rowOf(helper({ messages: replies(6) }));
+  const view = conversation(() => row, new HelperChat(() => undefined, "/tmp"));
+  const shown = () => stripTerminalSequences(renderLayoutFrame(view.scroll, 80, 10, () => {}).lines.join("\n"));
+  expect(shown()).toContain("MARK5X");
+  expect(view.following).toBeTrue();
+  row = rowOf(helper({ messages: replies(7) }));
+  expect(shown()).toContain("MARK6X");
+  expect(view.following).toBeTrue();
+
+  view.scroll.scrollBy(-8);
+  const top = view.scroll.scrollTop;
+  row = rowOf(helper({ messages: replies(8) }));
+  expect(shown()).not.toContain("MARK7X");
+  expect(view.scroll.scrollTop).toBe(top);
+  expect(view.following).toBeFalse();
+  view.scroll.scrollBy(1000);
+  expect(view.following).toBeTrue();
+  expect(shown()).toContain("MARK7X");
+
+  row = rowOf(helper({ phase: "completed", endedAt: NOW - 1000, messages: replies(8) }));
+  view.restore(row.key);
+  expect(shown()).toContain("Question");
+  expect(view.scroll.scrollTop).toBe(0);
 });

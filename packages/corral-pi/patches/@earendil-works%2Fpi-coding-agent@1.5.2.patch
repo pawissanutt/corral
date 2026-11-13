@@ -1,3 +1,9 @@
+diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-2b768fdd05a562a5 b/.bun-tag-2b768fdd05a562a5
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-54d2205a3614960d b/.bun-tag-54d2205a3614960d
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-a623d2c712400c20 b/.bun-tag-a623d2c712400c20
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
@@ -296,6 +302,19 @@ index d67feeb70a00ff60a93583bf4ffb79a3d780fa9b..9550f3fb8400bf7dc1844936d8a29f16
          return { steering, followUp };
      }
      /** Number of pending messages (includes both steering and follow-up) */
+diff --git a/dist/core/extensions/types.d.ts b/dist/core/extensions/types.d.ts
+index f527dee4c02869611b6fbf1871bc82841b14125b..d836440d5d892206e454403f47f544e032c4b237 100644
+--- a/dist/core/extensions/types.d.ts
++++ b/dist/core/extensions/types.d.ts
+@@ -381,6 +381,8 @@ export interface ToolRenderContext<TState = any, TArgs = any> extends Keybinding
+     executionStarted: boolean;
+     /** Whether the tool call arguments are complete. */
+     argsComplete: boolean;
++    /** The call never ran: its turn was stopped before it started (set by `ToolExecutionComponent.markNotRun`). */
++    notRun?: boolean;
+     /** Whether the tool result is partial/streaming. */
+     isPartial: boolean;
+     /** Whether the result view is expanded. */
 diff --git a/dist/core/session-manager.d.ts b/dist/core/session-manager.d.ts
 index c042aaf3f7aff9aa8dca36a83a6d96cdbbfc949e..53cdbd4fbcc1cdeb8337d98b20eda1e7cda8212e 100644
 --- a/dist/core/session-manager.d.ts
@@ -362,10 +381,10 @@ index 7ee05014e13c6434040bfdd7b39b455a6731a7d6..70ec5185af15a96c14395a1623a23573
      }
      /** Append a session info entry (e.g., display name). Returns entry id. */
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index bb8acdb1b034f89e8fcb86a5933fa513d49a8ef3..11347c908cd30def8bd51b2206dc99ebf74344f1 100644
+index bb8acdb1b034f89e8fcb86a5933fa513d49a8ef3..998f83a42bc3adcf2bc3b06f36f4fbbcd07cd322 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
-@@ -1,6 +1,8 @@
+@@ -1,8 +1,11 @@
 +export { withBuiltInRenderers } from "./core/tools/renderers/index.ts";
 +export type { InteractiveChatPresentation } from "./modes/interactive/interactive-mode.ts";
  export { type Args, parseArgs } from "./cli/args.ts";
@@ -374,8 +393,11 @@ index bb8acdb1b034f89e8fcb86a5933fa513d49a8ef3..11347c908cd30def8bd51b2206dc99eb
 +export { AgentSession, type AgentSessionConfig, type AgentSessionEvent, type AgentSessionEventListener, type HostQueueObserver, type ModelCycleResult, type ParsedSkillBlock, type PromptOptions, parseSkillBlock, type SessionStats, } from "./core/agent-session.ts";
  export { readStoredCredential } from "./core/auth-storage.ts";
  export type { CacheWarmingDecision, CacheWarmingStatus } from "./core/cache-warmer.ts";
++export { type CacheMiss, detectCacheMiss, type ModelPriceSource } from "./core/cache-stats.ts";
  export { type BranchPreparation, type BranchSummaryResult, type CollectEntriesResult, type CompactionResult, type CutPointResult, calculateContextTokens, collectEntriesForBranchSummary, compact, DEFAULT_COMPACTION_SETTINGS, estimateTokens, type FileOperations, findCutPoint, findTurnStartIndex, type GenerateBranchSummaryOptions, generateBranchSummary, generateSummary, generateSummaryWithUsage, getLastAssistantUsage, prepareBranchEntries, serializeConversation, shouldCompact, } from "./core/compaction/index.ts";
-@@ -35,6 +37,7 @@ export { createToolSearchExtension } from "./extensions/tool-search/index.ts";
+ export { createEventBus, type EventBus, type EventBusController } from "./core/event-bus.ts";
+ export type { AfterProviderResponseEvent, AgentActivityOutcome, AgentBeforeSettleEvent, AgentBeforeSettleEventResult, AgentEndEvent, AgentSettledEvent, AgentStartEvent, AgentToolResult, AgentToolUpdateCallback, AppKeybinding, AutocompleteProviderFactory, BashToolCallEvent, BeforeAgentStartCustomEvent, BeforeAgentStartEvent, BeforeAgentStartEventResult, BeforeAgentStartUserEvent, BeforeProviderHeadersEvent, BeforeProviderRequestEvent, BeforeProviderRequestEventResult, BoundaryContextPreview, BoundaryResult, BoundaryState, BuildSystemPromptOptions, CacheWarmingDecisionEvent, CacheWarmingDecisionEventResult, CompactionEntryDraft, CompactOptions, ContextEditEntryDraft, ContextEvent, ContextEventResult, ContextUsage, ContextWithSystemEvent, CustomEntryDraft, CustomMessageEntryDraft, CustomToolCallEvent, EditToolCallEvent, EntryRenderer, EntryRenderOptions, ExecOptions, ExecResult, ExecuteToolOptions, Extension, ExtensionActions, ExtensionAPI, ExtensionCommandContext, ExtensionCommandContextActions, ExtensionContext, ExtensionContextActions, ExtensionError, ExtensionEvent, ExtensionFactory, ExtensionFlag, ExtensionHandler, ExtensionRuntime, ExtensionShortcut, ExtensionToolContext, ExtensionUIContext, ExtensionUIDialogOptions, ExtensionVirtualModel, ExtensionWidgetOptions, FindToolCallEvent, GrepToolCallEvent, InlineExtension, InputEvent, InputEventResult, InputSource, KeybindingHints, KeybindingsManager, LoadExtensionsResult, LsToolCallEvent, MarkdownMessageType, MarkdownTransformContext, MarkdownTransformer, MarkdownTransformerOptions, MarkdownTransformerRegistration, McpServersChangeEvent, MessageEndEvent, MessageEndEventResult, MessageRenderer, MessageRenderOptions, MessageStartEvent, MessageUpdateEvent, ModelSelectEvent, ModelSelectSource, NormalizedBuildSystemPromptOptions, PowerShellToolCallEvent, ProjectTrustContext, ProjectTrustEvent, ProjectTrustEventDecision, ProjectTrustEventResult, ProjectTrustHandler, ProviderConfig, ProviderModelConfig, ProviderStreamEvent, ReadToolCallEvent, RegisteredCommand, RegisteredTool, ResolvedCommand, ResourcesDiscoverEvent, ResourcesDiscoverResult, SessionBeforeCompactEvent, SessionBeforeCompactResult, SessionBeforeForkEvent, SessionBeforeForkResult, SessionBeforeSwitchEvent, SessionBeforeSwitchResult, SessionBeforeTreeEvent, SessionBeforeTreeResult, SessionBoundaryDraft, SessionCompactEvent, SessionCompactFailedEvent, SessionInfoChangedEvent, SessionShutdownEvent, SessionStartEvent, SessionTreeEvent, SlashCommandInfo, SlashCommandSource, SourceInfo, TerminalInputHandler, ThinkingLevelSelectEvent, ToolAnnotations, ToolCallEvent, ToolCallEventResult, ToolDefinition, ToolExecutionEndEvent, ToolExecutionMode, ToolExecutionStartEvent, ToolExecutionUpdateEvent, ToolExposure, ToolInfo, ToolLoadout, ToolLoadoutChanges, ToolNamespace, ToolRendererResolver, ToolRenderers, ToolRenderResultOptions, ToolResultEvent, ToolResultEventResult, TurnEndEvent, TurnEndEventResult, TurnStartEvent, UIPromptEndEvent, UIPromptKind, UIPromptStartEvent, UserBashEvent, UserBashEventResult, WidgetPlacement, WorkingIndicatorOptions, WriteToolCallEvent, } from "./core/extensions/index.ts";
+@@ -35,6 +38,7 @@ export { createToolSearchExtension } from "./extensions/tool-search/index.ts";
  export { type MainOptions, main } from "./main.ts";
  export { InteractiveMode, type InteractiveModeOptions, type JsonAgentSessionEvent, type ModelInfo, type PrintModeOptions, RpcClient, type RpcClientOptions, type RpcCommand, type RpcEventListener, type RpcExtensionUIRequest, type RpcExtensionUIResponse, type RpcResponse, type RpcSessionState, runPrintMode, runRpcMode, } from "./modes/index.ts";
  export { ArminComponent, AssistantMessageComponent, BashExecutionComponent, BorderedLoader, BranchSummaryMessageComponent, CompactionSummaryMessageComponent, CustomEditor, type CustomEditorOptions, CustomMessageComponent, DynamicBorder, ExtensionEditorComponent, ExtensionInputComponent, ExtensionSelectorComponent, FooterComponent, keyHint, keyText, LoginDialogComponent, ModelSelectorComponent, OAuthSelectorComponent, type RenderDiffOptions, rawKeyHint, renderDiff, SessionSelectorComponent, type SettingsCallbacks, type SettingsConfig, SettingsSelectorComponent, ShowImagesSelectorComponent, SkillInvocationMessageComponent, ThemeSelectorComponent, ThinkingSelectorComponent, ToolExecutionComponent, type ToolExecutionOptions, TreeSelectorComponent, truncateToVisualLines, UserMessageComponent, UserMessageSelectorComponent, type VisualTruncateResult, } from "./modes/interactive/components/index.ts";
@@ -384,15 +406,22 @@ index bb8acdb1b034f89e8fcb86a5933fa513d49a8ef3..11347c908cd30def8bd51b2206dc99eb
  export { copyToClipboard } from "./utils/clipboard.ts";
  export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";
 diff --git a/dist/index.js b/dist/index.js
-index ab5cfccc3a90939e533b9118122189507a7af326..fbd8a9406f0078eae886a1471bc3c0aa6c1310b7 100644
+index ab5cfccc3a90939e533b9118122189507a7af326..28d6e90e5e454303a80b5f68df64ffa2f4796cdb 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -1,3 +1,4 @@
+@@ -1,9 +1,11 @@
 +export { withBuiltInRenderers } from "./core/tools/renderers/index.js";
  // Core session management
  export { parseArgs } from "./cli/args.js";
  // Config paths
-@@ -41,6 +42,7 @@ export { main } from "./main.js";
+ export { CONFIG_DIR_NAME, getAgentDir, getDocsPath, getExamplesPath, getPackageDir, getReadmePath, VERSION, } from "./config.js";
+ export { AgentSession, parseSkillBlock, } from "./core/agent-session.js";
+ export { readStoredCredential } from "./core/auth-storage.js";
++export { detectCacheMiss } from "./core/cache-stats.js";
+ // Compaction
+ export { calculateContextTokens, collectEntriesForBranchSummary, compact, DEFAULT_COMPACTION_SETTINGS, estimateTokens, findCutPoint, findTurnStartIndex, generateBranchSummary, generateSummary, generateSummaryWithUsage, getLastAssistantUsage, prepareBranchEntries, serializeConversation, shouldCompact, } from "./core/compaction/index.js";
+ export { createEventBus } from "./core/event-bus.js";
+@@ -41,6 +43,7 @@ export { main } from "./main.js";
  export { InteractiveMode, RpcClient, runPrintMode, runRpcMode, } from "./modes/index.js";
  // UI components for extensions
  export { ArminComponent, AssistantMessageComponent, BashExecutionComponent, BorderedLoader, BranchSummaryMessageComponent, CompactionSummaryMessageComponent, CustomEditor, CustomMessageComponent, DynamicBorder, ExtensionEditorComponent, ExtensionInputComponent, ExtensionSelectorComponent, FooterComponent, keyHint, keyText, LoginDialogComponent, ModelSelectorComponent, OAuthSelectorComponent, rawKeyHint, renderDiff, SessionSelectorComponent, SettingsSelectorComponent, ShowImagesSelectorComponent, SkillInvocationMessageComponent, ThemeSelectorComponent, ThinkingSelectorComponent, ToolExecutionComponent, TreeSelectorComponent, truncateToVisualLines, UserMessageComponent, UserMessageSelectorComponent, } from "./modes/interactive/components/index.js";
@@ -426,39 +455,181 @@ index afed5bdc99bad115f3e5c14b872aa714ef71d023..e995c18b1fc7c748d7630fccd91f623b
          ]),
      };
 diff --git a/dist/modes/interactive/components/assistant-message.d.ts b/dist/modes/interactive/components/assistant-message.d.ts
-index c58f050624a13c494174ab5f60be20e14a3dbfd5..6f07cb2effd89fa9db9fe76061ec3fcdd57c7855 100644
+index c58f050624a13c494174ab5f60be20e14a3dbfd5..19cafe1b983453aeeac3bc7cc6a4323dc9279807 100644
 --- a/dist/modes/interactive/components/assistant-message.d.ts
 +++ b/dist/modes/interactive/components/assistant-message.d.ts
-@@ -1,6 +1,8 @@
+@@ -1,6 +1,43 @@
  import type { AssistantMessage } from "@earendil-works/pi-ai";
- import { Container, type MarkdownTheme } from "@earendil-works/pi-tui";
+-import { Container, type MarkdownTheme } from "@earendil-works/pi-tui";
++import { Container, type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
  import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 +/** Presentation-only input: the renderer never consumes model, credential or usage metadata. */
-+type AssistantPresentation = Pick<AssistantMessage, "content" | "stopReason" | "errorMessage"> & { readonly hasToolCalls?: boolean };
++type AssistantPresentation = Pick<AssistantMessage, "content" | "stopReason" | "errorMessage"> & {
++    readonly hasToolCalls?: boolean;
++    /** Epoch ms the message ended. */
++    readonly timestamp?: number;
++    /** Typed failure facts a provider stream attached to the message; Pi passes them to `errorPresentation` unread. */
++    readonly providerFailure?: unknown;
++};
++/** What an `errorPresentation` hook is told about a failed or stopped turn. */
++export interface ErrorPresentationInput {
++    /** `error`: the turn failed; `aborted`: the owner stopped it. */
++    readonly stopReason: "error" | "aborted";
++    readonly errorMessage?: string;
++    /** Typed failure facts a provider stream attached to the message, unread by Pi. */
++    readonly providerFailure?: unknown;
++    /** The message drew reply text above this row. */
++    readonly partial: boolean;
++    /** Tool calls of the message that never ran (a stopped turn). */
++    readonly toolCallsNotRun: number;
++    /** Automatic retries made before this outcome. */
++    readonly retryAttempts: number;
++    /** Set on the row drawn once automatic retrying ended without success. */
++    readonly retryEnded?: boolean;
++    /** Epoch ms the turn ended, when known. */
++    readonly timestamp?: number;
++    /** Set when the turn just ended in this process; unset when an earlier turn is drawn again (resume, rebuild). */
++    readonly live?: boolean;
++}
++/**
++ * Draws a failed or stopped turn in place of Pi's `Error: …` and `Operation aborted` lines: a component (told Ctrl+O's
++ * expansion state when it has `setExpanded`), plain lines, or undefined for Pi's own line.
++ */
++export type ErrorPresentation = (input: ErrorPresentationInput) => Component | string[] | undefined;
++/** The automatic retries an aborted message reports in its own `Aborted after n retry attempts` text, else 0. */
++export declare function retryAttemptsOf(message: Pick<AssistantMessage, "errorMessage">): number;
++/** What an `errorPresentation` hook returned, as a component. */
++export declare function errorRowsComponent(presented: Component | string[], expanded: boolean): Component;
  /**
   * Component that renders a complete assistant message
   */
-@@ -18,12 +20,12 @@ export declare class AssistantMessageComponent extends Container {
+@@ -18,12 +55,22 @@ export declare class AssistantMessageComponent extends Container {
      private timestamp?;
      private thinkingVisibilityOverrides;
      private markdownSlots;
 -    constructor(message?: AssistantMessage, hideThinkingBlock?: boolean, markdownTheme?: MarkdownTheme, hiddenThinkingLabel?: string, outputPad?: number, markdownTransformers?: readonly MarkdownTransformer[], messageId?: string, timestamp?: string);
-+    constructor(message?: AssistantPresentation, hideThinkingBlock?: boolean, markdownTheme?: MarkdownTheme, hiddenThinkingLabel?: string, outputPad?: number, markdownTransformers?: readonly MarkdownTransformer[], messageId?: string, timestamp?: string);
++    private errorPresentation?;
++    private errorRows?;
++    private errorKey?;
++    private expanded;
++    private lastBlock?;
++    constructor(message?: AssistantPresentation, hideThinkingBlock?: boolean, markdownTheme?: MarkdownTheme, hiddenThinkingLabel?: string, outputPad?: number, markdownTransformers?: readonly MarkdownTransformer[], messageId?: string, timestamp?: string, errorPresentation?: ErrorPresentation);
      invalidate(): void;
      setHideThinkingBlock(hide: boolean): void;
      setHiddenThinkingLabel(label: string): void;
      setOutputPad(padding: number): void;
      render(width: number): string[];
 -    updateContent(message: AssistantMessage, isStreaming?: boolean): void;
++    /** Ctrl+O reaches the hook's error rows through the message. */
++    setExpanded(expanded: boolean): void;
++    /** True when the last block drawn is a thinking run and the message's tool rows follow it. */
++    endsWithThinking(): boolean;
 +    updateContent(message: AssistantPresentation, isStreaming?: boolean): void;
++    private presentedError;
  }
  //# sourceMappingURL=assistant-message.d.ts.map
 \ No newline at end of file
 diff --git a/dist/modes/interactive/components/assistant-message.js b/dist/modes/interactive/components/assistant-message.js
-index 1e16f4cb43136e7c20264f1e3dc8c5c43c0bd8a8..3bfef65c1e3dfe13685e00df4d11ab6fe162d847 100644
+index 1e16f4cb43136e7c20264f1e3dc8c5c43c0bd8a8..51da101919f122a0d9facc49cdd853248190c417 100644
 --- a/dist/modes/interactive/components/assistant-message.js
 +++ b/dist/modes/interactive/components/assistant-message.js
-@@ -157,7 +157,7 @@ export class AssistantMessageComponent extends Container {
+@@ -1,9 +1,26 @@
+-import { Container, Markdown, MouseRegion, Spacer, Text, } from "@earendil-works/pi-tui";
++import { Container, Markdown, MouseRegion, Spacer, Text, truncateToWidth, } from "@earendil-works/pi-tui";
+ import { getMarkdownTheme, theme } from "../theme/theme.js";
+ import { createMarkdownTransform } from "./markdown-transform.js";
+ const OSC133_ZONE_START = "\x1b]133;A\x07";
+ const OSC133_ZONE_END = "\x1b]133;B\x07";
+ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
++/** The automatic retries an aborted message reports in its own `Aborted after n retry attempts` text, else 0. */
++export function retryAttemptsOf(message) {
++    const match = /^Aborted after (\d+) retry attempts?$/.exec(message.errorMessage ?? "");
++    return match ? Number(match[1]) : 0;
++}
++/**
++ * What an `errorPresentation` hook returned, as a component: a component as is (told the expansion state when it
++ * can expand), plain lines clipped to the width.
++ */
++export function errorRowsComponent(presented, expanded) {
++    if (!Array.isArray(presented)) {
++        if (typeof presented.setExpanded === "function")
++            presented.setExpanded(expanded);
++        return presented;
++    }
++    return { render: (width) => presented.map((line) => truncateToWidth(line, width, "…")), invalidate() { } };
++}
+ /**
+  * Component that renders a complete assistant message
+  */
+@@ -21,7 +38,14 @@ export class AssistantMessageComponent extends Container {
+     timestamp;
+     thinkingVisibilityOverrides = new Map();
+     markdownSlots = [];
+-    constructor(message, hideThinkingBlock = false, markdownTheme = getMarkdownTheme(), hiddenThinkingLabel = "Thinking...", outputPad = 1, markdownTransformers = [], messageId, timestamp) {
++    errorPresentation;
++    /** The hook's rows for this message's error or stop, reused while the input stays the same. */
++    errorRows;
++    errorKey;
++    expanded = false;
++    /** The kind of the last block drawn: `thinking`, `text`, or `end` for the error or truncation row. */
++    lastBlock;
++    constructor(message, hideThinkingBlock = false, markdownTheme = getMarkdownTheme(), hiddenThinkingLabel = "Thinking...", outputPad = 1, markdownTransformers = [], messageId, timestamp, errorPresentation) {
+         super();
+         this.hideThinkingBlock = hideThinkingBlock;
+         this.markdownTheme = markdownTheme;
+@@ -30,6 +54,7 @@ export class AssistantMessageComponent extends Container {
+         this.markdownTransformers = markdownTransformers;
+         this.messageId = messageId;
+         this.timestamp = timestamp;
++        this.errorPresentation = errorPresentation;
+         // Container for text/thinking content
+         this.contentContainer = new Container();
+         this.addChild(this.contentContainer);
+@@ -73,6 +98,19 @@ export class AssistantMessageComponent extends Container {
+         lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
+         return lines;
+     }
++    /** Ctrl+O reaches the hook's error rows through the message. */
++    setExpanded(expanded) {
++        this.expanded = expanded;
++        if (this.errorRows && typeof this.errorRows.setExpanded === "function")
++            this.errorRows.setExpanded(expanded);
++    }
++    /**
++     * True when the last block drawn is a thinking run and the message's tool rows follow it: the transcript then
++     * draws the first tool row directly under the thinking, so a step reads as one block.
++     */
++    endsWithThinking() {
++        return this.hasToolCalls && this.lastBlock === "thinking";
++    }
+     updateContent(message, isStreaming = this.isStreaming) {
+         this.lastMessage = message;
+         this.isStreaming = isStreaming;
+@@ -91,6 +129,7 @@ export class AssistantMessageComponent extends Container {
+         // line before the first visible block and after each visible thinking run that is followed
+         // by more visible content, while hidden thinking runs without a label contribute nothing.
+         let needsSpacer = true;
++        this.lastBlock = undefined;
+         const addVisibleChild = (child) => {
+             if (needsSpacer) {
+                 this.contentContainer.addChild(new Spacer(1));
+@@ -106,6 +145,7 @@ export class AssistantMessageComponent extends Container {
+                 // Assistant text messages with no background - trim the text
+                 // Set paddingY=0 to avoid extra spacing before tool executions
+                 const text = content.text.trim();
++                this.lastBlock = "text";
+                 addVisibleChild(markdownBlock("text", text, () => new Markdown(text, this.outputPad, 0, this.markdownTheme, undefined, {
+                     transform: createMarkdownTransform("assistant", () => this.isStreaming, this.markdownTransformers, this.messageId, this.timestamp),
+                 })));
+@@ -141,6 +181,7 @@ export class AssistantMessageComponent extends Container {
+                     }, {
+                         transform: createMarkdownTransform("assistant-thinking", () => this.isStreaming, this.markdownTransformers, this.messageId, this.timestamp),
+                     }));
++                this.lastBlock = "thinking";
+                 addVisibleChild(new MouseRegion(thinkingComponent, (event) => {
+                     if (event.type !== "click" || event.button !== "left")
+                         return undefined;
+@@ -157,26 +198,58 @@ export class AssistantMessageComponent extends Container {
          // Check if incomplete/failed - show after partial content.
          // For aborted/error tool calls, tool execution components show the error.
          // Length stops can happen before a tool call is complete, so surface them here too.
@@ -466,7 +637,294 @@ index 1e16f4cb43136e7c20264f1e3dc8c5c43c0bd8a8..3bfef65c1e3dfe13685e00df4d11ab6f
 +        const hasToolCalls = message.hasToolCalls ?? message.content.some((c) => c.type === "toolCall");
          this.hasToolCalls = hasToolCalls;
          if (message.stopReason === "length") {
++            this.lastBlock = "end";
              this.contentContainer.addChild(new Spacer(1));
+             this.contentContainer.addChild(new Text(theme.fg("error", "Response was truncated before completion."), this.outputPad, 0));
+         }
+-        else if (!hasToolCalls) {
+-            if (message.stopReason === "aborted") {
++        else if (!hasToolCalls && (message.stopReason === "aborted" || message.stopReason === "error")) {
++            this.lastBlock = "end";
++            const rows = this.presentedError(message);
++            if (rows) {
++                this.contentContainer.addChild(new Spacer(1));
++                this.contentContainer.addChild(rows);
++            }
++            else if (message.stopReason === "aborted") {
+                 const abortMessage = message.errorMessage && message.errorMessage !== "Request was aborted"
+                     ? message.errorMessage
+                     : "Operation aborted";
+                 this.contentContainer.addChild(new Spacer(1));
+                 this.contentContainer.addChild(new Text(theme.fg("error", abortMessage), this.outputPad, 0));
+             }
+-            else if (message.stopReason === "error") {
++            else {
+                 const errorMsg = message.errorMessage || "Unknown error";
+                 this.contentContainer.addChild(new Spacer(1));
+                 this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
+             }
+         }
++        else {
++            this.errorRows = undefined;
++            this.errorKey = undefined;
++        }
++    }
++    /** The `errorPresentation` hook's rows for a failed or stopped message, or undefined without a hook or an answer. */
++    presentedError(message) {
++        if (!this.errorPresentation)
++            return undefined;
++        const input = {
++            stopReason: message.stopReason,
++            ...(message.errorMessage ? { errorMessage: message.errorMessage } : {}),
++            ...(message.providerFailure !== undefined ? { providerFailure: message.providerFailure } : {}),
++            partial: message.content.some((c) => c.type === "text" && c.text.trim()),
++            toolCallsNotRun: 0,
++            retryAttempts: retryAttemptsOf(message),
++            ...(typeof message.timestamp === "number" ? { timestamp: message.timestamp } : {}),
++        };
++        const key = JSON.stringify(input);
++        if (this.errorRows && this.errorKey === key)
++            return this.errorRows;
++        const presented = this.errorPresentation(input);
++        this.errorRows = presented ? errorRowsComponent(presented, this.expanded) : undefined;
++        this.errorKey = this.errorRows ? key : undefined;
++        return this.errorRows;
+     }
+ }
+ //# sourceMappingURL=assistant-message.js.map
+\ No newline at end of file
+diff --git a/dist/modes/interactive/components/compaction-summary-message.d.ts b/dist/modes/interactive/components/compaction-summary-message.d.ts
+index 6befa12a48256c46cdd9f5ec334f5be73a231ff6..93db00640f74efc5b3aa3b70f37673279178f420 100644
+--- a/dist/modes/interactive/components/compaction-summary-message.d.ts
++++ b/dist/modes/interactive/components/compaction-summary-message.d.ts
+@@ -1,21 +1,47 @@
+-import { Box, type MarkdownTheme } from "@earendil-works/pi-tui";
++import { Container, type Component, type MarkdownTheme, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+ import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
+ import type { CompactionSummaryMessage } from "../../../core/messages.ts";
+ /**
+- * Component that renders a compaction message with collapsed/expanded state.
+- * Uses same background color as custom messages for visual consistency.
++ * A compaction at its place in the transcript, drawn as one muted divider row that fills the width
++ * (`── context compacted · 484k → 15k tokens · 14:02 ───`) and one muted line under it: the text above stays
++ * readable, the agent keeps only a summary. The transcript above is never cleared. Expanded (a click on the
++ * divider, or expanding every row), the model-facing summary follows. Presentation only: the summary message
++ * itself is unchanged.
+  */
+-export declare class CompactionSummaryMessageComponent extends Box {
++export declare class CompactionSummaryMessageComponent extends Container {
+     private expanded;
+     private message;
+     private markdownTheme;
+     private markdownTransformers;
+     private messageId?;
+     private timestamp?;
+-    constructor(message: CompactionSummaryMessage, markdownTheme?: MarkdownTheme, outputPad?: number, markdownTransformers?: readonly MarkdownTransformer[], messageId?: string, timestamp?: string);
++    private outputPad;
++    private tokensAfter?;
++    private summaryLines;
++    /** `tokensAfter`: the estimated context right after the compaction; the divider then reads `before → after`. */
++    constructor(message: CompactionSummaryMessage, markdownTheme?: MarkdownTheme, outputPad?: number, markdownTransformers?: readonly MarkdownTransformer[], messageId?: string, timestamp?: string, tokensAfter?: number);
+     setExpanded(expanded: boolean): void;
+     setOutputPad(outputPad: number): void;
+     invalidate(): void;
++    private labels;
++    private renderRows;
+     private updateDisplay;
+ }
++/**
++ * The first row of a transcript whose older part is not drawn yet: `↑ load earlier` in accent and a muted count
++ * of the messages it holds. A click draws the next older part above the rows already shown.
++ */
++export declare class TranscriptLoadEarlierComponent implements Component {
++    private onLoad;
++    private outputPad;
++    private hiddenMessages;
++    /** The width of the last frame, so the transcript can keep the reader's place when it grows above. */
++    lastWidth: number;
++    constructor(onLoad: () => void, outputPad?: number);
++    setHiddenMessages(count: number): void;
++    setOutputPad(outputPad: number): void;
++    render(width: number): string[];
++    invalidate(): void;
++    handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
++}
+ //# sourceMappingURL=compaction-summary-message.d.ts.map
+\ No newline at end of file
+diff --git a/dist/modes/interactive/components/compaction-summary-message.js b/dist/modes/interactive/components/compaction-summary-message.js
+index 3902658984eca3d76a8e7d8d345b21ff12f13b11..76c3601b4128a313bfc3e1ce0894b9f0c3fda786 100644
+--- a/dist/modes/interactive/components/compaction-summary-message.js
++++ b/dist/modes/interactive/components/compaction-summary-message.js
+@@ -1,56 +1,108 @@
+-import { Box, Container, Markdown, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
++import { Container, Markdown, MouseRegion, Spacer, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+ import { getMarkdownTheme, theme } from "../theme/theme.js";
+-import { keyText } from "./keybinding-hints.js";
++import { formatTokens } from "./footer.js";
+ import { createMarkdownTransform } from "./markdown-transform.js";
++/** The divider's lead before its label: two rule cells and a space. */
++const LEAD = "── ";
++/** `HH:MM` in local time, or undefined when the time is unknown. */
++function clockTime(ms) {
++    if (!Number.isFinite(ms))
++        return undefined;
++    const date = new Date(ms);
++    return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
++}
++/** Source lines of the summary the agent keeps, without trailing blank lines. */
++function summaryLineCount(summary) {
++    const lines = summary.split("\n");
++    while (lines.length > 0 && lines[lines.length - 1].trim() === "")
++        lines.pop();
++    return lines.length;
++}
+ /**
+- * Component that renders a compaction message with collapsed/expanded state.
+- * Uses same background color as custom messages for visual consistency.
++ * A compaction at its place in the transcript, drawn as one muted divider row that fills the width
++ * (`── context compacted · 484k → 15k tokens · 14:02 ───`) and one muted line under it: the text above stays
++ * readable, the agent keeps only a summary. The transcript above is never cleared. Expanded (a click on the
++ * divider, or expanding every row), the model-facing summary follows. Presentation only: the summary message
++ * itself is unchanged.
+  */
+-export class CompactionSummaryMessageComponent extends Box {
++export class CompactionSummaryMessageComponent extends Container {
+     expanded = false;
+     message;
+     markdownTheme;
+     markdownTransformers;
+     messageId;
+     timestamp;
+-    constructor(message, markdownTheme = getMarkdownTheme(), outputPad = 1, markdownTransformers = [], messageId, timestamp) {
+-        super(outputPad, 1, (t) => theme.bg("customMessageBg", t));
++    outputPad;
++    tokensAfter;
++    summaryLines;
++    constructor(message, markdownTheme = getMarkdownTheme(), outputPad = 1, markdownTransformers = [], messageId, timestamp, tokensAfter) {
++        super();
+         this.message = message;
+         this.markdownTheme = markdownTheme;
+         this.markdownTransformers = markdownTransformers;
+         this.messageId = messageId;
+         this.timestamp = timestamp;
++        this.outputPad = outputPad;
++        this.tokensAfter = tokensAfter;
++        this.summaryLines = summaryLineCount(message.summary);
+         this.updateDisplay();
+     }
+     setExpanded(expanded) {
++        if (expanded === this.expanded)
++            return;
+         this.expanded = expanded;
+         this.updateDisplay();
+     }
+     setOutputPad(outputPad) {
+-        this.setPaddingX(outputPad);
++        this.outputPad = outputPad;
++        this.updateDisplay();
+     }
+     invalidate() {
+         super.invalidate();
+         this.updateDisplay();
+     }
++    /** The divider label, longest first: each later form fits a narrower row. */
++    labels() {
++        const before = formatTokens(this.message.tokensBefore);
++        const amount = this.tokensAfter === undefined ? `from ${before}` : `${before} → ${formatTokens(this.tokensAfter)}`;
++        const time = clockTime(this.message.timestamp);
++        const forms = [
++            ["context compacted", `${amount} tokens`, time],
++            ["context compacted", amount, time],
++            ["compacted", amount, time],
++            ["compacted", amount],
++            ["compacted"],
++        ];
++        return forms.map((parts) => parts.filter((part) => part !== undefined).join(" · "));
++    }
++    /** The divider row and the note under it, at `width` cells. */
++    renderRows(width) {
++        const pad = Math.max(0, Math.min(this.outputPad, Math.floor((width - 1) / 2)));
++        const inner = Math.max(1, width - pad * 2);
++        const margin = " ".repeat(pad);
++        // The label keeps at least two rule cells after it.
++        const room = inner - visibleWidth(LEAD) - 3;
++        const labels = this.labels();
++        const label = labels.find((candidate) => visibleWidth(candidate) <= room) ?? truncateToWidth(labels[labels.length - 1], Math.max(1, room), "");
++        const fill = Math.max(0, inner - visibleWidth(LEAD) - visibleWidth(label) - 1);
++        const rule = (text) => theme.fg("borderMuted", text);
++        const divider = truncateToWidth(`${margin}${rule(LEAD.trimEnd())} ${theme.fg("muted", label)} ${rule("─".repeat(fill))}`, width, "");
++        // The note lines up under the label.
++        const indent = Math.min(pad + visibleWidth(LEAD), Math.max(0, width - 8));
++        const note = this.expanded
++            ? "Everything above stays readable; the agent keeps only the summary below."
++            : `Everything above stays readable; the agent keeps only a ${this.summaryLines}-line summary.`;
++        const noteRows = wrapTextWithAnsi(note, Math.max(1, width - indent - pad)).map((line) => `${" ".repeat(indent)}${theme.fg("muted", line)}`);
++        return [divider, ...noteRows];
++    }
+     updateDisplay() {
+         this.clear();
+         const content = new Container();
+-        const tokenStr = this.message.tokensBefore.toLocaleString();
+-        const label = theme.fg("customMessageLabel", `\x1b[1m[compaction]\x1b[22m`);
+-        content.addChild(new Text(label, 0, 0));
+-        content.addChild(new Spacer(1));
++        content.addChild({ render: (width) => this.renderRows(width), invalidate() { } });
+         if (this.expanded) {
+-            const header = `**Compacted from ${tokenStr} tokens**\n\n`;
++            content.addChild(new Spacer(1));
+             const transform = createMarkdownTransform("summary", () => false, this.markdownTransformers, this.messageId, this.timestamp);
+-            content.addChild(new Markdown(this.message.summary, 0, 0, this.markdownTheme, { color: (text) => theme.fg("customMessageText", text) }, 
+-            // Transformers see only the summary content, not Pi's header.
+-            { transform: (markdown, width) => header + transform(markdown, width) }));
+-        }
+-        else {
+-            content.addChild(new Text(theme.fg("customMessageText", `Compacted from ${tokenStr} tokens (`) +
+-                theme.fg("dim", keyText("app.tools.expand")) +
+-                theme.fg("customMessageText", " to expand)"), 0, 0));
++            content.addChild(new Markdown(this.message.summary, this.outputPad + visibleWidth(LEAD), 0, this.markdownTheme, { color: (text) => theme.fg("customMessageText", text) }, { transform }));
+         }
+         this.addChild(new MouseRegion(content, (event) => {
+             if (event.type !== "click" || event.button !== "left")
+@@ -60,4 +112,38 @@ export class CompactionSummaryMessageComponent extends Box {
+         }));
+     }
+ }
++/**
++ * The first row of a transcript whose older part is not drawn yet: `↑ load earlier` in accent and a muted count
++ * of the messages it holds. A click draws the next older part above the rows already shown.
++ */
++export class TranscriptLoadEarlierComponent {
++    onLoad;
++    outputPad;
++    hiddenMessages = 0;
++    /** The width of the last frame, so the transcript can keep the reader's place when it grows above. */
++    lastWidth = 0;
++    constructor(onLoad, outputPad = 1) {
++        this.onLoad = onLoad;
++        this.outputPad = outputPad;
++    }
++    setHiddenMessages(count) {
++        this.hiddenMessages = count;
++    }
++    setOutputPad(outputPad) {
++        this.outputPad = outputPad;
++    }
++    render(width) {
++        this.lastWidth = width;
++        const count = this.hiddenMessages === 1 ? "1 earlier message" : `${this.hiddenMessages.toLocaleString("en-US")} earlier messages`;
++        const row = `${" ".repeat(Math.max(0, this.outputPad))}${theme.fg("accent", "↑ load earlier")}${theme.fg("muted", ` · ${count}`)}`;
++        return [truncateToWidth(row, width, "")];
++    }
++    invalidate() { }
++    handleMouse(event) {
++        if (event.type !== "click" || event.button !== "left")
++            return undefined;
++        this.onLoad();
++        return { handled: true };
++    }
++}
+ //# sourceMappingURL=compaction-summary-message.js.map
+\ No newline at end of file
 diff --git a/dist/modes/interactive/components/index.d.ts b/dist/modes/interactive/components/index.d.ts
 index a9c22b513c4441226dcea3108dbab513279f4fbb..07e45e7cdd1756c0e1017785d101d3e1b4056cf2 100644
 --- a/dist/modes/interactive/components/index.d.ts
@@ -494,12 +952,66 @@ index 1e998a7b86b0589f6d5fc8d693f7a7ae567c25f1..77bce69ce5bc0c37fb514104a7cb6f8a
  export { TrustSelectorComponent } from "./trust-selector.js";
  export { UserMessageComponent } from "./user-message.js";
 diff --git a/dist/modes/interactive/components/tool-execution.d.ts b/dist/modes/interactive/components/tool-execution.d.ts
-index 89cf0519dc56399ebb4017054d9a2ac0f2563347..da5f17398acb5347bcf43af5a2808898b8dfba26 100644
+index 89cf0519dc56399ebb4017054d9a2ac0f2563347..5831d2aeedccf6e1c8cb1f66a8f2d1d061a6b461 100644
 --- a/dist/modes/interactive/components/tool-execution.d.ts
 +++ b/dist/modes/interactive/components/tool-execution.d.ts
-@@ -67,6 +67,10 @@ export declare class ToolExecutionComponent extends Container {
+@@ -1,4 +1,4 @@
+-import { Container, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
++import { Container, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+ import type { ToolDefinition, ToolRenderers } from "../../../core/extensions/types.ts";
+ /** What this component needs from a tool: how to draw it, without executing it. */
+ export type { ToolRenderers };
+@@ -7,6 +7,25 @@ export interface ToolExecutionOptions {
+     imageWidthCells?: number;
+     outputPad?: number;
+ }
++/** What a group row draws: its lines and, optionally, its own pointer handling (a view label). */
++export interface TranscriptGroupRow {
++    readonly lines: readonly string[];
++    /** A pointer event on the row (`y` from its first line); a click it does not handle opens the group. */
++    handleMouse?(event: TuiMouseEvent): TuiMouseEventResult | undefined;
++}
++/**
++ * A settled tool row's membership of a fold, offered by its call renderer component through an optional
++ * `groupMember(): TranscriptGroupMember | undefined` method. Consecutive rows with the same `key` fold into one group
++ * row once there are `min` of them.
++ */
++export interface TranscriptGroupMember {
++    /** Rows of one kind share it. */
++    readonly key: string;
++    /** The fewest consecutive rows of this kind that fold. */
++    readonly min: number;
++    /** The group row for `run` (oldest first, every member of this key) at `width`, without a blank row above. */
++    render(run: readonly TranscriptGroupMember[], width: number): TranscriptGroupRow;
++}
+ export declare class ToolExecutionComponent extends Container {
+     private contentBox;
+     private contentText;
+@@ -37,6 +56,9 @@ export declare class ToolExecutionComponent extends Container {
+     private argsPending;
+     private result?;
+     private hideComponent;
++    private tightTop;
++    private groupOpen;
++    private notRun;
+     constructor(toolName: string, toolCallId: string, args: any, options: ToolExecutionOptions | undefined, toolDefinition: ToolRenderers | ToolDefinition<any, any, any> | undefined, ui: TUI, cwd: string);
+     private getCallRenderer;
+     private getResultRenderer;
+@@ -66,7 +88,22 @@ export declare class ToolExecutionComponent extends Container {
+         durationMs?: number;
      }, isPartial?: boolean): void;
      setExpanded(expanded: boolean): void;
++    /** Settles a call that never ran (the owner stopped the turn first): `reason` is its result text. */
++    markNotRun(reason: string): void;
++    /**
++     * The row's membership of a fold while it may fold: settled, successful, collapsed, self-framed, without images,
++     * and its call renderer component offers one. Undefined otherwise.
++     */
++    groupMember(): TranscriptGroupMember | undefined;
++    /** True after the owner opened the group this row folds into. */
++    isGroupOpen(): boolean;
++    /** Shows this row instead of the group row it folded into; `setExpanded(false)` folds it again. */
++    openGroup(): void;
      setOutputPad(outputPad: number): void;
 +    /** True when the tool draws its own frame (`renderShell: "self"`). */
 +    isSelfFramed(): boolean;
@@ -508,33 +1020,42 @@ index 89cf0519dc56399ebb4017054d9a2ac0f2563347..da5f17398acb5347bcf43af5a2808898
      setShowImages(show: boolean): void;
      setImageWidthCells(width: number): void;
      invalidate(): void;
-@@ -76,4 +80,11 @@ export declare class ToolExecutionComponent extends Container {
+@@ -76,4 +113,16 @@ export declare class ToolExecutionComponent extends Container {
      private getTextOutput;
      private formatToolExecution;
  }
 +/**
 + * The transcript container: a self-framed tool row drawn directly under another self-framed tool row (nothing
-+ * visible between them) drops its blank row, so a run of tool lines reads as one block.
++ * visible between them) drops its blank row, so a run of tool lines reads as one block. Consecutive rows that offer
++ * a group member with the same key fold into one group row from the member's `min`; a click opens the group.
 + */
 +export declare class TranscriptContainer extends Container {
++    private groupCache;
 +    render(width: number): string[];
++    private groupRow;
++    handleMouse(event: TuiMouseEvent): ReturnType<Container["handleMouse"]>;
++    invalidate(): void;
 +}
  //# sourceMappingURL=tool-execution.d.ts.map
 \ No newline at end of file
 diff --git a/dist/modes/interactive/components/tool-execution.js b/dist/modes/interactive/components/tool-execution.js
-index 611416e9d082fe5bbae0019ea4393a76219c381e..056b25f5b5344196aca9624673b5ccfe4b17f1e7 100644
+index 611416e9d082fe5bbae0019ea4393a76219c381e..0421a14039e87f15541364a141fe523c9775c51f 100644
 --- a/dist/modes/interactive/components/tool-execution.js
 +++ b/dist/modes/interactive/components/tool-execution.js
-@@ -34,6 +34,8 @@ export class ToolExecutionComponent extends Container {
+@@ -34,6 +34,12 @@ export class ToolExecutionComponent extends Container {
      argsPending = false;
      result;
      hideComponent = false;
-+    /** A self-framed row drawn directly under another self-framed row: no blank row above it. */
++    /** A self-framed tool row drawn directly under another self-framed tool row: no blank row above it. */
 +    tightTop = false;
++    /** The owner opened the folded group this row belongs to; collapsing the row (or Ctrl+O collapse-all) clears it. */
++    groupOpen = false;
++    /** The call never ran: the owner stopped the turn before it started. */
++    notRun = false;
      constructor(toolName, toolCallId, args, options = {}, toolDefinition, ui, cwd) {
          super();
          this.toolName = toolName;
-@@ -73,6 +75,14 @@ export class ToolExecutionComponent extends Container {
+@@ -73,6 +79,14 @@ export class ToolExecutionComponent extends Container {
      getRenderShell() {
          return this.toolDefinition?.renderShell ?? "default";
      }
@@ -549,7 +1070,56 @@ index 611416e9d082fe5bbae0019ea4393a76219c381e..056b25f5b5344196aca9624673b5ccfe
      getRenderContext(lastComponent) {
          return {
              args: this.args,
-@@ -179,7 +189,8 @@ export class ToolExecutionComponent extends Container {
+@@ -92,6 +106,7 @@ export class ToolExecutionComponent extends Container {
+             isError: this.result?.isError ?? false,
+             durationMs: this.isPartial ? undefined : this.result?.durationMs,
+             outputPad: this.outputPad,
++            notRun: this.notRun,
+             keyText,
+             keyHint,
+         };
+@@ -145,10 +160,40 @@ export class ToolExecutionComponent extends Container {
+         this.isPartial = isPartial;
+         this.updateDisplay();
+     }
++    /** Settles a call that never ran (the owner stopped the turn first): `reason` is its result text. */
++    markNotRun(reason) {
++        this.notRun = true;
++        this.result = { content: [{ type: "text", text: reason }], isError: true };
++        this.isPartial = false;
++        this.updateDisplay();
++    }
+     setExpanded(expanded) {
+         this.expanded = expanded;
++        if (!expanded)
++            this.groupOpen = false;
+         this.updateDisplay();
+     }
++    /**
++     * The row's membership of a fold while it may fold: settled, successful, collapsed, drawn by its own frame and
++     * without images, and its call renderer offers one (`groupMember()`). Undefined otherwise: the row stands alone.
++     */
++    groupMember() {
++        if (this.expanded || this.isPartial || !this.result || this.result.isError || this.argsPending || this.hideComponent)
++            return undefined;
++        if (!this.isSelfFramed() || this.imageComponents.length > 0)
++            return undefined;
++        const component = this.callRendererComponent;
++        return component && typeof component.groupMember === "function" ? component.groupMember() : undefined;
++    }
++    /** True after the owner opened the group this row folds into: the row draws on its own. */
++    isGroupOpen() {
++        return this.groupOpen;
++    }
++    /** Shows this row instead of the group row it folded into. */
++    openGroup() {
++        this.groupOpen = true;
++        this.ui.requestRender();
++    }
+     setOutputPad(outputPad) {
+         this.outputPad = outputPad;
+         this.updateDisplay();
+@@ -179,7 +224,8 @@ export class ToolExecutionComponent extends Container {
              }
              const lines = [];
              if (contentLines.length > 0) {
@@ -559,7 +1129,7 @@ index 611416e9d082fe5bbae0019ea4393a76219c381e..056b25f5b5344196aca9624673b5ccfe
                  lines.push(...contentLines);
              }
              for (let i = 0; i < this.imageComponents.length; i++) {
-@@ -199,13 +210,22 @@ export class ToolExecutionComponent extends Container {
+@@ -199,13 +245,22 @@ export class ToolExecutionComponent extends Container {
      handleMouse(event) {
          if (!this.hasRendererDefinition() || this.getRenderShell() !== "self")
              return super.handleMouse(event);
@@ -589,7 +1159,7 @@ index 611416e9d082fe5bbae0019ea4393a76219c381e..056b25f5b5344196aca9624673b5ccfe
      }
      updateDisplay() {
          this.argsPending = false;
-@@ -333,4 +353,30 @@ export class ToolExecutionComponent extends Container {
+@@ -333,4 +388,122 @@ export class ToolExecutionComponent extends Container {
          return text;
      }
  }
@@ -597,26 +1167,118 @@ index 611416e9d082fe5bbae0019ea4393a76219c381e..056b25f5b5344196aca9624673b5ccfe
 + * The transcript container: a self-framed tool row drawn directly under another self-framed tool row (nothing
 + * visible between them) drops its blank row, so a run of tool lines reads as one block. Decided while rendering,
 + * so live, resumed and spliced transcripts follow the same rule; default-shell rows keep their spacing.
++ *
++ * Folding: consecutive rows that offer a group member (`groupMember()`) with the same key, with nothing visible
++ * between them, draw as one group row once there are `min` of them, unless the owner opened one of them. The fold is
++ * decided per frame in this one pass, so the rows themselves (identity, streaming, expansion) are untouched; a row
++ * that is still running offers no member and draws under the group. A click on the group row opens it.
 + */
 +export class TranscriptContainer extends Container {
++    /** Group rows of the last frames by their first row: reused while the same members fold at the same width. */
++    groupCache = new Map();
 +    render(width) {
 +        const lines = [];
 +        const mouseChildren = [];
++        const cache = new Map();
 +        let afterSelfRow = false;
++        /** The rows that may still fold together, with their members. */
++        let run = [];
++        const flush = () => {
++            if (run.length === 0)
++                return;
++            const first = run[0];
++            if (run.length >= first.member.min && !run.some((entry) => entry.component.isGroupOpen())) {
++                const group = this.groupRow(first.component, run, width, cache);
++                if (!afterSelfRow)
++                    lines.push("");
++                for (const line of group.lines)
++                    lines.push(line);
++                mouseChildren.push({ component: group.mouse(afterSelfRow ? 0 : 1), height: group.lines.length + (afterSelfRow ? 0 : 1) });
++                afterSelfRow = true;
++            }
++            else {
++                for (const { component } of run) {
++                    component.setTightTop(afterSelfRow);
++                    const childLines = component.render(width);
++                    mouseChildren.push({ component, height: childLines.length });
++                    for (const line of childLines)
++                        lines.push(line);
++                    if (childLines.length > 0)
++                        afterSelfRow = true;
++                }
++            }
++            run = [];
++        };
 +        for (const child of this.children) {
-+            const selfRow = child instanceof ToolExecutionComponent && child.isSelfFramed();
++            const tool = child instanceof ToolExecutionComponent;
++            const member = tool ? child.groupMember() : undefined;
++            if (member) {
++                if (run.length > 0 && run[0].member.key !== member.key)
++                    flush();
++                run.push({ component: child, member });
++                continue;
++            }
++            const selfRow = tool && child.isSelfFramed();
 +            if (selfRow)
-+                child.setTightTop(afterSelfRow);
++                child.setTightTop(run.length > 0 || afterSelfRow);
 +            const childLines = child.render(width);
++            if (childLines.length === 0) {
++                // Nothing visible: the run goes on across it.
++                mouseChildren.push({ component: child, height: 0 });
++                continue;
++            }
++            flush();
 +            mouseChildren.push({ component: child, height: childLines.length });
 +            for (const line of childLines) {
 +                lines.push(line);
 +            }
-+            if (childLines.length > 0)
-+                afterSelfRow = selfRow;
++            // Thinking that ends an assistant message with tool calls leads into its rows: they sit right under it.
++            afterSelfRow = selfRow || (typeof child.endsWithThinking === "function" && child.endsWithThinking() === true);
 +        }
++        flush();
++        this.groupCache = cache;
 +        this.mouseLayout = { width, children: mouseChildren };
 +        return lines;
++    }
++    /** The group row of `run` at `width`: the last frame's lines when the same members fold at the same width. */
++    groupRow(first, run, width, cache) {
++        const members = run.map((entry) => entry.member);
++        const previous = this.groupCache.get(first);
++        const same = previous !== undefined && previous.width === width && previous.members.length === members.length &&
++            previous.members.every((member, index) => member === members[index]);
++        const drawn = same ? previous.drawn : members[0].render(members, width);
++        cache.set(first, { width, members, drawn });
++        const components = run.map((entry) => entry.component);
++        return {
++            lines: drawn.lines,
++            /** The group row's pointer target; `top` is its blank row. A click opens the group unless the row took it. */
++            mouse: (top) => ({
++                render: () => [],
++                invalidate() { },
++                handleMouse(event) {
++                    if (event.y < top)
++                        return undefined;
++                    const inner = drawn.handleMouse?.({ ...event, y: event.y - top, height: event.height - top });
++                    if (inner)
++                        return inner;
++                    if (event.type !== "click" || event.button !== "left")
++                        return undefined;
++                    for (const component of components)
++                        component.openGroup();
++                    return { handled: true };
++                },
++            }),
++        };
++    }
++    handleMouse(event) {
++        // Rows fold per frame: a pointer event at another width lays the frame out first, so rows map to the group rows.
++        if (this.mouseLayout?.width !== event.width)
++            this.render(event.width);
++        return super.handleMouse(event);
++    }
++    invalidate() {
++        this.groupCache = new Map();
++        super.invalidate();
 +    }
 +}
  //# sourceMappingURL=tool-execution.js.map
@@ -645,10 +1307,10 @@ index 4f5722425293a837926b8fb42de5ce6d820757dc..12194a23e323b737a74af27b2b6ac383
              return lines;
          }
 diff --git a/dist/modes/interactive/interactive-mode.d.ts b/dist/modes/interactive/interactive-mode.d.ts
-index 6fc601645f5fe0ad734e64d10026ccddfc80f506..27546e660f567d4bf8cfa2650e78c6edd0b9f308 100644
+index 6fc601645f5fe0ad734e64d10026ccddfc80f506..057c5dfaa92f2e80450d034818de650f7ff4d174 100644
 --- a/dist/modes/interactive/interactive-mode.d.ts
 +++ b/dist/modes/interactive/interactive-mode.d.ts
-@@ -3,7 +3,8 @@
+@@ -3,12 +3,14 @@
   * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
   */
  import { type ImageContent } from "@earendil-works/pi-ai/compat";
@@ -658,7 +1320,13 @@ index 6fc601645f5fe0ad734e64d10026ccddfc80f506..27546e660f567d4bf8cfa2650e78c6ed
  import { type AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
  import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
  import { SessionManager } from "../../core/session-manager.ts";
-@@ -38,6 +39,23 @@ export interface InteractiveModeOptions {
+ import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
+ import { type LatestPiRelease } from "../../utils/version-check.ts";
++import type { ErrorPresentation } from "./components/assistant-message.ts";
+ export { createInteractiveTui, createInteractiveTuiReference } from "./tui-renderer.ts";
+ export declare function formatCrashExtensionHint(extensionMatches: readonly string[] | undefined): string | undefined;
+ export declare function formatResumeCommand(sessionManager: SessionManager): string | undefined;
+@@ -38,6 +40,32 @@ export interface InteractiveModeOptions {
      initialThemeSetting?: string;
      /** Terminal implementation. Defaults to the current process terminal. */
      terminal?: Terminal;
@@ -668,9 +1336,18 @@ index 6fc601645f5fe0ad734e64d10026ccddfc80f506..27546e660f567d4bf8cfa2650e78c6ed
 +    readOnlyQueue?: boolean;
 +    /**
 +     * Presentation-only replacement for a user-role transcript message: return a component to draw instead of the
-+     * user bubble, or undefined to keep the bubble. What the model receives is unchanged.
++     * user bubble, or undefined to keep the bubble. `bubble` builds Pi's own user bubble for a text with the session's
++     * theme and transformers. What the model receives is unchanged.
 +     */
-+    userPresentation?: (text: string) => Component | undefined;
++    userPresentation?: (text: string, bubble: (text: string) => Component) => Component | undefined;
++    /**
++     * Presentation-only replacement for the line a failed or stopped turn draws (`Error: …`, `Operation aborted`,
++     * `Retry failed after n attempts: …`). With it, the tool calls of a turn the owner stopped read as not run and
++     * the stop is one row under them. Undefined keeps Pi's line. What the model receives is unchanged.
++     */
++    errorPresentation?: ErrorPresentation;
++    /** `false` when the host has its own resume command: the `To resume this session: pi --session …` line is not printed on quit. */
++    resumeHint?: false;
 +}
 +/** Live, presentation-only chat surface owned by this same interactive mode. */
 +export interface InteractiveChatPresentation {
@@ -682,11 +1359,50 @@ index 6fc601645f5fe0ad734e64d10026ccddfc80f506..27546e660f567d4bf8cfa2650e78c6ed
  }
  export declare class InteractiveMode {
      private runtimeHost;
+@@ -336,6 +364,8 @@ export declare class InteractiveMode {
+     private showStatus;
+     private addCustomEntryToChat;
+     private addMessageToChat;
++    /** A stopped turn with `errorPresentation`: its tool calls read as not run, then the hook's row under them. */
++    private presentStoppedTools;
+     private renderSessionItems;
+     /**
+      * Render session entries to chat. Used for initial load and rebuild after compaction.
 diff --git a/dist/modes/interactive/interactive-mode.js b/dist/modes/interactive/interactive-mode.js
-index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..19f737b375ec9ff277df99ccde3fcdeb5e1c971f 100644
+index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e4201941516 100644
 --- a/dist/modes/interactive/interactive-mode.js
 +++ b/dist/modes/interactive/interactive-mode.js
-@@ -82,7 +82,7 @@ import { SkillInvocationMessageComponent } from "./components/skill-invocation-m
+@@ -16,6 +16,7 @@ import { parseSkillBlock } from "../../core/agent-session.js";
+ import { SessionImportFileNotFoundError } from "../../core/agent-session-runtime.js";
+ import { CACHE_TTL_MS, collectCacheMisses, computeCacheWaste, detectCacheMiss, } from "../../core/cache-stats.js";
+ import { formatCacheWarmingStatus, formatCacheWarmingUsage } from "../../core/cache-warmer.js";
++import { estimateTokens } from "../../core/compaction/index.js";
+ import { findExtensionStackMatches, recordCrash, takeUnnotifiedCrash } from "../../core/crash-log.js";
+ import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "../../core/defaults.js";
+ import { FooterDataProvider } from "../../core/footer-data-provider.js";
+@@ -30,7 +31,7 @@ import { findMatchingProviders } from "../../core/provider-matching.js";
+ import { RADIUS_PROVIDER_ID } from "../../core/radius.js";
+ import { planRadiusMcpServer } from "../../core/radius-mcp.js";
+ import { formatMissingSessionCwdPrompt, getMissingSessionCwdOptions, MissingSessionCwdError, } from "../../core/session-cwd.js";
+-import { SessionManager, sessionEntryToContextMessages, } from "../../core/session-manager.js";
++import { buildSessionProjection, SessionManager, sessionEntryToContextMessages, } from "../../core/session-manager.js";
+ import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
+ import { getSourcePackageKey } from "../../core/source-info.js";
+ import { isInstallTelemetryEnabled } from "../../core/telemetry.js";
+@@ -53,10 +54,10 @@ import { checkForNewPiVersion } from "../../utils/version-check.js";
+ import { reportBug } from "./bug-report.js";
+ import { createChatViewport } from "./chat-viewport.js";
+ import { ArminComponent } from "./components/armin.js";
+-import { AssistantMessageComponent } from "./components/assistant-message.js";
++import { AssistantMessageComponent, errorRowsComponent, retryAttemptsOf } from "./components/assistant-message.js";
+ import { BashExecutionComponent } from "./components/bash-execution.js";
+ import { BranchSummaryMessageComponent } from "./components/branch-summary-message.js";
+-import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.js";
++import { CompactionSummaryMessageComponent, TranscriptLoadEarlierComponent } from "./components/compaction-summary-message.js";
+ import { CustomEditor } from "./components/custom-editor.js";
+ import { CustomEntryComponent } from "./components/custom-entry.js";
+ import { CustomMessageComponent } from "./components/custom-message.js";
+@@ -82,7 +83,7 @@ import { SkillInvocationMessageComponent } from "./components/skill-invocation-m
  import { BranchSummaryStatusIndicator, CompactionStatusIndicator, IdleStatus, RetryStatusIndicator, WorkingStatusIndicator, } from "./components/status-indicator.js";
  import { ThemedText } from "./components/themed-text.js";
  import { ThinkingSelectorComponent } from "./components/thinking-selector.js";
@@ -695,7 +1411,83 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..19f737b375ec9ff277df99ccde3fcdeb
  import { TreeSelectorComponent } from "./components/tree-selector.js";
  import { TrustSelectorComponent } from "./components/trust-selector.js";
  import { UserMessageComponent } from "./components/user-message.js";
-@@ -400,7 +400,7 @@ export class InteractiveMode {
+@@ -133,6 +134,65 @@ function isCustomSessionEntry(item) {
+ function isCompactionCostNotice(item) {
+     return "type" in item && item.type === "compaction_cost";
+ }
++// The transcript draws the whole session branch, so a compaction keeps the text above it readable; the model
++// context still comes from buildContextEntries(). Every frame lays out every drawn row, so a long branch draws its
++// newest part and one `load earlier` row above it (a 13k-entry branch costs about 100 ms per frame drawn whole).
++/** Top-level rows one drawn part of the branch holds, about the context of a long session. */
++const TRANSCRIPT_WINDOW_ROWS = 1000;
++/** Live rows that, at a compaction, move all but the newest `TRANSCRIPT_WINDOW_ROWS` behind the `load earlier` row. */
++const TRANSCRIPT_TRIM_AT = 2000;
++/**
++ * About how many top-level transcript rows a session entry draws. A custom entry draws only when `drawsCustom` says its
++ * type has an entry renderer (as `addCustomEntryToChat` decides); corral journals many types that draw nothing.
++ */
++function transcriptRows(entry, drawsCustom) {
++    if (entry.type === "message") {
++        const message = entry.message;
++        if (message.role === "assistant") {
++            return 1 + (Array.isArray(message.content) ? message.content.filter((content) => content.type === "toolCall").length : 0);
++        }
++        return message.role === "toolResult" || message.role === "system" ? 0 : 1;
++    }
++    if (entry.type === "custom_message")
++        return entry.display ? 1 : 0;
++    if (entry.type === "custom")
++        return drawsCustom(entry.customType) ? 1 : 0;
++    return entry.type === "compaction" || entry.type === "branch_summary" ? 1 : 0;
++}
++/** True for an entry drawn as an owner, host or agent message: what the `load earlier` row counts. */
++function isTranscriptMessage(entry) {
++    if (entry.type === "message") {
++        const role = entry.message.role;
++        return role === "user" || role === "assistant" || role === "bashExecution";
++    }
++    return entry.type === "custom_message" && entry.display === true;
++}
++/** The same count for drawn rows that were moved behind the `load earlier` row. */
++function isTranscriptMessageComponent(component) {
++    return component instanceof UserMessageComponent || component instanceof AssistantMessageComponent ||
++        component instanceof CustomMessageComponent || component instanceof BashExecutionComponent;
++}
++/**
++ * Where the drawn part of `entries[0, end)` starts: the newest entries worth `TRANSCRIPT_WINDOW_ROWS` drawn rows, moved
++ * on to the next user message so a turn opens it, unless that leaves less than half of the budget. Entries that draw
++ * nothing cost nothing, so the window always holds the newest drawn rows: all of them, or at least half the budget.
++ */
++function transcriptWindowStart(entries, end, drawsCustom) {
++    let start = end;
++    let rows = 0;
++    while (start > 0 && rows < TRANSCRIPT_WINDOW_ROWS) {
++        start--;
++        rows += transcriptRows(entries[start], drawsCustom);
++    }
++    if (start === 0)
++        return 0;
++    let turn = start;
++    while (turn < end && !(entries[turn].type === "message" && entries[turn].message.role === "user")) {
++        rows -= transcriptRows(entries[turn], drawsCustom);
++        turn++;
++    }
++    return turn < end && rows * 2 >= TRANSCRIPT_WINDOW_ROWS ? turn : start;
++}
+ function isUsageSessionEntry(item) {
+     return "type" in item && item.type === "usage";
+ }
+@@ -292,7 +352,8 @@ export class InteractiveMode {
+     managedToolStatusStarted = false;
+     // Streaming message tracking
+     streamingComponent = undefined;
+-    entriesRenderedByBoundaryCompaction = new Set();
++    /** The older transcript behind the `load earlier` row: its row, hidden parts (newest last), tool results by call id. */
++    transcriptHistory = undefined;
+     streamingMessage = undefined;
+     // Tool execution tracking: toolCallId -> component
+     pendingTools = new Map();
+@@ -400,7 +461,7 @@ export class InteractiveMode {
          this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
          this.headerContainer = new Container();
          this.loadedResourcesContainer = new Container();
@@ -704,7 +1496,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..19f737b375ec9ff277df99ccde3fcdeb
          this.documentContainer = new Container();
          this.documentContainer.addChild(this.headerContainer);
          this.documentContainer.addChild(this.loadedResourcesContainer);
-@@ -466,7 +466,7 @@ export class InteractiveMode {
+@@ -466,7 +527,7 @@ export class InteractiveMode {
          return description ? `[${sourceTag}] ${description}` : `[${sourceTag}]`;
      }
      getBuiltInCommandConflictDiagnostics(extensionRunner) {
@@ -713,7 +1505,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..19f737b375ec9ff277df99ccde3fcdeb
          return extensionRunner
              .getRegisteredCommands()
              .filter((command) => builtinNames.has(command.name))
-@@ -707,6 +707,15 @@ export class InteractiveMode {
+@@ -707,6 +768,15 @@ export class InteractiveMode {
          this.renderWidgets(); // Initialize with default spacer
          const viewport = createChatViewport({
              document: this.documentContainer,
@@ -729,7 +1521,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..19f737b375ec9ff277df99ccde3fcdeb
              pendingMessages: this.pendingMessagesContainer,
              status: this.statusContainer,
              widgetsAbove: this.widgetContainerAbove,
-@@ -774,7 +783,7 @@ export class InteractiveMode {
+@@ -774,7 +844,7 @@ export class InteractiveMode {
                  rawKeyHint("!", "to run bash"),
                  rawKeyHint("!!", "to run bash (no context)"),
                  hint("app.message.followUp", "to queue follow-up"),
@@ -738,7 +1530,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..19f737b375ec9ff277df99ccde3fcdeb
                  hint("app.clipboard.pasteImage", "to paste files on macOS, images, or text"),
                  rawKeyHint("drop files", "to attach"),
              ].join("\n");
-@@ -2780,7 +2789,7 @@ export class InteractiveMode {
+@@ -2780,7 +2850,7 @@ export class InteractiveMode {
                  this.editor.setText("");
                  return;
              }
@@ -747,12 +1539,144 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..19f737b375ec9ff277df99ccde3fcdeb
                  this.showSessionSelector();
                  this.editor.setText("");
                  return;
-@@ -3314,6 +3323,15 @@ export class InteractiveMode {
+@@ -2881,8 +2951,6 @@ export class InteractiveMode {
+                 this.ui.requestRender();
+                 break;
+             case "entry_appended":
+-                if (this.entriesRenderedByBoundaryCompaction.delete(event.entry.id))
+-                    break;
+                 if (event.entry.type === "custom") {
+                     this.addCustomEntryToChat(event.entry);
+                     this.ui.requestRender();
+@@ -2896,26 +2964,8 @@ export class InteractiveMode {
+                     this.ui.requestRender();
+                 }
+                 else if (event.entry.type === "compaction") {
+-                    const entries = this.sessionManager.buildContextEntries();
+-                    if (entries[0]?.id !== event.entry.id)
+-                        break;
+-                    this.chatContainer.clear();
+-                    const branch = this.sessionManager.getBranch();
+-                    const compactionIndex = branch.findIndex((entry) => entry.id === event.entry.id);
+-                    const entriesAfterCompaction = new Set(branch.slice(compactionIndex + 1).map((entry) => entry.id));
+-                    const retainedEntries = entries.slice(1);
+-                    this.renderSessionEntries(retainedEntries.filter((entry) => !entriesAfterCompaction.has(entry.id)));
+-                    this.addMessageToChat(createCompactionSummaryMessage(event.entry.summary, event.entry.tokensBefore, event.entry.timestamp));
+-                    if (event.entry.usage) {
+-                        this.addCompactionCostNotice({
+-                            type: "compaction_cost",
+-                            kind: "compaction",
+-                            usage: event.entry.usage,
+-                        });
+-                    }
+-                    this.renderSessionEntries(retainedEntries.filter((entry) => entriesAfterCompaction.has(entry.id)));
+-                    for (const entryId of entriesAfterCompaction)
+-                        this.entriesRenderedByBoundaryCompaction.add(entryId);
++                    // The transcript above stays; the divider marks the compaction where it happened.
++                    this.addCompactionDivider(event.entry);
+                     this.footer.invalidate();
+                     this.ui.requestRender();
+                 }
+@@ -2940,7 +2990,10 @@ export class InteractiveMode {
+                     this.ui.requestRender();
+                 }
+                 else if (event.message.role === "assistant") {
+-                    this.streamingComponent = new AssistantMessageComponent(undefined, this.hideThinkingBlock, this.getMarkdownThemeWithSettings(), this.hiddenThinkingLabel, this.outputPad, this.getMarkdownTransformers());
++                    // The turn ends in this process: the hook is told so (`live`), unlike a turn drawn again on resume or rebuild.
++                    const presentLive = this.options.errorPresentation;
++                    this.streamingComponent = new AssistantMessageComponent(undefined, this.hideThinkingBlock, this.getMarkdownThemeWithSettings(), this.hiddenThinkingLabel, this.outputPad, this.getMarkdownTransformers(), undefined, undefined, presentLive && ((input) => presentLive({ ...input, live: true })));
++                    this.streamingComponent.setExpanded(this.toolOutputExpanded);
+                     this.streamingMessage = event.message;
+                     this.chatContainer.addChild(this.streamingComponent);
+                     this.streamingComponent.updateContent(this.streamingMessage, true);
+@@ -2993,11 +3046,14 @@ export class InteractiveMode {
+                         if (!errorMessage) {
+                             errorMessage = this.streamingMessage.errorMessage || "Error";
+                         }
+-                        for (const [, component] of this.pendingTools.entries()) {
+-                            component.updateResult({
+-                                content: [{ type: "text", text: errorMessage }],
+-                                isError: true,
+-                            });
++                        const pending = [...this.pendingTools.values()];
++                        if (!this.presentStoppedTools(this.streamingMessage, pending, this.session.retryAttempt, true)) {
++                            for (const component of pending) {
++                                component.updateResult({
++                                    content: [{ type: "text", text: errorMessage }],
++                                    isError: true,
++                                });
++                            }
+                         }
+                         this.pendingTools.clear();
+                         this.maybeSuggestBugReport(this.streamingMessage);
+@@ -3110,21 +3166,12 @@ export class InteractiveMode {
+                     }
+                 }
+                 else if (event.result) {
+-                    const entries = this.sessionManager.buildContextEntries();
+-                    if (entries[0]?.type !== "compaction") {
+-                        throw new Error("Completed compaction is missing from the session context");
+-                    }
+-                    this.chatContainer.clear();
+-                    // The latest compaction is prepended for model context; append it below at its chronological position.
+-                    this.renderSessionEntries(entries.slice(1));
+-                    this.addMessageToChat(createCompactionSummaryMessage(event.result.summary, event.result.tokensBefore, new Date().toISOString()));
+-                    if (event.result.usage) {
+-                        this.addCompactionCostNotice({
+-                            type: "compaction_cost",
+-                            kind: "compaction",
+-                            usage: event.result.usage,
+-                        });
++                    const compaction = this.sessionManager.getBranch().findLast((entry) => entry.type === "compaction");
++                    if (!compaction) {
++                        throw new Error("Completed compaction is missing from the session branch");
+                     }
++                    // The transcript above stays; the divider marks the compaction where it happened, as a resume draws it.
++                    this.addCompactionDivider(compaction);
+                     this.footer.invalidate();
+                 }
+                 else if (event.errorMessage) {
+@@ -3160,7 +3207,24 @@ export class InteractiveMode {
+                 this.clearStatusIndicator("retry");
+                 // Show error only on final failure (success shows normal response)
+                 if (!event.success) {
+-                    this.showError(`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`);
++                    // The hook draws the end of retrying (an owner's stop reads as one); without it, Pi's error line.
++                    const presented = this.options.errorPresentation?.({
++                        stopReason: event.finalError === "Retry cancelled" ? "aborted" : "error",
++                        ...(event.finalError ? { errorMessage: event.finalError } : {}),
++                        partial: false,
++                        toolCallsNotRun: 0,
++                        retryAttempts: event.attempt,
++                        retryEnded: true,
++                        timestamp: Date.now(),
++                        live: true,
++                    });
++                    if (presented) {
++                        this.chatContainer.addChild(new Spacer(1));
++                        this.chatContainer.addChild(errorRowsComponent(presented, this.toolOutputExpanded));
++                    }
++                    else {
++                        this.showError(`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`);
++                    }
+                 }
+                 this.ui.requestRender();
+                 break;
+@@ -3280,7 +3344,7 @@ export class InteractiveMode {
+             }
+             case "compactionSummary": {
+                 this.chatContainer.addChild(new Spacer(1));
+-                const component = new CompactionSummaryMessageComponent(message, this.getMarkdownThemeWithSettings(), this.outputPad, this.getMarkdownTransformers(), options?.messageId, options?.timestamp);
++                const component = new CompactionSummaryMessageComponent(message, this.getMarkdownThemeWithSettings(), this.outputPad, this.getMarkdownTransformers(), options?.messageId, options?.timestamp, this.compactionTokensAfter(options?.messageId));
+                 component.setExpanded(this.toolOutputExpanded);
+                 this.chatContainer.addChild(component);
+                 break;
+@@ -3314,6 +3378,15 @@ export class InteractiveMode {
                          }
                      }
                      else {
 +                        // A host-made input the host presents itself (a notice row); the model still receives the text.
-+                        const presented = this.options.userPresentation?.(textContent);
++                        const presented = this.options.userPresentation?.(textContent, (text) => new UserMessageComponent(text, this.getMarkdownThemeWithSettings(), this.outputPad, this.getMarkdownTransformers(), options?.messageId, options?.timestamp));
 +                        if (presented) {
 +                            if (isExpandable(presented)) {
 +                                presented.setExpanded(this.toolOutputExpanded);
@@ -763,7 +1687,305 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..19f737b375ec9ff277df99ccde3fcdeb
                          const userComponent = new UserMessageComponent(textContent, this.getMarkdownThemeWithSettings(), this.outputPad, this.getMarkdownTransformers(), options?.messageId, options?.timestamp);
                          this.chatContainer.addChild(userComponent);
                      }
-@@ -3814,6 +3832,10 @@ export class InteractiveMode {
+@@ -3324,7 +3397,8 @@ export class InteractiveMode {
+                 break;
+             }
+             case "assistant": {
+-                const assistantComponent = new AssistantMessageComponent(message, this.hideThinkingBlock, this.getMarkdownThemeWithSettings(), this.hiddenThinkingLabel, this.outputPad, this.getMarkdownTransformers(), options?.messageId, options?.timestamp);
++                const assistantComponent = new AssistantMessageComponent(message, this.hideThinkingBlock, this.getMarkdownThemeWithSettings(), this.hiddenThinkingLabel, this.outputPad, this.getMarkdownTransformers(), options?.messageId, options?.timestamp, this.options.errorPresentation);
++                assistantComponent.setExpanded(this.toolOutputExpanded);
+                 this.chatContainer.addChild(assistantComponent);
+                 break;
+             }
+@@ -3337,6 +3411,33 @@ export class InteractiveMode {
+             }
+         }
+     }
++    /**
++     * A turn the owner stopped, drawn by the `errorPresentation` hook: its tool calls that never ran read as not run
++     * and the hook's one row follows them. False (nothing changed) without the hook, for a failed turn, or when the
++     * hook declines, so the caller marks the calls failed as before.
++     */
++    presentStoppedTools(message, components, retryAttempts, live) {
++        const present = this.options.errorPresentation;
++        if (!present || message.stopReason !== "aborted" || components.length === 0)
++            return false;
++        const presented = present({
++            stopReason: "aborted",
++            ...(message.errorMessage ? { errorMessage: message.errorMessage } : {}),
++            partial: message.content.some((c) => c.type === "text" && c.text.trim()),
++            toolCallsNotRun: components.length,
++            retryAttempts,
++            ...(typeof message.timestamp === "number" ? { timestamp: message.timestamp } : {}),
++            live,
++        });
++        if (!presented)
++            return false;
++        for (const component of components) {
++            component.markNotRun(message.errorMessage || "Operation aborted");
++        }
++        this.chatContainer.addChild(new Spacer(1));
++        this.chatContainer.addChild(errorRowsComponent(presented, this.toolOutputExpanded));
++        return true;
++    }
+     renderSessionItems(items, messageMeta, options = {}) {
+         this.pendingTools.clear();
+         const renderedPendingTools = new Map();
+@@ -3371,6 +3472,7 @@ export class InteractiveMode {
+                     timestamp: meta?.timestamp,
+                 });
+                 // Render tool call components
++                const stoppedTools = [];
+                 for (const content of message.content) {
+                     if (content.type === "toolCall") {
+                         const component = new ToolExecutionComponent(content.name, content.id, content.arguments, {
+@@ -3381,24 +3483,29 @@ export class InteractiveMode {
+                         component.setExpanded(this.toolOutputExpanded);
+                         this.chatContainer.addChild(component);
+                         if (message.stopReason === "aborted" || message.stopReason === "error") {
+-                            let errorMessage;
+-                            if (message.stopReason === "aborted") {
+-                                const retryAttempt = this.session.retryAttempt;
+-                                errorMessage =
+-                                    retryAttempt > 0
+-                                        ? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
+-                                        : "Operation aborted";
+-                            }
+-                            else {
+-                                errorMessage = message.errorMessage || "Error";
+-                            }
+-                            component.updateResult({ content: [{ type: "text", text: errorMessage }], isError: true });
++                            stoppedTools.push(component);
+                         }
+                         else {
+                             renderedPendingTools.set(content.id, component);
+                         }
+                     }
+                 }
++                if (stoppedTools.length > 0 && !this.presentStoppedTools(message, stoppedTools, retryAttemptsOf(message), false)) {
++                    let errorMessage;
++                    if (message.stopReason === "aborted") {
++                        const retryAttempt = this.session.retryAttempt;
++                        errorMessage =
++                            retryAttempt > 0
++                                ? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
++                                : "Operation aborted";
++                    }
++                    else {
++                        errorMessage = message.errorMessage || "Error";
++                    }
++                    for (const component of stoppedTools) {
++                        component.updateResult({ content: [{ type: "text", text: errorMessage }], isError: true });
++                    }
++                }
+                 if (message.stopReason !== "aborted" && message.stopReason !== "error") {
+                     const miss = cacheMisses.get(message);
+                     if (miss)
+@@ -3550,19 +3657,177 @@ export class InteractiveMode {
+         this.chatContainer.addChild(new ThemedText(() => theme.fg("warning", `${label}: ${reBilled}`), 1, 0));
+     }
+     renderInitialMessages() {
+-        const entries = this.sessionManager.buildContextEntries();
+-        this.renderSessionEntries(entries, {
++        // The whole branch, not the model context: text from before a compaction stays readable above its divider.
++        this.renderTranscriptHistory(this.sessionManager.getBranch(), {
+             updateFooter: true,
+             populateHistory: true,
+         });
+         this.renderProjectTrustWarningIfNeeded();
+-        // Show compaction info if session was compacted
+-        const allEntries = this.sessionManager.getEntries();
+-        const compactionCount = allEntries.filter((e) => e.type === "compaction").length;
+-        if (compactionCount > 0) {
+-            const times = compactionCount === 1 ? "1 time" : `${compactionCount} times`;
+-            this.showStatus(`Session compacted ${times}`);
++    }
++    /**
++     * Draws the session branch `entries`: its newest part, with one `load earlier` row above it when the branch is
++     * longer than one part. Expects an empty transcript.
++     */
++    renderTranscriptHistory(entries, options = {}) {
++        this.transcriptHistory = undefined;
++        const start = transcriptWindowStart(entries, entries.length, this.customEntryDrawn());
++        if (start > 0) {
++            const results = new Map();
++            for (const entry of entries) {
++                if (entry.type === "message" && entry.message.role === "toolResult")
++                    results.set(entry.message.toolCallId, entry.message);
++            }
++            const older = entries.slice(0, start);
++            const history = this.startTranscriptHistory(results);
++            history.chunks.push({ entries: older, messages: older.filter(isTranscriptMessage).length });
++            this.updateLoadEarlierRow();
++        }
++        this.renderSessionEntries(start > 0 ? entries.slice(start) : entries, options);
++    }
++    /** Puts the `load earlier` row first in the transcript and returns the (empty) history behind it. */
++    startTranscriptHistory(results) {
++        const row = new TranscriptLoadEarlierComponent(() => this.loadEarlierTranscript(), this.outputPad);
++        this.transcriptHistory = { row, chunks: [], results };
++        this.chatContainer.children.unshift(row);
++        return this.transcriptHistory;
++    }
++    updateLoadEarlierRow() {
++        const history = this.transcriptHistory;
++        history?.row.setHiddenMessages(history.chunks.reduce((sum, chunk) => sum + chunk.messages, 0));
++    }
++    /** The compaction divider and its cost notice at the end of the transcript, which keeps everything above it. */
++    addCompactionDivider(entry) {
++        this.addMessageToChat(createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp), {
++            messageId: entry.id,
++            timestamp: entry.timestamp,
++        });
++        if (entry.usage) {
++            this.addCompactionCostNotice({ type: "compaction_cost", kind: "compaction", usage: entry.usage });
++        }
++        this.trimTranscript();
++    }
++    /**
++     * The estimated model context right after the compaction `entryId`: the estimate the compaction reports when it
++     * ends, recomputed from the session so a resumed divider reads the same. Undefined for any other entry.
++     */
++    compactionTokensAfter(entryId) {
++        if (entryId === undefined || this.sessionManager.getEntry(entryId)?.type !== "compaction")
++            return undefined;
++        let tokens = 0;
++        for (const message of buildSessionProjection(this.sessionManager.getEntries(), entryId).messages)
++            tokens += estimateTokens(message);
++        return tokens;
++    }
++    /**
++     * A live transcript is no longer cleared at a compaction, so there it keeps its newest `TRANSCRIPT_WINDOW_ROWS`
++     * rows drawn once it holds more than `TRANSCRIPT_TRIM_AT`; the older rows move behind the `load earlier` row as they are.
++     */
++    trimTranscript() {
++        const children = this.chatContainer.children;
++        const index = this.transcriptHistory ? children.indexOf(this.transcriptHistory.row) : -1;
++        if (index < 0)
++            this.transcriptHistory = undefined;
++        const first = index + 1;
++        if (children.length - first <= TRANSCRIPT_TRIM_AT)
++            return;
++        const hidden = children.splice(first, children.length - first - TRANSCRIPT_WINDOW_ROWS);
++        const history = this.transcriptHistory ?? this.startTranscriptHistory(new Map());
++        // The settings the rows were drawn with: on their return only what changed meanwhile is applied.
++        history.chunks.push({
++            components: hidden,
++            messages: hidden.filter(isTranscriptMessageComponent).length,
++            drawn: { expanded: this.toolOutputExpanded, outputPad: this.outputPad, hideThinkingBlock: this.hideThinkingBlock },
++        });
++        this.updateLoadEarlierRow();
++    }
++    /**
++     * Draws the newest hidden part above the rows already shown (the `load earlier` row's click). The reader keeps
++     * their place: the rows they were reading stay where they were on screen.
++     */
++    loadEarlierTranscript() {
++        const history = this.transcriptHistory;
++        const index = history ? this.chatContainer.children.indexOf(history.row) : -1;
++        if (!history || index < 0) {
++            this.transcriptHistory = undefined;
++            return;
+         }
++        const chunk = history.chunks.pop();
++        if (!chunk)
++            return;
++        const view = this.transcriptScrollView;
++        const width = history.row.lastWidth;
++        const anchored = view !== undefined && width > 0 && !view.isFollowingEnd;
++        const heightBefore = anchored ? this.chatContainer.render(width).length : 0;
++        let components;
++        if (chunk.entries) {
++            const start = transcriptWindowStart(chunk.entries, chunk.entries.length, this.customEntryDrawn());
++            if (start > 0) {
++                const older = chunk.entries.slice(0, start);
++                history.chunks.push({ entries: older, messages: older.filter(isTranscriptMessage).length });
++            }
++            components = this.renderDetachedEntries(chunk.entries.slice(start), history.results);
++        }
++        else {
++            components = chunk.components;
++            for (const component of components)
++                this.restoreTranscriptComponent(component, chunk.drawn);
++        }
++        this.chatContainer.children.splice(index + 1, 0, ...components);
++        if (history.chunks.length === 0) {
++            this.chatContainer.children.splice(index, 1);
++            this.transcriptHistory = undefined;
++        }
++        else {
++            this.updateLoadEarlierRow();
++        }
++        if (anchored) {
++            const grown = this.chatContainer.render(width).length - heightBefore;
++            view.updateLayout(this.documentContainer.render(width).length, view.viewportHeight, () => this.ui.requestRender());
++            view.scrollTo(view.scrollTop + grown, { disableFollow: true });
++        }
++        this.ui.requestRender();
++    }
++    /** Draws session entries into a detached transcript and returns its rows, leaving the live transcript's state alone. */
++    renderDetachedEntries(entries, results) {
++        const live = this.chatContainer;
++        const pendingTools = this.pendingTools;
++        const cacheWarmingNotice = this.cacheWarmingNotice;
++        const holder = new TranscriptContainer();
++        this.chatContainer = holder;
++        this.pendingTools = new Map();
++        try {
++            this.renderSessionEntries(entries);
++            // A call whose result lies in a newer part is settled from it.
++            for (const [toolCallId, component] of this.pendingTools) {
++                const result = results.get(toolCallId);
++                if (result)
++                    component.updateResult(result);
++            }
++        }
++        finally {
++            this.chatContainer = live;
++            this.pendingTools = pendingTools;
++            this.cacheWarmingNotice = cacheWarmingNotice;
++        }
++        return holder.children;
++    }
++    /** Whether a custom entry type draws a row: the check `addCustomEntryToChat` makes. */
++    customEntryDrawn() {
++        const runner = this.session.extensionRunner;
++        return (customType) => Boolean(runner.getEntryRenderer(customType));
++    }
++    /**
++     * A row that waited behind the `load earlier` row takes only the settings that changed since it was drawn with
++     * `drawn`; a row or group the owner opened on its own stays open.
++     */
++    restoreTranscriptComponent(component, drawn) {
++        if (isExpandable(component) && drawn.expanded !== this.toolOutputExpanded)
++            component.setExpanded(this.toolOutputExpanded);
++        if (drawn.outputPad !== this.outputPad && "setOutputPad" in component && typeof component.setOutputPad === "function")
++            component.setOutputPad(this.outputPad);
++        if (drawn.hideThinkingBlock !== this.hideThinkingBlock && component instanceof AssistantMessageComponent)
++            component.setHideThinkingBlock(this.hideThinkingBlock);
++        component.invalidate();
+     }
+     renderProjectTrustWarningIfNeeded() {
+         if (this.settingsManager.isProjectTrusted() || !hasTrustRequiringProjectResources(this.sessionManager.getCwd())) {
+@@ -3587,7 +3852,7 @@ export class InteractiveMode {
+     }
+     rebuildChatFromMessages() {
+         this.chatContainer.clear();
+-        this.renderSessionEntries(this.sessionManager.buildContextEntries());
++        this.renderTranscriptHistory(this.sessionManager.getBranch());
+     }
+     // =========================================================================
+     // Key handlers
+@@ -3643,7 +3908,7 @@ export class InteractiveMode {
+         this.stop();
+         await this.runtimeHost.dispose();
+         const resumeCommand = formatResumeCommand(this.sessionManager);
+-        if (resumeCommand) {
++        if (resumeCommand && this.options.resumeHint !== false) {
+             process.stdout.write(`${chalk.dim("To resume this session:")} ${resumeCommand}\n`);
+         }
+         process.exit(0);
+@@ -3814,6 +4079,10 @@ export class InteractiveMode {
          }
      }
      handleDequeue() {
@@ -774,7 +1996,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..19f737b375ec9ff277df99ccde3fcdeb
          const restored = this.restoreQueuedMessagesToEditor();
          if (restored === 0) {
              this.showStatus("No queued messages to restore");
-@@ -3990,7 +4012,7 @@ export class InteractiveMode {
+@@ -3990,7 +4259,7 @@ export class InteractiveMode {
       * Clears both session queue and compaction queue.
       */
      clearAllQueues() {
@@ -783,7 +2005,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..19f737b375ec9ff277df99ccde3fcdeb
          const compactionSteering = this.compactionQueuedMessages
              .filter((msg) => msg.mode === "steer")
              .map((msg) => msg.text);
-@@ -4010,6 +4032,8 @@ export class InteractiveMode {
+@@ -4010,6 +4279,8 @@ export class InteractiveMode {
              this.pendingMessagesContainer.addChild(component);
          }
          const { steering: steeringMessages, followUp: followUpMessages } = this.getAllQueuedMessages();
@@ -792,7 +2014,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..19f737b375ec9ff277df99ccde3fcdeb
          if (steeringMessages.length > 0 || followUpMessages.length > 0) {
              this.pendingMessagesContainer.addChild(new Spacer(1));
              for (const message of steeringMessages) {
-@@ -4026,6 +4050,13 @@ export class InteractiveMode {
+@@ -4026,6 +4297,13 @@ export class InteractiveMode {
          }
      }
      restoreQueuedMessagesToEditor(options) {
@@ -806,7 +2028,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..19f737b375ec9ff277df99ccde3fcdeb
          const { steering, followUp } = this.clearAllQueues();
          const allQueued = [...steering, ...followUp];
          if (allQueued.length === 0) {
-@@ -5919,7 +5950,7 @@ export class InteractiveMode {
+@@ -5919,7 +6197,7 @@ export class InteractiveMode {
  | \`${externalEditor}\` | Edit message in external editor |
  | \`${copyMessage}\` | Copy selection or last assistant message |
  | \`${followUp}\` | Queue follow-up message |

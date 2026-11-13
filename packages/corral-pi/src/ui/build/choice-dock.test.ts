@@ -5,7 +5,7 @@ import { ChoiceDock, choiceLines, choiceRows } from "./choice-dock.ts";
 import type { ChoiceDialog } from "./choice-dock.ts";
 import { PANEL_SELECTED } from "../panels-view.ts";
 
-const ENTER = "\r", ESC = "\x1b", DOWN = "\x1b[B";
+const ENTER = "\r", ESC = "\x1b", DOWN = "\x1b[B", UP = "\x1b[A", F7 = "\x1b[18~";
 const click = (x: number, y: number): TuiMouseEvent =>
   ({ type: "click", button: "left", x, y, screenX: x, screenY: y, width: 120, height: 12, shift: false, alt: false, ctrl: false });
 const screen = (lines: readonly string[]) => lines.map(line => stripTerminalSequences(line));
@@ -63,7 +63,7 @@ test("digits outside the options do nothing and are not typed into the composer"
 test("an unavailable option is never picked; the host is asked to raise its reason", () => {
   const { dock, calls } = harness(EXIT);
   dock.handleKey("2");
-  dock.handleKey(DOWN); dock.handleKey("k");
+  dock.handleKey(DOWN); dock.handleKey(UP);
   expect(dock.selected).toBe(1);
   dock.handleKey(ENTER);
   expect(calls.picks).toEqual([]);
@@ -78,13 +78,31 @@ test("the guard after an automatic open swallows Enter and digits only", () => {
   expect(calls.picks).toEqual([]);
   dock.handleKey(DOWN);
   expect(dock.selected).toBe(1);
-  dock.handleKey("j");
+  dock.handleKey(DOWN);
   expect(dock.selected).toBe(2);
   dock.handleKey(ESC);
   expect(calls.dismissed).toBe(1);
   dock.guard(0);
   dock.handleKey(ENTER);
   expect(calls.picks).toEqual([2]);
+});
+
+test("view keys pass the docked dialog with its selection kept; a letter is typing and leaves the dialog", () => {
+  const { dock, calls } = harness(EXIT);
+  dock.handleKey(DOWN);
+  expect(dock.handleKey(F7)).toBeFalse(); expect(dock.handleKey("\x1b1")).toBeFalse();
+  expect(dock.focused).toBeTrue(); expect(dock.selected).toBe(1);
+  expect(dock.handleKey("a")).toBeFalse();
+  expect(dock.focused).toBeFalse(); expect(dock.selected).toBe(1);
+  expect(calls.picks).toEqual([]); expect(calls.dismissed).toBe(0);
+});
+
+test("a bracketed paste is typing: the dialog gives up the keys, so the next Enter never picks an option", () => {
+  const { dock, calls } = harness(EXIT);
+  expect(dock.handleKey("\x1b[200~keep going\x1b[201~")).toBeFalse();
+  expect(dock.focused).toBeFalse();
+  expect(dock.handleKey(ENTER)).toBeFalse();
+  expect(calls.picks).toEqual([]); expect(calls.refused).toEqual([]);
 });
 
 test("the selected option stays visible when the rows are fewer than the content", () => {

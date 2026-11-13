@@ -5,6 +5,7 @@ import type {
 } from "../../build/types.ts";
 import { BuildController } from "./build-controller.ts";
 import { BUILD_BOARD_ENTRY, BUILD_EXIT_ENTRY, BUILD_FINISH_ENTRY } from "./build-entries.ts";
+import type { TranscriptMark } from "../../host/transcript-marks.ts";
 import type { BuildEntry } from "./build-entries.ts";
 
 const ENTER = "\r", ESC = "\x1b";
@@ -38,7 +39,7 @@ function harness() {
   const s = {
     children: [] as ChildSnapshot[], target: "parent", exit: { phase: "none" } as ExitState, proposed: undefined as BoardPlan | undefined,
     tasks: [] as BoardTaskStatus[], steer: true, answer: true, draft: "", focus: "composer", calls: [] as string[],
-    notices: [] as { text: string; tone: string }[], posts: [] as BuildEntry<unknown>[],
+    notices: [] as { text: string; tone: string }[], posts: [] as BuildEntry<unknown>[], marks: [] as TranscriptMark[],
     preview: Promise.withResolvers<BoardPreview>(),
     /** Called where the host notifies exit subscribers and where the panels post an entry. */
     changed: undefined as (() => void) | undefined, posted: undefined as (() => void) | undefined,
@@ -100,6 +101,7 @@ function harness() {
     focusComposer: () => { s.focus = "composer"; }, focusDock: () => { s.focus = "choice"; },
     notice: (text, tone) => { s.notices.push({ text, tone }); },
     post: entry => { s.posts.push(entry); s.posted?.(); },
+    marks: { add: mark => { s.marks.push(mark); return true; } },
     showBoard: () => { s.calls.push("board"); },
     openChild: id => { s.calls.push(`open ${id}`); },
     color: () => "", now: () => 1000, changed: () => {},
@@ -156,7 +158,8 @@ test("picking an unavailable exit never chooses and names the reason", async () 
   controller.sync();
   controller.dock.guard(0);
   key("2");
-  key("j"); key("k"); key(ENTER);
+  // Arrows move the selection away and back; a letter would be typing that hands the keys to the composer.
+  key("\x1b[B"); key("\x1b[A"); key(ENTER);
   await settle();
   expect(s.calls).toEqual([]);
   expect(s.notices.filter(notice => notice.text.includes("Project policy requires independent review."))).toHaveLength(2);
@@ -276,4 +279,51 @@ test("one choice posts one exit entry, after earlier dismissals and with syncs f
   expect(s.calls.filter(call => call.startsWith("choose"))).toEqual(["choose keep"]);
   expect(s.posts.filter(entry => entry.customType === BUILD_EXIT_ENTRY)).toHaveLength(1);
   expect(s.posts.filter(entry => entry.customType === BUILD_FINISH_ENTRY)).toHaveLength(1);
+});
+
+test("a child's question, each answer and a delivered steer leave one transcript mark each", async () => {
+  const { s, controller, key } = harness();
+  const acts = () => s.marks.flatMap(mark => mark.kind === "child" ? [`${mark.act} ${mark.child}`] : []);
+  s.children = [asking("picker-ui", 10)];
+  controller.sync(); controller.sync();
+  expect(acts()).toEqual(["asked picker-ui"]);
+  controller.dock.guard(0);
+  key("1");
+  expect(acts()).toEqual(["asked picker-ui", "answered picker-ui"]);
+
+  // A written answer through the composer.
+  s.children = [asking("picker-ui", 30)];
+  controller.sync();
+  controller.dock.guard(0);
+  key("3");
+  s.draft = "Show both";
+  await controller.submit("Show both");
+  expect(acts().filter(act => act === "answered picker-ui")).toHaveLength(2);
+
+  // A delivered steer names the child once; a refused one records nothing.
+  s.children = [child("host-slots", "running")];
+  controller.point("host-slots");
+  await controller.submit("use the manifest lock");
+  s.steer = false;
+  await controller.submit("again");
+  expect(acts().filter(act => act === "steered host-slots")).toHaveLength(1);
+});
+
+test("an exit choice or a plan that cannot dock over a draft still raises a notice", () => {
+  const { s, controller } = harness();
+  s.draft = "half-written";
+  s.exit = { phase: "pending" };
+  controller.sync();
+  expect(controller.dialog()).toBeUndefined();
+  expect(s.notices.filter(notice => notice.tone === "warning")).toHaveLength(1);
+  s.proposed = PLAN;
+  controller.sync();
+  expect(controller.dialog()).toBeUndefined();
+  expect(s.notices.filter(notice => notice.tone === "warning")).toHaveLength(2);
+  // One that docks says nothing more.
+  const docked = harness();
+  docked.s.exit = { phase: "pending" };
+  docked.controller.sync();
+  expect(docked.controller.dialog()).toBeDefined();
+  expect(docked.s.notices).toEqual([]);
 });

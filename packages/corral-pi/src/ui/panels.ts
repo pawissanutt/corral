@@ -3,20 +3,22 @@ import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionUIContext, InteractiveChatPresentation } from "@earendil-works/pi-coding-agent";
 import { decodeKittyPrintable, isKeyRelease, matchesKey, TuiAltScreen, visibleWidth, type Component, type OverlayHandle, type OverlayOptions, type Terminal, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
-import type { BuildUi, FleetControl } from "../build/types.ts";
+import { LIVE_CHILD_STATES, type BuildUi, type FleetControl } from "../build/types.ts";
 import { PanelTerminal, PANEL_BREAKPOINT, PANEL_WIDTH, RAIL_MIN, RAIL_MAX, MIN_MAIN, type PanelSurface } from "./panel-terminal.ts";
 import { NativeWorkbench, boardUnavailable, plainClick, RULE_ROWS, type MainView } from "./workbench.ts";
 import type { HistoryRead } from "./history.ts";
 import type { ReviewBases } from "./review-store.ts";
 import type { JobControl } from "../host/job-controls.ts";
 import type { QueueControl } from "../host/queue-control.ts";
+import type { MarkSink } from "../host/transcript-marks.ts";
 import { hiddenThinkingLabel, panelTheme, thinkingLead, userLabel } from "./panels-theme.ts";
-import { type Appearance, type Density, type Motion, PACKAGED } from "./appearance.ts";
+import { type Appearance, type Bell, type Density, type Motion, PACKAGED } from "./appearance.ts";
 import { Activity, ActivityClock, elapsedLabel, PassCache, SYSTEM_SCHEDULER, type Scheduler, type Ticker } from "./activity.ts";
 import { ActionPalette, type HostAction } from "./action-palette.ts";
 import { setCanvasAppearance } from "./panel-canvas.ts";
 import { agentColor, setAgentHueAppearance } from "./agent-hues.ts";
 import { statusBar } from "./panels-chrome.ts";
+import { titleText, type TitleAttention } from "./chrome.ts";
 import { composerBar, composerBottom, composerRow, composerTitle, composerTop, type ComposerHit } from "./composer-chrome.ts";
 import { chromeTier, COMPACT_COLUMNS, SHORT_ROWS, type Notice } from "./header.ts";
 import { contextHints, footerBase, footerRow, keyGroups, keyLabel, piKey, queueFocusKey, targetKey, type FooterHit, type HintState, type KeyContext } from "./keymap.ts";
@@ -26,12 +28,17 @@ import { QueueDock } from "./queue-dock.ts";
 import { Sidebar, type SideHit, type SideTarget } from "./sidebar.ts";
 import { inspectorActivity } from "./inspector.ts";
 import { openOutputPager } from "./job-detail.ts";
-import { pad, plainLabel, setPanelAppearance, PANEL_ERROR, PANEL_RAISED, PANEL_RULE, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING, type PanelSnapshot } from "./panels-view.ts";
+import { plainLabel, setPanelAppearance, type PanelSnapshot } from "./panels-view.ts";
 import { BuildController } from "./build/build-controller.ts";
 import { BUILD_BOARD_ENTRY, BUILD_EXIT_ENTRY, BUILD_FINISH_ENTRY, buildEntryRenderer, type BuildEntry } from "./build/build-entries.ts";
-import { choiceRows } from "./build/choice-dock.ts";
+import { choiceRows, PASTE_START } from "./build/choice-dock.ts";
 import { childIdOf, type BuildCardSource } from "./build/contract.ts";
 import { steerable } from "./build/fleet-rows.ts";
+import { QuestionDock, questionsKey, type QuestionSource } from "./owner-questions.ts";
+import { sidebarKeyLabel, type SidebarKey } from "./herdr-keys.ts";
+import { EscGuard } from "./esc-guard.ts";
+import { AttentionSignal } from "./attention.ts";
+import { noticeGlyph, toastFrame } from "./toast.ts";
 
 export interface NativePanelsOptions {
   readonly build?: BuildUi;
@@ -55,8 +62,12 @@ export interface NativePanelsOptions {
   readonly reviewBases?: ReviewBases;
   /** The host's delivery of composer text to the current child target; false when the child or the session cannot take it. */
   readonly deliverBuildInput?: (text: string) => Promise<boolean>;
-  /** Time and interval source of the working indicator's clock; tests inject one. */
+  /** Time and interval source of the working indicator's clock and the Esc guard; tests inject one. */
   readonly scheduler?: Scheduler;
+  /** The sidebar toggle the host chose at startup (`sidebarToggleKey()`: Alt+B when herdr's prefix is Ctrl+B); Ctrl+B by default. */
+  readonly sidebarKey?: SidebarKey;
+  /** Where the build controller appends transcript marks; absent outside build sessions or before the host wires it. */
+  readonly marks?: MarkSink;
 }
 /** Views a tool row's clickable label can open by name; `plan` is the sidebar's Plan tab. */
 export type PanelView = "chat" | "agents" | "changes" | "task" | "proof" | "artifacts" | "inbox" | "usage" | "board" | "plan";
@@ -69,8 +80,10 @@ const PANEL_VIEWS: Readonly<Record<string, MainView>> = {
 const TASK_VIEWS: Readonly<Partial<Record<MainView, true>>> = { task: true, evidence: true, graph: true, timeline: true };
 const PANEL_TARGETS = "chat, agents, changes, task, proof, inbox, usage, graph, timeline, history, receipts, project, refresh or toggle";
 
-/** Where keys go when no Pi dialog or overlay is open: Pi's editor, the main view, the sidebar, the queue or a docked build dialog. */
-export type PanelFocus = "composer" | "main" | "sidebar" | "queue" | "choice";
+/** Where keys go when no Pi dialog or overlay is open: Pi's editor, the main view, the sidebar, the queue, the owner questions or a docked build dialog. */
+export type PanelFocus = "composer" | "main" | "sidebar" | "queue" | "questions" | "choice";
+/** Where the owner is, compared around an Esc to tell whether it navigated. */
+interface Place { readonly key: string; readonly dialog: string | undefined; readonly chat: boolean }
 
 /** The session's build controls, with a steer to the current target delivered through the host, which refuses it once the session closes or unbinds. */
 function routedBuild(build: BuildUi, deliver: ((text: string) => Promise<boolean>) | undefined): BuildUi {
@@ -121,6 +134,19 @@ export class NativePanels implements PanelSurface {
   appearance: Appearance = "dark";
   density: Density = "comfortable";
   motion: Motion = "animate";
+  bell: Bell = "off";
+  /** The key that collapses or expands the sidebar; every cap draws it, and only it toggles. */
+  readonly sidebarToggle: SidebarKey;
+  /** The owner-question card as a dock item, once the host attached its questions. */
+  readonly questionDock: QuestionDock;
+  private questions: QuestionSource | undefined;
+  private unsubscribeQuestions: (() => void) | undefined;
+  /** After an Esc that navigated, a further Esc this soon is ignored instead of stopping the turn. */
+  private readonly escGuard: EscGuard;
+  /** The terminal title and the bell, from the session's attention state; set once the session starts. */
+  private attention: AttentionSignal | undefined;
+  /** A reopen notice raised by dismissing a docked dialog, cleared once that dialog's subject has an outcome. */
+  private dismissal: { readonly notice: Notice; readonly settled: () => boolean } | undefined;
   /** The shared redraw clock: rows that keep changing after their tool returned (a running job, a detached cell) hold it. */
   readonly ticker: Ticker;
   /** What the main agent is doing, for the composer's working indicator and the header's state word. */
@@ -154,7 +180,13 @@ export class NativePanels implements PanelSurface {
     this.activity = new Activity(() => scheduler.now());
     this.clock = new ActivityClock(scheduler, () => this.activity.busy(), () => this.refresh(), () => this.motion === "still");
     this.ticker = this.clock;
+    this.sidebarToggle = options.sidebarKey ?? "ctrl+b";
     this.sidebar = new Sidebar(() => this.refresh());
+    this.sidebar.toggleKey = sidebarKeyLabel(this.sidebarToggle);
+    this.escGuard = new EscGuard(() => scheduler.now());
+    this.questionDock = new QuestionDock({
+      source: () => this.questions, focus: () => this.focusQuestions(), focusComposer: () => this.focusComposer(), changed: () => this.refresh(),
+    });
     const build = options.build ? routedBuild(options.build, options.deliverBuildInput) : undefined;
     this.build = build ? new BuildController({
       ui: build, state: () => this.snapshot()?.build, streaming: () => this.snapshot()?.streaming ?? false,
@@ -162,7 +194,7 @@ export class NativePanels implements PanelSurface {
       focusComposer: () => this.focusComposer(), focusDock: () => this.focusChoice(),
       notice: (text, tone) => this.workbench.notice(text, tone), post: entry => this.post(entry),
       showBoard: () => { this.workbench.setView("board"); }, openChild: id => this.workbench.openChild(id),
-      color: agentColor, now: () => Date.now(), changed: () => this.refresh(),
+      color: agentColor, now: () => Date.now(), changed: () => this.refresh(), ...(options.marks ? { marks: options.marks } : {}),
     }) : undefined;
     this.queue = new QueueDock({
       items: () => this.snapshot()?.queue ?? [], control: () => this.options.queueControl,
@@ -175,7 +207,7 @@ export class NativePanels implements PanelSurface {
     this.workbench = new NativeWorkbench({ ...options, ...(build && this.build ? { build, buildController: this.build } : {}),
       snapshot: () => this.snapshot(),
       terminal: () => this.terminal ? { columns: this.terminal.physical.columns, rows: this.terminal.rows } : undefined,
-      onFocusMain: () => { this.sidebar.focused = false; this.queue.focused = false; this.blurDock(); this.closeKeyDrawer(); },
+      onFocusMain: () => { this.sidebar.focused = false; this.queue.focused = false; this.blurDocks(); this.closeKeyDrawer(); },
       canInteract: () => this.canInteract && !this.activeSelection?.(), changed: () => this.refresh(),
       rail: {
         width: () => this.wide && this.terminal ? this.terminal.railWidth : undefined,
@@ -214,7 +246,15 @@ export class NativePanels implements PanelSurface {
   /** The logical focus: Pi's editor always holds the TUI focus; the panels route keys by this. */
   get focus(): PanelFocus {
     if (this.build?.dock.focused && this.build.dialog()) return "choice";
+    if (this.questionDock.focused && this.questionDock.waiting) return "questions";
     return this.queue.focused ? "queue" : this.sidebar.focused ? "sidebar" : this.workbench.focused ? "main" : "composer";
+  }
+  /** The owner questions the host asks on the panels' behalf; their card becomes a dock item. */
+  attachQuestions(source: QuestionSource): void {
+    this.unsubscribeQuestions?.();
+    this.questions = source;
+    this.unsubscribeQuestions = source.subscribe(() => this.refresh());
+    this.refresh();
   }
   layoutChanged(): void { this.refresh(); }
   refresh(): void {
@@ -225,28 +265,49 @@ export class NativePanels implements PanelSurface {
     queueMicrotask(() => {
       this.queued = false;
       if (this.disposed) return;
+      this.settleDismissal();
       this.syncToast();
+      this.attention?.update(this.attentionState());
       this.requestRender?.();
     });
   }
   /**
-   * The workbench's notice as a toast: raised surface, rounded border in the rule colour, at the top right of the
-   * main view. It never takes the focus; a new notice replaces it and it leaves when the notice expires.
+   * What the session needs from the owner, for the terminal title: a docked or pending build choice, a child's
+   * question, a waiting owner question or a dialog the agent opened; else working while a turn runs or, as the
+   * header says, while a build child is still live; else idle.
+   */
+  private attentionState(): TitleAttention {
+    const build = this.build, ui = this.options.build, snapshot = this.snapshot();
+    const needs = this.activity.phase() === "owner" || !!build?.dialog() || (build?.questions().length ?? 0) > 0
+      || ui?.exit.state().phase === "pending" || !!ui?.board.proposed()
+      || (this.questions?.waiting().some(question => question.status === "pending") ?? false);
+    if (needs) return "needs-you";
+    const children = snapshot?.build?.fleet.children ?? [];
+    return this.activity.active || snapshot?.streaming || children.some(child => LIVE_CHILD_STATES.includes(child.state)) ? "working" : "idle";
+  }
+  /** A reopen notice whose subject has since had its outcome (the exit chosen, the question answered) is stale. */
+  private settleDismissal(): void {
+    const dismissal = this.dismissal;
+    if (!dismissal) return;
+    if (this.workbench.currentNotice !== dismissal.notice) { this.dismissal = undefined; return; }
+    if (!dismissal.settled()) return;
+    this.dismissal = undefined;
+    this.workbench.clearNotice(dismissal.notice);
+  }
+  /**
+   * A notice the header has no room for as a toast at the top right of the main view, sized from its wrapped
+   * text. It never takes the focus; a new notice replaces it and it leaves when the notice expires. The header's
+   * own frame decides each render whether it drew the notice, and the toast shows only when it did not.
    */
   private syncToast(): void {
     const notice = this.workbench.currentNotice, tui = this.tui, terminal = this.terminal;
     if (this.toast?.notice === notice) return;
     this.toast?.handle.hide(); this.toast = undefined;
     if (!notice || !tui || !terminal) return;
-    const main = terminal.mainColumns, width = Math.max(6, Math.min(visibleWidth(notice.text) + 4, main - 2));
-    const tone = notice.tone === "success" ? PANEL_SUCCESS : notice.tone === "warning" ? PANEL_WARNING : notice.tone === "error" ? PANEL_ERROR : PANEL_TEXT;
-    const lines = [
-      `${PANEL_RAISED}${PANEL_RULE}╭${"─".repeat(width - 2)}╮`,
-      `${PANEL_RAISED}${PANEL_RULE}│${tone} ${pad(notice.text, width - 4)}${PANEL_RAISED} ${PANEL_RULE}│`,
-      `${PANEL_RAISED}${PANEL_RULE}╰${"─".repeat(width - 2)}╯`,
-    ].map(line => line + "\x1b[0m");
-    const handle = tui.showOverlay({ render: () => lines, invalidate() {} }, {
-      row: this.workbench.bodyTop(), col: Math.max(0, main - 1 - width), width, nonCapturing: true, visible: () => !this.probing,
+    const main = terminal.mainColumns, frame = toastFrame(notice, main);
+    const handle = tui.showOverlay({ render: () => [...frame.lines], invalidate() {} }, {
+      row: this.workbench.bodyTop(), col: Math.max(0, main - 1 - frame.width), width: frame.width, nonCapturing: true,
+      visible: () => !this.probing && !this.workbench.noticeInHeader,
     });
     this.toast = { handle, notice };
   }
@@ -255,6 +316,7 @@ export class NativePanels implements PanelSurface {
     this.releaseLive = undefined; this.clock.dispose();
     this.toast?.handle.hide(); this.toast = undefined; this.tui = undefined;
     for (const unsubscribe of this.unsubscribeBuild) unsubscribe();
+    this.unsubscribeQuestions?.(); this.unsubscribeQuestions = undefined; this.questions = undefined; this.attention = undefined;
     this.build?.dispose();
     this.workbench.dispose();
     this.ui = undefined; this.pi = undefined;
@@ -274,33 +336,63 @@ export class NativePanels implements PanelSurface {
     if (!this.drawerByKey) return;
     this.drawerByKey = false; this.sidebar.drawer = false;
   }
-  /** Back to Pi's editor: the main view, the sidebar, the queue and a docked dialog give up the focus. */
+  /** Back to Pi's editor: the main view, the sidebar, the queue and the dock items give up the focus. */
   focusComposer(): void {
-    this.sidebar.focused = false; this.queue.focused = false; this.workbench.focused = false; this.blurDock();
+    this.sidebar.focused = false; this.queue.focused = false; this.workbench.focused = false; this.blurDocks();
     this.closeKeyDrawer(); this.refresh();
   }
-  private blurDock(): void { if (this.build) this.build.dock.focused = false; }
+  /** The docked build dialog and the owner-question card give up the keys; both stay docked. */
+  private blurDocks(): void {
+    if (this.build) this.build.dock.focused = false;
+    this.questionDock.focused = false;
+  }
   /** A docked build dialog takes the keys; it already marked itself focused. */
   private focusChoice(): void {
+    this.sidebar.focused = false; this.queue.focused = false; this.workbench.focused = false; this.questionDock.focused = false;
+    this.closeKeyDrawer(); this.refresh();
+  }
+  /** The owner-question card takes the keys. */
+  private focusQuestions(): void {
     this.sidebar.focused = false; this.queue.focused = false; this.workbench.focused = false;
+    if (this.build) this.build.dock.focused = false;
+    this.questionDock.focused = true;
     this.closeKeyDrawer(); this.refresh();
   }
   /** F6: focus the sidebar (opening the drawer when there is no rail), or the next tab once it has the focus. */
   private sidebarKey(): void {
     if (this.sidebar.focused) this.sidebar.nextTab();
     else {
-      this.queue.focused = false; this.workbench.focused = false; this.blurDock(); this.sidebar.focused = true;
+      this.queue.focused = false; this.workbench.focused = false; this.blurDocks(); this.sidebar.focused = true;
       if (!this.wide && !this.sidebar.drawer) { this.sidebar.drawer = true; this.drawerByKey = true; }
     }
     this.refresh();
   }
-  /** Alt+↓: the queue takes the focus with the last editable item selected; false when nothing is editable. */
+  /** The queue takes the focus with the last editable item selected; false when nothing is editable. */
   private focusQueue(): boolean {
     if (!this.queue.focusLast()) return false;
-    this.sidebar.focused = false; this.workbench.focused = false; this.blurDock(); this.closeKeyDrawer(); this.refresh();
+    this.sidebar.focused = false; this.workbench.focused = false; this.blurDocks(); this.closeKeyDrawer(); this.refresh();
     return true;
   }
-  /** Ctrl+B: where the rail fits it hides or returns; elsewhere the collapsed row opens or closes its drawer. */
+  /**
+   * Alt+↓: the next dock item takes the keys, nearest the composer first (the queue while it holds input of
+   * yours, the owner questions, a docked build dialog); after the last one the composer has them again. False
+   * when the dock holds nothing that takes keys.
+   */
+  private nextDockItem(): boolean {
+    const items: PanelFocus[] = [
+      ...(this.editableQueue() ? ["queue" as const] : []),
+      ...(this.questionDock.waiting ? ["questions" as const] : []),
+      ...(this.build?.dialog() ? ["choice" as const] : []),
+    ];
+    if (!items.length) return false;
+    const at = items.indexOf(this.focus), next = at < 0 ? items[0] : items[at + 1];
+    if (next === "queue") return this.focusQueue();
+    if (next === "questions") this.focusQuestions();
+    else if (next === "choice" && this.build) { this.build.dock.focused = true; this.focusChoice(); }
+    else this.focusComposer();
+    return true;
+  }
+  /** The sidebar key: where the rail fits it hides or returns; elsewhere the collapsed row opens or closes its drawer. */
   private toggleSidebar(): void {
     if ((this.terminal?.physical.columns ?? 0) >= PANEL_BREAKPOINT) {
       this.sidebarEnabled = !this.sidebarEnabled;
@@ -337,20 +429,24 @@ export class NativePanels implements PanelSurface {
     if (target) this.openSideTarget(target);
   }
   /**
-   * One widget above the editor, in the mock's dock order: a docked build dialog, then the queue, then (only
-   * without a rail and without a dialog) the collapsed sidebar row or its drawer, each with its own rule.
+   * One widget above the editor, in the mock's dock order: a docked build dialog, then the owner questions, then
+   * the queue, then (only without a rail and without a dialog) the collapsed sidebar row or its drawer, each with
+   * its own rule. The question card and the queue count in the dialog's row budget.
    */
   private dock(): Component {
-    let choiceRowsShown = 0, queueRows = 0;
+    let choiceRowsShown = 0, questionRows = 0, queueRows = 0;
     let sideHits: ReadonlyMap<number, readonly SideHit[]> = new Map();
     return {
       render: width => {
-        const rows = this.terminal?.rows ?? 24;
+        const rows = this.terminal?.rows ?? 24, short = rows < SHORT_ROWS;
         this.queue.setCapacity(rows);
         const queue = this.queue.render(width);
+        // Short terminals give each question one row and list two at most.
+        this.questionDock.setLimit(short ? 4 : 15, short);
+        const questions = this.questionDock.render(width);
         let choice: string[] = [];
         if (this.build?.dialog()) {
-          this.build.dock.setLimit(choiceRows(rows, this.chromeRows(width, rows, queue.length)), rows < SHORT_ROWS);
+          this.build.dock.setLimit(choiceRows(rows, this.chromeRows(rows, questions.length + queue.length)), short);
           choice = this.build.dock.render(width);
         }
         let side: readonly string[] = [];
@@ -361,12 +457,14 @@ export class NativePanels implements PanelSurface {
             : this.sidebar.row(source, width, chromeTier(this.terminal?.physical.columns ?? width) === "tiny", rows);
           side = frame.lines; sideHits = frame.hits;
         }
-        choiceRowsShown = choice.length; queueRows = queue.length;
-        return [...choice, ...queue, ...side];
+        choiceRowsShown = choice.length; questionRows = questions.length; queueRows = queue.length;
+        return [...choice, ...questions, ...queue, ...side];
       },
       handleMouse: event => {
         if (event.y < choiceRowsShown) return this.canInteract ? this.build?.dock.handleMouse(event) : { handled: true };
-        const y = event.y - choiceRowsShown;
+        const inQuestions = event.y - choiceRowsShown;
+        if (inQuestions < questionRows) return this.canInteract ? this.questionDock.handleMouse({ ...event, y: inQuestions }) : { handled: true };
+        const y = inQuestions - questionRows;
         if (y >= queueRows) {
           const row = y - queueRows;
           if (this.canInteract && plainClick(event)) this.sideClick(sideHits.get(row)?.find(hit => event.x >= hit.from && event.x < hit.to), false);
@@ -374,21 +472,21 @@ export class NativePanels implements PanelSurface {
         }
         if (!this.canInteract) return undefined;
         const result = this.queue.handleMouse({ ...event, y });
-        if (this.queue.focused) { this.sidebar.focused = false; this.workbench.focused = false; this.blurDock(); this.closeKeyDrawer(); this.refresh(); }
+        if (this.queue.focused) { this.sidebar.focused = false; this.workbench.focused = false; this.blurDocks(); this.closeKeyDrawer(); this.refresh(); }
         return result;
       },
       invalidate() {},
     };
   }
   /**
-   * Rows the rest of the screen keeps while a dialog is docked: header (one row when short or tiny), tabs and
-   * their rule, the composer box (its bar folds away when short), the status bar, the footer and its rule, and
-   * the queue.
+   * Rows the rest of the screen keeps while a dialog is docked: header (one row when short), tabs and their
+   * rule, the composer box (its bar folds away when short), the status bar, the footer and its rule, and the
+   * other dock items (the owner questions and the queue).
    */
-  private chromeRows(width: number, rows: number, queueRows: number): number {
-    const header = rows < SHORT_ROWS || (this.terminal?.physical.columns ?? width) < COMPACT_COLUMNS ? 1 : 2;
+  private chromeRows(rows: number, dockRows: number): number {
+    const header = rows < SHORT_ROWS ? 1 : 2;
     const rules = rows >= RULE_ROWS ? 2 : 0;
-    return header + 1 + (rows < SHORT_ROWS ? 3 : 4) + this.statusRows + 1 + rules + queueRows;
+    return header + 1 + (rows < SHORT_ROWS ? 3 : 4) + this.statusRows + 1 + rules + dockRows;
   }
   private queueState(): HintState["queue"] {
     const items = this.snapshot()?.queue ?? [];
@@ -406,12 +504,65 @@ export class NativePanels implements PanelSurface {
     const focus = this.focus;
     return focus === "main" ? this.workbench.mainContext() : focus;
   }
-  /** Runs a key as if typed, after the current input or click has been handled. */
+  /**
+   * Runs a key as if typed, after the current input or click has been handled, in the encoding the active
+   * keyboard protocol accepts (the F1 rows and footer hints carry legacy bytes).
+   */
   private replay(data: string): void {
-    queueMicrotask(() => { if (!this.disposed) this.terminal?.replay(data); });
+    queueMicrotask(() => { if (!this.disposed) this.terminal?.replayKey(data); });
   }
+  /**
+   * Every key and pointer event reaches the panels first. Esc right after an Esc that navigated is ignored, so the
+   * habit of pressing Esc to get out never also stops the turn; Esc reaches Pi's interrupt only from Chat with the
+   * composer focused. Any other key ends the guard.
+   */
   handleInput(data: string): boolean {
     if (isKeyRelease(data)) return false;
+    if (!matchesKey(data, "escape")) {
+      if (!data.startsWith("\x1b[<")) this.escGuard.clear();
+      return this.route(data);
+    }
+    if (this.canInteract && this.escGuard.blocking) return true;
+    // Esc that closes the owner's own palette, keys list or pager navigates too.
+    const own = !this.canInteract && (this.overlay !== undefined || this.workbench.pagerOpen);
+    const before = this.place(), handled = this.route(data), after = this.place();
+    if (own || after.key !== before.key) this.escNavigated(before, after);
+    return handled;
+  }
+  /** Where the owner is: the view, its context, the focus, a docked dialog and the drawer. */
+  private place(): Place {
+    const dialog = this.build?.dialog()?.key, focus = this.focus;
+    return {
+      key: [this.workbench.view, this.workbench.mainContext(), focus, dialog ?? "", this.sidebar.drawer].join("|"),
+      dialog, chat: this.workbench.view === "conversation" && focus === "composer",
+    };
+  }
+  /**
+   * An Esc navigated: the guard starts. A dismissed build dialog says how to reopen it; landing in Chat while a
+   * turn runs says that Esc now stops it.
+   */
+  private escNavigated(before: Place, after: Place): void {
+    this.escGuard.arm();
+    if (before.dialog && !after.dialog) { this.reopenNotice(before.dialog); return; }
+    if (before.chat || !after.chat || !(this.activity.active || this.snapshot()?.streaming)) return;
+    const stop = piKey("app.interrupt");
+    this.workbench.notice(`Back in Chat · ${stop ? keyLabel(stop) : "esc"} again stops the turn`, "text");
+  }
+  /** After Esc on a docked build dialog: what stays waiting and how to reopen it, until its subject has an outcome. */
+  private reopenNotice(key: string): void {
+    const ui = this.options.build;
+    if (!ui) return;
+    const [kind, id = ""] = key.split(":");
+    const [text, settled]: [string, () => boolean] = kind === "exit"
+      ? ["No exit chosen. Nothing was filed or landed · F2 Finish reopens it", () => ui.exit.state().phase !== "pending"]
+      : kind === "question"
+        ? [`${id} keeps waiting · F2 Answer ${id}'s question reopens it`, () => !this.build?.questions().some(child => child.id === id)]
+        : ["Nothing filed. The plan still waits · F10 Board, then p, reopens it", () => !ui.board.proposed()];
+    this.workbench.notice(text, "text");
+    const notice = this.workbench.currentNotice;
+    if (notice) this.dismissal = { notice, settled };
+  }
+  private route(data: string): boolean {
     const mouse = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
     if (mouse && this.wide && this.terminal) {
       const column = Number(mouse[2]) - 1, row = Number(mouse[3]) - 1, x = column - this.terminal.mainColumns - 1;
@@ -444,22 +595,30 @@ export class NativePanels implements PanelSurface {
     }
     if (this.drag && matchesKey(data, "escape")) { const start = this.drag.start; this.drag = undefined; this.resizeRail(start); this.refresh(); return true; }
     if (!this.canInteract || mouse) return false;
-    // A docked build dialog is modal for keys: page keys scroll the open view and Ctrl+C stays Pi's.
+    // Pasted text is typing wherever the keys were: the composer takes it unchanged, so a later Enter sends the draft
+    // instead of picking a docked option, editing a queued item or acting in a view.
+    if (data.startsWith(PASTE_START) && this.focus !== "composer") { this.focusComposer(); return false; }
+    // A docked build dialog keeps ↑↓, Enter, digits and Esc; page keys scroll the open view. Typing leaves it docked
+    // and reaches the composer; F1, F2, view keys and Alt chords continue below with the dialog still docked.
     if (this.focus === "choice") {
       if (this.build?.dock.handleKey(data)) return true;
       if (matchesKey(data, "pageUp") || matchesKey(data, "pageDown")) return this.workbench.scrollPage(data);
-      return !matchesKey(data, "ctrl+c");
+      if (this.focus !== "choice") { this.refresh(); return false; }
+    }
+    if (this.focus === "questions") {
+      if (this.questionDock.handleKey(data)) return true;
+      if (this.focus !== "questions") return false;
     }
     if (matchesKey(data, "f1")) { void this.showKeys(); return true; }
     if (matchesKey(data, "f6")) { this.sidebarKey(); return true; }
-    if (matchesKey(data, "ctrl+b")) { this.toggleSidebar(); return true; }
+    if (matchesKey(data, this.sidebarToggle)) { this.toggleSidebar(); return true; }
     if (this.wide && (matchesKey(data, "alt+,") || matchesKey(data, "alt+."))) {
       this.resizeRail((this.terminal?.railWidth ?? this.sidebarWidth) + (matchesKey(data, "alt+.") ? 2 : -2)); return true;
     }
     const receiverKey = this.build ? targetKey() : undefined;
     if (receiverKey && matchesKey(data, receiverKey)) { this.build?.cycleTarget(); return true; }
     const focusKey = queueFocusKey();
-    if (focusKey && matchesKey(data, focusKey) && this.focusQueue()) return true;
+    if (focusKey && matchesKey(data, focusKey) && this.nextDockItem()) return true;
     if (this.queue.focused) {
       if (this.queue.handleKey(data)) return true;
       // A printable key left the queue and reaches the editor; function keys still open views.
@@ -501,7 +660,13 @@ export class NativePanels implements PanelSurface {
     });
     pi.on("tool_execution_end", event => { observe(() => this.activity.toolEnd(event.toolCallId)); });
     // Panel overlays (the palette, the keys list, a pager) are the owner's own prompts, not the agent waiting on the owner.
-    pi.on("ui_prompt_start", () => { this.prompts++; observe(() => this.activity.promptStart(this.overlay !== undefined || this.workbench.pagerOpen)); });
+    pi.on("ui_prompt_start", () => {
+      this.prompts++;
+      const own = this.overlay !== undefined || this.workbench.pagerOpen;
+      // A Pi dialog needs the rows an F6-opened drawer holds; the owner's own popups keep it.
+      if (!own && this.drawerByKey) { this.closeKeyDrawer(); this.sidebar.focused = false; }
+      observe(() => this.activity.promptStart(own));
+    });
     pi.on("ui_prompt_end", () => { this.prompts = Math.max(0, this.prompts - 1); observe(() => this.activity.promptEnd()); });
     pi.on("before_provider_request", () => { observe(() => this.activity.request()); });
     // Stream events only mark that data arrived; Pi redraws the transcript for them itself.
@@ -530,6 +695,8 @@ export class NativePanels implements PanelSurface {
     pi.on("session_start", (_event, ctx) => {
       if (ctx.mode !== "tui" || !this.terminal) return;
       this.ui = ctx.ui;
+      this.attention = new AttentionSignal({ title: text => ctx.ui.setTitle(text), bell: () => this.terminal?.bell() },
+        titleText(this.options.identity), () => this.bell === "on");
       this.workbench.bind(ctx.ui);
       this.prompts = 0;
       setPanelAppearance(this.appearance); setCanvasAppearance(this.appearance); setAgentHueAppearance(this.appearance); setMotion(this.motion);
@@ -643,10 +810,13 @@ export class NativePanels implements PanelSurface {
           // The status bar, a rule (not below RULE_ROWS rows), then one row of the focused surface's keys ending with F1.
           render: width => {
             const snapshot = this.snapshot(), cost = this.build ? buildCost(snapshot) : undefined;
+            const rows = this.terminal?.rows ?? RULE_ROWS;
+            // The composer's model bar folds away when short; the status bar then carries model and effort.
+            const folded = rows < SHORT_ROWS ? { model: snapshot?.model ?? null, ...(snapshot ? { effort: snapshot.effort } : {}) } : undefined;
             const status = statusBar(this.options.identity, cost && snapshot ? { ...snapshot, cost: cost.total } : snapshot,
-              data.getExtensionStatuses(), width, cost?.partial ?? false);
+              data.getExtensionStatuses(), width, cost?.partial ?? false, folded);
             const context = this.footerContext();
-            const row = footerRow(contextHints(this.workbench.hintState(context, this.queueState())),
+            const row = footerRow(contextHints(this.workbench.hintState(context, this.queueState(), this.questionDock.waiting)),
               chromeTier(this.terminal?.physical.columns ?? width), width, footerBase(context));
             const ruled = (this.terminal?.rows ?? RULE_ROWS) >= RULE_ROWS;
             this.statusRows = status.length; footerAt = status.length + (ruled ? 1 : 0); hits = row.hits;
@@ -800,7 +970,9 @@ export class NativePanels implements PanelSurface {
       panel("receipts", "Host receipts and events"),
       panel("project", "Choose project/worktree"),
       panel("refresh", "Refresh observations"),
-      panel("toggle", "Collapse or expand the sidebar", "Ctrl+B"),
+      panel("toggle", "Collapse or expand the sidebar", sidebarKeyLabel(this.sidebarToggle)),
+      action("notices", "Recent notices", "", () => this.showNotices(),
+        () => ready() ?? (this.workbench.recentNotices().length ? undefined : "No notices yet in this session")),
       action("sidebar.focus", "Sidebar: focus, then the next tab", "F6", () => this.sidebarKey()),
       action("queue.edit", "Edit the last queued input", dequeue ? keyLabel(dequeue) : "", () => { void this.queue.editLast(); }, queued),
       action("queue.focus", "Focus the queue", focus ? keyLabel(focus) : "", () => { this.focusQueue(); }, queued),
@@ -834,6 +1006,8 @@ export class NativePanels implements PanelSurface {
       `Motion: ${motion}${motion === this.motion ? " (current)" : ""}`, "", () => {
         this.motion = motion; setMotion(motion); this.clock.sync(); this.refresh();
       }));
+    for (const bell of ["off", "on"] as const) items.push(action(`bell.${bell}`,
+      `Bell: ${bell}${bell === this.bell ? " (current)" : ""}`, "", () => { this.bell = bell; this.refresh(); }));
     return items;
   }
   /** F2 in a build session: Board, the message receiver, open questions, Finish and board planning, each with its unavailable reason. */
@@ -874,14 +1048,24 @@ export class NativePanels implements PanelSurface {
     try { await action.run(); } catch (error) { this.workbench.notice(plainLabel(String(error)), "error"); }
     this.refresh();
   }
+  /** F2 Recent notices: the session's notices, oldest first, each with its time and tone glyph; opens at the newest. */
+  private async showNotices(): Promise<void> {
+    const ui = this.ui;
+    if (!ui) return;
+    const lines = this.workbench.recentNotices()
+      .map(item => `${new Date(item.at).toTimeString().slice(0, 8)}  ${noticeGlyph(item.tone) || "○"} ${plainLabel(item.text)}`);
+    this.overlay = "pager"; this.refresh();
+    try { await openOutputPager(ui, `Recent notices · ${lines.length}`, lines, lines.length); }
+    finally { this.overlay = undefined; this.refresh(); }
+  }
   /** F1: the keys this mode offers; Enter or a click runs a key as if typed. */
   private async showKeys(): Promise<void> {
     const ui = this.ui;
     if (!ui || !this.canInteract) return;
-    const identity = this.options.identity;
+    const identity = this.options.identity, answerKey = this.questions ? questionsKey() : undefined;
     const groups = keyGroups({ taskBound: !!identity.task, answer: identity.role === "pm" || identity.role === "assistant",
       jobs: this.snapshot()?.jobs != null, queueControl: this.queue.controllable, lifecycle: !!identity.task,
-      ...(this.build ? { build: true } : {}) });
+      sidebarKey: this.sidebarToggle, ...(answerKey ? { questionsKey: answerKey } : {}), ...(this.build ? { build: true } : {}) });
     this.overlay = "keys"; this.refresh();
     let data: string | undefined;
     try {

@@ -38,6 +38,7 @@ import { NEW_ASSISTANT_EXIT, RELINK_ASSISTANT_EXIT } from "./assistant-relink.ts
 import { RESUME_ASSISTANT_EXIT } from "./assistant-resume.ts";
 import { admitConnection } from "./connections.ts";
 import { presentHostNotice } from "../ui/host-notices.ts";
+import { errorPresenter } from "../ui/error-copy.ts";
 
 function launchFd(argv: readonly string[]): number {
   const index = argv.indexOf("--launch-fd");
@@ -197,9 +198,11 @@ export async function runHost(config: HostConfig, overrides: {
   const panels = session.panels;
   physicalTerminal = new ProcessTerminal();
   terminal = new sdk.InteractiveMode(session.runtime, {
-    verbose: false, terminal: panels ? panels.wrap(physicalTerminal) : physicalTerminal,
+    // corral resumes sessions with its own commands; Pi's `pi --session …` line would name a command that does not work here.
+    verbose: false, resumeHint: false, terminal: panels ? panels.wrap(physicalTerminal) : physicalTerminal,
     ...(panels ? { tuiMode: "fullscreen" as const, readOnlyQueue: true, mainView: (transcript, presentation) => panels.mainView(transcript, presentation),
-      userPresentation: presentHostNotice } : {}),
+      userPresentation: (text, bubble) => presentHostNotice(text, bubble, delivered => session.hostDelivered(delivered)),
+      errorPresentation: errorPresenter(() => session.latestStopCause()) } : {}),
   });
   guardTerminalStop(terminal, process.stdin);
   await terminal.init();

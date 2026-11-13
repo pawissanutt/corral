@@ -1,12 +1,13 @@
 // One agent's conversation in the reading area, as the mock's `childHTML`: a header line (back link, name,
 // profile and model, state and time, cost and context, and the activity sparkline while it runs), then the
-// prompt in a bubble, the replies and one line per tool call, then the agent's notes. A build child's prompt is
-// its brief from the parent with what it owns inside the bubble; the owner's steers follow the replies as
-// bubbles, then its state (waiting, asking, cancelled). The reading position is kept per agent key.
+// prompt in a bubble, the retention note when earlier messages were dropped, the replies and one line per tool
+// call, then the agent's notes. A build child's prompt is its brief from the parent with what it owns inside the
+// bubble; the owner's steers sit among the replies at the time they were sent, then its state (waiting, asking,
+// cancelled). A running agent's page follows its end until the owner scrolls up; the reading position is kept per agent key.
 import { ScrollView, truncateToWidth, visibleWidth, wrapTextWithAnsi, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { duration, money, sparkline, timeLabel, toneColor, type AgentRow } from "./agents-model.ts";
+import { duration, isLive, money, sparkline, timeLabel, toneColor, type AgentRow } from "./agents-model.ts";
 import { spinner } from "./frame.ts";
-import { bubble, type HelperChat } from "./helper-chat.ts";
+import { bubble, type HelperChat, type Steer } from "./helper-chat.ts";
 import { PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_TEXT, PANEL_WARNING, RESET } from "./panels-view.ts";
 
 export interface AgentConversationHost {
@@ -52,8 +53,10 @@ export function conversationHeader(row: AgentRow, width: number, now: number, co
 /** The scrollable one-agent page; the workbench mounts `scroll` in place of the reading area. */
 export class AgentConversation {
   readonly scroll: ScrollView;
-  private readonly positions = new Map<string, number>();
-  private pending: number | undefined;
+  /** Per agent key: where the owner was reading, and whether the page was following the agent's end. */
+  private readonly positions = new Map<string, { readonly top: number; readonly following: boolean }>();
+  /** Set by `restore`: the next render places the page, from the saved position (if any) and whether the agent is live. */
+  private pending: { readonly saved?: { readonly top: number; readonly following: boolean } } | undefined = {};
   private back = { from: 1, to: 1 + visibleWidth(BACK) };
   private chatStart = 0; private chatRows = 0;
   /** Rows of the clickable `▲` question line, and the agent it answers. */
@@ -63,15 +66,23 @@ export class AgentConversation {
       render: width => this.render(width),
       handleMouse: event => this.mouse(event),
       invalidate: () => host.chat.invalidate(),
-    }, { primary: true, follow: "none", scrollbar: "auto" });
+    }, { primary: true, follow: "end", scrollbar: "auto" });
   }
   /** Keeps the current reading position for the shown agent. */
   remember(): void {
     const key = this.host.row()?.key;
-    if (key !== undefined) this.positions.set(key, this.scroll.scrollTop);
+    if (key !== undefined) this.positions.set(key, { top: this.scroll.scrollTop, following: this.scroll.isFollowingEnd });
   }
-  /** The next render starts where `key` was last read, or at the top. */
-  restore(key: string): void { this.pending = this.positions.get(key) ?? 0; }
+  /**
+   * The next render starts where `key` was last read, or at the top. A live agent's page follows its end instead,
+   * unless the owner had scrolled up from the end there.
+   */
+  restore(key: string): void {
+    const saved = this.positions.get(key);
+    this.pending = saved === undefined ? {} : { saved };
+  }
+  /** Whether the page keeps the newest row in view as the agent adds to it. */
+  get following(): boolean { return this.scroll.isFollowingEnd; }
   expandTools(expanded: boolean): void { this.host.chat.expandTools(expanded); }
 
   private render(width: number): string[] {
@@ -91,14 +102,16 @@ export class AgentConversation {
       const prompt = child
         ? { label: "brief from parent", notes: [`Owns: ${row.owns?.length ? row.owns.join(", ") : "nothing (read-only)"} · no board access · no nested agents`] }
         : { label: "prompt from parent" };
-      const chat = row.conversation ? this.host.chat.renderHelper(row.conversation, width, { bubble: prompt, now })
+      const steers: readonly Steer[] = (row.steers ?? []).map((text, index) => {
+        const at = row.steeredAt?.[index];
+        return at === undefined ? { text } : { text, at };
+      });
+      const chat = row.conversation ? this.host.chat.renderHelper(row.conversation, width,
+        { bubble: prompt, now, ...(child ? { steers: { label: "you → " + BOLD + this.host.color(row.hue) + row.name + UNBOLD, items: steers } } : {}) })
         : [" " + PANEL_MUTED + "Conversation unavailable for this agent." + RESET];
       this.chatRows = row.conversation ? chat.length : 0;
       lines.push(...chat);
       if (child) {
-        // Steers carry no timestamps, so they follow the replies, oldest first.
-        const label = "you → " + BOLD + this.host.color(row.hue) + row.name + UNBOLD;
-        for (const steer of row.steers ?? []) lines.push("", ...bubble(label, steer, width));
         if (row.state === "queued") lines.push("", ...say(`Not started: ${row.activity}.`, PANEL_MUTED));
         if (row.state === "needs" && row.question !== undefined) {
           lines.push("");
@@ -110,14 +123,17 @@ export class AgentConversation {
       }
       for (const note of row.notes) {
         // A child's live wait is already its `Not started` line; its failure reads as the conversation's last word.
-        if (child && note.tone === "muted") continue;
+        // The retention note already stands under the prompt.
+        if ((child && note.tone === "muted") || (note.retention && row.conversation)) continue;
         const mark = child && row.state === "failed" && note.tone === "error" ? "✗ " : "";
         lines.push("", ...say(mark + note.text, toneColor(note.tone)));
       }
     }
     if (this.pending !== undefined) {
+      const saved = this.pending.saved, live = row !== undefined && isLive(row.state);
       this.scroll.updateLayout(lines.length, this.scroll.viewportHeight, () => {});
-      this.scroll.scrollTo(this.pending, { disableFollow: true });
+      if (live && (saved === undefined || saved.following)) this.scroll.scrollToEnd();
+      else this.scroll.scrollTo(saved?.top ?? 0, { disableFollow: true });
       this.pending = undefined;
     }
     return lines;

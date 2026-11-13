@@ -158,6 +158,8 @@ export interface ChildSnapshot {
   readonly usage: ChildUsage;
   /** Messages the owner or parent sent it while it ran, oldest first. */
   readonly steers: readonly string[];
+  /** When each steer was sent (epoch ms), index for index with `steers`; absent in snapshots that predate it. */
+  readonly steeredAt?: readonly number[];
   readonly question?: ChildQuestion;
   /** Its final answer, capped at 32,768 characters. */
   readonly report?: string;
@@ -169,6 +171,8 @@ export interface ChildSnapshot {
   readonly history: string;
   /** Retained conversation, with the same caps as helper history. */
   readonly messages: readonly HelperMessage[];
+  /** Messages dropped from the front of `messages` by the retention limit; absent when none were. */
+  readonly dropped?: number;
 }
 
 export interface FleetSnapshot {

@@ -3,7 +3,7 @@
 // `AgentExtras`. Unknown values stay absent and render as "–", never as zero.
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { HelperInspection, HelperMessage } from "../extensions/subagent/inspection.ts";
-import { helperText, toolSummary } from "./helper-chat.ts";
+import { helperText, retentionNote, toolSummary } from "./helper-chat.ts";
 import {
   plainLabel, PANEL_BG, PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_SELECTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING,
   type PanelJob, type PanelSnapshot,
@@ -140,12 +140,18 @@ export interface AgentCapabilities {
 /** Capability present but not usable in the current state: shown dim with this reason. */
 export type Disabled = Partial<Record<keyof AgentCapabilities, string>>;
 
-export interface AgentNote { readonly text: string; readonly tone: Tone }
+export interface AgentNote {
+  readonly text: string; readonly tone: Tone;
+  /** The retention note: the conversation draws it under the prompt, where the dropped messages were. */
+  readonly retention?: boolean;
+}
 
 /** What HelperChat renders. HelperInspection satisfies it; a build child maps to it. */
 export interface ConversationSource {
   readonly request: string; readonly prompt: string; readonly phase: string;
   readonly messages: readonly HelperMessage[]; readonly result?: string;
+  /** Some content was clipped or dropped by the retention limit; `dropped` counts the messages dropped from the front. */
+  readonly truncated?: boolean; readonly dropped?: number;
 }
 
 export interface AgentRow {
@@ -169,6 +175,8 @@ export interface AgentRow {
   readonly end?: AgentEnd;
   readonly owns?: readonly string[]; readonly after?: readonly string[];
   readonly steers?: readonly string[]; readonly question?: string;
+  /** When each steer was sent, index for index with `steers`; a steer without a time is drawn after the replies. */
+  readonly steeredAt?: readonly number[];
   readonly meta: readonly string[];      // model id, tier, generation, session, parent
   readonly notes: readonly AgentNote[];
   readonly capabilities: AgentCapabilities;
@@ -275,7 +283,7 @@ export function helperRows(snapshot: PanelSnapshot | null, now: number): AgentRo
     const notes: AgentNote[] = [
       ...(helper.error ? [{ text: "Error: " + plainLabel(helperText(helper.error)), tone: "error" as const }] : []),
       ...(helper.inspectionError ? [{ text: "Inspector warning: " + plainLabel(helperText(helper.inspectionError)), tone: "warning" as const }] : []),
-      ...(helper.truncated ? [{ text: "Some content was omitted by retention limits.", tone: "warning" as const }] : []),
+      ...(helper.truncated ? [{ text: retentionNote(helper), tone: "warning" as const, retention: true }] : []),
       ...(bound ? [] : [{ text: "Host unbound · this observation may be stale.", tone: "warning" as const }]),
     ];
     const end = helperEnd(helper, state);

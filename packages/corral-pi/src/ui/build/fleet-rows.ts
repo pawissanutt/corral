@@ -128,13 +128,15 @@ export function childRow(child: ChildSnapshot, fleet: FleetSnapshot, now: number
     files: files.length, outside: outside.length, pulse: child.pulse,
     spans, ...(end ? { end } : {}),
     owns: child.owns.map(clean), after: child.after.map(clean), steers: child.steers.map(clean),
+    ...(child.steeredAt === undefined ? {} : { steeredAt: child.steeredAt }),
     ...(child.question ? { question: clean(child.question.question) } : {}),
     meta, notes,
     capabilities: { open: true, transcript: false, steer: true, cancel: true, model: true, answer: child.state === "needs" },
     ...(finished ? { disabled: { steer: "not running", cancel: "not running", model: "not running" } }
       : child.state === "queued" ? { disabled: { steer: "not started yet" } } : {}),
     conversation: { request: child.id, prompt: child.brief, phase: child.state, messages: child.messages,
-      ...(child.report === undefined ? {} : { result: child.report }) },
+      ...(child.report === undefined ? {} : { result: child.report }),
+      ...(child.dropped === undefined ? {} : { truncated: true, dropped: child.dropped }) },
   };
 }
 

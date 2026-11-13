@@ -14,13 +14,15 @@ import type { InspectorSnapshot } from "./inspector.ts";
 import type { PanelJob, PanelSnapshot } from "./panels-view.ts";
 import type { HelperInspection } from "../extensions/subagent/inspection.ts";
 import type { QueueControl } from "../host/queue-control.ts";
+import type { BuildUi, ChildSnapshot } from "../build/types.ts";
 import { RecordingTerminal } from "../../test/support/panel-terminal.ts";
 
 beforeAll(() => sdk.initTheme("dark", false));
 const work = mkdtempSync(join(tmpdir(), "corral-workbench-shell-"));
 afterAll(() => rmSync(work, { recursive: true, force: true }));
 
-const KEY = { f1: "\x1bOP", f8: "\x1b[19~", f9: "\x1b[20~", f10: "\x1b[21~", f5: "\x1b[15~", esc: "\x1b", enter: "\r", down: "\x1b[B", pageDown: "\x1b[6~", ctrlB: "\x02", ctrlO: "\x0f" };
+const KEY = { f1: "\x1bOP", f7: "\x1b[18~", f8: "\x1b[19~", f9: "\x1b[20~", f10: "\x1b[21~", f11: "\x1b[23~", f5: "\x1b[15~", esc: "\x1b", enter: "\r",
+  down: "\x1b[B", pageUp: "\x1b[5~", pageDown: "\x1b[6~", end: "\x1b[F", ctrlB: "\x02", ctrlO: "\x0f", alt1: "\x1b1", alt2: "\x1b2" };
 const worker = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 3 };
 const assistant = { store: "st-0123456789abcdef", project: "demo", role: "assistant" as const, assistant: "A-7", generation: 1 };
 const NOW = Date.now();
@@ -76,7 +78,7 @@ function shell(columns: number, rows: number, state: () => PanelSnapshot | null,
   let draft = "", dock: Component | undefined, footer: Component | undefined;
   const customs: Component[] = [];
   const ui = {
-    theme: { getColorMode: () => "truecolor" }, setTheme() {}, setEditorComponent() {}, setHeader() {}, notify() {}, setWorkingVisible() {}, setHiddenThinkingLabel() {},
+    theme: { getColorMode: () => "truecolor" }, setTheme() {}, setEditorComponent() {}, setHeader() {}, setTitle() {}, notify() {}, setWorkingVisible() {}, setHiddenThinkingLabel() {},
     setWidget: (_key: string, factory: (tui: unknown, theme: unknown) => Component) => { dock = factory(tui, theme); },
     setFooter: (factory: (tui: unknown, theme: unknown, data: unknown) => Component) => {
       footer = factory(tui, theme, { onBranchChange: () => () => {}, getExtensionStatuses: () => new Map() });
@@ -122,6 +124,35 @@ test("F8 opens Agents and Enter opens the agent's conversation; the parent draft
   } finally { wb.dispose(); }
 });
 
+test("End in an agent conversation jumps that conversation to its latest row", () => {
+  const long = helper("first", { messages: [{ id: "a", kind: "assistant", text: Array.from({ length: 90 }, (_, i) => `first_LINE_${i}`).join("\n\n"), stopReason: "stop" }] });
+  const wb = new NativeWorkbench({ cwd: work, identity: assistant, snapshot: () => snapshot({ helpers: [long] }), changed() {}, canInteract: () => true });
+  const view = viewport(wb, "");
+  const frame = () => plain(renderLayoutFrame(view.root, 100, 30, () => {}).lines);
+  try {
+    wb.openAgent("helper:first"); frame();
+    for (let page = 0; page < 6; page++) wb.handleInput(KEY.pageUp);
+    expect(frame()).not.toContain("first_LINE_89");
+    expect(wb.handleInput(KEY.end)).toBeTrue(); expect(wb.view).toBe("agent");
+    expect(frame()).toContain("first_LINE_89");
+  } finally { wb.dispose(); }
+});
+
+test("while another view is open the parent transcript is never rendered", () => {
+  const wb = new NativeWorkbench({ cwd: work, identity: assistant, snapshot: () => snapshot(), changed() {}, canInteract: () => true });
+  const document = new Text("PARENT_ONLY", 0, 0), render = document.render.bind(document);
+  let renders = 0;
+  document.render = width => { renders++; return render(width); };
+  const view = createChatViewport({ document, pendingMessages: new Text("", 0, 0), status: new Text("", 0, 0), editor: new Text("", 0, 0),
+    footer: new Text("", 0, 0), mainView: transcript => wb.mount(transcript) });
+  try {
+    renderLayoutFrame(view.root, 100, 30, () => {});
+    wb.setView("changes"); renders = 0;
+    for (let frame = 0; frame < 5; frame++) renderLayoutFrame(view.root, 100, 30, () => {});
+    expect(renders).toBe(0);
+  } finally { wb.dispose(); }
+});
+
 test("reading positions survive a return to an agent and to the parent conversation", () => {
   const long = (request: string) => helper(request, { messages: [{ id: "a", kind: "assistant", text: Array.from({ length: 90 }, (_, i) => `${request}_LINE_${i}`).join("\n\n"), stopReason: "stop" }] });
   const wb = new NativeWorkbench({ cwd: work, identity: assistant, snapshot: () => snapshot({ helpers: [long("first"), long("second")] }), changed() {}, canInteract: () => true });
@@ -142,7 +173,7 @@ test("reading positions survive a return to an agent and to the parent conversat
   } finally { wb.dispose(); }
 });
 
-test("t refuses an ineligible transcript with a notice and never reads; an eligible one reads by its own id", async () => {
+test("t on an agent without a transcript is typing; an eligible one reads by its own id", async () => {
   let current = snapshot({ helpers: [helper("first")], agents: [{ id: "first", session: "s-1", kind: "explore", state: "completed", model: "model-a", transcript: false }] });
   const reads: string[] = [];
   const wb = new NativeWorkbench({ cwd: work, identity: assistant, snapshot: () => current, changed() {}, canInteract: () => true,
@@ -151,13 +182,14 @@ test("t refuses an ineligible transcript with a notice and never reads; an eligi
   wb.mount(new Text("PARENT", 0, 0));
   try {
     wb.handleInput(KEY.f8);
-    expect(wb.handleInput("t")).toBeTrue(); await settle();
-    expect(reads).toEqual([]); expect(wb.currentNotice?.text).toContain("Transcript unavailable");
+    expect(wb.handleInput("t")).toBeFalse(); expect(wb.focused).toBeFalse(); await settle();
+    expect(reads).toEqual([]);
     current = { ...current, agents: [{ id: "first", session: "s-1", kind: "explore", state: "completed", model: "model-a", transcript: true }] };
+    wb.handleInput(KEY.f8);
     expect(wb.handleInput("t")).toBeTrue(); await settle();
     expect(reads).toEqual(["first"]);
     current = { ...current, bound: false };
-    wb.handleInput("t"); await settle();
+    wb.handleInput(KEY.f8); wb.handleInput("t"); await settle();
     expect(reads).toEqual(["first"]);
   } finally { wb.dispose(); }
 });
@@ -280,19 +312,70 @@ test("Alt+Up with an editable queued item puts its text before the draft", async
   } finally { h.stop(); }
 });
 
-test("a view's letters that the selection does not offer do nothing; undefined letters go on to the composer", () => {
+test("a letter a view defines but does not offer now goes to the composer like any other typing", () => {
   const h = shell(140, 46, () => snapshot({ helpers: [helper("first")] }), { identity: assistant });
   try {
-    h.setDraft("my draft");
-    expect(h.panels.handleInput(KEY.f8)).toBeTrue();
-    expect(h.panels.workbench.agentsView.entry()?.row.key).toBe("helper:first");
     for (const letter of ["s", "x", "m"]) {
-      expect(h.panels.handleInput(letter)).toBeTrue();
-      expect(h.panels.focus).toBe("main"); expect(h.panels.workbench.view).toBe("agents");
+      expect(h.panels.handleInput(KEY.f8)).toBeTrue();
+      expect(h.panels.workbench.agentsView.entry()?.row.key).toBe("helper:first");
+      expect(h.panels.focus).toBe("main");
+      expect(h.panels.handleInput(letter)).toBeFalse();
+      expect(h.panels.focus).toBe("composer"); expect(h.panels.workbench.view).toBe("agents");
     }
-    expect(h.draft()).toBe("my draft");
-    expect(h.panels.handleInput("z")).toBeFalse(); expect(h.panels.focus).toBe("composer");
   } finally { h.stop(); }
+});
+
+test("`/` with an empty draft starts a command in the composer from Changes, Agents and Inbox; Enter without an action stays", () => {
+  const h = shell(140, 46, () => snapshot({ helpers: [helper("first")] }), { identity: assistant });
+  try {
+    for (const key of [KEY.f7, KEY.f8, KEY.f11]) {
+      expect(h.panels.handleInput(key)).toBeTrue(); expect(h.panels.focus).toBe("main");
+      const view = h.panels.workbench.view;
+      expect(h.panels.handleInput("/")).toBeFalse();
+      expect(h.panels.focus).toBe("composer"); expect(h.panels.workbench.view).toBe(view);
+    }
+    // Changes has no Enter action: Enter keeps the keys where they are; Tab gives them to the composer.
+    h.panels.handleInput(KEY.f7);
+    expect(h.panels.handleInput(KEY.enter)).toBeTrue(); expect(h.panels.focus).toBe("main");
+    expect(h.panels.handleInput("\t")).toBeTrue(); expect(h.panels.focus).toBe("composer");
+  } finally { h.stop(); }
+});
+
+test("Alt+1 to Alt+6 open the views in tab order, and a focused view leads its footer with its name", () => {
+  const h = shell(140, 46, () => snapshot({ helpers: [helper("first")] }), { identity: assistant });
+  try {
+    expect(h.panels.handleInput(KEY.alt2)).toBeTrue(); expect(h.panels.workbench.view).toBe("agents");
+    expect(stripTerminalSequences(h.footer.render(140).at(-1) ?? "")).toContain("keys → Agents");
+    expect(h.panels.handleInput(KEY.alt1)).toBeTrue(); expect(h.panels.workbench.view).toBe("conversation");
+    expect(stripTerminalSequences(h.footer.render(140).at(-1) ?? "")).not.toContain("keys →");
+  } finally { h.stop(); }
+});
+
+test("a worker starts on Chat with the keys in the composer, and its footer has no view lead", () => {
+  const h = shell(140, 46, () => snapshot(), { readTask: async () => ({ id: "T-001", title: "Fixture task" }) });
+  try {
+    expect(h.panels.workbench.view).toBe("conversation"); expect(h.panels.focus).toBe("composer");
+    expect(stripTerminalSequences(h.footer.render(140).at(-1) ?? "")).not.toContain("keys →");
+    expect(h.panels.handleInput(KEY.f5)).toBeTrue(); expect(h.panels.workbench.view).toBe("task"); expect(h.panels.focus).toBe("main");
+    expect(stripTerminalSequences(h.footer.render(140).at(-1) ?? "")).toContain("keys → Task");
+  } finally { h.stop(); }
+});
+
+test("opening a child's conversation makes it the receiver with a notice; leaving it for another view gives the parent back", () => {
+  let receiver = "parent";
+  const children = [{ id: "alpha", state: "running" }] as unknown as ChildSnapshot[];
+  const build = { fleet: { snapshot: () => ({ children, maxParallel: 3, startedAt: NOW }) }, board: { tasks: () => [], proposed: () => undefined },
+    target: () => receiver, setTarget: (id: string) => { receiver = id; } } as unknown as BuildUi;
+  const wb = new NativeWorkbench({ cwd: work, identity: { store: "build", project: "", role: "build", generation: 1 }, snapshot: () => snapshot(),
+    changed() {}, canInteract: () => true, build });
+  wb.mount(new Text("PARENT", 0, 0));
+  try {
+    wb.openChild("alpha");
+    expect(wb.view).toBe("agent"); expect(receiver).toBe("alpha"); expect(wb.currentNotice?.text).toBe("Messages now go to alpha");
+    wb.setView("changes"); expect(receiver).toBe("parent");
+    wb.openChild("alpha"); expect(receiver).toBe("alpha");
+    wb.openAgents(); expect(receiver).toBe("parent");
+  } finally { wb.dispose(); }
 });
 
 test("an expanded image's footer lists its own keys, never in the image title", () => {
@@ -378,25 +461,29 @@ test("the frame: header, tabs, dock, status bar and footer span the full width; 
       expect(lines[rows - 1]!.trimEnd()).toMatch(/F1\s+keys$/);
     } finally { h.stop(); }
   }
-  // Below 105 columns: no rail, the collapsed sidebar row under its own rule above the composer.
+  // Below 105 columns: no rail; the collapsed sidebar row above the composer. A settled helper leaves no summary,
+  // so the row is set into its own rule: the full width, with the tab labels and the toggle key.
   const h = shell(92, 40, () => snapshot({ helpers: [helper("first")] }));
   try {
     expect(h.panels.wide).toBeFalse();
     const dock = plain(h.dock.render(92)).split("\n");
-    expect(dock[0]).toBe("─".repeat(92));
-    expect(dock[1]).toContain("Context");
+    expect(visibleWidth(dock[0]!)).toBe(92);
+    expect(dock[0]!.startsWith("─ Context")).toBeTrue();
+    for (const label of ["Files", "Plan"]) expect(dock[0]).toContain(label);
+    expect(dock[0]!.trimEnd()).toMatch(/─ +(Ctrl|Alt)\+B  ▴$/);
   } finally { h.stop(); }
 });
 
-test("a notice is a toast at the top right of the main view, not a header word; Agent details opens the pager", async () => {
+test("a one-line notice takes header row 1's state place and is kept with its time; Agent details opens the pager", async () => {
   const h = shell(140, 46, () => snapshot({ helpers: [helper("first")] }), { identity: assistant });
   try {
     h.panels.workbench.notice("Saved the plan", "success");
     expect(h.panels.workbench.currentNotice?.text).toBe("Saved the plan");
+    expect(h.panels.workbench.recentNotices().at(-1)?.text).toBe("Saved the plan");
     const main = createChatViewport({ document: new Text("PARENT_TRANSCRIPT", 0, 0), pendingMessages: new Text("", 0, 0), status: new Text("", 0, 0),
       widgetsAbove: h.dock, editor: new Text("REAL_EDITOR_DRAFT", 0, 0), footer: h.footer, mainView: transcript => h.panels.mainView(transcript) });
-    const header = plain(renderLayoutFrame(main.root, 140, 46, () => {}).lines.slice(0, 2));
-    expect(header).not.toContain("Saved the plan");
+    const header = plain(renderLayoutFrame(main.root, 140, 46, () => {}).lines.slice(0, 1));
+    expect(header).toContain("Saved the plan"); expect(h.panels.workbench.noticeInHeader).toBeTrue();
     const details = h.panels.actions().find(action => action.id === "agents.details")!;
     expect(details.label).toBe("Agent details"); expect(details.shortcut).toBe("");
     expect(h.panels.workbench.selectedAgent()).toBeUndefined();

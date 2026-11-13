@@ -128,8 +128,12 @@ export function proofSplit(store: InspectionStore, selected: number, width: numb
   return renderProof(store, selected, width, legend, open, now, true);
 }
 
-/** The Proof body at any width: list + detail at `SPLIT_MIN`+, otherwise a one-line picker above the same detail. */
-export function renderProof(store: InspectionStore, selected: number, width: number, legend: boolean, open: ReadonlySet<SectionId>, now = Date.now(), wide = width >= SPLIT_MIN): ProofFrame {
+/**
+ * The Proof body at any width: list + detail at `SPLIT_MIN`+, otherwise a one-line picker above the same detail.
+ * The selected row's bar is accent while the view has the keys (`focused`), muted otherwise.
+ */
+export function renderProof(store: InspectionStore, selected: number, width: number, legend: boolean, open: ReadonlySet<SectionId>, now = Date.now(),
+  wide = width >= SPLIT_MIN, focused = true): ProofFrame {
   const lines: string[] = [], hits = new Map<number, number>();
   const full = (text: string) => lines.push(...wrap(PANEL_TEXT + text, width));
   const data = store.current;
@@ -155,11 +159,11 @@ export function renderProof(store: InspectionStore, selected: number, width: num
       const c = data.criteria[item.index];
       if (!c) return;
       const tag = tagOf(c), label = plainFit(`${c.id} ${c.scenario}`, LIST_WIDTH - 3 - 9 - visibleWidth(tag) - 1);
-      left.push({ text: listRow(`${PANEL_TEXT}${label} ${PANEL_MUTED}${tag}${PANEL_TEXT}`, glyphs(ladder(store, data, c)), on), item: at });
+      left.push({ text: paneRow(`${PANEL_TEXT}${label} ${PANEL_MUTED}${tag}${PANEL_TEXT}`, glyphs(ladder(store, data, c)), on, LIST_WIDTH, focused), item: at });
     } else {
       if (items[at - 1]?.kind === "criterion") left.push({ text: " ".repeat(LIST_WIDTH) }, { text: listRow(`${PANEL_MUTED}MORE${PANEL_TEXT}`, "", false) });
       const count = plainFit(sectionCount(data, item.id), 18);
-      left.push({ text: listRow(`${PANEL_TEXT}${open.has(item.id) ? "▾" : "▸"} ${SECTION_LABEL[item.id]}`, `${PANEL_MUTED}${count}${PANEL_TEXT}`, on), item: at });
+      left.push({ text: paneRow(`${PANEL_TEXT}${open.has(item.id) ? "▾" : "▸"} ${SECTION_LABEL[item.id]}`, `${PANEL_MUTED}${count}${PANEL_TEXT}`, on, LIST_WIDTH, focused), item: at });
     }
   });
   const right = detail(store, data, current, open, Math.max(20, width - LIST_WIDTH - 2), now);

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { sliceByColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, renderFakeCursor, sliceByColumn, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { COMPOSER_INSET, composerBar, composerBottom, composerRow, composerTitle, composerTop } from "./composer-chrome.ts";
-import { PANEL_BLUE, PANEL_LINE, type PanelSnapshot } from "./panels-view.ts";
+import { PANEL_BLUE, PANEL_LINE, PANEL_MUTED, type PanelSnapshot } from "./panels-view.ts";
 
 const snapshot: PanelSnapshot = {
   bound: true, model: "anthropic/claude-sonnet-4-5", effort: "high", effortAvailable: true, streaming: true,
@@ -59,6 +59,14 @@ test("the border is accent while the composer has the focus, the line colour oth
   expect(composerRow(" ".repeat(5) + "x" + " ".repeat(74), 5, 80, true, true)).toContain(PANEL_BLUE + "│");
 });
 
+test("without the keys the composer row has no cursor cell and a muted prompt; with them both return", () => {
+  const row = " ".repeat(5) + "draft" + CURSOR_MARKER + renderFakeCursor(" ") + " ".repeat(69);
+  const away = composerRow(row, 5, 80, false, true), here = composerRow(row, 5, 80, true, true);
+  expect(away).not.toContain(CURSOR_MARKER); expect(away).not.toContain(renderFakeCursor(" "));
+  expect(away).toContain(PANEL_MUTED + "›"); expect(visibleWidth(away)).toBe(80);
+  expect(here).toContain(CURSOR_MARKER); expect(here).toContain(PANEL_BLUE + "›");
+});
+
 test("model and effort hit ranges cover exactly the cells that show them", () => {
   for (const width of [30, 52, 80, 140]) {
     const bar = composerBar(snapshot, width, 0, false);
@@ -70,7 +78,7 @@ test("model and effort hit ranges cover exactly the cells that show them", () =>
     expect(plain(sliceByColumn(bar.line, bar.model!.to, 3))).toBe(" · ");
     if (width >= 52) {
       expect(cells(bar.model!)).toBe("claude-sonnet-4-5 ▾");
-      expect(cells(bar.effort!)).toBe(" · high ↻");
+      expect(cells(bar.effort!)).toBe(" · effort high ↻");
     }
     if (bar.effort) expect(bar.effort.to).toBeLessThanOrEqual(width - COMPOSER_INSET);
   }

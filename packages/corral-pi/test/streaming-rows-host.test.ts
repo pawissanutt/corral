@@ -101,8 +101,8 @@ test("a write call is visible while its content is still being written, then set
     mode = new sdk.InteractiveMode(host.runtime, { terminal, tuiMode: "fullscreen", readOnlyQueue: true, verbose: false, mainView: transcript => panels.mainView(transcript) });
     await mode.init(); host.markAttached("interactive");
     void mode.run().catch(error => { throw error; });
-    await physical.untilVisible("WORKER  ● g1");
-    physical.send("\x1b[20~"); // task-bound sessions open on Task; F9 shows the transcript
+    await physical.untilVisible("WORKER  ● bound");
+    physical.send("\x1b[20~"); // F9: Chat, where every session starts; the transcript stays in front
 
     const lines = () => screen.sync(physical.writes).lines();
     /** The screen row of the write call: its verb and file name on one row. */

@@ -114,12 +114,12 @@ export class FleetRuntime implements FleetControl {
     for (const input of specs) {
       const spec = { ...input, owns: input.owns.map(path => this.path(path)), after: [...input.after ?? []] };
       const model = models.get(spec.id)!;
-      const history = new AuxiliaryHistory();
+      const history = new AuxiliaryHistory(() => {}, this.now);
       history.begin(spec.id, "explore", model.model, 0, spec.brief);
       const bucket = Math.max(0, Math.floor((at - this.startedAt!) / 5000));
       const entry: Entry = { spec, model, controller: new AbortController(), history, settled: Promise.withResolvers<void>(), modelVersion: 0, pulseBucket: 0, historyBucket: bucket,
         value: { id: spec.id, call, title: spec.title, brief: spec.brief, owns: spec.owns, after: spec.after, profile: model.profile,
-          model: `${model.provider}/${model.model}`, effort: model.effort, state: "queued", createdAt: at, edits: [], steers: [], usage: { input: 0, output: 0, turns: 0 }, pulse: [], history: " ".repeat(Math.min(239, bucket)) + "q", messages: [] } };
+          model: `${model.provider}/${model.model}`, effort: model.effort, state: "queued", createdAt: at, edits: [], steers: [], steeredAt: [], usage: { input: 0, output: 0, turns: 0 }, pulse: [], history: " ".repeat(Math.min(239, bucket)) + "q", messages: [] } };
       this.entries.set(spec.id, entry); added.push(entry);
     }
     // Register the complete batch before a notification can reenter the runtime.
@@ -251,9 +251,11 @@ export class FleetRuntime implements FleetControl {
   async steer(id: string, text: string): Promise<boolean> {
     const entry = this.entries.get(id);
     if (!entry?.handle || !live(entry)) return false;
+    // The owner's moment of sending, so the conversation shows the steer between the replies around it.
+    const at = this.now();
     try { await entry.handle.steer(text); }
     catch (error) { if (!live(entry)) return false; throw error; }
-    entry.value.steers = [...entry.value.steers, text]; this.touch(entry); return true;
+    entry.value.steers = [...entry.value.steers, text]; entry.value.steeredAt = [...entry.value.steeredAt ?? [], at]; this.touch(entry); return true;
   }
   cancel(id: string): boolean {
     const entry = this.entries.get(id);
@@ -288,12 +290,13 @@ export class FleetRuntime implements FleetControl {
   }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   private copy(entry: Entry): ChildSnapshot {
-    const value = entry.value;
+    const value = entry.value, inspection = entry.history.snapshot()[0];
     return Object.freeze({ ...value, owns: Object.freeze([...value.owns]), after: Object.freeze([...value.after]),
       edits: Object.freeze(value.edits.map(edit => Object.freeze({ ...edit }))), usage: Object.freeze({ ...value.usage }),
-      steers: Object.freeze([...value.steers]), pulse: Object.freeze([...value.pulse]),
+      steers: Object.freeze([...value.steers]), steeredAt: Object.freeze([...value.steeredAt ?? []]), pulse: Object.freeze([...value.pulse]),
       question: value.question ? Object.freeze({ ...value.question, options: Object.freeze(value.question.options.map(option => Object.freeze({ ...option }))) }) : undefined,
-      messages: Object.freeze((entry.history.snapshot()[0]?.messages ?? []).map(item => Object.freeze({ ...item, ...(item.textBlocks ? { textBlocks: Object.freeze([...item.textBlocks]) } : {}) }))) });
+      ...(inspection?.dropped ? { dropped: inspection.dropped } : {}),
+      messages: Object.freeze((inspection?.messages ?? []).map(item => Object.freeze({ ...item, ...(item.textBlocks ? { textBlocks: Object.freeze([...item.textBlocks]) } : {}) }))) });
   }
   snapshot(): FleetSnapshot { return Object.freeze({ children: Object.freeze([...this.entries.values()].map(entry => this.copy(entry))), maxParallel: this.options.context.settings.maxParallel, startedAt: this.startedAt }); }
   async close(): Promise<void> {

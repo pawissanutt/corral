@@ -2,13 +2,14 @@
 // in a rounded card, and the bounded read-only output pager. Values are this host's job runtime observations,
 // never task settlement.
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { ScrollView, matchesKey, stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { ScrollView, stripTerminalSequences, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { chipRows, jobStatus, type Chip } from "./agents-model.ts";
 import { card, titledBox } from "./frame.ts";
 import {
-  pad, plainLabel, PANEL_BLUE, PANEL_ERROR, PANEL_LINE, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING,
+  plainLabel, PANEL_BLUE, PANEL_ERROR, PANEL_LINE, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING,
   type PanelJob,
 } from "./panels-view.ts";
+import { openPager } from "./pager.ts";
 
 /** Output captured when follow was switched off; the detail keeps showing it until follow resumes. */
 export interface JobFreeze { readonly job: string; readonly tail: string; readonly lines: number | undefined; readonly running: boolean }
@@ -108,18 +109,7 @@ export function pagerLines(job: PanelJob): string[] {
   const all = numberedTail(d.tail, d.lines, job.state === "running"), gutter = String(all.at(-1)?.number ?? "").length;
   return all.map(line => (line.number === undefined ? "" : String(line.number).padStart(gutter) + " │ ") + line.text);
 }
-/** A bounded read-only overlay over the retained output; never reads or follows the job's output file. */
-export async function openOutputPager(ui: ExtensionUIContext, title: string, lines: readonly string[], start = 0): Promise<void> {
-  await ui.custom<void>((tui, _theme, _keys, done) => {
-    let offset = start, max = 0;
-    return { render: width => {
-      const height = Math.max(1, Math.floor(tui.terminal.rows * 0.8) - 2);
-      max = Math.max(0, lines.length - height); offset = Math.max(0, Math.min(max, offset));
-      return [pad(plainLabel(title), width), ...lines.slice(offset, offset + height).map(line => pad(line, width))];
-    }, handleInput: data => {
-      if (matchesKey(data, "escape") || data === "q") { done(); return; }
-      const step = matchesKey(data, "up") ? -1 : matchesKey(data, "down") ? 1 : matchesKey(data, "pageUp") ? -10 : matchesKey(data, "pageDown") ? 10 : 0;
-      offset = Math.max(0, Math.min(max, offset + step)); tui.requestRender();
-    }, invalidate() {} };
-  }, { overlay: true, overlayOptions: { width: "90%", maxHeight: "85%", anchor: "center" } });
+/** The retained output in the shared pager; never reads or follows the job's output file. */
+export function openOutputPager(ui: ExtensionUIContext, title: string, lines: readonly string[], start = 0): Promise<void> {
+  return openPager(ui, { title, lines, start });
 }

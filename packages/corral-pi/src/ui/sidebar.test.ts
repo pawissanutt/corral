@@ -216,3 +216,37 @@ test("below the rail: a rule, then the collapsed row with summaries and [Ctrl+B]
   expect(drawer[1]!.trimEnd()).toMatch(/Ctrl\+B  ▾$/);
   expect(drawer[2]!.trim()).toBe("1/7 done");
 });
+
+test("until the owner picks a tab the rail shows Plan for a plan and Context while work is live; a pick stays", () => {
+  const progress = { revision: 1, spec_revision: "s", phases: [{ id: "p", label: "Build", steps: [step("a", "pending")] }] } as TodoProgress;
+  const planned = source({ plan: { progress, stale: false } }), live = source({ plan: { progress, stale: false }, jobs: [job("j:1", "bun test")] });
+  const bar = new Sidebar(() => {});
+  bar.rail(source(), 34, 10); expect(bar.tab).toBe("context");
+  bar.rail(planned, 34, 10); expect(bar.tab).toBe("plan");
+  bar.rail(live, 34, 10); expect(bar.tab).toBe("context");
+  // A focused sidebar keeps its tab, so the selection under the owner's keys never moves.
+  bar.focused = true;
+  bar.rail(planned, 34, 10); expect(bar.tab).toBe("context");
+  bar.focused = false;
+  bar.tab = "files";
+  for (const s of [planned, live, source()]) { bar.rail(s, 34, 10); bar.row(s, 92, false, 40); expect(bar.tab).toBe("files"); }
+});
+
+test("the plan heading explains the wait marks it shows", () => {
+  const progress = { revision: 1, spec_revision: "s", phases: [{ id: "p", label: "Build", steps: [step("ask", "pending"), step("go", "pending")] }],
+    waits: [{ step: "ask", on: { kind: "owner", question: "ship?" } }] } as TodoProgress;
+  const bar = new Sidebar(() => {});
+  bar.tab = "plan";
+  const text = plain(bar.drawerFrame(source({ plan: { progress, stale: false } }), 92, 40)).join("\n");
+  expect(text).toContain("? waits for you"); expect(text).not.toContain("waits for an event");
+});
+
+test("a collapsed row with no summary is one row, its labels and toggle set into the rule; the toggle draws the chosen key", () => {
+  const bar = new Sidebar(() => {});
+  bar.toggleKey = "Alt+B";
+  const frame = bar.row(source(), 92, false, 40), lines = plain(frame);
+  expect(lines).toHaveLength(1);
+  expect(lines[0]!.startsWith("─ Context")).toBeTrue(); expect(lines[0]!.trimEnd()).toMatch(/─ +Alt\+B  ▴$/);
+  const plan = (frame.hits.get(0) ?? []).find(hit => hit.tab === "plan")!;
+  expect(lines[0]!.slice(plan.from, plan.to)).toBe("Plan");
+});

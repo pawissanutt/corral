@@ -92,7 +92,7 @@ test("project-less assistant shows actionable scope choice, not a misleading cle
     // The Changes tab reads `?`, never a count of zero.
     const root = panels.workbench.mount(new Text("transcript", 0, 0));
     const tabs = stripTerminalSequences(renderLayoutFrame(root, 104, 24, () => {}).lines.join("\n"));
-    expect(tabs).toMatch(/Changes\s+\?/); expect(tabs).not.toMatch(/Changes\s+0/);
+    expect(tabs).toMatch(/Changes\s+project\?/); expect(tabs).not.toMatch(/Changes\s+0/);
     panels.sidebar.tab = "plan";
     const plan = stripTerminalSequences(panels.renderSidebar(34, 26).join("\n"));
     expect(plan).toContain("0/2 done"); expect(plan).toContain("Implement project-aware panels");

@@ -4,7 +4,7 @@ import { SessionManager, type BeforeAgentStartEvent, type BeforeAgentStartEventR
   type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildSystemPrompt, normalizeBuildSystemPromptOptions } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.js";
 import { PendingQuestions, QUESTION_ENTRY, type QuestionEntry } from "../host/pending-questions.ts";
-import { OwnerQuestionUi, OWNER_QUESTION_STATE, QUESTIONS_SHORTCUT, ownerQuestionLines, renderOwnerQuestionState } from "./owner-questions.ts";
+import { OwnerQuestionUi, OWNER_QUESTION_STATE, QUESTIONS_KEY, QuestionDock, ownerQuestionLines, renderOwnerQuestionState, type QuestionSource } from "./owner-questions.ts";
 
 test("owner UI dismisses without consent, preserves permission dialogs and fences stale callbacks", async () => {
   const entries: QuestionEntry[] = [];
@@ -27,7 +27,7 @@ test("owner UI dismisses without consent, preserves permission dialogs and fence
   const ui = new OwnerQuestionUi(q, () => true, () => {}); ui.install(api);
   await handlers.get("session_start")?.({}, ctx);
   const id = q.ask("Q", [{ question: "Which?", options: ["One", "Two"] }]).id;
-  expect(shortcuts).toContain(QUESTIONS_SHORTCUT);
+  expect(shortcuts).toContain(QUESTIONS_KEY);
   await command(id, ctx); // Escape or timeout from an owned answer UI.
   expect(q.get(id)?.status).toBe("pending"); expect(records).toBe(0);
   handlers.get("ui_prompt_start")?.({}, ctx); // An existing owner-action or permission dialog.
@@ -184,8 +184,9 @@ test("waiting owner questions use the docked dialog form: count in the header, o
   for (let width = 30; width <= 160; width++) {
     const frame = ownerQuestionLines(q.list(), width), rows = frame.lines.map(line => stripTerminalSequences(line));
     for (const line of frame.lines) expect(visibleWidth(line)).toBe(width);
-    // Three questions are listed; each row maps back to its question for a click.
+    // Three questions are listed; each row maps back to its question for a click. `/questions` shows at every width.
     expect(new Set(frame.hits.values()).size).toBe(3);
+    expect(rows[1]).toContain("/questions");
     for (const [line, id] of frame.hits) {
       expect(ids.slice(0, 3)).toContain(id);
       expect(rows[line]!.startsWith("│")).toBeTrue();
@@ -197,4 +198,24 @@ test("waiting owner questions use the docked dialog form: count in the header, o
   // The question is the option's label; the full id the owner answers by sits under it.
   const at = rows.findIndex(row => row.includes("Which layout for A?"));
   expect(rows[at + 1]).toContain(`/questions ${ids[0]}`);
+});
+
+test("the docked card takes keys only while focused: a digit opens that question, a letter is typing, Esc returns", () => {
+  const entries: QuestionEntry[] = [];
+  const q = new PendingQuestions({ session: () => "owned", generation: 1, entries: () => entries,
+    append: data => { entries.push({ type: "custom", customType: QUESTION_ENTRY, data }); }, changed() {},
+    record: async text => text, deliver: async () => true });
+  const ids = ["A", "B"].map(key => q.ask(key, [{ question: `Ship ${key}?`, options: ["Yes", "No"] }]).id);
+  const opened: (string | undefined)[] = [];
+  let composer = 0;
+  const source: QuestionSource = { waiting: () => q.list(), open: id => { opened.push(id); }, subscribe: () => () => {} };
+  const dock = new QuestionDock({ source: () => source, focus() {}, focusComposer: () => { composer++; }, changed() {} });
+  expect(dock.handleKey("2")).toBeFalse();
+  dock.focused = true;
+  expect(dock.handleKey("\x1b[18~")).toBeFalse(); expect(dock.focused).toBeTrue();
+  expect(dock.handleKey("2")).toBeTrue(); expect(opened).toEqual([ids[1]]);
+  dock.focused = true;
+  expect(dock.handleKey("x")).toBeFalse(); expect(dock.focused).toBeFalse();
+  dock.focused = true;
+  expect(dock.handleKey("\x1b")).toBeTrue(); expect(dock.focused).toBeFalse(); expect(composer).toBe(3);
 });

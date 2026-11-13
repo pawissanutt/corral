@@ -30,7 +30,7 @@ test("the popup: rounded border, a `Keys` title with `esc close`, a divider, hea
   const lines = new KeysList(keyGroups(mode), () => {}, () => {}, 12).render(78);
   const text = lines.map(plain);
   expect(text[0]!.startsWith("╭")).toBeTrue(); expect(text[0]!.endsWith("╮")).toBeTrue();
-  expect(text[1]).toMatch(/^│ Keys +esc +close │$/);
+  expect(text[1]).toMatch(/^│ Keys +1–12 \/ \d+ +esc +close │$/);
   expect(text[2]).toMatch(/^│─+│$/);
   expect(text.at(-1)!.startsWith("╰")).toBeTrue();
   expect(lines.find(line => plain(line).includes("Views"))).toContain(PANEL_HEAD);
@@ -38,15 +38,50 @@ test("the popup: rounded border, a `Keys` title with `esc close`, a divider, hea
   expect(text.some(line => line.startsWith("│▌"))).toBeTrue();
 });
 
-test("the list stays within its rows and width and keeps the selection in view", () => {
+test("the list stays within its rows and width; a drawn selection is always a runnable row", () => {
   for (const width of [40, 78]) for (const capacity of [4, 9]) {
-    const list = new KeysList(keyGroups(mode), () => {}, () => {}, capacity);
+    const results: (string | undefined)[] = [];
+    const list = new KeysList(keyGroups(mode), data => { results.push(data); }, () => {}, capacity);
     for (let step = 0; step < 60; step++) {
       const lines = list.render(width);
       expect(lines.length).toBeLessThanOrEqual(capacity + 4);
       for (const line of lines) expect(visibleWidth(line)).toBe(width);
-      expect(lines.some(line => plain(line).startsWith("│▌"))).toBeTrue();
+      if (lines.some(line => plain(line).startsWith("│▌"))) {
+        list.handleInput("\r");
+        expect(typeof results.at(-1)).toBe("string");
+      }
       list.handleInput("\x1b[B");
     }
   }
+});
+
+// 68 lines: runnable groups between reference-only groups, as in a task-bound session.
+const fixture = ([["Views", 6, true], ["Agents", 15, false], ["Changes", 3, true], ["Task", 20, false], ["Anywhere", 10, false], ["Queue", 8, true]] as const)
+  .map(([title, count, runs]) => ({ title, rows: Array.from({ length: count }, (_, index) => ({ key: "k", label: `${title} ${index + 1}`,
+    ...(runs ? { data: `run ${title} ${index + 1}` } : {}) })) }));
+const titles = fixture.flatMap(group => [group.title, ...group.rows.map(row => row.label)]);
+const label = (line: string) => plain(line).slice(1, -1).replace(/^▌/, "").trim().replace(/^k\s+/, "");
+
+test("F1 at 24 rows brings every one of 68 lines on screen with ↓ or PgDn, and Enter runs the selected row", () => {
+  expect(titles.length).toBe(68);
+  for (const key of ["\x1b[B", "\x1b[6~"]) {
+    const results: (string | undefined)[] = [];
+    const list = new KeysList(fixture, data => { results.push(data); }, () => {}, 16);
+    const seen = new Set<string>();
+    let lines = list.render(78);
+    for (let press = 0; press < 80; press++) {
+      for (const line of lines.slice(3, -1)) seen.add(label(line));
+      list.handleInput(key); lines = list.render(78);
+    }
+    expect(titles.filter(title => !seen.has(title))).toEqual([]);
+    expect(plain(lines[1]!)).toContain("53–68 / 68");
+    const bar = lines.find(line => plain(line).startsWith("│▌"));
+    expect(bar === undefined).toBeFalse();
+    list.handleInput("\r");
+    expect(results).toEqual([`run ${label(bar ?? "")}`]);
+  }
+  const wheel = new KeysList(fixture, () => {}, () => {}, 16);
+  wheel.handleMouse({ type: "wheel", button: "none", x: 4, y: 6, screenX: 4, screenY: 6, width: 78, height: 20,
+    shift: false, alt: false, ctrl: false, wheelDelta: 5 });
+  expect(plain(wheel.render(78)[1]!)).toContain("6–21 / 68");
 });

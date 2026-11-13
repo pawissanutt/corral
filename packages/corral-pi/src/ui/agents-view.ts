@@ -9,6 +9,7 @@ import {
 import { keyCap, rule, spinner } from "./frame.ts";
 import { jobDetailLines, type JobFreeze } from "./job-detail.ts";
 import { PANEL_BG, PANEL_BLUE, PANEL_HEAD, PANEL_MUTED, PANEL_RULE, PANEL_SELECTED, PANEL_TEXT, PANEL_WARNING, RESET } from "./panels-view.ts";
+import { FILTER_KEY, keyLabel } from "./keymap.ts";
 
 export type AgentsAction = "open" | "answer" | "transcript" | "steer" | "cancel" | "model"
   | "output" | "search" | "follow" | "peek" | "background" | "stop";
@@ -18,12 +19,16 @@ export interface AgentsViewHost {
   click(event: TuiMouseEvent): boolean;       // plain click allowed (workbench plainClick + canInteract)
   focus(): void;
   act(action: AgentsAction, key: string): void;
+  /** True while the view has the keys: the selection bar is accent then, muted otherwise. Absent reads as focused. */
+  focused?(): boolean;
 }
 export type AgentsEntry = { readonly kind: "agent"; readonly row: AgentRow } | { readonly kind: "job"; readonly row: JobRow };
 export interface AgentsHit { readonly key: string; readonly action?: AgentsAction; readonly from?: number; readonly to?: number }
 export interface AgentsOptions {
   readonly now: number; readonly short: boolean; readonly legend: boolean;
   readonly freeze: JobFreeze | undefined; readonly color: (hue: number) => string;
+  /** The selection bar in accent while the view has the keys, muted otherwise; absent reads as focused. */
+  readonly focused?: boolean;
 }
 
 /**
@@ -89,10 +94,10 @@ function pulse(entry: AgentRow, cells: number, color: string): string {
 function gridOf(width: number): number { return width - 3; }
 
 function agentLines(entry: AgentRow, phase: number, selected: boolean, density: "full" | "med" | "min", width: number,
-  color: (hue: number) => string, now: number): string[] {
+  color: (hue: number) => string, now: number, bar: string): string[] {
   const surface = selected ? PANEL_SELECTED : PANEL_BG, base = surface + PANEL_TEXT, grid = gridOf(width);
   const hue = color(entry.hue), name = BOLD + hue + entry.name + UNBOLD;
-  const lead = (selected ? PANEL_BLUE + "▌" : " ") + GAP + glyph(entry.status, entry.state === "running", now, phase) + GAP;
+  const lead = (selected ? bar + "▌" : " ") + GAP + glyph(entry.status, entry.state === "running", now, phase) + GAP;
   const time = cell(toneColor(timeTone(entry.status.tone)) + timeLabel(entry.status), TIME, base, true);
   const cost = cell(PANEL_TEXT + money(entry.usage?.cost), COST, base, true);
   const profile = PANEL_MUTED + entry.profile + " · " + entry.model + (entry.pendingModel ? " → " + entry.pendingModel : "");
@@ -111,9 +116,9 @@ function agentLines(entry: AgentRow, phase: number, selected: boolean, density: 
   const second = " ".repeat(LEAD) + cell(activity, grid - LEAD - (beat ? PULSE_MED + GAP.length : 0), base) + (beat ? GAP + beat : "");
   return [row(first, width, surface), row(second, width, surface)];
 }
-function jobLine(entry: JobRow, phase: number, selected: boolean, density: "full" | "med" | "min", width: number, now: number): string {
+function jobLine(entry: JobRow, phase: number, selected: boolean, density: "full" | "med" | "min", width: number, now: number, bar: string): string {
   const surface = selected ? PANEL_SELECTED : PANEL_BG, base = surface + PANEL_TEXT, grid = gridOf(width);
-  const lead = (selected ? PANEL_BLUE + "▌" : " ") + GAP + glyph(entry.status, entry.live, now, phase) + GAP;
+  const lead = (selected ? bar + "▌" : " ") + GAP + glyph(entry.status, entry.live, now, phase) + GAP;
   const state = entry.status.time ? `${entry.status.word} ${entry.status.time}` : entry.status.word;
   const stateWidth = Math.min(JOB_STATE, visibleWidth(state)), idWidth = density === "min" ? 0 : Math.min(JOB_ID, visibleWidth(entry.job));
   const command = grid - LEAD - stateWidth - GAP.length - (idWidth ? idWidth + GAP.length : 0);
@@ -157,7 +162,7 @@ function agentActions(entry: AgentRow): Action[] {
 function jobActions(entry: JobRow, freeze: JobFreeze | undefined): Action[] {
   const frozen = freeze?.job === entry.job;
   const keys: Readonly<Record<(typeof JOB_ACTIONS)[number], readonly [string, string]>> = {
-    output: ["⏎", "output"], search: ["/", "search output"], follow: ["f", frozen ? "resume follow" : "pause follow"], peek: ["p", "peek"],
+    output: ["⏎", "output"], search: [keyLabel(FILTER_KEY), "search output"], follow: ["f", frozen ? "resume follow" : "pause follow"], peek: ["p", "peek"],
     background: ["b", "background"], stop: ["x", "stop"],
   };
   return JOB_ACTIONS.filter(action => entry.capabilities[action] || action === "follow" && frozen)
@@ -234,7 +239,7 @@ export function renderAgents(model: AgentsModel, selected: string | undefined, w
   const push = (line: string, rowHits?: readonly AgentsHit[]) => { if (rowHits?.length) hits.set(lines.length, [...rowHits]); lines.push(line); };
   const divider = () => push(row(rule(width - 2), width));
   const heading = (title: string, note: string) => push(row(BOLD + PANEL_HEAD + title + UNBOLD + PANEL_MUTED + note, width));
-  const entry = shownEntry(model, selected);
+  const entry = shownEntry(model, selected), bar = options.focused === false ? PANEL_MUTED : PANEL_BLUE;
   let selectedRow = -1;
 
   if (!model.bound && (model.jobs.length > 0 || model.agents.some(agent => agent.source === "helper"))) {
@@ -248,14 +253,14 @@ export function renderAgents(model: AgentsModel, selected: string | undefined, w
   model.agents.forEach((agent, index) => {
     const on = entry?.row.key === agent.key;
     if (on) selectedRow = lines.length;
-    for (const line of agentLines(agent, index, on, density, width, options.color, options.now)) push(line, [{ key: agent.key }]);
+    for (const line of agentLines(agent, index, on, density, width, options.color, options.now, bar)) push(line, [{ key: agent.key }]);
   });
   if (model.jobs.length) {
     heading("Jobs", ` · ${model.jobs.filter(job => job.live).length} running`);
     model.jobs.forEach((job, index) => {
       const on = entry?.row.key === job.key;
       if (on) selectedRow = lines.length;
-      push(jobLine(job, model.agents.length + index, on, density, width, options.now), [{ key: job.key }]);
+      push(jobLine(job, model.agents.length + index, on, density, width, options.now, bar), [{ key: job.key }]);
     });
   }
 
@@ -327,7 +332,7 @@ export class AgentsView {
     const enter = matchesKey(data, "enter");
     const action: AgentsAction | undefined = entry.kind === "agent"
       ? enter ? "open" : data === "a" ? "answer" : data === "t" ? "transcript" : data === "s" ? "steer" : data === "x" ? "cancel" : data === "m" ? "model" : undefined
-      : enter ? "output" : data === "/" ? "search" : data === "f" ? "follow" : data === "p" ? "peek" : data === "b" ? "background" : data === "x" ? "stop" : undefined;
+      : enter ? "output" : matchesKey(data, FILTER_KEY) ? "search" : data === "f" ? "follow" : data === "p" ? "peek" : data === "b" ? "background" : data === "x" ? "stop" : undefined;
     if (!action) return false;
     if (this.actions().includes(action)) { this.host.act(action, entry.row.key); return true; }
     // A present but disabled capability is shown dim with its reason; its key does nothing else.
@@ -340,6 +345,7 @@ export class AgentsView {
   private render(width: number): string[] {
     const frame = renderAgents(this.host.model(), this.selected, width, {
       now: this.host.now(), short: this.host.short(), legend: this.host.legend(), freeze: this.host.freeze(), color: hue => this.host.color(hue),
+      focused: this.host.focused?.() ?? true,
     });
     this.hits = frame.hits;
     const height = this.scroll.viewportHeight, top = this.scroll.scrollTop, row = frame.selectedRow;
