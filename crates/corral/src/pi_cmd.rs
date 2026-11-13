@@ -9,12 +9,15 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use clap::Args;
-use corral_core::Store;
+use corral_core::{Config, ProfileChoice, Store};
 use corral_ops::Ctx;
+use corral_ops::agent::credentials;
 use corral_ops::agent::hooks::pm::Overrides;
+use corral_ops::agent::hooks::preflight;
+use corral_ops::agent::launch::host_provider;
 use corral_ops::agent::pi::{self, BareArgs};
 use corral_ops::agent::pi_build::{self, BuildArgs, BuildSessionSummary};
-use corral_tui::launcher::{self, LauncherEntry, Section};
+use corral_tui::launcher::{self, LauncherContext, LauncherEntry, Login, ProviderLogin, Section};
 
 use crate::entry::Entry;
 
@@ -174,7 +177,10 @@ pub fn run(start: &Path, args: PiArgs, entry: &Entry) -> Result<()> {
         Invocation::Build { here, name, resume } => start_build(overrides, here, name, resume),
         Invocation::Launcher => {
             let ctx = entry.open(start)?;
-            let Some((id, option)) = launcher::pick(&launcher_entries(start, &ctx)?)? else {
+            let top = git_top_level(start);
+            let entries = launcher_entries(&ctx, top.as_deref())?;
+            let context = launcher_context(start, &ctx, top.as_deref(), &overrides);
+            let Some((id, option)) = launcher::pick(&entries, &context)? else {
                 return Ok(());
             };
             let (next, continue_session) = chosen(&id, option)?;
@@ -307,8 +313,8 @@ fn git_top_level(start: &Path) -> Option<PathBuf> {
 
 /// The launcher's rows: start a build session, an assistant or the PM, or resume one of the newest
 /// stopped sessions: assistants `corral pi --resume` accepts (open, with no running host) and the
-/// build sessions recorded for a repository inside this workspace or the current one.
-fn launcher_entries(start: &Path, ctx: &Ctx) -> Result<Vec<LauncherEntry>> {
+/// build sessions recorded for a repository inside this workspace or `top`, the current one.
+fn launcher_entries(ctx: &Ctx, top: Option<&Path>) -> Result<Vec<LauncherEntry>> {
     let mut entries = vec![
         build_entry(),
         LauncherEntry {
@@ -359,7 +365,6 @@ fn launcher_entries(start: &Path, ctx: &Ctx) -> Result<Vec<LauncherEntry>> {
         ));
     }
     let workspace = ctx.store.root();
-    let top = git_top_level(start);
     for session in pi_build::list_sessions(&corral_ops::agent::install::data_root()?) {
         let Ok(updated) = session.updated.parse::<jiff::Timestamp>() else {
             continue;
@@ -368,13 +373,88 @@ fn launcher_entries(start: &Path, ctx: &Ctx) -> Result<Vec<LauncherEntry>> {
             .repo_root
             .canonicalize()
             .unwrap_or_else(|_| session.repo_root.clone());
-        if repo.starts_with(workspace) || top.as_deref() == Some(repo.as_path()) {
+        if repo.starts_with(workspace) || top == Some(repo.as_path()) {
             resume.push((updated, build_resume_entry(&session, now)));
         }
     }
     resume.sort_by(|a, b| b.0.cmp(&a.0));
     entries.extend(resume.into_iter().take(RESUME_ROWS).map(|(_, entry)| entry));
     Ok(entries)
+}
+
+/// What the launcher's option block shows about the build session it would open: the project a
+/// build resolves for this checkout (the deepest project containing `top`, the repository root,
+/// else `start`) and the providers its agents can use, each with what the launch's credential check
+/// says of its login. File reads only: no subprocess, no network.
+fn launcher_context(
+    start: &Path,
+    ctx: &Ctx,
+    top: Option<&Path>,
+    overrides: &Overrides,
+) -> LauncherContext {
+    let project = corral_ops::infer_project(ctx, top.unwrap_or(start));
+    let config = ctx
+        .store
+        .config_layers()
+        .and_then(|layers| layers.config())
+        .unwrap_or_else(|_| ctx.store.config.clone());
+    let build = config
+        .build
+        .profiles
+        .values()
+        .filter_map(|profile| profile.model.split_once('/'))
+        .map(|(provider, _)| provider.to_owned());
+    let mut ids: Vec<String> = Vec::new();
+    for id in assistant_provider(&config, overrides)
+        .into_iter()
+        .chain(build)
+    {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    let data_root = corral_ops::agent::install::data_root().ok();
+    let providers = ids
+        .into_iter()
+        .map(|id| ProviderLogin {
+            login: provider_login(data_root.as_deref(), &id),
+            id,
+        })
+        .collect();
+    LauncherContext { project, providers }
+}
+
+/// The provider the assistant profile, which a build session's parent runs, uses with this launch's
+/// `--provider` and `--model`; `None` when it names no model or no known provider.
+fn assistant_provider(config: &Config, overrides: &Overrides) -> Option<String> {
+    if let Some(id) = &overrides.provider {
+        return Some(id.clone());
+    }
+    let name = config.assistant.agent.as_ref().unwrap_or(&config.pm.agent);
+    let choice = ProfileChoice {
+        profile: Some(name.clone()),
+        ..ProfileChoice::default()
+    };
+    let resolved = config.resolve_profile(&choice, None, None).ok()?;
+    let vendor = overrides
+        .model
+        .as_deref()
+        .and_then(corral_core::infer_vendor)
+        .or(resolved.vendor);
+    let model = overrides.model.clone().or(resolved.model)?;
+    host_provider(vendor.as_deref(), &model)
+}
+
+/// A provider's login as the build launch's credential check sees it from file metadata; unknown
+/// when there is no data root or the provider has no corral-owned login.
+fn provider_login(data_root: Option<&Path>, id: &str) -> Login {
+    let (Some(root), Some(provider)) = (data_root, credentials::provider(id)) else {
+        return Login::Unknown;
+    };
+    match preflight::credential(root, Some(provider.vendor)) {
+        Ok(()) => Login::Present,
+        Err(_) => Login::Missing,
+    }
 }
 
 /// What the launcher's row (with its chosen option) stands for, and whether it continues the
