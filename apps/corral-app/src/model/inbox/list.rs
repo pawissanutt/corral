@@ -1,12 +1,14 @@
-//! Inbox rows, changes feed and desktop selection previews. Answered rows stay in place;
-//! their displayed count intentionally differs from the navigation's needs-you badge.
+//! Inbox list descriptors, and the fixture preview's rows, changes feed and selection panes.
+//! Answered rows stay in place; their displayed count intentionally differs from the
+//! navigation's needs-you badge.
 
 use super::sheet::button;
 use super::{
-    Action, Button, ButtonKind, Chip, Notice, Q, QuestionState, Selection, Sheet, State, phone,
-    sheet_desk,
+    Action, Button, ButtonKind, Chip, Notice, Q, QuestionState, Selection, Sheet, State,
+    fixture_desk, phone,
 };
-use crate::model::board::{self, Change};
+use crate::model::Id;
+use crate::model::board::{self, ChangeKind};
 use crate::model::effect::{DataMode, Env, Page};
 use crate::model::hue::Hue;
 use crate::model::nav::Destination;
@@ -15,12 +17,12 @@ use crate::model::text::{Rich, span};
 /// One needs-you row or phone card, with every visible string resolved for the form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NeedYouItem {
-    /// Typed row identity for desktop selection.
-    pub key: Selection,
+    /// The row's test id: `inbox-<key>` for served rows, the fixture's own names otherwise.
+    pub test_id: String,
     /// Lead phrase, also available separately for accessibility.
-    pub lead: &'static str,
+    pub lead: String,
     /// Record id.
-    pub id: &'static str,
+    pub id: String,
     /// Complete visible lead line, including sample attribution where appropriate.
     pub heading: Rich,
     /// Main title, with the phone plan prefix already included.
@@ -28,10 +30,10 @@ pub struct NeedYouItem {
     /// Full resolved secondary text.
     pub meta: String,
     /// Right-side desktop age; phone ages are already included in heading.
-    pub age: &'static str,
+    pub age: String,
     /// Question state, absent on other row kinds.
     pub state: Option<QuestionState>,
-    /// Neutralises the question's owner dot when it is not open.
+    /// Neutralises the owner dot when the item is no longer open.
     pub hue: Hue,
     /// Desktop selection state.
     pub selected: bool,
@@ -41,12 +43,20 @@ pub struct NeedYouItem {
     pub action: Action,
 }
 
-/// A changes-feed row, preserving the board's time, id, kind and text.
+/// A changes-feed row: time, id, kind and text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedRow {
-    /// Canonical board change; its kind supplies the mark shape.
-    pub change: Change,
-    /// Desktop's unseen styling, absent on phone rows.
+    /// Local time of the change.
+    pub at: String,
+    /// The changed task, or empty for workspace-wide changes.
+    pub id: String,
+    /// The mark shape.
+    pub kind: ChangeKind,
+    /// What changed.
+    pub text: String,
+    /// Test id (`task-<id>`, or `change-<seq>` without a task).
+    pub test_id: String,
+    /// Unseen styling, absent on phone rows.
     pub unseen: bool,
     /// Open the changed task.
     pub action: Action,
@@ -58,7 +68,7 @@ pub struct EmptyState {
     /// Message heading.
     pub title: &'static str,
     /// Complete explanatory paragraph.
-    pub body: &'static str,
+    pub body: String,
     /// Optional recovery/navigation control.
     pub action: Option<Button>,
 }
@@ -83,34 +93,34 @@ pub enum InboxList {
         needs_title: &'static str,
         /// Count of rendered rows, including stamped answered questions.
         needs_count: usize,
-        /// Needs-you rows/cards in source order.
+        /// Needs-you rows/cards in order.
         items: Vec<NeedYouItem>,
         /// Empty-state message when there are no needs-you rows.
         empty: Option<EmptyState>,
         /// Desktop “Since your last visit” or phone “Since 18:40”.
         since_title: String,
-        /// Desktop's time in the group heading.
-        last_visit: &'static str,
-        /// Phone's total changes count, independent of the six-row preview.
-        changes_count: u32,
-        /// Eight desktop or six phone change rows.
+        /// Desktop's time of the last visit in the group heading, when known.
+        last_visit: Option<String>,
+        /// Phone's count of changes since the last visit, independent of the preview length.
+        changes_count: u64,
+        /// Desktop or phone change rows.
         feed: Vec<FeedRow>,
         /// All-changes navigation control, already labelled for the form.
         all_changes: Button,
     },
 }
 
-/// The plan's small inbox preview, not the full plan-review document.
+/// A plan's small inbox preview, not the full plan-review document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanPreview {
-    /// Ordered needs-you and approval chips.
+    /// Ordered needs-you and state chips.
     pub chips: Vec<Chip>,
     /// Plan id and revision.
-    pub record: &'static str,
+    pub record: String,
     /// Full plan title.
-    pub title: &'static str,
-    /// Plan goal from its real projection.
-    pub goal: &'static str,
+    pub title: String,
+    /// Plan goal, when the projection carries it.
+    pub goal: Option<String>,
     /// Heading for the consequences paragraph.
     pub consequence_title: &'static str,
     /// Members, delivery destination and autopilot consequence.
@@ -119,9 +129,24 @@ pub struct PlanPreview {
     pub open: Button,
 }
 
-/// Selected assistant prompt metadata; the screen composes Permission with
-/// `assistant::permission_card(env)` and Confirmation with `assistant::mode_pause_card()`.
-/// Those cards remain assistant-owned rather than being copied into the question model.
+/// A served needs-you item that is neither a question, a prompt nor a plan: a review, a
+/// stuck task or an escalation without a question record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemPreview {
+    /// Needs-you and state chips.
+    pub chips: Vec<Chip>,
+    /// Row id.
+    pub record: String,
+    /// Row title.
+    pub title: String,
+    /// Recorded facts, one per line.
+    pub facts: Vec<String>,
+    /// Open the item's own page, when it has one.
+    pub open: Option<Button>,
+}
+
+/// Selected assistant prompt metadata in the fixture preview; the screen composes Permission
+/// with `assistant::permission_card(env)` and Confirmation with `assistant::mode_pause_card()`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssistantPreview {
     /// Selects the permission or mode-pause builder documented on this type.
@@ -141,18 +166,20 @@ pub struct AssistantPreview {
 /// The desktop right pane. Phone renders the list and pushes the selected item instead.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InboxPreview {
-    /// Three skeleton blocks while the projection loads.
+    /// Skeleton blocks while the projection or the question's detail loads.
     Loading {
         /// Header/title/body placeholder count.
         skeleton_count: u8,
     },
     /// No item is waiting on the owner.
     Empty(EmptyState),
+    /// The selected question's detail did not load.
+    Failed(Notice),
     /// Full inline S, B, A, R, Thread, History handover.
     Question(Sheet),
-    /// T-885's goal and publication consequence.
+    /// A plan's goal and publication consequence.
     Plan(PlanPreview),
-    /// The illustrative PM question preview.
+    /// The fixture's illustrative PM question preview.
     Pm {
         /// Needs-you chip.
         chip: Chip,
@@ -165,8 +192,17 @@ pub enum InboxPreview {
         /// Current repair-budget situation.
         body: &'static str,
     },
-    /// An assistant-domain prompt, with the surrounding inbox content resolved here.
+    /// A fixture assistant-domain prompt, with the surrounding inbox content resolved here.
     Assistant(AssistantPreview),
+    /// A served assistant prompt: the assistant domain renders its card from the thread.
+    Prompt {
+        /// The assistant thread (`quick` or `A-n`).
+        thread: Id,
+        /// The prompt key.
+        key: Id,
+    },
+    /// A served review, stuck task or escalation.
+    Item(ItemPreview),
 }
 
 /// Complete Inbox destination content without application-shell banners or presentation.
@@ -185,21 +221,38 @@ pub struct Inbox {
 const PM_TITLE: &str = "T-852 repair budget: re-gate only, or one more round?";
 const PLAN_TITLE: &str = "PM supervisor evolution: bounded reads";
 
-/// Build all five projected needs-you items, or none for Empty. The question is retained
+fn fixture_id(key: Selection) -> &'static str {
+    match key {
+        Selection::Question => "inbox-question",
+        Selection::Plan => "inbox-plan",
+        Selection::Pm => "inbox-pm",
+        Selection::Permission => "inbox-permission",
+        Selection::Confirmation => "inbox-confirmation",
+    }
+}
+
+/// Build all five fixture needs-you items, or none for Empty. The question is retained
 /// with its answer stamp even though needs_you_count no longer includes it in the badge.
 pub fn need_you(state: &State, env: Env) -> Vec<NeedYouItem> {
     if env.mode == DataMode::Empty {
         return Vec::new();
     }
     let status = state.question_state(env);
-    let row = |key, lead, id, title: &str, meta: String, age, question_state, sample| NeedYouItem {
-        key,
-        lead,
-        id,
+    let row = |key: Selection,
+               lead: &str,
+               id: &str,
+               title: &str,
+               meta: String,
+               age: &str,
+               question_state: Option<QuestionState>,
+               sample| NeedYouItem {
+        test_id: fixture_id(key).into(),
+        lead: lead.into(),
+        id: id.into(),
         heading: vec![span(lead), span(" · "), span(id).mono()],
         title: title.into(),
         meta,
-        age,
+        age: age.into(),
         state: question_state,
         hue: if question_state.is_some_and(|st| st != QuestionState::Open) {
             Hue::Neutral
@@ -211,66 +264,81 @@ pub fn need_you(state: &State, env: Env) -> Vec<NeedYouItem> {
         action: Action::Select(key),
     };
     let mut items = vec![
-        row(
+        (
             Selection::Question,
-            "Worker asks",
-            Q.key,
-            Q.short,
-            match status {
-                QuestionState::Elsewhere => "answered on PM pane 22:14".into(),
-                QuestionState::Mine => "answered by you 22:12".into(),
-                _ => format!("T-868 blocked · {} · owner only", Q.age),
-            },
-            Q.age,
-            Some(status),
-            None,
+            row(
+                Selection::Question,
+                "Worker asks",
+                Q.key,
+                Q.short,
+                match status {
+                    QuestionState::Elsewhere => "answered on PM pane 22:14".into(),
+                    QuestionState::Mine => "answered by you 22:12".into(),
+                    _ => format!("T-868 blocked · {} · owner only", Q.age),
+                },
+                Q.age,
+                Some(status),
+                None,
+            ),
         ),
-        row(
+        (
             Selection::Plan,
-            "Plan awaits acceptance",
-            "T-885 P2",
-            PLAN_TITLE,
-            "reviewed · approve P2 · 3 members".into(),
-            "10h",
-            None,
-            None,
+            row(
+                Selection::Plan,
+                "Plan awaits acceptance",
+                "T-885 P2",
+                PLAN_TITLE,
+                "reviewed · approve P2 · 3 members".into(),
+                "10h",
+                None,
+                None,
+            ),
         ),
-        row(
+        (
             Selection::Pm,
-            "PM asks",
-            "PM/Q7",
-            PM_TITLE,
-            "12m · nothing blocked".into(),
-            "12m",
-            None,
-            Some("sample"),
+            row(
+                Selection::Pm,
+                "PM asks",
+                "PM/Q7",
+                PM_TITLE,
+                "12m · nothing blocked".into(),
+                "12m",
+                None,
+                Some("sample"),
+            ),
         ),
-        row(
+        (
             Selection::Permission,
-            "Assistant A-7 asks",
-            "write permission",
-            "Write ~/miti-workspace/notes/corral-log.md (+6 lines)?",
-            "Allow once · 1 hour · session · Deny".into(),
-            "7m",
-            None,
-            None,
+            row(
+                Selection::Permission,
+                "Assistant A-7 asks",
+                "write permission",
+                "Write ~/miti-workspace/notes/corral-log.md (+6 lines)?",
+                "Allow once · 1 hour · session · Deny".into(),
+                "7m",
+                None,
+                None,
+            ),
         ),
-        row(
+        (
             Selection::Confirmation,
-            "Assistant A-7 waits",
-            "corral mode pause",
-            "Confirm on this device: pause autopilot for tonight",
-            "confirm on this device · mode".into(),
-            "10m",
-            None,
-            None,
+            row(
+                Selection::Confirmation,
+                "Assistant A-7 waits",
+                "corral mode pause",
+                "Confirm on this device: pause autopilot for tonight",
+                "confirm on this device · mode".into(),
+                "10m",
+                None,
+                None,
+            ),
         ),
     ];
-    for item in &mut items {
+    for (key, item) in &mut items {
         if phone(env) {
             item.selected = false;
-            item.heading = vec![span(item.lead), span(format!(" · {}", item.age))];
-            item.action = match item.key {
+            item.heading = vec![span(item.lead.clone()), span(format!(" · {}", item.age))];
+            item.action = match key {
                 Selection::Question => {
                     item.heading.push(span(" · blocking"));
                     item.meta = match status {
@@ -301,25 +369,29 @@ pub fn need_you(state: &State, env: Env) -> Vec<NeedYouItem> {
             item.heading.extend([span(" · "), span("sample").dim()]);
         }
     }
-    items
+    items.into_iter().map(|(_, item)| item).collect()
 }
 
-/// Build a bounded changes feed from the shared board, without duplicating change data.
+/// Build a bounded fixture changes feed from the shared board.
 pub fn feed(limit: usize, env: Env) -> Vec<FeedRow> {
     board::changes()
         .iter()
         .take(limit)
-        .map(|&change| FeedRow {
-            change,
+        .map(|change| FeedRow {
+            at: change.at.into(),
+            id: change.id.into(),
+            kind: change.kind,
+            text: change.text.into(),
+            test_id: format!("task-{}", change.id),
             unseen: !phone(env),
             action: Action::Open(Page::Task(change.id)),
         })
         .collect()
 }
 
-/// Build desktop list or phone cards, their source-specific error banner, empty state,
-/// and changes preview. Empty still shows the changes feed; Loading does not.
-pub fn inbox_list(state: &State, env: Env) -> InboxList {
+/// Build the fixture's desktop list or phone cards, their error banner, empty state, and
+/// changes preview. Empty still shows the changes feed; Loading does not.
+pub fn fixture_list(state: &State, env: Env) -> InboxList {
     if env.mode == DataMode::Loading {
         return InboxList::Loading {
             skeleton_count: if phone(env) { 2 } else { 5 },
@@ -358,10 +430,20 @@ pub fn inbox_list(state: &State, env: Env) -> InboxList {
             }
         }
     });
-    let empty = items.is_empty().then(|| EmptyState { title: "Nothing needs you.",
-        body: if phone(env) { "Corral is verifying 3 · workers producing 2 · 23 queued. You'll get a push when that changes." }
-            else { "Corral is verifying 3, workers are producing 2, 23 are queued. You'll get a push if that changes." },
-        action: Some(button("Open Now", Action::Go(Destination::Now), ButtonKind::Ghost)) });
+    let empty = items.is_empty().then(|| EmptyState {
+        title: "Nothing needs you.",
+        body: if phone(env) {
+            "Corral is verifying 3 · workers producing 2 · 23 queued. You'll get a push when that changes."
+        } else {
+            "Corral is verifying 3, workers are producing 2, 23 are queued. You'll get a push if that changes."
+        }
+        .into(),
+        action: Some(button(
+            "Open Now",
+            Action::Go(Destination::Now),
+            ButtonKind::Ghost,
+        )),
+    });
     InboxList::Ready {
         label: "Inbox",
         error,
@@ -374,7 +456,7 @@ pub fn inbox_list(state: &State, env: Env) -> InboxList {
         } else {
             "Since your last visit".into()
         },
-        last_visit: board::LAST_VISIT,
+        last_visit: Some(board::LAST_VISIT.into()),
         changes_count: 12,
         feed: feed(if phone(env) { 6 } else { 8 }, env),
         all_changes: button(
@@ -385,21 +467,21 @@ pub fn inbox_list(state: &State, env: Env) -> InboxList {
     }
 }
 
-/// Build the selected desktop pane; assistant prompt cards remain owned by the assistant
-/// model and can be composed using the typed prompt identity on AssistantPreview.
-pub fn inbox_preview(state: &State, env: Env) -> InboxPreview {
+/// Build the fixture's selected desktop pane; assistant prompt cards remain owned by the
+/// assistant model and are composed using the typed prompt identity on AssistantPreview.
+pub fn fixture_preview(state: &State, env: Env) -> InboxPreview {
     if env.mode == DataMode::Loading {
         return InboxPreview::Loading { skeleton_count: 3 };
     }
     if env.mode == DataMode::Empty {
         return InboxPreview::Empty(EmptyState {
             title: "Inbox is clear",
-            body: "Answered questions and accepted plans stay in Changes and Timeline. Nothing here is waiting on you.",
+            body: "Answered questions and accepted plans stay in Changes and Timeline. Nothing here is waiting on you.".into(),
             action: None,
         });
     }
     match state.sel {
-        Selection::Question => InboxPreview::Question(sheet_desk(state, env, false)),
+        Selection::Question => InboxPreview::Question(fixture_desk(state, env, false)),
         Selection::Plan => InboxPreview::Plan(PlanPreview {
             chips: vec![
                 Chip {
@@ -411,9 +493,9 @@ pub fn inbox_preview(state: &State, env: Env) -> InboxPreview {
                     hue: Hue::Ok,
                 },
             ],
-            record: "T-885 P2",
-            title: "PM supervisor evolution: bounded reads, warm-context episodes",
-            goal: "Deliver a bounded first wave of PM information and lifecycle visibility improvements, while reviewing a longer-term hybrid supervisor design without authorizing it wholesale.",
+            record: "T-885 P2".into(),
+            title: "PM supervisor evolution: bounded reads, warm-context episodes".into(),
+            goal: Some("Deliver a bounded first wave of PM information and lifecycle visibility improvements, while reviewing a longer-term hybrid supervisor design without authorizing it wholesale.".into()),
             consequence_title: "What accepting does",
             consequence: vec![
                 span("Publishes 3 member tasks to "),
@@ -463,15 +545,5 @@ pub fn inbox_preview(state: &State, env: Env) -> InboxPreview {
                 ),
             })
         }
-    }
-}
-
-/// Build Inbox for desktop/web/terminal or phone, leaving only presentation to the screen.
-pub fn inbox(state: &State, env: Env) -> Inbox {
-    Inbox {
-        title: "Inbox",
-        large_title: phone(env),
-        list: inbox_list(state, env),
-        preview: (!phone(env)).then(|| inbox_preview(state, env)),
     }
 }

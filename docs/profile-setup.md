@@ -5,6 +5,14 @@ It does not dispatch a task, launch a reviewer, enable Autopilot, grant spending
 authority, or change acceptance policy. PM conversation, semantic task selection,
 runtime fallback, and role-aware review launching belong to later increments.
 
+The app's Settings › Assistant shows configured profiles and lets an authorized device
+choose the assistant profile, edit models and manage profile copies through the daemon.
+The composer's model selector offers `corral-pi` profiles that name a model and switches
+on the next message. The daemon host still needs a working provider configuration and
+authentication; listing a model is not proof of access or a successful execution. The
+historical app design's alternate rollover summary profile is not a canonical setting.
+See the [app guide](../apps/corral-app/README.md) for connection and platform limits.
+
 ## Read and prepare
 
 All setup commands return structured JSON. `--json` is also accepted explicitly.

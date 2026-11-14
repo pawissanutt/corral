@@ -23,7 +23,8 @@ use nsh_core::{
 use super::{banner, confirmation, lock, stale, toast};
 use crate::{
     model::{
-        Destination, NavState, Overlay, Page, PhoneTab, SettingsSection,
+        Availability, DataState, Destination, Live, NavState, Overlay, Page, PhoneTab, Route,
+        SettingsSection,
         nav::{ASK_BUTTON, ASK_BUTTON_LABEL},
         work::{self, MoreRow},
     },
@@ -63,10 +64,10 @@ const TAB_ICON: f32 = 24.0;
 const TAB_LABEL: f32 = 10.5;
 
 /// One page of a tab's stack above its root.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Entry {
-    /// A page the model knows (`NavState::pages`).
-    Page(Page),
+    /// A page the model knows (`NavState::pages`): a fixture page or a live record.
+    Page(Route),
     /// A destination opened from the More list.
     Destination(Destination),
     /// A Settings section opened from the Settings list.
@@ -80,7 +81,7 @@ struct Seen {
     settings: SettingsSection,
     section_opens: u32,
     goes: u32,
-    pages: Vec<Page>,
+    pages: Vec<Route>,
     palette: bool,
 }
 
@@ -166,15 +167,15 @@ pub fn shell(app: AppState) -> AnyElement {
 fn start_of(nav: &NavState) -> (PhoneTab, Vec<Entry>) {
     match nav.pages.first() {
         Some(first) => (
-            home(*first),
-            nav.pages.iter().copied().map(Entry::Page).collect(),
+            home(first),
+            nav.pages.iter().cloned().map(Entry::Page).collect(),
         ),
         None => (nav.destination.phone_tab(), entries_of(nav.destination)),
     }
 }
 
 /// The tab a page belongs to.
-fn home(page: Page) -> PhoneTab {
+fn home(page: &Route) -> PhoneTab {
     page.owner().phone_tab()
 }
 
@@ -187,11 +188,11 @@ fn entries_of(destination: Destination) -> Vec<Entry> {
     }
 }
 
-fn pages_of(entries: &[Entry]) -> Vec<Page> {
+fn pages_of(entries: &[Entry]) -> Vec<Route> {
     entries
         .iter()
         .filter_map(|entry| match entry {
-            Entry::Page(page) => Some(*page),
+            Entry::Page(page) => Some(page.clone()),
             Entry::Destination(_) | Entry::Section(_) => None,
         })
         .collect()
@@ -267,8 +268,8 @@ impl Nav {
             });
         } else if let Some(first) = now.pages.first() {
             self.land(
-                home(*first),
-                now.pages.iter().copied().map(Entry::Page).collect(),
+                home(first),
+                now.pages.iter().cloned().map(Entry::Page).collect(),
             );
         } else {
             self.land(now.destination.phone_tab(), entries_of(now.destination));
@@ -276,13 +277,13 @@ impl Nav {
     }
 
     /// A page the model pushed. The question, a session and a thread live under their own tab;
-    /// a task or a plan stays on the stack it was opened from, unless it was opened from a tab's
-    /// root of another tab or from the palette.
-    fn push(self, page: Page, global: bool) {
+    /// a task, a plan or a review stays on the stack it was opened from, unless it was opened
+    /// from a tab's root of another tab or from the palette.
+    fn push(self, page: Route, global: bool) {
         let tab = self.tab.get_untracked();
-        let target = home(page);
+        let target = home(&page);
         let at_root = self.stack.with_untracked(Vec::is_empty);
-        let detail = matches!(page, Page::Task(_) | Page::Plan(_));
+        let detail = page.is_detail();
         if global || (target != tab && (at_root || !detail)) {
             self.land(target, vec![Entry::Page(page)]);
         } else {
@@ -388,9 +389,9 @@ impl Nav {
 }
 
 /// `now` is `was` with one more page on top.
-fn pushed(was: &[Page], now: &[Page]) -> Option<Page> {
+fn pushed(was: &[Route], now: &[Route]) -> Option<Route> {
     match now.split_last() {
-        Some((page, below)) if below == was => Some(*page),
+        Some((page, below)) if below == was => Some(page.clone()),
         _ => None,
     }
 }
@@ -415,7 +416,7 @@ fn tab_stack(nav: Nav, tab: PhoneTab) -> AnyElement {
         .child(each(
             move || {
                 nav.stack
-                    .with(|s| s.iter().copied().enumerate().collect::<Vec<_>>())
+                    .with(|s| s.iter().cloned().enumerate().collect::<Vec<_>>())
             },
             |item: &(usize, Entry)| key_of(item.0, &item.1),
             move |item, _| {
@@ -447,49 +448,69 @@ fn root(nav: Nav, tab: PhoneTab) -> Screen {
         .child(body)
 }
 
-/// The page an entry shows.
+/// The page an entry shows. Against corrald a live record opens its domain's live page, a
+/// destination its served screen (or the frame saying why it is not), and a fixture page left
+/// over from the preview only its destination. Without a connection every page is its
+/// destination's frame, and Settings keeps its sections (browser pairing lives in Connection).
 fn page_of(app: AppState, entry: Entry) -> PhonePage {
-    if untracked(|| app.daemon()) {
-        let destination = match entry {
-            Entry::Page(page) if !matches!(page, Page::Task(_)) => Some(page.owner()),
-            Entry::Destination(destination)
-                if !matches!(destination, Destination::Now | Destination::Settings) =>
-            {
-                Some(destination)
-            }
-            _ => None,
-        };
-        if let Some(destination) = destination {
-            return PhonePage {
-                title: destination.label().to_owned(),
-                back: PhoneTab::More.label(),
-                body: screens::destination(app, destination),
-                trailing: None,
-                bar: None,
-                ask: true,
-                scroll: false,
+    match untracked(|| app.data.get()) {
+        DataState::Daemon => {
+            return match entry {
+                Entry::Page(Route::Live(live))
+                    if untracked(|| app.available(live.owner())) == Availability::Ready =>
+                {
+                    live_page(app, live)
+                }
+                Entry::Page(route) => destination_page(app, route.owner()),
+                Entry::Destination(destination) => destination_page(app, destination),
+                Entry::Section(section) => settings::section_phone(app, section),
             };
         }
+        DataState::Disconnected => {
+            return match entry {
+                Entry::Page(route) => destination_page(app, route.owner()),
+                Entry::Destination(destination) => destination_page(app, destination),
+                Entry::Section(section) => settings::section_phone(app, section),
+            };
+        }
+        DataState::Fixture => {}
     }
     match entry {
-        Entry::Page(Page::Question) => inbox::question_phone(app),
-        Entry::Page(Page::Task(_)) => now::task_phone(app),
-        Entry::Page(Page::Plan(_)) => plans::plan_phone(app),
-        Entry::Page(Page::Session(_)) => agents::session_phone(app),
-        Entry::Page(Page::Thread(_)) => assistant::thread_phone(app),
-        Entry::Destination(Destination::Review) if untracked(|| app.snapshot().connected()) => {
-            review::page_phone(app)
-        }
-        Entry::Destination(destination) => PhonePage {
-            title: destination.label().to_owned(),
-            back: PhoneTab::More.label(),
-            body: screens::destination(app, destination),
-            trailing: None,
-            bar: None,
-            ask: true,
-            scroll: false,
-        },
+        Entry::Page(Route::Page(Page::Question)) => inbox::question_phone(app),
+        Entry::Page(Route::Page(Page::Task(_))) => now::task_phone(app),
+        Entry::Page(Route::Page(Page::Plan(_))) => plans::plan_phone(app),
+        Entry::Page(Route::Page(Page::Session(_))) => agents::session_phone(app),
+        Entry::Page(Route::Page(Page::Thread(_))) => assistant::thread_phone(app),
+        // A live record never opens over the fixture preview: its destination shows instead.
+        Entry::Page(Route::Live(live)) => destination_page(app, live.owner()),
+        Entry::Destination(Destination::Review) => review::page_phone(app),
+        Entry::Destination(destination) => destination_page(app, destination),
         Entry::Section(section) => settings::section_phone(app, section),
+    }
+}
+
+/// A live record's pushed page, from its domain.
+fn live_page(app: AppState, live: Live) -> PhonePage {
+    match live {
+        Live::Question(key) => inbox::live_question_phone(app, key),
+        Live::Task(id) => now::live_task_phone(app, id),
+        Live::Plan(id) => plans::live_plan_phone(app, id),
+        Live::Session(id) => agents::live_session_phone(app, id),
+        Live::Thread(id) => assistant::live_thread_phone(app, id),
+        Live::Review(task) => review::live_review_phone(app, task),
+    }
+}
+
+/// A destination pushed over More: its screen, or the frame that says why it is unavailable.
+fn destination_page(app: AppState, destination: Destination) -> PhonePage {
+    PhonePage {
+        title: destination.label().to_owned(),
+        back: PhoneTab::More.label(),
+        body: screens::destination(app, destination),
+        trailing: None,
+        bar: None,
+        ask: true,
+        scroll: false,
     }
 }
 
@@ -505,15 +526,24 @@ fn pushed_page(nav: Nav, depth: usize, entry: Entry) -> Screen {
         bar,
         ask,
         scroll,
-    } = page_of(app, entry);
+    } = page_of(app, entry.clone());
     if bar.is_some() {
         let key = key_of(depth, &entry);
         let gone = key.clone();
         nav.bars.update(|b| b.push(key));
         cleanup(move || nav.bars.update(|b| b.retain(|k| *k != gone)));
     }
+    // A served assistant thread's subject moves while it stays pushed (the quick thread rolls
+    // to its next session): its head follows the thread; every other page keeps its title.
+    let title: Reactive<SharedString> = match &entry {
+        Entry::Page(Route::Live(Live::Thread(id))) if untracked(|| app.daemon()) => {
+            let live = assistant::live_thread_title(app, id.clone());
+            (move || SharedString::from(live.get())).into_reactive()
+        }
+        _ => SharedString::from(title).into_reactive(),
+    };
     let page = nav_page()
-        .title(SharedString::from(title.clone()))
+        .title(title.clone())
         .header_style_with(|s| {
             s.bg(color(Token::Bg))
                 .text_color(color(Token::Ink))
@@ -591,11 +621,15 @@ fn frame(
 
 /// The More tab's root (`SCREENS.more`): the large title with search, then a row per
 /// destination with its icon, label and the model's subtitle, each pushing its destination.
+/// Only the fixture preview has illustrative subtitles; otherwise the rows are bare.
 fn more_list(nav: Nav) -> AnyElement {
     let app = nav.app;
-    let more = app
-        .work
-        .with_untracked(|state| work::more(state, app.env()));
+    let more = if untracked(|| app.data.get()) == DataState::Fixture {
+        app.work
+            .with_untracked(|state| work::more(state, untracked(|| app.env())))
+    } else {
+        app.feed.with_untracked(work::daemon_more)
+    };
     let rows: Vec<AnyElement> = more.rows.iter().map(|&row| more_row(nav, row)).collect();
     let list = view()
         .mt(px(6.0))
@@ -623,7 +657,7 @@ fn more_row(nav: Nav, row: MoreRow) -> AnyElement {
     let app = nav.app;
     list_row(
         app,
-        if app.daemon() {
+        if row.subtitle.is_empty() {
             row.label.to_owned()
         } else {
             format!("{}, {}", row.label, row.subtitle)
@@ -646,7 +680,7 @@ fn more_row(nav: Nav, row: MoreRow) -> AnyElement {
                 .min_w(px(0.0))
                 .gap(px(2.0))
                 .child(plain(app, row.label).truncate())
-                .when(!app.daemon(), |v| {
+                .when(!row.subtitle.is_empty(), |v| {
                     v.child(dim(app, row.subtitle).truncate())
                 })
                 .into_element(),
@@ -783,8 +817,19 @@ fn app_tab(nav: Nav, which: PhoneTab) -> AnyElement {
                 .style_when(selected, |s| s.font_weight(FontWeight::BOLD))
                 .text_color(ink),
         );
+    // The tab's own name, so it is announced even while a page's bar hides the face; Inbox
+    // carries its needs-you count, which the badge otherwise announces alone.
+    let name = move || {
+        Some(SharedString::from(
+            match (which, app.snapshot().count(Destination::Inbox)) {
+                (PhoneTab::Inbox, Some(n)) => format!("{}, {n} need you", which.label()),
+                _ => which.label().to_owned(),
+            },
+        ))
+    };
     tab()
         .selected(selected)
+        .accessibility_label(name)
         .on_press(move |_: &()| nav.select(which))
         .flex_1()
         .h(px(TAB_HEIGHT))

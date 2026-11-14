@@ -1,6 +1,7 @@
 use crate::client::core::{Core, Event};
 use crate::client::transport;
 use corral_protocol::frame::{read_frame_until, write_frame_until};
+#[cfg(test)]
 use corral_protocol::subscription::Topic;
 use corral_protocol::{self as wire, Welcome};
 use serde_json::Value;
@@ -29,10 +30,9 @@ impl Session {
             started,
             last_activity: Instant::now(),
         };
-        session.core.hello(
-            &[wire::BOARD_V1, corral_protocol::device::DEVICE_V1],
-            session.now_ms(),
-        )?;
+        session
+            .core
+            .hello(crate::client::app::CAPS, session.now_ms())?;
         session.flush()?;
         loop {
             if let Some(welcome) = session.core.take_welcome() {
@@ -43,6 +43,7 @@ impl Session {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn open(&mut self, topic: Topic) -> Result<(), String> {
         self.core.open(topic, self.now_ms())?;
         self.flush()
@@ -50,6 +51,17 @@ impl Session {
 
     pub(crate) fn request(&mut self, method: &'static str, params: Value) -> Result<(), String> {
         self.core.request(method, params, self.now_ms())?;
+        self.flush()
+    }
+
+    pub(crate) fn request_tagged(
+        &mut self,
+        method: &'static str,
+        params: Value,
+        tag: Option<String>,
+    ) -> Result<(), String> {
+        self.core
+            .request_tagged(method, params, tag, self.now_ms())?;
         self.flush()
     }
 

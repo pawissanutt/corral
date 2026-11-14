@@ -1,8 +1,8 @@
 # Corral app integration: design handoff
 
-Implemented connection prerequisite: [app connection contract](CONNECTION-CONTRACT.md), covering independent client compatibility and authenticated native/browser transport. The [earlier transport proof](TRANSPORT-PROOF.md) remains historical feasibility evidence; production app wiring and private-surface verification are recorded in [enrolled native and browser connections](NEXT-STEP.md#verification-receipt).
+The [app connection contract](CONNECTION-CONTRACT.md) describes the implemented independent client and authenticated native/browser transport boundaries. The [earlier transport proof](TRANSPORT-PROOF.md) is historical feasibility evidence. The [app guide](../../apps/corral-app/README.md) describes current setup and limits.
 
-The worker/PM question journey remains the Phase 2a milestone that follows this connection increment.
+The app now wires typed reads and authorized actions across its current destinations, including worker/PM questions and the shared assistant/PM composer. This is implementation status, not a claim that every private journey or the full gate has passed.
 
 Imported from `/home/pawis/corral-app-design/` into branch `app-daemon-integration`, based on Corral commit `6f91ec1175e1ac1edc5ff5a568dd6620e4de824b`. This is a design handoff and next-step recommendation, not an implementation task contract or authorization to run agents, change automation, or install services.
 
@@ -17,34 +17,14 @@ The imported files are preserved verbatim. Originals remain in the external dire
 
 Corral's current [daemon guide](../guide/daemon.md), [daemon-first implementation record](../records/daemon-first.md), app [README](../../apps/corral-app/README.md), repo guidance and source describe shipped behavior. They take precedence over historical claims that a component is built or missing; owner requirements still govern the product target. Keep future integration decisions here in the repository rather than relying on edits to the external copy.
 
-## Baseline and design drift
+## Implementation status
 
-The preceding readiness investigation exercised the installed daemon and the NSH terminal app without sending mutations:
+The app remains a separate Cargo workspace and uses an app-local client on `corral-protocol`, not a standalone `corral-client` crate. Native enrolled Unix and paired loopback Noise WebSocket sessions use the same typed app services. Device authority and negotiated capabilities govern actions; disconnected or unsupported data is never replaced with fixture facts. Fixture preview is explicit.
 
-- The daemon reported healthy, its Herdr TUI runtime available, and the PM live.
-- A board subscription delivered 186 rows across two acknowledged pages. The app rendered live health, Now and selected-task board facts.
-- The daemon negotiated `board.v1`, `cmd.v1`, `read.v1` and `classic.v1`. `detail.get` returned `method_not_found`; an Inbox subscription returned `unsupported topic`. The app's Inbox displayed its unavailable state rather than fixtures.
-- The current app is a separate Cargo workspace at `apps/corral-app/`, with an app-local native client on `corral-protocol`; it has no standalone `corral-client` crate. Do not recreate working pieces merely because the proposal names a different layout.
-- Commands already have a typed router and an idempotency journal. The app does not use them. Both command admission and served reads currently require the daemon's executable path/build identity. The app session currently accepts CONTROL frames only; command outputs and served read documents require DATA handling.
-- The web build compiles out the socket client. Browser transport, device enrolment and authenticated app command access are still integration work.
+The daemon hosts assistant sessions; Ask also targets the PM inbox. Settings exposes configured profiles and the assistant model selection, while provider availability and quotas remain reported only where known. The app guide documents attachments, reconnect and result recovery.
 
-These are a handoff snapshot, not a claim about future live task counts or daemon health. In particular, the architecture's section 1 is a historical baseline; section 11's `welcome.caps = board.v1 only` row and section 15's original direct-write decision are superseded by later daemon-first notes and the current protocol. Do not plan the command router or daemon loop again from scratch.
+Private smoke has launched the native terminal and paired packaged Chromium against a private daemon, with matching trusted-side pairing codes and a live seven-task board and connected Settings. It does not establish the full browser journeys or root gate. GTK desktop and a physical phone have not been built or tested on this host; phone web layout remains in scope.
 
-## Recommended next milestone: Phase 2a
-
-The owner's D11 and architecture section 14 require **Needs you on desktop and web**, not just a native read-only board. A native intermediate increment is useful, but does not complete that milestone.
-
-Sequence the work around one end-to-end journey:
-
-1. **Agree the app-facing connection contract.** Reuse the existing protocol, router, result journal and conflict handling. Define independent app version/capability compatibility, local device enrolment and provenance without disabling the CLI's executable/build safety check globally. Prove the loopback WebSocket + Noise path works in NSH's wasm build; retain origin restrictions and the same authority rules on every transport.
-2. **Serve Inbox and question context.** Add bounded typed subscriptions/readers for worker and PM questions, with revision, options and consequences, goal/plan position, inline evidence, follow-up thread and history. Identify which facts already exist and which require canonical fields; do not fabricate context from fixture text. PM questions need the canonical mirror described in section 6.
-3. **Wire the existing question surface.** Replace the fixture source for this journey across the appropriate shells. Submit answers and follow-ups through the shared service path. Display pending, refused, stale and answered-elsewhere states; keep other unserved destinations explicit. A second surface must converge on the winning answer.
-4. **Prove the milestone.** Answer a worker question and a PM question from the desktop app and from a browser. Show all required context, one winning answer across surfaces, conflict behavior on a stale revision, and no second effect after an uncertain-result reconnect. Use private fixtures; never answer a live owner's question for a smoke test.
-
-The first implementation assignment should settle the connection contract and prove the native/browser transport seam, not turn on fixture action buttons. Then deliver the question journey against that contract. Scope the checks to each actual change; the app and root workspaces have separate toolchains and gates.
-
-## After Phase 2a
-
-Phase 2b is **Ask as a complete chat**, not an idea-capture substitute: durable messages, pane-less supervised assistant host, streamed grounded answers, model selection, assistant filing with verbatim owner input and duplicate checks, PM targeting, permissions/confirmations and unavailable-provider behavior. Architecture section 14 explicitly forbids shipping a store-only composer as this milestone. It does not depend on the herdr-core migration.
+The architecture's section 1 and its phases are historical proposals, not a current inventory. Its proposed alternate rollover summary profile is not a canonical supported setting. Do not plan the already implemented daemon and command router again from scratch.
 
 Keep runtime migration, remote phone reach, relay/push and classic-UI retirement in their later phases. Phone layouts remain part of the UI contract; later phone packaging is not permission to create a desktop-only product. Keep the sidebar collapsible and available at narrow widths. Retire classic only after actionable parity, not after a successful board connection.

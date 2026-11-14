@@ -1,108 +1,183 @@
 //! The selected plan's detail: which variant shows, the head and pipeline every variant
-//! shares, and the awaiting plan's review document with its decide bar.
+//! shares, the review document with its owner decisions and decide bar, the plan document, the
+//! revision diff, and the loading and notice states of a served plan.
 
 use nsh_core::prelude::*;
 
-use crate::model::Form;
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
 use crate::model::plans::{
-    self, AwaitingView, Detail, DocumentSection, Header, PipelineStage, ProposedRow, ReviewRow,
-    SectionBody,
+    self, ApprovedView, AwaitingView, Decide, Detail, DiffLine, DiffLineKind, DiffView,
+    DocumentSection, DocumentView, ExecutingView, Header, NoticeView, PipelineStage, ProposedRow,
+    ReviewRow, SectionBody,
 };
-use crate::model::text::Rich;
+use crate::model::text::span;
+use crate::model::{Form, Id};
 use crate::state::AppState;
 use crate::ui::kit::chip::{chip, illus};
 use crate::ui::kit::marks::{hue_ink, mark};
-use crate::ui::kit::notice::empty;
+use crate::ui::kit::notice::{empty, error, notice, skeleton};
 use crate::ui::kit::page::{bar, bar_pane, pane as scroll_pane, qhead};
 use crate::ui::kit::text::{rich, rich_small};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 
-use super::{command, tracker};
+use super::{command, decide, tracker};
 
-/// Which detail shows; the executing plan's id names its graph.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Which detail shows, with the content its builder reads untracked. Parts that track their own
+/// reads (the decide bar, the graph, the story, typed fields) are blanked here, so a keystroke,
+/// a member press or a board change redraws only those parts, not the scroll they sit in.
+#[derive(Debug, Clone, PartialEq)]
 enum Kind {
-    Awaiting,
-    Executing(&'static str),
-    Approved,
+    Awaiting(Box<AwaitingView>),
+    Executing(Box<ExecutingView>),
+    Approved(ApprovedView),
+    Document(Box<DocumentView>),
+    Diff(Box<DiffView>),
     Scale,
+    Loading,
+    Notice(NoticeView),
 }
 
-/// The tracked detail of the selected plan, and which variant it is. The variant changes only
-/// when the selection does, so a member press or a connection change redraws the parts that
-/// read them, not the scroll they sit in.
-fn memos(app: AppState) -> (Memo<Detail>, Memo<Kind>) {
+fn blank_decide() -> Decide {
+    Decide {
+        buttons: vec![],
+        compose: None,
+        note: None,
+        attribution: vec![],
+    }
+}
+
+fn kind_of(detail: &Detail) -> Kind {
+    match detail {
+        Detail::Awaiting(review) => {
+            let mut review = review.clone();
+            review.decide = blank_decide();
+            for section in &mut review.sections {
+                if let SectionBody::Decisions(rows) = &mut section.body {
+                    for row in rows {
+                        row.resolution.clear();
+                    }
+                }
+            }
+            Kind::Awaiting(Box::new(review))
+        }
+        Detail::Executing(tracker) => {
+            let mut tracker = tracker.clone();
+            tracker.members = Default::default();
+            tracker.selected = None;
+            tracker.story = None;
+            Kind::Executing(Box::new(tracker))
+        }
+        Detail::Approved(state) => Kind::Approved(state.clone()),
+        Detail::Document(document) => Kind::Document(Box::new(document.clone())),
+        Detail::Diff(diff) => {
+            let mut diff = diff.clone();
+            diff.decide = diff.decide.map(|_| blank_decide());
+            Kind::Diff(Box::new(diff))
+        }
+        Detail::Scale(_) => Kind::Scale,
+        Detail::Loading => Kind::Loading,
+        Detail::Notice(view) => Kind::Notice(view.clone()),
+    }
+}
+
+/// The tracked detail of the shown plan, and which variant it is. `plan` names a served plan
+/// (the phone page's); otherwise the root selection, or the fixture's, is shown.
+fn memos(app: AppState, plan: Option<Id>) -> (Memo<Detail>, Memo<Kind>) {
     let detail = computed(move || {
         let env = app.env();
-        app.plans.with(|state| plans::detail(state, env))
+        if app.daemon() {
+            let shown = plan.clone().or_else(|| {
+                let selection = app.selection();
+                app.feed.with(|feed| plans::current_plan(&selection, feed))
+            });
+            app.plans.with(|state| {
+                app.feed
+                    .with(|feed| plans::live_detail(state, shown.as_ref(), feed, env))
+            })
+        } else {
+            app.plans.with(|state| plans::detail(state, env))
+        }
     });
-    let kind = computed(move || {
-        let plan = app.plans.with(|state| plans::plan(state.plan).id);
-        detail.with(|detail| match detail {
-            Detail::Awaiting(_) => Kind::Awaiting,
-            Detail::Executing(_) => Kind::Executing(plan),
-            Detail::Approved(_) => Kind::Approved,
-            Detail::Scale(_) => Kind::Scale,
-        })
-    });
+    let kind = computed(move || detail.with(kind_of));
     (detail, kind)
 }
 
 /// The detail column on desktop and in a terminal: the review with its pinned decide bar, the
-/// tracker beside its member story, the approved plan's empty state, or the 64-member strips.
+/// tracker beside its member story, the approved plan's empty state, the document, the diff,
+/// the 64-member strips, or what stands in for a plan not yet received.
 pub(super) fn pane(app: AppState) -> AnyElement {
-    let (detail, kind) = memos(app);
+    let (detail, kind) = memos(app, None);
     view()
         .flex_1()
         .flex_col()
         .min_w(px(0.0))
         .min_h(px(0.0))
         .child(dynamic(move || match kind.get() {
-            Kind::Awaiting => bar_pane(
+            Kind::Awaiting(_) => bar_pane(
                 app,
                 "plan-detail",
                 awaiting_content(app, detail),
-                decide(app, detail),
+                decide::decide_bar(app, detail),
             ),
-            Kind::Executing(plan) => tracker::executing_pane(app, detail, plan),
-            Kind::Approved => scroll_pane(app, "plan-detail", approved(app, detail)),
+            Kind::Diff(diff) if diff.decide.is_some() => bar_pane(
+                app,
+                "plan-detail",
+                diff_content(app, detail),
+                decide::decide_bar(app, detail),
+            ),
+            Kind::Diff(_) => scroll_pane(app, "plan-detail", diff_content(app, detail)),
+            Kind::Executing(_) => tracker::executing_pane(app, detail),
+            Kind::Approved(_) => scroll_pane(app, "plan-detail", approved(app, detail)),
+            Kind::Document(_) => scroll_pane(app, "plan-detail", document_page(app, detail)),
             Kind::Scale => scroll_pane(app, "plan-detail", tracker::scale(app, detail)),
+            Kind::Loading => scroll_pane(app, "plan-detail", loading(app)),
+            Kind::Notice(_) => scroll_pane(app, "plan-detail", notice_view(app, detail)),
         }))
         .into_element()
 }
 
 /// The pushed phone page's body; the shell scrolls it.
-pub(super) fn phone_body(app: AppState) -> AnyElement {
-    let (detail, kind) = memos(app);
+pub(super) fn phone_body(app: AppState, plan: Option<Id>) -> AnyElement {
+    let (detail, kind) = memos(app, plan);
     view()
         .test_id("plan-detail")
         .child(dynamic(move || match kind.get() {
-            Kind::Awaiting => awaiting_content(app, detail),
-            Kind::Executing(plan) => tracker::executing_body(app, detail, plan),
-            Kind::Approved => approved(app, detail),
+            Kind::Awaiting(_) => awaiting_content(app, detail),
+            Kind::Executing(_) => tracker::executing_body(app, detail),
+            Kind::Approved(_) => approved(app, detail),
+            Kind::Document(_) => document_page(app, detail),
+            Kind::Diff(_) => diff_content(app, detail),
             Kind::Scale => tracker::scale(app, detail),
+            Kind::Loading => loading(app),
+            Kind::Notice(_) => notice_view(app, detail),
         }))
         .into_element()
 }
 
-/// The phone's decide bar (`.pdecide`): Changes and the wide Accept, or the refused Accept
-/// alone while offline.
-pub(super) fn phone_bar(app: AppState) -> AnyElement {
-    let (detail, _) = memos(app);
-    dynamic(move || match detail.get() {
-        Detail::Awaiting(review) => Some(bar(
-            app,
-            review
-                .decide
-                .iter()
-                .map(|button| command(app, button, button.primary))
-                .collect(),
-            None,
-        )),
-        _ => None,
+/// The phone's decide bar (`.pdecide`): Changes and the wide Accept, the refused Accept alone
+/// while offline, or the request-changes field with Send and Cancel; a served plan's note sits
+/// above it.
+pub(super) fn phone_bar(app: AppState, plan: Option<Id>) -> AnyElement {
+    let (detail, _) = memos(app, plan);
+    let shape = computed(move || detail.with(decide::shape));
+    dynamic(move || {
+        shape.get().map(|bar_now| {
+            view()
+                .children(bar_now.note.as_ref().map(|line| {
+                    view()
+                        .px(px(14.0))
+                        .pt(px(8.0))
+                        .bg(color(Token::Bg))
+                        .border_t(px(1.0))
+                        .border_color(color(Token::Rule))
+                        .child(decide::note(app, line, false))
+                        .into_element()
+                }))
+                .child(bar(app, decide::actions(app, &bar_now, true), None))
+                .into_element()
+        })
     })
 }
 
@@ -117,7 +192,7 @@ pub(super) fn inset(app: AppState) -> View {
 }
 
 /// The handover head of a plan: state chips, the id, the meta line and its illustrative tag,
-/// the title, and on desktop the Ask command.
+/// the title and its commands, then a stale copy's notice.
 pub(super) fn header(app: AppState, head: &Header) -> AnyElement {
     let mut meta: Vec<AnyElement> = head
         .chips
@@ -145,11 +220,23 @@ pub(super) fn header(app: AppState, head: &Header) -> AnyElement {
     }
     meta.extend(head.illustrative.map(|label| illus(app, label)));
     let actions = head
-        .ask
+        .actions
         .iter()
         .map(|button| command(app, button, false))
         .collect();
-    qhead(app, meta, head.title, None, actions)
+    let top = qhead(app, meta, head.title.clone(), None, actions);
+    match &head.stale {
+        None => top,
+        Some(line) => element_view()
+            .child(top)
+            .child(inset(app).pb(px(0.0)).child(notice(
+                app,
+                Hue::Held,
+                &vec![span(line.as_str())],
+                None,
+            )))
+            .into_element(),
+    }
 }
 
 /// The pipeline (`.pipe`): the four stages as outlined steps joined by short rules; the active
@@ -250,25 +337,39 @@ fn element_view() -> View {
 }
 
 /// The review document (`.plan-doc`): pipeline, then each section's caption over its
-/// paragraph, list, proposed members or verdicts, then the document's path.
+/// paragraph, list, proposed members, verdicts or decisions, then the document's path.
 fn document(app: AppState, review_doc: &AwaitingView) -> AnyElement {
     let terminal = app.form == Form::Terminal;
     inset(app)
         .child(pipeline(app, &review_doc.pipeline))
-        .children(
-            review_doc
-                .sections
-                .iter()
-                .map(|section| doc_section(app, section))
-                .collect::<Vec<_>>(),
-        )
-        .child(
-            element_view()
-                .when(!terminal, |v| v.mt(px(10.0)))
-                .when(terminal, |v| v.child(term::blank()))
-                .child(rich_small(app, &review_doc.artifact)),
-        )
+        .children(sections(app, &review_doc.sections))
+        .when(!review_doc.artifact.is_empty(), |doc| {
+            doc.child(
+                element_view()
+                    .when(!terminal, |v| v.mt(px(10.0)))
+                    .when(terminal, |v| v.child(term::blank()))
+                    .child(rich_small(app, &review_doc.artifact)),
+            )
+        })
         .into_element()
+}
+
+fn sections(app: AppState, sections: &[DocumentSection]) -> Vec<AnyElement> {
+    sections
+        .iter()
+        .map(|section| doc_section(app, section))
+        .collect()
+}
+
+/// A served plan's document outside review: its head with the way back, then its sections.
+fn document_page(app: AppState, detail: Memo<Detail>) -> AnyElement {
+    match detail.get_untracked() {
+        Detail::Document(page) => element_view()
+            .child(header(app, &page.header))
+            .child(inset(app).children(sections(app, &page.sections)))
+            .into_element(),
+        _ => element_view().into_element(),
+    }
 }
 
 /// A section caption (`.plan-doc h3`): 12 pt spaced capitals in ink-3, 18 pt above and 6
@@ -318,6 +419,18 @@ fn doc_section(app: AppState, section: &DocumentSection) -> AnyElement {
             .gap(px(6.0))
             .children(rows.iter().map(|row| review(app, row)).collect::<Vec<_>>())
             .into_element(),
+        SectionBody::Decisions(rows) => element_view()
+            .gap(px(if app.form == Form::Terminal {
+                0.0
+            } else {
+                10.0
+            }))
+            .children(
+                rows.iter()
+                    .map(|row| decide::decision(app, row))
+                    .collect::<Vec<_>>(),
+            )
+            .into_element(),
     };
     element_view()
         .child(doc_heading(app, section.heading))
@@ -326,7 +439,7 @@ fn doc_section(app: AppState, section: &DocumentSection) -> AnyElement {
 }
 
 /// A plain bulleted list (`.plan-doc ul`): items 4 pt apart, 18 pt in.
-fn bullets(app: AppState, items: &'static [&'static str]) -> AnyElement {
+fn bullets(app: AppState, items: &[String]) -> AnyElement {
     let terminal = app.form == Form::Terminal;
     let size = text_size(app.form);
     element_view()
@@ -337,7 +450,7 @@ fn bullets(app: AppState, items: &'static [&'static str]) -> AnyElement {
                 .iter()
                 .map(|item| {
                     let bullet = text("•").text_color(color(Token::Ink2));
-                    let words = text(*item)
+                    let words = text(item.clone())
                         .flex_1()
                         .min_w(px(0.0))
                         .text_color(color(Token::Ink));
@@ -374,7 +487,7 @@ fn bullets(app: AppState, items: &'static [&'static str]) -> AnyElement {
 /// the trailing edge.
 fn proposed(app: AppState, row: &ProposedRow) -> AnyElement {
     let terminal = app.form == Form::Terminal;
-    let name = text(row.name)
+    let name = text(row.name.clone())
         .flex_1()
         .min_w(px(0.0))
         .truncate()
@@ -419,7 +532,7 @@ fn review(app: AppState, row: &ReviewRow) -> AnyElement {
             })
             .flex_shrink_0()
     };
-    let rev = text(row.rev)
+    let rev = text(row.rev.clone())
         .number_of_lines(1u32)
         .text_color(color(Token::Ink));
     let rev = if terminal {
@@ -448,67 +561,135 @@ fn review(app: AppState, row: &ReviewRow) -> AnyElement {
         .into_element()
 }
 
-/// The desktop and terminal decide bar (`.decide`): the actions, then the exact command and
-/// attribution, or the offline refusal in the failure colour.
-fn decide(app: AppState, detail: Memo<Detail>) -> AnyElement {
-    dynamic(move || match detail.get() {
-        Detail::Awaiting(review) => {
-            let actions = review
-                .decide
-                .iter()
-                .map(|button| command(app, button, false))
-                .collect();
-            let note = match review.refusal {
-                Some(refusal) => Some(refused(app, refusal)),
-                None if review.attribution.is_empty() => None,
-                None => Some(attribution(app, &review.attribution)),
-            };
-            Some(bar(app, actions, note))
-        }
-        _ => None,
-    })
-}
-
-fn refused(app: AppState, refusal: &'static str) -> AnyElement {
-    let words = text(refusal).text_color(hue_ink(Hue::Fail));
-    if app.form == Form::Terminal {
-        return words.number_of_lines(1u32).into_element();
-    }
-    words
-        .text_right()
-        .font_family(FONT_TEXT)
-        .text_size(px(11.5))
-        .line_height(px(15.5))
-        .into_element()
-}
-
-/// The command a decision runs (`.decide .attr`): 11.5 pt quiet, right-aligned, its mono runs
-/// in the mono font. The kit's rich text sets no alignment, and these lines sit flush right.
-fn attribution(app: AppState, words: &Rich) -> AnyElement {
-    if app.form == Form::Terminal {
-        return rich_small(app, words);
-    }
-    text("")
-        .text_right()
-        .font_family(FONT_TEXT)
-        .text_size(px(11.5))
-        .line_height(px(15.5))
-        .text_color(color(Token::Ink3))
-        .children(words.iter().map(|run| {
-            let piece = text(run.text.clone());
-            if run.mono {
-                piece.font_family(FONT_MONO).text_size(px(11.0))
-            } else {
-                piece
-            }
-        }))
-        .into_element()
-}
-
-/// The approved plan's empty state (`.empty`).
+/// The approved plan: its head (state, id and revision, title) when corrald serves it, the
+/// empty state, its tracker and document commands wrapping 8 pt apart (two Cells in a
+/// terminal), and a stale copy's notice.
 fn approved(app: AppState, detail: Memo<Detail>) -> AnyElement {
     match detail.get_untracked() {
-        Detail::Approved(state) => empty(app, state.heading, state.body, None),
+        Detail::Approved(state) => {
+            let terminal = app.form == Form::Terminal;
+            let actions = (!state.actions.is_empty()).then(|| {
+                let mut row = view().flex_row().flex_wrap().items_center();
+                for (at, button) in state.actions.iter().enumerate() {
+                    if terminal && at > 0 {
+                        row = row.child(term::space(2.0));
+                    }
+                    row = row.child(command(app, button, false));
+                }
+                let row = if terminal { row } else { row.gap(px(8.0)) };
+                row.into_element()
+            });
+            element_view()
+                .children(state.header.as_ref().map(|head| header(app, head)))
+                .children(state.stale.as_ref().map(|line| {
+                    inset(app)
+                        .pb(px(0.0))
+                        .child(notice(app, Hue::Held, &vec![span(line.as_str())], None))
+                        .into_element()
+                }))
+                .child(empty(
+                    app,
+                    state.heading.clone(),
+                    state.body.clone(),
+                    actions,
+                ))
+                .into_element()
+        }
         _ => element_view().into_element(),
     }
+}
+
+/// One diff line in mono: additions in the ok ink, removals in the failure ink, headers quiet.
+fn diff_line(app: AppState, line: &DiffLine) -> AnyElement {
+    let ink = match line.kind {
+        DiffLineKind::Added => hue_ink(Hue::Ok),
+        DiffLineKind::Removed => hue_ink(Hue::Fail),
+        DiffLineKind::Header => color(Token::Ink3),
+        DiffLineKind::Context => color(Token::Ink2),
+    };
+    let words = text(line.text.clone()).text_color(ink);
+    if app.form == Form::Terminal {
+        return words.into_element();
+    }
+    words
+        .font_family(FONT_MONO)
+        .text_size(px(if app.form == Form::Phone { 12.0 } else { 11.5 }))
+        .line_height(px(if app.form == Form::Phone { 17.0 } else { 16.0 }))
+        .into_element()
+}
+
+/// The revision diff: its head with the earlier revisions to compare, the lines received so
+/// far, the loading, error, empty or truncation note, and "Show more" while pages remain.
+fn diff_content(app: AppState, detail: Memo<Detail>) -> AnyElement {
+    let Detail::Diff(diff) = detail.get_untracked() else {
+        return element_view().into_element();
+    };
+    element_view()
+        .child(header(app, &diff.header))
+        .child(
+            inset(app)
+                .child(
+                    element_view()
+                        .test_id("plan-diff")
+                        .role(AccessibilityRole::List)
+                        .children(
+                            diff.lines
+                                .iter()
+                                .map(|line| diff_line(app, line))
+                                .collect::<Vec<_>>(),
+                        ),
+                )
+                .children(diff.note.as_ref().map(|line| {
+                    element_view()
+                        .when(app.form != Form::Terminal, |v| v.mt(px(10.0)))
+                        .child(decide::note(app, line, false))
+                        .into_element()
+                }))
+                .children(diff.more.as_ref().map(|button| {
+                    element_view()
+                        .flex_row()
+                        .when(app.form != Form::Terminal, |v| v.mt(px(12.0)))
+                        .child(command(app, button, false))
+                        .into_element()
+                })),
+        )
+        .into_element()
+}
+
+/// corrald has not delivered the plan yet.
+fn loading(app: AppState) -> AnyElement {
+    inset(app)
+        .child(skeleton(
+            app,
+            &[
+                (0.3, 12.0),
+                (0.75, 20.0),
+                (0.6, 10.0),
+                (0.7, 10.0),
+                (0.45, 10.0),
+            ],
+        ))
+        .into_element()
+}
+
+/// No plan, an unserved plan, or a failed request with its retry.
+fn notice_view(app: AppState, detail: Memo<Detail>) -> AnyElement {
+    let Detail::Notice(state) = detail.get_untracked() else {
+        return element_view().into_element();
+    };
+    let action = state
+        .action
+        .as_ref()
+        .map(|button| command(app, button, false));
+    if state.hue == Hue::Fail {
+        return error(
+            app,
+            &vec![
+                span(state.heading.as_str()).bold().hue(Hue::Fail),
+                span(format!(" · {}", state.body)),
+            ],
+            action,
+        );
+    }
+    empty(app, state.heading, state.body, action)
 }

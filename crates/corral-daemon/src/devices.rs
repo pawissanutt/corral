@@ -1,4 +1,6 @@
-//! Owner-attributed enrolled devices; private keys never enter the workspace store.
+//! Device registry authority is server-owned; web devices can never acquire admin.
+//! Records in `devices` retain authority and a monotonic per-device seen cursor.
+//! Callers pass only transport-authenticated ids; queued actions reload these facts.
 use std::collections::BTreeMap;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -11,6 +13,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use corral_core::{Actor, Store, records::RecordArea};
 use corral_ops::Ctx;
+use corral_protocol::app::{DeviceAuthority, DeviceSetAuthority, SeenCursor};
 use corral_protocol::{device::*, rpc::ErrorCode};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -33,10 +36,32 @@ struct DeviceRecord {
     app_version: String,
     enrolled_at: String,
     revoked_at: Option<String>,
+    #[serde(default)]
+    authority: Option<DeviceAuthority>,
+    #[serde(default)]
+    seen: SeenCursor,
 }
 
 impl DeviceRecord {
+    fn authority(&self) -> DeviceAuthority {
+        let mut authority = self.authority.clone().unwrap_or_else(|| {
+            let native = self.platform == DevicePlatform::Native;
+            DeviceAuthority {
+                reply: true,
+                act: true,
+                assistant: true,
+                assistant_act: native,
+                admin: native,
+            }
+        });
+        if self.platform != DevicePlatform::Native {
+            authority.admin = false;
+        }
+        authority
+    }
+
     fn info(self, id: String) -> DeviceInfo {
+        let authority = self.authority();
         DeviceInfo {
             id,
             name: self.name,
@@ -44,6 +69,7 @@ impl DeviceRecord {
             app_version: self.app_version,
             enrolled_at: self.enrolled_at,
             revoked_at: self.revoked_at,
+            authority: Some(authority),
         }
     }
 }
@@ -86,6 +112,14 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 pub(crate) fn start(ctx: &Ctx, shared: &Arc<Shared>, state_root: Option<PathBuf>) -> Result<()> {
     let store =
         Store::open_unobserved(ctx.store.root()).context("opening daemon device registry")?;
+    // Persist platform defaults for old enrollments so runtime citation checks use the
+    // same durable authority facts as direct app actions (missing facts fail closed).
+    for (id, mut record) in AREA.list(&store)? {
+        if record.authority.is_none() {
+            record.authority = Some(record.authority());
+            AREA.save(&store, &id, &record)?;
+        }
+    }
     *lock(&shared.devices) = Some(Arc::new(Devices {
         store: Mutex::new(store),
         state_root,
@@ -182,6 +216,14 @@ impl Devices {
             app_version,
             enrolled_at: jiff::Timestamp::now().to_string(),
             revoked_at: None,
+            authority: Some(DeviceAuthority {
+                reply: true,
+                act: true,
+                assistant: true,
+                assistant_act: public.is_none(),
+                admin: public.is_none(),
+            }),
+            seen: SeenCursor::default(),
         };
         let (event, platform) = if public.is_some() {
             ("device_paired", "web")
@@ -258,6 +300,7 @@ impl Devices {
     }
 
     pub(crate) fn list(&self) -> Result<Vec<DeviceInfo>, DeviceError> {
+        // `info` always populates authority, including legacy enrolled records.
         Ok(AREA
             .list(&lock(&self.store))?
             .into_iter()
@@ -292,6 +335,85 @@ impl Devices {
             }
         }
         Ok(record.info(device.into()))
+    }
+
+    /// Reloads durable authority; session-cached facts never authorize a side effect.
+    pub(crate) fn authenticated(
+        &self,
+        device: &str,
+    ) -> Result<(DeviceInfo, DeviceAuthority), DeviceError> {
+        let record = self.active(&lock(&self.store), device)?;
+        let authority = record.authority();
+        Ok((record.info(device.into()), authority))
+    }
+
+    fn active(&self, store: &Store, device: &str) -> Result<DeviceRecord, DeviceError> {
+        let record = AREA
+            .load(store, device)?
+            .ok_or(DeviceError::NotFound("device_not_found"))?;
+        if record.revoked_at.is_some() {
+            return Err(DeviceError::Revoked);
+        }
+        Ok(record)
+    }
+
+    pub(crate) fn seen(&self, device: &str) -> Result<SeenCursor, DeviceError> {
+        Ok(self.active(&lock(&self.store), device)?.seen)
+    }
+
+    pub(crate) fn advance_seen(
+        &self,
+        device: &str,
+        through: u64,
+    ) -> Result<SeenCursor, DeviceError> {
+        let store = lock(&self.store);
+        let _guard = store
+            .try_lock("devices")?
+            .ok_or(DeviceError::Conflict("device_registry_busy"))?;
+        let mut record = self.active(&store, device)?;
+        if through > record.seen.through {
+            record.seen = SeenCursor {
+                through,
+                at: Some(corral_core::clock::now().to_string()),
+            };
+            AREA.save(&store, device, &record)?;
+        }
+        Ok(record.seen)
+    }
+
+    /// Only a live native administrator may edit authority; web admin is ungrantable.
+    pub(crate) fn set_authority(
+        &self,
+        admin: &str,
+        request: DeviceSetAuthority,
+    ) -> Result<DeviceInfo, DeviceError> {
+        let base = lock(&self.store);
+        let store = base.reattributed();
+        let _guard = store
+            .try_lock("devices")?
+            .ok_or(DeviceError::Conflict("device_registry_busy"))?;
+        let caller = self.active(&store, admin)?;
+        if caller.platform != DevicePlatform::Native || !caller.authority().admin {
+            return Err(DeviceError::Refused("admin_only"));
+        }
+        let mut record = self.active(&store, &request.device)?;
+        if record.platform != DevicePlatform::Native && request.authority.admin {
+            return Err(DeviceError::Refused("admin_only"));
+        }
+        store.set_attribution(Actor::Owner, &format!("app:{admin}"))?;
+        record.authority = Some(request.authority);
+        store.records_transaction(|| {
+            AREA.save(&store, &request.device, &record)?;
+            store.log_event(
+                None,
+                "device_authority_changed",
+                json!({
+                    "device": request.device, "authority": record.authority,
+                    "by_device": admin, "name": caller.name,
+                }),
+            )
+        })?;
+        Ok(record.info(request.device))
     }
 
     pub(crate) fn pair_begin(&self, now: Instant) -> Result<PairOffer, DeviceError> {
@@ -347,6 +469,7 @@ pub(crate) enum DeviceError {
     Conflict(&'static str),
     Limit(&'static str),
     Invalid(&'static str),
+    Refused(&'static str),
     Unavailable(String),
     Internal(anyhow::Error),
 }
@@ -384,6 +507,7 @@ impl DeviceError {
                 (*message).into(),
             ),
             Self::Invalid(message) => (ErrorCode::InvalidParams, (*message).into()),
+            Self::Refused(message) => (ErrorCode::Refused, (*message).into()),
             Self::Unavailable(message) => (ErrorCode::Unavailable, message.clone()),
             Self::Internal(error) => (
                 ErrorCode::Internal,
@@ -435,10 +559,31 @@ pub(crate) fn serve_unix(
         return Ok(true);
     };
     let result = (|| -> Result<Value, DeviceError> {
+        if session.via == "app"
+            && [DEVICE_REVOKE, PAIR_BEGIN, PAIR_CONFIRM, PAIR_CANCEL].contains(&method)
+        {
+            let device = session
+                .attached
+                .as_ref()
+                .ok_or(DeviceError::Refused("admin_only"))?;
+            let (info, authority) = devices.authenticated(&device.device)?;
+            if info.platform != DevicePlatform::Native || !authority.admin {
+                return Err(DeviceError::Refused("admin_only"));
+            }
+        }
+        let app_via = (session.via == "app")
+            .then(|| {
+                session
+                    .attached
+                    .as_ref()
+                    .map(|guard| format!("app:{}", guard.device))
+            })
+            .flatten();
+        let via = app_via.as_deref().unwrap_or(session.via);
         match method {
             DEVICE_ENROL => {
                 let p: DeviceEnrol = params(input)?;
-                let info = devices.enrol_native(&p.name, &p.app_version, session.via)?;
+                let info = devices.enrol_native(&p.name, &p.app_version, via)?;
                 let (_, guard) = devices.attach(&info.id)?;
                 session.attached = Some(guard);
                 value(info)
@@ -455,7 +600,7 @@ pub(crate) fn serve_unix(
             }
             DEVICE_REVOKE => {
                 let p: DeviceRevoke = params(input)?;
-                value(devices.revoke(&p.device, session.via)?)
+                value(devices.revoke(&p.device, via)?)
             }
             PAIR_BEGIN => {
                 let _: PairBegin = params(input)?;
@@ -475,7 +620,7 @@ pub(crate) fn serve_unix(
             }
             PAIR_CONFIRM => {
                 let p: PairConfirm = params(input)?;
-                value(devices.pair_confirm(&p.pair_id, session.via)?)
+                value(devices.pair_confirm(&p.pair_id, via)?)
             }
             PAIR_CANCEL => {
                 let p: PairCancel = params(input)?;

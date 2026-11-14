@@ -1,19 +1,23 @@
 //! A session's transcript (`.tx`, `.tm`, `.tool`, `.qcard`) and its reply box (`.composer`,
 //! the phone's `.reply`). Desktop and phone share the layout at their sizes; a terminal shows
-//! each message as a block of plain rows.
+//! each message as a block of plain rows. A daemon transcript is one bounded page, with the
+//! controls to page through it and the state of its source.
 
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::agents::{Message, MessageItem, QuestionCard, Reply, Tool, Transcript};
+use crate::model::agents::{
+    Action, Fill, Message, MessageItem, Note, QuestionCard, Reply, ReplyMode, Tool, Transcript,
+};
 use crate::model::hue::Hue;
-use crate::model::text::Rich;
+use crate::model::text::{Rich, span};
 use crate::state::AppState;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::chip::illus;
 use crate::ui::kit::marks::{dot, hue_fill, hue_ink, mark};
+use crate::ui::kit::notice::{empty, error, notice, skeleton};
 use crate::ui::kit::text::{dim, plain, rich};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
@@ -66,8 +70,61 @@ pub fn line(app: AppState, rich: &Rich, size: f32, base: Token) -> AnyElement {
     .into_element()
 }
 
-/// The transcript: every message in order, then the illustrative disclaimer. Desktop centres it
-/// at the mockup's measure; the phone uses the full width with 16 pt sides.
+/// A paging control above or below the messages: a quiet button, dimmed while a page loads.
+fn pager(
+    app: AppState,
+    action: &Option<Action>,
+    label: &str,
+    test_id: &str,
+    paging: bool,
+) -> Option<AnyElement> {
+    let action = action.clone()?;
+    Some(button_with(
+        app,
+        if paging { "Loading…" } else { label },
+        ButtonKind::Quiet,
+        ButtonOptions {
+            disabled: paging,
+            ..ButtonOptions::default()
+        },
+        test_id,
+        move || run(app, action.clone()),
+    ))
+}
+
+/// What stands in for the messages while there are none to show: the skeleton, the failure or
+/// the empty state.
+fn fill(app: AppState, fill: &Fill) -> Option<AnyElement> {
+    match fill {
+        Fill::Ready => None,
+        Fill::Loading => Some(
+            view()
+                .when(app.form != Form::Terminal, |pad| {
+                    pad.px(px(24.0)).py(px(12.0))
+                })
+                .child(skeleton(
+                    app,
+                    &[(0.5, 10.0), (0.8, 10.0), (0.65, 10.0), (0.3, 10.0)],
+                ))
+                .into_element(),
+        ),
+        Fill::Failed(words) => Some(error(app, &vec![span(words.clone())], None)),
+        Fill::Empty { heading, paragraph } => Some(empty(app, *heading, paragraph.clone(), None)),
+    }
+}
+
+/// The note under the messages: the fixture's illustrative tag, or a quiet sentence.
+fn disclaimer(app: AppState, note: &Option<Note>) -> Option<AnyElement> {
+    Some(match note.as_ref()? {
+        Note::Illustrative(words) => illus(app, *words),
+        Note::Plain(words) => dim(app, words.clone()).into_element(),
+    })
+}
+
+/// The transcript: a stale notice when its source is unreachable, the control for earlier
+/// messages, every message of the page in order (or why there are none), the way back to the
+/// latest messages, then the note. Desktop centres it at the mockup's measure; the phone uses
+/// the full width with 16 pt sides.
 pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
     let form = app.form;
     let messages = transcript
@@ -75,6 +132,26 @@ pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
         .iter()
         .enumerate()
         .map(|(at, message)| self::message(app, at, message));
+    let stale = transcript
+        .stale
+        .as_ref()
+        .map(|words| notice(app, Hue::Held, &vec![span(words.clone())], None));
+    let older = pager(
+        app,
+        &transcript.older,
+        "Show earlier messages",
+        "btn-older",
+        transcript.paging,
+    );
+    let newer = pager(
+        app,
+        &transcript.newer,
+        "Back to the latest messages",
+        "btn-newer",
+        transcript.paging,
+    );
+    let fill = self::fill(app, &transcript.fill);
+    let note = disclaimer(app, &transcript.disclaimer);
     match form {
         Form::Terminal => {
             let mut parts = Vec::new();
@@ -86,13 +163,19 @@ pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
             }
             view()
                 .test_id("session-transcript-items")
+                .children(stale)
+                .children(older.map(|button| view().flex_row().child(button)))
+                .children(fill)
                 .children(parts)
-                .child(term::blank())
-                .child(illus(app, transcript.disclaimer))
+                .children(newer.map(|button| view().flex_row().child(button)))
+                .when_some(note, |list, note| list.child(term::blank()).child(note))
                 .into_element()
         }
         Form::Desktop | Form::Phone => {
             let sides = if form == Form::Phone { 16.0 } else { 24.0 };
+            let edge = move |content: AnyElement| {
+                view().flex_row().px(px(sides)).py(px(4.0)).child(content)
+            };
             view()
                 .w_full()
                 .items_center()
@@ -103,13 +186,15 @@ pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
                         .max_w(px(MEASURE))
                         .pt(px(if form == Form::Phone { 8.0 } else { 16.0 }))
                         .pb(px(10.0))
+                        .children(stale.map(|notice| edge(notice).pb(px(8.0))))
+                        .children(older.map(edge))
+                        .children(fill)
                         .children(messages.collect::<Vec<_>>())
-                        .child(
-                            view()
-                                .px(px(sides))
-                                .pt(px(4.0))
-                                .pb(px(16.0))
-                                .child(illus(app, transcript.disclaimer)),
+                        .children(newer.map(edge))
+                        .children(
+                            note.map(|note| {
+                                view().px(px(sides)).pt(px(4.0)).pb(px(16.0)).child(note)
+                            }),
                         ),
                 )
                 .into_element()
@@ -199,9 +284,14 @@ fn paragraph(app: AppState, words: &Rich) -> AnyElement {
         .into_element()
 }
 
-/// What a screen reader hears for a tool call.
+/// What a screen reader hears for a tool call, with whether its output is shown.
 fn tool_label(tool: &Tool) -> String {
-    format!("{} {}, {}", tool.kind, tool.argument, tool.result)
+    let output = match tool.expanded {
+        Some(true) => ", output shown",
+        Some(false) => ", output hidden",
+        None => "",
+    };
+    format!("{} {}, {}{output}", tool.kind, tool.argument, tool.result)
 }
 
 /// A tool call (`.tool`): its result mark, the tool, its argument cut to fit and its result;
@@ -209,7 +299,7 @@ fn tool_label(tool: &Tool) -> String {
 /// model's tool action.
 fn tool(app: AppState, tool: &Tool, test_id: String) -> AnyElement {
     let form = app.form;
-    let action = tool.action;
+    let action = tool.action.clone();
     let head = view()
         .flex_row()
         .items_center()
@@ -217,7 +307,7 @@ fn tool(app: AppState, tool: &Tool, test_id: String) -> AnyElement {
         .role(AccessibilityRole::Button)
         .label(tool_label(tool))
         .test_id(&test_id)
-        .on_press(move || run(app, action));
+        .on_press(move || run(app, action.clone()));
     if form == Form::Terminal {
         return view()
             .child(
@@ -228,17 +318,17 @@ fn tool(app: AppState, tool: &Tool, test_id: String) -> AnyElement {
                         view()
                             .w(term::cells(5.0))
                             .flex_shrink_0()
-                            .child(term::quiet(tool.kind)),
+                            .child(term::quiet(tool.kind.clone())),
                     )
                     .child(
-                        text(tool.argument)
+                        text(tool.argument.clone())
                             .flex_1()
                             .min_w(px(0.0))
                             .truncate()
                             .text_color(color(Token::Ink)),
                     )
                     .child(term::space(1.0))
-                    .child(term::quiet(tool.result)),
+                    .child(term::quiet(tool.result.clone())),
             )
             .when(!tool.output.is_empty(), |block| {
                 block.child(
@@ -249,7 +339,7 @@ fn tool(app: AppState, tool: &Tool, test_id: String) -> AnyElement {
             })
             .into_element();
     }
-    let mono = |content: &'static str, size: f32, ink: Token| {
+    let mono = |content: String, size: f32, ink: Token| {
         text(content)
             .number_of_lines(1u32)
             .font_family(FONT_MONO)
@@ -290,19 +380,18 @@ fn tool(app: AppState, tool: &Tool, test_id: String) -> AnyElement {
                         .flex_shrink_0()
                         .child(mark(app, tool.mark, Hue::Neutral)),
                 )
+                .child(view().w(px(44.0)).flex_shrink_0().child(mono(
+                    tool.kind.clone(),
+                    11.0,
+                    Token::Ink3,
+                )))
                 .child(
-                    view()
-                        .w(px(44.0))
-                        .flex_shrink_0()
-                        .child(mono(tool.kind, 11.0, Token::Ink3)),
-                )
-                .child(
-                    mono(tool.argument, 11.5, Token::Ink)
+                    mono(tool.argument.clone(), 11.5, Token::Ink)
                         .flex_1()
                         .min_w(px(0.0))
                         .truncate(),
                 )
-                .child(mono(tool.result, 11.0, Token::Ink3).flex_shrink_0()),
+                .child(mono(tool.result.clone(), 11.0, Token::Ink3).flex_shrink_0()),
         )
         .when(!tool.output.is_empty(), |block| {
             block.child(
@@ -316,36 +405,45 @@ fn tool(app: AppState, tool: &Tool, test_id: String) -> AnyElement {
         .into_element()
 }
 
-/// The inline handover (`.qcard`): owner only and blocking, in the needs-you colour; the
-/// question; the button that opens the question and the options hint.
+/// The inline handover (`.qcard`): an open question in the needs-you colour with the button
+/// that opens it to decide; a settled one quiet, still opening its handover.
 fn question(app: AppState, card: &QuestionCard) -> AnyElement {
     let form = app.form;
-    let action = card.action;
+    let action = card.action.clone();
     let open = button(
         app,
         card.button,
-        ButtonKind::Primary,
+        if card.open {
+            ButtonKind::Primary
+        } else {
+            ButtonKind::Ghost
+        },
         "btn-open-question",
-        move || run(app, action),
+        move || run(app, action.clone()),
     );
+    let (label_ink, hue) = if card.open {
+        (Token::You, Hue::You)
+    } else {
+        (Token::Ink2, Hue::Neutral)
+    };
     if form == Form::Terminal {
         return term::framed(
             view()
                 .px(term::cells(1.0))
                 .child(
-                    text(card.label)
+                    text(card.label.clone())
                         .number_of_lines(1u32)
                         .font_weight(FontWeight::BOLD)
-                        .text_color(color(Token::You)),
+                        .text_color(color(label_ink)),
                 )
-                .child(plain(app, card.question))
+                .child(plain(app, card.question.clone()))
                 .child(
                     view()
                         .flex_row()
                         .items_center()
                         .child(open)
                         .child(term::space(2.0))
-                        .child(term::quiet(card.hint)),
+                        .child(term::quiet(card.hint.clone())),
                 ),
         )
         .test_id("session-question")
@@ -359,30 +457,40 @@ fn question(app: AppState, card: &QuestionCard) -> AnyElement {
         .px(px(14.0))
         .py(px(10.0))
         .rounded(px(8.0))
-        .bg(color(Token::YouBg))
-        .border(px(1.5))
-        .border_color(color(Token::You))
+        .map(|card_box| {
+            if card.open {
+                card_box
+                    .bg(color(Token::YouBg))
+                    .border(px(1.5))
+                    .border_color(color(Token::You))
+            } else {
+                card_box
+                    .bg(color(Token::Surface))
+                    .border_1()
+                    .border_color(color(Token::Rule2))
+            }
+        })
         .child(
             view()
                 .flex_row()
                 .items_center()
                 .gap(px(8.0))
-                .child(dot(app, Hue::You))
+                .child(dot(app, hue))
                 .child(
-                    text(card.label)
+                    text(card.label.clone())
                         .flex_shrink(1.0)
                         .min_w(px(0.0))
                         .font_family(FONT_TEXT)
                         .text_size(px(if phone { 12.5 } else { 11.5 }))
                         .font_weight(FontWeight::BOLD)
-                        .text_color(color(Token::You)),
+                        .text_color(color(label_ink)),
                 ),
         )
         .child(
             view()
                 .mt(px(4.0))
                 .mb(px(8.0))
-                .child(plain(app, card.question)),
+                .child(plain(app, card.question.clone())),
         )
         .child(
             view()
@@ -391,7 +499,7 @@ fn question(app: AppState, card: &QuestionCard) -> AnyElement {
                 .items_center()
                 .gap(px(8.0))
                 .child(open)
-                .child(dim(app, card.hint)),
+                .child(dim(app, card.hint.clone())),
         )
         .into_element()
 }
@@ -430,44 +538,166 @@ fn field(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElement {
     }
 }
 
-/// The reply box under the transcript: the field and Send in one raised box, then how the
-/// message is sent and where the open question is answered. Desktop: `.composer` (a rule
-/// above, 10 24 12, the box at most 772 pt wide). Terminal: a rule, the field and Send, the
-/// hint quiet. The phone docks [`phone_reply`] instead.
-pub fn reply(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElement {
-    let form = app.form;
-    let action = reply.action;
-    let send = button_with(
+/// Send: the field's words go to the model's reducer; while a reply is in flight it waits,
+/// dimmed, so one intent never becomes two commands.
+fn send(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElement {
+    let busy = reply.mode == ReplyMode::Busy;
+    button_with(
         app,
-        reply.button,
+        if busy { "Sending…" } else { reply.button },
         ButtonKind::Primary,
         ButtonOptions {
             icon: Some(Icon::Send),
+            disabled: busy,
             ..ButtonOptions::default()
         },
         "btn-send",
-        move || run(app, action),
-    );
+        move || run(app, Action::Send(draft.get_untracked())),
+    )
+}
+
+/// The latest reply's outcome in its tone, with "Check delivery" when it is unknown.
+fn outcome(app: AppState, reply: &Reply) -> Option<AnyElement> {
+    let (hue, words) = reply.status.clone()?;
+    let ink = match hue {
+        Hue::Neutral => color(Token::Ink3),
+        hue => hue_ink(hue),
+    };
+    let words = text(words)
+        .test_id("session-reply-status")
+        .flex_shrink(1.0)
+        .min_w(px(0.0))
+        .text_color(ink);
+    let words = if app.form == Form::Terminal {
+        words
+    } else {
+        words.font_family(FONT_TEXT).text_size(px(11.5))
+    };
+    Some(
+        view()
+            .flex_row()
+            .items_center()
+            .gap(px(8.0))
+            .child(words)
+            .children(reply.recover.clone().map(|action| {
+                button(
+                    app,
+                    "Check delivery",
+                    ButtonKind::Quiet,
+                    "btn-recover-reply",
+                    move || run(app, action.clone()),
+                )
+            }))
+            .into_element(),
+    )
+}
+
+/// Why replies do not go to this session, with where to answer instead.
+fn closed(app: AppState, reason: &str, action: &Option<(&'static str, Action)>) -> AnyElement {
+    let go = action.clone().map(|(label, action)| {
+        button(
+            app,
+            label,
+            ButtonKind::Ghost,
+            "btn-reply-elsewhere",
+            move || run(app, action.clone()),
+        )
+    });
+    if app.form == Form::Terminal {
+        return view()
+            .flex_row()
+            .items_center()
+            .px(term::cells(1.0))
+            .child(term::quiet(reason.to_owned()).flex_1().min_w(px(0.0)))
+            .children(go.map(|go| view().flex_row().child(term::space(2.0)).child(go)))
+            .into_element();
+    }
+    view()
+        .test_id("session-reply-closed")
+        .flex_1()
+        .min_w(px(0.0))
+        .flex_row()
+        .items_center()
+        .gap(px(10.0))
+        .px(px(12.0))
+        .py(px(if app.form == Form::Phone { 8.0 } else { 9.0 }))
+        .rounded(px(if app.form == Form::Phone { 12.0 } else { 8.0 }))
+        .bg(color(Token::BgSunk))
+        .border_1()
+        .border_color(color(Token::Rule))
+        .child(
+            text(reason.to_owned())
+                .flex_1()
+                .min_w(px(0.0))
+                .font_family(FONT_TEXT)
+                .text_size(px(if app.form == Form::Phone { 14.0 } else { 12.5 }))
+                .text_color(color(Token::Ink2)),
+        )
+        .children(go)
+        .into_element()
+}
+
+/// The reply box under the transcript: the field and Send in one raised box, then how the
+/// message is sent, the latest reply's outcome and where the open question is answered.
+/// Desktop: `.composer` (a rule above, 10 24 12, the box at most 772 pt wide). Terminal: a
+/// rule, the field and Send, the hint quiet. A session that takes no replies says why instead.
+/// The phone docks [`phone_reply`] instead.
+pub fn reply(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElement {
+    let form = app.form;
+    let status = outcome(app, reply);
     if form == Form::Terminal {
+        let entry = match &reply.mode {
+            ReplyMode::Closed { reason, action } => closed(app, reason, action),
+            ReplyMode::Open | ReplyMode::Busy => view()
+                .flex_row()
+                .items_end()
+                .px(term::cells(1.0))
+                .child(field(app, reply, draft))
+                .child(term::space(2.0))
+                .child(send(app, reply, draft))
+                .into_element(),
+        };
+        let takes_words = !matches!(reply.mode, ReplyMode::Closed { .. });
         return view()
             .flex_none()
             .child(term::hrule())
-            .child(
-                view()
-                    .flex_row()
-                    .items_end()
-                    .px(term::cells(1.0))
-                    .child(field(app, reply, draft))
-                    .child(term::space(2.0))
-                    .child(send),
-            )
-            .child(
-                view()
-                    .px(term::cells(1.0))
-                    .child(line(app, &reply.hint, 0.0, Token::Ink3)),
-            )
+            .child(entry)
+            .children(status.map(|status| view().px(term::cells(1.0)).child(status)))
+            .when(takes_words, |box_| {
+                box_.child(view().px(term::cells(1.0)).child(line(
+                    app,
+                    &reply.hint,
+                    0.0,
+                    Token::Ink3,
+                )))
+            })
             .into_element();
     }
+    let entry = match &reply.mode {
+        ReplyMode::Closed { reason, action } => view()
+            .w_full()
+            .max_w(px(772.0))
+            .flex_row()
+            .child(closed(app, reason, action))
+            .into_element(),
+        ReplyMode::Open | ReplyMode::Busy => view()
+            .w_full()
+            .max_w(px(772.0))
+            .flex_row()
+            .items_end()
+            .gap(px(8.0))
+            .pl(px(12.0))
+            .pr(px(8.0))
+            .py(px(8.0))
+            .rounded(px(8.0))
+            .bg(color(Token::Surface))
+            .border_1()
+            .border_color(color(Token::Rule2))
+            .child(field(app, reply, draft))
+            .child(send(app, reply, draft))
+            .into_element(),
+    };
+    let takes_words = !matches!(reply.mode, ReplyMode::Closed { .. });
     view()
         .flex_none()
         .px(px(24.0))
@@ -477,70 +707,56 @@ pub fn reply(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElement 
         .border_t_1()
         .border_t_color(color(Token::Rule))
         .items_center()
-        .child(
-            view()
-                .w_full()
-                .max_w(px(772.0))
-                .flex_row()
-                .items_end()
-                .gap(px(8.0))
-                .pl(px(12.0))
-                .pr(px(8.0))
-                .py(px(8.0))
-                .rounded(px(8.0))
-                .bg(color(Token::Surface))
-                .border_1()
-                .border_color(color(Token::Rule2))
-                .child(field(app, reply, draft))
-                .child(send),
-        )
-        .child(
-            view()
-                .w_full()
-                .max_w(px(772.0))
-                .mt(px(6.0))
-                .flex_row()
-                .flex_wrap()
-                .gap(px(12.0))
-                .child(line(app, &reply.hint, 11.0, Token::Ink4))
-                .child(
-                    text(reply.question_hint)
-                        .font_family(FONT_TEXT)
-                        .text_size(px(11.0))
-                        .text_color(color(Token::Ink4)),
-                ),
-        )
+        .child(entry)
+        .children(status.map(|status| view().w_full().max_w(px(772.0)).mt(px(6.0)).child(status)))
+        .when(takes_words, |box_| {
+            box_.child(
+                view()
+                    .w_full()
+                    .max_w(px(772.0))
+                    .mt(px(6.0))
+                    .flex_row()
+                    .flex_wrap()
+                    .gap(px(12.0))
+                    .child(line(app, &reply.hint, 11.0, Token::Ink4))
+                    .when(!reply.question_hint.is_empty(), |hints| {
+                        hints.child(
+                            text(reply.question_hint.clone())
+                                .font_family(FONT_TEXT)
+                                .text_size(px(11.0))
+                                .text_color(color(Token::Ink4)),
+                        )
+                    }),
+            )
+        })
         .into_element()
 }
 
 /// The phone's docked reply (`.reply`): the field and the Send button in one rounded box, for
-/// the page's bar.
+/// the page's bar, with the latest reply's outcome above it; or why the session takes none.
 pub fn phone_reply(app: AppState, reply: &Reply, draft: Signal<String>) -> AnyElement {
-    let action = reply.action;
+    let entry = match &reply.mode {
+        ReplyMode::Closed { reason, action } => closed(app, reason, action),
+        ReplyMode::Open | ReplyMode::Busy => view()
+            .flex_row()
+            .items_end()
+            .gap(px(8.0))
+            .pl(px(12.0))
+            .pr(px(6.0))
+            .py(px(6.0))
+            .rounded(px(12.0))
+            .bg(color(Token::Surface))
+            .border_1()
+            .border_color(color(Token::Rule2))
+            .child(field(app, reply, draft))
+            .child(send(app, reply, draft))
+            .into_element(),
+    };
     view()
         .flex_1()
         .min_w(px(0.0))
-        .flex_row()
-        .items_end()
-        .gap(px(8.0))
-        .pl(px(12.0))
-        .pr(px(6.0))
-        .py(px(6.0))
-        .rounded(px(12.0))
-        .bg(color(Token::Surface))
-        .border_1()
-        .border_color(color(Token::Rule2))
-        .child(field(app, reply, draft))
-        .child(button_with(
-            app,
-            reply.button,
-            ButtonKind::Primary,
-            ButtonOptions {
-                icon: Some(Icon::Send),
-                ..ButtonOptions::default()
-            },
-            "btn-send",
-            move || run(app, action),
-        ))
+        .gap(px(6.0))
+        .children(outcome(app, reply).map(|status| view().px(px(4.0)).child(status)))
+        .child(entry)
         .into_element()
 }

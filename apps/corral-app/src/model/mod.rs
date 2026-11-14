@@ -1,5 +1,7 @@
 //! Pure data, reducers and view builders shared by all app forms.
 
+/// Typed canonical commands, device authority and command status.
+pub mod act;
 /// Agent sessions and worker wall.
 pub mod agents;
 /// Ask and assistant threads.
@@ -20,8 +22,12 @@ pub mod fixture;
 pub mod health;
 /// Semantic state colours.
 pub mod hue;
+/// Owned daemon identifiers.
+pub mod id;
 /// Questions and needs-you items.
 pub mod inbox;
+/// Live records, their routes and the shared selection.
+pub mod live;
 /// Navigation and overlay state.
 pub mod nav;
 /// Plans and dependency graphs.
@@ -39,11 +45,15 @@ pub mod usage;
 /// Now, tasks and changes.
 pub mod work;
 
+pub use act::{Act, ActStatus, Authority};
 pub use effect::{Conn, DataMode, Effect, Env, Page, Risk};
 pub use fixture::snapshot;
-pub use health::{DataState, Health, Segment, Snapshot, Tone, Workspace};
+pub use health::{Availability, DataState, Health, Segment, Snapshot, Tone, Workspace};
 pub use hue::Hue;
+pub use id::Id;
+pub use live::{Live, LiveKind, Route, Selection};
 pub use nav::{
-    AskTarget, Destination, Form, NavState, Overlay, PhoneTab, SettingsSection, ThemeChoice,
+    AskTarget, Destination, Form, NavState, Overlay, PhoneTab, SettingsSection, SidebarPref,
+    ThemeChoice,
 };
-pub use text::{Rich, Span, flat, span, task_link};
+pub use text::{Rich, Span, flat, live_task_link, span, task_link};

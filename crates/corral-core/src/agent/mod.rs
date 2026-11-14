@@ -13,6 +13,7 @@ mod local_controls;
 mod lsp;
 pub(crate) mod native_inputs;
 mod native_record;
+pub mod owner_question;
 pub mod paths;
 pub mod pm_cost;
 pub mod pm_notes;

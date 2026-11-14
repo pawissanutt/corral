@@ -1,11 +1,13 @@
-//! The Inbox destination and the focused question (`Page::Question`). The model resolves every
-//! word, branch and order (`model::inbox`); this module lays it out per form and sends each
-//! control's [`Action`] back through [`State::act`].
+//! The Inbox destination and the focused question: the fixture preview's `Page::Question`, and
+//! a served question's live page by its key. The model resolves every word, branch and order
+//! (`model::inbox`); this module lays it out per form and sends each control's [`Action`]
+//! back through the reducer (`State::act` for the fixture, `State::act_live` for corrald).
 //!
-//! Views read the model through memos built from a copy of the state without the alternate
-//! answer: typing in that field changes only the decide bar, so the field keeps its focus and
-//! the bands around it are not made again.
+//! Views read the model through memos built from a copy of the state without the typed text
+//! (the alternate answer, the follow-up): typing changes only the decide bar, so the fields
+//! keep their focus and the bands around them are not made again.
 
+mod decide;
 mod evidence;
 mod graph;
 mod list;
@@ -15,8 +17,8 @@ mod thread;
 
 use nsh_core::prelude::*;
 
-use crate::model::inbox::{self, Action, Button, ButtonKind as ModelKind, State};
-use crate::model::{Destination, Env, Form, Hue, Rich};
+use crate::model::inbox::{self, Action, Button, ButtonKind as ModelKind, Src, State};
+use crate::model::{Destination, Env, Form, Hue, Id, Rich};
 use crate::screens::PhonePage;
 use crate::state::AppState;
 use crate::ui::icons::Icon;
@@ -35,12 +37,17 @@ const LIST_NARROW: f32 = 280.0;
 const SHEET_MIN: f32 = 560.0;
 const SIDE: f32 = 340.0;
 
+/// Which question a handover shows: a served focus page's key, or None for the fixture and
+/// for the inline handover of the selected row.
+type Key = Option<Id>;
+
 /// The Inbox destination. Desktop: the 400 pt list beside the selection's pane (the full
-/// handover with its decide bar pinned for the question); in a window narrower than both need,
+/// handover with its decide bar pinned for a question); in a window narrower than both need,
 /// a 280 pt list beside the handover in its narrow layout. Phone: the large title over the
 /// needs-you cards and the changes feed, scrolling itself. Terminal: the list and the pane side
 /// by side on a wide grid, stacked on a narrow one with the pane taking two thirds.
 pub fn screen(app: AppState) -> AnyElement {
+    list::load_changes(app);
     match app.form {
         Form::Desktop => by_width(app, LIST + SHEET_MIN, desk_inbox),
         Form::Phone => list::phone(app),
@@ -48,53 +55,95 @@ pub fn screen(app: AppState) -> AnyElement {
     }
 }
 
+/// The fixture preview's focused question.
+pub fn question(app: AppState) -> AnyElement {
+    focus_page(app, None)
+}
+
+/// A served question's focus page on desktop and terminal.
+pub fn live_question(app: AppState, key: Id) -> AnyElement {
+    focus_page(app, Some(key))
+}
+
+/// The fixture preview's question pushed on the phone.
+pub fn question_phone(app: AppState) -> PhonePage {
+    phone_page(app, None)
+}
+
+/// A served question pushed on the phone.
+pub fn live_question_phone(app: AppState, key: Id) -> PhonePage {
+    phone_page(app, Some(key))
+}
+
 /// The focused question. Desktop: the page head (back, pager, keys, Ask about this, Next), S A R
 /// in the centre with the decide bar pinned under them, B Thread History in the 340 pt context
 /// column; in a window too narrow for both, the context bands under S A R in one scroll.
 /// Terminal: the same head; on a wide grid the context column beside the bands, on a narrow one
-/// under them in the same scroll.
-pub fn question(app: AppState) -> AnyElement {
-    let body = match app.form {
-        Form::Terminal => view()
-            .flex_1()
-            .min_h(px(0.0))
-            .min_w(px(0.0))
-            .child(dynamic(move || {
-                let wide = term::wide();
-                Some(untracked(move || {
-                    if wide {
-                        focus_columns(app)
-                    } else {
-                        sheet::focus_main(app, true, true)
-                    }
+/// under them in the same scroll. A served question loads first, and says so when it cannot.
+fn focus_page(app: AppState, key: Key) -> AnyElement {
+    sheet::load(app, key.clone());
+    let head_key = key.clone();
+    let body = move |app: AppState| match app.form {
+        Form::Terminal => {
+            let key = head_key.clone();
+            view()
+                .flex_1()
+                .min_h(px(0.0))
+                .min_w(px(0.0))
+                .child(dynamic(move || {
+                    let wide = term::wide();
+                    let key = key.clone();
+                    Some(untracked(move || {
+                        if wide {
+                            focus_columns(app, key)
+                        } else {
+                            sheet::focus_main(app, key, true, true)
+                        }
+                    }))
                 }))
-            }))
-            .into_element(),
-        Form::Desktop | Form::Phone => by_width(app, SHEET_MIN + SIDE, desk_question),
+                .into_element()
+        }
+        Form::Desktop | Form::Phone => {
+            let key = head_key.clone();
+            by_width_with(app, SHEET_MIN + SIDE, move |app, narrow| {
+                if narrow {
+                    sheet::focus_main(app, key.clone(), true, true)
+                } else {
+                    focus_columns(app, key.clone())
+                }
+            })
+        }
     };
+    let page_key = key.clone();
     view()
         .flex_1()
         .min_h(px(0.0))
         .min_w(px(0.0))
         .bg(color(Token::Bg))
-        .child(sheet::focus_head(app))
-        .child(body)
+        .child(sheet::focus_head(app, page_key))
+        .child(sheet::gate(app, key, body))
         .into_element()
 }
 
 /// The question pushed on the phone: S R A B Thread History under the pager and head, the decide
 /// bar in place of the tab bar, the Ask-about icon in the header, the thread as a sheet.
-pub fn question_phone(app: AppState) -> PhonePage {
+fn phone_page(app: AppState, key: Key) -> PhonePage {
+    sheet::load(app, key.clone());
     let title = untracked(|| {
         let env = app.env();
-        app.inbox.with(|state| inbox::question(state, env).title)
+        with_source(app, |state, src| {
+            inbox::question(state, src, key.as_ref(), env).title
+        })
     });
+    let body_key = key.clone();
     PhonePage {
         title: title.into(),
         back: Destination::Inbox.label(),
-        body: sheet::phone_body(app),
-        trailing: Some(sheet::ask_icon(app)),
-        bar: Some(sheet::decide(app, false)),
+        body: sheet::gate(app, key.clone(), move |app| {
+            sheet::phone_body(app, body_key.clone())
+        }),
+        trailing: Some(sheet::ask_icon(app, key.clone())),
+        bar: Some(decide::decide(app, key, false)),
         ask: true,
         scroll: true,
     }
@@ -114,27 +163,19 @@ fn desk_inbox(app: AppState, narrow: bool) -> AnyElement {
     )
 }
 
-fn desk_question(app: AppState, narrow: bool) -> AnyElement {
-    if narrow {
-        sheet::focus_main(app, true, true)
-    } else {
-        focus_columns(app)
-    }
-}
-
 fn terminal_preview(app: AppState) -> AnyElement {
     list::preview(app, true)
 }
 
-fn focus_columns(app: AppState) -> AnyElement {
+fn focus_columns(app: AppState, key: Key) -> AnyElement {
     columns(
         app,
         vec![
             (
                 Width::Fill,
-                sheet::focus_main(app, false, app.form == Form::Terminal),
+                sheet::focus_main(app, key.clone(), false, app.form == Form::Terminal),
             ),
-            (Width::Fixed(SIDE), sheet::side(app)),
+            (Width::Fixed(SIDE), sheet::side(app, key)),
         ],
         0,
     )
@@ -144,6 +185,14 @@ fn focus_columns(app: AppState) -> AnyElement {
 /// made again only when the width crosses `min`. It grows into its parent, so its measure is the
 /// room and not its content.
 fn by_width(app: AppState, min: f32, build: fn(AppState, bool) -> AnyElement) -> AnyElement {
+    by_width_with(app, min, build)
+}
+
+fn by_width_with(
+    app: AppState,
+    min: f32,
+    build: impl Fn(AppState, bool) -> AnyElement + 'static,
+) -> AnyElement {
     let width = signal(None::<f32>);
     let narrow = computed(move || width.get().map(|room| room < min));
     view()
@@ -159,7 +208,7 @@ fn by_width(app: AppState, min: f32, build: fn(AppState, bool) -> AnyElement) ->
         })
         .child(dynamic(move || {
             let narrow = narrow.get()?;
-            Some(untracked(move || build(app, narrow)))
+            Some(untracked(|| build(app, narrow)))
         }))
         .into_element()
 }
@@ -209,9 +258,15 @@ fn terminal_panes(
         .into_element()
 }
 
-/// Runs `action` through the inbox reducer, then the effects it returns.
+/// Runs `action` through the source's reducer, then the effects it returns.
 fn act(app: AppState, action: Action) {
-    app.act(app.inbox, move |state, env| state.act(action, env));
+    if untracked(|| app.daemon()) {
+        app.reduce(app.inbox, move |state, feed, _selection, env| {
+            state.act_live(action, feed, env)
+        });
+    } else {
+        app.act(app.inbox, move |state, env| state.act(action, env));
+    }
 }
 
 /// A press handler dispatching `action`.
@@ -219,22 +274,24 @@ fn press(app: AppState, action: Action) -> impl Fn() + 'static {
     move || act(app, action.clone())
 }
 
-/// A memo of a view builder over the state without its alternate answer (see the module docs).
+/// Tracked read of the state and the source: the served feed in daemon mode, else the fixture.
+fn with_source<R>(app: AppState, read: impl FnOnce(&State, Src) -> R) -> R {
+    if app.daemon() {
+        app.feed
+            .with(|feed| app.inbox.with(|state| read(state, Src::Live(feed))))
+    } else {
+        app.inbox.with(|state| read(state, Src::Fixture))
+    }
+}
+
+/// A memo of a view builder over the state without its typed text (see the module docs).
 fn blind<T: PartialEq + 'static>(
     app: AppState,
-    build: impl Fn(&State, Env) -> T + 'static,
+    build: impl Fn(&State, Src, Env) -> T + 'static,
 ) -> Memo<T> {
     computed(move || {
         let env = app.env();
-        app.inbox.with(|state| {
-            if state.draft.is_empty() {
-                build(state, env)
-            } else {
-                let mut without = state.clone();
-                without.draft.clear();
-                build(&without, env)
-            }
-        })
+        with_source(app, |state, src| build(&state.blind(), src, env))
     })
 }
 
@@ -280,18 +337,29 @@ fn kind(kind: ModelKind) -> ButtonKind {
 /// toast-only controls, which say what they are.
 fn action_id(action: &Action, label: &str) -> String {
     match action {
-        Action::Answer => "answer".into(),
+        Action::Answer | Action::Submit(_) => "answer".into(),
         Action::Thread => "ask-worker".into(),
-        Action::SendThread => "send".into(),
+        Action::FocusReply => "ask-asker".into(),
+        Action::SendThread | Action::Followup(_) => "send".into(),
         Action::CloseThread => "done".into(),
-        Action::NextQ => "next".into(),
-        Action::Ask => "ask-about".into(),
+        Action::NextQ | Action::Next(_) => "next".into(),
+        Action::Ask | Action::AskAbout(_, false) => "ask-about".into(),
+        Action::AskAbout(_, true) => "discuss-pm".into(),
         Action::OpenQuestion => "open-question".into(),
         Action::PlanOpen(_) => "open-plan".into(),
         Action::Go(destination) => format!("go-{}", destination.slug()),
-        Action::Open(_) => "open".into(),
-        Action::Evidence(_) => "proof".into(),
-        Action::Select(_) | Action::Choose(_) | Action::Draft(_) | Action::Toast(_) => slug(label),
+        Action::Open(_) | Action::Live(_) | Action::OpenRow(_) => "open".into(),
+        Action::Evidence(_) | Action::Proof(..) => "proof".into(),
+        Action::Recover(_) => "check-result".into(),
+        Action::Refetch(_) => "reload".into(),
+        Action::Select(_)
+        | Action::Row(_)
+        | Action::Choose(_)
+        | Action::Pick(..)
+        | Action::Draft(_)
+        | Action::Text(..)
+        | Action::Reply(..)
+        | Action::Toast(_) => slug(label),
     }
 }
 
@@ -330,7 +398,8 @@ fn code(app: AppState, content: impl Into<SharedString>, size: f32, ink: Token) 
 
 /// The model's [`Rich`] at `size` in `ink`, line height 1.5: the kit's `rich` has two sizes
 /// only, and the sheet's metadata, consequences and attributions sit at others. Mono runs are
-/// 0.93 of the size; dim runs ink-3; hued runs their hue.
+/// 0.93 of the size; dim runs ink-3; hued runs their hue. Fixture links open their page, live
+/// links their record.
 fn rich_at(app: AppState, content: &Rich, size: f32, ink: AdaptiveColor) -> Text {
     let terminal = app.form == Form::Terminal;
     let root = text("").flex_shrink(1.0).min_w(px(0.0)).text_color(ink);
@@ -363,6 +432,12 @@ fn rich_at(app: AppState, content: &Rich, size: f32, ink: AdaptiveColor) -> Text
                 .cursor_pointer()
                 .role(AccessibilityRole::Link)
                 .on_press(move || app.open(page));
+        } else if let Some(record) = run.live.clone() {
+            piece = piece
+                .underline()
+                .cursor_pointer()
+                .role(AccessibilityRole::Link)
+                .on_press(move || app.open_live(record.clone()));
         }
         piece
     }))
@@ -372,8 +447,8 @@ fn rich_at(app: AppState, content: &Rich, size: f32, ink: AdaptiveColor) -> Text
 /// for going back.
 fn icon_for(action: &Action) -> Option<Icon> {
     match action {
-        Action::Thread | Action::Ask => Some(Icon::Ask),
-        Action::SendThread => Some(Icon::Send),
+        Action::Thread | Action::Ask | Action::AskAbout(..) | Action::FocusReply => Some(Icon::Ask),
+        Action::SendThread | Action::Followup(_) => Some(Icon::Send),
         Action::Go(Destination::Inbox) => Some(Icon::Back),
         _ => None,
     }

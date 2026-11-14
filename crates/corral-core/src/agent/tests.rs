@@ -28,6 +28,7 @@ fn state(role: AgentRole, callback: Option<&str>) -> Box<AgentRunState> {
         n: 1,
         bind_nonce_sha256: "00".into(),
         pane: "p1".into(),
+        daemon_hosted: false,
         created: Timestamp::UNIX_EPOCH,
         bound: None,
         fenced: None,

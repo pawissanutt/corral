@@ -16,6 +16,13 @@ pub fn agent_entry(invoker: &Invoker) -> bool {
 /// Reject agent, assistant and PM entry points independently of caller-supplied attribution.
 /// Like other local owner controls, this trusts the owner's OS session, not a CLI flag.
 pub fn require_automation_owner(store: &Store, invoker: &Invoker) -> Result<()> {
+    if invoker.is_app() {
+        ensure!(
+            invoker.device_admin()?,
+            "admin_only: trusted native administrator required"
+        );
+        return Ok(());
+    }
     let agent = agent_entry(invoker);
     let pm = invoker.owner_action.is_none() && invoker.pm_marker();
     let cwd = invoker

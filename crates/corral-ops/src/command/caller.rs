@@ -1,11 +1,15 @@
 //! Who runs a command: the wire `Caller` plus local-only owner-action authority.
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use corral_core::{Actor, Store};
 use corral_protocol::cmd::{ActorName, Caller, CallerEnv, ClientKind, Principal, Via};
 
 use crate::assistant::owner_action::{self, OwnerAuthority, ViaAssistant};
+
+#[cfg(test)]
+#[path = "caller_tests.rs"]
+mod tests;
 
 /// The caller record every caller-dependent check reads instead of this process's environment.
 #[derive(Debug, Clone)]
@@ -13,9 +17,85 @@ pub struct Invoker {
     pub caller: Caller,
     /// Local only (`Entry::new` claim). Never serialized; forces local routing.
     pub owner_action: Option<ViaAssistant>,
+    // Never deserialized from Caller. Only the authenticated daemon adapter supplies this.
+    device: Option<crate::agent::app_runtime::AuthenticatedDevice>,
+    admin: bool,
 }
 
 impl Invoker {
+    /// An admitted CLI caller. App claims remain untrusted and are refused by `resolve`.
+    pub fn from_caller(caller: Caller) -> Self {
+        Self {
+            caller,
+            owner_action: None,
+            device: None,
+            admin: false,
+        }
+    }
+
+    /// The daemon calls this only after authenticating and rechecking the device registry.
+    /// Neither the wire Caller nor its environment can grant device authority.
+    pub fn authenticated_device(
+        caller: Caller,
+        device: crate::agent::app_runtime::AuthenticatedDevice,
+        admin: bool,
+    ) -> Result<Self> {
+        let invoker = Self {
+            caller,
+            owner_action: None,
+            device: Some(device),
+            admin,
+        };
+        invoker.device()?;
+        Ok(invoker)
+    }
+
+    pub fn device(&self) -> Result<&crate::agent::app_runtime::AuthenticatedDevice> {
+        let device = self
+            .device
+            .as_ref()
+            .context("not_app_safe: authenticated device required")?;
+        let env = &self.caller.env;
+        ensure!(
+            matches!(&self.caller.principal, Principal::Device { id } if id == &device.id)
+                && !device.id.is_empty()
+                && self.caller.client == ClientKind::App
+                && self.caller.via == Via::App
+                && self.caller.actor == Some(ActorName::Owner)
+                && self.caller.assistant.is_none()
+                && self.caller.cwd.is_none()
+                && !self.caller.planning_safe
+                && self.owner_action.is_none()
+                && [
+                    &env.corral_pm,
+                    &env.corral_assistant,
+                    &env.ai_agent,
+                    &env.pi_coding_agent,
+                    &env.corral_agent,
+                    &env.corral_reviewer,
+                    &env.corral_agent_task,
+                    &env.corral_agent_bootstrap,
+                    &env.corral_task
+                ]
+                .iter()
+                .all(|v| v.is_none()),
+            "not_app_safe: invalid authenticated device caller"
+        );
+        Ok(device)
+    }
+
+    pub(crate) fn device_admin(&self) -> Result<bool> {
+        self.device()?;
+        Ok(self.admin)
+    }
+
+    pub(crate) fn is_app(&self) -> bool {
+        self.device.is_some()
+            || matches!(self.caller.principal, Principal::Device { .. })
+            || self.caller.client == ClientKind::App
+            || self.caller.via == Via::App
+    }
+
     /// Records this process's caller-identity variables and raw working directory.
     pub fn from_process(
         client: ClientKind,
@@ -40,6 +120,8 @@ impl Invoker {
                 env: env_from_process(),
             },
             owner_action,
+            device: None,
+            admin: false,
         }
     }
 
@@ -81,14 +163,28 @@ impl Invoker {
         store.set_attribution(actor, &via)?;
         if let Some(authority) = &self.owner_action {
             store.set_attribution_detail("owner_authority", serde_json::to_value(authority)?)?;
+        } else if self.is_app() {
+            let device = self.device()?;
+            store.set_attribution_detail(
+                "device",
+                serde_json::json!({"device": device.id, "name": device.name}),
+            )?;
         }
         Ok(())
     }
 
     /// The event actor and `via` this caller's events carry.
     pub fn resolve(&self, store: &Store) -> Result<(Actor, String)> {
+        if self.is_app() {
+            let device = self.device()?;
+            return Ok((Actor::Owner, format!("app:{}", device.id)));
+        }
         if let Some(authority) = &self.owner_action {
-            return Ok((Actor::Owner, format!("assistant:{}", authority.session)));
+            let via = authority.device.as_ref().map_or_else(
+                || format!("assistant:{}", authority.session),
+                |device| format!("app:{device}"),
+            );
+            return Ok((Actor::Owner, via));
         }
         if let Some(session) = &self.caller.assistant {
             return Ok((Actor::Assistant, format!("assistant:{session}")));

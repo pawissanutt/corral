@@ -10,7 +10,7 @@ use nsh_core::SvgPaint;
 use nsh_core::canvas::{CanvasTextAlign, LineJoin};
 use nsh_core::prelude::*;
 
-use crate::model::usage::{BandChart, Level, Point as ChartPoint, Provider, band_chart};
+use crate::model::usage::{BandChart, Chart, Level, Point as ChartPoint, band_chart};
 use crate::ui::tokens::{FONT_MONO, Token, color};
 
 /// `.band-chart .z1`: the held hue at 14 percent; `.z2`: the failure hue at 16 percent.
@@ -26,9 +26,9 @@ const DOT_RADIUS: f32 = 3.0;
 /// view box width (desktop 380, phone 354), drawn until the first layout reports the real one.
 /// The chart is one image for screen readers, labelled with the model's description; the
 /// figures beside it carry the same numbers as text.
-pub fn chart(provider: &'static Provider, start_width: f32, height: f32) -> AnyElement {
+pub fn chart(source: Chart, start_width: f32, height: f32) -> AnyElement {
     let width = signal(start_width);
-    let label = band_chart(provider, start_width, height).accessibility_label;
+    let label = source.label.clone();
     view()
         .relative()
         .w_full()
@@ -43,7 +43,7 @@ pub fn chart(provider: &'static Provider, start_width: f32, height: f32) -> AnyE
             }
         })
         .child(dynamic(move || {
-            layers(&band_chart(provider, width.get(), height))
+            layers(&band_chart(&source, width.get(), height))
         }))
         .into_element()
 }
@@ -100,13 +100,13 @@ fn labels(chart: &BandChart) -> Painter {
         .fill_style_from_view(SvgPaint::CurrentColor)
         .text_align(CanvasTextAlign::Left);
     let painter = chart.vertical_labels.iter().fold(painter, |p, label| {
-        p.fill_text(label.text, label.position.x, label.position.y)
+        p.fill_text(&label.text, label.position.x, label.position.y)
     });
     chart
         .hour_labels
         .iter()
         .fold(painter.text_align(CanvasTextAlign::Center), |p, label| {
-            p.fill_text(label.text, label.position.x, label.position.y)
+            p.fill_text(&label.text, label.position.x, label.position.y)
         })
 }
 

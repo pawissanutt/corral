@@ -1,6 +1,8 @@
 //! `cmd.submit` / `cmd.result`: owner and agent commands executed by two `corrald` workers,
 //! each on its own store handle, behind the idempotency journal in record area
-//! `app-commands` (key `local-<uid>/<cmd_id>`), whose only writer is this module.
+//! `app-commands` (CLI key `local-<uid>/<cmd_id>`, app key `dev-<device>/<cmd_id>`).
+//! Every new reservation or result tombstone shares the index admission lock and principal
+//! capacity; recovery reads do not consume capacity or discard existing results.
 //!
 //! Connection threads check what needs no store (build identity, herdr target, command,
 //! expiry, caller) and hand the command to a worker. A worker refuses disabled commands and
@@ -33,6 +35,8 @@ use serde_json::Value;
 use crate::conn;
 use crate::state::Shared;
 
+pub(crate) mod app;
+pub(crate) mod assistant;
 mod journal;
 
 use journal::{Answer, Flight, Index, Journal, JournalState, Stored, expiry, principal};
@@ -58,18 +62,33 @@ const CANCELLED: u8 = 2;
 pub(crate) struct Service {
     jobs: mpsc::SyncSender<Job>,
     flights: Mutex<HashMap<String, Arc<Flight>>>,
+    /// Admission lock: hold through expiry eviction, capacity check and durable insertion.
     index: Mutex<Index>,
     /// Journal reads and tombstones of `cmd.result`.
     journal: Mutex<Store>,
+    previews: Mutex<HashMap<String, app::Preview>>,
 }
 
 struct Job {
-    submit: CmdSubmit,
+    payload: Payload,
     key: String,
     digest: String,
     /// `QUEUED` until a worker takes it (`TAKEN`) or its connection gives up (`CANCELLED`).
     handoff: Arc<AtomicU8>,
     reply: mpsc::Sender<Reply>,
+}
+
+// Jobs already carry a full command inline; do not add a per-command heap allocation.
+#[allow(clippy::large_enum_variant)]
+enum Payload {
+    Command {
+        submit: CmdSubmit,
+        confirm: Option<corral_protocol::app::ConfirmProof>,
+    },
+    Prompt {
+        device: String,
+        request: corral_protocol::assistant::PromptAnswer,
+    },
 }
 
 enum Reply {
@@ -78,6 +97,30 @@ enum Reply {
     Wait(Arc<Flight>),
     /// A JSON-RPC error: not accepted, nothing recorded.
     Refuse(ErrorCode, &'static str),
+}
+
+#[derive(Debug)]
+enum QueryError {
+    Busy,
+    Journal(anyhow::Error),
+}
+
+impl From<anyhow::Error> for QueryError {
+    fn from(problem: anyhow::Error) -> Self {
+        Self::Journal(problem)
+    }
+}
+
+impl QueryError {
+    fn wire(self) -> (ErrorCode, &'static str) {
+        match self {
+            Self::Busy => (ErrorCode::Busy, "queue_full"),
+            Self::Journal(problem) => {
+                eprintln!("corrald command result: {problem:#}");
+                (ErrorCode::Unavailable, "journal_unavailable")
+            }
+        }
+    }
 }
 
 struct Worker {
@@ -97,6 +140,7 @@ pub(crate) fn start(ctx: &Ctx, shared: &Arc<Shared>) -> Result<()> {
         flights: Mutex::default(),
         index: Mutex::new(Index::load(rows)),
         journal: Mutex::new(journal),
+        previews: Mutex::default(),
     });
     let receiver = Arc::new(Mutex::new(receiver));
     for n in 0..WORKERS {
@@ -129,7 +173,7 @@ pub(crate) fn start(ctx: &Ctx, shared: &Arc<Shared>) -> Result<()> {
                         continue;
                     }
                     let reply =
-                        service.run(&mut worker, &shared, job.submit, &job.key, &job.digest);
+                        service.run(&mut worker, &shared, job.payload, &job.key, &job.digest);
                     let _ = job.reply.send(reply);
                 }
             })
@@ -159,7 +203,10 @@ pub(crate) fn serve_submit(
     let job = Job {
         key: journal_key(peer_uid, &submit.cmd_id),
         digest: command::digest(&submit),
-        submit,
+        payload: Payload::Command {
+            submit,
+            confirm: None,
+        },
         handoff: Arc::clone(&handoff),
         reply,
     };
@@ -221,8 +268,8 @@ pub(crate) fn serve_result(
     match service.query(&key, Instant::now() + wait, query.abandon_if_absent) {
         Ok(answer) => write_answer(stream, id, query.cmd_id, answer),
         Err(problem) => {
-            eprintln!("corrald command result {key}: {problem:#}");
-            conn::error(stream, id, ErrorCode::Unavailable, "journal_unavailable")
+            let (code, message) = problem.wire();
+            conn::error(stream, id, code, message)
         }
     }
 }
@@ -306,7 +353,7 @@ impl Service {
         &self,
         worker: &mut Worker,
         shared: &Shared,
-        submit: CmdSubmit,
+        payload: Payload,
         key: &str,
         digest: &str,
     ) -> Reply {
@@ -339,7 +386,14 @@ impl Service {
             flights.insert(key.to_owned(), Arc::clone(&flight));
             flight
         };
-        let (reply, executed) = self.accept(worker, submit, key, digest);
+        let (reply, executed) = match payload {
+            Payload::Command { submit, confirm } => {
+                self.accept(worker, shared, submit, key, digest, confirm)
+            }
+            Payload::Prompt { device, request } => {
+                app::accept_prompt(self, worker, shared, &device, request, key, digest)
+            }
+        };
         lock(&self.flights).remove(key);
         // Only waiters that took the flight before its removal hold another reference; later
         // ones read the journal, which is already settled.
@@ -359,14 +413,39 @@ impl Service {
     fn accept(
         &self,
         worker: &mut Worker,
+        shared: &Shared,
         submit: CmdSubmit,
         key: &str,
         digest: &str,
+        confirm: Option<corral_protocol::app::ConfirmProof>,
     ) -> (Reply, bool) {
         let Worker { base, timing } = worker;
         let store = &base.store;
-        self.evict(store, key);
-        if lock(&self.index).count(principal(key)) >= LIVE_MAX {
+        let mut index = lock(&self.index);
+        // Recover the same id even at capacity, before evicting any eligible old entries.
+        match store.record::<Journal>(COMMANDS_AREA, key) {
+            Ok(Some(_)) => return (existing(store, key, digest), false),
+            Ok(None) => {}
+            Err(_) => {
+                return (
+                    Reply::Refuse(ErrorCode::Unavailable, "journal_unavailable"),
+                    false,
+                );
+            }
+        }
+        self.evict(store, key, &mut index);
+        let confirmed_target = if key.starts_with("dev-") {
+            if let Err((code, message)) = app::authorize(shared, &submit) {
+                return (Reply::Refuse(code, message), false);
+            }
+            match app::consume_confirmation(self, store, &submit, confirm.as_ref()) {
+                Ok(target) => target,
+                Err((code, message)) => return (Reply::Refuse(code, message), false),
+            }
+        } else {
+            None
+        };
+        if index.full(key) {
             return (Reply::Refuse(ErrorCode::Busy, "queue_full"), false);
         }
         let reserved = Journal {
@@ -375,9 +454,10 @@ impl Service {
             issued_at: submit.issued_at,
             expires_at: submit.expires_at,
             result: None,
+            retain_until: app::retention(key),
         };
         match store.insert_record(COMMANDS_AREA, key, &reserved) {
-            Ok(true) => lock(&self.index).live(key),
+            Ok(true) => index.live(key),
             Ok(false) => return (existing(store, key, digest), false),
             Err(problem) => {
                 eprintln!("corrald reserving command {key}: {problem:#}");
@@ -387,36 +467,49 @@ impl Service {
                 );
             }
         }
-        let answer = match expectation(store, submit.expect.as_ref()) {
+        drop(index);
+        let mut answer = match expectation(store, submit.expect.as_ref()) {
             Some(answer) => answer,
-            None => execute(base, timing, submit.caller, submit.command),
+            None => match app::check_target(store, &submit.command, confirmed_target.as_deref())
+                .and_then(|()| app::execution_invoker(shared, submit.caller, &submit.command))
+            {
+                Ok(invoker) => execute(base, timing, invoker, submit.command),
+                Err(problem) => failed(&command::error_style(&submit.command), problem),
+            },
         };
-        let expires = expiry(&reserved.expires_at);
+        if key.starts_with("dev-") {
+            answer.output = None;
+        }
         let settled = Journal {
             state: JournalState::Settled,
             result: Some(answer.stored()),
+            retain_until: app::retention(key),
             ..reserved
         };
         if let Err(problem) = base.store.save_record(COMMANDS_AREA, key, &settled) {
             // The reservation stays: replays answer `unknown`, never a second execution.
             eprintln!("corrald settling command {key}: {problem:#}");
         }
-        lock(&self.index).done(key, expires);
+        lock(&self.index).done(key, journal::eviction_time(key, &settled));
         (Reply::Answer(answer), true)
     }
 
-    /// Deletes up to 8 final entries of this principal whose expiry is 10 minutes past.
-    fn evict(&self, store: &Store, key: &str) {
-        let cutoff = corral_core::clock::now()
-            .checked_sub(EVICT_AFTER)
-            .unwrap_or(Timestamp::MIN);
-        let victims = lock(&self.index).evictable(principal(key), cutoff);
+    /// Deletes up to 8 eligible expired entries while holding the admission lock.
+    fn evict(&self, store: &Store, key: &str, index: &mut Index) {
+        let cutoff = if key.starts_with("dev-") {
+            corral_core::clock::now()
+        } else {
+            corral_core::clock::now()
+                .checked_sub(EVICT_AFTER)
+                .unwrap_or(Timestamp::MIN)
+        };
+        let victims = index.evictable(principal(key), cutoff);
         for victim in victims {
             if let Err(problem) = store.delete_record(COMMANDS_AREA, &victim.1) {
                 eprintln!("corrald evicting command {}: {problem:#}", victim.1);
                 return;
             }
-            lock(&self.index).evicted(&victim);
+            index.evicted(&victim);
         }
     }
 
@@ -426,7 +519,7 @@ impl Service {
 
     /// `cmd.result`: waits on an in-flight key, else answers from the journal; an absent key is
     /// tombstoned when asked, so a late submit of it is refused.
-    fn query(&self, key: &str, deadline: Instant, abandon: bool) -> Result<Answer> {
+    fn query(&self, key: &str, deadline: Instant, abandon: bool) -> Result<Answer, QueryError> {
         // A reservation seen while its flight registers or lands is looked at again.
         for _ in 0..3 {
             if let Some(flight) = self.flight(key) {
@@ -436,6 +529,8 @@ impl Service {
                     Some(None) => {}
                 }
             }
+            // All insert paths acquire index before their store, and retain it until indexed.
+            let mut index = lock(&self.index);
             let store = lock(&self.journal);
             let journal = store
                 .record::<Journal>(COMMANDS_AREA, key)
@@ -452,6 +547,10 @@ impl Service {
                     JournalState::Reserved => return Ok(Answer::bare(CmdState::Unknown)),
                 },
                 None if abandon => {
+                    self.evict(&store, key, &mut index);
+                    if index.full(key) {
+                        return Err(QueryError::Busy);
+                    }
                     let now = corral_core::clock::now();
                     let expires = now.checked_add(TOMBSTONE_TTL).unwrap_or(Timestamp::MAX);
                     let tombstone = Journal {
@@ -460,12 +559,13 @@ impl Service {
                         issued_at: now.to_string(),
                         expires_at: expires.to_string(),
                         result: None,
+                        retain_until: app::retention(key),
                     };
                     if store
                         .insert_record(COMMANDS_AREA, key, &tombstone)
                         .context("writing command tombstone")?
                     {
-                        lock(&self.index).done(key, expires);
+                        index.done(key, journal::eviction_time(key, &tombstone));
                         return Ok(Answer::bare(CmdState::Abandoned));
                     }
                 }
@@ -535,7 +635,7 @@ fn conflict(message: String) -> Answer {
 fn execute(
     base: &Ctx,
     timing: &mut corral_ops::timing::Snapshot,
-    caller: Caller,
+    invoker: Invoker,
     command: Command,
 ) -> Answer {
     let started = Instant::now();
@@ -543,10 +643,6 @@ fn execute(
     let answer = {
         let _span = corral_core::timing::span("corrald.command");
         let store = base.store.reattributed();
-        let invoker = Invoker {
-            caller,
-            owner_action: None,
-        };
         // Only the attribution half of the open spec applies: the loop observes config edits.
         let applied = if command::open_spec(&command).attribute {
             invoker.apply(&store)

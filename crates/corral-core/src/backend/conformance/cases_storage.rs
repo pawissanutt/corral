@@ -9,6 +9,11 @@ use super::*;
 pub(super) fn cases() -> Vec<Case> {
     vec![
         Case {
+            name: "exclusive_event_sequence_bounds",
+            covers: &[OpKind::AppendEvents],
+            run: exclusive_event_sequence_bounds,
+        },
+        Case {
             name: "scratch_transitions",
             covers: &[
                 OpKind::ScratchRegister,
@@ -38,6 +43,72 @@ pub(super) fn cases() -> Vec<Case> {
             run: conditions,
         },
     ]
+}
+
+fn exclusive_event_sequence_bounds(make: MakeFixture<'_>) -> Result<()> {
+    let fx = make();
+    apply(
+        &fx,
+        Operation::AppendEvents(AppendEvents {
+            events: ["a", "b", "a", "b", "a"]
+                .into_iter()
+                .enumerate()
+                .map(|(index, kind)| event(&fx, None, kind, json!({ "index": index })))
+                .collect(),
+            reservations: vec![],
+        }),
+    )?;
+    let view = fx.backend.view()?;
+    let all = view
+        .events(&EventQuery::default(), PageReq::first(10))?
+        .items;
+    ensure!(all.len() == 5, "five test events");
+    for newest_first in [false, true] {
+        // Exercise both the single-index and merged-per-kind SQLite branches.
+        for kinds in [vec![], vec!["a".to_owned(), "b".to_owned()]] {
+            let query = EventQuery {
+                after: Some(all[0].seq),
+                before: Some(all[4].seq),
+                newest_first,
+                kinds,
+                ..Default::default()
+            };
+            let mut page = PageReq::first(1);
+            let mut found = Vec::new();
+            loop {
+                let result = view.events(&query, page)?;
+                found.extend(result.items.into_iter().map(|event| event.seq));
+                let Some(after) = result.next else {
+                    break;
+                };
+                page = PageReq {
+                    after: Some(after),
+                    limit: 1,
+                };
+            }
+            let mut expected: Vec<_> = all[1..4].iter().map(|event| event.seq).collect();
+            if newest_first {
+                expected.reverse();
+            }
+            ensure!(
+                found == expected,
+                "exclusive bounds must apply before paging"
+            );
+        }
+    }
+    ensure!(
+        view.events(
+            &EventQuery {
+                before: Some(all[0].seq),
+                ..Default::default()
+            },
+            PageReq::first(1)
+        )?
+        .items
+        .is_empty(),
+        "first event is excluded"
+    );
+    Ok(())
 }
 
 fn scratch(fx: &Fixture, id: &str) -> Result<ScratchRow> {

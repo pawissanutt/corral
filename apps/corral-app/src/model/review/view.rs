@@ -1,4 +1,5 @@
-//! Typed content for Review renderers. No widgets, dimensions or styling APIs live here.
+//! Typed content for Review renderers, shared by the fixture replay and the served candidate.
+//! No widgets, dimensions or styling APIs live here.
 
 use crate::model::board::Mark;
 use crate::model::effect::{Conn, Env};
@@ -6,20 +7,24 @@ use crate::model::hue::Hue;
 use crate::model::nav::Form;
 use crate::model::text::{Rich, span};
 
-use super::data::{
-    CANDIDATES, Candidate, Comment, FILES, File, GATE_LOG, GATE_LOG_NOTE, HunkSource, LogLine,
-    REPORT, Report, SCREENSHOT, Screenshot, VERDICTS,
-};
-use super::diff::{SplitRow, UnifiedRow, hunk_header, split, unified};
-use super::{APPROVAL_REFUSED, Action, Layout, State, Tab};
+use super::data::Screenshot;
+use super::diff::{Anchor, split_rows, unified_rows};
+use super::{Action, Compose, Layout, State, Tab};
 
 /// A neutral or state-coloured chip whose copy is already resolved for the form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chip {
     /// Chip text, without extra punctuation added by a renderer.
-    pub label: &'static str,
+    pub label: String,
     /// Semantic state colour.
     pub hue: Hue,
+}
+
+pub(super) fn chip(label: impl Into<String>, hue: Hue) -> Chip {
+    Chip {
+        label: label.into(),
+        hue,
+    }
 }
 
 /// Button emphasis from the source, not a platform-specific layout instruction.
@@ -33,22 +38,22 @@ pub enum ButtonStyle {
     Quiet,
 }
 
-/// A labelled intent; even a refused approval remains clickable so it can explain itself.
+/// A labelled intent; a refused control remains pressable so its reducer can explain itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Button {
     /// Visible label.
     pub label: String,
     /// Reducer intent.
     pub action: Action,
-    /// Whether the source affordance can be activated.
+    /// Whether the control can be activated at all.
     pub enabled: bool,
     /// Source emphasis.
     pub style: ButtonStyle,
-    /// Explanation produced on activation instead of executing an unavailable command.
-    pub refusal: Option<&'static str>,
+    /// Why activating it will not run the command, shown beside the control.
+    pub refusal: Option<String>,
 }
 
-fn button(label: impl Into<String>, action: Action, style: ButtonStyle) -> Button {
+pub(super) fn button(label: impl Into<String>, action: Action, style: ButtonStyle) -> Button {
     Button {
         label: label.into(),
         action,
@@ -58,20 +63,26 @@ fn button(label: impl Into<String>, action: Action, style: ButtonStyle) -> Butto
     }
 }
 
-/// One candidate-list row with its static replay selection and toast-only action.
+/// One candidate-list row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CandidateRow {
-    /// Candidate identity, state and actor mark colour.
-    pub candidate: Candidate,
+    /// Task id, the row's stable key and test id.
+    pub task: String,
+    /// Short title below the identity.
+    pub title: String,
+    /// Stage line below the title.
+    pub state: String,
+    /// Actor mark colour, independent of selection.
+    pub hue: Hue,
     /// Formatted task id and candidate identity.
     pub identity: Rich,
-    /// T-868 remains selected even when other source rows are clicked.
+    /// Whether this is the candidate shown beside the list.
     pub selected: bool,
     /// Intent for the whole row.
     pub action: Action,
 }
 
-/// Candidate group heading and its rows, absent from the phone page.
+/// Candidate group heading and its rows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CandidateGroup {
     /// `Your verdict` or `Verifying`.
@@ -80,38 +91,32 @@ pub struct CandidateGroup {
     pub count: u32,
     /// Heading's semantic state colour.
     pub hue: Hue,
-    /// Rows in source order.
+    /// Rows in order.
     pub rows: Vec<CandidateRow>,
 }
 
-/// The selected candidate's title, metadata and replay marker.
+/// The selected candidate's title, metadata and tags.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
-    /// Selected task id.
-    pub task: &'static str,
-    /// Round shown with the candidate.
-    pub round: &'static str,
-    /// SHA whose approval is requested.
-    pub sha: &'static str,
     /// Candidate title.
-    pub title: &'static str,
+    pub title: String,
     /// Form-specific metadata, including desktop base and totals.
     pub metadata: Rich,
-    /// The phone marks this candidate as a replay here; desktop uses the list footnote.
+    /// Replay, review state and freshness tags.
     pub chips: Vec<Chip>,
 }
 
 /// A verdict's complete presentation, including stale mark, strike and older-candidate tag.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerdictView {
-    /// Display mark; stale overrides the original fail mark.
+    /// Display mark; stale overrides the original mark.
     pub mark: Mark,
     /// Who supplied the verdict, in bold.
-    pub who: &'static str,
+    pub who: String,
     /// Candidate SHA with stale hue already applied.
     pub sha: Rich,
-    /// Clock time, or empty for the owner.
-    pub time: &'static str,
+    /// Clock time, or empty when none was recorded.
+    pub time: String,
     /// Phone attribution line: bold actor, monospace SHA and optional clock time.
     pub line: Rich,
     /// Result text with strike/dim/owner hue resolved.
@@ -123,91 +128,130 @@ pub struct VerdictView {
 /// A tab button in the desktop tab list or phone segmented list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TabView {
-    /// Tab identity.
     pub tab: Tab,
     /// Form-specific label.
     pub label: &'static str,
-    /// Whether this tab is selected.
     pub selected: bool,
-    /// Intent on activation.
     pub action: Action,
 }
 
 /// A layout preference button, shown only alongside the desktop Diff tab.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LayoutChoice {
-    /// Preference this button writes.
     pub layout: Layout,
     /// `Side by side` or `Unified`.
     pub label: &'static str,
     /// Whether it matches the stored preference, not the width-constrained output.
     pub selected: bool,
-    /// Reducer intent.
     pub action: Action,
 }
 
-/// An inline thread followed by the source's noninteractive owner reply box.
+/// One message of a thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageView {
+    /// Author, time and candidate.
+    pub attribution: Rich,
+    pub text: String,
+}
+
+/// A text field and its send control. The renderer keeps the draft under `draft`, and on Send
+/// dispatches `Action::Submit { target, text }` with the draft's text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Composer {
+    /// Draft key, unique on the page.
+    pub draft: String,
+    pub target: Compose,
+    pub placeholder: &'static str,
+    /// Accessible name of the field.
+    pub label: &'static str,
+    pub send: &'static str,
+    /// Closes the composer without sending.
+    pub cancel: Option<Button>,
+    /// Why Send will not run, shown under the field; Send stays pressable to explain.
+    pub refusal: Option<String>,
+}
+
+/// A command this page sent and its truthful status, with what can still be done about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusLine {
+    pub text: Rich,
+    pub hue: Hue,
+    /// Check again, restore the unsent text, or dismiss a settled line.
+    pub actions: Vec<Button>,
+}
+
+/// A discussion: the thread's messages, its state, a reply composer and thread actions. A new
+/// line comment is a discussion with no messages yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommentView {
-    /// Reviewer, review round and candidate attribution.
-    pub attribution: Rich,
-    /// Plain comment body.
-    pub text: &'static str,
-    /// Static reply-box prompt, not a persisted comment draft.
-    pub placeholder: &'static str,
-    /// Keycap shown by the source, not a registered screen shortcut.
-    pub keycap: &'static str,
-    /// Inert source affordance; activation does not invent a comment editor.
-    pub action: Action,
-    /// False because the source provides neither input nor an action handler.
-    pub editable: bool,
+    /// Thread id, or the anchor of a new comment; a stable rendering key.
+    pub key: String,
+    /// Where the thread is anchored, for a thread shown away from its line.
+    pub anchor: Option<String>,
+    pub messages: Vec<MessageView>,
+    /// Resolved, stale (older candidate), sending.
+    pub chips: Vec<Chip>,
+    pub composer: Option<Composer>,
+    /// Resolve or reopen.
+    pub actions: Vec<Button>,
+    pub status: Vec<StatusLine>,
 }
 
-fn comment_view(comment: Comment) -> CommentView {
-    CommentView {
-        attribution: vec![
-            span(comment.who).bold(),
-            span(" · "),
-            span(comment.at),
-            span(" · on "),
-            span(comment.sha),
-        ],
-        text: comment.text,
-        placeholder: "Reply or add a line comment as owner…",
-        keycap: "c",
-        action: Action::CommentBox,
-        editable: false,
-    }
-}
-
-/// A file body. Row comments specify where to insert the file's resolved `discussion`.
+/// Unified or side-by-side rows of one hunk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiffContent {
-    /// One-stream gutters and code; insert discussion after each row with `comment: Some`.
-    Unified(Vec<UnifiedRow>),
-    /// Paired old/new cells; insert discussion after each row with `comment: Some`.
-    Split(Vec<SplitRow>),
-    /// Changed-line summary; clicking only shows the source expansion toast.
-    Collapsed(Button),
+    /// One-stream gutters and code; insert discussions after rows that name them.
+    Unified(Vec<super::UnifiedRow>),
+    /// Paired old/new cells; insert discussions after rows that name them.
+    Split(Vec<super::SplitRow>),
 }
 
-/// A file heading with its counts, illustrative tag, hunk action and resolved diff body.
+/// One hunk of a file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HunkView {
+    pub header: String,
+    pub content: DiffContent,
+}
+
+/// A file body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileBody {
+    /// Changed-line summary; pressing it expands the file.
+    Collapsed(Button),
+    /// The patch was requested and has not arrived.
+    Loading(String),
+    /// The patch could not be shown; the line says why and what to do.
+    Unavailable(String),
+    /// Hunks with their discussions and any whole-file notes. The client assembles every
+    /// bounded page of the patch before it is shown.
+    Hunks {
+        hunks: Vec<HunkView>,
+        notes: Vec<String>,
+        /// Why the patch ends early: corrald stopped serving it at its bound.
+        tail: Option<String>,
+    },
+}
+
+/// A file heading with its counts, illustrative tag, actions and resolved body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileView {
-    /// Full source path, also useful as a stable rendering key.
-    pub path: &'static str,
+    /// Full path, also the stable rendering key.
+    pub path: String,
     /// Monospace path followed by coloured added and deleted counts.
     pub heading: Rich,
-    /// `lines illustrative` only for the fabricated cross-lane code lines.
+    /// `lines illustrative` only for the fixture's fabricated lines.
     pub illustrative: Option<&'static str>,
-    /// Ask action appears only on the file with the inline comment.
+    /// Ask about this file or hunk.
     pub ask: Option<Button>,
-    /// Hunk header; absent on collapsed files.
-    pub hunk_header: Option<&'static str>,
-    /// Fully attributed discussion used wherever a row carries a comment attachment.
-    pub discussion: Option<CommentView>,
-    /// Resolved split, unified or collapsed body.
-    pub content: DiffContent,
+    /// Collapse an expanded served file.
+    pub collapse: Option<Button>,
+    /// Every discussion of the file; rows and `loose` name them by index.
+    pub discussions: Vec<CommentView>,
+    /// Discussions whose anchored line is not among the shown lines, shown above the hunks.
+    pub loose: Vec<usize>,
+    /// Whether pressing a code line opens a new line comment there.
+    pub annotatable: bool,
+    pub body: FileBody,
 }
 
 /// The Diff tab with the effective, form/width-constrained presentation.
@@ -217,20 +261,31 @@ pub struct DiffView {
     pub layout: Layout,
     /// Phone's explanatory sentence; absent from desktop and terminal.
     pub notice: Option<&'static str>,
-    /// All five files in source order.
     pub files: Vec<FileView>,
+    /// Shown instead of files when the candidate changed none.
+    pub empty: Option<String>,
 }
 
-/// Rendered report data with its styled provenance sentence.
+/// A marked or plain acceptance criterion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcceptanceView {
+    /// Pass mark; absent when the record carries no per-criterion result.
+    pub mark: Option<Mark>,
+    pub text: String,
+}
+
+/// Rendered report data with its provenance sentence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReportView {
-    /// Headings, paragraphs and marked acceptance list.
-    pub document: &'static Report,
-    /// Source label, monospace artifact and condensed-text note.
+    pub heading: String,
+    pub paragraphs: Vec<String>,
+    pub acceptance_heading: &'static str,
+    pub acceptance: Vec<AcceptanceView>,
+    /// Source label and provenance.
     pub source: Rich,
 }
 
-/// Terminal screenshot illustration and its real artifact caption.
+/// Fixture terminal screenshot illustration and its artifact caption.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScreenshotView {
     /// Original text and description, including illustrative provenance.
@@ -243,67 +298,133 @@ pub struct ScreenshotView {
     pub cursor: bool,
 }
 
+/// One canonical artifact record and, once opened, its contents from corrald's catalog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactView {
+    pub title: String,
+    /// The canonical catalog key, shown as text and never opened as a host path.
+    pub source: String,
+    /// Declared media type, or `unknown type`.
+    pub kind: String,
+    /// Show or hide the contents.
+    pub toggle: Button,
+    pub content: ArtifactContent,
+}
+
+/// An artifact's contents as this form can show them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArtifactContent {
+    Closed,
+    Loading,
+    Error(String),
+    /// Text without terminal control sequences.
+    Text {
+        text: String,
+        truncated: bool,
+    },
+    /// A `data:` URI of the assembled image.
+    Image {
+        uri: String,
+        truncated: bool,
+    },
+    /// What this form cannot show, and where it can be seen.
+    Unsupported(&'static str),
+}
+
+/// The candidate's artifact records and how they reach this device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactsView {
+    pub rows: Vec<ArtifactView>,
+    /// Shown when the candidate recorded none.
+    pub empty: Option<&'static str>,
+    pub note: &'static str,
+}
+
+/// One preformatted gate-log line with its result colour resolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogView {
+    pub text: String,
+    pub hue: Hue,
+}
+
 /// Exactly one evidence body selected by state and form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Body {
-    /// File diffs and inline comments.
     Diff(DiffView),
-    /// Rendered implementation report.
     Report(ReportView),
-    /// Terminal capture.
+    /// The fixture's terminal capture.
     Screenshot(ScreenshotView),
-    /// Desktop or terminal gate-log lines and their illustrative label.
+    /// The served candidate's artifact records.
+    Artifacts(ArtifactsView),
     Log {
-        /// Preformatted log lines with success hue resolved.
-        lines: &'static [LogLine],
-        /// Label under the log.
-        note: &'static str,
+        lines: Vec<LogView>,
+        note: String,
     },
+    /// No evidence to show yet, or none recorded: the line says which.
+    Notice(String),
 }
 
-/// Candidate-bound decision controls; both forms route approval through confirmation.
+/// Candidate-bound decision controls; approval always goes through a fresh confirmation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecideBar {
     /// Buttons in source order: approve/changes on desktop, changes/approve on phone.
     pub buttons: Vec<Button>,
+    /// Retry and Discard: in the bar on desktop and terminal, in the page on phone.
+    pub secondary: Vec<Button>,
     /// Desktop's candidate-bound verdict explanation; absent on phone.
     pub explanation: Option<Rich>,
-    /// Desktop's owner/device attribution; absent on phone as in the source.
+    /// The authenticated device the owner acts through; absent on phone.
     pub attribution: Option<Rich>,
+    /// The request-changes note while it is open.
+    pub composer: Option<Composer>,
+    /// Decisions sent from this page and where they stand.
+    pub status: Vec<StatusLine>,
+}
+
+/// A page-level notice about the candidate detail: loading, stale, error or superseded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notice {
+    pub text: String,
+    pub hue: Hue,
+    pub action: Option<Button>,
+}
+
+/// The selected candidate's detail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetailView {
+    pub header: Header,
+    pub notice: Option<Notice>,
+    /// Form-specific verdict section heading.
+    pub verdict_heading: &'static str,
+    /// Phone's right-hand verdict heading label.
+    pub verdict_binding: Option<&'static str>,
+    pub verdicts: Vec<VerdictView>,
+    /// Shown instead of verdict rows when none are recorded.
+    pub verdicts_empty: Option<&'static str>,
+    pub tabs: Vec<TabView>,
+    /// Desktop Diff preference controls; empty on phone, terminal or other tabs.
+    pub layouts: Vec<LayoutChoice>,
+    pub body: Body,
 }
 
 /// Complete content of Review; the shell supplies shared connection banners and navigation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageView {
     /// Pushed-page title on phone.
-    pub title: &'static str,
+    pub title: String,
     /// Phone back-control label; absent on desktop and terminal.
     pub back_label: Option<&'static str>,
-    /// Whether to use the phone content variant.
     pub phone: bool,
-    /// Reading the last known state while offline or down.
+    /// Reading the last known state while offline, down or revalidating.
     pub stale: bool,
-    /// Connection state for the shared shell's banner.
     pub conn: Conn,
-    /// Desktop candidate groups; empty on phone.
+    /// Candidate groups; empty on the fixture phone page.
     pub candidates: Vec<CandidateGroup>,
-    /// Desktop list footnote identifying the T-868 replay.
-    pub candidate_note: Option<&'static str>,
-    /// Selected candidate header and replay chips.
-    pub header: Header,
-    /// Form-specific verdict section heading.
-    pub verdict_heading: &'static str,
-    /// Phone's right-hand verdict heading label.
-    pub verdict_binding: Option<&'static str>,
-    /// Verdict rows, including the struck old candidate.
-    pub verdicts: Vec<VerdictView>,
-    /// Form-specific evidence-tab list.
-    pub tabs: Vec<TabView>,
-    /// Desktop Diff preference controls; empty on phone, terminal or other tabs.
-    pub layouts: Vec<LayoutChoice>,
-    /// Selected evidence, with phone Gate-log fallback matching the source.
-    pub body: Body,
-    /// Pinned decision controls.
+    pub candidate_note: Option<String>,
+    /// The selected candidate, absent when there is none.
+    pub detail: Option<DetailView>,
+    /// Why no candidate is shown.
+    pub empty: Option<String>,
     pub decide: DecideBar,
 }
 
@@ -316,299 +437,93 @@ pub fn effective_layout(state: &State, env: Env, width: f32) -> Layout {
     }
 }
 
-/// Builds all file headings and bodies using an already resolved effective layout.
-pub fn files(layout: Layout) -> Vec<FileView> {
-    FILES.iter().map(|file| file_view(file, layout)).collect()
-}
-
-fn file_view(file: &File, layout: Layout) -> FileView {
-    let content = if file.hunk == HunkSource::Collapsed {
-        DiffContent::Collapsed(button(
-            format!(
-                "{} changed lines collapsed · expand",
-                file.added + file.deleted
-            ),
-            Action::ExpandFile(file.path),
-            ButtonStyle::Ghost,
-        ))
-    } else {
-        match layout {
-            Layout::Split => DiffContent::Split(split(file)),
-            Layout::Unified => DiffContent::Unified(unified(file)),
-        }
-    };
-    FileView {
-        path: file.path,
-        heading: vec![
-            span(file.path).mono(),
-            span(format!(" +{}", file.added)).hue(Hue::Ok),
-            span(format!(" −{}", file.deleted)).hue(Hue::Fail),
-        ],
-        illustrative: file.illustrative.then_some("lines illustrative"),
-        ask: file
-            .comment
-            .map(|_| button("Ask about this hunk", Action::AskHunk, ButtonStyle::Quiet)),
-        hunk_header: hunk_header(file),
-        discussion: file.comment.map(comment_view),
-        content,
-    }
-}
-
-/// Resolves stale strike, stale mark, owner hue and form-specific older-candidate chips.
-pub fn verdicts(phone: bool) -> Vec<VerdictView> {
-    VERDICTS
+/// One tab per form-specific label, in order.
+pub(super) fn tabs(state: &State, specs: &[(Tab, &'static str)]) -> Vec<TabView> {
+    specs
         .iter()
-        .map(|verdict| VerdictView {
-            mark: if verdict.stale {
-                Mark::Stale
-            } else {
-                verdict.mark
-            },
-            who: verdict.who,
-            sha: vec![span(verdict.sha).mono().hue(if verdict.stale && !phone {
-                Hue::Held
-            } else {
-                Hue::Neutral
-            })],
-            time: verdict.time,
-            line: {
-                let mut line = vec![
-                    span(verdict.who).bold(),
-                    span(" · "),
-                    span(verdict.sha).mono(),
-                ];
-                if !verdict.time.is_empty() {
-                    line.push(span(" "));
-                    line.push(span(verdict.time));
-                }
-                line
-            },
-            text: vec![if verdict.stale {
-                span(verdict.text).strike().dim()
-            } else {
-                span(verdict.text).hue(if verdict.who == "you" && !phone {
-                    Hue::You
-                } else {
-                    Hue::Neutral
-                })
-            }],
-            tag: verdict.stale.then_some(Chip {
-                label: if phone {
-                    "older candidate"
-                } else {
-                    "stale · older candidate"
-                },
-                hue: Hue::Held,
-            }),
+        .map(|&(tab, label)| TabView {
+            tab,
+            label,
+            selected: state.tab == tab,
+            action: Action::Tab(tab),
         })
         .collect()
 }
 
-fn report() -> ReportView {
-    ReportView {
-        document: &REPORT,
-        source: vec![
-            span("Source: ").dim(),
-            span(REPORT.source).mono().dim(),
-            span(REPORT.source_note).dim(),
-        ],
+/// Desktop Side by side | Unified switch, shown with the Diff tab.
+pub(super) fn layouts(state: &State, env: Env) -> Vec<LayoutChoice> {
+    if state.tab != Tab::Diff || env.form != Form::Desktop {
+        return Vec::new();
     }
-}
-
-fn screenshot() -> ScreenshotView {
-    ScreenshotView {
-        evidence: &SCREENSHOT,
-        terminal: vec![
-            span(SCREENSHOT.heading).bold(),
-            span("\n\n› draft kept: \"tighten the withdraw race test\"\n\n"),
-            span("Esc").bold(),
-            span("  aborted turn · restored 1 pane item\n     "),
-            span("external identities retained: 2").hue(Hue::Ok),
-            span("\n     queued  1 steering · 1 follow-up\n\n› tighten the withdraw race test"),
-        ],
-        caption: vec![
-            span(SCREENSHOT.source).dim(),
-            span(" · ").dim(),
-            span(SCREENSHOT.description).dim(),
-        ],
-        cursor: true,
-    }
-}
-
-fn candidate_groups() -> Vec<CandidateGroup> {
-    let row = |candidate: &Candidate| CandidateRow {
-        candidate: *candidate,
-        identity: vec![
-            span(format!("{} · {}", candidate.task, candidate.sha))
-                .mono()
-                .dim(),
-        ],
-        selected: candidate.task == "T-868",
-        action: Action::Select(candidate.task),
-    };
-    vec![
-        CandidateGroup {
-            label: "Your verdict",
-            count: 1,
-            hue: Hue::You,
-            rows: CANDIDATES[..1].iter().map(row).collect(),
-        },
-        CandidateGroup {
-            label: "Verifying",
-            count: 3,
-            hue: Hue::Corral,
-            rows: CANDIDATES[1..].iter().map(row).collect(),
-        },
+    [
+        (Layout::Split, "Side by side"),
+        (Layout::Unified, "Unified"),
     ]
+    .into_iter()
+    .map(|(layout, label)| LayoutChoice {
+        layout,
+        label,
+        selected: state.layout == layout,
+        action: Action::Layout(layout),
+    })
+    .collect()
 }
 
-fn decide(env: Env) -> DecideBar {
-    let phone = env.form == Form::Phone;
-    let mut approve = button("Approve 85b45e1e", Action::Approve, ButtonStyle::Primary);
-    approve.refusal = env.conn.refuses().then_some(APPROVAL_REFUSED);
-    let changes = button(
-        if phone { "Changes" } else { "Request changes" },
-        Action::RequestChanges,
-        ButtonStyle::Ghost,
-    );
-    DecideBar {
-        buttons: if phone {
-            vec![changes, approve]
-        } else {
-            vec![approve, changes]
-        },
-        explanation: (!phone).then(|| {
-            vec![
-                span("Verdicts apply to "),
-                span("85b45e1e").mono(),
-                span(" only; a new candidate makes them stale. Approving needs a fresh confirm."),
-            ]
-        }),
-        attribution: (!phone)
-            .then(|| vec![span(format!("actor=owner · {}", env.via())).mono().dim()]),
+/// Rows for one hunk at the effective layout, discussions after their anchored rows.
+pub(super) fn hunk_content(
+    lines: Vec<super::NumberedLine>,
+    anchors: &[Anchor],
+    layout: Layout,
+) -> DiffContent {
+    match layout {
+        Layout::Split => DiffContent::Split(split_rows(&lines, anchors)),
+        Layout::Unified => DiffContent::Unified(unified_rows(lines, anchors)),
     }
 }
 
-/// Builds Review with a wide desktop assumption; phone and terminal always remain unified.
-/// Width-aware desktop renderers should call `page_for_width` instead.
-pub fn page(state: &State, env: Env) -> PageView {
-    page_for_width(state, env, f32::INFINITY)
-}
-
-/// Builds the phone variant even if the caller's environment has another form.
-pub fn phone(state: &State, env: Env) -> PageView {
-    page_for_width(
-        state,
-        Env {
-            form: Form::Phone,
-            ..env
-        },
-        0.0,
-    )
-}
-
-/// Builds all page content at the available width, applying the 900 pt split threshold.
-/// The source does not branch Review on data mode, so loading/empty/error keep this replay.
-pub fn page_for_width(state: &State, env: Env, width: f32) -> PageView {
-    let phone = env.form == Form::Phone;
-    let layout = effective_layout(state, env, width);
-    let tab_specs: &[(Tab, &str)] = if phone {
-        &[
-            (Tab::Diff, "Diff"),
-            (Tab::Report, "Report"),
-            (Tab::Shot, "Screen"),
-        ]
-    } else {
-        &[
-            (Tab::Diff, "Diff · 5 files"),
-            (Tab::Report, "Report"),
-            (Tab::Shot, "Screenshot"),
-            (Tab::Log, "Gate log"),
-        ]
-    };
-    let body = match state.tab {
-        Tab::Diff => Body::Diff(DiffView {
-            layout,
-            notice: phone.then_some("Unified on phones; side by side needs ≥ 900 pt."),
-            files: files(layout),
+/// One verdict row's presentation, shared by fixture and served verdicts.
+pub(super) fn verdict_view(
+    phone: bool,
+    who: &str,
+    sha: &str,
+    time: &str,
+    mark: Mark,
+    text: &str,
+    stale: bool,
+) -> VerdictView {
+    let mut line = vec![span(who).bold(), span(" · "), span(sha).mono()];
+    if !time.is_empty() {
+        line.push(span(" "));
+        line.push(span(time));
+    }
+    VerdictView {
+        mark: if stale { Mark::Stale } else { mark },
+        who: who.into(),
+        sha: vec![span(sha).mono().hue(if stale && !phone {
+            Hue::Held
+        } else {
+            Hue::Neutral
+        })],
+        time: time.into(),
+        line,
+        text: vec![if stale {
+            span(text).strike().dim()
+        } else {
+            span(text).hue(if who == "you" && !phone {
+                Hue::You
+            } else {
+                Hue::Neutral
+            })
+        }],
+        tag: stale.then(|| {
+            chip(
+                if phone {
+                    "older candidate"
+                } else {
+                    "stale · older candidate"
+                },
+                Hue::Held,
+            )
         }),
-        Tab::Report => Body::Report(report()),
-        Tab::Shot => Body::Screenshot(screenshot()),
-        Tab::Log if phone => Body::Screenshot(screenshot()),
-        Tab::Log => Body::Log {
-            lines: GATE_LOG,
-            note: GATE_LOG_NOTE,
-        },
-    };
-    PageView {
-        title: "Review",
-        back_label: phone.then_some("Back"),
-        phone,
-        stale: env.conn.refuses(),
-        conn: env.conn,
-        candidates: if phone {
-            Vec::new()
-        } else {
-            candidate_groups()
-        },
-        candidate_note: (!phone).then_some(
-            "T-868 here is a replay of its 2026-11-08 review; the rest follow the snapshot.",
-        ),
-        header: Header {
-            task: "T-868",
-            round: "R1",
-            sha: "85b45e1e",
-            title: "host-queue-ledger",
-            metadata: if phone {
-                vec![span("T-868 · R1 · 85b45e1e").mono().dim()]
-            } else {
-                vec![
-                    span("T-868 · R1 · candidate 85b45e1e").mono(),
-                    span(" base main · 5 files · +334 −28"),
-                ]
-            },
-            chips: if phone {
-                vec![Chip {
-                    label: "replay",
-                    hue: Hue::Neutral,
-                }]
-            } else {
-                Vec::new()
-            },
-        },
-        verdict_heading: if phone {
-            "Verdicts"
-        } else {
-            "Verdicts · bound to candidate SHA"
-        },
-        verdict_binding: phone.then_some("bound to SHA"),
-        verdicts: verdicts(phone),
-        tabs: tab_specs
-            .iter()
-            .map(|&(tab, label)| TabView {
-                tab,
-                label,
-                selected: state.tab == tab,
-                action: Action::Tab(tab),
-            })
-            .collect(),
-        layouts: if state.tab == Tab::Diff && env.form == Form::Desktop {
-            [
-                (Layout::Split, "Side by side"),
-                (Layout::Unified, "Unified"),
-            ]
-            .into_iter()
-            .map(|(layout, label)| LayoutChoice {
-                layout,
-                label,
-                selected: state.layout == layout,
-                action: Action::Layout(layout),
-            })
-            .collect()
-        } else {
-            Vec::new()
-        },
-        body,
-        decide: decide(env),
     }
 }

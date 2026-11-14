@@ -30,6 +30,19 @@ pub enum PlanCommand {
         id: String,
         policy: String,
     },
+    Accept {
+        id: String,
+        revision: String,
+        owner_ok: bool,
+        /// Canonical explicit decision resolutions retained by the acceptance guard.
+        #[serde(default)]
+        notes: Option<String>,
+    },
+    RequestChanges {
+        id: String,
+        revision: String,
+        text: String,
+    },
     #[serde(other)]
     Other,
 }
@@ -41,6 +54,8 @@ impl PlanCommand {
             Self::AddMember { .. } => "add-member",
             Self::MoveMember { .. } => "move-member",
             Self::Policy { .. } => "policy",
+            Self::Accept { .. } => "accept",
+            Self::RequestChanges { .. } => "request-changes",
             Self::Other => "other",
         }
     }

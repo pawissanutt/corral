@@ -32,9 +32,9 @@ use crate::ui::kit::button::tab_strip;
 use crate::ui::term;
 use crate::ui::tokens::{Token, color, row_height, text_size};
 
-pub use phone::task_phone;
+pub use phone::{live_task_phone, task_phone};
 
-use parts::{act, dim_when, stale};
+use parts::{act, dim_when, keep_loaded, selected_task, stale};
 
 /// Every resize and tab selection reports a layout; Storage hears the one the user settles on.
 const SAVE_DELAY: Duration = Duration::from_millis(400);
@@ -128,10 +128,9 @@ fn title(app: AppState, titles: &Titles, key: &str) -> impl Fn() -> SharedString
         .into_iter()
         .find(|tab| layout::lower_panel(*tab) == key);
     move || match lower {
-        Some(tab) if app.daemon() => SharedString::from(
-            app.feed
-                .with(|feed| work::daemon_lower_label(tab, &feed.board)),
-        ),
+        Some(tab) if app.daemon() => {
+            SharedString::from(app.feed.with(|feed| work::daemon_lower_label(tab, feed)))
+        }
         _ => fixed.clone(),
     }
 }
@@ -153,6 +152,8 @@ fn workspace(app: AppState) -> AnyElement {
             .map(|(width, height)| arrangement(width, height, minimum))
     });
     let titles = titles(app);
+    // In the Daemon state the selected task's detail stays loaded for every panel showing it.
+    keep_loaded(app, selected_task(app));
 
     let seen_reset = stored(app.now_reset.get_untracked());
     {
@@ -202,10 +203,14 @@ fn workspace(app: AppState) -> AnyElement {
         if let Some(old) = pending.replace(Some(task)) {
             old.cancel();
         }
-        // A tab the user brought forward is the model's tab now.
+        // A tab the user brought forward is the model's tab now. The fixture's Goals tab
+        // explains its filter; the daemon's Goals panel is the filter itself.
+        let daemon = untracked(|| app.daemon());
         for key in shown {
-            if let Some(action) = layout::panel_action(key) {
-                act(app, action);
+            match layout::panel_action(key) {
+                Some(work::Action::Goals) if daemon => {}
+                Some(action) => act(app, action),
+                None => {}
             }
         }
     };

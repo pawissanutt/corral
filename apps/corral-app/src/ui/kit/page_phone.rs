@@ -110,16 +110,18 @@ pub fn search(app: AppState) -> AnyElement {
 /// `nav_page().header(..)` as `shell/phone.rs` does for its pushed pages. Desktop: the page
 /// head with a quiet back button before the title. Terminal: `‹ <back>` as a pressable entry,
 /// the title in bold, a joined rule under them. test_id "page-back" on the back control,
-/// "page-title" on the title; the back control is labelled "Back to <back>".
+/// "page-title" on the title; the back control is labelled "Back to <back>". The title may be a
+/// fixed text or a memo or closure: a page whose subject changes while it is shown (an assistant
+/// thread rolling to its next session) keeps its head current without being pushed again.
 pub fn pushed_head(
     app: AppState,
-    title: impl Into<SharedString>,
+    title: impl IntoReactive<SharedString>,
     back: &'static str,
     on_back: impl Fn() + 'static,
     trailing: Option<AnyElement>,
 ) -> AnyElement {
     let form = app.form;
-    let title: SharedString = title.into();
+    let title = title.into_reactive();
     let back_label = format!("Back to {back}");
     match form {
         Form::Desktop => view()

@@ -1,10 +1,12 @@
 //! Optional enrolled native and browser daemon connections.
+mod app;
 mod core;
 #[cfg(not(target_arch = "wasm32"))]
 mod credentials;
 #[cfg(not(target_arch = "wasm32"))]
 mod driver;
 mod map;
+mod outbox;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod pairing_link;
 pub mod requests;

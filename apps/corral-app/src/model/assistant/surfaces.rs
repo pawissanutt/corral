@@ -3,65 +3,57 @@
 use super::views::{button, command_link};
 use super::{
     Action, ActionCard, Button, Chip, Composer, HOTKEY_KEYS, HotkeyState, KeyHint, PermissionCard,
-    ShareStep, SharedFiledCard, State, ThreadItem, composer, mode_pause_card, permission_card,
-    shared_filed_card, state_chip, thread,
+    ShareStep, SharedFiledCard, State, composer, mode_pause_card, permission_card,
+    shared_filed_card, state_chip,
 };
 use crate::model::effect::{Conn, Env, Page};
 use crate::model::hue::Hue;
 use crate::model::nav::{AskTarget, Form};
 use crate::model::text::{Rich, span};
 
-/// Content in the desktop Ask drawer or the phone composer sheet.
+/// The head of the desktop Ask drawer or the phone composer sheet; the transcript and composer
+/// beneath it are rendered from `thread`/`live_items` and `composer`/`live_composer`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Drawer {
     /// Dialog/accessibility name.
     pub label: &'static str,
     /// Drawer title, or Ask on phone.
-    pub title: &'static str,
+    pub title: String,
     /// Assistant state, hidden by the source phone sheet.
     pub state: Option<Chip>,
     /// Cross-device host scope, desktop only.
-    pub subtitle: Option<&'static str>,
+    pub subtitle: Option<String>,
     /// Open in Agents or quick-thread sheet link, then Close.
     pub buttons: Vec<Button>,
-    /// Quick transcript on desktop/terminal; the phone sheet contains only the composer.
-    pub items: Vec<ThreadItem>,
-    /// All target, model, chip, input and send content.
-    pub composer: Composer,
     /// Phone sheet requests the system keyboard.
     pub keyboard_requested: bool,
     /// Label used by Escape and close accessibility.
     pub close_label: &'static str,
 }
 
-/// Builds Ask, taking the app-owned target and draft explicitly.
-pub fn drawer(state: &State, target: AskTarget, text: &str, env: Env) -> Drawer {
+/// Builds the fixture Ask head.
+pub fn drawer(state: &State, env: Env) -> Drawer {
     let phone = env.form == Form::Phone;
     Drawer {
         label: "Ask",
-        title: if phone { "Ask" } else { "Quick thread · A-7" },
+        title: if phone { "Ask" } else { "Quick thread · A-7" }.into(),
         state: (!phone).then(|| state_chip(state)),
-        subtitle: (!phone).then_some("shared by your devices · runs in corrald"),
-        buttons: vec![
-            button(
-                if phone {
-                    "Quick thread · A-7 ›"
-                } else {
-                    "Open in Agents"
-                },
-                Action::OpenQuickThread,
-            ),
-            button("Close", Action::CloseAsk),
-        ],
-        items: if phone {
-            Vec::new()
-        } else {
-            thread(state, "A-7", env)
-        },
-        composer: composer(state, target, text, None, env),
+        subtitle: (!phone).then(|| "shared by your devices · runs in corrald".into()),
+        buttons: drawer_buttons(phone, "Quick thread · A-7 ›"),
         keyboard_requested: phone,
         close_label: "Close (Esc)",
     }
+}
+
+/// Open in Agents (the phone's quick-thread link) and Close; shared by the live drawer.
+pub(super) fn drawer_buttons(phone: bool, phone_link: &'static str) -> Vec<Button> {
+    vec![
+        button(
+            if phone { phone_link } else { "Open in Agents" },
+            Action::OpenQuickThread,
+        ),
+        button("Close", Action::CloseAsk),
+    ]
 }
 
 /// A compact filed result in the small global window.
@@ -458,9 +450,9 @@ pub struct PromptPane {
     /// Needs-you state.
     pub state: Chip,
     /// Origin explanation.
-    pub origin: &'static str,
+    pub origin: String,
     /// Detail heading.
-    pub title: &'static str,
+    pub title: String,
     /// Typed card shared with the quick thread.
     pub card: PromptCard,
     /// Cross-device single-winner explanation.
@@ -476,12 +468,13 @@ pub fn prompt_pane(prompt: Prompt, env: Env) -> PromptPane {
             label: "needs you".into(),
             hue: Hue::You,
         },
-        origin: "from the quick thread · A-7 · you were not in the thread",
+        origin: "from the quick thread · A-7 · you were not in the thread".into(),
         title: if prompt == Prompt::Permission {
             "Assistant wants to write a file"
         } else {
             "Confirm corral mode pause"
-        },
+        }
+        .into(),
         card: match prompt {
             Prompt::Permission => PromptCard::Permission(permission_card(env)),
             Prompt::Confirmation => PromptCard::Confirmation(mode_pause_card()),

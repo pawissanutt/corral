@@ -5,25 +5,36 @@ pub mod local;
 pub mod render;
 pub mod route;
 
+mod annotation;
 mod assistant;
 mod attention;
+mod config;
+mod config_profiles;
 mod inbox;
 mod knowledge;
+mod message;
 mod meta;
 pub mod mode;
 mod plan;
 mod pm;
+mod policy;
 mod question;
 mod queue;
 mod repair;
+mod review;
 mod run;
 mod setup;
+mod target;
 mod task;
 
 use std::fmt::Write as _;
 
 pub use caller::Invoker;
+pub use config::config_hash;
+pub(crate) use config_profiles::profile_choices;
 pub use corral_protocol::cmd::{CmdError, CmdState, Command};
+pub use policy::app_class;
+pub use target::app_target_fingerprint;
 
 use corral_core::backend::ApplyError;
 use corral_protocol::cmd::{CmdSubmit, Principal};
@@ -117,16 +128,20 @@ macro_rules! by_family {
     ($command:expr, $family:ident => $body:expr, $other:expr) => {
         match $command {
             Command::Assistant($family) => $body,
+            Command::Annotation($family) => $body,
             Command::Attention($family) => $body,
+            Command::Config($family) => $body,
             Command::Inbox($family) => $body,
             Command::Knowledge($family) => $body,
             Command::Meta($family) => $body,
+            Command::Message($family) => $body,
             Command::Mode($family) => $body,
             Command::Plan($family) => $body,
             Command::Pm($family) => $body,
             Command::Question($family) => $body,
             Command::Queue($family) => $body,
             Command::Repair($family) => $body,
+            Command::Review($family) => $body,
             Command::Run($family) => $body,
             Command::Setup($family) => $body,
             Command::Task($family) => $body,
@@ -169,6 +184,9 @@ pub fn execute_in(ctx: crate::Ctx, invoker: &Invoker, command: Command) -> Outco
         return unknown(&command, Output::default());
     }
     let style = error_style(&command);
+    if let Err(error) = policy::admit(invoker, &command) {
+        return settle(&style, Err(error), Output::default());
+    }
     let mut cx = Exec {
         ctx,
         invoker,
@@ -176,6 +194,11 @@ pub fn execute_in(ctx: crate::Ctx, invoker: &Invoker, command: Command) -> Outco
     };
     let result =
         by_family!(command, family => family.execute(&mut cx), Err(unknown_command("other")));
+    let result = if invoker.is_app() {
+        result.map_err(policy::app_error)
+    } else {
+        result
+    };
     settle(&style, result, cx.out)
 }
 

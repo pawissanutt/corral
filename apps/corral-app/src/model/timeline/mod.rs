@@ -1,6 +1,16 @@
-//! Timeline fixtures and canvas-ready geometry. Times are minutes after midnight; horizontal
-//! coordinates include the label column. The seven-day control changes selection only because the
-//! mockup supplies no seven-day dataset.
+//! Timeline plots and canvas-ready geometry. A [`Plot`] is either the fixture preview's
+//! illustrative day (`data`) or the daemon's recorded spans (`live`); both are laid out by the
+//! same geometry. Plot times are whole minutes on the plot's own clock; horizontal coordinates
+//! include the label column.
+
+mod data;
+mod live;
+
+pub use data::GAPS_DISCLOSURE;
+pub use live::{
+    LIVE_GAPS_NOTE, Window, burnup_request, burnup_series, empty_gaps_line, gaps as live_gaps,
+    plot as live_plot, request, window,
+};
 
 use crate::model::effect::{Effect, Env};
 use crate::model::hue::Hue;
@@ -8,20 +18,20 @@ use crate::model::hue::Hue;
 /// Selected time range in the page switch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Range {
-    /// Today's snapshot.
+    /// Today, from local midnight to now.
     #[default]
     Today,
-    /// Seven-day selection, using the mockup's same snapshot.
+    /// The last seven local calendar days, including today.
     SevenDays,
 }
 
-/// Selected desktop grouping; the fixture remains task-based.
+/// Selected desktop grouping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Grouping {
     /// Group by task.
     #[default]
     ByTask,
-    /// Group by agent.
+    /// Group by agent session.
     ByAgent,
 }
 
@@ -59,12 +69,16 @@ pub enum Kind {
     Land,
     /// Idle hatch.
     Idle,
-    /// Stalled hatch.
+    /// Stalled hatch (illustrative preview only).
     Stall,
     /// Waiting-on-you hatch.
     Ask,
-    /// Stale-verdict hatch.
+    /// Stale-verdict hatch (illustrative preview only).
     Stale,
+    /// Waiting for the owner's acceptance.
+    Held,
+    /// A phase whose times corral did not record.
+    Unavailable,
 }
 impl Kind {
     /// Name used in the segment's accessible label.
@@ -78,6 +92,8 @@ impl Kind {
             Self::Stall => "stall",
             Self::Ask => "ask",
             Self::Stale => "stale",
+            Self::Held => "awaiting acceptance",
+            Self::Unavailable => "not recorded",
         }
     }
     /// State colour; the kind also tells the renderer which hatch or mixed fill to use.
@@ -86,397 +102,197 @@ impl Kind {
             Self::Run => Hue::Worker,
             Self::Gate | Self::Review => Hue::Corral,
             Self::Land => Hue::Ok,
-            Self::Idle => Hue::Neutral,
+            Self::Idle | Self::Unavailable => Hue::Neutral,
             Self::Stall => Hue::Fail,
             Self::Ask => Hue::You,
-            Self::Stale => Hue::Held,
+            Self::Stale | Self::Held => Hue::Held,
         }
     }
 }
 
-/// One fixture segment, with its optional explanatory note.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Segment {
-    /// Segment state.
+/// An hour or day tick on the plot's clock; phone leaves minor ticks unlabelled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlotTick {
+    pub at: i64,
+    pub label: String,
+    pub minor: bool,
+}
+/// An instant with its words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Marker {
+    pub at: i64,
+    pub label: String,
+}
+/// One placed span of a lane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlotSegment {
     pub kind: Kind,
-    /// Start time in HH:MM.
-    pub start: &'static str,
-    /// End time in HH:MM.
-    pub end: &'static str,
-    /// Additional accessible explanation.
-    pub note: Option<&'static str>,
+    pub start: i64,
+    pub end: i64,
+    /// Hover and screen-reader description.
+    pub label: String,
+    /// Visible desktop annotation above the bar.
+    pub note: Option<String>,
+    /// Visible phone annotation under the bar.
+    pub phone_note: Option<String>,
 }
-const fn seg(
-    kind: Kind,
-    start: &'static str,
-    end: &'static str,
-    note: Option<&'static str>,
-) -> Segment {
-    Segment {
-        kind,
-        start,
-        end,
-        note,
-    }
+/// One lane: its placed spans, its question strip, and what it could not place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlotLane {
+    pub id: String,
+    pub title: String,
+    pub segments: Vec<PlotSegment>,
+    pub ask: Option<PlotSegment>,
+    /// Phases corral recorded without times, said instead of drawn.
+    pub missing: Option<String>,
+}
+/// A supervisor interval or instant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlotPm {
+    pub start: i64,
+    pub end: i64,
+    pub hue: Hue,
+    pub label: Option<String>,
+    pub accessible_label: String,
+}
+/// Everything the chart draws, before geometry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Plot {
+    pub start: i64,
+    pub end: i64,
+    pub ticks: Vec<PlotTick>,
+    pub owner: Vec<Marker>,
+    pub pm: Vec<PlotPm>,
+    pub lanes: Vec<PlotLane>,
+    pub last_visit: Option<Marker>,
+    pub now: Marker,
+    pub accessible_label: String,
 }
 
-/// A task's timeline fixture; an ask overlay is drawn above its normal segments.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Lane {
-    /// Task id.
-    pub id: &'static str,
-    /// Task title.
-    pub title: &'static str,
-    /// Normal segments in chronological order.
-    pub segments: &'static [Segment],
-    /// Optional question overlay.
-    pub ask: Option<Segment>,
+/// The illustrative day of the fixture preview.
+pub fn fixture_plot() -> Plot {
+    data::plot()
 }
-/// One owner action marker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OwnerAction {
-    /// Time in HH:MM.
-    pub time: &'static str,
-    /// Accessible description.
-    pub description: &'static str,
-}
-/// One supervisor interval.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PmInterval {
-    /// Start in HH:MM.
-    pub start: &'static str,
-    /// End in HH:MM.
-    pub end: &'static str,
-    /// Whether this interval is labelled relaunching.
-    pub relaunching: bool,
-}
-/// Start of the timeline, minutes after midnight.
-pub const START: u32 = 540;
-/// End of the timeline, minutes after midnight.
-pub const END: u32 = 1332;
-/// Last visit, minutes after midnight.
-pub const LAST_VISIT: u32 = 1120;
-/// Task lanes in display order.
-pub const LANES: &[Lane] = &[
-    Lane {
-        id: "T-852",
-        title: "Co-work C1",
-        segments: &[
-            seg(Kind::Run, "09:43", "12:10", None),
-            seg(Kind::Gate, "12:10", "12:52", None),
-            seg(Kind::Review, "12:52", "13:40", None),
-            seg(Kind::Run, "13:40", "16:05", None),
-            seg(Kind::Gate, "16:05", "16:40", None),
-            seg(
-                Kind::Stall,
-                "16:40",
-                "19:28",
-                Some("held · external op · 2h48 nobody moved"),
-            ),
-            seg(Kind::Gate, "19:28", "19:49", None),
-            seg(Kind::Idle, "19:49", "22:03", None),
-            seg(Kind::Stale, "22:03", "22:12", None),
-        ],
-        ask: None,
-    },
-    Lane {
-        id: "T-854",
-        title: "Co-work C3",
-        segments: &[
-            seg(Kind::Run, "09:00", "11:40", None),
-            seg(Kind::Idle, "11:40", "13:05", None),
-            seg(Kind::Run, "13:05", "22:12", None),
-        ],
-        ask: None,
-    },
-    Lane {
-        id: "T-885",
-        title: "plan P2",
-        segments: &[
-            seg(Kind::Review, "10:02", "10:33", None),
-            seg(Kind::Run, "10:40", "11:58", None),
-            seg(Kind::Review, "11:58", "12:10", None),
-            seg(
-                Kind::Ask,
-                "12:10",
-                "19:12",
-                Some("awaiting your acceptance · 7h02"),
-            ),
-        ],
-        ask: None,
-    },
-    Lane {
-        id: "T-868",
-        title: "host-queue-ledger",
-        segments: &[
-            seg(Kind::Run, "18:58", "21:40", None),
-            seg(Kind::Idle, "21:40", "22:12", None),
-        ],
-        ask: Some(seg(
-            Kind::Ask,
-            "19:12",
-            "22:12",
-            Some("needs you · T-868/R1/Q1 · 3h"),
-        )),
-    },
-    Lane {
-        id: "T-890",
-        title: "pm-bounded-read",
-        segments: &[
-            seg(Kind::Run, "19:31", "22:03", None),
-            seg(Kind::Gate, "22:03", "22:12", None),
-        ],
-        ask: None,
-    },
-    Lane {
-        id: "T-894",
-        title: "api-connections",
-        segments: &[
-            seg(Kind::Run, "19:33", "22:06", None),
-            seg(Kind::Gate, "22:06", "22:12", None),
-        ],
-        ask: None,
-    },
-    Lane {
-        id: "T-867",
-        title: "queue-contract-core",
-        segments: &[
-            seg(Kind::Run, "20:40", "21:52", None),
-            seg(Kind::Gate, "21:52", "22:05", None),
-            seg(Kind::Stale, "22:05", "22:12", None),
-        ],
-        ask: None,
-    },
-    Lane {
-        id: "T-871",
-        title: "annotation-service",
-        segments: &[seg(Kind::Run, "21:17", "22:12", None)],
-        ask: None,
-    },
-];
-/// Owner actions shown as dots.
-pub const OWNER: &[OwnerAction] = &[
-    OwnerAction {
-        time: "10:35",
-        description: "commented on T-885 P1",
-    },
-    OwnerAction {
-        time: "12:14",
-        description: "read T-885 P2 review",
-    },
-    OwnerAction {
-        time: "19:12",
-        description: "accepted T-885 P2",
-    },
-    OwnerAction {
-        time: "21:58",
-        description: "asked in T-868 thread",
-    },
-];
-/// Supervisor intervals, including the relaunch.
-pub const PM: &[PmInterval] = &[
-    PmInterval {
-        start: "09:00",
-        end: "14:20",
-        relaunching: false,
-    },
-    PmInterval {
-        start: "14:20",
-        end: "15:05",
-        relaunching: true,
-    },
-    PmInterval {
-        start: "15:05",
-        end: "22:12",
-        relaunching: false,
-    },
-];
 
-fn mins(time: &str) -> u32 {
-    let b = time.as_bytes();
-    u32::from(b[0] - b'0') * 600
-        + u32::from(b[1] - b'0') * 60
-        + u32::from(b[3] - b'0') * 10
-        + u32::from(b[4] - b'0')
-}
-/// An axis tick with canvas x and optional label (odd hours are blank on phone).
+/// An axis tick with canvas x and optional label (minor ticks are blank on phone).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tick {
-    /// Horizontal canvas coordinate.
     pub x: f32,
-    /// Tick text.
     pub label: String,
 }
 /// A vertical reference line.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Line {
-    /// Horizontal canvas coordinate.
     pub x: f32,
-    /// Line caption.
-    pub label: &'static str,
+    pub label: String,
 }
 /// A positioned task segment.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlacedSegment {
-    /// Horizontal start.
     pub x: f32,
     /// Width, including the mockup's one-unit gap and minimum width.
     pub width: f32,
-    /// Segment state and hatch selection.
     pub kind: Kind,
-    /// State colour.
     pub hue: Hue,
-    /// Hover or accessibility description.
     pub accessible_label: String,
     /// Additional visible annotation, if any.
-    pub annotation: Option<&'static str>,
+    pub annotation: Option<String>,
     /// Whether this is the thin overlay rather than a normal segment.
     pub overlay: bool,
 }
-/// A positioned task lane.
+/// A positioned lane.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlacedLane {
-    /// Task id.
-    pub id: &'static str,
-    /// Task title.
-    pub title: &'static str,
-    /// Top of the lane.
+    pub id: String,
+    pub title: String,
     pub y: f32,
-    /// Normal and overlay segments.
     pub segments: Vec<PlacedSegment>,
+    /// Phases without recorded times, written in the track.
+    pub missing: Option<String>,
 }
 /// An owner action dot with its accessibility text.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OwnerMarker {
-    /// Horizontal coordinate.
     pub x: f32,
-    /// Time and action.
     pub accessible_label: String,
 }
 /// A positioned supervisor interval.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlacedPm {
-    /// Horizontal start.
     pub x: f32,
-    /// Interval width.
     pub width: f32,
-    /// State colour.
     pub hue: Hue,
-    /// Optional visible label.
-    pub label: Option<&'static str>,
-    /// Screen-reader description of the interval.
+    pub label: Option<String>,
     pub accessible_label: String,
 }
 /// Canvas-ready timeline, including owner and supervisor lanes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layout {
-    /// Total canvas width.
     pub width: f32,
-    /// Total canvas height.
     pub height: f32,
-    /// Width reserved for desktop labels.
     pub label_width: f32,
-    /// Width available to time coordinates.
     pub plot_width: f32,
-    /// Height of each lane.
     pub lane_height: f32,
-    /// First lane's y coordinate.
     pub top: f32,
-    /// Hour ticks.
     pub ticks: Vec<Tick>,
-    /// Owner lane title.
     pub owner_label: (&'static str, &'static str),
-    /// Owner markers.
     pub owner: Vec<OwnerMarker>,
-    /// Supervisor lane title.
     pub pm_label: (&'static str, &'static str),
-    /// Supervisor intervals.
     pub pm: Vec<PlacedPm>,
-    /// Task lanes after the six-unit supervisor gap.
+    /// Lanes after the six-unit supervisor gap.
     pub lanes: Vec<PlacedLane>,
-    /// Last visit line.
-    pub last_visit: Line,
-    /// Current time line.
+    pub last_visit: Option<Line>,
     pub now: Line,
-    /// Canvas accessibility description.
-    pub accessible_label: &'static str,
+    pub accessible_label: String,
 }
-/// Lay out the illustrative snapshot at the given total canvas width. Phone suppresses odd
-/// hour labels and moves labels above the tracks; range does not change the mockup's data.
-pub fn layout(_state: &State, width: f32, phone: bool) -> Layout {
+/// Lay out a plot at the given total canvas width. Phone suppresses minor tick labels and moves
+/// labels above the tracks.
+pub fn layout(plot: &Plot, width: f32, phone: bool) -> Layout {
     let label_width = if phone { 0.0 } else { 190.0 };
     let lane_height = if phone { 46.0 } else { 34.0 };
     let top = 26.0;
     let plot_width = width - label_width - 10.0;
-    let x = |m: u32| label_width + (m as f32 - START as f32) / (END - START) as f32 * plot_width;
-    let ticks = (9..=22)
-        .map(|h| Tick {
-            x: x(h * 60),
-            label: if phone && h % 2 != 0 {
+    let span = (plot.end - plot.start).max(1) as f32;
+    let x = |m: i64| label_width + (m - plot.start) as f32 / span * plot_width;
+    let ticks = plot
+        .ticks
+        .iter()
+        .map(|tick| Tick {
+            x: x(tick.at),
+            label: if phone && tick.minor {
                 String::new()
             } else {
-                format!("{h:02}")
+                tick.label.clone()
             },
         })
         .collect();
-    let owner = OWNER
+    let owner = plot
+        .owner
         .iter()
         .map(|a| OwnerMarker {
-            x: x(mins(a.time)),
-            accessible_label: format!("{} {}", a.time, a.description),
+            x: x(a.at),
+            accessible_label: a.label.clone(),
         })
         .collect();
-    let pm = PM
+    let pm = plot
+        .pm
         .iter()
         .map(|p| PlacedPm {
-            x: x(mins(p.start)),
-            width: x(mins(p.end)) - x(mins(p.start)),
-            hue: if p.relaunching {
-                Hue::Held
-            } else {
-                Hue::Neutral
-            },
-            label: p.relaunching.then_some("relaunching"),
-            accessible_label: format!(
-                "PM {}–{}{}",
-                p.start,
-                p.end,
-                if p.relaunching { " · relaunching" } else { "" }
-            ),
+            x: x(p.start),
+            width: (x(p.end) - x(p.start)).max(2.0),
+            hue: p.hue,
+            label: p.label.clone(),
+            accessible_label: p.accessible_label.clone(),
         })
         .collect();
-    let lanes = LANES
+    let lanes = plot
+        .lanes
         .iter()
         .enumerate()
         .map(|(i, lane)| {
-            let place = |s: &Segment, overlay: bool| {
-                let x1 = x(mins(s.start));
-                let raw_width = x(mins(s.end)) - x1;
-                let accessible_label = if overlay {
-                    s.note.unwrap_or("").to_string()
-                } else {
-                    format!(
-                        "{} {} {}–{}{}",
-                        lane.id,
-                        s.kind.label(),
-                        s.start,
-                        s.end,
-                        s.note.map(|n| format!(" · {n}")).unwrap_or_default()
-                    )
-                };
-                let annotation = if overlay && !phone {
-                    Some("needs you 3h")
-                } else if !overlay && s.kind == Kind::Stall {
-                    Some(if phone {
-                        "stall 16:40–19:28 · 2h48"
-                    } else {
-                        "stall 16:40–19:28 · nobody moved"
-                    })
-                } else if !overlay && s.kind == Kind::Ask && !phone {
-                    Some("waiting on you · 7h02")
-                } else {
-                    None
-                };
+            let place = |s: &PlotSegment, overlay: bool| {
+                let x1 = x(s.start);
+                let raw_width = x(s.end) - x1;
                 PlacedSegment {
                     x: x1,
                     width: if overlay {
@@ -486,8 +302,12 @@ pub fn layout(_state: &State, width: f32, phone: bool) -> Layout {
                     },
                     kind: s.kind,
                     hue: s.kind.hue(),
-                    accessible_label,
-                    annotation,
+                    accessible_label: s.label.clone(),
+                    annotation: if phone {
+                        s.phone_note.clone()
+                    } else {
+                        s.note.clone()
+                    },
                     overlay,
                 }
             };
@@ -496,16 +316,17 @@ pub fn layout(_state: &State, width: f32, phone: bool) -> Layout {
                 segments.push(place(ask, true));
             }
             PlacedLane {
-                id: lane.id,
-                title: lane.title,
+                id: lane.id.clone(),
+                title: lane.title.clone(),
                 y: top + 2.0 * lane_height + 6.0 + i as f32 * lane_height,
                 segments,
+                missing: lane.missing.clone(),
             }
         })
         .collect();
     Layout {
         width,
-        height: top + (2 + LANES.len()) as f32 * lane_height + 6.0 + 18.0,
+        height: top + (2 + plot.lanes.len()) as f32 * lane_height + 6.0 + 18.0,
         label_width,
         plot_width,
         lane_height,
@@ -516,46 +337,37 @@ pub fn layout(_state: &State, width: f32, phone: bool) -> Layout {
         pm_label: ("PM", "supervisor"),
         pm,
         lanes,
-        last_visit: Line {
-            x: x(LAST_VISIT),
-            label: "your last visit 18:40",
-        },
+        last_visit: plot.last_visit.as_ref().map(|visit| Line {
+            x: x(visit.at),
+            label: visit.label.clone(),
+        }),
         now: Line {
-            x: x(END),
-            label: "now",
+            x: x(plot.now.at),
+            label: plot.now.label.clone(),
         },
-        accessible_label: "Run timeline 09:00 to 22:12",
+        accessible_label: plot.accessible_label.clone(),
     }
 }
 
 /// One page range option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RangeOption {
-    /// Option text.
     pub label: &'static str,
-    /// Reducer argument.
     pub range: Range,
-    /// Current selection.
     pub selected: bool,
 }
 /// One desktop grouping option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GroupOption {
-    /// Option text.
     pub label: &'static str,
-    /// Reducer argument.
     pub grouping: Grouping,
-    /// Current selection.
     pub selected: bool,
 }
 /// Page heading and controls.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Head {
-    /// Page title.
     pub title: &'static str,
-    /// Desktop subtitle.
     pub subtitle: &'static str,
-    /// Range options.
     pub ranges: [RangeOption; 2],
     /// Desktop grouping controls, absent on phone.
     pub grouping: Option<[GroupOption; 2]>,
@@ -591,153 +403,182 @@ pub fn head(state: &State, _env: Env, phone: bool) -> Head {
         ]),
     }
 }
+/// The live page's subtitle: corral records no stalls or stale verdicts as spans.
+pub const LIVE_SUBTITLE: &str = "who worked when · run, gate, review, land · waits and idle";
 /// A legend entry, with kind identifying hatch and mixed-fill variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LegendItem {
-    /// Legend wording.
     pub label: &'static str,
-    /// Segment representation.
     pub kind: Kind,
-    /// State colour.
     pub hue: Hue,
 }
-/// Timeline legend in mockup order.
-pub fn legend() -> Vec<LegendItem> {
-    [
-        ("run", Kind::Run),
-        ("gate", Kind::Gate),
-        ("review", Kind::Review),
-        ("land", Kind::Land),
-        ("waiting on you", Kind::Ask),
-        ("idle", Kind::Idle),
-        ("stale verdict", Kind::Stale),
-        ("stall", Kind::Stall),
-    ]
-    .into_iter()
-    .map(|(label, kind)| LegendItem {
-        label,
-        kind,
-        hue: kind.hue(),
-    })
-    .collect()
+/// Timeline legend: the mockup's order in the preview; recorded kinds only when live.
+pub fn legend(live: bool) -> Vec<LegendItem> {
+    let kinds: &[(&str, Kind)] = if live {
+        &[
+            ("run", Kind::Run),
+            ("gate", Kind::Gate),
+            ("review", Kind::Review),
+            ("land", Kind::Land),
+            ("waiting on you", Kind::Ask),
+            ("awaiting acceptance", Kind::Held),
+            ("idle", Kind::Idle),
+            ("times not recorded", Kind::Unavailable),
+        ]
+    } else {
+        &[
+            ("run", Kind::Run),
+            ("gate", Kind::Gate),
+            ("review", Kind::Review),
+            ("land", Kind::Land),
+            ("waiting on you", Kind::Ask),
+            ("idle", Kind::Idle),
+            ("stale verdict", Kind::Stale),
+            ("stall", Kind::Stall),
+        ]
+    };
+    kinds
+        .iter()
+        .map(|&(label, kind)| LegendItem {
+            label,
+            kind,
+            hue: kind.hue(),
+        })
+        .collect()
 }
 /// A noteworthy interval beneath the chart.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Gap {
-    /// Time span as displayed.
-    pub time: &'static str,
-    /// Task id.
-    pub task: &'static str,
-    /// Duration as displayed.
-    pub duration: &'static str,
-    /// Interval state.
+    pub time: String,
+    pub task: String,
+    pub duration: String,
     pub kind: Kind,
-    /// Description.
-    pub wording: &'static str,
+    pub wording: String,
 }
-/// Gap section heading.
-pub const GAPS_TITLE: &str = "Gaps worth a look today";
-/// Gap section's illustrative-data disclosure.
-pub const GAPS_DISCLOSURE: &str = "Segment boundaries are illustrative, reconstructed around real start times and change events. Real records show 4 stalls of 4–8.6 h ended only by the owner asking (docs/records/pm-runtime-redesign.md).";
-/// Noteworthy gaps in display order.
-pub const GAPS: &[Gap] = &[
-    Gap {
-        time: "16:40–19:28",
-        task: "T-852",
-        duration: "2h48",
-        kind: Kind::Stall,
-        wording: "held · external op; no sync tick moved it for 2h48. Today the daemon would have re-checked on its own loop.",
-    },
-    Gap {
-        time: "12:10–19:12",
-        task: "T-885",
-        duration: "7h02",
-        kind: Kind::Ask,
-        wording: "plan P2 waited 7h02 for your acceptance; a push would have reached the phone at 12:10.",
-    },
-    Gap {
-        time: "19:12–now",
-        task: "T-868",
-        duration: "3h",
-        kind: Kind::Ask,
-        wording: "question open 3h; the worker kept producing until 21:40, then idled.",
-    },
-];
-/// Scope values over fourteen days.
-pub const SCOPE: [u32; 14] = [41, 41, 44, 44, 47, 47, 50, 53, 53, 53, 56, 56, 56, 57];
-/// Landed values over fourteen days.
-pub const LANDED: [u32; 14] = [18, 19, 19, 22, 24, 24, 27, 29, 31, 31, 33, 35, 36, 37];
+/// Gap section heading for a range.
+pub fn gaps_title(range: Range) -> &'static str {
+    match range {
+        Range::Today => "Gaps worth a look today",
+        Range::SevenDays => "Gaps worth a look · 7 days",
+    }
+}
+/// The illustrative gaps of the fixture preview.
+pub fn fixture_gaps() -> Vec<Gap> {
+    data::gaps()
+}
+
+/// Burn-up input: points at fractions of the period with their scope and landed counts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BurnupSeries {
+    pub title: String,
+    pub period: String,
+    /// `(fraction of the period, scope, landed)` in time order.
+    pub points: Vec<(f32, u32, u32)>,
+    pub first: String,
+    pub last: String,
+    pub disclosure: Option<&'static str>,
+}
+/// The illustrative burn-up of the fixture preview.
+pub fn fixture_burnup() -> BurnupSeries {
+    data::burnup()
+}
 /// A plotted chart point.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point {
-    /// Horizontal coordinate.
     pub x: f32,
-    /// Vertical coordinate.
     pub y: f32,
-    /// Source count.
     pub value: u32,
 }
 /// Burn-up chart data and canvas coordinates.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Burnup {
-    /// Section heading.
-    pub title: &'static str,
-    /// Time period caption.
-    pub period: &'static str,
-    /// Screen-reader summary.
-    pub accessible_label: &'static str,
-    /// Illustrative data disclosure.
-    pub disclosure: &'static str,
-    /// Canvas dimensions.
+    pub title: String,
+    pub period: String,
+    pub accessible_label: String,
+    pub disclosure: Option<&'static str>,
     pub size: (f32, f32),
-    /// Scope series.
     pub scope: Vec<Point>,
-    /// Landed series.
     pub landed: Vec<Point>,
     /// Horizontal grid values and y coordinates.
     pub grid: Vec<(u32, f32)>,
-    /// Last scope count.
     pub scope_total: u32,
-    /// Last landed count.
     pub landed_total: u32,
     /// Labels at the ends of the series.
-    pub series_labels: [(&'static str, f32, f32); 2],
+    pub series_labels: [(String, f32, f32); 2],
     /// Start and end axis labels and their positions.
-    pub axis_labels: [(&'static str, f32, f32); 2],
+    pub axis_labels: [(String, f32, f32); 2],
+}
+/// Baseline distance between the burn-up's two end labels.
+const LABEL_LINE: f32 = 12.0;
+/// The smallest round grid step that puts the top of the series under three steps.
+fn grid_step(max: u32) -> u32 {
+    let need = max.div_ceil(3).max(1);
+    let mut magnitude = 1;
+    loop {
+        for factor in [1, 2, 5] {
+            if factor * magnitude >= need {
+                return factor * magnitude;
+            }
+        }
+        magnitude *= 10;
+    }
 }
 /// Build chart points for the requested canvas dimensions (desktop 404×150, phone 354×140).
-pub fn burnup(width: f32, height: f32) -> Burnup {
-    let x = |i: usize| 26.0 + i as f32 / 13.0 * (width - 32.0);
-    let y = |v: u32| 8.0 + (1.0 - v as f32 / 60.0) * (height - 30.0);
-    let series = |values: &[u32]| {
-        values
+pub fn burnup(series: &BurnupSeries, width: f32, height: f32) -> Burnup {
+    let step = grid_step(
+        series
+            .points
             .iter()
-            .enumerate()
-            .map(|(i, &value)| Point {
-                x: x(i),
-                y: y(value),
-                value,
-            })
-            .collect()
-    };
+            .map(|p| p.1.max(p.2))
+            .max()
+            .unwrap_or(0),
+    );
+    let top = step * 3;
+    let x = |fraction: f32| 26.0 + fraction.clamp(0.0, 1.0) * (width - 32.0);
+    let y = |v: u32| 8.0 + (1.0 - v as f32 / top as f32) * (height - 30.0);
+    let scope: Vec<Point> = series
+        .points
+        .iter()
+        .map(|&(at, value, _)| Point {
+            x: x(at),
+            y: y(value),
+            value,
+        })
+        .collect();
+    let landed: Vec<Point> = series
+        .points
+        .iter()
+        .map(|&(at, _, value)| Point {
+            x: x(at),
+            y: y(value),
+            value,
+        })
+        .collect();
+    let (scope_total, landed_total) = series.points.last().map_or((0, 0), |p| (p.1, p.2));
+    let end = x(series.points.last().map_or(1.0, |p| p.0));
+    // The end labels stay above the zero line (the day labels sit under it), inside the top
+    // edge, and a line apart when the series end close together.
+    let landed_y = (y(landed_total) + 14.0).min(y(0) - 4.0);
+    let scope_y = (y(scope_total) - 5.0).min(landed_y - LABEL_LINE).max(9.0);
+    let landed_y = landed_y.max(scope_y + LABEL_LINE);
     Burnup {
-        title: "Goal burn-up · Co-work and PM goals",
-        period: "14 days",
-        accessible_label: "Burn-up: 37 of 57 landed",
-        disclosure: "burn-up numbers illustrative",
+        title: series.title.clone(),
+        period: series.period.clone(),
+        accessible_label: format!("Burn-up: {landed_total} of {scope_total} landed"),
+        disclosure: series.disclosure,
         size: (width, height),
-        scope: series(&SCOPE),
-        landed: series(&LANDED),
-        grid: [0, 20, 40, 60].into_iter().map(|v| (v, y(v))).collect(),
-        scope_total: 57,
-        landed_total: 37,
+        scope,
+        landed,
+        grid: (0..=3).map(|i| (i * step, y(i * step))).collect(),
+        scope_total,
+        landed_total,
         series_labels: [
-            ("scope 57", x(13), y(57) - 5.0),
-            ("landed 37", x(13), y(37) + 14.0),
+            (format!("scope {scope_total}"), end, scope_y),
+            (format!("landed {landed_total}"), end, landed_y),
         ],
         axis_labels: [
-            ("10-26", 26.0, height - 4.0),
-            ("today", width - 6.0, height - 4.0),
+            (series.first.clone(), 26.0, height - 4.0),
+            (series.last.clone(), width - 6.0, height - 4.0),
         ],
     }
 }
@@ -747,10 +588,30 @@ mod tests {
     use super::*;
     #[test]
     fn segment_coordinates_use_plot_width_not_canvas_width() {
-        let view = layout(&State::default(), 1190.0, false);
+        let view = layout(&fixture_plot(), 1190.0, false);
         let segment = &view.lanes[0].segments[0];
-        let scale = (1190.0 - 190.0 - 10.0) / (END - START) as f32;
+        let scale = (1190.0 - 190.0 - 10.0) / (data::END - data::START) as f32;
         assert!((segment.x - (190.0 + 43.0 * scale)).abs() < 0.001);
         assert!((segment.width - (147.0 * scale - 1.0)).abs() < 0.001);
+    }
+    #[test]
+    fn burnup_end_labels_clear_the_day_labels_and_each_other() {
+        let series = BurnupSeries {
+            title: String::new(),
+            period: String::new(),
+            points: vec![(0.0, 9, 0), (1.0, 9, 0)],
+            first: "11-14".into(),
+            last: "today".into(),
+            disclosure: None,
+        };
+        let chart = burnup(&series, 404.0, 150.0);
+        let [scope, landed] = &chart.series_labels;
+        let day = chart.axis_labels[1].2;
+        assert!(
+            landed.2 <= day - LABEL_LINE,
+            "landed label over the day label"
+        );
+        assert!(landed.2 - scope.2 >= LABEL_LINE, "end labels overlap");
+        assert!(scope.2 >= 9.0, "scope label above the canvas");
     }
 }

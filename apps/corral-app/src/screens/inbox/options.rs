@@ -1,4 +1,4 @@
-//! Recommendation: the answer options as radio cards, the alternate answer and the worker's
+//! Recommendation: the answer options as radio cards, the alternate answer and the asker's
 //! reason.
 
 use nsh_core::Checked;
@@ -6,81 +6,87 @@ use nsh_core::element::{color as for_appearance, input};
 use nsh_core::prelude::*;
 
 use super::{act, code, press, rich_at, ring, words};
-use crate::model::inbox::{Action, AnswerOption, Recommendation};
-use crate::model::{Form, Hue, Rich, span};
+use crate::model::inbox::{Action, AnswerOption, Button, Recommendation};
+use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::text::label_value;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
-/// The options as radio cards, the alternate answer, the worker's reason.
+/// The options as radio cards, the alternate answer, the asker's reason when one is given.
 pub(super) fn recommendation(app: AppState, part: Recommendation) -> AnyElement {
     let form = app.form;
-    let reason: Rich = vec![
-        span(part.reason_label).bold(),
-        span(" "),
-        span(part.reason).dim(),
-    ];
     view()
         .child(
             view()
                 .role(AccessibilityRole::Radiogroup)
                 .label(part.label)
                 .gap(px(if form == Form::Terminal { 0.0 } else { 8.0 }))
-                .children(part.options.iter().map(|option| {
-                    answer_option(app, &part.consequence_labels, part.locked, option)
-                }))
+                .children(
+                    part.options
+                        .iter()
+                        .map(|option| answer_option(app, part.locked, option)),
+                )
                 .child(draft_row(app, &part)),
         )
-        .child(
+        .children(part.reason.as_ref().map(|reason| {
             view()
                 .when(form != Form::Terminal, |v| v.mt(px(10.0)))
                 .when(form == Form::Terminal, |v| v.child(term::blank()))
                 .child(rich_at(
                     app,
-                    &reason,
+                    reason,
                     if form == Form::Phone { 13.5 } else { 12.0 },
                     color(Token::Ink2),
-                )),
-        )
+                ))
+        }))
         .into_element()
 }
 
 /// One option (`.opt`): its number in a ring (filled ink when chosen), the label with the
-/// worker's recommendation tag, then Then, Unblocks and Costs (three columns on desktop, one
-/// under another on the phone and in a terminal), the proof link switching the evidence tab.
-/// Chosen: a 1.5 pt ink edge on the surface. Locked: the others fade to half.
-fn answer_option(
-    app: AppState,
-    labels: &[&'static str; 3],
-    locked: bool,
-    option: &AnswerOption,
-) -> AnyElement {
+/// asker's recommendation tag, then the recorded Then, Unblocks and Costs (three columns on
+/// desktop, one under another on the phone and in a terminal), the proof link switching the
+/// evidence tab. Chosen: a 1.5 pt ink edge on the surface. Locked: the others fade to half.
+fn answer_option(app: AppState, locked: bool, option: &AnswerOption) -> AnyElement {
     let form = app.form;
     let on = option.selected;
     let value_size = if form == Form::Phone { 14.0 } else { 12.5 };
-    let cells: Vec<AnyElement> = labels
+    let last = option.consequences.len().saturating_sub(1);
+    let cells: Vec<AnyElement> = option
+        .consequences
         .iter()
-        .zip(option.consequences)
         .enumerate()
         .map(|(at, (label, value))| {
-            let dd = words(app, value, value_size, Token::Ink2)
+            let dd = words(app, value.clone(), value_size, Token::Ink2)
                 .flex_shrink(1.0)
                 .min_w(px(0.0))
-                .line_height(px(value_size * 1.5))
-                .when(at == labels.len() - 1, |dd| {
-                    dd.child(text(" ")).child(proof_link(app, option))
-                });
+                .line_height(px(value_size * 1.5));
+            let dd = match option.proof.as_ref().filter(|_| at == last) {
+                Some(link) => dd
+                    .child(text(" "))
+                    .child(proof_link(app, option.number, link)),
+                None => dd,
+            };
             consequence(app, *label, dd)
         })
         .collect();
+    // With nothing recorded under the label, the proof link stands alone beneath it.
+    let lone_proof = option
+        .proof
+        .as_ref()
+        .filter(|_| option.consequences.is_empty())
+        .map(|link| {
+            view()
+                .mt(px(6.0))
+                .child(proof_link(app, option.number, link))
+        });
     let consequences = match form {
         Form::Desktop => view()
             .flex_row()
             .items_start()
             .gap(px(18.0))
-            .mt(px(8.0))
+            .when(!cells.is_empty(), |v| v.mt(px(8.0)))
             .children(cells),
         Form::Phone | Form::Terminal => view().children(cells),
     };
@@ -88,7 +94,7 @@ fn answer_option(
     // phone and in a terminal under it (`.ol`, `.rec`).
     let label = words(
         app,
-        option.label,
+        option.label.clone(),
         if form == Form::Phone { 15.5 } else { 14.0 },
         Token::Ink,
     )
@@ -100,7 +106,7 @@ fn answer_option(
         FontWeight::SEMIBOLD
     })
     .line_height(px(if form == Form::Phone { 21.7 } else { 19.6 }));
-    let tag = option.recommendation_chip.map(|tag| {
+    let tag = option.recommendation_chip.clone().map(|tag| {
         view()
             .flex_row()
             .flex_shrink_0()
@@ -122,7 +128,7 @@ fn answer_option(
         .items_start()
         .min_w(px(0.0))
         .role(AccessibilityRole::Radio)
-        .label(option.label)
+        .label(option.label.clone())
         .accessibility_state(AccessibilityState {
             checked: Some(if on { Checked::True } else { Checked::False }),
             disabled: !option.enabled,
@@ -141,7 +147,8 @@ fn answer_option(
                 .flex_1()
                 .min_w(px(0.0))
                 .child(title)
-                .child(consequences),
+                .child(consequences)
+                .children(lone_proof),
         );
     match form {
         Form::Terminal => card.gap(px(8.0)).pb(px(16.0)).into_element(),
@@ -224,7 +231,7 @@ fn number(app: AppState, label: String, on: bool) -> AnyElement {
 }
 
 /// "worker recommends" (`.opt .rec`): 11 pt semibold ink-2 in a rule-2 outline.
-fn recommends(app: AppState, tag: &'static str) -> AnyElement {
+fn recommends(app: AppState, tag: String) -> AnyElement {
     if app.form == Form::Terminal {
         return chip(app, tag, Hue::Neutral);
     }
@@ -247,11 +254,11 @@ fn recommends(app: AppState, tag: &'static str) -> AnyElement {
 }
 
 /// "see A · diff hunk": underlined quiet text that selects the option's evidence tab.
-fn proof_link(app: AppState, option: &AnswerOption) -> Text {
-    let link = &option.proof;
+fn proof_link(app: AppState, number: usize, link: &Button) -> Text {
+    let (label, action) = (link.label.clone(), link.action.clone());
     words(
         app,
-        link.label.clone(),
+        label,
         if app.form == Form::Phone { 13.0 } else { 11.5 },
         Token::Ink3,
     )
@@ -260,22 +267,24 @@ fn proof_link(app: AppState, option: &AnswerOption) -> Text {
     .underline_offset(px(2.0))
     .cursor_pointer()
     .role(AccessibilityRole::Link)
-    .test_id(&format!("btn-proof-{}", option.number))
-    .on_press(press(app, link.action.clone()))
+    .test_id(&format!("btn-proof-{number}"))
+    .on_press(press(app, action))
 }
 
 /// The alternate answer (`.opt.free`): the pencil in the number's place, a one-line field bound
-/// to the state's draft. Locked, it is read-only and faded with the other options.
+/// to the question's draft. Locked, it is read-only and faded with the other options.
 fn draft_row(app: AppState, part: &Recommendation) -> AnyElement {
     let form = app.form;
     let locked = part.locked;
+    let read_key = part.draft_key.clone();
+    let write_key = part.draft_key.clone();
     let field = input()
         .test_id("opt-draft")
         .label(part.draft_placeholder)
         .placeholder(part.draft_placeholder)
         .readonly(locked)
-        .value(move || app.inbox.with(|state| state.draft.clone()))
-        .on_change(move |typed: &str| act(app, Action::Draft(typed.to_owned())))
+        .value(move || app.inbox.with(|state| state.draft_of(read_key.as_ref())))
+        .on_change(move |typed: &str| act(app, Action::draft(write_key.as_ref(), typed.to_owned())))
         .flex_1()
         .min_w(px(0.0))
         .text_color(color(Token::Ink))

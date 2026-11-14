@@ -173,6 +173,10 @@ pub struct AnnotationAnchor {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AnnotationSurface {
     Cli,
+    App {
+        device: String,
+        name: String,
+    },
     PiPanel {
         container: crate::agent::ContainerRef,
         session: String,

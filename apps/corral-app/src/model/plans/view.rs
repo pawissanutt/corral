@@ -1,14 +1,12 @@
-//! Content descriptors for the list, review document, trackers and phone plan pages.
+//! Content descriptors for the list, review document, trackers and phone plan pages. The
+//! fixture preview (`fixture.rs`) and corrald's plans (`live.rs`) both build these, so the
+//! screens walk one shape whichever source is shown.
 
-use super::{
-    Action, Document, Graph, PLANS, Plan, PlanState, SCALE, SCALE_LAYERS, ScaleState, State, Story,
-    layout, plan, story,
-};
-use crate::model::board::{Actor, Mark, task};
-use crate::model::effect::Env;
+use super::{Action, GraphInput, Story};
+use crate::model::Id;
+use crate::model::board::Mark;
 use crate::model::hue::Hue;
-use crate::model::nav::Form;
-use crate::model::text::{Rich, span};
+use crate::model::text::Rich;
 
 /// A labelled state chip; selection never changes its hue.
 #[derive(Debug, Clone, PartialEq)]
@@ -30,14 +28,14 @@ pub enum ButtonKind {
     Quiet,
 }
 
-/// One complete press target, including offline disabled state.
+/// One complete press target, including its refused state.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Button {
     /// Visible action label.
-    pub label: &'static str,
+    pub label: String,
     /// Domain reducer input.
     pub action: Action,
-    /// False only when the mockup refuses the command.
+    /// False while the command is refused (offline, stale, not acceptable, in flight).
     pub enabled: bool,
     /// The decide bar's primary action.
     pub primary: bool,
@@ -47,14 +45,20 @@ pub struct Button {
 
 impl Button {
     /// A secondary command descriptor, useful in the selected-member story too.
-    pub fn new(label: &'static str, action: Action) -> Self {
+    pub fn new(label: impl Into<String>, action: Action) -> Self {
         Self {
-            label,
+            label: label.into(),
             action,
             enabled: true,
             primary: false,
             kind: ButtonKind::Ghost,
         }
+    }
+
+    /// The same command in the quiet utility weight.
+    pub fn quiet(mut self) -> Self {
+        self.kind = ButtonKind::Quiet;
+        self
     }
 }
 
@@ -77,7 +81,7 @@ pub enum SquareState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MemberSquare {
     /// Member id for accessibility.
-    pub id: &'static str,
+    pub id: Id,
     /// Strip-state treatment.
     pub state: SquareState,
     /// State hue; landed and waiting are distinct neutral treatments.
@@ -87,19 +91,19 @@ pub struct MemberSquare {
 /// A list row, with all desktop and phone wording already resolved.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanRow {
-    /// Real plan or S-900 id.
-    pub id: &'static str,
+    /// Plan, tracker or S-900 id.
+    pub id: Id,
     /// Revision retained as data even when the phone omits it from the id label.
-    pub rev: Option<&'static str>,
+    pub rev: Option<String>,
     /// Id plus revision on desktop; id only on phone.
     pub id_label: String,
     /// Full plan title.
-    pub title: &'static str,
+    pub title: String,
     /// Actor colour for the row's state.
     pub hue: Hue,
     /// Complete second line, excluding the separately supplied member squares.
     pub sub: Rich,
-    /// Executing members' state squares.
+    /// Executing members' state squares, when their states are known.
     pub members: Vec<MemberSquare>,
     /// Executing landed/total fraction, otherwise absent.
     pub progress: Option<String>,
@@ -116,7 +120,7 @@ pub struct PlanRow {
 pub struct ListSection {
     /// Group heading.
     pub label: &'static str,
-    /// Mockup section count, absent for phone Scale test.
+    /// Section count, absent for the phone's Scale test.
     pub count: Option<u32>,
     /// Heading state colour.
     pub hue: Hue,
@@ -126,6 +130,22 @@ pub struct ListSection {
     pub rows: Vec<PlanRow>,
 }
 
+/// What the list says instead of, or above, its rows.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ListNotice {
+    /// The plans topic has not delivered its first snapshot.
+    Loading,
+    /// A complete snapshot holds no plan.
+    Empty {
+        heading: &'static str,
+        body: &'static str,
+    },
+    /// The plans topic failed before any row arrived.
+    Error(String),
+    /// Rows are the last ones received; the list is not current.
+    Stale(String),
+}
+
 /// Plans list content, including the phone's large navigation title.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanList {
@@ -133,7 +153,9 @@ pub struct PlanList {
     pub title: &'static str,
     /// Phone uses the large title treatment.
     pub large: bool,
-    /// Awaiting, executing, approved and synthetic sections in order.
+    /// Loading, empty, error or stale state, absent when the rows are current.
+    pub notice: Option<ListNotice>,
+    /// Plan sections in order; empty sections are omitted for corrald's plans.
     pub sections: Vec<ListSection>,
 }
 
@@ -156,13 +178,15 @@ pub struct Header {
     /// Id and optional revision.
     pub id: String,
     /// Full screen title.
-    pub title: &'static str,
+    pub title: String,
     /// Acceptance attribution or review timing replay.
     pub meta: Rich,
     /// Explicit illustrative marker, when the source has one.
     pub illustrative: Option<&'static str>,
-    /// Desktop Ask button; phone puts this in its navigation bar.
-    pub ask: Option<Button>,
+    /// Desktop commands at the title's end (Ask, document); phone puts Ask in its bar.
+    pub actions: Vec<Button>,
+    /// The detail is the last copy received and is not current.
+    pub stale: Option<String>,
 }
 
 /// One proposed-member row in the review document.
@@ -171,7 +195,7 @@ pub struct ProposedRow {
     /// Untouched member mark.
     pub mark: Mark,
     /// Proposed name, not a published task id.
-    pub name: &'static str,
+    pub name: String,
     /// “can start now” or “after <name>”.
     pub sub: String,
 }
@@ -180,16 +204,16 @@ pub struct ProposedRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReviewRow {
     /// Reviewed revision.
-    pub rev: &'static str,
+    pub rev: String,
     /// Original verdict mark for revision-aware inspection.
     pub original_mark: Mark,
-    /// Stale for superseded P1, otherwise the original mark.
+    /// Stale for a superseded revision, otherwise the original mark.
     pub mark: Mark,
     /// Verdict plus superseded aside, with styles preserved.
     pub verdict: Rich,
     /// Reviewer, time and summary with dim attribution.
     pub note: Rich,
-    /// Source's subdued superseded row treatment.
+    /// The subdued superseded row treatment.
     pub superseded: bool,
 }
 
@@ -199,14 +223,30 @@ pub enum SectionBody {
     /// One complete paragraph.
     Paragraph(Rich),
     /// Plain bullet list.
-    Bullets(&'static [&'static str]),
+    Bullets(Vec<String>),
     /// Proposed unpublished members.
     Proposed(Vec<ProposedRow>),
     /// Revision-bound review history.
     Reviews(Vec<ReviewRow>),
+    /// Owner decisions the acceptance must resolve, each with the owner's resolution field.
+    Decisions(Vec<DecisionRow>),
 }
 
-/// Heading and content for one section of the awaiting review document.
+/// One owner decision and the owner's resolution as typed; acceptance records it as
+/// `Resolved: <decision> => <resolution>`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecisionRow {
+    /// The plan the decision belongs to.
+    pub plan: Id,
+    /// The decision exactly as corrald states it.
+    pub decision: String,
+    /// The owner's resolution so far.
+    pub resolution: String,
+    /// Read-only while the acceptance is in flight.
+    pub locked: bool,
+}
+
+/// Heading and content for one section of a plan document.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DocumentSection {
     /// Section heading.
@@ -215,7 +255,45 @@ pub struct DocumentSection {
     pub body: SectionBody,
 }
 
-/// Awaiting P2 review, including decide bar and refusal explanation.
+/// The decide note: a refusal, a command's status, or nothing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecideNote {
+    /// The complete sentence.
+    pub text: String,
+    /// Failure for refusals and failed commands, held for unknown results, ok when done.
+    pub hue: Hue,
+}
+
+/// The request-changes note being written, bound to the revision it answers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Compose {
+    /// The plan the note is for.
+    pub plan: Id,
+    /// The owner's words so far.
+    pub text: String,
+    /// Field label and placeholder.
+    pub placeholder: String,
+    /// Read-only while the note is in flight.
+    pub locked: bool,
+    /// Send and Cancel.
+    pub send: Button,
+    pub cancel: Button,
+}
+
+/// The decide bar: actions, the request-changes field, and its note or attribution.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Decide {
+    /// Desktop or phone actions with their refused state resolved.
+    pub buttons: Vec<Button>,
+    /// The request-changes field, when open.
+    pub compose: Option<Compose>,
+    /// Refusal or command status; replaces the attribution when present.
+    pub note: Option<DecideNote>,
+    /// Exact command and actor/via attribution; empty on phone.
+    pub attribution: Rich,
+}
+
+/// A revision under review, including the decide bar.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AwaitingView {
     /// Needs-you/reviewed header.
@@ -224,14 +302,10 @@ pub struct AwaitingView {
     pub pipeline: Vec<PipelineStage>,
     /// Complete document in source order.
     pub sections: Vec<DocumentSection>,
-    /// Document artifact attribution.
+    /// Document artifact attribution; empty when corrald names none.
     pub artifact: Rich,
-    /// Desktop or phone decide actions with disabled state resolved.
-    pub decide: Vec<Button>,
-    /// Offline explanation on desktop; absent on phone as in the mockup.
-    pub refusal: Option<&'static str>,
-    /// Exact command and actor/via attribution; absent on phone or offline.
-    pub attribution: Rich,
+    /// Actions, field and note.
+    pub decide: Decide,
 }
 
 /// One final-acceptance blocker.
@@ -240,45 +314,107 @@ pub struct Blocker {
     /// Needs-your-answer active mark or not-applicable mark.
     pub mark: Mark,
     /// Full blocker phrase.
-    pub text: &'static str,
-    /// Needs-you hue only for the answer blocker.
+    pub text: String,
+    /// Needs-you hue only for a blocker that waits on the owner.
     pub hue: Hue,
 }
 
 /// Published tracker content and its selected-member inspector.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutingView {
-    /// Executing state, acceptance attribution and Ask.
+    /// State, acceptance attribution and commands.
     pub header: Header,
     /// Four plan stages.
     pub pipeline: Vec<PipelineStage>,
-    /// Unmapped-scenario warning, including the source's “final verify has no owner”.
-    pub warning: String,
+    /// Unmapped-scenario warning, absent when mapping is complete or unknown.
+    pub warning: Option<String>,
     /// Warning state mark.
     pub warning_mark: Mark,
     /// Members heading.
     pub members_heading: &'static str,
-    /// Precomputed dependency cards or compact rows.
-    pub graph: Graph,
+    /// Members, layers and dependencies; the screen lays them out at its measured width.
+    pub members: GraphInput,
     /// Blocking-final-acceptance heading.
     pub blockers_heading: &'static str,
     /// Number shown alongside the blockers heading.
     pub blocker_count: usize,
     /// Ordered blockers.
     pub blockers: Vec<Blocker>,
-    /// Resolved selected task id, with first-member fallback.
-    pub selected: Option<&'static str>,
+    /// Resolved selected member, with first-member fallback.
+    pub selected: Option<Id>,
     /// Desktop/terminal inspector; absent on phone, where members push task pages.
     pub story: Option<Story>,
 }
 
-/// Approved plan's intentionally unpublished empty state.
+/// An approved plan: its identity, and the state of publication under it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApprovedView {
+    /// The plan's state, id and revision and title, carrying any stale-copy notice; absent in
+    /// the fixture preview, whose list row beside it names the plan.
+    pub header: Option<Header>,
     /// Desktop and phone use different empty-state headings.
-    pub heading: &'static str,
+    pub heading: String,
     /// The idiom-specific explanation.
-    pub body: &'static str,
+    pub body: String,
+    /// Opens the published tracker and the approved document when corrald serves them.
+    pub actions: Vec<Button>,
+    /// The detail is the last copy received and is not current (when there is no header).
+    pub stale: Option<String>,
+}
+
+/// A plan's document outside review: the executing or approved plan's accepted text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DocumentView {
+    /// Header with the way back to the tracker.
+    pub header: Header,
+    /// Document sections in source order.
+    pub sections: Vec<DocumentSection>,
+}
+
+/// One line of a revision diff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffLineKind {
+    /// Added in the newer revision.
+    Added,
+    /// Removed from the older revision.
+    Removed,
+    /// A hunk or file header.
+    Header,
+    /// Unchanged context.
+    Context,
+}
+
+/// A diff line, as received.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiffLine {
+    pub text: String,
+    pub kind: DiffLineKind,
+}
+
+/// The revision diff between two plan revisions, paged as corrald bounds it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiffView {
+    /// "revision diff" header with the way back to the document.
+    pub header: Header,
+    /// Lines of every page received so far.
+    pub lines: Vec<DiffLine>,
+    /// Loading, error, empty or truncation sentence.
+    pub note: Option<DecideNote>,
+    /// "Show more" when corrald holds another page.
+    pub more: Option<Button>,
+    /// The awaiting revision keeps its decide bar beside the diff.
+    pub decide: Option<Decide>,
+}
+
+/// What the detail says when there is no plan content to show.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NoticeView {
+    pub heading: String,
+    pub body: String,
+    /// Failure tone for errors, neutral otherwise.
+    pub hue: Hue,
+    /// Retry the request, for errors.
+    pub action: Option<Button>,
 }
 
 /// An expanded synthetic member that moves or needs attention.
@@ -360,36 +496,37 @@ pub enum Detail {
     Executing(ExecutingView),
     /// Approved, but not yet published.
     Approved(ApprovedView),
-    /// Explicitly synthetic 64-member tracker.
+    /// The plan's document outside review.
+    Document(DocumentView),
+    /// The diff between two revisions.
+    Diff(DiffView),
+    /// Explicitly synthetic 64-member tracker (fixture preview only).
     Scale(ScaleView),
+    /// corrald has not delivered the plan yet.
+    Loading,
+    /// No plan, an unserved plan, or a failed request.
+    Notice(NoticeView),
 }
 
 /// Phone plan-page navigation metadata plus its complete detail content.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PhonePage {
     /// Plan review, tracker id or S-900.
-    pub title: &'static str,
+    pub title: String,
     /// Parent list label.
     pub back_label: &'static str,
     /// Back navigation action.
     pub back: crate::model::effect::Effect,
-    /// Navigation-bar Ask action, only for real executing trackers.
+    /// Navigation-bar Ask action, only for executing trackers.
     pub right: Option<Button>,
     /// Accessibility label for the navigation-bar action.
     pub right_label: Option<&'static str>,
-    /// Review, executing, approved or scale body and decide actions.
+    /// Review, executing, approved, document, diff or scale body and decide actions.
     pub detail: Detail,
 }
 
-/// Number of published members whose land stage has passed.
-pub fn landed(p: &Plan) -> usize {
-    p.members
-        .iter()
-        .filter(|id| task(id).rail[3] == Mark::Done)
-        .count()
-}
-
-fn square(id: &'static str, state: SquareState) -> MemberSquare {
+/// Square treatment and hue for the member strips and the legend.
+pub fn square(id: Id, state: SquareState) -> MemberSquare {
     MemberSquare {
         id,
         state,
@@ -402,140 +539,9 @@ fn square(id: &'static str, state: SquareState) -> MemberSquare {
     }
 }
 
-fn member_bar(p: &Plan) -> Vec<MemberSquare> {
-    p.members
-        .iter()
-        .map(|id| {
-            let t = task(id);
-            let state = if t.actor == Actor::You {
-                SquareState::You
-            } else if t.rail[3] == Mark::Done {
-                SquareState::Landed
-            } else if matches!(t.actor, Actor::Corral | Actor::Worker) {
-                SquareState::Active
-            } else if t.actor == Actor::Held {
-                SquareState::Held
-            } else {
-                SquareState::Waiting
-            };
-            square(id, state)
-        })
-        .collect()
-}
-
-fn actor_hue(state: PlanState) -> Hue {
-    match state {
-        PlanState::Awaiting => Hue::You,
-        PlanState::Executing => Hue::Corral,
-        PlanState::Approved => Hue::Neutral,
-    }
-}
-
-fn row(p: &Plan, state: &State, phone: bool) -> PlanRow {
-    let sub = match p.state {
-        PlanState::Awaiting => vec![span("reviewed · approve P2 · 3 members").dim()],
-        PlanState::Executing => vec![
-            span("criteria ").hue(if phone { Hue::Held } else { Hue::Neutral }),
-            span(format!(
-                "{}/{} mapped",
-                p.mapped.unwrap_or(0),
-                p.scenarios.unwrap_or(0)
-            ))
-            .hue(Hue::Held),
-        ],
-        PlanState::Approved => vec![span(p.note.unwrap_or("")).dim()],
-    };
-    PlanRow {
-        id: p.id,
-        rev: p.rev,
-        id_label: if phone {
-            p.id.into()
-        } else {
-            p.rev
-                .map_or_else(|| p.id.into(), |rev| format!("{} {rev}", p.id))
-        },
-        title: p.title,
-        hue: actor_hue(p.state),
-        sub,
-        members: if p.state == PlanState::Executing {
-            member_bar(p)
-        } else {
-            vec![]
-        },
-        progress: if p.state == PlanState::Executing {
-            Some(format!("{}/{}", landed(p), p.members.len()))
-        } else {
-            None
-        },
-        selected: state.plan == p.id && !state.scale,
-        illustrative: None,
-        action: if phone {
-            Action::PhonePlan(p.id)
-        } else {
-            Action::SelectPlan(p.id)
-        },
-    }
-}
-
-/// Grouped list content with phone navigation and desktop revisions resolved.
-pub fn list(state: &State, env: Env) -> PlanList {
-    let phone = env.form == Form::Phone;
-    let scale_row = PlanRow {
-        id: "S-900",
-        rev: None,
-        id_label: "S-900".into(),
-        title: "64-member tracker",
-        hue: Hue::Neutral,
-        sub: if phone {
-            vec![span("6 layers · 64 members")]
-        } else {
-            vec![]
-        },
-        members: vec![],
-        progress: None,
-        selected: state.scale,
-        illustrative: if phone { None } else { Some("synthetic") },
-        action: if phone {
-            Action::PhonePlan("S-900")
-        } else {
-            Action::SelectPlan("S-900")
-        },
-    };
-    let groups = [
-        ("Awaiting your acceptance", PlanState::Awaiting, 1),
-        ("Executing", PlanState::Executing, 4),
-        ("Approved · not started", PlanState::Approved, 1),
-    ];
-    let mut sections = groups
-        .into_iter()
-        .map(|(label, kind, count)| ListSection {
-            label,
-            count: Some(count),
-            hue: actor_hue(kind),
-            illustrative: None,
-            rows: PLANS
-                .iter()
-                .filter(|p| p.state == kind)
-                .map(|p| row(p, state, phone))
-                .collect(),
-        })
-        .collect::<Vec<_>>();
-    sections.push(ListSection {
-        label: "Scale test",
-        count: if phone { None } else { Some(1) },
-        hue: Hue::Neutral,
-        illustrative: if phone { Some("synthetic") } else { None },
-        rows: vec![scale_row],
-    });
-    PlanList {
-        title: "Plans",
-        large: phone,
-        sections,
-    }
-}
-
-fn pipeline(first: &str, members: String, awaiting: bool) -> Vec<PipelineStage> {
-    [
+/// The four plan stages: design, members, aggregate verification and final acceptance.
+pub fn pipeline(first: &str, members: String, awaiting: bool) -> Vec<PipelineStage> {
+    pipeline_marks([
         (
             first.to_owned(),
             if awaiting { Mark::Active } else { Mark::Done },
@@ -543,420 +549,21 @@ fn pipeline(first: &str, members: String, awaiting: bool) -> Vec<PipelineStage> 
         (members, if awaiting { Mark::Next } else { Mark::Active }),
         ("Aggregate verify".into(), Mark::Next),
         ("Final accept".into(), Mark::Next),
-    ]
-    .into_iter()
-    .map(|(label, mark)| PipelineStage {
-        label,
-        mark,
-        hue: if mark == Mark::Active {
-            Hue::Corral
-        } else {
-            Hue::Neutral
-        },
-    })
-    .collect()
+    ])
 }
 
-fn document(doc: &Document) -> Vec<DocumentSection> {
-    vec![
-        DocumentSection {
-            heading: "Problem",
-            body: SectionBody::Paragraph(vec![span(doc.problem)]),
-        },
-        DocumentSection {
-            heading: "Goal",
-            body: SectionBody::Paragraph(vec![span(doc.goal)]),
-        },
-        DocumentSection {
-            heading: "Changes",
-            body: SectionBody::Bullets(doc.changes),
-        },
-        DocumentSection {
-            heading: "Keeps",
-            body: SectionBody::Bullets(doc.retained),
-        },
-        DocumentSection {
-            heading: "Not doing",
-            body: SectionBody::Bullets(doc.non_goals),
-        },
-        DocumentSection {
-            heading: "Proposed members · published on accept",
-            body: SectionBody::Proposed(
-                doc.proposed
-                    .iter()
-                    .map(|m| ProposedRow {
-                        mark: Mark::Next,
-                        name: m.name,
-                        sub: m
-                            .needs
-                            .first()
-                            .map_or_else(|| "can start now".into(), |dep| format!("after {dep}")),
-                    })
-                    .collect(),
-            ),
-        },
-        DocumentSection {
-            heading: "Reviewer verdicts · bound to plan revision",
-            body: SectionBody::Reviews(
-                doc.reviews
-                    .iter()
-                    .map(|r| {
-                        let superseded = r.rev == "P1";
-                        let mut verdict = vec![span(r.verdict)];
-                        if superseded {
-                            verdict.push(span(" · superseded").dim());
-                        }
-                        ReviewRow {
-                            rev: r.rev,
-                            original_mark: r.mark,
-                            mark: if superseded { Mark::Stale } else { r.mark },
-                            verdict,
-                            note: vec![
-                                span(format!("{} {} ·", r.who, r.at)).dim(),
-                                span(format!(" {}", r.note)),
-                            ],
-                            superseded,
-                        }
-                    })
-                    .collect(),
-            ),
-        },
-        DocumentSection {
-            heading: "What accepting does",
-            body: SectionBody::Paragraph(vec![
-                span("Publishes 3 member tasks to "),
-                span("main").bold(),
-                span(
-                    " delivery and creates tracker T-893. Autopilot may admit the first member; gates, independent review and landing checks stay unchanged.",
-                ),
-            ]),
-        },
-    ]
-}
-
-fn awaiting(env: Env) -> AwaitingView {
-    let phone = env.form == Form::Phone;
-    let off = env.conn.refuses();
-    let mut accept = Button::new(
-        if phone {
-            if off {
-                "Accept · refused offline"
-            } else {
-                "Accept · publish 3"
-            }
-        } else {
-            "Accept · publish 3 members"
-        },
-        Action::Accept,
-    );
-    accept.enabled = !off;
-    accept.primary = true;
-    accept.kind = ButtonKind::Standard;
-    let mut decide = vec![];
-    if phone && !off {
-        decide.push(Button::new("Changes", Action::RequestChanges));
-    }
-    decide.push(accept);
-    if !phone && !off {
-        decide.push(Button::new("Request changes", Action::RequestChanges));
-        decide.push(Button {
-            kind: ButtonKind::Quiet,
-            ..Button::new("Diff P1 → P2", Action::Diff)
-        });
-        decide.push(Button {
-            kind: ButtonKind::Quiet,
-            ..Button::new("Open document", Action::OpenDocument)
-        });
-    }
-    let doc = &super::DOCUMENT;
-    AwaitingView {
-        header: Header {
-            chips: vec![
-                Chip {
-                    label: "needs you".into(),
-                    hue: Hue::You,
-                },
-                Chip {
-                    label: "reviewed · approve P2".into(),
-                    hue: Hue::Ok,
-                },
-            ],
-            id: "T-885 P2".into(),
-            title: PLANS[0].title,
-            meta: if phone {
-                vec![]
-            } else {
-                vec![span("replay of 12:10–19:12 ")]
-            },
-            illustrative: if phone { None } else { Some("timing replay") },
-            ask: None,
-        },
-        pipeline: pipeline("Design · awaiting you", "Members 0/3".into(), true),
-        sections: document(doc),
-        artifact: vec![span("Document ").dim(), span(doc.artifact).mono().dim()],
-        decide,
-        refusal: if off && !phone {
-            Some("Refused offline: acceptance is revision-checked when it applies.")
-        } else {
-            None
-        },
-        attribution: if off || phone {
-            vec![]
-        } else {
-            vec![
-                span("Runs "),
-                span("corral plan accept T-885 --rev P2").mono(),
-                span(" after a fresh confirm\n"),
-                span("actor=owner · via=app:pawis-desktop").mono(),
-            ]
-        },
-    }
-}
-
-fn executing(state: &State, p: &Plan, env: Env) -> ExecutingView {
-    let phone = env.form == Form::Phone;
-    let selected = p
-        .members
-        .iter()
-        .copied()
-        .find(|id| *id == state.member)
-        .or_else(|| p.members.first().copied());
-    let n = p.scenarios.unwrap_or(0);
-    let width = match env.form {
-        Form::Phone => 354.0,
-        Form::Desktop => 760.0,
-        Form::Terminal => 0.0,
-    };
-    ExecutingView {
-        header: Header {
-            chips: vec![Chip {
-                label: "executing".into(),
-                hue: Hue::Corral,
-            }],
-            id: p.id.into(),
-            title: p.title,
-            meta: vec![
-                span(format!(
-                    "accepted {} · delivers to main",
-                    p.accepted.unwrap_or("")
-                ))
-                .dim(),
-            ],
-            illustrative: None,
-            ask: if phone {
-                None
-            } else {
-                Some(Button::new("Ask about this", Action::Ask(p.id)))
-            },
-        },
-        pipeline: pipeline(
-            "Design",
-            format!("Members {}/{} landed", landed(p), p.members.len()),
-            false,
-        ),
-        warning: format!(
-            "{n} of {n} acceptance scenarios are not mapped to any member · final verify has no owner"
-        ),
-        warning_mark: Mark::Stale,
-        members_heading: "Members · live state",
-        graph: layout(p, selected.unwrap_or(""), width, phone),
-        blockers_heading: "Blocking final acceptance",
-        blocker_count: p.blockers.len(),
-        blockers: p
-            .blockers
-            .iter()
-            .map(|b| {
-                let you = b.contains("your answer");
-                Blocker {
-                    mark: if you { Mark::Active } else { Mark::Na },
-                    text: b,
-                    hue: if you { Hue::You } else { Hue::Neutral },
-                }
-            })
-            .collect(),
-        selected,
-        story: if phone { None } else { selected.map(story) },
-    }
-}
-
-/// Build all synthetic layer strips with the source's phone/desktop active-row limit.
-pub fn scale(_state: &State, env: Env) -> ScaleView {
-    let phone = env.form == Form::Phone;
-    let mut offset = 0;
-    let layers = SCALE_LAYERS
-        .iter()
-        .enumerate()
-        .map(|(index, spec)| {
-            let members = &SCALE[offset..offset + spec[0]];
-            offset += spec[0];
-            let landed = members
-                .iter()
-                .filter(|m| m.state == ScaleState::Landed)
-                .count();
-            let waiting = members
-                .iter()
-                .filter(|m| m.state == ScaleState::Waiting)
-                .count();
-            let moving = members.len() - landed - waiting;
-            let shown = members
-                .iter()
-                .filter(|m| !matches!(m.state, ScaleState::Landed | ScaleState::Waiting))
-                .take(if phone { 3 } else { 4 })
-                .map(|m| ScaleLine {
-                    id: m.id,
-                    name: m.name(),
-                    hue: match m.state {
-                        ScaleState::You => Hue::You,
-                        ScaleState::Held => Hue::Held,
-                        _ => Hue::Corral,
-                    },
-                    status: match m.state {
-                        ScaleState::You => "needs you",
-                        ScaleState::Held => "held · budget",
-                        _ => "gating",
-                    },
-                    status_hue: match m.state {
-                        ScaleState::You => Hue::You,
-                        ScaleState::Held => Hue::Held,
-                        _ => Hue::Neutral,
-                    },
-                })
-                .collect::<Vec<_>>();
-            let hidden = moving - shown.len();
-            let mut pieces = vec![];
-            if landed > 0 {
-                pieces.push(format!("{landed} landed"));
-            }
-            if moving > 0 {
-                pieces.push(format!("{moving} moving or need you"));
-            }
-            if waiting > 0 {
-                pieces.push(format!(
-                    "{waiting} waiting on layer {}",
-                    index.saturating_sub(1)
-                ));
-            }
-            ScaleLayerView {
-                index,
-                label: format!("Layer {index}"),
-                squares: members
-                    .iter()
-                    .map(|m| {
-                        square(
-                            m.id,
-                            match m.state {
-                                ScaleState::Landed => SquareState::Landed,
-                                ScaleState::Active => SquareState::Active,
-                                ScaleState::You => SquareState::You,
-                                ScaleState::Held => SquareState::Held,
-                                ScaleState::Waiting => SquareState::Waiting,
-                            },
-                        )
-                    })
-                    .collect(),
-                summary: pieces.join(" · "),
-                landed,
-                moving,
-                waiting,
-                shown,
-                hidden,
-                more: if hidden > 0 {
-                    Some(format!("+{hidden} more in this layer"))
-                } else {
-                    None
-                },
-            }
-        })
-        .collect();
-    let total = SCALE.len();
-    let landed = SCALE
-        .iter()
-        .filter(|m| m.state == ScaleState::Landed)
-        .count();
-    ScaleView {
-        header: Header {
-            chips: vec![Chip {
-                label: "executing".into(),
-                hue: Hue::Corral,
-            }],
-            id: "S-900".into(),
-            title: "Store tracker: 64 members",
-            meta: vec![],
-            illustrative: Some("synthetic scale test · 64 members · 6 layers"),
-            ask: None,
-        },
-        total,
-        landed,
-        pipeline: pipeline("Design", format!("Members {landed}/{total} landed"), false),
-        explanation: "Landed members collapse into the layer strip; only members that move or need you get a line. Each square is one member, left to right in id order.",
-        layers,
-        legend: [
-            ("landed", SquareState::Landed, Hue::Neutral),
-            ("moving", SquareState::Active, Hue::Corral),
-            ("needs you", SquareState::You, Hue::You),
-            ("held", SquareState::Held, Hue::Held),
-            ("waiting", SquareState::Waiting, Hue::Neutral),
-        ]
+/// Stages with explicit marks; the active one takes the Corral colour.
+pub fn pipeline_marks(stages: [(String, Mark); 4]) -> Vec<PipelineStage> {
+    stages
         .into_iter()
-        .map(|(label, state, hue)| LegendEntry { label, state, hue })
-        .collect(),
-    }
-}
-
-/// Resolve the selected real-plan or synthetic detail for the current form.
-pub fn detail(state: &State, env: Env) -> Detail {
-    if state.scale {
-        return Detail::Scale(scale(state, env));
-    }
-    let p = plan(state.plan);
-    match p.state {
-        PlanState::Awaiting => Detail::Awaiting(awaiting(env)),
-        PlanState::Executing => Detail::Executing(executing(state, p, env)),
-        PlanState::Approved => Detail::Approved(ApprovedView {
-            heading: if env.form == Form::Phone {
-                "Approved · not started"
+        .map(|(label, mark)| PipelineStage {
+            label,
+            mark,
+            hue: if mark == Mark::Active {
+                Hue::Corral
             } else {
-                "T-385 P5 · approved, no tracker published"
+                Hue::Neutral
             },
-            body: if env.form == Form::Phone {
-                p.note.unwrap_or("")
-            } else {
-                "4 approvals. Publishing members is a separate owner action."
-            },
-        }),
-    }
-}
-
-/// Build the pushed phone page; forces phone wording regardless of the caller's form.
-pub fn phone_page(state: &State, env: Env) -> PhonePage {
-    let p = plan(state.plan);
-    let executing = !state.scale && p.state == PlanState::Executing;
-    PhonePage {
-        title: if state.scale {
-            "S-900"
-        } else if p.state == PlanState::Awaiting {
-            "Plan review"
-        } else {
-            p.id
-        },
-        back_label: "Plans",
-        back: crate::model::effect::Effect::Back,
-        right: if executing {
-            Some(Button::new("Ask about this", Action::Ask(p.id)))
-        } else {
-            None
-        },
-        right_label: if executing {
-            Some("Ask the assistant about this plan")
-        } else {
-            None
-        },
-        detail: detail(
-            state,
-            Env {
-                form: Form::Phone,
-                ..env
-            },
-        ),
-    }
+        })
+        .collect()
 }

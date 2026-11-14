@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use super::QuestionKey;
 
-pub const QUESTION_EVENT_KINDS: [&str; 8] = [
+pub const QUESTION_EVENT_KINDS: [&str; 9] = [
     "question_opened",
     "question_answered",
     "question_escalated",
@@ -20,6 +20,7 @@ pub const QUESTION_EVENT_KINDS: [&str; 8] = [
     "question_withdrawn",
     "question_unattended",
     "question_deadline_set",
+    "question_followup",
 ];
 
 struct Owed {
@@ -52,6 +53,7 @@ fn owed_entry(entry: &QuestionTriage) -> Option<Owed> {
         "withdraw" => "question_withdrawn",
         "unattended" => "question_unattended",
         "deadline" => "question_deadline_set",
+        "followup" => "question_followup",
         _ => return None,
     };
     if let Some(note) = &entry.note {
@@ -67,7 +69,7 @@ fn owed_entry(entry: &QuestionTriage) -> Option<Owed> {
 
 fn append_missing(
     store: &Store,
-    task: &str,
+    task: Option<&str>,
     key: &str,
     owed: impl IntoIterator<Item = Owed>,
 ) -> Result<usize> {
@@ -80,7 +82,7 @@ fn append_missing(
         if let (Some(detail), Value::Object(extra)) = (detail.as_object_mut(), event.detail) {
             detail.extend(extra);
         }
-        store.log_event(Some(task), event.kind, detail)?;
+        store.log_event(task, event.kind, detail)?;
         written += 1;
     }
     Ok(written)
@@ -92,9 +94,20 @@ pub(super) fn drain(
     question: &AgentQuestion,
     entries: &[QuestionTriage],
 ) -> Result<()> {
-    let parsed = QuestionKey::parse(&question.key)?;
+    let parsed =
+        if corral_core::agent::owner_question::owner_question_container(&question.key).is_some() {
+            None
+        } else {
+            Some(QuestionKey::parse(&question.key)?)
+        };
     let owed = entries.iter().filter_map(owed_entry);
-    append_missing(store, parsed.task(), &question.key, owed).map(|_| ())
+    append_missing(
+        store,
+        parsed.as_ref().map(QuestionKey::task),
+        &question.key,
+        owed,
+    )
+    .map(|_| ())
 }
 
 /// Full-task oracle for canonical, still-pending question correlation.

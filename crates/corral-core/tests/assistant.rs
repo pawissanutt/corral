@@ -74,6 +74,7 @@ fn sessions_and_containers_round_trip_and_end_retains_transcripts() {
                 n: 1,
                 bind_nonce_sha256: "digest".into(),
                 pane: "pane-1".into(),
+                daemon_hosted: false,
                 created: first.created,
                 bound: Some(GenerationBound {
                     host_cap_sha256: "host".into(),

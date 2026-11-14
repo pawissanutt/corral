@@ -2,7 +2,7 @@
 //! generation records would otherwise fill their families for good. One pass runs, inside the
 //! caller's PM transaction, once either family reaches its high-water mark:
 //!
-//! 1. evict settled receipts of ended generations, oldest first. Under generation pressure it
+//! 1. compact settled, unwatched receipts oldest first into a keyed cold replay archive.
 //!    also empties the oldest ended generations that nothing else pins;
 //! 2. retire ended generations that then hold no receipts, after writing one history record
 //!    of each one's usage attribution (never read on the hot path);
@@ -10,16 +10,15 @@
 //!
 //! A pass that reclaims nothing records an idle watermark in the head and later passes skip
 //! the scan while it holds. It holds only while the current generation and the pressured
-//! families are unchanged and no write touched a pinning family other than appending a
-//! current-generation receipt (`save` clears it); those are the only ways a fruitless pass can
-//! become fruitful.
+//! families are unchanged and no write touched a pinning family (`save` clears it). A
+//! current-generation settlement or append can now enable compaction without a host restart.
 //!
-//! A fenced generation can no longer commit, so dropping its replay answer only turns a stale
-//! retry into a fenced refusal. Never evicted or retired: the current generation and its
-//! receipts, the newest bound generation (a relaunch continues its transcript), a receipt still
-//! owing a settlement or post-commit effect or watched by an active wake, and a generation with
-//! a pending question or a job that still needs reaping. A fenced generation's open turns can
-//! never be settled, so they do not pin it. Budget request rows are never touched.
+//! A replay archive is never scanned by hot readers: exact request selections consult it
+//! after the active family. Current-generation answers therefore remain replayable even
+//! after a long-lived host crosses the active receipt cap. Never compacted: a receipt owing
+//! settlement or post-commit effects or watched by an active wake. Never retired: the current
+//! generation, newest bound generation, or one with pending questions or jobs needing reaping.
+//! Budget request rows are never touched.
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, ensure};
@@ -27,7 +26,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{Child, Head, LAYOUT_RETIRED, RETIRED, area, split, supported, work_area};
+use super::{Child, Head, LAYOUT_RETIRED, REPLAY, RETIRED, area, split, supported, work_area};
 use crate::Store;
 use crate::agent::{
     AgentGeneration, AgentQuestion, GENERATIONS_HIGH_WATER, GENERATIONS_MAX, JobRecord,
@@ -167,9 +166,7 @@ pub fn retain(store: &Store, limits: &RetentionLimits) -> Result<Retention> {
     let mut held = Vec::new();
     for (key, ordinal, receipt) in children::<RequestReceipt>(store, "receipts")? {
         let generation = receipt.identity.generation;
-        let evictable = generation != current
-            && !receipt.effects_pending()
-            && !watched.contains(&receipt.request_id);
+        let evictable = !receipt.effects_pending() && !watched.contains(&receipt.request_id);
         if !evictable {
             pinned.insert(generation);
         }
@@ -210,6 +207,10 @@ pub fn retain(store: &Store, limits: &RetentionLimits) -> Result<Retention> {
         );
     }
     for key in &evict {
+        let child: Child = store
+            .record(&area("receipts"), key)?
+            .context("compacted PM receipt disappeared")?;
+        store.save_record(REPLAY, key, &child)?;
         remove(store, "receipts", key)?;
     }
     let holding: BTreeSet<u32> = held

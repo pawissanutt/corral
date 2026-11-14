@@ -139,6 +139,68 @@ fn approved_decomposition_publishes_one_plan_without_rewriting_design_history() 
 }
 
 #[test]
+fn app_plan_projection_distinguishes_published_design_from_executing_tracker() {
+    use corral_protocol::detail::{DetailBody, DetailGet, DetailRef};
+    use corral_protocol::rows::{PlanRole, PlanState};
+
+    let (_dir, ctx, id) = fixture(vec![
+        scope("producer", &[]),
+        scope("consumer", &["producer"]),
+    ]);
+    apply(&ctx, &id, "P1").unwrap();
+    let tracker = published_tracker(&ctx, &id);
+    assert_eq!(ctx.store.head(&id).unwrap().status, Status::Done);
+
+    // The same title and revision describe two records, not two executions:
+    // publication has finished, while aggregate delivery has not.
+    let rows = crate::app_read::plans_rows(&ctx).unwrap();
+    assert_eq!(rows.len(), 2);
+    let design = rows.iter().find(|row| row.id == id).unwrap();
+    let execution = rows.iter().find(|row| row.id == tracker.id).unwrap();
+    assert_eq!(design.title, execution.title);
+    assert_eq!(design.state, PlanState::Approved);
+    assert_eq!(design.role, Some(PlanRole::Design));
+    assert_eq!(design.linked.as_deref(), Some(tracker.id.as_str()));
+    assert_eq!(execution.state, PlanState::Executing);
+    assert_eq!(execution.role, Some(PlanRole::Tracker));
+    assert_eq!(execution.linked.as_deref(), Some(id.as_str()));
+    assert_eq!((design.members_total, design.members_landed), (2, 0));
+    assert_eq!((execution.members_total, execution.members_landed), (2, 0));
+
+    // Opening either stable ID preserves that lifecycle and the real member graph.
+    for row in [design, execution] {
+        let reply = crate::app_read::read(
+            &ctx,
+            &DetailGet {
+                target: DetailRef::Plan { id: row.id.clone() },
+                etag: None,
+                page: None,
+            },
+        )
+        .unwrap();
+        let Some(DetailBody::Plan(detail)) = reply.body else {
+            panic!("expected canonical plan detail");
+        };
+        assert_eq!(detail.id, row.id);
+        assert_eq!(detail.state, row.state);
+        assert_eq!(detail.role, row.role);
+        assert_eq!(detail.linked, row.linked);
+        assert!(!detail.acceptable);
+        assert_eq!(
+            detail
+                .members
+                .iter()
+                .map(|member| &member.id)
+                .collect::<Vec<_>>(),
+            tracker.children.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(detail.edges.len(), 1);
+        assert_eq!(detail.edges[0].from, tracker.children[0]);
+        assert_eq!(detail.edges[0].to, tracker.children[1]);
+    }
+}
+
+#[test]
 fn tracker_publication_failure_resumes_from_same_receipt_and_ids() {
     // Given failure at each file boundary, including the tracker itself.
     for blocked_id in ["T-004", "T-002", "T-003"] {

@@ -1,4 +1,5 @@
-//! Complete workspace, Changes and More content projections.
+//! Complete workspace, Changes and More content projections of the fixture preview, and the
+//! owned feed, hold and Changes descriptors the Daemon state's builders share.
 
 use crate::model::board::{Change, ChangeKind, LAST_VISIT, Mark, changes as board_changes};
 use crate::model::effect::{Conn, Env};
@@ -7,8 +8,9 @@ use crate::model::nav::{Destination, Form, PhoneTab};
 use crate::model::text::{Rich, span};
 
 use super::{
-    Action, Button, ButtonKind, CtxTab, GroupedList, HOLDS, Inspector, Live, LowTab, NowTab,
-    PlanContext, State, grouped_list_with_question, inspector, live, plan_context, question_open,
+    Action, Button, ButtonKind, ChangeFilter, CtxTab, GroupedList, HOLDS, Inspector, LiveDock,
+    LowTab, NowTab, PlanContext, Press, State, grouped_list_with_question, inspector, live,
+    plan_context, question_open,
 };
 
 /// A connection banner with its entire inline emphasis and handled controls.
@@ -113,32 +115,74 @@ pub struct Tab {
 }
 
 /// One feed row in Now or Changes, with link and illustrative flags resolved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedRow {
-    /// Clock, task id, mark kind and exact event wording.
-    pub change: Change,
+    /// Local time, `18:40` today or `Nov 12` before.
+    pub at: String,
+    /// The task the event concerns; empty for an event about none.
+    pub id: String,
+    /// The mark drawn for the event.
+    pub kind: ChangeKind,
+    /// Exact event wording.
+    pub text: String,
+    /// Who did it and through what, as corrald attributes it; absent in the fixture.
+    pub by: Option<String>,
     /// New since this device's last visit.
     pub unseen: bool,
     /// The historical rows after the seen line are dimmed.
     pub dim: bool,
     /// The 21:59 reply and three historical rows are illustrative.
     pub illustrative: bool,
-    /// Recent rows open the task; the historical source rows are plain text.
-    pub action: Option<Action>,
+    /// Rows about a task open it; the historical source rows are plain text.
+    pub action: Option<Press>,
+}
+
+impl FeedRow {
+    fn fixture(change: &Change, unseen: bool, dim: bool, illustrative: bool) -> FeedRow {
+        FeedRow {
+            at: change.at.to_owned(),
+            id: change.id.to_owned(),
+            kind: change.kind,
+            text: change.text.to_owned(),
+            by: None,
+            unseen,
+            dim,
+            illustrative,
+            action: (!dim).then(|| Press::Work(Action::OpenTask(change.id))),
+        }
+    }
+
+    /// What a screen reader hears: time, task, event and attribution.
+    pub fn label(&self) -> String {
+        [self.at.as_str(), self.id.as_str(), self.text.as_str()]
+            .into_iter()
+            .chain(self.by.as_deref())
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+/// Whether a fixture change passes `filter`, by the mark the feed draws for it.
+fn admits_kind(filter: ChangeFilter, kind: ChangeKind) -> bool {
+    match filter {
+        ChangeFilter::All => true,
+        ChangeFilter::NeedsYou => kind == ChangeKind::Message,
+        ChangeFilter::Verdicts => matches!(kind, ChangeKind::Mark(_)),
+        ChangeFilter::Runs => matches!(kind, ChangeKind::Start | ChangeKind::Note),
+    }
 }
 
 /// The newest-first snapshot feed, ending before the last-visit marker.
-pub fn feed(_state: &State, _env: Env) -> Vec<FeedRow> {
+pub fn feed(state: &State, _env: Env) -> Vec<FeedRow> {
+    since_rows(ChangeFilter::All, state)
+}
+
+fn since_rows(filter: ChangeFilter, _state: &State) -> Vec<FeedRow> {
     board_changes()
         .iter()
-        .filter(|change| change.at >= LAST_VISIT)
-        .map(|change| FeedRow {
-            change: *change,
-            unseen: true,
-            dim: false,
-            illustrative: change.at == "21:59",
-            action: Some(Action::OpenTask(change.id)),
-        })
+        .filter(|change| change.at >= LAST_VISIT && admits_kind(filter, change.kind))
+        .map(|change| FeedRow::fixture(change, true, false, change.at == "21:59"))
         .collect()
 }
 
@@ -146,7 +190,7 @@ pub fn feed(_state: &State, _env: Env) -> Vec<FeedRow> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HoldRow {
     /// Mono task id.
-    pub id: &'static str,
+    pub id: String,
     /// When the hold began: a date, or how long ago.
     pub since: String,
     /// Full task title, for screen readers.
@@ -155,6 +199,8 @@ pub struct HoldRow {
     pub mark: Mark,
     /// Title followed by the dimmed attribution.
     pub text: Rich,
+    /// Open the task, in the Daemon state.
+    pub action: Option<Press>,
 }
 
 /// Build the six parked rows displayed by the lower dock tab.
@@ -162,11 +208,12 @@ pub fn holds(_state: &State, _env: Env) -> Vec<HoldRow> {
     HOLDS
         .iter()
         .map(|hold| HoldRow {
-            id: hold.id,
+            id: hold.id.to_owned(),
             since: hold.since.to_owned(),
             title: hold.title.to_owned(),
             mark: Mark::Na,
             text: vec![span(hold.title), span(format!(" · {}", hold.project)).dim()],
+            action: None,
         })
         .collect()
 }
@@ -184,7 +231,7 @@ pub enum Lower {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Context {
     /// Selected terminal tail and optional running-agent tiles.
-    Live(Live),
+    Live(LiveDock),
     /// Plan and member ids handed to the Plans graph renderer.
     PlanGraph(PlanContext),
 }
@@ -263,13 +310,28 @@ pub fn workspace_with_question(state: &State, env: Env, question_is_open: bool) 
     }
 }
 
-/// A Changes filter control; the source has no filtering handler.
+/// A Changes filter control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FeedFilter {
     /// Filter label, including desktop-only Runs.
     pub label: &'static str,
-    /// All is selected in the source.
+    /// Whether the feed shows this filter's events now.
     pub selected: bool,
+    /// The filter it selects.
+    pub filter: ChangeFilter,
+}
+
+/// The filter controls of a form: the phone has no Runs, as in the mockup.
+pub fn feed_filters(state: &State, form: Form) -> Vec<FeedFilter> {
+    ChangeFilter::ALL
+        .into_iter()
+        .filter(|filter| form != Form::Phone || *filter != ChangeFilter::Runs)
+        .map(|filter| FeedFilter {
+            label: filter.label(),
+            selected: state.filter == filter,
+            filter,
+        })
+        .collect()
 }
 
 /// Complete Changes content before and after the per-device seen line.
@@ -282,19 +344,23 @@ pub struct Changes {
     /// Pop the phone page, absent on desktop/terminal.
     pub back: Option<Action>,
     /// Desktop subtitle explaining the per-device cursor, absent on phone.
-    pub subtitle: Option<&'static str>,
-    /// Static source filters, with All selected.
-    pub filters: &'static [FeedFilter],
-    /// Recent, clickable rows before the seen marker.
+    pub subtitle: Option<String>,
+    /// The filter controls.
+    pub filters: Vec<FeedFilter>,
+    /// Recent rows before the seen marker.
     pub recent: Vec<FeedRow>,
     /// Seen-cursor line; desktop names the device, phone uses a shorter last-visit label.
-    pub seen_line: &'static str,
-    /// Three dim historical rows, omitted on phone.
+    pub seen_line: String,
+    /// Rows this device has seen, dimmed.
     pub history: Vec<FeedRow>,
-    /// Desktop-only illustrative attribution below the feed.
+    /// Desktop-only illustrative attribution below the feed, in the fixture.
     pub illustrative: Option<&'static str>,
-    /// Desktop-only Mark seen control, whose source handler shows a notice only.
+    /// Desktop-only Mark seen control.
     pub mark_seen: Option<Button>,
+    /// Fetch the page before the oldest row shown, while corrald has more.
+    pub older: Option<Button>,
+    /// One line instead of, or after, the rows: loading, empty, refused or failed.
+    pub notice: Option<String>,
     /// Connection banner and stale flags.
     pub status: Status,
 }
@@ -331,33 +397,24 @@ pub fn changes_for_tab(state: &State, env: Env, tab: PhoneTab) -> Changes {
                 text: "held · external op started",
             },
         ]
-        .into_iter()
-        .map(|change| FeedRow {
-            change,
-            unseen: false,
-            dim: true,
-            illustrative: true,
-            action: None,
-        })
+        .iter()
+        .filter(|change| admits_kind(state.filter, change.kind))
+        .map(|change| FeedRow::fixture(change, false, true, true))
         .collect()
     };
     Changes {
         title: "Changes",
         back_label: phone.then_some(if tab == PhoneTab::More { "More" } else { "Back" }),
         back: phone.then_some(Action::Back),
-        subtitle: (!phone).then_some("since this device's last visit 18:40 · 12 events · seen-cursor is per device: your phone read these at 21:30, the ▲ marks here stay"),
-        filters: if phone { &[
-            FeedFilter { label: "All", selected: true }, FeedFilter { label: "Needs you", selected: false },
-            FeedFilter { label: "Verdicts", selected: false },
-        ] } else { &[
-            FeedFilter { label: "All", selected: true }, FeedFilter { label: "Needs you", selected: false },
-            FeedFilter { label: "Verdicts", selected: false }, FeedFilter { label: "Runs", selected: false },
-        ] },
-        recent: feed(state, env),
-        seen_line: if phone { "last visit 18:40" } else { "your last visit · 18:40 · seen-cursor for pawis-desktop" },
+        subtitle: (!phone).then(|| "since this device's last visit 18:40 · 12 events · seen-cursor is per device: your phone read these at 21:30, the ▲ marks here stay".to_owned()),
+        filters: feed_filters(state, env.form),
+        recent: since_rows(state.filter, state),
+        seen_line: if phone { "last visit 18:40" } else { "your last visit · 18:40 · seen-cursor for pawis-desktop" }.to_owned(),
         history,
         illustrative: (!phone).then_some("Events after 18:40 are real snapshot changes; the three before the line and 21:59 are illustrative."),
         mark_seen: (!phone).then(|| Button::new("Mark seen", Action::MarkSeen, ButtonKind::Ghost)),
+        older: None,
+        notice: None,
         status: status(env),
     }
 }
@@ -390,6 +447,37 @@ pub struct More {
     pub rows: &'static [MoreRow],
     /// Connection banner and stale flags, supplied by the phone shell in the mockup.
     pub status: Status,
+}
+
+const fn bare(destination: Destination, label: &'static str) -> MoreRow {
+    MoreRow {
+        destination,
+        label,
+        subtitle: "",
+        count: None,
+        secondary_count: None,
+        percent: None,
+        action: Action::Go(destination),
+    }
+}
+
+/// The More rows in the Daemon state: the destinations alone, with no fixture count or
+/// subtitle.
+const DAEMON_MORE: &[MoreRow] = &[
+    bare(Destination::Changes, "Changes"),
+    bare(Destination::Review, "Review"),
+    bare(Destination::Timeline, "Timeline"),
+    bare(Destination::Usage, "Usage"),
+    bare(Destination::Settings, "Settings"),
+];
+
+/// The phone More list in the Daemon state.
+pub fn daemon_more(feed: &crate::model::daemon::Feed) -> More {
+    More {
+        title: "More",
+        rows: DAEMON_MORE,
+        status: super::daemon_status(feed),
+    }
 }
 
 /// Build the phone More list; count and subtitle wording never live in the UI.

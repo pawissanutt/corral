@@ -17,6 +17,81 @@ pub const BLOCKING_QUESTIONS_MAX: usize = 1;
 pub const QUESTION_GROUP_MAX: usize = 4;
 /// Open plus escalated questions per asking run or review child.
 pub const PENDING_QUESTIONS_MAX: usize = 8;
+/// Follow-ups are a bounded conversation, not an unbounded transcript.
+pub const QUESTION_FOLLOWUPS_MAX: usize = 16;
+pub const QUESTION_FOLLOWUP_MAX_BYTES: usize = 4 * 1024;
+pub const QUESTION_EVIDENCE_MAX: usize = 5;
+
+/// Consequences supplied by the asking agent, never inferred from an option's prose.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionOption {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unblocks: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<String>,
+    #[serde(default)]
+    pub recommended: bool,
+    /// Index into this question's typed evidence references.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<usize>,
+}
+
+/// Canonical references only. Readers resolve these through their owning service; none
+/// authorizes an arbitrary host-path read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum QuestionEvidenceRef {
+    Task {
+        id: String,
+    },
+    Plan {
+        task: String,
+        id: String,
+    },
+    Run {
+        task: String,
+        run: String,
+    },
+    Artifact {
+        task: String,
+        id: String,
+    },
+    Diff {
+        task: String,
+        run: String,
+        path: String,
+    },
+    Log {
+        task: String,
+        run: String,
+    },
+    Decision {
+        task: String,
+        id: String,
+    },
+}
+
+/// Authenticated surface attribution, attached by the service, never by model payloads.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionAttribution {
+    pub via: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionFollowup {
+    pub revision: u32,
+    pub by: QuestionActor,
+    pub attribution: QuestionAttribution,
+    pub at: Timestamp,
+    pub text: String,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -97,6 +172,8 @@ pub struct QuestionAnswer {
     pub message_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub superseded_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<QuestionAttribution>,
 }
 
 /// An owner-set expiry; void once the question's revision changes.
@@ -159,6 +236,14 @@ pub struct AgentQuestion {
     pub recommendation: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub option_details: Vec<QuestionOption>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<QuestionEvidenceRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owner_decisions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub followups: Vec<QuestionFollowup>,
     /// A hint only; never an expiry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub needed_by: Option<Timestamp>,

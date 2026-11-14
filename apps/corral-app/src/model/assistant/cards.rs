@@ -1,4 +1,5 @@
-//! Typed cards carried inside assistant replies and reused by Inbox and share content.
+//! Typed cards carried inside assistant replies and reused by Inbox and share content. The
+//! fixture builders here fill the same owned records the live thread builds from `EntryCard`s.
 
 use super::views::button;
 use super::{Action, Button, Chip, Filed, State, WaitReason, filed};
@@ -55,12 +56,16 @@ pub enum ActionOutcome {
         explanation: Rich,
         buttons: Vec<Button>,
     },
+    /// Submitted or running; no outcome yet.
+    Pending(String),
+    /// The outcome was lost; it may have run.
+    Unknown(String),
     /// No command ran because this client lacks instruct permission.
     AskAndFileOnly(Rich),
     /// No command ran because this input was delivered over fifteen minutes late.
     Late {
-        typed: &'static str,
-        delivered: &'static str,
+        typed: String,
+        delivered: String,
         explanation: String,
     },
 }
@@ -73,6 +78,8 @@ impl ActionOutcome {
             Self::Refused(_) => Some("REFUSED"),
             Self::Declined(_) => Some("DECLINED"),
             Self::Waiting { .. } => Some("WAITING ON YOU"),
+            Self::Pending(_) => Some("RUNNING"),
+            Self::Unknown(_) => Some("UNKNOWN"),
             _ => None,
         }
     }
@@ -82,7 +89,8 @@ impl ActionOutcome {
         match self {
             Self::Executed(_) => Hue::Ok,
             Self::Refused(_) => Hue::Fail,
-            Self::Waiting { .. } => Hue::Held,
+            Self::Waiting { .. } | Self::Unknown(_) => Hue::Held,
+            Self::Pending(_) => Hue::Corral,
             _ => Hue::Neutral,
         }
     }
@@ -112,21 +120,21 @@ pub const FILED_LABELS: FiledLabels = FiledLabels {
     duplicates: "Duplicates",
 };
 
-/// An owner action always cites the exact journaled owner-input id.
+/// An owner action always cites the exact journaled owner-input id when one exists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionCard {
     /// Heading above the command.
     pub heading: &'static str,
     /// Exact CLI operation proposed or executed.
-    pub command: &'static str,
+    pub command: String,
     /// Authority class and its text.
     pub class: ActionClass,
     /// Reason confirmation or restriction applies.
-    pub why: Option<&'static str>,
+    pub why: Option<String>,
     /// Journal input id, never inferred from the command.
-    pub input: &'static str,
+    pub input: Option<String>,
     /// Confirmation device and time, when already given.
-    pub confirmed: Option<&'static str>,
+    pub confirmed: Option<String>,
     /// Typed receipt or no-run explanation.
     pub outcome: ActionOutcome,
 }
@@ -140,10 +148,10 @@ pub fn mode_pause_card() -> ActionCard {
     confirm.primary = true;
     ActionCard {
         heading: "Owner action",
-        command: "corral mode pause",
+        command: "corral mode pause".into(),
         class: ActionClass::Confirm,
-        why: Some("mode is confirm-class"),
-        input: "A-7/g2/i19",
+        why: Some("mode is confirm-class".into()),
+        input: Some("A-7/g2/i19".into()),
         confirmed: None,
         outcome: ActionOutcome::Waiting {
             explanation: vec![
@@ -166,32 +174,34 @@ pub fn mode_pause_card() -> ActionCard {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AskOption {
     /// Choice title.
-    pub label: &'static str,
+    pub label: String,
     /// What choosing this does to the owner's words.
-    pub consequence: &'static str,
+    pub consequence: String,
     /// The already-recorded answer.
     pub selected: bool,
     /// Whether another answer can still be submitted.
     pub enabled: bool,
+    /// What choosing it runs, absent once answered.
+    pub action: Option<Action>,
 }
 
-/// The already-answered duplicate check, before the subsequent merged card.
+/// An ask_user card: the question, its options and how it was answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AskUserCard {
     /// Prompt provenance and time.
-    pub heading: &'static str,
-    /// Linked likely duplicate and question.
+    pub heading: String,
+    /// Linked question.
     pub question: Rich,
-    /// Merge and file-separately choices, with consequences.
+    /// Choices with consequences.
     pub options: Vec<AskOption>,
-    /// Answer time, input id and response surface.
-    pub answer: Rich,
+    /// Answer time, input id and response surface, or the pending/refused state of an answer.
+    pub answer: Option<Rich>,
 }
 
 /// Builds the fixture's duplicate-check prompt with its recorded merge choice.
 pub fn duplicate_card() -> AskUserCard {
     AskUserCard {
-        heading: "assistant asks · ask_user · before filing · 22:04",
+        heading: "assistant asks · ask_user · before filing · 22:04".into(),
         question: vec![
             span("This looks close to "),
             task_link("T-874"),
@@ -200,23 +210,26 @@ pub fn duplicate_card() -> AskUserCard {
         ],
         options: vec![
             AskOption {
-                label: "Merge into T-874",
-                consequence: "Your words become a comment on T-874. Nothing new is filed.",
+                label: "Merge into T-874".into(),
+                consequence: "Your words become a comment on T-874. Nothing new is filed.".into(),
                 selected: true,
                 enabled: false,
+                action: None,
             },
             AskOption {
-                label: "File separately",
-                consequence: "A new Idea, linked to T-874 as related. It can be merged later.",
+                label: "File separately".into(),
+                consequence: "A new Idea, linked to T-874 as related. It can be merged later."
+                    .into(),
                 selected: false,
                 enabled: false,
+                action: None,
             },
         ],
-        answer: vec![
+        answer: Some(vec![
             span("Answered inline by you after 40 s · "),
             span("A-7/g2/i18").mono(),
             span(" · dialog"),
-        ],
+        ]),
     }
 }
 
@@ -238,10 +251,7 @@ pub struct MergedCard {
 /// Builds the merged outcome of the T-874 duplicate check.
 pub fn merged_card() -> MergedCard {
     MergedCard {
-        chip: Chip {
-            label: "merged · T-874".into(),
-            hue: Hue::Neutral,
-        },
+        chip: Chip::new("merged · T-874", Hue::Neutral),
         destination: vec![
             span("comment added to "),
             task_link("T-874"),
@@ -289,23 +299,23 @@ impl Grant {
     }
 }
 
-/// One added line of the write-permission preview.
+/// One line of the write-permission preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffLine {
-    /// Destination line number.
-    pub line: u32,
-    /// Addition marker.
+    /// Destination line number, when the preview states it.
+    pub line: Option<u32>,
+    /// Addition or removal marker, empty for context.
     pub marker: &'static str,
     /// Exact preview text.
-    pub text: &'static str,
+    pub text: String,
 }
 
-/// A permission button plus its phone presence requirement.
+/// A permission button plus its presence requirement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionChoice {
     /// Grant or deny button.
     pub button: Button,
-    /// Gate activation behind Face ID or PIN when true.
+    /// Gate activation behind a fresh confirmation on this device when true.
     pub requires_presence: bool,
     /// Presence prompt wording, absent for one-shot approval and denial.
     pub presence_prompt: Option<&'static str>,
@@ -315,21 +325,21 @@ pub struct PermissionChoice {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionCard {
     /// Request heading and timestamp.
-    pub heading: &'static str,
-    /// Unanswered state.
+    pub heading: String,
+    /// Unanswered, answering or answered state.
     pub state: Chip,
     /// File and replacement summary.
-    pub path: &'static str,
-    /// Illustrative preview lines, not a complete six-line patch.
+    pub path: String,
+    /// Preview lines.
     pub lines: Vec<DiffLine>,
-    /// Three grants and a denial, already resolved for phone presence rules.
+    /// Grants and the denial, already resolved for presence rules; empty once answered.
     pub choices: Vec<PermissionChoice>,
     /// Explanation of standing grants.
-    pub presence_note: &'static str,
+    pub presence_note: Option<&'static str>,
     /// Prompt deadline and first-answer-wins semantics.
-    pub timer_note: &'static str,
-    /// Preview disclosure.
-    pub illustrative: &'static str,
+    pub timer_note: Option<String>,
+    /// Preview disclosure (fixture only).
+    pub illustrative: Option<&'static str>,
 }
 
 /// Builds the write prompt; a renderer must complete `requires_presence` before dispatching a standing grant.
@@ -353,35 +363,77 @@ pub fn permission_card(env: Env) -> PermissionCard {
         }
     })
     .collect();
+    let added = |line: u32, text: &str| DiffLine {
+        line: Some(line),
+        marker: "+",
+        text: text.into(),
+    };
     PermissionCard {
-        heading: "assistant wants to write · edit · 22:05",
-        state: Chip {
-            label: "waiting on you".into(),
-            hue: Hue::You,
-        },
-        path: "~/miti-workspace/notes/corral-log.md · replacement 1 · +6 lines",
+        heading: "assistant wants to write · edit · 22:05".into(),
+        state: Chip::new("waiting on you", Hue::You),
+        path: "~/miti-workspace/notes/corral-log.md · replacement 1 · +6 lines".into(),
         lines: vec![
-            DiffLine {
-                line: 41,
-                marker: "+",
-                text: "## 2026-11-07 night",
-            },
-            DiffLine {
-                line: 42,
-                marker: "+",
-                text: "- T-867 stale on 5949a4b (base moved), re-gate queued",
-            },
-            DiffLine {
-                line: 43,
-                marker: "+",
-                text: "- T-870 waits on T-868/R1/Q1",
-            },
+            added(41, "## 2026-11-07 night"),
+            added(42, "- T-867 stale on 5949a4b (base moved), re-gate queued"),
+            added(43, "- T-870 waits on T-868/R1/Q1"),
         ],
         choices,
-        presence_note: "On a phone, the two standing grants ask for Face ID or PIN first; Allow once and Deny do not.",
-        timer_note: "The tool waited 120 s, then deferred; this prompt stays answerable here and in Inbox until 22:05 tomorrow. One answer wins.",
-        illustrative: "path and preview illustrative",
+        presence_note: Some(
+            "On a phone, the two standing grants ask for Face ID or PIN first; Allow once and Deny do not.",
+        ),
+        timer_note: Some("The tool waited 120 s, then deferred; this prompt stays answerable here and in Inbox until 22:05 tomorrow. One answer wins.".into()),
+        illustrative: Some("path and preview illustrative"),
     }
+}
+
+/// An Idea's unchanged request and the fields the assistant wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdeaFields {
+    /// Filed task id.
+    pub id: String,
+    /// Owner's words, never rewritten.
+    pub words: String,
+    /// Assistant-written title.
+    pub title: String,
+    /// Assistant-written labels.
+    pub labels: Vec<String>,
+    /// Assistant-written acceptance criteria.
+    pub criteria: Vec<String>,
+    /// Duplicate-check outcome.
+    pub duplicates: String,
+}
+
+impl IdeaFields {
+    fn fixture(idea: &Filed) -> IdeaFields {
+        IdeaFields {
+            id: idea.id.into(),
+            words: idea.words.into(),
+            title: idea.title.into(),
+            labels: idea.labels.iter().map(|label| (*label).into()).collect(),
+            criteria: idea.criteria.iter().map(|line| (*line).into()).collect(),
+            duplicates: idea.duplicates.into(),
+        }
+    }
+}
+
+/// How the filed card's title is edited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Editing {
+    /// Not editing.
+    No,
+    /// The fixture's free fields: title, project and criteria, kept by the inputs only.
+    Fixture,
+    /// The live title, held in `LiveState::editing` and saved with `task edit`. The owner's
+    /// words and the criteria in the task body are never rewritten from here.
+    Title,
+}
+
+/// The merge destination field of a filed Idea; the field owns the typed id, and the renderer
+/// fills `MergeInto::into` from it when Merge is pressed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeInput {
+    /// Merge and Cancel.
+    pub buttons: Vec<Button>,
 }
 
 /// An assistant-filed Idea, with the unchanged request before editable generated fields.
@@ -389,24 +441,28 @@ pub fn permission_card(env: Env) -> PermissionCard {
 pub struct FiledCard {
     /// Filed result chip.
     pub chip: Chip,
-    /// Full immutable fixture fields.
-    pub idea: Filed,
+    /// Idea fields.
+    pub idea: IdeaFields,
     /// Project value.
-    pub project: &'static str,
+    pub project: String,
     /// Device attribution line.
     pub provenance: Rich,
     /// Assistant attribution above the quotation.
-    pub attribution: &'static str,
+    pub attribution: String,
     /// Quotation caption.
     pub quote_label: &'static str,
-    /// Whether title, project and criteria are shown as editable fields.
-    pub editing: bool,
+    /// Which fields are shown as editable.
+    pub editing: Editing,
+    /// The merge destination field, while merging.
+    pub merge: Option<MergeInput>,
     /// Optional related record, already linked.
     pub related: Option<Rich>,
     /// Edit/Merge/Discard, or Save/Cancel in edit state.
     pub buttons: Vec<Button>,
     /// Discard's confirmation requirement, absent while editing.
     pub discard_note: Option<&'static str>,
+    /// Status of the latest command on this Idea.
+    pub status: Option<Chip>,
     /// Whether this card carries a shared attachment.
     pub attached: bool,
 }
@@ -429,26 +485,30 @@ pub fn filed_card(state: &State, id: &str, attached: bool) -> Option<FiledCard> 
         ]
     };
     Some(FiledCard {
-        chip: Chip {
-            label: format!("filed · {}", idea.id),
-            hue: Hue::Ok,
-        },
-        idea,
-        project: "corral",
+        chip: Chip::new(format!("filed · {}", idea.id), Hue::Ok),
+        idea: IdeaFields::fixture(&idea),
+        project: "corral".into(),
         provenance: vec![
             span("Idea · project "),
             span("corral").bold(),
             span(" · "),
             span(format!("via=app:{}", idea.device)).mono(),
         ],
-        attribution: "filed by assistant A-7 from your message · your words kept as the request",
+        attribution: "filed by assistant A-7 from your message · your words kept as the request"
+            .into(),
         quote_label: "your words, unchanged",
-        editing,
+        editing: if editing {
+            Editing::Fixture
+        } else {
+            Editing::No
+        },
+        merge: None,
         related: idea
             .related
             .map(|id| vec![span("· related ").dim(), task_link(id)]),
         buttons,
         discard_note: (!editing).then_some("Discard asks on this device"),
+        status: None,
         attached,
     })
 }
@@ -473,17 +533,14 @@ pub struct SavedCard {
 }
 
 /// Builds saved-as-written content from the actual submitted text, never another message's request.
-pub fn saved_as_written(id: &'static str, words: &str) -> SavedCard {
+pub fn saved_as_written(id: &str, words: &str) -> SavedCard {
     let first = words.split('\n').next().unwrap_or("");
     let mut title: String = first.chars().take(120).collect();
     if first.chars().count() > 120 {
         title.push('…');
     }
     SavedCard {
-        chip: Chip {
-            label: format!("saved · {id}"),
-            hue: Hue::Ok,
-        },
+        chip: Chip::new(format!("saved · {id}"), Hue::Ok),
         attribution: "Idea · filed by you, as written · no model ran",
         quote_label: "your words, unchanged",
         words: words.into(),
@@ -499,14 +556,21 @@ pub struct WaitingBlock {
     /// State/reason wording.
     pub state: Chip,
     /// Why this host cannot run, absent for compact newly-sent messages.
-    pub explanation: Option<&'static str>,
+    pub explanation: Option<String>,
     /// Storage and eventual processing explanation.
     pub note: &'static str,
     /// Optional resume followed by File as idea now and Withdraw.
     pub buttons: Vec<Button>,
+    /// Status of a File as idea now or Withdraw already sent.
+    pub status: Option<Chip>,
     /// Expiry and auto-filing policy.
     pub lifetime: &'static str,
 }
+
+/// The waiting block's lasting promise; shared by fixture and live blocks.
+pub(super) const WAIT_LIFETIME: &str = "It waits until the assistant can run, you file it, or you withdraw it. It never expires and corrald never files it by itself.";
+/// The full waiting block's storage note.
+pub(super) const WAIT_NOTE: &str = "Your message is stored and every device shows it; the assistant takes it as soon as it can run.";
 
 /// Builds a full host wait or a compact wait for a just-submitted message.
 pub fn waiting_block(reason: WaitReason, full: bool) -> WaitingBlock {
@@ -520,18 +584,15 @@ pub fn waiting_block(reason: WaitReason, full: bool) -> WaitingBlock {
     buttons.push(button("File as idea now", Action::FileNow));
     buttons.push(button("Withdraw", Action::Withdraw));
     WaitingBlock {
-        state: Chip {
-            label: format!("waiting for assistant · {}", reason.label()),
-            hue: Hue::Held,
-        },
-        explanation: full.then(|| reason.explanation()),
-        note: if full {
-            "Your message is stored and every device shows it; the assistant takes it as soon as it can run."
-        } else {
-            ""
-        },
+        state: Chip::new(
+            format!("waiting for assistant · {}", reason.label()),
+            Hue::Held,
+        ),
+        explanation: full.then(|| reason.explanation().to_owned()),
+        note: if full { WAIT_NOTE } else { "" },
         buttons,
-        lifetime: "It waits until the assistant can run, you file it, or you withdraw it. It never expires and corrald never files it by itself.",
+        status: None,
+        lifetime: WAIT_LIFETIME,
     }
 }
 
@@ -559,10 +620,7 @@ pub fn shared_filed_card() -> SharedFiledCard {
     let mut discard = button("Discard", Action::Confirm(Risk::Discard, Some("T-905")));
     discard.danger = true;
     SharedFiledCard {
-        chip: Chip {
-            label: "filed · T-905".into(),
-            hue: Hue::Ok,
-        },
+        chip: Chip::new("filed · T-905", Hue::Ok),
         description: "Idea · project corral",
         attachment: "link attached",
         attribution: "filed by assistant A-7 from your share",

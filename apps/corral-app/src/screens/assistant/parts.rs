@@ -20,9 +20,16 @@ const TARGET: f32 = 44.0;
 /// `.mono` is 0.93 of the text around it.
 const MONO_SCALE: f32 = 0.93;
 
-/// Runs an assistant action through its reducer. Card buttons never submit the draft, so the
-/// text is empty and the target is whatever Ask holds.
+/// Runs an assistant action through its reducer: with the daemon, the live reducer returns the
+/// canonical send, command or prompt answer; in the fixture, the preview's reducer. Card buttons
+/// never submit the draft, so the fixture text is empty and the target is whatever Ask holds.
 pub fn act(app: AppState, action: Action) {
+    if untracked(|| app.daemon()) {
+        app.reduce(app.assistant, move |state, feed, _, _| {
+            state.act_live(action, feed)
+        });
+        return;
+    }
     let target = app.ask_target.get_untracked();
     app.act(app.assistant, move |state, env| {
         state.act(action, "", target, env)
@@ -299,6 +306,16 @@ pub fn button_row(app: AppState, buttons: &[Button], kind: ButtonKind, gap: f32)
 pub fn test_id(button: &Button) -> String {
     let subject = match &button.action {
         Action::Edit(Some(id)) | Action::Merge(id) | Action::Confirm(_, Some(id)) => Some(*id),
+        Action::EditIdea(Some(id))
+        | Action::MergeIdea(Some(id))
+        | Action::SaveIdea { task: id, .. }
+        | Action::MergeInto { task: id, .. }
+        | Action::DiscardIdea(id)
+        | Action::FileEntry(id)
+        | Action::WithdrawEntry(id)
+        | Action::WithdrawPm { id, .. }
+        | Action::CancelSend(id)
+        | Action::Answer { key: id, .. } => Some(id.as_str()),
         _ => None,
     };
     let mut slug = String::with_capacity(button.label.len() + 8);

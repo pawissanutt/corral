@@ -131,7 +131,9 @@ pub fn pair_browser(app: AppState) -> AnyElement {
                 PairBrowser::Connecting => {
                     vec![cell(app, "Connecting to corrald…", Token::Ink3, false).into_element()]
                 }
-                PairBrowser::Claimed { line } => {
+                // Pairing hands the app to its live session (`AppState`), so Paired only names
+                // the device until that switch lands.
+                PairBrowser::Claimed { line } | PairBrowser::Paired { line } => {
                     vec![cell(app, line, Token::Ink, false).into_element()]
                 }
                 PairBrowser::Failed { line } => vec![
@@ -141,20 +143,6 @@ pub fn pair_browser(app: AppState) -> AnyElement {
                 PairBrowser::Blocked { line } => {
                     vec![cell(app, line, Token::Fail, false).into_element()]
                 }
-                PairBrowser::Paired { line } => vec![
-                    cell(app, line, Token::Ink, false).into_element(),
-                    button_row(
-                        app,
-                        vec![button_with(
-                            app,
-                            "Open live data",
-                            ButtonKind::Primary,
-                            ButtonOptions::default(),
-                            "btn-open-live",
-                            move || app.set_data(DataState::Daemon),
-                        )],
-                    ),
-                ],
             };
             section(app, parts)
         })
@@ -204,6 +192,25 @@ fn field(
     placeholder: &'static str,
     draft: Signal<String>,
 ) -> AnyElement {
+    bound_field(
+        app,
+        id.to_owned(),
+        label,
+        placeholder,
+        move || draft.get(),
+        move |text| draft.set(text),
+    )
+}
+
+/// A labelled one-line text field showing `value` and reporting each edit to `on_change`.
+pub(super) fn bound_field(
+    app: AppState,
+    id: String,
+    label: &'static str,
+    placeholder: &'static str,
+    value: impl Fn() -> String + 'static,
+    on_change: impl Fn(String) + 'static,
+) -> AnyElement {
     let form = app.form;
     let size = if form == Form::Phone {
         15.0
@@ -211,11 +218,11 @@ fn field(
         text_size(form)
     };
     let entry = input()
-        .test_id(id)
+        .test_id(&id)
         .label(label)
         .placeholder(placeholder)
-        .value(move || draft.get())
-        .on_change(move |text: &str| draft.set(text.to_owned()))
+        .value(value)
+        .on_change(move |text: &str| on_change(text.to_owned()))
         .min_w(px(0.0))
         .w_full()
         .font_family(FONT_TEXT)
@@ -244,7 +251,7 @@ fn field(
         .into_element()
 }
 
-fn group(app: AppState, parts: Vec<AnyElement>) -> AnyElement {
+pub(super) fn group(app: AppState, parts: Vec<AnyElement>) -> AnyElement {
     view()
         .min_w(px(0.0))
         .gap(if app.form == Form::Terminal {

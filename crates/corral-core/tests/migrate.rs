@@ -729,6 +729,7 @@ fn imported_rows_equal_a_v2_write_and_add_only_the_event_only_panes() {
     assert_eq!(due, ["T-072", "T-227"]);
     let query = EventQuery {
         after: None,
+        before: None,
         task: Some("T-001".to_owned()),
         kinds: Vec::new(),
         run: Some("R1".to_owned()),

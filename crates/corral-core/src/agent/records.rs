@@ -238,8 +238,11 @@ pub struct AgentBinding {
 pub struct AgentGeneration {
     pub n: u32,
     pub bind_nonce_sha256: String,
-    /// The herdr pane this generation was launched in.
+    /// The herdr pane; empty only for an explicitly daemon-hosted assistant.
     pub pane: String,
+    /// A pane-less host under a daemon supervisor, never inferred from the pane string.
+    #[serde(default)]
+    pub daemon_hosted: bool,
     pub created: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bound: Option<GenerationBound>,

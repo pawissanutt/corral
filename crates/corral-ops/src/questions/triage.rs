@@ -614,6 +614,9 @@ pub fn answer(
     actor: Actor<'_>,
     input: AnswerInput,
 ) -> Result<Applied> {
+    if agent::owner_question::owner_question_container(key).is_some() {
+        return super::owner::answer(ctx, key, revision, actor, input);
+    }
     let by = actor.by();
     let pm = matches!(actor, Actor::Pm(_));
     let applied = transact(
@@ -679,6 +682,7 @@ pub(super) fn plan_answer(
         at: now,
         message_id: None,
         superseded_by: None,
+        attribution: Some(super::followup::attribution(ctx)?),
     };
     let (action, kind, note) = match previous.filter(|_| superseding) {
         Some((rev, prior)) => (
@@ -724,6 +728,11 @@ pub fn escalate(
     note: Option<String>,
     kind: Option<QuestionKind>,
 ) -> Result<Applied> {
+    if agent::owner_question::owner_question_container(key).is_some() {
+        return Err(rule(
+            "host-authored asks already address the owner; escalation applies only to task questions",
+        ));
+    }
     let by = actor.by();
     let applied = transact(
         ctx,
@@ -774,6 +783,9 @@ pub fn cancel(
     actor: Actor<'_>,
     reason: &str,
 ) -> Result<Applied> {
+    if agent::owner_question::owner_question_container(key).is_some() {
+        return super::owner::cancel(ctx, key, revision, actor, reason);
+    }
     let by = actor.by();
     let applied = transact(
         ctx,
@@ -816,6 +828,11 @@ pub fn deadline(
     at: Timestamp,
     instruction: &str,
 ) -> Result<Applied> {
+    if agent::owner_question::owner_question_container(key).is_some() {
+        return Err(rule(
+            "host-authored asks require an explicit owner answer; task-question deadlines do not apply",
+        ));
+    }
     let actor = Actor::Owner;
     let applied = transact(
         ctx,

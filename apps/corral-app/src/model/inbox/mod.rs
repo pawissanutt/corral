@@ -1,24 +1,36 @@
 //! Inbox and question content. Render [`inbox`] for the list and selection preview, and
-//! [`question`] for the focused question. [`sheet_desk`] also exposes the inline desktop
-//! handover. Builders own wording, section order, state stamps and connection branches;
-//! the renderer only supplies presentation and dispatches [`Action`] through [`State::act`].
-//! Answers carry Q's revision expectation and therefore queue on both offline and down,
-//! exactly as the interactive source does. Other domains need not inspect these fields.
+//! [`question`] for the focused question; [`sheet_desk`] also exposes the inline desktop
+//! handover. Each takes a [`Src`]: the explicitly selected fixture preview, or the served
+//! `feed.inbox` rows and question details. Builders own wording, section order, state stamps
+//! and connection branches; the renderer only supplies presentation and dispatches [`Action`]
+//! through [`State::act`] (fixture) or [`State::act_live`] (served).
 
 mod data;
 mod evidence;
 mod list;
+mod live;
+mod live_evidence;
+mod live_list;
+mod live_notice;
+mod live_sheet;
 mod sheet;
+mod view;
 
 pub use data::*;
 pub use evidence::assessment;
 pub use list::*;
+pub use live::{
+    Desk, Draft, Sent, can_answer, choice, clock, is_open, is_question, ordered, question_detail,
+    question_ref, question_state as served_state, reply_value, selected, target,
+};
 pub use sheet::*;
+pub use view::*;
 
 use crate::model::effect::{Conn, DataMode, Effect, Env, Page};
 use crate::model::nav::{Destination, Form};
+use crate::model::{Id, Live};
 
-/// The five rows in keyboard-selection order, including the assistant's two prompts.
+/// The five fixture rows in keyboard-selection order, including the assistant's two prompts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Selection {
     /// The blocking worker question.
@@ -45,7 +57,7 @@ impl Selection {
     ];
 }
 
-/// The selected evidence tab, in the source's cycle order.
+/// The selected fixture evidence tab, in the source's cycle order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Evidence {
     /// The real patch hunk.
@@ -64,7 +76,7 @@ impl Evidence {
     pub const ALL: [Evidence; 4] = [Self::Diff, Self::File, Self::Log, Self::Shot];
 }
 
-/// Locally stored answer state; the elsewhere data mode overrides it for display and actions.
+/// Locally stored fixture answer state; the elsewhere data mode overrides it for display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Status {
     /// Awaiting an owner answer.
@@ -76,37 +88,48 @@ pub enum Status {
     Mine,
 }
 
-/// Effective question state, including an answer won on the PM pane.
+/// Effective question state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuestionState {
     /// Still answerable.
     Open,
-    /// Queued locally, still showing editable options as in the source.
+    /// Fixture only: queued locally, still showing editable options as in the source.
     Queued,
-    /// Answered by the owner here.
+    /// This device's answer is on its way to corrald.
+    Pending,
+    /// This device's answer may or may not have been applied; never resent automatically.
+    Uncertain,
+    /// Answered by the owner on this device.
     Mine,
-    /// Answered on the PM pane, making this copy read-only.
+    /// Answered on another device, the PM pane or by an agent, making this copy read-only.
     Elsewhere,
+    /// Cancelled or expired.
+    Closed,
 }
 
-/// The complete local inbox and question state, initialized like the interactive mockup.
+/// The complete inbox and question state: the fixture's mockup state and the served desk.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct State {
-    /// Selected inbox row.
+    /// Fixture: selected inbox row.
     pub sel: Selection,
-    /// Zero-based answer option; reducer inputs only accept existing options.
+    /// Fixture: zero-based answer option; reducer inputs only accept existing options.
     pub choice: usize,
-    /// Evidence tab currently selected.
+    /// Fixture: evidence tab currently selected.
     pub evidence: Evidence,
-    /// Locally stored answer status.
+    /// Fixture: locally stored answer status.
     pub status: Status,
-    /// The alternate-answer textarea; any nonempty draft changes the button to “your text”.
+    /// Fixture: the alternate-answer textarea.
     pub draft: String,
     /// Whether the phone thread sheet is open.
     pub thread_open: bool,
+    /// Served: selection, drafts and sent commands.
+    pub desk: Desk,
+    /// Grows by one when “Ask the asker” moves focus to the follow-up field.
+    pub reply_focus: u32,
 }
 
-/// Every interaction carried by the inbox builders, including source toast-only controls.
+/// Every interaction carried by the inbox builders. The first group is the fixture
+/// preview's; the second carries served ids.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// Select the inline desktop row.
@@ -133,19 +156,59 @@ pub enum Action {
     NextQ,
     /// Navigate to a destination.
     Go(Destination),
-    /// Open a task/session/thread page.
+    /// Open a fixture task/session/thread page.
     Open(Page),
     /// Ask about the question with its context chip.
     Ask,
     /// Execute an explicitly toast-only mockup control.
     Toast(&'static str),
+    /// Served: select a row in place.
+    Row(Id),
+    /// Served: open a row's own page.
+    OpenRow(Id),
+    /// Served: open a live route.
+    Live(Live),
+    /// Served: choose an option of a question.
+    Pick(Id, usize),
+    /// Served: select a question's evidence block.
+    Proof(Id, usize),
+    /// Served: edit a question's alternate answer.
+    Text(Id, String),
+    /// Served: edit the follow-up to the asker.
+    Reply(Id, String),
+    /// Served: answer the question at its canonical revision.
+    Submit(Id),
+    /// Served: post the follow-up to the asker.
+    Followup(Id),
+    /// Served: ask corrald for the result of an uncertain command, by its same identity.
+    Recover(Id),
+    /// Served: revalidate a question's detail.
+    Refetch(Id),
+    /// Served: ask about the question, to the PM when true.
+    AskAbout(Id, bool),
+    /// Served: move focus to the follow-up field.
+    FocusReply,
+    /// Served: open the next open item after this one.
+    Next(Id),
+}
+
+impl Action {
+    /// The alternate-answer edit for a served question, or the fixture's.
+    pub fn draft(key: Option<&Id>, text: String) -> Action {
+        match key {
+            Some(key) => Action::Text(key.clone(), text),
+            None => Action::Draft(text),
+        }
+    }
 }
 
 /// Keyboard names consumed by the inbox and focused-question handlers (NSH naming).
-pub const KEYS: &[&str] = &["j", "k", "down", "up", "enter", "f", "1", "2", "e"];
+pub const KEYS: &[&str] = &[
+    "j", "k", "down", "up", "enter", "f", "1", "2", "3", "4", "5", "6", "7", "8", "9", "e",
+];
 
 impl State {
-    /// Resolve the elsewhere override without losing this device's stored answer state.
+    /// Resolve the fixture's elsewhere override without losing its stored answer state.
     pub fn question_state(&self, env: Env) -> QuestionState {
         if env.mode == DataMode::Elsewhere {
             return QuestionState::Elsewhere;
@@ -157,7 +220,31 @@ impl State {
         }
     }
 
-    /// Dispatch an action emitted by a view; all nonlocal work is returned as effects.
+    /// The alternate answer the field shows: the served question's, else the fixture's.
+    pub fn draft_of(&self, key: Option<&Id>) -> String {
+        match key {
+            Some(key) => self
+                .desk
+                .draft(key)
+                .map(|draft| draft.text.clone())
+                .unwrap_or_default(),
+            None => self.draft.clone(),
+        }
+    }
+
+    /// A copy without any typed text, so views that do not show it are not made again
+    /// while the owner types.
+    pub fn blind(&self) -> State {
+        let mut without = self.clone();
+        without.draft.clear();
+        for draft in without.desk.drafts.values_mut() {
+            draft.text.clear();
+            draft.reply.clear();
+        }
+        without
+    }
+
+    /// Dispatch a fixture action; all nonlocal work is returned as effects.
     pub fn act(&mut self, action: Action, env: Env) -> Vec<Effect> {
         match action {
             Action::Select(sel) => self.inbox_sel(sel),
@@ -187,6 +274,8 @@ impl State {
                 text: None,
             }],
             Action::Toast(text) => vec![Effect::Toast(text.into())],
+            // Served actions are dispatched through `act_live`.
+            _ => Vec::new(),
         }
     }
 
@@ -236,7 +325,7 @@ impl State {
         }
     }
 
-    /// Open the thread sheet; its title, body, reply and Done control come from [`thread_view`].
+    /// Open the thread sheet; its title, body, reply and Done control come from the view.
     pub fn thread(&mut self) -> Vec<Effect> {
         self.thread_open = true;
         Vec::new()
@@ -298,7 +387,7 @@ impl State {
     }
 }
 
-/// The navigation badge: zero for Empty, otherwise three or two board items plus two
+/// The fixture navigation badge: zero for Empty, otherwise three or two board items plus two
 /// assistant prompts. Answered/queued question rows remain in the list but not the badge.
 pub fn needs_you_count(state: &State, env: Env) -> u32 {
     if env.mode == DataMode::Empty {

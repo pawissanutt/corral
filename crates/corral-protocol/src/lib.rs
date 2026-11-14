@@ -1,23 +1,34 @@
 //! Shared wire contract for the daemon and its clients; independent of store internals.
+pub mod app;
+pub mod assistant;
+pub mod attachment;
+#[cfg(test)]
+mod attachment_tests;
 pub mod board;
 pub mod classic;
 pub mod cmd;
+pub mod detail;
 pub mod device;
 pub mod frame;
 pub mod health;
 pub mod read;
+pub mod rows;
 pub mod rpc;
 #[cfg(test)]
 mod schema;
 pub mod subscription;
 
+pub use app::{
+    ACT_V1, AGENTS_V1, ASSISTANT_V1, CHANGES_V1, FILINGS_V1, INBOX_V1, PLANS_V1, REVIEW_V1,
+    SETTINGS_V1, TIMELINE_V1, USAGE_V1,
+};
 pub use classic::CLASSIC_V1;
 pub use health::{DaemonState, Health, LoopFacts, PmState, RuntimeHealth, RuntimeState};
 pub use read::{READ, READ_V1};
 use serde::{Deserialize, Serialize};
 
 pub const PROTO_MAJOR: u32 = 1;
-pub const PROTO_MINOR: u32 = 0;
+pub const PROTO_MINOR: u32 = 1;
 
 pub const HELLO: &str = "hello";
 pub const PING: &str = "ping";

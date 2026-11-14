@@ -1,6 +1,9 @@
-//! Dependency graph geometry from PLANGRAPH. The compact fallback has rows, not edges.
+//! Dependency graph geometry from PLANGRAPH. The compact fallback has rows, not edges. The
+//! members come from either source as a `GraphInput`: the fixture's tasks (`fixture_graph`) or
+//! a plan detail served by corrald (`live::graph_input`).
 
 use super::{Action, Plan};
+use crate::model::Id;
 use crate::model::board::{Actor, Rail, task};
 use crate::model::hue::Hue;
 
@@ -17,9 +20,9 @@ pub struct Point {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Edge {
     /// Prerequisite task id.
-    pub from: &'static str,
+    pub from: Id,
     /// Dependent task id.
-    pub to: &'static str,
+    pub to: Id,
     /// Start at the prerequisite card's right centre.
     pub start: Point,
     /// First cubic control point.
@@ -45,7 +48,7 @@ pub struct CardGeometry {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     /// Task id, also the first text line.
-    pub id: &'static str,
+    pub id: Id,
     /// Card or row origin.
     pub x: f32,
     /// Card or row origin.
@@ -57,7 +60,7 @@ pub struct Node {
     /// Id, title and now-phrase; card titles use the mockup's 21-character cutoff.
     pub lines: [String; 3],
     /// Untruncated title for accessibility and compact rows.
-    pub title: &'static str,
+    pub title: String,
     /// Four delivery marks.
     pub rail: Rail,
     /// Internal card geometry; absent for compact rows laid out as rows.
@@ -84,7 +87,7 @@ pub struct Layer {
     /// Heading origin (baseline for horizontal SVG headings, top for compact headings).
     pub position: Point,
     /// Members in this layer, in source order.
-    pub members: Vec<&'static str>,
+    pub members: Vec<Id>,
 }
 
 /// Complete graph geometry. Render compact rows when `fits` is false; no geometry is deferred.
@@ -104,16 +107,110 @@ pub struct Graph {
     pub edges: Vec<Edge>,
 }
 
+/// One member as the graph draws it, whichever source supplied it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GraphMember {
+    pub id: Id,
+    /// Full task title.
+    pub title: String,
+    /// The now-phrase under the title.
+    pub now: String,
+    pub rail: Rail,
+    /// Actor colour.
+    pub hue: Hue,
+    /// Colour of the now-phrase.
+    pub now_hue: Hue,
+    /// Owner action needed: the needs-you card treatment.
+    pub needs_you: bool,
+    /// Zero-based dependency layer.
+    pub layer: usize,
+    /// What a card press does (select the member, or open its question).
+    pub select: Action,
+    /// What a compact row press does (open the task, or its question).
+    pub open: Action,
+}
+
+/// Members in source order and their prerequisite → dependent edges.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct GraphInput {
+    pub members: Vec<GraphMember>,
+    pub edges: Vec<(Id, Id)>,
+}
+
+/// The fixture plan's members from the shared board snapshot.
+pub fn fixture_graph(p: &Plan) -> GraphInput {
+    let layer_of = |id: &str| {
+        p.layers
+            .iter()
+            .position(|layer| layer.contains(&id))
+            .unwrap_or(0)
+    };
+    let members = p
+        .members
+        .iter()
+        .map(|&id| {
+            let t = task(id);
+            let needs_you = t.actor == Actor::You;
+            GraphMember {
+                id: Id::from(id),
+                title: t.title.into(),
+                now: t.now.into(),
+                rail: t.rail,
+                hue: t.actor.hue(),
+                now_hue: if needs_you {
+                    Hue::You
+                } else if t.now.contains("stale") {
+                    Hue::Held
+                } else {
+                    Hue::Neutral
+                },
+                needs_you,
+                layer: layer_of(id),
+                select: if needs_you {
+                    Action::Question
+                } else {
+                    Action::SelectMember(id)
+                },
+                open: if needs_you {
+                    Action::Question
+                } else {
+                    Action::OpenTask(id)
+                },
+            }
+        })
+        .collect();
+    let edges = p
+        .members
+        .iter()
+        .flat_map(|&id| {
+            task(id)
+                .needs
+                .iter()
+                .map(move |(dep, _)| (Id::from(*dep), Id::from(id)))
+        })
+        .collect();
+    GraphInput { members, edges }
+}
+
 /// Port PLANGRAPH's fit calculation, card positions, dependency curves and vertical fallback.
 /// `phone` changes compact row height from 28 to 40; it does not change the source fit equation.
 /// Pass a narrow width for terminal vertical layers, as the screen builder does.
-pub fn layout(p: &Plan, selected: &str, width: f32, phone: bool) -> Graph {
-    let fallback = [p.members];
-    let layers = if p.layers.is_empty() {
-        &fallback[..]
-    } else {
-        p.layers
-    };
+pub fn layout(input: &GraphInput, selected: Option<&str>, width: f32, phone: bool) -> Graph {
+    let count = input
+        .members
+        .iter()
+        .map(|member| member.layer + 1)
+        .max()
+        .unwrap_or(0);
+    let layers: Vec<Vec<&GraphMember>> = (0..count)
+        .map(|li| {
+            input
+                .members
+                .iter()
+                .filter(|member| member.layer == li)
+                .collect()
+        })
+        .collect();
     let cw = 172.0;
     let ch = 54.0;
     let gx = 40.0;
@@ -125,7 +222,7 @@ pub fn layout(p: &Plan, selected: &str, width: f32, phone: bool) -> Graph {
         width: if fits { required } else { width.max(0.0) },
         height: 0.0,
         layers: Vec::with_capacity(layers.len()),
-        nodes: Vec::with_capacity(p.members.len()),
+        nodes: Vec::with_capacity(input.members.len()),
         edges: Vec::new(),
     };
     let mut compact_y = 0.0;
@@ -151,14 +248,12 @@ pub fn layout(p: &Plan, selected: &str, width: f32, phone: bool) -> Graph {
                 x: if fits { li as f32 * (cw + gx) } else { 0.0 },
                 y: heading_y,
             },
-            members: members.to_vec(),
+            members: members.iter().map(|member| member.id.clone()).collect(),
         });
         if !fits {
             compact_y += 10.5 * if phone { 1.4 } else { 1.45 } + 4.0;
         }
-        for (mi, id) in members.iter().copied().enumerate() {
-            let t = task(id);
-            let needs_you = t.actor == Actor::You;
+        for (mi, member) in members.iter().enumerate() {
             let h = if fits {
                 ch
             } else if phone {
@@ -171,66 +266,54 @@ pub fn layout(p: &Plan, selected: &str, width: f32, phone: bool) -> Graph {
             } else {
                 compact_y
             };
-            let title = if fits && t.title.chars().count() > 21 {
-                format!("{}…", t.title.chars().take(20).collect::<String>())
+            let title = if fits && member.title.chars().count() > 21 {
+                format!("{}…", member.title.chars().take(20).collect::<String>())
             } else {
-                t.title.into()
+                member.title.clone()
             };
             graph.nodes.push(Node {
-                id,
+                id: member.id.clone(),
                 x: if fits { li as f32 * (cw + gx) } else { 0.0 },
                 y,
                 w: if fits { cw } else { graph.width },
                 h,
-                lines: [id.into(), title, t.now.into()],
-                title: t.title,
-                rail: t.rail,
-                card: if fits {
-                    Some(CardGeometry {
-                        text: [
-                            Point { x: 10.0, y: 17.0 },
-                            Point { x: 10.0, y: 33.0 },
-                            Point { x: 10.0, y: 47.0 },
-                        ],
-                        rail: [
-                            Point {
-                                x: cw - 64.0,
-                                y: 7.0,
-                            },
-                            Point {
-                                x: cw - 50.0,
-                                y: 7.0,
-                            },
-                            Point {
-                                x: cw - 36.0,
-                                y: 7.0,
-                            },
-                            Point {
-                                x: cw - 22.0,
-                                y: 7.0,
-                            },
-                        ],
-                        rail_size: Point { x: 11.0, y: 11.0 },
-                    })
+                lines: [member.id.to_string(), title, member.now.clone()],
+                title: member.title.clone(),
+                rail: member.rail,
+                card: fits.then(|| CardGeometry {
+                    text: [
+                        Point { x: 10.0, y: 17.0 },
+                        Point { x: 10.0, y: 33.0 },
+                        Point { x: 10.0, y: 47.0 },
+                    ],
+                    rail: [
+                        Point {
+                            x: cw - 64.0,
+                            y: 7.0,
+                        },
+                        Point {
+                            x: cw - 50.0,
+                            y: 7.0,
+                        },
+                        Point {
+                            x: cw - 36.0,
+                            y: 7.0,
+                        },
+                        Point {
+                            x: cw - 22.0,
+                            y: 7.0,
+                        },
+                    ],
+                    rail_size: Point { x: 11.0, y: 11.0 },
+                }),
+                hue: member.hue,
+                now_hue: member.now_hue,
+                selected: selected == Some(member.id.as_str()),
+                needs_you: member.needs_you,
+                action: if fits {
+                    member.select.clone()
                 } else {
-                    None
-                },
-                hue: t.actor.hue(),
-                now_hue: if needs_you {
-                    Hue::You
-                } else if t.now.contains("stale") {
-                    Hue::Held
-                } else {
-                    Hue::Neutral
-                },
-                selected: id == selected,
-                needs_you,
-                action: if needs_you {
-                    Action::Question
-                } else if fits {
-                    Action::SelectMember(id)
-                } else {
-                    Action::OpenTask(id)
+                    member.open.clone()
                 },
             });
             if fits {
@@ -244,45 +327,48 @@ pub fn layout(p: &Plan, selected: &str, width: f32, phone: bool) -> Graph {
         graph.height = compact_y;
         return graph;
     }
-    for node in &graph.nodes {
-        for (dep, _) in task(node.id).needs {
-            if let Some(from) = graph.nodes.iter().find(|from| from.id == *dep) {
-                graph.edges.push(Edge {
-                    from: from.id,
-                    to: node.id,
-                    start: Point {
-                        x: from.x + cw,
-                        y: from.y + ch / 2.0,
-                    },
-                    control1: Point {
-                        x: from.x + cw + gx / 2.0,
-                        y: from.y + ch / 2.0,
-                    },
-                    control2: Point {
-                        x: node.x - gx / 2.0,
-                        y: node.y + ch / 2.0,
-                    },
-                    end: Point {
-                        x: node.x,
-                        y: node.y + ch / 2.0,
-                    },
-                });
-            }
-        }
+    for (dep, id) in &input.edges {
+        let (Some(from), Some(node)) = (
+            graph.nodes.iter().find(|node| node.id == *dep),
+            graph.nodes.iter().find(|node| node.id == *id),
+        ) else {
+            continue;
+        };
+        graph.edges.push(Edge {
+            from: from.id.clone(),
+            to: node.id.clone(),
+            start: Point {
+                x: from.x + cw,
+                y: from.y + ch / 2.0,
+            },
+            control1: Point {
+                x: from.x + cw + gx / 2.0,
+                y: from.y + ch / 2.0,
+            },
+            control2: Point {
+                x: node.x - gx / 2.0,
+                y: node.y + ch / 2.0,
+            },
+            end: Point {
+                x: node.x,
+                y: node.y + ch / 2.0,
+            },
+        });
     }
     graph
 }
 
 #[cfg(test)]
 mod tests {
-    use super::layout;
+    use super::{fixture_graph, layout};
     use crate::model::plans::plan;
 
     #[test]
     fn insufficient_width_uses_vertical_layers() {
         let p = plan("T-870");
-        let wide = layout(p, "T-868", 384.0, false);
-        let narrow = layout(p, "T-868", 383.0, false);
+        let members = fixture_graph(p);
+        let wide = layout(&members, Some("T-868"), 384.0, false);
+        let narrow = layout(&members, Some("T-868"), 383.0, false);
         assert!(wide.fits);
         assert!(!narrow.fits);
         assert!(narrow.edges.is_empty());

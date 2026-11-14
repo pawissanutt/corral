@@ -193,6 +193,7 @@ fn a_real_board_migrates_to_ordinary_rows_run_keyed_events_and_valid_receipts() 
     for ((task, run), expected) in &run_events {
         let query = EventQuery {
             after: None,
+            before: None,
             task: Some(task.clone()),
             kinds: Vec::new(),
             run: Some(run.clone()),

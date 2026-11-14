@@ -1,11 +1,15 @@
 //! Settings. Desktop and terminal: the section selected in the navigation (the sidebar lists
 //! the sections), in a scrolling body. Phone: the root list of sections, and each section as a
-//! pushed page.
+//! pushed page. The fixture preview draws the mockup's sections; a daemon session draws each
+//! section from corrald (`live_*`) with the owner edits this device's authority allows.
 
 mod connection;
 mod devices;
 mod enrolment;
+mod live_assistant;
+mod live_autopilot;
 mod live_devices;
+mod live_sections;
 mod parts;
 mod sections;
 
@@ -66,23 +70,18 @@ fn page(app: AppState, section: SettingsSection) -> AnyElement {
         return super::frame(app, Destination::Settings);
     }
     if untracked(|| app.daemon()) {
-        if let Some(line) = crate::model::settings::daemon_section_notice(section) {
-            return parts::frame(
-                app,
-                section.label(),
-                12.0,
-                vec![parts::cell(app, line, Token::Ink3, false).into_element()],
-            );
-        }
+        return match section {
+            SettingsSection::Devices => live_devices::page(app),
+            SettingsSection::Machines => live_sections::machines(app),
+            SettingsSection::Connection => connection::page(app),
+            SettingsSection::Notifications => live_sections::notifications(app),
+            SettingsSection::Assistant => live_assistant::page(app),
+            SettingsSection::Autopilot => live_autopilot::page(app),
+            SettingsSection::General => live_sections::general(app),
+        };
     }
     match section {
-        SettingsSection::Devices => {
-            if untracked(|| app.daemon()) {
-                live_devices::page(app)
-            } else {
-                devices::page(app)
-            }
-        }
+        SettingsSection::Devices => devices::page(app),
         SettingsSection::Machines => sections::machines(app),
         SettingsSection::Connection => connection::page(app),
         SettingsSection::Notifications => sections::notifications(app),

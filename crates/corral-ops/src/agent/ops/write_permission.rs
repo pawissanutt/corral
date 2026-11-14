@@ -9,6 +9,8 @@
 //! - `check` answers whether an active grant covers a target, and `list` returns the active
 //!   grants. Both are authenticated lookups that store no receipt and require the caller's
 //!   generation to be current and its session open.
+//! Remote generations may check grants but cannot decide for the owner. Their device-bound
+//! prompts use the same validation and record_permission transition through owner_prompt.
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -239,6 +241,19 @@ fn decide(ctx: &Ctx, envelope: &Envelope, d: Decide) -> Result<CallResponse> {
     let home = home();
     validate(envelope, &d, &home)?;
     let session = envelope.identity.assistant.clone().unwrap_or_default();
+    ctx.store
+        .inspect_assistant_container(&session, |assistant, _| {
+            if assistant
+                .state
+                .generation(envelope.identity.generation)
+                .is_some_and(|g| g.daemon_hosted)
+            {
+                return Err(bad(
+                    "remote permission decisions require an authenticated device prompt answer",
+                ));
+            }
+            Ok(())
+        })?;
     let admitted = match admission::admit(ctx, envelope, Mode::Mutation { settles_turn: None })? {
         Admission::Replay(stored) => {
             ctx.store
@@ -404,3 +419,65 @@ fn list(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
 #[cfg(test)]
 #[path = "write_permission_tests.rs"]
 mod tests;
+
+/// Reuse the exact pane validation for a daemon prompt decision. No host capability is
+/// synthesized or persisted: this envelope exists only to validate identity-derived fields.
+pub(super) fn validate_remote(
+    identity: &corral_core::agent::RequestIdentity,
+    payload: Value,
+) -> Result<NewPermission> {
+    let action: Action = serde_json::from_value(payload.clone())
+        .map_err(|_| bad("malformed remote permission decision"))?;
+    let Action::Decide {
+        invocation,
+        tool,
+        operation,
+        target,
+        digest,
+        preview_sha256,
+        choice,
+        scope,
+    } = action
+    else {
+        return Err(bad("remote permission requires decide fields"));
+    };
+    let request = tool_request_id(
+        &identity.session_id,
+        &format!("wp:{}:{}", invocation.generation, invocation.id),
+    );
+    let envelope = Envelope {
+        version: crate::agent::envelope::ENVELOPE_VERSION,
+        op: "write_permission".into(),
+        request_id: request.clone(),
+        payload_sha256: crate::agent::envelope::payload_sha256(&payload),
+        identity: identity.clone(),
+        auth: crate::agent::envelope::Auth {
+            host_cap: String::new(),
+            bind_nonce: None,
+        },
+        payload,
+    };
+    let d = Decide {
+        invocation,
+        tool,
+        operation,
+        target,
+        digest,
+        preview_sha256,
+        choice,
+        scope,
+    };
+    validate(&envelope, &d, &home())?;
+    Ok(NewPermission {
+        generation: identity.generation,
+        turn: identity.turn,
+        request,
+        tool: d.tool,
+        operation: d.operation,
+        target: d.target,
+        digest: d.digest,
+        invocation: d.invocation,
+        choice: d.choice,
+        scope: d.scope,
+    })
+}

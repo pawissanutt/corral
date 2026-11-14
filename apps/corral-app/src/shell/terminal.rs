@@ -1,5 +1,6 @@
 //! The terminal shell: the top bar on the first row, the sidebar and the content as two framed
-//! regions under it, the toast's row while one shows, and the key line on the last row.
+//! regions under it, the toast's row while one shows, and the key line on the last row. The
+//! sidebar folds to a rail of keys and counts by choice (`mod+b`) or on a narrow grid.
 //! Everything is sized in whole Cells (8 x 16 points by default) and drawn in the terminal's own
 //! font and colours; colour means state, and the structure is lines and weight (`ui::term`).
 
@@ -7,12 +8,12 @@ use nsh_core::prelude::*;
 
 use crate::{
     model::{
-        Destination, Overlay, Page, SettingsSection, Workspace,
-        commands::key_legend,
+        DataState, Destination, Live, Overlay, Page, SettingsSection, Workspace,
+        commands::{destination_key, key_legend, key_legend_live},
         nav::{ASK_KEY, ASK_LABEL, PALETTE_LABEL, THIS_DEVICE},
     },
     screens,
-    shell::{banner, confirmation, toast},
+    shell::{banner, confirmation, section_short, toast},
     state::AppState,
     ui::{
         ask, atoms, composer, palette,
@@ -30,6 +31,7 @@ pub fn shell(app: AppState) -> AnyElement {
     // destination alone.
     let destination = computed(move || app.destination());
     let workspace = computed(move || app.snapshot().workspace);
+    let collapsed = computed(move || term::sidebar_collapsed(app));
     view()
         .flex_1()
         .flex_col()
@@ -39,7 +41,13 @@ pub fn shell(app: AppState) -> AnyElement {
                 .flex_1()
                 .min_h(px(0.0))
                 .flex_row()
-                .child(sidebar(app, destination, workspace))
+                .child(dynamic(move || {
+                    if collapsed.get() {
+                        untracked(|| rail(app, destination))
+                    } else {
+                        untracked(|| sidebar(app, destination, workspace))
+                    }
+                }))
                 .child(content(app)),
         )
         .child(toast(app))
@@ -155,7 +163,7 @@ fn sidebar(
             ),
         );
     term::framed(body)
-        .w(move || cells(term::sidebar_columns()))
+        .w(move || cells(term::sidebar_columns(app)))
         .flex_shrink_0()
         .child(dynamic(move || {
             workspace.get().map(|ws| {
@@ -168,6 +176,71 @@ fn sidebar(
             })
         }))
         .child(dynamic(move || workspace.get().map(device)))
+        .into_element()
+}
+
+/// The folded sidebar: each destination as its key, its count beside it, the Settings
+/// sections' short names under Settings while it is selected, then Ask and Go to as their keys.
+fn rail(app: AppState, destination: Memo<Destination>) -> AnyElement {
+    let rows = Destination::ALL.into_iter().map(move |item| {
+        atoms::nav_row(
+            app,
+            destination_key(item).unwrap_or_default(),
+            format!("nav-{}", item.slug()),
+            move || destination.get() == item,
+            Some(
+                view()
+                    .w(cells(3.0))
+                    .flex_row()
+                    .justify_end()
+                    .child(atoms::count(app, item))
+                    .into_element(),
+            ),
+            move || app.go(item),
+        )
+    });
+    let sections = move || {
+        view()
+            .children(SettingsSection::ALL.into_iter().map(move |section| {
+                atoms::nav_row(
+                    app,
+                    section_short(section),
+                    format!("settings-{}", section.slug()),
+                    move || app.nav.with(|nav| nav.settings == section),
+                    None,
+                    move || app.go_settings(section),
+                )
+            }))
+            .into_element()
+    };
+    let body = scroll().flex_1().min_h(px(0.0)).child(
+        view()
+            .children(rows)
+            .child(when(
+                move || destination.get() == Destination::Settings,
+                sections,
+            ))
+            .child(term::hrule())
+            .child(atoms::nav_row(
+                app,
+                ASK_KEY,
+                String::from("ask-open"),
+                move || app.is_open(Overlay::Ask),
+                None,
+                move || app.open_ask(),
+            ))
+            .child(atoms::nav_row(
+                app,
+                PALETTE_CHORD,
+                String::from("palette-open"),
+                move || app.is_open(Overlay::Palette),
+                None,
+                move || app.open_palette(),
+            )),
+    );
+    term::framed(view().flex_1().min_h(px(0.0)).child(body))
+        .w(move || cells(term::sidebar_columns(app)))
+        .flex_shrink_0()
         .into_element()
 }
 
@@ -300,10 +373,19 @@ fn keep(destination: Destination) -> u8 {
 
 /// The key line's groups in order, a line between each two: the keys of the page in view (when
 /// the model gives it any), the destinations, then Ask and Go to.
-fn groups(destination: Destination, page: Option<Page>, daemon: bool) -> Vec<Vec<Entry>> {
-    let own: Vec<Entry> = key_legend(destination, page)
+fn groups(
+    destination: Destination,
+    page: Option<Page>,
+    live: Option<Live>,
+    daemon: bool,
+) -> Vec<Vec<Entry>> {
+    let legend = if daemon {
+        key_legend_live(destination, live.as_ref())
+    } else {
+        key_legend(destination, page)
+    };
+    let own: Vec<Entry> = legend
         .into_iter()
-        .filter(|_| !daemon || destination == Destination::Now)
         .map(|(keys, name)| Entry {
             keys: String::from(keys),
             name,
@@ -355,11 +437,28 @@ fn line_cells(groups: &[Vec<Entry>], keep: u8) -> usize {
 /// When the grid is short of room the names give way one by one, the least used first; the
 /// page's keep theirs.
 fn key_line(app: AppState) -> AnyElement {
-    let route = computed(move || (app.destination(), app.page(), app.daemon()));
+    let route = computed(move || {
+        (
+            app.destination(),
+            app.page(),
+            app.live_page(),
+            app.data.get(),
+        )
+    });
     dynamic(move || {
         let room = term::columns();
-        let (destination, page, daemon) = route.get();
-        let groups = groups(destination, page, daemon);
+        let (destination, page, live, data) = route.get();
+        // An unserved destination answers no keys of its own; disconnected, none is served.
+        let daemon = data == DataState::Daemon;
+        let served = match data {
+            DataState::Fixture => true,
+            DataState::Daemon => app.available(destination) == crate::model::Availability::Ready,
+            DataState::Disconnected => false,
+        };
+        let mut groups = groups(destination, page, live, daemon);
+        if !served && groups.len() > 2 {
+            groups.remove(0);
+        }
         let keep = (0..=KEEP_PAGE)
             .find(|&keep| line_cells(&groups, keep) <= room)
             .unwrap_or(KEEP_PAGE);

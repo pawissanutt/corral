@@ -24,6 +24,10 @@ const COLUMN: f32 = 8.0;
 const ROW: f32 = 16.0;
 /// A grid at least this wide gives the sidebar its full width and Ask half the content.
 const WIDE_COLUMNS: f32 = 110.0;
+/// A grid narrower than this folds an automatic sidebar to its rail.
+const NARROW_COLUMNS: f32 = 80.0;
+/// The folded sidebar: its lines, a selection bar, the count, the key.
+const RAIL_COLUMNS: f32 = 10.0;
 /// Longer than any line a terminal shows; the view a line sits in clips it.
 const LINE_CELLS: usize = 400;
 /// The box-drawing glyphs `─` and `│` in UTF-8.
@@ -87,11 +91,30 @@ pub fn wide() -> bool {
     columns() as f32 >= WIDE_COLUMNS
 }
 
-/// The sidebar's width in Cells, its lines included (tracked): on a wide grid room for "This
-/// device <name>" in its bottom line and the autopilot state on one row; otherwise the longest
-/// Settings section on its indent.
-pub fn sidebar_columns() -> f32 {
-    if wide() { 32.0 } else { 24.0 }
+/// Whether the grid is narrow enough that the sidebar folds to its rail (tracked).
+pub fn narrow() -> bool {
+    (columns() as f32) < NARROW_COLUMNS
+}
+
+/// Whether this app's terminal sidebar shows as the rail of keys and counts (tracked): always on
+/// a narrow grid, unless its labels were asked for there for the moment (a terminal cannot lay
+/// them over the page without leaving the page's cut words beside them).
+pub fn sidebar_collapsed(app: AppState) -> bool {
+    app.sidebar.get().collapsed(narrow()) && !(narrow() && app.sidebar_peeking())
+}
+
+/// The sidebar's width in Cells, its lines included (tracked): folded, the rail of each
+/// destination's count and key; on a wide grid room for "This device <name>" in its bottom
+/// line and the autopilot state on one row; otherwise the longest Settings section on its
+/// indent.
+pub fn sidebar_columns(app: AppState) -> f32 {
+    if sidebar_collapsed(app) {
+        RAIL_COLUMNS
+    } else if wide() {
+        32.0
+    } else {
+        24.0
+    }
 }
 
 /// `n` blank Cells in a row.

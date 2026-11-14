@@ -4,6 +4,8 @@
 
 use crate::model::effect::Page;
 use crate::model::hue::Hue;
+use crate::model::id::Id;
+use crate::model::live::Live;
 
 /// One run of text in one style.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -14,8 +16,10 @@ pub struct Span {
     pub dim: bool,
     pub strike: bool,
     pub hue: Hue,
-    /// Where pressing the run leads.
+    /// Where pressing the run leads in the fixture preview.
     pub link: Option<Page>,
+    /// The live record pressing the run opens.
+    pub live: Option<Live>,
 }
 
 /// A sentence or paragraph: its runs in order, with no separator added between them.
@@ -59,11 +63,21 @@ impl Span {
         self.link = Some(page);
         self
     }
+
+    pub fn live(mut self, live: Live) -> Span {
+        self.live = Some(live);
+        self
+    }
 }
 
 /// A task id as the design links it: mono, opening the task.
 pub fn task_link(id: &'static str) -> Span {
     span(id).mono().link(Page::Task(id))
+}
+
+/// A live task id: mono, opening the task by its owned id.
+pub fn live_task_link(id: &Id) -> Span {
+    span(id.as_str()).mono().live(Live::Task(id.clone()))
 }
 
 /// The text without its styles, for a terminal line, an accessibility label or a search.

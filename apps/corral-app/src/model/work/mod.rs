@@ -2,30 +2,48 @@
 //!
 //! Render [`workspace`] as the desktop/terminal dock contents, [`phone_now`] as the phone
 //! tab, and [`task_page`] as its pushed task page. Rows carry their resolved facts
-//! ([`TaskLine`](crate::model::board::TaskLine)) so the renderer reads no store. Pass button
-//! actions to [`State::act`]. The mockup's Split, Zoom and Changes filter controls have no
-//! handlers; their descriptors intentionally carry no action. Graph references contain ids
-//! only, for the Plans renderer. In the Daemon data state, [`daemon_list`] and its siblings
-//! build Now from the daemon's board instead of the fixtures.
+//! ([`TaskLine`](crate::model::board::TaskLine)) so the renderer reads no store. Controls carry a
+//! [`Press`]: a fixture [`Action`] for [`State::act`], or a live press for [`State::press`],
+//! which turns it into root effects (live navigation, Ask context, typed canonical commands,
+//! changes paging and the per-device seen cursor). The mockup's Split and Zoom controls have no
+//! handlers; their descriptors intentionally carry no action. In the Daemon data state,
+//! [`daemon_list`], [`daemon_inspector`], [`live_changes`] and their siblings build Now and
+//! Changes from the daemon's feed instead of the fixtures.
 
 mod data;
 mod inspector;
 mod list;
+mod live_changes;
+mod live_context;
+mod live_task;
 mod served;
 mod served_facts;
+mod standing;
 mod views;
+mod when;
 
 pub use data::*;
 pub use inspector::*;
 pub use list::*;
+pub use live_changes::*;
+pub use live_context::*;
+pub use live_task::*;
 pub use served::*;
 pub use served_facts::*;
+pub use standing::*;
 pub use views::*;
+pub use when::*;
 
 use std::borrow::Cow;
 
+use corral_protocol::app::{ChangesQuery, SeenAdvance};
+use corral_protocol::cmd::{Command, Expect, task::TaskCommand};
+
+use crate::model::act::{self, Act};
+use crate::model::daemon;
 use crate::model::effect::{Effect, Env, Page};
 use crate::model::nav::{Destination, SettingsSection};
+use crate::model::{Id, Live};
 
 /// The selected inspector tab, in the mockup's cycling order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -90,7 +108,7 @@ impl LowTab {
     /// The lower dock tab strip.
     pub const ALL: [Self; 2] = [Self::Since, Self::Parked];
 
-    /// The complete tab label, including its snapshot count or clock.
+    /// The fixture's complete tab label, including its snapshot count or clock.
     pub const fn label(self) -> &'static str {
         match self {
             Self::Since => "Since your last visit · 18:40",
@@ -99,11 +117,98 @@ impl LowTab {
     }
 }
 
-/// Selection, dock tabs and the daemon list's expanded groups, initially focused on T-890's
-/// story.
+/// Which events the Changes feed shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChangeFilter {
+    #[default]
+    All,
+    /// Questions and attention: what waits on the owner.
+    NeedsYou,
+    /// Gate results, review verdicts and landings.
+    Verdicts,
+    /// Worker runs and the queue.
+    Runs,
+}
+
+impl ChangeFilter {
+    /// Every filter in display order; Runs is desktop and terminal only, as in the mockup.
+    pub const ALL: [Self; 4] = [Self::All, Self::NeedsYou, Self::Verdicts, Self::Runs];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::NeedsYou => "Needs you",
+            Self::Verdicts => "Verdicts",
+            Self::Runs => "Runs",
+        }
+    }
+
+    /// Whether a daemon change of `class` passes (the change vocabulary's class names).
+    pub fn admits_class(self, class: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::NeedsYou => matches!(class, "attention" | "question"),
+            Self::Verdicts => matches!(class, "gate" | "review" | "land" | "annotation"),
+            Self::Runs => matches!(class, "work" | "queue" | "automation"),
+        }
+    }
+}
+
+/// A task command Now offers when the task's state allows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskVerb {
+    /// Set the owner's dispatch hold on a queued task.
+    Hold,
+    /// Release the task's hold.
+    Release,
+    /// Run the task again after its run failed.
+    Retry { run: Option<String> },
+}
+
+impl TaskVerb {
+    /// The command's title, as its button and receipt name it.
+    pub fn title(&self, task: &str) -> String {
+        match self {
+            Self::Hold => format!("Hold {task}"),
+            Self::Release => format!("Release {task}"),
+            Self::Retry { .. } => format!("Retry {task}"),
+        }
+    }
+
+    fn command(&self, task: &str) -> TaskCommand {
+        let id = task.to_owned();
+        match self {
+            Self::Hold => TaskCommand::Hold { id, reason: None },
+            Self::Release => TaskCommand::Release { id },
+            Self::Retry { run } => TaskCommand::Retry {
+                id,
+                run: run.clone(),
+                profile: None,
+            },
+        }
+    }
+}
+
+/// The task command this device last sent from Now for one task, kept to show its status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sent {
+    pub task: Id,
+    /// The command's `cmd_id`.
+    pub key: Id,
+    pub title: String,
+}
+
+/// How many tasks' last commands Now keeps.
+const SENT_KEPT: usize = 16;
+
+/// Changes fetched per page.
+pub const CHANGES_PER_PAGE: u16 = 100;
+
+/// Selection, dock tabs, the daemon list's expanded groups and filters, initially focused on
+/// T-890's story in the fixture. The Daemon state's selected task is the root's live selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct State {
-    /// Task id selected in the list and all inspector/context content.
+    /// Fixture task id selected in the list and all inspector/context content.
     pub sel: &'static str,
     /// Selected inspector tab.
     pub now_tab: NowTab,
@@ -117,6 +222,12 @@ pub struct State {
     pub all_parked: bool,
     /// The daemon list shows every held task, not only the first few.
     pub all_held: bool,
+    /// The Changes feed's filter.
+    pub filter: ChangeFilter,
+    /// The board goal the daemon list is narrowed to.
+    pub goal: Option<String>,
+    /// Task commands sent from Now, newest last.
+    pub sent: Vec<Sent>,
 }
 
 impl Default for State {
@@ -129,11 +240,15 @@ impl Default for State {
             all_queued: false,
             all_parked: false,
             all_held: false,
+            filter: ChangeFilter::All,
+            goal: None,
+            sent: Vec::new(),
         }
     }
 }
 
-/// Every handled control in the Now, task, Changes and More builders.
+/// Every handled fixture or form-independent control in the Now, task, Changes and More
+/// builders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     /// Select a desktop row without changing destination.
@@ -166,7 +281,7 @@ pub enum Action {
     ParkedSummary,
     /// Open the illustrative PM question's sample notice.
     SampleQuestion,
-    /// Show the per-device seen-cursor notice without altering snapshot marks.
+    /// Show the fixture's per-device seen-cursor notice without altering snapshot marks.
     MarkSeen,
     /// Open connection settings from a connection banner.
     Connection,
@@ -174,6 +289,43 @@ pub enum Action {
     RestartDaemon,
     /// Show every row of a collapsed daemon group (Queued, Held or Parked).
     ShowAll(GroupKey),
+    /// Narrow the Changes feed.
+    Filter(ChangeFilter),
+}
+
+/// What pressing a control does: a fixture or form-independent [`Action`], or a live press on
+/// owned daemon ids that [`State::press`] turns into root effects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Press {
+    Work(Action),
+    /// Select a task in place.
+    Select(Id),
+    /// Open a live record (a task page, a session, a question, a plan, a review).
+    Open(Live),
+    /// Open Ask about a record, at the revision the app shows.
+    Ask {
+        about: Live,
+        rev: Option<u64>,
+    },
+    /// Send a task command, preconditioned on the task's owner revision.
+    Run {
+        task: Id,
+        verb: TaskVerb,
+    },
+    /// Ask corrald for the result of a command whose outcome is unknown, under its own id.
+    Recover(Id),
+    /// Narrow the daemon list to a goal, or show every goal.
+    Goal(Option<String>),
+    /// Move this device's seen cursor through the change `seq`.
+    Seen(u64),
+    /// Fetch the page of changes before `seq`.
+    Older(u64),
+}
+
+impl From<Action> for Press {
+    fn from(action: Action) -> Press {
+        Press::Work(action)
+    }
 }
 
 /// A button's emphasis, without any layout or colour prescription.
@@ -192,8 +344,8 @@ pub enum ButtonKind {
 pub struct Button {
     /// Complete visible wording, static unless it embeds a selected id.
     pub label: Cow<'static, str>,
-    /// Dispatch this action when present.
-    pub action: Option<Action>,
+    /// Dispatch this press when present.
+    pub action: Option<Press>,
     /// Whether the user can press this control.
     pub enabled: bool,
     /// The mockup's button emphasis.
@@ -202,13 +354,23 @@ pub struct Button {
 
 impl Button {
     /// Build an enabled, actionable control with its complete model-owned label.
-    pub fn new(label: impl Into<Cow<'static, str>>, action: Action, kind: ButtonKind) -> Self {
+    pub fn new(
+        label: impl Into<Cow<'static, str>>,
+        action: impl Into<Press>,
+        kind: ButtonKind,
+    ) -> Self {
         Self {
             label: label.into(),
-            action: Some(action),
+            action: Some(action.into()),
             enabled: true,
             kind,
         }
+    }
+
+    /// The same control, pressable only when `enabled`.
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
     }
 }
 
@@ -219,12 +381,12 @@ pub const START_MARK: &str = "▶";
 pub const KEYS: &[&str] = &["j", "k", "down", "up", "enter", "tab"];
 
 impl State {
-    /// Select a task for every Now panel; navigation is the app's responsibility.
+    /// Select a fixture task for every Now panel; navigation is the app's responsibility.
     pub fn select(&mut self, id: &'static str) {
         self.sel = id;
     }
 
-    /// Apply a button or row action, returning all cross-domain effects.
+    /// Apply a fixture or form-independent action, returning all cross-domain effects.
     pub fn act(&mut self, action: Action, env: Env) -> Vec<Effect> {
         use crate::model::nav::Form;
         match action {
@@ -286,8 +448,76 @@ impl State {
             Action::ShowAll(GroupKey::Parked) => self.all_parked = true,
             Action::ShowAll(GroupKey::Held) => self.all_held = true,
             Action::ShowAll(_) => self.all_queued = true,
+            Action::Filter(filter) => self.filter = filter,
         }
         Vec::new()
+    }
+
+    /// Apply any press: fixture actions through [`State::act`], live presses into root effects
+    /// against the daemon's feed.
+    pub fn press(&mut self, press: Press, feed: &daemon::Feed, env: Env) -> Vec<Effect> {
+        match press {
+            Press::Work(action) => self.act(action, env),
+            Press::Select(id) => vec![Effect::Select(Live::Task(id))],
+            Press::Open(live) => vec![Effect::OpenLive(live)],
+            Press::Ask { about, rev } => vec![Effect::AskAbout {
+                context: Some(about.context(rev)),
+                text: None,
+                target: None,
+            }],
+            Press::Run { task, verb } => self.run(task, verb, feed),
+            Press::Recover(key) => vec![Effect::Recover(key)],
+            Press::Goal(goal) => {
+                self.goal = goal;
+                Vec::new()
+            }
+            Press::Seen(through) => vec![Effect::Seen(SeenAdvance { through })],
+            Press::Older(before) => vec![Effect::Changes(ChangesQuery {
+                before: Some(before),
+                after: None,
+                limit: CHANGES_PER_PAGE,
+            })],
+        }
+    }
+
+    /// The last command sent from Now for `task`, if any.
+    pub fn sent_for(&self, task: &str) -> Option<&Sent> {
+        self.sent.iter().rev().find(|sent| sent.task == *task)
+    }
+
+    /// Builds the task command against the loaded detail's owner revision. Nothing is sent
+    /// without that revision, nor while this task's previous command has no known outcome: a
+    /// new identity after an uncertain one could run the change twice.
+    fn run(&mut self, task: Id, verb: TaskVerb, feed: &daemon::Feed) -> Vec<Effect> {
+        if let Some(previous) = self.sent_for(&task)
+            && act::status(feed, &previous.key).is_some_and(|status| status.uncertain())
+        {
+            return vec![Effect::Toast(format!(
+                "{} has no known result yet; nothing new was sent.",
+                previous.title
+            ))];
+        }
+        let Some(detail) = loaded_task(feed, &task) else {
+            return vec![Effect::Toast(format!(
+                "{task} detail has not loaded; nothing was sent."
+            ))];
+        };
+        let act = Act::new(verb.title(&task), Command::Task(verb.command(&task)))
+            .expect(Expect::TaskRevision {
+                task: task.to_string(),
+                revision: detail.owner_revision.clone(),
+            })
+            .about(Live::Task(task.clone()));
+        self.sent.retain(|sent| sent.task != task);
+        self.sent.push(Sent {
+            task,
+            key: act.key.clone(),
+            title: act.title.clone(),
+        });
+        if self.sent.len() > SENT_KEPT {
+            self.sent.remove(0);
+        }
+        vec![Effect::Act(act)]
     }
 
     /// Moves the inspector to its next tab, wrapping from Session back to Story.
@@ -299,7 +529,7 @@ impl State {
         };
     }
 
-    /// Port Now's j/k, arrows, Enter and cycling Tab handler.
+    /// Port Now's j/k, arrows, Enter and cycling Tab handler for the fixture preview.
     ///
     /// `page` prevents handling keys for another domain's pushed page. Collapsed summaries
     /// and extra plan/PM rows are not keyboard-selectable, as in the mockup. Empty/elsewhere
@@ -398,5 +628,55 @@ mod tests {
         state.key("k", None, env);
         assert_eq!(state.sel, "T-890");
         assert!(!visible_task_ids(env, false).contains(&"T-868"));
+    }
+
+    #[test]
+    fn a_task_command_needs_the_loaded_owner_revision_and_is_never_reissued_while_uncertain() {
+        let env = Env {
+            conn: Conn::Healthy,
+            mode: DataMode::Live,
+            form: Form::Desktop,
+        };
+        let mut feed = daemon::Feed::default();
+        let mut state = State::default();
+        let effects = state.press(
+            Press::Run {
+                task: Id::from("T-9"),
+                verb: TaskVerb::Release,
+            },
+            &feed,
+            env,
+        );
+        assert!(matches!(effects.as_slice(), [Effect::Toast(_)]));
+        assert!(state.sent.is_empty());
+        state.sent.push(Sent {
+            task: Id::from("T-9"),
+            key: Id::from("cmd-1"),
+            title: "Release T-9".into(),
+        });
+        feed.commands.insert(
+            Id::from("cmd-1"),
+            daemon::CommandState {
+                device: None,
+                method: "act.submit".into(),
+                request: serde_json::Value::Null,
+                status: daemon::CommandStatus::Unknown,
+                result: None,
+                error: None,
+                entry: None,
+            },
+        );
+        let effects = state.press(
+            Press::Run {
+                task: Id::from("T-9"),
+                verb: TaskVerb::Release,
+            },
+            &feed,
+            env,
+        );
+        assert!(
+            matches!(effects.as_slice(), [Effect::Toast(text)] if text.contains("no known result"))
+        );
+        assert_eq!(state.sent.len(), 1);
     }
 }

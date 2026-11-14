@@ -1,7 +1,16 @@
 //! What a reducer asks the app to do, and the switches every screen reads: the connection state,
 //! the data state, and the device the app runs on.
 
-use crate::model::nav::{Destination, Form, SettingsSection};
+use corral_protocol::app::{ChangesQuery, SeenAdvance};
+use corral_protocol::assistant::{
+    AssistantSend, AssistantSessionOp, AssistantStop, AssistantWarm, ContextRef, PromptAnswer,
+};
+use corral_protocol::detail::DetailGet;
+
+use crate::model::act::Act;
+use crate::model::id::Id;
+use crate::model::live::Live;
+use crate::model::nav::{AskTarget, Destination, Form, SettingsSection};
 
 /// The connection states of the design (its "Connection" switch).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -90,7 +99,8 @@ pub struct Env {
 }
 
 impl Env {
-    /// The device the app runs on, as attribution names it.
+    /// The fixture device the preview attributes actions to. Live views name the
+    /// authenticated device through `AppState::device_name` instead.
     pub const fn device(self) -> &'static str {
         match self.form {
             Form::Phone => "pawis-iphone",
@@ -98,13 +108,14 @@ impl Env {
         }
     }
 
-    /// `via=app:<device>`.
+    /// `via=app:<device>` of the fixture device.
     pub fn via(self) -> String {
         format!("via=app:{}", self.device())
     }
 }
 
-/// A page above a destination. Ids are fixture ids, so they are static.
+/// A page above a destination in the fixture preview. Ids are fixture ids, so they are static;
+/// live records open through `Live` instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Page {
     /// The handover sheet of question T-868/R1/Q1, in focus mode.
@@ -163,4 +174,53 @@ pub enum Effect {
     CloseAsk,
     /// Switch the connection state (the Connection settings' state cards do).
     SetConn(Conn),
+    /// Select a live record and push its page where the form stacks it.
+    OpenLive(Live),
+    /// Select a live record in place without navigating.
+    Select(Live),
+    /// Open the one Ask composer with a real bounded context, an optional draft and, when
+    /// given, the recipient (otherwise the composer keeps its current one).
+    AskAbout {
+        context: Option<ContextRef>,
+        text: Option<String>,
+        target: Option<AskTarget>,
+    },
+    /// Run a typed canonical command (preview and fresh confirmation when it is Confirm-class).
+    Act(Act),
+    /// Ask corrald for the result of the command with this id, without resubmitting it.
+    Recover(Id),
+    /// Fetch, revalidate or page a detail.
+    Detail(DetailGet),
+    Changes(ChangesQuery),
+    Seen(SeenAdvance),
+    /// Send a message in the one chat, with the attachment refs it carries.
+    Send(AssistantSend),
+    /// Remove a staged attachment from the next message by its key; an upload is discarded.
+    Unattach(Id),
+    /// Withdraw or discard this device's unacknowledged send under its own command id. The
+    /// client removes a never-sent or refused one locally and asks corrald for the rest.
+    CancelSend(Id),
+    /// Answer an assistant permission prompt, through a fresh confirmation when `confirm`.
+    Prompt {
+        answer: PromptAnswer,
+        title: String,
+        confirm: bool,
+    },
+    /// Open or close a scoped thread subscription ("quick" or A-n).
+    Thread {
+        scope: String,
+        open: bool,
+    },
+    Stop(AssistantStop),
+    Warm(AssistantWarm),
+    /// Keep the unsent draft of a thread durably on this device.
+    Draft {
+        thread: String,
+        text: String,
+    },
+    /// Start, end, take over or reconfigure an assistant session; its reply is read by `key`.
+    Session {
+        key: Id,
+        op: AssistantSessionOp,
+    },
 }

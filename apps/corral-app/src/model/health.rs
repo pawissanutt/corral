@@ -1,6 +1,9 @@
-//! Connection health, stale-board banners and shell snapshot data.
+//! Connection health, stale-board banners, destination availability and shell snapshot data.
 
 use std::borrow::Cow;
+
+use corral_protocol::app as wire;
+use corral_protocol::rows::{InboxState, PlanState};
 
 use crate::model::daemon::{DaemonLevel, Feed, Group, Link, PmLevel, RuntimeLevel};
 use crate::model::devices::DeviceLink;
@@ -27,21 +30,12 @@ impl DataState {
             Self::Disconnected => "Disconnected",
         }
     }
-    /// The storage slug.
+    /// The palette's id and label slug; storage remembers the preview as `preview` (`state`).
     pub const fn slug(self) -> &'static str {
         match self {
             Self::Fixture => "fixture",
             Self::Daemon => "daemon",
             Self::Disconnected => "disconnected",
-        }
-    }
-    /// Finds a data state by its slug.
-    pub fn from_slug(slug: &str) -> Option<DataState> {
-        match slug {
-            "fixture" => Some(Self::Fixture),
-            "daemon" => Some(Self::Daemon),
-            "disconnected" => Some(Self::Disconnected),
-            _ => None,
         }
     }
 }
@@ -154,14 +148,110 @@ impl Snapshot {
     /// The destination body line for this state.
     pub fn body_line(&self, destination: Destination) -> Cow<'static, str> {
         match self.state {
-            DataState::Daemon => format!(
-                "corrald does not serve {} yet. The palette's Demo group switches Data to Fixture for the mockup's content.",
-                destination.label()
-            ).into(),
+            DataState::Daemon => {
+                format!("Connecting to corrald for {}…", destination.label()).into()
+            }
             DataState::Fixture => "Not built yet. This build is the app shell.".into(),
             DataState::Disconnected => "No connection to corrald.".into(),
         }
     }
+}
+
+/// Whether corrald serves a destination to this app session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Availability {
+    Ready,
+    /// No session has negotiated capabilities yet.
+    Connecting,
+    /// The session's daemon does not advertise the capability.
+    Missing(&'static str),
+}
+
+/// The capability a destination needs; Now (the board) and Settings need none.
+pub const fn capability(destination: Destination) -> Option<&'static str> {
+    match destination {
+        Destination::Inbox => Some(wire::INBOX_V1),
+        Destination::Changes => Some(wire::CHANGES_V1),
+        Destination::Plans => Some(wire::PLANS_V1),
+        Destination::Agents => Some(wire::AGENTS_V1),
+        Destination::Review => Some(wire::REVIEW_V1),
+        Destination::Timeline => Some(wire::TIMELINE_V1),
+        Destination::Usage => Some(wire::USAGE_V1),
+        Destination::Now | Destination::Settings => None,
+    }
+}
+
+/// Whether the daemon behind the feed serves the destination.
+pub fn availability(feed: &Feed, destination: Destination) -> Availability {
+    match capability(destination) {
+        None => Availability::Ready,
+        Some(capability) => capability_availability(feed, capability),
+    }
+}
+
+/// Whether the daemon serves `capability`. Only capabilities negotiated with this corrald can
+/// say it does not; with none negotiated and no live link it is not known yet (a cold boot
+/// offline, or still connecting), which is never a refusal by the server.
+pub fn capability_availability(feed: &Feed, capability: &'static str) -> Availability {
+    if feed.capable(capability) {
+        Availability::Ready
+    } else if feed.capabilities.is_empty() && feed.link != Link::Up {
+        Availability::Connecting
+    } else {
+        Availability::Missing(capability)
+    }
+}
+
+/// The line shown in place of a destination corrald does not serve (yet).
+pub fn unavailable_line(feed: &Feed, destination: Destination) -> String {
+    let label = destination.label();
+    match availability(feed, destination) {
+        Availability::Ready => String::new(),
+        Availability::Missing(capability) => format!(
+            "This corrald does not offer {label} to the app ({capability} is not advertised)."
+        ),
+        Availability::Connecting if feed.link == Link::Down => {
+            format!("corrald is not reachable. {label} shows once a session is open.")
+        }
+        Availability::Connecting => format!("Connecting to corrald for {label}…"),
+    }
+}
+
+/// Open needs-you rows: served questions when the Inbox is served, else the board's group.
+pub fn needs_you(feed: &Feed) -> usize {
+    if feed.capable(wire::INBOX_V1) {
+        feed.inbox
+            .values()
+            .filter(|row| matches!(row.state, InboxState::Open))
+            .count()
+    } else {
+        feed.board.count(Group::NeedsYou)
+    }
+}
+
+/// Plans waiting for the owner's acceptance.
+pub fn awaiting_plans(feed: &Feed) -> usize {
+    feed.plans
+        .values()
+        .filter(|row| matches!(row.state, PlanState::Awaiting))
+        .count()
+}
+
+/// The authenticated name of this device: the daemon's session, else its enrolment.
+pub fn device_name(feed: &Feed) -> Option<&str> {
+    feed.session
+        .as_ref()
+        .map(|session| session.device.name.as_str())
+        .or(match &feed.device {
+            DeviceLink::Enrolled { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+}
+
+/// A calendar day as the shell shows it, "Sat 14 Nov", from `YYYY-MM-DD`.
+pub fn day_label(date: &str) -> Option<String> {
+    let date: jiff::civil::Date = date.parse().ok()?;
+    Some(date.strftime("%a %-d %b").to_string())
 }
 
 /// A banner action, absent on phone where the banner is informational.
@@ -276,8 +366,15 @@ pub fn daemon_env(feed: &Feed, form: Form) -> crate::model::effect::Env {
 /// Projects the last daemon reading without borrowing session-owned strings.
 pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
     let down = feed.link == Link::Down;
+    // Health arrives only once this device is authenticated; before that the device's own
+    // standing is the truth, not an endless "connecting".
+    let refused = feed.health.is_none() && matches!(feed.device, DeviceLink::Failed(_));
     let (value, tone): (Cow<'static, str>, Tone) = if down {
         ("not reachable".into(), Tone::Fail)
+    } else if refused {
+        ("not connected".into(), Tone::Fail)
+    } else if feed.health.is_none() && feed.device == DeviceLink::Unenrolled {
+        ("not enrolled".into(), Tone::Warn)
     } else {
         match feed.health.as_ref().map(|health| health.level) {
             Some(DaemonLevel::Healthy) => ("healthy".into(), Tone::Ok),
@@ -327,37 +424,58 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
             tone: if down { Tone::Warn } else { tone },
         });
     }
-    let reach = if down {
-        feed.synced.as_ref().map_or_else(
+    let reach = if refused {
+        None
+    } else if down {
+        Some(feed.synced.as_ref().map_or_else(
             || Cow::Borrowed("offline"),
             |synced| Cow::Owned(format!("offline · last sync {synced}")),
-        )
+        ))
+    } else if cfg!(target_arch = "wasm32") {
+        Some(Cow::Borrowed("direct · paired, encrypted"))
     } else {
-        Cow::Borrowed("direct · loopback")
+        Some(Cow::Borrowed("direct · loopback"))
     };
-    let count = feed.board.count(Group::NeedsYou);
+    let count = needs_you(feed);
     let workspace_name = feed.workspace.as_deref().and_then(|path| {
         path.trim_end_matches('/')
             .rsplit('/')
             .find(|part| !part.is_empty())
     });
-    let source = workspace_name.map_or_else(
-        || Cow::Borrowed("corrald"),
-        |name| Cow::Owned(format!("corrald · {name}")),
-    );
-    let name = workspace_name.unwrap_or("corrald").to_owned();
-    let device = match &feed.device {
-        DeviceLink::Enrolled { name, .. } => Some(name),
-        _ => feed.host.as_ref(),
+    let day = day_label(&feed.date);
+    let source = match (workspace_name, day) {
+        (Some(name), Some(day)) => Cow::Owned(format!("corrald · {name} · {day}")),
+        (Some(name), None) => Cow::Owned(format!("corrald · {name}")),
+        (None, Some(day)) => Cow::Owned(format!("corrald · {day}")),
+        (None, None) => Cow::Borrowed("corrald"),
     };
+    let name = workspace_name.unwrap_or("corrald").to_owned();
+    let device = device_name(feed);
+    let mode = feed.settings.values().next().map(|settings| {
+        use corral_protocol::rows::OperatingMode;
+        match settings.mode {
+            OperatingMode::Assist => "Mode · assist",
+            OperatingMode::Autopilot
+                if crate::model::settings::live::grant_on(settings, "automation.paused") =>
+            {
+                "Mode · autopilot (paused)"
+            }
+            OperatingMode::Autopilot => "Mode · autopilot",
+            OperatingMode::Other => "Mode · unknown",
+        }
+    });
+    let mut counts = vec![(Destination::Inbox, count as u32)];
+    if feed.capable(wire::PLANS_V1) {
+        counts.push((Destination::Plans, awaiting_plans(feed) as u32));
+    }
     Snapshot::new(
         DataState::Daemon,
         Health {
             segments,
-            reach: Some(reach),
-            e2e: false,
+            reach,
+            e2e: !refused && cfg!(target_arch = "wasm32"),
             attention: (count > 0).then(|| format!("{count} need you").into()),
-            clock: Some(feed.clock.clone().into()),
+            clock: (!feed.clock.is_empty()).then(|| feed.clock.clone().into()),
             source: Some(source),
         },
         Some(Workspace {
@@ -369,16 +487,15 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
                 .cloned()
                 .unwrap_or_default()
                 .into(),
-            autopilot: "",
+            autopilot: mode.unwrap_or(""),
             device: device
-                .cloned()
-                .map(Cow::Owned)
+                .map(|name| Cow::Owned(name.to_owned()))
                 .unwrap_or(Cow::Borrowed("this device")),
             via: device
                 .map(|name| Cow::Owned(format!("via=app:{name}")))
                 .unwrap_or(Cow::Borrowed("via=app")),
         }),
-        Vec::new(),
+        counts,
     )
 }
 
@@ -432,6 +549,29 @@ mod tests {
     use crate::model::daemon::{DaemonHealth, Runtime};
 
     #[test]
+    fn ask_is_unknown_before_negotiation_and_refused_only_by_a_negotiated_daemon() {
+        let mut feed = Feed::default();
+        for link in [Link::Connecting, Link::Down] {
+            feed.link = link;
+            assert_eq!(
+                capability_availability(&feed, wire::ASSISTANT_V1),
+                Availability::Connecting
+            );
+        }
+        feed.link = Link::Up;
+        feed.capabilities.insert(wire::INBOX_V1.into());
+        assert_eq!(
+            capability_availability(&feed, wire::ASSISTANT_V1),
+            Availability::Missing(wire::ASSISTANT_V1)
+        );
+        feed.capabilities.insert(wire::ASSISTANT_V1.into());
+        assert_eq!(
+            capability_availability(&feed, wire::ASSISTANT_V1),
+            Availability::Ready
+        );
+    }
+
+    #[test]
     fn down_daemon_has_no_healthy_segments_and_retains_sync_age() {
         let feed = Feed {
             link: Link::Down,
@@ -476,19 +616,35 @@ mod tests {
     }
 
     #[test]
-    fn unserved_destination_body_names_its_destination() {
-        let snapshot = daemon_snapshot(&Feed::default(), Form::Terminal);
-        assert!(
-            snapshot
-                .body_line(Destination::Usage)
-                .contains(Destination::Usage.label())
+    fn unserved_destination_names_its_missing_capability() {
+        let mut feed = Feed {
+            link: Link::Up,
+            ..Feed::default()
+        };
+        feed.capabilities.insert(wire::INBOX_V1.into());
+        assert_eq!(availability(&feed, Destination::Inbox), Availability::Ready);
+        assert_eq!(availability(&feed, Destination::Now), Availability::Ready);
+        assert_eq!(
+            availability(&feed, Destination::Usage),
+            Availability::Missing(wire::USAGE_V1)
+        );
+        let line = unavailable_line(&feed, Destination::Usage);
+        assert!(line.contains(Destination::Usage.label()) && line.contains(wire::USAGE_V1));
+        assert_eq!(
+            availability(&Feed::default(), Destination::Usage),
+            Availability::Connecting
         );
     }
 
     #[test]
-    fn daemon_identity_uses_host_and_workspace_instead_of_fixture_or_store_path() {
+    fn daemon_identity_uses_the_authenticated_device_and_actual_date_not_the_host() {
         let feed = Feed {
             host: Some("devbox".into()),
+            device: DeviceLink::Enrolled {
+                id: "dev-1".into(),
+                name: "owner-laptop".into(),
+            },
+            date: "2026-11-14".into(),
             workspace: Some("/home/owner/workspace".into()),
             store: Some("/home/owner/workspace/.corral".into()),
             ..Feed::default()
@@ -496,17 +652,15 @@ mod tests {
         let snapshot = daemon_snapshot(&feed, Form::Terminal);
         let workspace = snapshot.workspace.as_ref().expect("workspace");
         assert_eq!(workspace.name, "workspace");
-        assert_eq!(workspace.device, "devbox");
-        assert_eq!(workspace.via, "via=app:devbox");
-        assert!(
-            snapshot
-                .health
-                .source
-                .as_deref()
-                .is_some_and(|source| { source.contains("workspace") && !source.contains('/') })
+        assert_eq!(workspace.device, "owner-laptop");
+        assert_eq!(workspace.via, "via=app:owner-laptop");
+        assert_eq!(
+            snapshot.health.source.as_deref(),
+            Some("corrald · workspace · Sat 14 Nov")
         );
         let unknown = daemon_snapshot(
             &Feed {
+                host: feed.host,
                 store: feed.store,
                 ..Feed::default()
             },

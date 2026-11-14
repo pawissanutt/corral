@@ -553,6 +553,10 @@ impl ReadView for SqliteView {
                     filters.push("seq > ?".to_owned());
                     args.push(Sql::Integer(int(after.0).or_view()?));
                 }
+                if let Some(before) = q.before {
+                    filters.push("seq < ?".to_owned());
+                    args.push(Sql::Integer(int(before.0).or_view()?));
+                }
                 let order = if q.newest_first { "DESC" } else { "ASC" };
                 selects.push(format!(
                     "SELECT * FROM (SELECT {} FROM events{} ORDER BY seq {order} LIMIT {take})",
@@ -575,6 +579,10 @@ impl ReadView for SqliteView {
         if let Some(after) = q.after {
             filters.push("seq > ?".to_owned());
             args.push(Sql::Integer(int(after.0).or_view()?));
+        }
+        if let Some(before) = q.before {
+            filters.push("seq < ?".to_owned());
+            args.push(Sql::Integer(int(before.0).or_view()?));
         }
         if let Some(task) = &q.task {
             filters.push("task = ?".to_owned());

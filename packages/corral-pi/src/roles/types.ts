@@ -33,7 +33,7 @@ export type CorralOp =
   | "job" | "job_monitor"
   | "plan_write" | "plan_submit" | "plan_verdict" | "owner_action" | "write_permission"
   | "assistant_plan" | "assistant_plan_review" | "assistant_handoff" | "notes" | "pm_action"
-  | "pm_shadow";
+  | "pm_shadow" | "owner_ask" | "owner_prompt" | "idea_file";
 
 export const CORRAL_OPS: readonly CorralOp[] = [
   "hello", "event", "receipt_lookup", "ask", "withdraw", "wait", "progress", "checkpoint",
@@ -43,7 +43,7 @@ export const CORRAL_OPS: readonly CorralOp[] = [
   "todo", "job", "job_monitor", "memory_list", "memory_read", "memory_put", "memory_remove",
   "plan_write", "plan_submit", "plan_verdict", "owner_action", "write_permission",
   "assistant_plan", "assistant_plan_review", "assistant_handoff", "notes", "pm_action",
-  "pm_shadow",
+  "pm_shadow", "owner_ask", "owner_prompt", "idea_file",
 ];
 
 /** The launcher-bound identity; never chosen by the model. */
@@ -78,6 +78,7 @@ export interface CapabilitySet {
 /** What a role module can see when it builds its loadout and contract. */
 export interface RoleContext {
   readonly identity: HostIdentity;
+  readonly daemonHosted?: boolean;
   /** Enabled only by the Rust launch snapshot; absent means disabled. */
   readonly todo?: boolean;
   /** Absent when an older corral launched this host without a snapshot. */
@@ -93,6 +94,8 @@ export interface RoleContext {
     turn(): { id: number | undefined; signal: AbortSignal };
     call(requestId: string, payload: Record<string, unknown>): Promise<import("../tools/corral.ts").CorralReceipt>;
     emit(kind: string, data: Record<string, unknown>): void;
+    /** Daemon-only canonical permission prompt; no local decision is manufactured. */
+    remote?(payload: Record<string, unknown>, signal: AbortSignal): Promise<{ authorized: boolean; state: string }>;
   };
   readonly registerCapability?: (pid: number) => () => void;
   /** The store root, independent of a project's or assistant scratch's tool cwd. */

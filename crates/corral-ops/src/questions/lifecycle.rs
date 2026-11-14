@@ -168,6 +168,7 @@ pub fn expire_deadlines(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<Vec<
                     at,
                     message_id: None,
                     superseded_by: None,
+                    attribution: None,
                 };
                 let body = answer_body(&question, &answer, "question_answer");
                 question.answer = Some(answer);

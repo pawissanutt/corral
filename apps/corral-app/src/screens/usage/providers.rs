@@ -1,10 +1,11 @@
 //! One provider's window: the desktop cell of the provider grid (`.ucell`), the phone's stacked
 //! block (`.pband`) and the terminal's gauge line. All words and figures are the model's
-//! `ProviderView`.
+//! `ProviderView`; where corral holds no quota fact the big figure is the period's cost, the
+//! headroom says the quota is unknown and the chart's place says no samples were recorded.
 
 use nsh_core::prelude::*;
 
-use crate::model::usage::{Level, ProviderView, USED_LABEL};
+use crate::model::usage::{Level, ProviderView};
 use crate::screens::usage::cellbar::gauge;
 use crate::screens::usage::chart::chart;
 use crate::ui::term;
@@ -13,7 +14,7 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 /// The mockup's chart view boxes: desktop 380 by 96, phone 354 by 92.
 const DESKTOP_CHART: (f32, f32) = (380.0, 96.0);
 const PHONE_CHART: (f32, f32) = (354.0, 92.0);
-/// Terminal gauge line: the label column, the percent column, and the bar's bounds.
+/// Terminal gauge line: the label column, the figure column, and the bar's bounds.
 const LABEL_CELLS: usize = 24;
 const USED_CELLS: usize = 4;
 const BAR_MIN: usize = 10;
@@ -29,15 +30,28 @@ fn headroom_ink(provider_level: Level) -> Token {
     }
 }
 
-/// A desktop cell: the label and window, the big percent with "used", the headroom in its
+/// The band chart, or the model's words in its place at the chart's height.
+fn window_chart(item: &ProviderView, (width, height): (f32, f32), size: f32) -> AnyElement {
+    match (&item.chart, item.chart_missing) {
+        (Some(source), _) => chart(source.clone(), width, height),
+        (None, Some(words)) => view()
+            .h(px(height))
+            .flex_row()
+            .items_center()
+            .child(words_text(words, size, FontWeight::NORMAL, Token::Ink3).italic())
+            .into_element(),
+        (None, None) => view().into_element(),
+    }
+}
+
+/// A desktop cell: the label and window, the big figure with its word, the headroom in its
 /// level, the reset time at the trailing edge, the band chart, the cost line. `first` leaves
 /// out the rule on its left. test_id `usage-<provider id>`.
 pub fn desktop_cell(item: &ProviderView, first: bool) -> AnyElement {
-    let provider = item.provider;
     view()
-        .test_id(&format!("usage-{}", provider.id))
+        .test_id(&format!("usage-{}", item.id))
         .role(AccessibilityRole::Group)
-        .label(provider.label)
+        .label(item.label.clone())
         .flex_1()
         .min_w(px(0.0))
         .px(px(18.0))
@@ -52,9 +66,14 @@ pub fn desktop_cell(item: &ProviderView, first: bool) -> AnyElement {
                 .flex_wrap()
                 .items_baseline()
                 .gap_x(px(8.0))
-                .child(words(provider.label, 13.5, FontWeight::BOLD, Token::Ink))
-                .child(words(
-                    provider.window,
+                .child(words_text(
+                    item.label.clone(),
+                    13.5,
+                    FontWeight::BOLD,
+                    Token::Ink,
+                ))
+                .child(words_text(
+                    item.window.clone(),
                     11.5,
                     FontWeight::NORMAL,
                     Token::Ink3,
@@ -72,33 +91,38 @@ pub fn desktop_cell(item: &ProviderView, first: bool) -> AnyElement {
                         .flex_row()
                         .items_baseline()
                         .gap(px(4.0))
-                        .child(big(item.used.clone(), 26.0))
-                        .child(words(USED_LABEL, 12.0, FontWeight::MEDIUM, Token::Ink3)),
+                        .child(big(item.big.clone(), 26.0))
+                        .child(words_text(
+                            item.big_label,
+                            12.0,
+                            FontWeight::MEDIUM,
+                            Token::Ink3,
+                        )),
                 )
-                .child(words(
+                .child(words_text(
                     item.headroom.clone(),
                     13.0,
                     FontWeight::SEMIBOLD,
                     headroom_ink(item.level),
                 ))
                 .child(
-                    words(item.resets.clone(), 12.0, FontWeight::NORMAL, Token::Ink3).ml(auto()),
+                    words_text(item.resets.clone(), 12.0, FontWeight::NORMAL, Token::Ink3)
+                        .ml(auto()),
                 ),
         )
         .child(
             view()
                 .mt(px(6.0))
-                .child(chart(provider, DESKTOP_CHART.0, DESKTOP_CHART.1)),
+                .child(window_chart(item, DESKTOP_CHART, 12.0)),
         )
-        .child(words(item.costs.clone(), 12.0, FontWeight::NORMAL, Token::Ink3).mt(px(4.0)))
+        .child(words_text(item.costs.clone(), 12.0, FontWeight::NORMAL, Token::Ink3).mt(px(4.0)))
         .into_element()
 }
 
-/// A phone block (`.pband`): the label and window, the big percent, the headroom, the reset
+/// A phone block (`.pband`): the label and window, the big figure, the headroom, the reset
 /// time, the band chart, then each profile with its share and cost. test_id
 /// `usage-<provider id>`.
 pub fn phone_block(item: &ProviderView) -> AnyElement {
-    let provider = item.provider;
     let profiles = item
         .profiles
         .iter()
@@ -108,7 +132,7 @@ pub fn phone_block(item: &ProviderView) -> AnyElement {
                 .items_baseline()
                 .gap(px(8.0))
                 .child(
-                    text(profile.name)
+                    text(profile.name.clone())
                         .flex_shrink(1.0)
                         .min_w(px(0.0))
                         .font_family(FONT_MONO)
@@ -117,7 +141,7 @@ pub fn phone_block(item: &ProviderView) -> AnyElement {
                         .text_color(color(Token::Ink)),
                 )
                 .child(
-                    words(
+                    words_text(
                         profile.detail.clone(),
                         14.0,
                         FontWeight::NORMAL,
@@ -129,9 +153,9 @@ pub fn phone_block(item: &ProviderView) -> AnyElement {
         })
         .collect::<Vec<_>>();
     view()
-        .test_id(&format!("usage-{}", provider.id))
+        .test_id(&format!("usage-{}", item.id))
         .role(AccessibilityRole::Group)
-        .label(provider.label)
+        .label(item.label.clone())
         .px(px(18.0))
         .pt(px(14.0))
         .pb(px(16.0))
@@ -144,10 +168,13 @@ pub fn phone_block(item: &ProviderView) -> AnyElement {
                 .gap(px(8.0))
                 .mb(px(8.0))
                 .child(
-                    words(provider.label, 15.0, FontWeight::BOLD, Token::Ink)
+                    words_text(item.label.clone(), 15.0, FontWeight::BOLD, Token::Ink)
                         .role(AccessibilityRole::Header),
                 )
-                .child(words(provider.window, 15.0, FontWeight::MEDIUM, Token::Ink).ml(auto())),
+                .child(
+                    words_text(item.window.clone(), 15.0, FontWeight::MEDIUM, Token::Ink)
+                        .ml(auto()),
+                ),
         )
         .child(
             view()
@@ -155,15 +182,15 @@ pub fn phone_block(item: &ProviderView) -> AnyElement {
                 .flex_wrap()
                 .items_baseline()
                 .gap_x(px(12.0))
-                .child(big(item.used.clone(), 30.0))
-                .child(words(
+                .child(big(item.big.clone(), 30.0))
+                .child(words_text(
                     item.headroom.clone(),
                     16.0,
                     FontWeight::BOLD,
                     headroom_ink(item.level),
                 ))
                 .child(
-                    words(
+                    words_text(
                         item.phone_resets.clone(),
                         13.0,
                         FontWeight::NORMAL,
@@ -175,21 +202,22 @@ pub fn phone_block(item: &ProviderView) -> AnyElement {
         .child(
             view()
                 .mt(px(6.0))
-                .child(chart(provider, PHONE_CHART.0, PHONE_CHART.1)),
+                .child(window_chart(item, PHONE_CHART, 13.0)),
         )
         .child(view().gap(px(4.0)).mt(px(8.0)).children(profiles))
         .into_element()
 }
 
-/// A terminal gauge line and its detail: the label (bold, in a fixed column), the percent used
-/// (bold), the window gauge as wide as `room` Cells allow, the headroom (bold in the held hue
-/// once in a zone, quiet before); under it, indented, the window, the reset time and the cost
-/// line, wrapped onto as many lines as `room` needs. test_id `usage-<provider id>`.
+/// A terminal gauge line and its detail: the label (bold, in a fixed column), the big figure
+/// (bold), the window gauge as wide as `room` Cells allow (blank where the quota is unknown),
+/// the headroom (bold in the held hue once in a zone, quiet before); under it, indented, the
+/// window, the reset time and the cost line, wrapped onto as many lines as `room` needs.
+/// test_id `usage-<provider id>`.
 pub fn terminal_line(item: &ProviderView, room: usize) -> AnyElement {
-    let provider = item.provider;
     let headroom_cells = item.headroom.chars().count();
+    let figure_cells = item.big.chars().count().max(USED_CELLS);
     let bar = room
-        .saturating_sub(LABEL_CELLS + USED_CELLS + 1 + GAP_CELLS + headroom_cells)
+        .saturating_sub(LABEL_CELLS + figure_cells + 1 + GAP_CELLS + headroom_cells)
         .clamp(BAR_MIN, BAR_MAX);
     let in_zone = item.level != Level::None;
     let headroom = text(item.headroom.clone())
@@ -197,14 +225,23 @@ pub fn terminal_line(item: &ProviderView, room: usize) -> AnyElement {
         .flex_shrink_0()
         .text_color(color(headroom_ink(item.level)))
         .when(in_zone, |t| t.font_weight(FontWeight::BOLD));
-    let details = pack(
-        &[provider.window, item.resets.as_str(), item.costs.as_str()],
-        room.saturating_sub(GAP_CELLS),
-    );
+    let meter = match item.used {
+        Some(used) => gauge(used, bar),
+        None => view()
+            .w(term::cells(bar as f32))
+            .flex_shrink_0()
+            .into_element(),
+    };
+    let mut parts = vec![item.window.as_str()];
+    if !item.resets.is_empty() {
+        parts.push(item.resets.as_str());
+    }
+    parts.push(item.costs.as_str());
+    let details = pack(&parts, room.saturating_sub(GAP_CELLS));
     view()
-        .test_id(&format!("usage-{}", provider.id))
+        .test_id(&format!("usage-{}", item.id))
         .role(AccessibilityRole::Group)
-        .label(provider.label)
+        .label(item.label.clone())
         .child(
             view()
                 .flex_row()
@@ -215,7 +252,7 @@ pub fn terminal_line(item: &ProviderView, room: usize) -> AnyElement {
                         .w(term::cells(LABEL_CELLS as f32))
                         .flex_shrink_0()
                         .child(
-                            text(provider.label)
+                            text(item.label.clone())
                                 .number_of_lines(1u32)
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(color(Token::Ink)),
@@ -223,19 +260,19 @@ pub fn terminal_line(item: &ProviderView, room: usize) -> AnyElement {
                 )
                 .child(
                     view()
-                        .w(term::cells(USED_CELLS as f32))
+                        .w(term::cells(figure_cells as f32))
                         .flex_shrink_0()
                         .flex_row()
                         .justify_end()
                         .child(
-                            text(item.used.clone())
+                            text(item.big.clone())
                                 .number_of_lines(1u32)
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(color(Token::Ink)),
                         ),
                 )
                 .child(term::space(1.0))
-                .child(gauge(provider.used, bar))
+                .child(meter)
                 .child(term::space(GAP_CELLS as f32))
                 .child(headroom),
         )
@@ -270,7 +307,7 @@ fn pack(parts: &[&str], room: usize) -> Vec<String> {
 }
 
 /// Text in the app's font at `size`, one paragraph.
-fn words(content: impl Into<SharedString>, size: f32, weight: FontWeight, ink: Token) -> Text {
+fn words_text(content: impl Into<SharedString>, size: f32, weight: FontWeight, ink: Token) -> Text {
     text(content.into())
         .font_family(FONT_TEXT)
         .text_size(px(size))
@@ -278,7 +315,7 @@ fn words(content: impl Into<SharedString>, size: f32, weight: FontWeight, ink: T
         .text_color(color(ink))
 }
 
-/// The big percent (`.ucell .big`): bold, tabular, drawn a little tight.
+/// The big figure (`.ucell .big`): bold, tabular, drawn a little tight.
 fn big(content: String, size: f32) -> Text {
     text(content)
         .flex_shrink_0()

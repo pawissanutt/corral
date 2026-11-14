@@ -534,6 +534,7 @@ impl Store {
         let view = self.view()?;
         let query = EventQuery {
             after: Some(EventSeq(after)),
+            before: None,
             task: task.map(str::to_owned),
             kinds: kinds.iter().map(|kind| (*kind).to_owned()).collect(),
             run: run.map(str::to_owned),

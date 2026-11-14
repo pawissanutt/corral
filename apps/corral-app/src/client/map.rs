@@ -1,6 +1,6 @@
 use crate::model::board::Mark;
 use crate::model::daemon::{
-    self, Agent, DaemonHealth, DaemonLevel, Group, PmLevel, Runtime, RuntimeLevel, Step, Task,
+    Agent, DaemonHealth, DaemonLevel, Group, PmLevel, Runtime, RuntimeLevel, Step, Task,
 };
 use corral_protocol::board::{BoardGroup, BoardRow, CostBasis, RailGlyph};
 use corral_protocol::{DaemonState, Health, PmState, RuntimeState};
@@ -16,7 +16,7 @@ pub(super) fn timestamp(text: Option<&str>) -> Option<u64> {
 
 pub(super) fn task(row: BoardRow) -> Task {
     Task {
-        id: daemon::id(&row.id),
+        id: row.id.into(),
         title: row.title,
         project: row.project,
         plan: row.plan,
@@ -102,6 +102,7 @@ pub(super) fn device(
     crate::model::devices::DeviceRow {
         id: info.id,
         name: info.name,
+        authority: info.authority,
         platform: match info.platform {
             DevicePlatform::Native => "native",
             DevicePlatform::Web => "web",

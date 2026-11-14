@@ -14,17 +14,19 @@ impl Session {
         Err("daemon peer credentials are unavailable on this platform".into())
     }
 
-    pub(super) fn open(
-        &mut self,
-        _topic: corral_protocol::subscription::Topic,
-    ) -> Result<(), String> {
-        Err("daemon sockets are unavailable on this platform".into())
-    }
-
     pub(super) fn request(
         &mut self,
         _method: &'static str,
         _params: serde_json::Value,
+    ) -> Result<(), String> {
+        Err("daemon sockets are unavailable on this platform".into())
+    }
+
+    pub(super) fn request_tagged(
+        &mut self,
+        _method: &'static str,
+        _params: serde_json::Value,
+        _tag: Option<String>,
     ) -> Result<(), String> {
         Err("daemon sockets are unavailable on this platform".into())
     }

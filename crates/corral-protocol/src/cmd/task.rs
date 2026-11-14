@@ -68,6 +68,35 @@ pub enum TaskCommand {
     RecoverInfrastructure {
         id: String,
     },
+    Dispatch {
+        id: String,
+        profile: Option<String>,
+        model: Option<String>,
+        effort: Option<String>,
+        base: Option<String>,
+        headless: bool,
+    },
+    Retry {
+        id: String,
+        run: Option<String>,
+        profile: Option<String>,
+    },
+    Reply {
+        id: String,
+        text: String,
+    },
+    Edit {
+        id: String,
+        title: Option<String>,
+        body: Option<String>,
+        owner_ok: bool,
+    },
+    Revert {
+        id: String,
+    },
+    Unstick {
+        id: String,
+    },
     #[serde(other)]
     Other,
 }
@@ -85,6 +114,12 @@ impl TaskCommand {
             Self::WaiveReview { .. } => "waive-review",
             Self::Focus { .. } => "focus",
             Self::RecoverInfrastructure { .. } => "recover-infrastructure",
+            Self::Dispatch { .. } => "dispatch",
+            Self::Retry { .. } => "retry",
+            Self::Reply { .. } => "reply",
+            Self::Edit { .. } => "edit",
+            Self::Revert { .. } => "revert",
+            Self::Unstick { .. } => "unstick",
             Self::Other => "other",
         }
     }

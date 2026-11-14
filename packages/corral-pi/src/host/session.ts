@@ -10,7 +10,7 @@ import type {
   AgentSession, AgentSessionRuntime, CreateAgentSessionRuntimeFactory, ExtensionAPI, SessionManager, ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
-import type { StreamFunction } from "@earendil-works/pi-ai";
+import type { ImageContent, StreamFunction } from "@earendil-works/pi-ai";
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 
@@ -105,11 +105,13 @@ import { pmCacheKeyStream } from "./pm-cache-key.ts";
 import { recordTranscriptMark, type MarkSink, type ModelMark, type TranscriptMark, type TurnStopCause, type TurnWait } from "./transcript-marks.ts";
 import { TurnFacts, turnWaits } from "./turn-facts.ts";
 import { holdContextOnly } from "./lifecycle.ts";
+import { RemotePrompts } from "./remote-prompts.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
   readonly identity: HostIdentity;
   readonly build?: BuildContext;
+  readonly daemonHosted?: boolean;
   readonly cwd: string;
   readonly agentDir: string;
   readonly model: string;
@@ -318,6 +320,7 @@ export class HostSession {
   private readonly localTools: readonly ToolDefinition[];
   private dialogPi: ExtensionAPI | undefined;
   private readonly ownerQuestions: PendingQuestions | undefined;
+  private readonly remotePrompts: RemotePrompts | undefined;
   private questionUi: OwnerQuestionUi | undefined;
   private readonly jobs: JobRuntime | undefined;
   private readonly assistantShell: AssistantShell | undefined;
@@ -392,6 +395,8 @@ export class HostSession {
 
   private constructor(private readonly options: HostSessionOptions) {
     this.provider = options.provider ?? "openai-codex";
+    this.remotePrompts = options.daemonHosted ? new RemotePrompts(options.client, options.events,
+      () => this.sessionId(), () => this.currentTurn(), () => this.writeAbort.signal) : undefined;
     this.marks = options.ui === "plain" ? undefined : { add: mark => this.addMark(mark) };
     this.turnFacts = new TurnFacts(this.marks);
     this.queue = new HostQueue({
@@ -512,8 +517,10 @@ export class HostSession {
       cancel: () => { void this.cancelRun(this.currentTurn(), "budget"); void this.auxiliary?.cancelAll(); },
     });
     const registerCapability = capabilityRegistry(() => this.session?.sessionFile);
+    const remotePrompts = this.remotePrompts;
     this.roleContext = {
       identity: options.identity, cwd: options.cwd, workspaceRoot: options.client.workspaceRoot,
+      ...(options.daemonHosted ? { daemonHosted: true } : {}),
       model: options.model, registerCapability,
       todo: options.capabilities ? options.capabilities.enabled.includes("todo") : options.todo === true,
       ...(options.capabilities ? { capabilities: options.capabilities } : {}),
@@ -537,6 +544,8 @@ export class HostSession {
             requestId, payload, turn: this.currentTurn(),
           }),
           emit: (kind: string, data: Record<string, unknown>) => { options.events.emit(kind, data); },
+          ...(remotePrompts ? { remote: (payload: Record<string, unknown>, signal: AbortSignal) =>
+            remotePrompts.permission(payload, signal) } : {}),
         },
       } : {}),
     };
@@ -681,8 +690,8 @@ export class HostSession {
       },
       error: error => { options.events.emit("local_plan_review_error", { message: error instanceof Error ? error.message : String(error) }); },
     }) : undefined;
-    const dialogEnabled = askUserEnabled(options.identity.role, options.capabilities?.enabled ?? []);
-    this.ownerQuestions = dialogEnabled ? new PendingQuestions({
+    const dialogEnabled = options.daemonHosted || askUserEnabled(options.identity.role, options.capabilities?.enabled ?? []);
+    this.ownerQuestions = dialogEnabled && !options.daemonHosted ? new PendingQuestions({
       session: () => options.sessionManager.getSessionId(), generation: options.identity.generation,
       entries: () => options.sessionManager.getEntries(),
       append: value => { options.sessionManager.appendCustomEntry(QUESTION_ENTRY, value); },
@@ -710,7 +719,7 @@ export class HostSession {
         const message = id ? ownerInputText(answer, id) : answer;
         this.dialogPi.sendUserMessage(message, { deliverAs: "followUp" });
         return message;
-      }, this.ownerQuestions, () => this.questionUi?.busy === true, () => this.dialogPresentation())] : []),
+      }, this.ownerQuestions, () => this.questionUi?.busy === true, () => this.dialogPresentation(), this.remotePrompts?.ask)] : []),
       ...(this.additionalLsp?.tools ?? []).map(tool => ({ ...tool, execute: (...args: Parameters<ToolDefinition["execute"]>) => {
         const current = this.additionalLsp?.tools.find(candidate => candidate.name === tool.name);
         if (!current) throw new Error("LSP runtime unavailable; no effect started");
@@ -1372,7 +1381,7 @@ export class HostSession {
   private async journalOwnerInput(
     source: "pane" | "dialog" | "confirmation", text: string, command?: string, answers?: string,
   ): Promise<string | undefined> {
-    if (!this.bound) return undefined;
+    if (!this.bound || this.options.daemonHosted) return undefined;
     const sha256 = sha256Hex(text);
     const kept = utf8Prefix(text, OWNER_INPUT_TEXT_MAX);
     const event = this.options.events.emit("owner_input", { source, sha256, bytes: Buffer.byteLength(text) });
@@ -1396,6 +1405,10 @@ export class HostSession {
 
   /** Shows the owner a confirm-class command in the pane and journals the answer for the request. */
   private async confirmOwnerAction(command: string, context: ConfirmUi, requestId: string): Promise<boolean> {
+    if (this.remotePrompts) {
+      if (this.planning?.refusal("corral_owner_action")) return false;
+      return this.remotePrompts.confirmation(command, requestId);
+    }
     if (!context.hasUI || this.planning?.refusal("corral_owner_action")) return false;
     const signal = this.writeAbort.signal;
     const yes = await context.ui.confirm("corral: confirm owner action", command, { signal });
@@ -1781,7 +1794,7 @@ export class HostSession {
     await released;
   }
 
-  async hello(bindNonce: string, pane: string, ctlCapSha256: string): Promise<CorralReceipt> {
+  async hello(bindNonce: string, pane: string | null, ctlCapSha256: string): Promise<CorralReceipt> {
     const sessionId = this.session.sessionId;
     const sessionFile = this.session.sessionFile;
     if (!sessionFile) throw new Error("hello_failed: the Pi session has no session file");
@@ -1885,12 +1898,12 @@ export class HostSession {
     return this.deliveredTextHashes.has(sha256Hex(text));
   }
 
-  async submit(input: SubmitInput, requestId: string): Promise<SubmitResult> {
+  async submit(input: SubmitInput, requestId: string, images?: ImageContent[]): Promise<SubmitResult> {
     if (!this.bound) return { disposition: "rejected", reason: "host_not_bound" };
     if (this.closing) return { disposition: "rejected", reason: "host_closing" };
     // Lifecycle transitions are the owner's: only text typed in the pane runs /resume.
     if (this.resume && /^\/resume(\s|$)/.test(input.text.trim())) return { disposition: "rejected", reason: "owner_only_command" };
-    const queueTag = this.queue.bridgeInput(input);
+    const queueTag = this.queue.bridgeInput(input, images);
     try {
       await this.options.modules.delivery.accept({
         requestId, idempotencyKey: input.idempotencyKey, origin: input.origin, busyPolicy: input.busyPolicy,
@@ -1923,7 +1936,7 @@ export class HostSession {
         resolve(result);
       };
       this.session.prompt(input.text, {
-        source: "rpc", queueTag,
+        source: "rpc", queueTag, ...(images ? { images } : {}),
         ...(input.busyPolicy === "steer" ? { streamingBehavior: "steer" as const } : {}),
         ...(input.busyPolicy === "follow_up" ? { streamingBehavior: "followUp" as const } : {}),
         preflightResult: (disposition) => {
@@ -1940,6 +1953,22 @@ export class HostSession {
         settle({ disposition: "rejected", reason: /already processing/i.test(message) ? "busy" : message.slice(0, 256) });
       });
     });
+  }
+  /** Remote input IDs originate only in the daemon's journal; never create an owner-input event. */
+  remoteOwnerInput(input: string): void { this.remotePrompts?.setInput(input); }
+
+  /** Select only a model already in this generation's admitted provider catalog. */
+  async selectRemoteModel(name: string, effort?: string): Promise<void> {
+    if (!this.options.daemonHosted || this.open || this.closing) throw new Error("remote_model_selection_unavailable");
+    const slash = name.indexOf("/");
+    const provider = slash < 0 ? this.provider : name.slice(0, slash);
+    const id = slash < 0 ? name : name.slice(slash + 1);
+    if (provider !== this.provider) throw new Error("provider_change_requires_new_generation");
+    const model = this.auxiliaryModels?.getModel(provider, id);
+    if (!model) throw new Error(`model_unavailable: ${name}`);
+    if (effort !== undefined && !THINKING.has(effort)) throw new Error("thinking_level_invalid");
+    await this.session.setModel(model, { persist: false });
+    if (effort !== undefined) this.session.setThinkingLevel(effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh", { persist: false });
   }
 
   /** Cause of the latest run's stop, cleared when the next run starts. */

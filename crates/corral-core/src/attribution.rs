@@ -116,6 +116,12 @@ impl Store {
         AttributionGuard(scope)
     }
 
+    /// Captures the current authenticated attribution, including scoped actor overrides.
+    /// Canonical decision records use this rather than accepting identity in payloads.
+    pub fn event_attribution(&self) -> Result<(Option<Actor>, Option<String>, serde_json::Value)> {
+        let event = self.attributed_event(None, "attribution", serde_json::json!({}))?;
+        Ok((event.actor, event.via, event.detail))
+    }
     pub(crate) fn attributed_event(
         &self,
         task: Option<&str>,

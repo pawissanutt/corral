@@ -432,6 +432,7 @@ impl Client {
                             corral_protocol::SUB_CLOSE,
                             SubClose {
                                 topic: Topic::Board,
+                                scope: None,
                             },
                         )?;
                         return Ok(rows.into_values().collect());
@@ -441,6 +442,7 @@ impl Client {
                         SubAck {
                             topic: Topic::Board,
                             cursor: delta.cursor,
+                            scope: None,
                         },
                     )?;
                 }
@@ -456,6 +458,7 @@ impl Client {
             SubOpen {
                 topic: Topic::Board,
                 since: None,
+                scope: None,
             },
         )?;
         Ok(())

@@ -65,6 +65,9 @@ pub enum AgentOp {
     PlanSubmit,
     PlanVerdict,
     OwnerAction,
+    OwnerAsk,
+    OwnerPrompt,
+    IdeaFile,
     WritePermission,
     AssistantPlan,
     AssistantPlanReview,
@@ -100,7 +103,7 @@ const ASSISTANT: &[AgentRole] = &[AgentRole::Assistant];
 const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm, AgentRole::Assistant];
 
 impl AgentOp {
-    pub const ALL: [AgentOp; 49] = [
+    pub const ALL: [AgentOp; 52] = [
         AgentOp::Hello,
         AgentOp::Event,
         AgentOp::ReceiptLookup,
@@ -142,6 +145,9 @@ impl AgentOp {
         AgentOp::PlanSubmit,
         AgentOp::PlanVerdict,
         AgentOp::OwnerAction,
+        AgentOp::OwnerAsk,
+        AgentOp::OwnerPrompt,
+        AgentOp::IdeaFile,
         AgentOp::WritePermission,
         AgentOp::AssistantPlan,
         AgentOp::AssistantPlanReview,
@@ -174,7 +180,10 @@ impl AgentOp {
             AgentOp::PlanWrite => PLANNING,
             AgentOp::PlanSubmit => PLANNER,
             AgentOp::PlanVerdict => PLAN_REVIEWER,
+            AgentOp::OwnerAsk => &[AgentRole::Pm, AgentRole::Assistant],
             AgentOp::OwnerAction
+            | AgentOp::OwnerPrompt
+            | AgentOp::IdeaFile
             | AgentOp::WritePermission
             | AgentOp::AssistantPlan
             | AgentOp::AssistantPlanReview
@@ -200,6 +209,7 @@ impl AgentOp {
     fn route(self, role: AgentRole) -> Option<Route> {
         match self {
             AgentOp::Notes | AgentOp::PmAction | AgentOp::PmShadow => None,
+            AgentOp::OwnerAsk | AgentOp::OwnerPrompt | AgentOp::IdeaFile => None,
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup | AgentOp::ReadAnnotations => {
                 None
             }
@@ -548,6 +558,9 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
             | AgentOp::MemoryRemove => super::ops::memory::call(ctx, &envelope, op),
             AgentOp::Job | AgentOp::JobMonitor => super::ops::jobs::call(ctx, &envelope, op),
             AgentOp::OwnerAction => super::ops::owner_action::call(ctx, &envelope),
+            AgentOp::OwnerAsk => super::ops::owner_ask::call(ctx, &envelope),
+            AgentOp::OwnerPrompt => super::ops::owner_prompt::call(ctx, &envelope),
+            AgentOp::IdeaFile => super::app_runtime::actions::host_call(ctx, &envelope),
             AgentOp::WritePermission => super::ops::write_permission::call(ctx, &envelope),
             AgentOp::AssistantPlan | AgentOp::AssistantPlanReview | AgentOp::AssistantHandoff => {
                 super::ops::assistant_workflow::call(ctx, &envelope, op)

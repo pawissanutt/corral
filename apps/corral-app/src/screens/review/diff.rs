@@ -1,25 +1,30 @@
-//! The Diff tab (`.diff`): each file's head, the hunk header, unified or side-by-side rows with
-//! their add/del tints and the highlighted word, the discussion between the rows it follows, and
-//! collapsed files. The rows are built here rather than with `nsh_base`'s DiffView because the
-//! mockup sets an inline comment card between two rows, which DiffView does not host.
+//! The Diff tab (`.diff`): each file's head, its hunks with their headers, unified or
+//! side-by-side rows with their add/del tints and the highlighted word, the discussions between
+//! the rows they follow, and collapsed, loading or unavailable files. The rows are built here
+//! rather than with `nsh_base`'s DiffView because the mockup sets a discussion card between two
+//! rows, which DiffView does not host. On a served candidate a code line is pressable: it opens
+//! a new comment on that line.
 
 use nsh_core::EllipsizeMode;
 use nsh_core::prelude::*;
 
-use crate::model::Form;
 use crate::model::board::LineKind;
 use crate::model::review::{
-    Button, CommentView, DiffContent, DiffView, FileView, NumberedLine, SplitRow, UnifiedRow,
+    Action, Button, CommentView, DiffContent, DiffView, FileBody, FileView, HunkView, LineAt,
+    NumberedLine, SplitRow, UnifiedRow,
 };
+use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
-use crate::ui::kit::chip::illus;
+use crate::ui::kit::chip::{chip, illus};
+use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::page::panel;
 use crate::ui::kit::text::dim;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
-use super::{act, button_id, command, rich_at, ring};
+use super::compose::{composer, status_line};
+use super::{Ctx, act, button_id, command, rich_at, ring};
 
 /// One code row: 11.5 pt at the mockup's line height of 1.6.
 const LINE: f32 = 18.0;
@@ -41,7 +46,8 @@ fn code_size(form: Form) -> f32 {
 }
 
 /// The phone's notice, then every file in the model's order.
-pub(super) fn diff(app: AppState, diff: &DiffView) -> AnyElement {
+pub(super) fn diff(cx: &Ctx, diff: &DiffView) -> AnyElement {
+    let app = cx.app;
     view()
         .children(diff.notice.map(|notice| {
             view()
@@ -50,28 +56,46 @@ pub(super) fn diff(app: AppState, diff: &DiffView) -> AnyElement {
                 .child(dim(app, notice))
                 .into_element()
         }))
-        .children(diff.files.iter().map(|file| file_block(app, file)))
+        .children(diff.empty.clone().map(|line| dim(app, line).into_element()))
+        .children(diff.files.iter().map(|file| file_block(cx, file)))
         .into_element()
 }
 
-fn file_block(app: AppState, file: &FileView) -> AnyElement {
-    let terminal = app.form == Form::Terminal;
-    let body = match &file.content {
-        DiffContent::Collapsed(button) => collapsed(app, button),
-        DiffContent::Unified(rows) => hunk(app, file, unified_rows(app, file, rows)),
-        DiffContent::Split(rows) => hunk(app, file, split_rows(app, file, rows)),
+fn file_block(cx: &Ctx, file: &FileView) -> AnyElement {
+    let terminal = cx.app.form == Form::Terminal;
+    let body = match &file.body {
+        FileBody::Collapsed(button) => collapsed(cx, button),
+        FileBody::Loading(line) => quiet_box(cx, line.clone(), Hue::Neutral),
+        FileBody::Unavailable(line) => quiet_box(cx, line.clone(), Hue::Fail),
+        FileBody::Hunks { hunks, notes, tail } => view()
+            .gap(px(if terminal { 0.0 } else { 8.0 }))
+            .children(hunks.iter().map(|part| hunk(cx, file, part)))
+            .children(
+                notes
+                    .iter()
+                    .chain(tail.iter())
+                    .map(|line| dim(cx.app, line.clone()).into_element()),
+            )
+            .into_element(),
     };
     view()
         .when(!terminal, |block| block.mb(px(14.0)))
-        .child(file_head(app, file))
+        .child(file_head(cx, file))
+        .children(
+            file.loose
+                .iter()
+                .filter_map(|&at| file.discussions.get(at))
+                .map(|talk| discussion(cx, talk, true)),
+        )
         .child(body)
         .when(terminal, |block| block.child(term::blank()))
         .into_element()
 }
 
-/// `.ev-file`: the mono path with its counts, the illustrative tag, and Ask about this hunk at
-/// the trailing edge of the file that has a discussion.
-fn file_head(app: AppState, file: &FileView) -> AnyElement {
+/// `.ev-file`: the mono path with its counts, the illustrative tag, then Ask and Collapse at
+/// the trailing edge.
+fn file_head(cx: &Ctx, file: &FileView) -> AnyElement {
+    let app = cx.app;
     let terminal = app.form == Form::Terminal;
     let mut parts = vec![
         rich_at(app, &file.heading, 11.5, Token::Ink2, true)
@@ -85,9 +109,8 @@ fn file_head(app: AppState, file: &FileView) -> AnyElement {
         parts.push(illus(app, tag));
     }
     parts.push(view().flex_1().min_w(px(0.0)).into_element());
-    if let Some(ask) = &file.ask {
-        parts.push(command(app, ask));
-    }
+    parts.extend(file.ask.iter().map(|ask| command(cx, ask)));
+    parts.extend(file.collapse.iter().map(|collapse| command(cx, collapse)));
     view()
         .flex_row()
         .items_center()
@@ -96,12 +119,40 @@ fn file_head(app: AppState, file: &FileView) -> AnyElement {
         .into_element()
 }
 
+/// A line where a patch would be: loading, or why it is not shown.
+fn quiet_box(cx: &Ctx, line: String, hue: Hue) -> AnyElement {
+    let app = cx.app;
+    let words = dim(app, line);
+    let words = if hue == Hue::Neutral {
+        words
+    } else {
+        words.text_color(hue_ink(hue))
+    };
+    if app.form == Form::Terminal {
+        return words.into_element();
+    }
+    view()
+        .px(px(12.0))
+        .py(px(8.0))
+        .rounded(px(6.0))
+        .border_1()
+        .border_color(color(Token::Rule))
+        .bg(color(Token::Surface))
+        .child(words)
+        .into_element()
+}
+
 /// The framed hunk: header on the sunk ground, then the rows. A terminal has no frame: the
 /// header quiet, the rows under it.
-fn hunk(app: AppState, file: &FileView, rows: Vec<AnyElement>) -> AnyElement {
+fn hunk(cx: &Ctx, file: &FileView, part: &HunkView) -> AnyElement {
+    let app = cx.app;
+    let rows = match &part.content {
+        DiffContent::Unified(rows) => unified_rows(cx, file, rows),
+        DiffContent::Split(rows) => split_rows(cx, file, rows),
+    };
     if app.form == Form::Terminal {
         return view()
-            .children(file.hunk_header.map(|header| clip(term::quiet(header))))
+            .child(clip(term::quiet(part.header.clone())))
             .children(rows)
             .into_element();
     }
@@ -111,71 +162,111 @@ fn hunk(app: AppState, file: &FileView, rows: Vec<AnyElement>) -> AnyElement {
         .border_color(color(Token::Rule))
         .bg(color(Token::Surface))
         .overflow_hidden()
-        .children(file.hunk_header.map(|header| {
+        .child(
             view()
                 .px(px(10.0))
                 .py(px(3.0))
                 .bg(color(Token::BgSunk))
                 .border_b(px(1.0))
                 .border_color(color(Token::Rule))
-                .child(clip(code(app, header).text_color(color(Token::Ink3))))
-                .into_element()
-        }))
+                .child(clip(
+                    code(app, part.header.clone()).text_color(color(Token::Ink3)),
+                )),
+        )
         .children(rows)
         .into_element()
 }
 
-/// Unified rows, the discussion after the row the model attaches it to.
-fn unified_rows(app: AppState, file: &FileView, rows: &[UnifiedRow]) -> Vec<AnyElement> {
+fn placed(cx: &Ctx, file: &FileView, at: &[usize], out: &mut Vec<AnyElement>) {
+    out.extend(
+        at.iter()
+            .filter_map(|&index| file.discussions.get(index))
+            .map(|talk| discussion(cx, talk, false)),
+    );
+}
+
+/// The line a press on `line` comments on: a deletion by its old number, else its new one.
+fn line_at(file: &FileView, line: &NumberedLine, old_side: bool) -> Option<LineAt> {
+    let old_side = old_side || line.kind == LineKind::Del;
+    let number = if old_side { line.old } else { line.new }?;
+    Some(LineAt {
+        path: file.path.clone(),
+        old_side,
+        line: number,
+    })
+}
+
+/// Makes a code row open a new comment on its line when the file allows it.
+fn pressable(cx: &Ctx, file: &FileView, line: &NumberedLine, old_side: bool, row: View) -> View {
+    let Some(at) = line_at(file, line, old_side).filter(|_| file.annotatable) else {
+        return row;
+    };
+    let label = format!(
+        "Comment on {} {}",
+        if at.old_side { "old line" } else { "line" },
+        at.line
+    );
+    let test_id = button_id(&Action::Annotate(at.clone()));
+    let press = act(cx, Action::Annotate(at));
+    row.cursor_pointer()
+        .role(AccessibilityRole::Button)
+        .label(label)
+        .test_id(&test_id)
+        .hover(|s| s.bg(color(Token::Hover)))
+        .focus_visible(ring)
+        .on_press(move || press())
+}
+
+/// Unified rows, each discussion after the row the model attaches it to.
+fn unified_rows(cx: &Ctx, file: &FileView, rows: &[UnifiedRow]) -> Vec<AnyElement> {
     let mut out = Vec::with_capacity(rows.len() + 1);
     for row in rows {
-        out.push(unified_line(app, &row.line));
-        if row.comment.is_some() {
-            out.extend(file.discussion.as_ref().map(|talk| discussion(app, talk)));
-        }
+        out.push(unified_line(cx, file, &row.line));
+        placed(cx, file, &row.discussions, &mut out);
     }
     out
 }
 
-/// Side-by-side rows, the discussion after the row the model attaches it to.
-fn split_rows(app: AppState, file: &FileView, rows: &[SplitRow]) -> Vec<AnyElement> {
+/// Side-by-side rows, each discussion after the row the model attaches it to.
+fn split_rows(cx: &Ctx, file: &FileView, rows: &[SplitRow]) -> Vec<AnyElement> {
     let mut out = Vec::with_capacity(rows.len() + 1);
     for row in rows {
         out.push(
             view()
                 .flex_row()
-                .child(half(app, row.left.as_ref(), false))
-                .child(half(app, row.right.as_ref(), true))
+                .child(half(cx, file, row.left.as_ref(), false))
+                .child(half(cx, file, row.right.as_ref(), true))
                 .into_element(),
         );
-        if row.comment.is_some() {
-            out.extend(file.discussion.as_ref().map(|talk| discussion(app, talk)));
-        }
+        placed(cx, file, &row.discussions, &mut out);
     }
     out
 }
 
 /// A unified row: old and new numbers (the phone keeps only the new, as the mockup hides the
 /// first column), the sign and the code on the line's tint.
-fn unified_line(app: AppState, line: &NumberedLine) -> AnyElement {
+fn unified_line(cx: &Ctx, file: &FileView, line: &NumberedLine) -> AnyElement {
+    let app = cx.app;
     let form = app.form;
-    if form == Form::Terminal {
-        return terminal_line(line);
-    }
-    view()
-        .flex_row()
-        .bg(tint(line.kind))
-        .when(form == Form::Desktop, |row| {
-            row.child(gutter(app, line.old))
-        })
-        .child(gutter(app, line.new))
-        .child(sign(app, line))
-        .child(code_cell(app, line))
-        .into_element()
+    let row = if form == Form::Terminal {
+        view().child(terminal_line(line))
+    } else {
+        view()
+            .flex_row()
+            .bg(tint(line.kind))
+            .when(form == Form::Desktop, |row| {
+                row.child(gutter(app.form, line.old))
+            })
+            .child(gutter(app.form, line.new))
+            .child(sign(app.form, line))
+            .child(code_cell(app.form, line))
+    };
+    pressable(cx, file, line, false, row).into_element()
 }
 
 /// One side of a split row; a missing side is the sunk ground, not a context line.
-fn half(app: AppState, line: Option<&NumberedLine>, new_side: bool) -> AnyElement {
+fn half(cx: &Ctx, file: &FileView, line: Option<&NumberedLine>, new_side: bool) -> AnyElement {
+    let form = cx.app.form;
     let cell = view()
         .flex_1()
         .min_w(px(0.0))
@@ -186,12 +277,14 @@ fn half(app: AppState, line: Option<&NumberedLine>, new_side: bool) -> AnyElemen
         });
     match line {
         None => cell.bg(color(Token::BgSunk)).into_element(),
-        Some(line) => cell
-            .bg(tint(line.kind))
-            .child(gutter(app, if new_side { line.new } else { line.old }))
-            .child(sign(app, line))
-            .child(code_cell(app, line))
-            .into_element(),
+        Some(line) => {
+            let cell = cell
+                .bg(tint(line.kind))
+                .child(gutter(form, if new_side { line.new } else { line.old }))
+                .child(sign(form, line))
+                .child(code_cell(form, line));
+            pressable(cx, file, line, !new_side, cell).into_element()
+        }
     }
 }
 
@@ -212,9 +305,13 @@ fn terminal_line(line: &NumberedLine) -> AnyElement {
                     .text_color(color(Token::Ink3)),
             )
             .child(text(format!("{:<1} ", line.sign)).text_color(ink))
-            .child(text(before).text_color(ink))
-            .children(word.map(|word| text(word).font_weight(FontWeight::BOLD).text_color(ink)))
-            .child(text(after).text_color(ink)),
+            .child(text(before.to_owned()).text_color(ink))
+            .children(word.map(|word| {
+                text(word.to_owned())
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(ink)
+            }))
+            .child(text(after.to_owned()).text_color(ink)),
     )
 }
 
@@ -235,8 +332,8 @@ fn clip(line: Text) -> AnyElement {
 }
 
 /// The code before, of and after the highlighted word, by the model's byte range.
-fn pieces(line: &NumberedLine) -> (&'static str, Option<&'static str>, &'static str) {
-    let code = line.text;
+fn pieces(line: &NumberedLine) -> (&str, Option<&str>, &str) {
+    let code = line.text.as_str();
     line.highlight
         .and_then(|mark| {
             Some((
@@ -268,16 +365,19 @@ fn word_fill(kind: LineKind) -> AdaptiveColor {
 
 /// A line of code text: mono at the diff's size and line height, one line.
 fn code(app: AppState, content: impl Into<SharedString>) -> Text {
-    let size = code_size(app.form);
+    code_text(app.form, content)
+}
+
+fn code_text(form: Form, content: impl Into<SharedString>) -> Text {
     text(content.into())
         .number_of_lines(1u32)
         .font_family(FONT_MONO)
-        .text_size(px(size))
+        .text_size(px(code_size(form)))
         .line_height(px(LINE))
 }
 
 /// A line number, right-aligned in its column, faint.
-fn gutter(app: AppState, number: Option<u32>) -> AnyElement {
+fn gutter(form: Form, number: Option<u32>) -> AnyElement {
     view()
         .w(px(GUTTER))
         .flex_shrink_0()
@@ -285,14 +385,14 @@ fn gutter(app: AppState, number: Option<u32>) -> AnyElement {
         .items_end()
         .accessibility_elements_hidden(true)
         .child(
-            code(app, number.map(|n| n.to_string()).unwrap_or_default())
+            code_text(form, number.map(|n| n.to_string()).unwrap_or_default())
                 .tabular_nums()
                 .text_color(color(Token::Ink4)),
         )
         .into_element()
 }
 
-fn sign(app: AppState, line: &NumberedLine) -> AnyElement {
+fn sign(form: Form, line: &NumberedLine) -> AnyElement {
     let ink = match line.kind {
         LineKind::Add => color(Token::Ok),
         LineKind::Del => color(Token::Fail),
@@ -301,145 +401,140 @@ fn sign(app: AppState, line: &NumberedLine) -> AnyElement {
     view()
         .w(px(SIGN))
         .flex_shrink_0()
-        .child(code(app, line.sign).text_color(ink))
+        .child(code_text(form, line.sign).text_color(ink))
         .into_element()
 }
 
-fn code_cell(app: AppState, line: &NumberedLine) -> AnyElement {
+fn code_cell(form: Form, line: &NumberedLine) -> AnyElement {
     let (before, word, after) = pieces(line);
     view()
         .flex_1()
         .min_w(px(0.0))
         .pr(px(10.0))
         .child(clip(
-            code(app, "")
+            code_text(form, "")
                 .text_color(color(Token::Ink))
-                .child(before)
-                .children(word.map(|word| text(word).bg(word_fill(line.kind)).rounded(px(2.0))))
-                .child(after),
+                .child(before.to_owned())
+                .children(word.map(|word| {
+                    text(word.to_owned())
+                        .bg(word_fill(line.kind))
+                        .rounded(px(2.0))
+                }))
+                .child(after.to_owned()),
         ))
         .into_element()
 }
 
-/// The inline discussion (`.cm`): the attributed comment card, then the owner's reply box with
-/// its keycap. The reply box is the model's inert affordance: pressing it runs its action, which
-/// opens no editor.
-fn discussion(app: AppState, talk: &CommentView) -> AnyElement {
+/// A discussion (`.cm`): where it sits when shown away from its line, its messages as
+/// attributed cards with their state tags, the thread's Resolve or Reopen, the lines of
+/// commands sent about it, then the owner's composer.
+fn discussion(cx: &Ctx, talk: &CommentView, away: bool) -> AnyElement {
+    let app = cx.app;
     let form = app.form;
-    let reply = act(app, talk.action);
-    let test_id = button_id(talk.action);
-    if form == Form::Terminal {
-        let content = view()
-            .child(rich_at(app, &talk.attribution, 0.0, Token::Ink3, false))
-            .child(text(talk.text).text_color(color(Token::Ink)))
-            .child(
+    let tags: Vec<AnyElement> = talk
+        .anchor
+        .iter()
+        .filter(|_| away)
+        .map(|anchor| illus(app, anchor.clone()))
+        .chain(
+            talk.chips
+                .iter()
+                .map(|tag| chip(app, tag.label.clone(), tag.hue)),
+        )
+        .collect();
+    let tags = (!tags.is_empty()).then(|| {
+        view()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(px(6.0))
+            .children(tags)
+            .into_element()
+    });
+    let actions = (!talk.actions.is_empty()).then(|| {
+        view()
+            .flex_row()
+            .flex_wrap()
+            .gap(px(6.0))
+            .children(talk.actions.iter().map(|button| command(cx, button)))
+            .into_element()
+    });
+    let messages: Vec<AnyElement> = talk
+        .messages
+        .iter()
+        .map(|message| {
+            if form == Form::Terminal {
                 view()
-                    .flex_row()
-                    .items_center()
-                    .role(AccessibilityRole::Button)
-                    .label(talk.placeholder)
-                    .test_id(&test_id)
-                    .cursor_pointer()
-                    .on_press(move || reply())
+                    .child(rich_at(app, &message.attribution, 0.0, Token::Ink3, false))
+                    .child(text(message.text.clone()).text_color(color(Token::Ink)))
+                    .into_element()
+            } else {
+                card(view())
+                    .border_color(color(Token::Rule2))
+                    .child(rich_at(app, &message.attribution, 11.5, Token::Ink3, false).mb(px(3.0)))
                     .child(
-                        term::quiet(talk.placeholder)
-                            .flex_shrink(1.0)
-                            .min_w(px(0.0))
-                            .truncate(),
+                        text(message.text.clone())
+                            .font_family(FONT_TEXT)
+                            .text_size(px(if form == Form::Phone { 14.0 } else { 12.5 }))
+                            .line_height(px(if form == Form::Phone { 20.0 } else { 19.0 }))
+                            .text_color(color(Token::Ink)),
                     )
-                    .child(view().flex_1().min_w(px(0.0)))
-                    .child(term::key_cap(talk.keycap)),
-            )
-            .into_element();
+                    .into_element()
+            }
+        })
+        .collect();
+    let content = view()
+        .gap(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
+        .children(tags)
+        .children(messages)
+        .children(actions)
+        .children(talk.status.iter().map(|line| status_line(cx, line)))
+        .children(talk.composer.as_ref().map(|edit| {
+            view()
+                .max_w(px(COMMENT_MAX))
+                .child(composer(cx, edit))
+                .into_element()
+        }));
+    if form == Form::Terminal {
         return view()
             .pl(term::cells(2.0))
-            .child(panel(app, None, content))
+            .child(panel(app, None, content.into_element()))
             .into_element();
     }
-    let card = |s: View| {
-        s.max_w(px(COMMENT_MAX))
-            .px(px(12.0))
-            .py(px(8.0))
-            .rounded(px(8.0))
-            .border_1()
-            .bg(color(Token::Surface))
-    };
     view()
-        .pl(px(COMMENT_INDENT))
+        .pl(px(if away || form == Form::Phone {
+            12.0
+        } else {
+            COMMENT_INDENT
+        }))
         .pr(px(14.0))
         .py(px(10.0))
         .bg(color(Token::Bg))
         .border_t(px(1.0))
         .border_b(px(1.0))
         .border_color(color(Token::Rule))
-        .child(
-            card(view())
-                .border_color(color(Token::Rule2))
-                .child(rich_at(app, &talk.attribution, 11.5, Token::Ink3, false).mb(px(3.0)))
-                .child(
-                    text(talk.text)
-                        .font_family(FONT_TEXT)
-                        .text_size(px(12.5))
-                        .line_height(px(19.0))
-                        .text_color(color(Token::Ink)),
-                ),
-        )
-        .child(
-            card(view())
-                .mt(px(6.0))
-                .flex_row()
-                .items_center()
-                .gap(px(8.0))
-                .when(form == Form::Phone, |reply| reply.min_h(px(TARGET)))
-                .border_color(color(Token::Rule))
-                .role(AccessibilityRole::Button)
-                .label(talk.placeholder)
-                .test_id(&test_id)
-                .cursor_pointer()
-                .hover(|s| s.bg(color(Token::Hover)))
-                .focus_visible(ring)
-                .on_press(move || reply())
-                .child(
-                    text(talk.placeholder)
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .truncate()
-                        .font_family(FONT_TEXT)
-                        .text_size(px(12.5))
-                        .text_color(color(Token::Ink3)),
-                )
-                .child(keycap(talk.keycap)),
-        )
+        .when(away, |block| block.mb(px(8.0)).rounded(px(6.0)).border_1())
+        .child(content)
         .into_element()
 }
 
-/// `.kbd`: the key in mono on a hairline cap.
-fn keycap(key: &'static str) -> AnyElement {
-    view()
-        .flex_shrink_0()
-        .px(px(4.0))
-        .rounded(px(3.0))
+fn card(s: View) -> View {
+    s.max_w(px(COMMENT_MAX))
+        .px(px(12.0))
+        .py(px(8.0))
+        .rounded(px(8.0))
         .border_1()
-        .border_color(color(Token::Rule2))
-        .accessibility_elements_hidden(true)
-        .child(
-            text(key)
-                .font_family(FONT_MONO)
-                .text_size(px(10.5))
-                .line_height(px(15.0))
-                .text_color(color(Token::Ink3)),
-        )
-        .into_element()
+        .bg(color(Token::Surface))
 }
 
 /// A collapsed file: the whole framed block is the button, a chevron before the model's
 /// changed-lines label. A terminal shows the model's button as the kit draws it.
-fn collapsed(app: AppState, button: &Button) -> AnyElement {
-    let form = app.form;
+fn collapsed(cx: &Ctx, button: &Button) -> AnyElement {
+    let form = cx.app.form;
     if form == Form::Terminal {
-        return command(app, button);
+        return command(cx, button);
     }
-    let press = act(app, button.action);
+    let press = act(cx, button.action.clone());
     view()
         .flex_row()
         .items_center()
@@ -453,7 +548,7 @@ fn collapsed(app: AppState, button: &Button) -> AnyElement {
         .bg(color(Token::Surface))
         .role(AccessibilityRole::Button)
         .label(button.label.clone())
-        .test_id(&button_id(button.action))
+        .test_id(&button_id(&button.action))
         .cursor_pointer()
         .hover(|s| s.bg(color(Token::Hover)))
         .focus_visible(ring)

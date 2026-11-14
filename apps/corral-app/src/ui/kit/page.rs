@@ -49,7 +49,12 @@ pub fn head(
     actions: Vec<AnyElement>,
 ) -> AnyElement {
     let form = app.form;
-    let title = title_text(form, title.into(), "page-title", Title::Page);
+    let title = title_text(
+        form,
+        Into::<SharedString>::into(title),
+        "page-title",
+        Title::Page,
+    );
     match form {
         Form::Desktop => view()
             .flex_row()
@@ -102,7 +107,9 @@ pub fn head(
 /// Phone: a page band (`.pband`): meta chips wrapping 6 pt apart, title 20 pt bold at line
 /// height 1.25, wrapping, the note 13 pt quiet (the mockup moves "from worker … ago" there),
 /// actions in a row under it. Terminal: the meta row, the title in bold, wrapping, the note
-/// quiet, a joined rule under them. The title has test_id "qhead-title".
+/// quiet, a joined rule under them. Where the title and its actions do not fit on one line the
+/// actions move under the title, and wrap among themselves, rather than squeezing the title
+/// to a few letters a line. The title has test_id "qhead-title".
 pub fn qhead(
     app: AppState,
     meta: Vec<AnyElement>,
@@ -111,7 +118,12 @@ pub fn qhead(
     actions: Vec<AnyElement>,
 ) -> AnyElement {
     let form = app.form;
-    let title = title_text(form, title.into(), "qhead-title", Title::Handover);
+    let title = title_text(
+        form,
+        Into::<SharedString>::into(title),
+        "qhead-title",
+        Title::Handover,
+    );
     match form {
         Form::Desktop => view()
             .flex_none()
@@ -124,12 +136,14 @@ pub fn qhead(
             .child(
                 view()
                     .flex_row()
+                    .flex_wrap()
                     .items_center()
-                    .gap(px(12.0))
+                    .gap_x(px(12.0))
+                    .gap_y(px(8.0))
                     .mt(px(6.0))
                     .child(title)
                     .child(spacer())
-                    .child(actions_row(form, actions, 8.0)),
+                    .child(head_actions(form, actions, 8.0)),
             )
             .when_some(note, |head, note| {
                 head.child(view().mt(px(4.0)).child(quiet(form, note, 12.0)))
@@ -148,7 +162,7 @@ pub fn qhead(
                 head.child(view().mt(px(4.0)).child(quiet(form, note, 13.0)))
             })
             .when(!actions.is_empty(), |head| {
-                head.child(view().mt(px(12.0)).child(actions_row(form, actions, 8.0)))
+                head.child(view().mt(px(12.0)).child(head_actions(form, actions, 8.0)))
             })
             .into_element(),
         Form::Terminal => view()
@@ -160,10 +174,11 @@ pub fn qhead(
                     .child(
                         view()
                             .flex_row()
+                            .flex_wrap()
                             .items_center()
                             .child(title)
                             .child(spacer())
-                            .child(actions_row(form, actions, 2.0)),
+                            .child(head_actions(form, actions, 2.0)),
                     )
                     .when_some(note, |head, note| head.child(term::quiet(note))),
             )
@@ -454,10 +469,11 @@ pub(super) enum Title {
 
 /// The title of a head: bold, the header role. Desktop `.pagehead h1` (15 pt, one line) or
 /// `.qhead h1` (19 pt, line height 1.3); phone `.plarge h1` (30 pt) or the `.pband` title
-/// (20 pt, line height 1.25); terminal one line for a page, wrapping for a handover.
+/// (20 pt, line height 1.25); terminal one line for a page, wrapping for a handover. The title
+/// may be a fixed text or a memo or closure it follows.
 pub(super) fn title_text(
     form: Form,
-    title: SharedString,
+    title: impl IntoReactive<SharedString>,
     test_id: &str,
     kind: Title,
 ) -> AnyElement {
@@ -539,6 +555,25 @@ fn actions_row(form: Form, actions: Vec<AnyElement>, gap: f32) -> AnyElement {
         .items_center()
         .flex_shrink_0()
         .gap(px(gap))
+        .children(actions)
+        .into_element()
+}
+
+/// A handover head's actions: they shrink to the line they are given and wrap among
+/// themselves there, so every one stays reachable however narrow the head; in a terminal `gap`
+/// Cells apart. (A page head keeps [`actions_row`]: its single fixed-height row never wraps.)
+fn head_actions(form: Form, actions: Vec<AnyElement>, gap: f32) -> AnyElement {
+    let row = view()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .flex_shrink(1.0)
+        .min_w(px(0.0));
+    if form == Form::Terminal {
+        return row.children(spaced(actions, gap)).into_element();
+    }
+    row.gap_x(px(gap))
+        .gap_y(px(6.0))
         .children(actions)
         .into_element()
 }

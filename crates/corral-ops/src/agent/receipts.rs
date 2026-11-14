@@ -1,7 +1,9 @@
 //! Single-phase receipts: each op writes its receipt in its own final transaction, which first
 //! rereads the container, returns an identical stored receipt, and repeats the liveness, fence
 //! and saved-pane check. A refusal there writes nothing, so after a fence commits a missing
-//! single-phase receipt is final. No wrapper holds a lock around a public operation.
+//! single-phase receipt is final. Settled assistant receipts compact to a keyed cold replay
+//! archive before the active cap; no current-generation retry loses its durable answer.
+//! No wrapper holds a lock around a public operation.
 use anyhow::{Context, Result};
 use corral_core::agent::{
     self, AGENT_RECORD_VERSION, AgentRunState, ClosureReason, ContainerRef, RECEIPTS_MAX,
@@ -98,6 +100,65 @@ pub(crate) fn pm_capacity(store: &Store) -> Result<()> {
         )
         .into());
     }
+    Ok(())
+}
+
+fn assistant_replay_key(id: &str, request: &str) -> String {
+    paths::sha256_hex(format!("{id}/{request}").as_bytes())
+}
+
+/// Exact replay lookup, including settled answers compacted out of the active container.
+pub(crate) fn assistant_receipt(
+    store: &Store,
+    id: &str,
+    state: &AgentRunState,
+    request: &str,
+) -> Result<Option<RequestReceipt>> {
+    match state.receipt(request) {
+        Some(receipt) => Ok(Some(receipt.clone())),
+        None => store.record(
+            "assistant-replay-receipts",
+            &assistant_replay_key(id, request),
+        ),
+    }
+}
+
+/// Compact settled, unwatched receipts before appending, under the session transaction.
+/// Cold answers remain addressable by request ID, but never inflate the hot container.
+pub(crate) fn assistant_capacity(store: &Store, id: &str, state: &mut AgentRunState) -> Result<()> {
+    if state.receipts.len() < agent::RECEIPTS_HIGH_WATER {
+        return Ok(());
+    }
+    let watched: std::collections::BTreeSet<_> = state
+        .wakes
+        .iter()
+        .filter(|wake| {
+            matches!(
+                wake.state,
+                agent::WakeState::Armed | agent::WakeState::PendingStart
+            )
+        })
+        .map(|wake| wake.request_id.as_str())
+        .collect();
+    let mut remaining = state.receipts.len().saturating_sub(RECEIPTS_MAX / 2);
+    let mut compacted = std::collections::BTreeSet::new();
+    for receipt in &state.receipts {
+        if remaining == 0 {
+            break;
+        }
+        if !receipt.effects_pending() && !watched.contains(receipt.request_id.as_str()) {
+            store.save_record(
+                "assistant-replay-receipts",
+                &assistant_replay_key(id, &receipt.request_id),
+                receipt,
+            )?;
+            compacted.insert(receipt.request_id.clone());
+            remaining -= 1;
+        }
+    }
+    state
+        .receipts
+        .retain(|receipt| !compacted.contains(&receipt.request_id));
     Ok(())
 }
 
@@ -265,14 +326,17 @@ pub(crate) fn commit_assistant_with(
     let (receipt, replayed) = ctx
         .store
         .settle_assistant_container(id, |assistant, ended| {
-            if let Some(stored) = assistant.state.receipt(&origin.request_id) {
-                admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
+            if let Some(stored) =
+                assistant_receipt(&ctx.store, id, &assistant.state, &origin.request_id)?
+            {
+                admission::same_request(&stored, &origin.op, &origin.payload_sha256)?;
                 if answer == StoredAnswer::LiveOnly {
                     admission::recheck_assistant(assistant, ended, origin.binding.generation)?;
                 }
                 return Ok((stored.clone(), true));
             }
             admission::recheck_assistant(assistant, ended, origin.binding.generation)?;
+            assistant_capacity(&ctx.store, id, &mut assistant.state)?;
             let commit = apply(assistant)?;
             Ok((append(&mut assistant.state, origin, commit)?, false))
         })?;
@@ -294,11 +358,9 @@ pub(crate) fn replay_assistant_live(
     let receipt = ctx
         .store
         .inspect_assistant_container(id, |assistant, ended| {
-            let current = assistant
-                .state
-                .receipt(&envelope.request_id)
-                .cloned()
-                .unwrap_or(stored);
+            let current =
+                assistant_receipt(&ctx.store, id, &assistant.state, &envelope.request_id)?
+                    .unwrap_or(stored);
             admission::same_request(&current, &envelope.op, &envelope.payload_sha256)?;
             admission::recheck_assistant(assistant, ended, envelope.identity.generation)?;
             Ok(current)

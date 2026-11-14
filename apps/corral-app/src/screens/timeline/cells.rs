@@ -5,25 +5,25 @@
 use nsh_core::EllipsizeMode;
 use nsh_core::prelude::*;
 
+use super::shown::Shown;
 use crate::model::Hue;
-use crate::model::timeline::{self, Kind, Layout};
-use crate::state::AppState;
+use crate::model::timeline::{self, BurnupSeries, Kind, Layout};
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::term;
 use crate::ui::tokens::{Token, color};
 
 /// The model lays out at the mockup's desktop width; the plot is then scaled onto the Cells.
 const MODEL_WIDTH: f32 = 1190.0;
-/// The burn-up's nominal size; only its values are used here.
-const BURNUP_SIZE: (f32, f32) = (404.0, 150.0);
+/// The burn-up's Cells: the mockup's fourteen days at two Cells a day.
+const BURNUP_CELLS: usize = 28;
 /// Label column: id and title on a grid this wide or wider, the id alone below it.
 const TITLES_FROM: usize = 64;
 const LABEL_WIDE: usize = 24;
 const LABEL_NARROW: usize = 7;
-/// The id's column inside the wide label.
+/// The id's column inside the label: its least, and its most, which keeps the wide label's
+/// title at least ten Cells.
 const ID_CELLS: usize = 7;
-/// Cells per day of the burn-up.
-const DAY_CELLS: usize = 2;
+const ID_MAX: usize = 14;
 /// Block heights from an eighth to full.
 const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 /// What marks an owner action, the supervisor's bar and the last-visit line.
@@ -33,7 +33,8 @@ const GUIDE_GLYPH: char = '┊';
 
 /// The glyph a kind of segment fills its Cells with: a heavy line for run, double for gate, a
 /// dashed heavy line for review, squares for land, a faint dash for idle, crosses for a stall,
-/// `╱` for waiting on you and a shade for a stale verdict.
+/// `╱` for waiting on you, a shade for a stale verdict, a heavier shade for awaiting
+/// acceptance and a faint dotted line where corral recorded no times.
 pub fn glyph(kind: Kind) -> char {
     match kind {
         Kind::Run => '━',
@@ -44,6 +45,8 @@ pub fn glyph(kind: Kind) -> char {
         Kind::Stall => '╳',
         Kind::Ask => '╱',
         Kind::Stale => '░',
+        Kind::Held => '▒',
+        Kind::Unavailable => '┄',
     }
 }
 
@@ -60,7 +63,7 @@ enum Ink {
 
 fn ink_of(kind: Kind) -> Ink {
     match kind {
-        Kind::Idle => Ink::Quiet,
+        Kind::Idle | Kind::Unavailable => Ink::Quiet,
         other => Ink::Hue(other.hue()),
     }
 }
@@ -170,15 +173,22 @@ fn piece(words: String, ink: Option<Ink>) -> Text {
     text(words).text_color(ink.map_or(color(Token::Ink3), ink_color))
 }
 
+/// The label column's Cells: the id's column and the whole label.
+#[derive(Clone, Copy)]
+struct Label {
+    id: usize,
+    width: usize,
+}
+
 /// A lane's label: the id quiet and the title in ink on a wide grid, the id alone otherwise.
-fn lead(id: &str, title: &str, label: usize) -> Vec<Text> {
-    if label < LABEL_WIDE {
-        vec![piece(column(id, label), Some(Ink::Quiet))]
+fn lead(id: &str, title: &str, label: Label) -> Vec<Text> {
+    if label.width == label.id {
+        vec![piece(column(id, label.width), Some(Ink::Quiet))]
     } else {
         vec![
-            piece(column(id, ID_CELLS), Some(Ink::Quiet)),
+            piece(column(id, label.id), Some(Ink::Quiet)),
             piece(
-                column(title, label - ID_CELLS),
+                column(title, label.width - label.id),
                 Some(Ink::Hue(Hue::Neutral)),
             ),
         ]
@@ -227,33 +237,44 @@ fn spoken<'a>((name, title): (&str, &str), parts: impl Iterator<Item = &'a str>)
 /// The lanes as rows of Cells across the pane: the hour labels, the owner's actions (`●`), the
 /// supervisor (`━`, the relaunch in amber with its caption under it), then one row per task
 /// with its segments as glyphs, its annotations on a row above, the question strip on a row
-/// between, the last-visit line as `┊`, and the captions of the last visit and now at the foot.
-/// Narrow grids drop the titles to keep the track. Each lane row tells a screen reader the task
-/// and every segment's label.
-pub fn lanes(app: AppState) -> AnyElement {
+/// between, phases without recorded times written after its bars, the last-visit line as `┊`,
+/// and the captions of the last visit and now at the foot. Narrow grids drop the titles to keep
+/// the track. Each lane row tells a screen reader the task and every segment's label.
+pub fn lanes(data: Memo<Shown>) -> AnyElement {
     let width = signal(0.0_f32);
+    let plot = computed(move || data.with(|shown| shown.plot.clone()));
     view()
         .w_full()
         .flex_col()
         .on_layout(move |frame: &Bounds<Points>| width.set(frame.size.width.0))
         .child(dynamic(move || {
             let columns = (width.get() / term::cells(1.0).0).floor() as usize;
-            (columns > 0).then(|| grid(app, columns))
+            let plot = plot.get()?;
+            (columns > 0).then(|| grid(timeline::layout(&plot, MODEL_WIDTH, false), columns))
         }))
         .into_element()
 }
 
-fn grid(app: AppState, columns: usize) -> AnyElement {
+fn grid(layout: Layout, columns: usize) -> AnyElement {
+    // The id column holds the longest id with a blank after it (session lanes such as
+    // `T-001/R1` are longer than task ids), within bounds that leave the title and track room.
+    let longest = layout
+        .lanes
+        .iter()
+        .map(|lane| lane.id.chars().count() + 1)
+        .max()
+        .unwrap_or(0);
     let label = if columns >= TITLES_FROM {
-        LABEL_WIDE
+        Label {
+            id: longest.clamp(ID_CELLS, ID_MAX),
+            width: LABEL_WIDE,
+        }
     } else {
-        LABEL_NARROW
+        let width = longest.clamp(LABEL_NARROW, ID_MAX);
+        Label { id: width, width }
     };
-    let track = columns.saturating_sub(label).max(1);
-    let layout = app
-        .timeline
-        .with(|state| timeline::layout(state, MODEL_WIDTH, false));
-    let blank = || vec![piece(" ".repeat(label), None)];
+    let track = columns.saturating_sub(label.width).max(1);
+    let blank = || vec![piece(" ".repeat(label.width), None)];
     let mut rows = Vec::new();
 
     let mut axis = Track::new(track, &layout);
@@ -273,7 +294,9 @@ fn grid(app: AppState, columns: usize) -> AnyElement {
     for marker in &layout.owner {
         owner.mark(marker.x, OWNER_GLYPH, Ink::Hue(Hue::You));
     }
-    owner.guide(layout.last_visit.x);
+    if let Some(visit) = &layout.last_visit {
+        owner.guide(visit.x);
+    }
     rows.push(line(
         lead(layout.owner_label.0, layout.owner_label.1, label),
         &owner.cells,
@@ -292,12 +315,14 @@ fn grid(app: AppState, columns: usize) -> AnyElement {
             hue => Ink::Hue(hue),
         };
         pm.span(interval.x, interval.width, PM_GLYPH, ink);
-        if let Some(words) = interval.label {
+        if let Some(words) = &interval.label {
             pm_notes.text(interval.x, words, Ink::Quiet);
             relaunched = true;
         }
     }
-    pm.guide(layout.last_visit.x);
+    if let Some(visit) = &layout.last_visit {
+        pm.guide(visit.x);
+    }
     rows.push(line(
         lead(layout.pm_label.0, layout.pm_label.1, label),
         &pm.cells,
@@ -328,12 +353,26 @@ fn grid(app: AppState, columns: usize) -> AnyElement {
                 glyph(segment.kind),
                 ink_of(segment.kind),
             );
-            if let Some(words) = segment.annotation {
+            if let Some(words) = &segment.annotation {
                 notes.text(segment.x, words, Ink::Hue(segment.hue));
                 noted = true;
             }
         }
-        bars.guide(layout.last_visit.x);
+        if let Some(words) = &lane.missing {
+            let end = lane
+                .segments
+                .iter()
+                .filter(|segment| !segment.overlay)
+                .map(|segment| segment.x + segment.width)
+                .reduce(f32::max);
+            match end {
+                Some(end) => bars.text(end, &format!(" {words}"), Ink::Quiet),
+                None => bars.text(layout.label_width, words, Ink::Quiet),
+            }
+        }
+        if let Some(visit) = &layout.last_visit {
+            bars.guide(visit.x);
+        }
         if noted {
             rows.push(line(blank(), &notes.cells, Voice::Text));
         }
@@ -341,33 +380,38 @@ fn grid(app: AppState, columns: usize) -> AnyElement {
             rows.push(line(blank(), &strip.cells, Voice::Hidden));
         }
         rows.push(line(
-            lead(lane.id, lane.title, label),
+            lead(&lane.id, &lane.title, label),
             &bars.cells,
             Voice::Label(spoken(
-                (lane.id, lane.title),
-                lane.segments.iter().map(|s| s.accessible_label.as_str()),
+                (lane.id.as_str(), lane.title.as_str()),
+                lane.segments
+                    .iter()
+                    .map(|s| s.accessible_label.as_str())
+                    .chain(lane.missing.as_deref()),
             )),
         ));
     }
 
     let mut foot = Track::new(track, &layout);
-    foot.text_end(layout.now.x, layout.now.label, Ink::Hue(Hue::Neutral));
-    foot.text_end(layout.last_visit.x, layout.last_visit.label, Ink::Quiet);
+    foot.text_end(layout.now.x, &layout.now.label, Ink::Hue(Hue::Neutral));
+    if let Some(visit) = &layout.last_visit {
+        foot.text_end(visit.x, &visit.label, Ink::Quiet);
+    }
     rows.push(line(blank(), &foot.cells, Voice::Text));
 
     view()
         .flex_col()
         .role(AccessibilityRole::Region)
-        .label(layout.accessible_label)
+        .label(layout.accessible_label.clone())
         .children(rows)
         .into_element()
 }
 
-/// The goal burn-up as block heights, two Cells a day: scope in quiet ink, landed in ink, each
-/// after its end label, the first and last day under them. Screen readers hear the model's
-/// summary.
-pub fn burnup() -> AnyElement {
-    let chart = timeline::burnup(BURNUP_SIZE.0, BURNUP_SIZE.1);
+/// The goal burn-up as block heights over the period's Cells, each Cell the counts recorded at
+/// its moment: scope in quiet ink, landed in ink, each after its end label, the first and last
+/// day under them. Screen readers hear the model's summary.
+pub fn burnup(series: &BurnupSeries) -> AnyElement {
+    let chart = timeline::burnup(series, 404.0, 150.0);
     let top = chart
         .grid
         .iter()
@@ -375,40 +419,49 @@ pub fn burnup() -> AnyElement {
         .max()
         .unwrap_or(1)
         .max(1) as f32;
-    let [scope_label, landed_label] = chart.series_labels;
+    let [scope_label, landed_label] = &chart.series_labels;
     let label = scope_label
         .0
         .chars()
         .count()
         .max(landed_label.0.chars().count())
         + 2;
-    let bars = |points: &[timeline::Point]| -> String {
-        points
+    // The counts at each Cell's moment: the last recorded point at or before it.
+    let at = |cell: usize, pick: fn(&(f32, u32, u32)) -> u32| -> u32 {
+        let moment = (cell as f32 + 0.5) / BURNUP_CELLS as f32;
+        series
+            .points
             .iter()
-            .flat_map(|at| {
-                let step = ((at.value as f32 / top) * BLOCKS.len() as f32)
+            .take_while(|point| point.0 <= moment)
+            .last()
+            .map_or(0, pick)
+    };
+    let bars = |pick: fn(&(f32, u32, u32)) -> u32| -> String {
+        (0..BURNUP_CELLS)
+            .map(|cell| {
+                let step = ((at(cell, pick) as f32 / top) * BLOCKS.len() as f32)
                     .ceil()
                     .clamp(1.0, BLOCKS.len() as f32) as usize;
-                std::iter::repeat_n(BLOCKS[step - 1], DAY_CELLS)
+                BLOCKS[step - 1]
             })
             .collect()
     };
-    let days = chart.scope.len() * DAY_CELLS;
-    let [first_day, last_day] = chart.axis_labels;
-    let between = days.saturating_sub(first_day.0.chars().count() + last_day.0.chars().count());
+    let [first_day, last_day] = &chart.axis_labels;
+    let between =
+        BURNUP_CELLS.saturating_sub(first_day.0.chars().count() + last_day.0.chars().count());
     let rows = vec![
         line(
             vec![
-                piece(column(scope_label.0, label), Some(Ink::Quiet)),
-                piece(bars(&chart.scope), Some(Ink::Quiet)),
+                piece(column(&scope_label.0, label), Some(Ink::Quiet)),
+                piece(bars(|point| point.1), Some(Ink::Quiet)),
             ],
             &[],
             Voice::Hidden,
         ),
         line(
             vec![
-                piece(column(landed_label.0, label), Some(Ink::Hue(Hue::Neutral))),
-                piece(bars(&chart.landed), Some(Ink::Hue(Hue::Neutral))),
+                piece(column(&landed_label.0, label), Some(Ink::Hue(Hue::Neutral))),
+                piece(bars(|point| point.2), Some(Ink::Hue(Hue::Neutral))),
             ],
             &[],
             Voice::Hidden,

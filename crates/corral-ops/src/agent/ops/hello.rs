@@ -1,5 +1,6 @@
 //! hello: proves the generation's one-shot bind nonce and records the digests of both
-//! directional secrets, the Pi session and the host process. The nonce is then consumed.
+//! directional secrets, the Pi session and the host process. Pane-less generations prove an
+//! explicit daemon binding with no pane; terminal generations still require their exact pane.
 use std::path::{Component, PathBuf};
 
 use anyhow::{Context, Result};
@@ -26,7 +27,8 @@ struct HelloPayload {
     session_file: PathBuf,
     pid: u32,
     start_time: String,
-    pane: String,
+    #[serde(default)]
+    pane: Option<String>,
 }
 
 fn bad(reason: &str) -> anyhow::Error {
@@ -50,9 +52,15 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     if payload.ctl_cap_sha256 == paths::sha256_hex(envelope.auth.host_cap.as_bytes()) {
         return Err(bad("host_cap and ctl_cap must be different secrets"));
     }
-    if payload.pid == 0 || !plain(&payload.start_time, 64) || !plain(&payload.pane, 128) {
+    if payload.pid == 0
+        || !plain(&payload.start_time, 64)
+        || payload
+            .pane
+            .as_deref()
+            .is_some_and(|pane| !plain(pane, 128))
+    {
         return Err(bad(
-            "hello needs a pid, a start_time and a pane of [A-Za-z0-9._:+-]",
+            "hello needs a pid, a start_time and a valid pane when present",
         ));
     }
     let container = admission::container_of(&envelope.identity);
@@ -106,8 +114,13 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             "hello connection binding does not match the launched generation",
         ));
     }
-    let launched = generation.map(|g| g.pane);
-    if launched.as_deref() != Some(payload.pane.as_str()) {
+    let generation = generation.context("the generation disappeared")?;
+    let pane_matches = if generation.daemon_hosted {
+        envelope.identity.role == AgentRole::Assistant && payload.pane.is_none()
+    } else {
+        payload.pane.as_deref() == Some(generation.pane.as_str())
+    };
+    if !pane_matches {
         return Err(Rejection::new(
             RejectCode::PaneMismatch,
             "hello came from a pane other than the generation's",
@@ -211,3 +224,7 @@ fn bound_commit(
         post_pending: vec!["event:agent_bound".into()],
     }
 }
+
+#[cfg(test)]
+#[path = "hello_daemon_tests.rs"]
+mod daemon_tests;

@@ -1,6 +1,6 @@
 //! Admission in contract order: bounds (envelope.rs), resolution of the NAMED container,
 //! authentication against the named generation, receipt lookup, then role liveness, current
-//! generation and saved pane for new mutations. Also the generation binding primitives.
+//! generation and saved pane (or explicit daemon ownership) for new mutations.
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -57,11 +57,21 @@ impl Resolved {
         }
     }
 
-    fn receipt(&self, container: &ContainerRef, id: &str) -> Result<Option<RequestReceipt>> {
+    fn receipt(
+        &self,
+        store: &Store,
+        container: &ContainerRef,
+        id: &str,
+    ) -> Result<Option<RequestReceipt>> {
         match self {
             Resolved::Task(task) => task.agent_receipt(container, id),
             Resolved::Pm(pm) => Ok(pm.state.receipt(id).cloned()),
-            Resolved::Assistant(assistant, _) => Ok(assistant.state.receipt(id).cloned()),
+            Resolved::Assistant(assistant, _) => super::receipts::assistant_receipt(
+                store,
+                container.assistant().context("assistant session missing")?,
+                &assistant.state,
+                id,
+            ),
         }
     }
 }
@@ -324,7 +334,16 @@ pub(crate) fn recheck_assistant(
     generation: u32,
 ) -> Result<()> {
     agent::check_assistant_live(&assistant.state, ended, generation)?;
-    saved_pane(&assistant.state, generation, assistant.pane.as_deref())
+    if assistant
+        .state
+        .generation(generation)
+        .is_some_and(|g| g.daemon_hosted)
+    {
+        ensure!(assistant.pane.is_none(), "daemon assistant acquired a pane");
+        Ok(())
+    } else {
+        saved_pane(&assistant.state, generation, assistant.pane.as_deref())
+    }
 }
 
 pub(crate) fn admit(ctx: &Ctx, envelope: &Envelope, mode: Mode) -> Result<Admission> {
@@ -345,7 +364,7 @@ pub(crate) fn admit(ctx: &Ctx, envelope: &Envelope, mode: Mode) -> Result<Admiss
         retired,
         mode,
     )?;
-    if let Some(stored) = resolved.receipt(&container, &envelope.request_id)? {
+    if let Some(stored) = resolved.receipt(&ctx.store, &container, &envelope.request_id)? {
         same_request(&stored, &envelope.op, &envelope.payload_sha256)?;
         return Ok(Admission::Replay(Box::new(stored)));
     }
@@ -418,7 +437,7 @@ fn random_secret() -> Result<String> {
 fn next_generation(
     state: &mut AgentRunState,
     nonce_digest: &str,
-    pane: &str,
+    pane: Option<&str>,
     capabilities: &CapabilitySnapshot,
     connection: Option<&corral_core::connection::ConnectionBinding>,
     fresh_session: bool,
@@ -468,7 +487,8 @@ fn next_generation(
     state.generations.push(AgentGeneration {
         n,
         bind_nonce_sha256: nonce_digest.into(),
-        pane: pane.into(),
+        pane: pane.unwrap_or_default().into(),
+        daemon_hosted: pane.is_none(),
         created: now,
         bound: None,
         fenced: None,
@@ -525,6 +545,32 @@ pub(crate) fn open_generation_bound(
     connection: Option<&corral_core::connection::ConnectionBinding>,
     fresh_session: bool,
 ) -> Result<GenerationGrant> {
+    open_generation_host(
+        store,
+        target,
+        Some(pane),
+        adopt,
+        supported,
+        connection,
+        fresh_session,
+    )
+}
+
+/// Only the daemon assistant supervisor may request a host without terminal ownership.
+pub(crate) fn open_generation_host(
+    store: &Store,
+    target: &BindTarget,
+    pane: Option<&str>,
+    adopt: bool,
+    supported: Option<&BTreeSet<String>>,
+    connection: Option<&corral_core::connection::ConnectionBinding>,
+    fresh_session: bool,
+) -> Result<GenerationGrant> {
+    ensure!(
+        pane.is_some_and(|pane| !pane.is_empty())
+            || matches!(target, BindTarget::Assistant { .. }) && pane.is_none(),
+        "only an assistant may open without a real pane"
+    );
     if let Some(binding) = connection {
         binding.validate()?;
         binding.connection.require_admission()?;
@@ -601,15 +647,15 @@ pub(crate) fn open_generation_bound(
                 let pm = pm.get_or_insert_with(|| {
                     let state =
                         AgentRunState::new(binding(AgentRole::Pm, &store_id, project, None));
-                    AgentPm::new(pane.into(), state)
+                    AgentPm::new(pane.unwrap_or_default().into(), state)
                 });
                 // Adoption moves only with an adopting launch; another pane drops it, the same keeps it.
                 if adopt {
-                    pm.adopted_pane = Some(pane.into());
-                } else if pm.pane != pane {
+                    pm.adopted_pane = pane.map(str::to_owned);
+                } else if Some(pm.pane.as_str()) != pane {
                     pm.adopted_pane = None;
                 }
-                pm.pane = pane.into();
+                pm.pane = pane.unwrap_or_default().into();
                 if pm.state.binding.project != *project {
                     pm.state.todo = None;
                 }
@@ -631,7 +677,7 @@ pub(crate) fn open_generation_bound(
         (BindTarget::Assistant { session }, _) => {
             store.update_assistant_container(session, |assistant| {
                 crate::assistant::workflow::boundary::require_resume(store, session, assistant)?;
-                assistant.pane = Some(pane.into());
+                assistant.pane = pane.map(str::to_owned);
                 assistant.state.binding.project = project.clone().unwrap_or_default();
                 next_generation(
                     &mut assistant.state,

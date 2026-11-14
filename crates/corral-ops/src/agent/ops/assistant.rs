@@ -166,8 +166,13 @@ pub(crate) fn session_project(ctx: &Ctx, id: &str) -> Result<String> {
     Ok(ctx.store.get_assistant(id)?.project.unwrap_or_default())
 }
 
-/// Opens session `id`'s next generation in `pane` and writes its one-shot bootstrap.
-fn prepare(ctx: &Ctx, id: &str, pane: &str, resolved: &ResolvedProfile) -> Result<Prepared> {
+/// Opens a terminal or daemon generation, preserving focus, continuation and metering.
+pub(crate) fn prepare(
+    ctx: &Ctx,
+    id: &str,
+    pane: Option<&str>,
+    resolved: &ResolvedProfile,
+) -> Result<Prepared> {
     let _lease = ctx.store.assistant_scratch_lease(id)?;
     let session = ctx.store.get_assistant(id)?;
     let model = resolved
@@ -200,7 +205,7 @@ fn prepare(ctx: &Ctx, id: &str, pane: &str, resolved: &ResolvedProfile) -> Resul
         fresh_session: false,
     };
     let target = BindTarget::Assistant { session: id.into() };
-    let prepared = launch::prepare_bootstrap(ctx, &target, pane, &spec)?;
+    let prepared = launch::prepare_bootstrap_host(ctx, &target, pane, &spec)?;
     record_assets(ctx, id, &prepared)?;
     if resolved.vendor.as_deref() == Some("amazon-bedrock") {
         let binding =
@@ -301,7 +306,7 @@ pub(crate) fn open_observed(
             session.project = project;
             Ok(())
         })?;
-        Ok((session, prepare(ctx, &created.id, pane, &resolved)?))
+        Ok((session, prepare(ctx, &created.id, Some(pane), &resolved)?))
     })();
     match prepared {
         Ok((session, prepared)) => {
@@ -360,7 +365,7 @@ pub fn resume(ctx: &Ctx, id: &str, pane: &str, overrides: &Overrides) -> Result<
         fence_generation(&ctx.store, &reference, fenced, "resume")?;
         remove_control(&ctx.store, id, fenced)?;
     }
-    let prepared = prepare(ctx, id, pane, &resolved)?;
+    let prepared = prepare(ctx, id, Some(pane), &resolved)?;
     ctx.store.log_event(
         None,
         "assistant_resumed",
@@ -371,7 +376,7 @@ pub fn resume(ctx: &Ctx, id: &str, pane: &str, overrides: &Overrides) -> Result<
 
 /// `/new`, `/resume` and a clean quit leave the outgoing conversation open, but its stopped host
 /// has no remaining authority. Only the supervisor calls this, after waiting for the child to exit.
-pub(crate) fn suspend(ctx: &Ctx, id: &str, generation: u32, reason: &str) -> Result<()> {
+pub fn suspend(ctx: &Ctx, id: &str, generation: u32, reason: &str) -> Result<()> {
     let container = ctx.store.get_assistant_container(id)?;
     anyhow::ensure!(
         container.state.binding.generation == generation && !host_alive(&container.state)?,
@@ -498,7 +503,7 @@ pub(crate) fn take_switch_request(ctx: &Ctx, id: &str, generation: u32) -> Resul
 }
 
 /// A fenced generation's control credential and socket go: nobody reaches it again.
-fn remove_control(store: &Store, id: &str, generation: u32) -> Result<()> {
+pub(crate) fn remove_control(store: &Store, id: &str, generation: u32) -> Result<()> {
     let dir = launch::assistant_runtime_dir(store, id).join(format!("g{generation}"));
     for name in [CTL_CAP_FILE, SOCKET_FILE] {
         let path = dir.join(name);
@@ -561,10 +566,12 @@ pub(crate) fn startup_lease(
             !ended
                 && !container.state.binding.closing
                 && container.state.binding.generation == bootstrap.generation
-                && container
-                    .state
-                    .current_generation()
-                    .is_some_and(|g| { g.fenced.is_none() && g.bound.is_none() }),
+                && container.state.current_generation().is_some_and(|g| {
+                    g.fenced.is_none()
+                        && g.bound.is_none()
+                        && g.daemon_hosted == bootstrap.daemon_hosted
+                        && g.pane == bootstrap.pane
+                }),
             "assistant_changed: {id}'s prepared generation is no longer launchable"
         );
         Ok(())

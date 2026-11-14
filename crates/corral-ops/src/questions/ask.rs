@@ -32,6 +32,12 @@ pub struct AskPayload {
     pub context_refs: Vec<String>,
     #[serde(default)]
     pub needed_by: Option<Timestamp>,
+    #[serde(default)]
+    pub option_details: Vec<corral_core::agent::QuestionOption>,
+    #[serde(default)]
+    pub evidence: Vec<corral_core::agent::QuestionEvidenceRef>,
+    #[serde(default)]
+    pub owner_decisions: Vec<String>,
 }
 
 /// One question of a batched ask; the batch shares `blocking`, `context_refs` and `needed_by`.
@@ -44,6 +50,12 @@ pub struct AskItem {
     pub options: Vec<String>,
     #[serde(default)]
     pub recommendation: Option<String>,
+    #[serde(default)]
+    pub option_details: Vec<corral_core::agent::QuestionOption>,
+    #[serde(default)]
+    pub evidence: Vec<corral_core::agent::QuestionEvidenceRef>,
+    #[serde(default)]
+    pub owner_decisions: Vec<String>,
 }
 
 /// A batched ask: 1-4 questions opened together as one group in one transaction.
@@ -72,6 +84,9 @@ impl AskBatchPayload {
                 recommendation: item.recommendation.clone(),
                 context_refs: self.context_refs.clone(),
                 needed_by: self.needed_by,
+                option_details: item.option_details.clone(),
+                evidence: item.evidence.clone(),
+                owner_decisions: item.owner_decisions.clone(),
             })
             .collect()
     }
@@ -129,6 +144,7 @@ pub fn validate_ask(payload: &AskPayload) -> Result<(), QuestionRefusal> {
     if let Some(recommendation) = &payload.recommendation {
         bounded(recommendation, QUESTION_TEXT_MAX_BYTES, "recommendation")?;
     }
+    super::metadata::validate(payload)?;
     Ok(())
 }
 
@@ -269,6 +285,10 @@ fn push(
         needed_by: payload.needed_by,
         state: QuestionState::Open,
         triage: Vec::new(),
+        option_details: payload.option_details,
+        evidence: payload.evidence,
+        owner_decisions: payload.owner_decisions,
+        followups: Vec::new(),
         answer: None,
         deadline: None,
         wake: QuestionWake {

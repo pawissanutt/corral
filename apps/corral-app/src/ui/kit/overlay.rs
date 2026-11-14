@@ -60,10 +60,11 @@ pub struct Confirm {
     pub on_confirm: Rc<dyn Fn()>,
 }
 
-/// The toast: one line of news that leaves by itself after 3.4 s (calling `on_close`), or at
+/// The toast: a line of news that leaves by itself after 3.4 s (calling `on_close`), or at
 /// once when `message` changes to another or to `None`. Screen readers hear it as it appears.
 /// Desktop: bottom centre of its parent, 22 pt up, on the button colour (`.toast`: padding
-/// 9 14, radius 8, 12.5 pt), rising in over 220 ms; put it last in the content container.
+/// 9 14, radius 8, 12.5 pt), at most 560 pt wide and wrapping to three lines, rising in over
+/// 220 ms; put it last in the content container.
 /// Phone: 100 pt up from the bottom of the shell root, above the tab bar, at most 340 pt wide
 /// and wrapping. Terminal: a row in the flow on a raised band, the message in bold; put it in
 /// the shell's column just above the key line, where it takes a row only while it shows.
@@ -124,7 +125,7 @@ pub fn modal(
             let on_close = on_close.clone();
             untracked(|| {
                 if app.form == Form::Terminal {
-                    terminal_dialog(content(), on_close)
+                    terminal_dialog(app, content(), on_close)
                 } else {
                     desktop_dialog(app, content(), on_close)
                 }
@@ -173,13 +174,17 @@ fn toast_face(app: AppState, message: String) -> AnyElement {
         .bind_motion(&rise)
         .child(
             text(message)
+                .flex_shrink(1.0)
+                .min_w(px(0.0))
                 .font_family(FONT_TEXT)
                 .text_size(px(12.5))
                 .line_height(px(18.0))
                 .text_color(color(Token::BtnInk))
-                .when(!phone, |t| t.number_of_lines(1u32)),
+                .when(!phone, |t| t.number_of_lines(3u32)),
         );
-    let face = if phone { face.max_w(px(340.0)) } else { face };
+    // Bounded on every form: a long receipt wraps inside the toast, never past the window's
+    // edges; three desktop lines hold a refusal, and the page keeps the full status.
+    let face = face.max_w(px(if phone { 340.0 } else { 560.0 }));
     // The strip spans its parent to centre the toast; it takes no presses of its own.
     view()
         .absolute()
@@ -414,7 +419,7 @@ fn phone_sheet(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyElemen
 
 /// The terminal dialog: the content pane turned into the modal, as the palette stands, so no
 /// half-cut words of the page show beside it.
-fn terminal_dialog(modal: Modal, on_close: Rc<dyn Fn()>) -> AnyElement {
+fn terminal_dialog(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyElement {
     let Modal {
         test_id,
         title,
@@ -505,7 +510,7 @@ fn terminal_dialog(modal: Modal, on_close: Rc<dyn Fn()>) -> AnyElement {
         .absolute()
         .top(term::rows(2.0))
         .bottom(term::rows(2.0))
-        .left(term::cells(term::sidebar_columns() + 1.0))
+        .left(term::cells(term::sidebar_columns(app) + 1.0))
         .right(term::cells(1.0))
         .child(header)
         .when_some(sub.clone(), |panel, sub| {

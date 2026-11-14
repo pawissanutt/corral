@@ -1,35 +1,25 @@
-//! What Now shows besides the list in the Daemon data state: the stale flags, the selected task's
-//! facts, the held tasks, the lower tab titles and the phone tab, all from the daemon's feed.
+//! What Now shows besides the list and the inspector in the Daemon state: the stale flags, the
+//! held and parked tasks, the lower tab titles, the goals the board serves and the phone tab,
+//! all from the daemon's feed.
 
-use crate::model::board::{Actor, Mark, STAGES, daemon_actor, money, stage_word};
+use corral_protocol::app::CHANGES_V1;
+
+use crate::model::board::Mark;
 use crate::model::daemon::{self, Link};
 use crate::model::hue::Hue;
-use crate::model::nav::Form;
-use crate::model::text::{Rich, span};
+use crate::model::nav::{Destination, Form};
+use crate::model::text::span;
+use crate::model::{Live, Selection};
 
 use super::{
-    EMPTY_BOARD, GroupKey, HoldRow, Inspector, LowTab, NO_BOARD, NowTab, PhoneNow, Stage, State,
-    Status, daemon_list, daemon_selection, group_key, group_label,
+    Action, Button, ButtonKind, GroupKey, HoldRow, LowTab, PhoneNow, Press, State, Status,
+    SummaryChip, daemon_list, group_key, stamp,
 };
 
-/// Said by every panel whose content the daemon does not send.
-pub const NOT_SERVED: &str = "corrald does not serve this yet.";
-/// Said by the holds panel when the board holds no held task.
-pub const NOTHING_HELD: &str = "Nothing is held.";
-
-/// The daemon's facts about one task, laid out as the inspector's header and key/value rows.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TaskFacts {
-    pub id: &'static str,
-    pub title: String,
-    /// The heading of the group the task is in: who acts next.
-    pub who: &'static str,
-    pub who_hue: Hue,
-    /// Run, gate, review, land, with each stage's sha and age where the daemon knows them.
-    pub stages: [Stage; 4],
-    /// Labelled facts in display order; facts the daemon left out are absent.
-    pub facts: Vec<(&'static str, Rich)>,
-}
+/// Said by the holds panel when the board holds no held or parked task.
+pub const NOTHING_HELD: &str = "Nothing is held or parked.";
+/// Said by the Goals panel when no task on the board names a goal.
+pub const NO_GOALS: &str = "No task on the board names a goal.";
 
 /// Stale flags in the Daemon state: a board received before the link went down stays, dimmed,
 /// stamped with the last time the daemon was heard. The health strip carries the banner.
@@ -46,174 +36,166 @@ pub fn daemon_status(feed: &daemon::Feed) -> Status {
     }
 }
 
-/// The inspector in the Daemon state: the selected task's facts on Story; the other tabs, which
-/// the daemon does not serve, one quiet line.
-pub fn daemon_inspector(state: &State, feed: &daemon::Feed, form: Form) -> Inspector {
-    if let Some(line) = feed.device.board_notice() {
-        return Inspector::Quiet(line);
-    }
-    let board = &feed.board;
-    if !board.complete {
-        return match feed.link {
-            Link::Down => Inspector::Quiet(NO_BOARD),
-            Link::Connecting | Link::Up => Inspector::Loading,
-        };
-    }
-    if state.now_tab != NowTab::Story {
-        return Inspector::Quiet(NOT_SERVED);
-    }
-    daemon_selection(state, board, form)
-        .and_then(|id| board.task(id))
-        .map_or(Inspector::Quiet(EMPTY_BOARD), |task| {
-            Inspector::Facts(task_facts(task, feed.now))
-        })
-}
-
-/// A stage's detail: its candidate sha and how long ago it reached its state.
-fn stage(task: &daemon::Task, index: usize, now: u64) -> Stage {
-    let step = &task.rail[index];
-    let active = step.mark == Mark::Active;
-    let detail = [
-        step.sha7.clone().unwrap_or_default(),
-        daemon::age(step.at, now),
-    ]
-    .into_iter()
-    .filter(|part| !part.is_empty())
-    .collect::<Vec<_>>()
-    .join(" · ");
-    Stage {
-        label: STAGES[index],
-        mark: step.mark,
-        word: stage_word(step.mark),
-        detail,
-        active,
-        hue: match (active, index, daemon_actor(task.group)) {
-            (false, _, _) => Hue::Neutral,
-            (true, 0, Actor::You) => Hue::You,
-            (true, 0, _) => Hue::Worker,
-            (true, _, _) => Hue::Corral,
-        },
-    }
-}
-
-fn task_facts(task: &daemon::Task, now: u64) -> TaskFacts {
-    let key = group_key(task.group);
-    let mut facts: Vec<(&'static str, Rich)> = Vec::new();
-    let mut doing = vec![span(task.now.clone())];
-    let age = daemon::age(task.since, now);
-    if !age.is_empty() {
-        doing.push(span(format!(" · for {age}")).dim());
-    }
-    facts.push(("Now", doing));
-    for (label, value) in [
-        ("Plan", &task.plan),
-        ("Project", &task.project),
-        ("Goal", &task.goal),
-    ] {
-        if let Some(value) = value {
-            facts.push((label, vec![span(value.clone())]));
-        }
-    }
-    if let Some(agent) = &task.agent {
-        let mut who = vec![span(agent.role.clone())];
-        if let Some(profile) = &agent.profile {
-            who.push(span(format!(" · {profile}")));
-        }
-        if let Some(session) = &agent.session {
-            who.push(span(" · "));
-            who.push(span(session.clone()).mono());
-        }
-        facts.push(("Agent", who));
-    }
-    if task.cost.is_some() {
-        let amount = span(money(task.cost.map(|cost| cost as f32)));
-        let word = if task.cost_estimated {
-            " estimated"
-        } else {
-            " reported"
-        };
-        facts.push(("Cost", vec![amount, span(word).dim()]));
-    }
-    if let Some(reason) = &task.held_reason {
-        facts.push(("Held", vec![span(reason.clone()).hue(Hue::Held)]));
-    }
-    if task.questions != 0 {
-        facts.push((
-            "Questions",
-            vec![span(format!("{} open", task.questions)).hue(Hue::You)],
-        ));
-    }
-    if !task.attention.is_empty() {
-        facts.push(("Attention", vec![span(attention_kinds(&task.attention))]));
-    }
-    TaskFacts {
-        id: task.id,
-        title: task.title.clone(),
-        who: group_label(key),
-        who_hue: key.hue(),
-        stages: std::array::from_fn(|index| stage(task, index, now)),
-        facts,
-    }
-}
-
-/// The kinds of attention keys (`T-935/escalation/2026-…Z` reads `escalation`), comma-separated,
-/// each once in first-seen order; a key without that shape is shown whole.
-fn attention_kinds(keys: &[String]) -> String {
-    let mut kinds: Vec<&str> = Vec::new();
-    for key in keys {
-        let kind = key
-            .split_once('/')
-            .and_then(|(_, rest)| rest.split_once('/'))
-            .map_or(key.as_str(), |(kind, _)| kind);
-        if !kinds.contains(&kind) {
-            kinds.push(kind);
-        }
-    }
-    kinds.join(", ")
-}
-
-/// The held tasks of the daemon's board, in the hold table's columns: how long ago the task
-/// entered its state, the id, the title with the held reason dimmed after it.
+/// The held and parked tasks of the daemon's board, in the hold table's columns: how long ago
+/// the task entered its state, the id, the title with its reason dimmed after it. Each opens
+/// its task.
 pub fn daemon_holds(feed: &daemon::Feed) -> Vec<HoldRow> {
     feed.board
         .tasks()
         .iter()
-        .filter(|task| group_key(task.group) == GroupKey::Held)
+        .filter(|task| matches!(group_key(task.group), GroupKey::Held | GroupKey::Parked))
         .map(|task| {
             let mut text = vec![span(task.title.clone())];
             if let Some(reason) = &task.held_reason {
                 text.push(span(format!(" · {reason}")).dim());
+            } else if group_key(task.group) == GroupKey::Parked {
+                text.push(span(format!(" · {}", task.now)).dim());
             }
             HoldRow {
-                id: task.id,
+                id: task.id.to_string(),
                 since: daemon::age(task.since, feed.now),
                 title: task.title.clone(),
                 mark: Mark::Na,
                 text,
+                action: Some(Press::Open(Live::Task(task.id.clone()))),
             }
         })
         .collect()
 }
 
-/// A lower dock tab's title in the Daemon state: no fixture clock or count; Parked holds the
-/// board's held tasks and counts them once a board has arrived.
-pub fn daemon_lower_label(tab: LowTab, board: &daemon::Board) -> String {
+/// A lower dock tab's title in the Daemon state: Since carries this device's last visit; the
+/// holds tab counts the board's held and parked tasks once a board has arrived.
+pub fn daemon_lower_label(tab: LowTab, feed: &daemon::Feed) -> String {
+    let board = &feed.board;
     match tab {
-        LowTab::Since => "Since your last visit".into(),
+        LowTab::Since => feed
+            .seen
+            .as_ref()
+            .and_then(|seen| seen.at.as_deref())
+            .map(|at| stamp(at, feed))
+            .filter(|at| !at.is_empty())
+            .map_or_else(
+                || "Since your last visit".to_owned(),
+                |at| format!("Since your last visit · {at}"),
+            ),
         LowTab::Parked if board.complete => {
-            format!("Held {}", board.count(daemon::Group::Held))
+            let held = board.count(daemon::Group::Held);
+            match board.count(daemon::Group::Parked) {
+                0 => format!("Held {held}"),
+                parked => format!("Held {held} · parked {parked}"),
+            }
         }
         LowTab::Parked => "Held".into(),
     }
 }
 
-/// The phone Now tab in the Daemon state: the daemon's list with no fixture summary chips.
-pub fn daemon_phone_now(state: &State, feed: &daemon::Feed) -> PhoneNow {
+/// One goal the board's tasks serve, as a Goals panel row narrowing the list to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoalRow {
+    pub button: Button,
+    pub count: usize,
+    pub selected: bool,
+}
+
+/// The goals the board's tasks name, each with its task count, after an "All goals" row while
+/// the list is narrowed; empty when no task names one.
+pub fn daemon_goals(state: &State, feed: &daemon::Feed) -> Vec<GoalRow> {
+    let mut goals: Vec<(&str, usize)> = Vec::new();
+    for goal in feed
+        .board
+        .tasks()
+        .iter()
+        .filter_map(|task| task.goal.as_deref())
+    {
+        match goals.iter_mut().find(|(known, _)| *known == goal) {
+            Some((_, count)) => *count += 1,
+            None => goals.push((goal, 1)),
+        }
+    }
+    if goals.is_empty() {
+        return Vec::new();
+    }
+    let mut rows = Vec::with_capacity(goals.len() + 1);
+    rows.push(GoalRow {
+        button: Button::new("All goals", Press::Goal(None), ButtonKind::Quiet),
+        count: feed.board.tasks().len(),
+        selected: state.goal.is_none(),
+    });
+    rows.extend(goals.into_iter().map(|(goal, count)| GoalRow {
+        button: Button::new(
+            goal.to_owned(),
+            Press::Goal(Some(goal.to_owned())),
+            ButtonKind::Quiet,
+        ),
+        count,
+        selected: state.goal.as_deref() == Some(goal),
+    }));
+    rows
+}
+
+/// The phone's summary chips from the board and the changes feed: what is new since this
+/// device's last visit (when corrald serves changes), what needs the owner, what moves and what
+/// waits. None before the first board.
+fn daemon_chips(feed: &daemon::Feed) -> Vec<SummaryChip> {
+    let board = &feed.board;
+    if !board.complete || feed.device.board_notice().is_some() {
+        return Vec::new();
+    }
+    let count = |groups: &[daemon::Group]| {
+        let total: usize = groups.iter().map(|group| board.count(*group)).sum();
+        u32::try_from(total).unwrap_or(u32::MAX)
+    };
+    let mut chips = Vec::with_capacity(4);
+    if feed.capable(CHANGES_V1)
+        && let Some(seen) = &feed.seen
+    {
+        let new = u32::try_from(feed.changes.range(seen.through.saturating_add(1)..).count())
+            .unwrap_or(u32::MAX);
+        let since = seen
+            .at
+            .as_deref()
+            .map(|at| stamp(at, feed))
+            .filter(|at| !at.is_empty());
+        chips.push(SummaryChip::new(
+            match since {
+                Some(at) => format!("▲ {new} since {at}"),
+                None => format!("▲ {new} new"),
+            },
+            Hue::Neutral,
+            new,
+        ));
+    }
+    let you = count(&[daemon::Group::NeedsYou]);
+    chips.push(SummaryChip::new(
+        format!("{you} need you"),
+        if you == 0 { Hue::Neutral } else { Hue::You },
+        you,
+    ));
+    let moving = count(&[daemon::Group::Verifying, daemon::Group::Producing]);
+    chips.push(SummaryChip::new(
+        format!("{moving} moving"),
+        Hue::Neutral,
+        moving,
+    ));
+    let upcoming = count(&[daemon::Group::Queued, daemon::Group::Other]);
+    chips.push(SummaryChip::new(
+        format!("{upcoming} upcoming"),
+        Hue::Neutral,
+        upcoming,
+    ));
+    chips
+}
+
+/// The phone Now tab in the Daemon state: the daemon's list under the board's own summary; a
+/// press on the summary opens Changes where corrald serves it.
+pub fn daemon_phone_now(state: &State, feed: &daemon::Feed, selected: &Selection) -> PhoneNow {
     PhoneNow {
         title: "Now",
-        chips: &[],
-        summary_action: None,
-        list: daemon_list(state, feed, Form::Phone),
+        chips: daemon_chips(feed),
+        summary_action: feed
+            .capable(CHANGES_V1)
+            .then_some(Action::Go(Destination::Changes)),
+        list: daemon_list(state, feed, selected, Form::Phone),
         status: daemon_status(feed),
     }
 }

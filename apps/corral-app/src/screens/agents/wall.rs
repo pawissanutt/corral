@@ -3,17 +3,21 @@
 
 use nsh_core::prelude::*;
 
-use crate::model::Form;
-use crate::model::agents::{Action, Mode, Tile, Wall};
+use crate::model::agents::{Action, Fill, Mode, Note, Tile, Wall};
+use crate::model::assistant::QUICK;
 use crate::model::hue::Hue;
+use crate::model::text::span;
+use crate::model::{Form, Id};
 use crate::screens::assistant;
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::seg;
 use crate::ui::kit::chip::{chip, illus};
 use crate::ui::kit::marks::{dot, hue_ink};
+use crate::ui::kit::notice::{empty, error, notice, skeleton};
 use crate::ui::kit::page::{body, group_head, head, pane, search};
 use crate::ui::kit::rows::list_row;
+use crate::ui::kit::text::dim;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
@@ -27,8 +31,16 @@ const GAP: f32 = 12.0;
 /// Cells the terminal row keeps for an agent's title: "supervisor · generation 14" whole.
 const TERM_TITLE: f32 = 26.0;
 
-/// The whole page for the form.
+/// The whole page for the form. With the daemon, the page (not the content it rebuilds on every
+/// agent update) subscribes the quick thread its tile quotes and settles the assistant blocks'
+/// session operations, so neither restarts while the page stays open. Other quick-thread
+/// views (the Ask drawer, the thread page) hold their own reference; the subscription closes
+/// only with the last of them.
 pub fn screen(app: AppState) -> AnyElement {
+    if untracked(|| app.daemon()) {
+        assistant::open_scope(app, Id::from(QUICK), false);
+        assistant::watch_ops(app);
+    }
     let wall = computed(move || wall_view(app));
     let (title, subtitle, labels) =
         untracked(move || wall.with(|w| (w.title, w.subtitle, w.mode_labels)));
@@ -72,13 +84,57 @@ pub fn screen(app: AppState) -> AnyElement {
     }
 }
 
+/// The footer note: the fixture's illustrative tag, or a quiet sentence about the data.
+fn note(app: AppState, note: &Note) -> AnyElement {
+    match note {
+        Note::Illustrative(words) => illus(app, *words),
+        Note::Plain(words) => dim(app, words.clone()).into_element(),
+    }
+}
+
+/// What stands in for the agents while there are none to show: the skeleton while the first
+/// rows load, the failure, or the empty state.
+fn fill(app: AppState, fill: &Fill) -> Option<AnyElement> {
+    match fill {
+        Fill::Ready => None,
+        Fill::Loading => Some(
+            view()
+                .when(app.form != Form::Terminal, |pad| {
+                    pad.px(px(18.0)).py(px(8.0))
+                })
+                .child(skeleton(app, &[(0.4, 10.0), (0.7, 10.0), (0.55, 10.0)]))
+                .into_element(),
+        ),
+        Fill::Failed(words) => Some(error(app, &vec![span(words.clone())], None)),
+        Fill::Empty { heading, paragraph } => Some(empty(app, *heading, paragraph.clone(), None)),
+    }
+}
+
+/// The notice over agents shown from the last update while corrald is not answering.
+fn stale(app: AppState, wall: &Wall) -> Option<AnyElement> {
+    let words = wall.stale.clone()?;
+    let notice = notice(app, Hue::Held, &vec![span(words)], None);
+    Some(if app.form == Form::Terminal {
+        notice
+    } else {
+        view()
+            .px(px(if app.form == Form::Phone { 16.0 } else { 18.0 }))
+            .pt(px(12.0))
+            .child(notice)
+            .into_element()
+    })
+}
+
 /// What scrolls under the head: the blocks and the agents in the mockup's order.
 fn content(app: AppState, wall: &Wall) -> AnyElement {
     let first = untracked(move || assistant::agents_head(app));
     let last = untracked(move || assistant::agents_tail(app));
+    let stale = stale(app, wall);
+    let fill = fill(app, &wall.fill);
     match app.form {
         Form::Desktop => view()
             .child(machine_line(app, wall))
+            .children(stale)
             .child(match wall.mode {
                 Mode::Wall => grid(app, first, &wall.tiles),
                 Mode::List => view()
@@ -89,24 +145,27 @@ fn content(app: AppState, wall: &Wall) -> AnyElement {
                     .children(wall.tiles.iter().map(|tile| list_line(app, tile)))
                     .into_element(),
             })
+            .children(fill)
             .child(last)
             .child(
                 view()
                     .px(px(18.0))
                     .pb(px(16.0))
-                    .child(illus(app, wall.footer)),
+                    .child(note(app, &wall.footer)),
             )
             .into_element(),
         Form::Phone => view()
             .child(first)
+            .children(stale)
             .child(group_head(
                 app,
-                wall.machine,
+                wall.machine.clone(),
                 Some(wall.count.to_string()),
                 Hue::Neutral,
-                Some(wall.phone_machine_detail.to_owned()),
-                Some(illus(app, wall.phone_machine_note)),
+                Some(wall.phone_machine_detail.clone()),
+                wall.phone_machine_note.map(|words| illus(app, words)),
             ))
+            .children(fill)
             .children(wall.tiles.iter().map(|tile| phone_row(app, tile)))
             .child(last)
             .into_element(),
@@ -117,36 +176,42 @@ fn content(app: AppState, wall: &Wall) -> AnyElement {
                     .items_center()
                     .h(term::rows(1.0))
                     .child(
-                        text(wall.machine)
+                        text(wall.machine.clone())
                             .flex_shrink_0()
                             .font_weight(FontWeight::BOLD)
                             .text_color(color(Token::Ink)),
                     )
                     .child(term::space(2.0))
                     .child(
-                        term::quiet(wall.machine_detail)
+                        term::quiet(wall.machine_detail.clone())
                             .flex_shrink(1.0)
                             .min_w(px(0.0)),
                     )
-                    .child(term::space(2.0))
-                    .child(illus(app, wall.machine_note)),
+                    .children(wall.machine_note.map(|words| {
+                        view()
+                            .flex_row()
+                            .child(term::space(2.0))
+                            .child(illus(app, words))
+                    })),
             )
             .child(term::blank())
+            .children(stale)
             .child(first)
             .child(term::hrule())
+            .children(fill)
             .children(wall.tiles.iter().map(|tile| list_line(app, tile)))
             .child(term::hrule())
             .child(last)
             .child(term::blank())
-            .child(illus(app, wall.footer))
+            .child(note(app, &wall.footer))
             .into_element(),
     }
 }
 
-/// `.machine`: the terminal icon, the machine in bold, what runs there, the illustrative tag,
-/// and at the trailing edge where other machines will come from.
+/// `.machine`: the terminal icon, the machine in bold, what runs there, the illustrative tag in
+/// the preview, and at the trailing edge where other machines will come from.
 fn machine_line(app: AppState, wall: &Wall) -> AnyElement {
-    let quiet = |content: &'static str| {
+    let quiet = |content: String| {
         text(content)
             .number_of_lines(1u32)
             .flex_shrink(1.0)
@@ -163,17 +228,17 @@ fn machine_line(app: AppState, wall: &Wall) -> AnyElement {
         .pt(px(14.0))
         .child(icon(Icon::Term, 15.0, color(Token::Ink2)))
         .child(
-            text(wall.machine)
+            text(wall.machine.clone())
                 .flex_shrink_0()
                 .font_family(FONT_TEXT)
                 .text_size(px(12.5))
                 .font_weight(FontWeight::BOLD)
                 .text_color(color(Token::Ink)),
         )
-        .child(quiet(wall.machine_detail))
-        .child(illus(app, wall.machine_note))
+        .child(quiet(wall.machine_detail.clone()))
+        .children(wall.machine_note.map(|words| illus(app, words)))
         .child(view().flex_1().min_w(px(GAP)))
-        .child(quiet(wall.other_machines))
+        .child(quiet(wall.other_machines.to_owned()))
         .into_element()
 }
 
@@ -213,20 +278,22 @@ fn grid(app: AppState, first: AnyElement, tiles: &[Tile]) -> AnyElement {
 
 /// What a screen reader hears for an agent: chip, id, title, what it does, feed, since.
 fn spoken(tile: &Tile) -> String {
-    let a = &tile.agent;
     [
         tile.chip,
-        a.id,
-        a.title,
-        a.doing,
-        a.feed.label(),
+        tile.label.as_str(),
+        tile.title.as_str(),
+        tile.doing.as_str(),
+        tile.feed_short.as_str(),
         tile.since.as_str(),
     ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>()
     .join(", ")
 }
 
 fn test_id(tile: &Tile) -> String {
-    format!("agent-{}", tile.agent.id)
+    format!("agent-{}", tile.id)
 }
 
 /// The colour of what the agent is doing: needs you in its colour, else the secondary ink.
@@ -238,12 +305,11 @@ fn doing_ink(tile: &Tile) -> AdaptiveColor {
 }
 
 /// One desktop tile (`.tile`): chip, id and role; the title; what it does now; the tail in the
-/// terminal look under its live or snapshot tag; profile, runtime, pane and since. Pressing it
-/// opens the agent's session.
+/// terminal look under its live or snapshot tag; profile, runtime, pane, usage and since.
+/// Pressing it opens the agent's session.
 fn tile(app: AppState, tile: &Tile) -> AnyElement {
-    let action = tile.action;
-    let a = tile.agent;
-    let small = |content: &'static str, ink: Token| {
+    let action = tile.action.clone();
+    let small = |content: String, ink: Token| {
         text(content)
             .number_of_lines(1u32)
             .flex_shrink_0()
@@ -270,7 +336,7 @@ fn tile(app: AppState, tile: &Tile) -> AnyElement {
                 .outline_color(color(Token::Focus))
                 .outline_offset(px(2.0))
         })
-        .on_press(move || run(app, action))
+        .on_press(move || run(app, action.clone()))
         .child(
             view()
                 .flex_row()
@@ -281,7 +347,7 @@ fn tile(app: AppState, tile: &Tile) -> AnyElement {
                 .pb(px(2.0))
                 .child(chip(app, tile.chip, tile.hue))
                 .child(
-                    text(a.id)
+                    text(tile.label.clone())
                         .number_of_lines(1u32)
                         .flex_shrink(1.0)
                         .min_w(px(0.0))
@@ -290,10 +356,10 @@ fn tile(app: AppState, tile: &Tile) -> AnyElement {
                         .text_color(color(Token::Ink3)),
                 )
                 .child(view().flex_1().min_w(px(0.0)))
-                .child(small(a.role, Token::Ink3).text_size(px(12.0))),
+                .child(small(tile.role.clone(), Token::Ink3).text_size(px(12.0))),
         )
         .child(
-            text(a.title)
+            text(tile.title.clone())
                 .truncate()
                 .px(px(12.0))
                 .font_family(FONT_TEXT)
@@ -302,7 +368,7 @@ fn tile(app: AppState, tile: &Tile) -> AnyElement {
                 .text_color(color(Token::Ink)),
         )
         .child(
-            text(a.doing)
+            text(tile.doing.clone())
                 .truncate()
                 .px(px(12.0))
                 .pt(px(2.0))
@@ -319,7 +385,7 @@ fn tile(app: AppState, tile: &Tile) -> AnyElement {
                 .px(px(12.0))
                 .py(px(8.0))
                 .bg(console::ground())
-                .child(console::tag(a.feed, a.feed.wall_label()))
+                .child(console::tag(tile.feed, tile.feed_label.clone()))
                 .child(console::lines(&tile.tail, TILE, false)),
         )
         .child(
@@ -331,14 +397,19 @@ fn tile(app: AppState, tile: &Tile) -> AnyElement {
                 .py(px(6.0))
                 .border_t_1()
                 .border_t_color(color(Token::Rule))
-                .child(small(a.profile, Token::Ink3))
+                .child(small(tile.profile.clone(), Token::Ink3))
                 .child(
-                    small(a.runtime, Token::Ink3)
+                    small(tile.runtime.clone(), Token::Ink3)
                         .flex_shrink(1.0)
                         .min_w(px(0.0))
                         .truncate(),
                 )
-                .child(small(a.pane, Token::Ink3).font_family(FONT_MONO))
+                .child(small(tile.pane.clone(), Token::Ink3).font_family(FONT_MONO))
+                .children(tile.usage.clone().map(|usage| {
+                    small(usage, Token::Ink3)
+                        .font_family(FONT_MONO)
+                        .tabular_nums()
+                }))
                 .child(view().flex_1().min_w(px(0.0)))
                 .child(
                     text(tile.since.clone())
@@ -355,8 +426,7 @@ fn tile(app: AppState, tile: &Tile) -> AnyElement {
 /// A one-line row per agent: the desktop List mode and the terminal wall. Chip, id, title,
 /// what it does (left out on a narrow terminal grid), the feed and since.
 fn list_line(app: AppState, tile: &Tile) -> AnyElement {
-    let action = tile.action;
-    let a = tile.agent;
+    let action = tile.action.clone();
     let form = app.form;
     let terminal = form == Form::Terminal;
     let fixed = |width: f32, child: AnyElement| {
@@ -390,7 +460,7 @@ fn list_line(app: AppState, tile: &Tile) -> AnyElement {
                 slot.flex_shrink_0().w(px(320.0))
             }
         })
-        .child(words(a.doing.into(), doing_ink(tile), false))
+        .child(words(tile.doing.clone().into(), doing_ink(tile), false))
         .into_element();
     let title = view()
         .min_w(px(0.0))
@@ -404,7 +474,7 @@ fn list_line(app: AppState, tile: &Tile) -> AnyElement {
             }
         })
         .child(
-            words(a.title.into(), color(Token::Ink), false)
+            words(tile.title.clone().into(), color(Token::Ink), false)
                 .when(!terminal, |t| t.font_weight(FontWeight::SEMIBOLD)),
         )
         .into_element();
@@ -413,29 +483,31 @@ fn list_line(app: AppState, tile: &Tile) -> AnyElement {
         spoken(tile),
         test_id(tile),
         || false,
-        move || run(app, action),
+        move || run(app, action.clone()),
         vec![
             fixed(11.0, chip(app, tile.chip, tile.hue)),
-            fixed(11.0, words(a.id.into(), quiet, true).into_element()),
+            fixed(
+                11.0,
+                words(tile.label.clone().into(), quiet, true).into_element(),
+            ),
             title,
             doing,
             fixed(
                 9.0,
-                words(a.feed.label().into(), quiet, false).into_element(),
+                words(tile.feed_short.clone().into(), quiet, false).into_element(),
             ),
             fixed(
                 if terminal { 5.0 } else { 6.0 },
-                words(a.since.into(), quiet, true).into_element(),
+                words(tile.since_short.clone().into(), quiet, true).into_element(),
             ),
         ],
     )
 }
 
 /// The phone row (`.prow`): the state dot, the id, the bold title and since; under them what it
-/// does (needs you in its colour) and live or snapshot.
+/// does (needs you in its colour) and the tail's freshness.
 fn phone_row(app: AppState, tile: &Tile) -> AnyElement {
-    let action = tile.action;
-    let a = tile.agent;
+    let action = tile.action.clone();
     let first = view()
         .flex_row()
         .items_center()
@@ -455,7 +527,7 @@ fn phone_row(app: AppState, tile: &Tile) -> AnyElement {
                 .items_baseline()
                 .gap(px(8.0))
                 .child(
-                    text(a.id)
+                    text(tile.label.clone())
                         .flex_shrink_0()
                         .number_of_lines(1u32)
                         .font_family(FONT_MONO)
@@ -463,7 +535,7 @@ fn phone_row(app: AppState, tile: &Tile) -> AnyElement {
                         .text_color(color(Token::Ink3)),
                 )
                 .child(
-                    text(a.title)
+                    text(tile.title.clone())
                         .flex_1()
                         .min_w(px(0.0))
                         .truncate()
@@ -474,7 +546,7 @@ fn phone_row(app: AppState, tile: &Tile) -> AnyElement {
                 ),
         )
         .child(
-            text(a.since)
+            text(tile.since_short.clone())
                 .flex_shrink_0()
                 .number_of_lines(1u32)
                 .font_family(FONT_MONO)
@@ -488,7 +560,7 @@ fn phone_row(app: AppState, tile: &Tile) -> AnyElement {
         .gap(px(8.0))
         .pl(px(22.0))
         .child(
-            text(a.doing)
+            text(tile.doing.clone())
                 .flex_1()
                 .min_w(px(0.0))
                 .truncate()
@@ -497,7 +569,7 @@ fn phone_row(app: AppState, tile: &Tile) -> AnyElement {
                 .text_color(doing_ink(tile)),
         )
         .child(
-            text(a.feed.label())
+            text(tile.feed_short.clone())
                 .flex_shrink_0()
                 .number_of_lines(1u32)
                 .font_family(FONT_TEXT)
@@ -509,7 +581,7 @@ fn phone_row(app: AppState, tile: &Tile) -> AnyElement {
         spoken(tile),
         test_id(tile),
         || false,
-        move || run(app, action),
+        move || run(app, action.clone()),
         vec![
             view()
                 .flex_1()

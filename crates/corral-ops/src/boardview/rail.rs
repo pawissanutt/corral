@@ -2,7 +2,7 @@ use corral_core::{AutoStage, GateResult, RunHead, RunOutcome, TaskHead, Verdict}
 use corral_protocol::board::{RailGlyph as Glyph, RailStep};
 use jiff::Timestamp;
 
-pub(super) fn steps(head: &TaskHead) -> [RailStep; 4] {
+pub(crate) fn steps(head: &TaskHead) -> [RailStep; 4] {
     let Some(run) = head.current_run.as_deref() else {
         return std::array::from_fn(|_| step(Glyph::Unavailable, None, None));
     };

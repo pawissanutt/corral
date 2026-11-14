@@ -6,19 +6,19 @@ This app lives in the corral repository as `apps/corral-app/`. It is its own Car
 
 The app has three data states (`DataState`):
 
-- **Fixture**: the explicit mockup preview, and the default for native builds without `CORRAL_SOCKET`. Destination content comes from fixtures in `src/model/`: Inbox and its question handover sheet, Now, Changes, Plans, Agents and sessions, Review, Timeline, Usage, Settings, the Ask composer and assistant threads. Actions change local state only.
-- **Daemon**: an enrolled native Unix session (`CORRAL_SOCKET`, peer-UID trust and a private `0600` device-id file), or a paired browser session over an explicitly enabled loopback WebSocket with pinned Noise IK. Health, Now and connection/device Settings are live; other destinations remain explicitly unavailable. Only the trusted native/CLI side administers devices. Neither app sends task/question commands.
-- **Disconnected**: no daemon connection. Unpaired browsers start here on Settings › Connection, with pairing available and without fixture dates, health or board rows; other destinations remain unavailable.
+- **Fixture**: explicitly selected mockup preview. Content comes from fixtures in `src/model/`; actions change local state only.
+- **Daemon**: an enrolled native Unix session (`CORRAL_SOCKET`, peer-UID trust and a private `0600` device-id file), or a paired browser session over an explicitly enabled loopback WebSocket with pinned Noise IK. Typed reads and permitted actions cover the current destinations; capabilities, authority, stale data and missing facts remain visible. Native devices have Admin authority; newly paired browsers have `reply`, `act` and `assistant`, not `admin` or `assistant_act`.
+- **Disconnected**: no daemon connection. Normal startup must not substitute fixture facts. Unpaired browsers open Settings › Connection.
 
-The web build opens Connection automatically until paired, ignoring older fixture/destination preferences. It pairs through that page using a trusted-side offer and matching-code confirmation. Its encrypted credential and non-extractable wrapping key live in IndexedDB; only `corral.paired` is in NSH Storage. Revocation closes sessions and stops automatic reconnect. Forget returns to disconnected Connection. No LAN listener, relay or browser command executor is enabled.
+The web build pairs using a trusted-side offer and matching-code confirmation. Its encrypted credential and non-extractable wrapping key live in IndexedDB; only `corral.paired` is in NSH Storage. Revocation closes sessions and stops automatic reconnect. Forget returns to disconnected Connection. No browser shell executor is enabled.
 
-Replies to newly typed Ask messages are not simulated, as in the mockup. NSH Storage keys are `corral.destination`, `corral.settings`, `corral.theme`, `corral.data`, `corral.conn`, `corral.mode`, `corral.now.layout` and the non-secret `corral.paired` marker.
+Ask is one composer for assistant and PM messages; the daemon hosts the assistant, and the PM receives inbox messages. Drafts and bounded assistant sends persist per device/store, with cancellation and same-ID reconnect recovery; other offline actions refuse. Images and bounded UTF-8 files upload from the client; links are opaque. Never represent missing provider, quota or raw-terminal facts as available. NSH Storage keys are `corral.destination`, `corral.settings`, `corral.theme`, `corral.data`, `corral.conn`, `corral.mode`, `corral.now.layout` and the non-secret `corral.paired` marker.
 
 ## Module map
 
 - `src/lib.rs`: root `App`.
 - `src/model/`: pure Rust, with no `nsh_*` imports or I/O; holds data, wording, state, reducers and view builders for every form.
-- `src/model/daemon.rs`: owned data received from `corrald` (`Feed`: link, health, board) and its pure updates.
+- `src/model/daemon.rs`: owned daemon feed and its pure updates, including typed domain data and command states.
 - `src/client/`: shared frame/session core, native Unix adapter and device-id persistence, browser WebSocket/Noise adapter and encrypted IndexedDB credentials, wire-to-model mapping, and root-owned tasks feeding `AppState::feed`.
 - `src/model/hue.rs`, `text.rs`, `effect.rs`: semantic colours, rich text, environment and reducer effects.
 - `src/model/nav.rs`, `health.rs`, `fixture.rs`, `commands.rs`: navigation, health and fixture snapshots, and palette commands.
@@ -41,7 +41,7 @@ Each domain's model supplies a `State`, reducers and pure view builders. Read th
 
 Give pressable controls and testable regions IDs in these shapes: `task-<id>`, `plan-<id>`, `inbox-<key>`, `agent-<id>`, `thread-<id>`, `seg-<group>-<value>`, `btn-<action>`, `opt-<n>`, and `page-title`. Preserve the shell IDs `tab-<slug>`, `nav-<slug>`, `settings-<slug>`, `ask-open`, `ask-close`, `health`, `health-source` and `count-<slug>`.
 
-The command palette's Demo group switches Connection, Data and Assistant states and opens the hotkey window, share sheet and lock-screen push demos.
+The explicit fixture preview offers Demo controls; live palette entries use real data.
 
 ## Conventions
 

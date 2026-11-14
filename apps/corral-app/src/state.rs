@@ -1,27 +1,38 @@
 //! App signals, persistence and key routing. Domain reducers stay pure; this layer applies their
-//! effects in order and owns transient confirmations, overlays and toast timing.
+//! effects in order and owns transient confirmations, overlays and toast timing. The live bridge
+//! to corrald (`live`) dispatches typed commands, details and assistant calls.
 
-use std::collections::BTreeSet;
+mod attach;
+mod live;
+mod sidebar;
+
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+use corral_protocol::assistant::ContextRef;
 use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 use nsh_core::storage::Storage;
 
+use crate::model::act::{Confirmable, Confirmation};
 use crate::model::commands::Action;
 use crate::model::{
-    AskTarget, Conn, DataMode, DataState, Destination, Effect, Env, Form, NavState, Overlay, Page,
-    Risk, SettingsSection, Snapshot, ThemeChoice, agents, assistant, commands, daemon, inbox,
-    plans, review, settings, timeline, usage, work,
+    AskTarget, Conn, DataMode, DataState, Destination, Effect, Env, Form, Id, NavState, Overlay,
+    Page, Risk, SettingsSection, SidebarPref, Snapshot, ThemeChoice, agents, assistant, commands,
+    daemon, inbox, plans, review, settings, timeline, usage, work,
 };
 
 const DESTINATION_KEY: &str = "corral.destination";
 const SETTINGS_KEY: &str = "corral.settings";
 const THEME_KEY: &str = "corral.theme";
 const DATA_KEY: &str = "corral.data";
+/// How `DATA_KEY` remembers the fixture preview, written only once it has been chosen. Older
+/// builds stored `fixture` there by default, which is no choice and so restores nothing.
+const PREVIEW: &str = "preview";
 const CONN_KEY: &str = "corral.conn";
 const MODE_KEY: &str = "corral.mode";
 const NOW_LAYOUT_KEY: &str = "corral.now.layout";
+const SIDEBAR_KEY: &str = "corral.sidebar";
 
 /// Shared app handles. Screens render tracked reads and send domain effects back through `run`.
 #[derive(Clone, Copy)]
@@ -50,8 +61,29 @@ pub struct AppState {
     pub review: Signal<review::State>,
     pub settings: Signal<settings::State>,
     pub assistant: Signal<assistant::State>,
-    /// Fresh confirmation, with an optional device or idea name.
+    /// Fresh confirmation of a fixture preview command, with an optional device or idea name.
     pub confirm: Signal<Option<(Risk, Option<String>)>>,
+    /// Fresh confirmation of a live command, waiting for corrald's preview and this device.
+    pub confirmation: Signal<Option<Confirmation>>,
+    /// The real context "Ask about this" attached to the composer; cleared when Ask closes.
+    pub ask_context: Signal<Option<ContextRef>>,
+    /// What is staged for the next message, shared by Ask and docked composers like the draft.
+    /// In memory only; it outlives a closed Ask so a picker answering late still lands.
+    pub ask_staged: Signal<Vec<assistant::Staged>>,
+    /// The inline link or path field open in the composer foot, if any.
+    pub ask_field: Signal<Option<assistant::AttachField>>,
+    /// The open field's text; never persisted, never logged.
+    pub ask_field_text: Signal<String>,
+    /// Why the open field's text was not attached.
+    pub ask_field_error: Signal<Option<String>>,
+    /// The app's root owner: a picker's answer is awaited under it, so closing Ask or the
+    /// sheet while the system picker is up does not drop the picked files.
+    pub root: Owner,
+    /// Live commands sent from here whose receipt has not been shown yet, and where each
+    /// stands with this device's confirmation.
+    watching: Signal<BTreeMap<Id, (Confirmable, live::Watch)>>,
+    /// Assistant session operations by their caller key, to the client's correlation.
+    sessions: Signal<BTreeMap<Id, Id>>,
     /// A receipt that expires 3.4 seconds after the most recent toast call.
     pub toast: Signal<Option<String>>,
     /// Later UI phases render the global hotkey window when true.
@@ -60,6 +92,10 @@ pub struct AppState {
     pub share: Signal<bool>,
     /// Later UI phases render the lock-screen push demo when true.
     pub lock: Signal<bool>,
+    /// Persisted wide-layout sidebar choice; a narrow window or grid always folds it.
+    pub sidebar: Signal<SidebarPref>,
+    /// The labels opened over the content from the rail while narrow; never persisted.
+    sidebar_peek: Signal<bool>,
 }
 
 impl AppState {
@@ -77,7 +113,7 @@ impl AppState {
             &mut nav,
             crate::client::pairing_supported(),
             crate::client::configured(),
-            preference(DATA_KEY, DataState::from_slug),
+            Storage::get_item(DATA_KEY).as_deref(),
             pairing_link,
         );
         let open_pairing = nav.section_opens > 0;
@@ -89,6 +125,7 @@ impl AppState {
             theme: signal(
                 preference(THEME_KEY, ThemeChoice::from_slug).unwrap_or(ThemeChoice::System),
             ),
+            sidebar: signal(preference(SIDEBAR_KEY, SidebarPref::from_slug).unwrap_or_default()),
             ask_target: signal(AskTarget::Assistant),
             ask_draft: signal(String::new()),
             ask_focus: signal(0),
@@ -104,13 +141,24 @@ impl AppState {
             review: signal(review::State::default()),
             settings: signal(settings::State::default()),
             assistant: signal(assistant::State::default()),
+            confirmation: signal(None),
+            ask_context: signal(None),
+            ask_staged: signal(Vec::new()),
+            ask_field: signal(None),
+            ask_field_text: signal(String::new()),
+            ask_field_error: signal(None),
+            root: Owner::current(),
+            watching: signal(BTreeMap::new()),
+            sessions: signal(BTreeMap::new()),
             confirm: signal(None),
             toast: signal_with(None, SignalEquals::Never),
             hotkey: signal(false),
             share: signal(false),
             lock: signal(false),
+            sidebar_peek: signal(false),
         };
         crate::client::start(app.feed);
+        app.follow_browser_pairing();
         if open_pairing {
             // Phone sections are pushed by a navigation intent after the shell starts.
             let _ = set_timeout(Duration::ZERO, move || {
@@ -119,23 +167,33 @@ impl AppState {
         }
         app.persist();
         app.install_toast_timer();
+        app.watch_receipts();
+        app.follow_sidebar();
+        app.latch_previews();
         if form != Form::Phone {
             app.bind_keys();
         }
         app
     }
 
-    /// Tracked environment for any domain's reducer or view builder.
+    /// Tracked environment for any domain's reducer or view builder. The preview's demo
+    /// connection and data-mode switches apply only to the fixture preview.
     pub fn env(&self) -> Env {
-        if self.daemon() {
-            self.feed
-                .with(|feed| crate::model::health::daemon_env(feed, self.form))
-        } else {
-            Env {
+        match self.data.get() {
+            DataState::Daemon => self
+                .feed
+                .with(|feed| crate::model::health::daemon_env(feed, self.form)),
+            DataState::Fixture => Env {
                 conn: self.conn.get(),
                 mode: self.mode.get(),
                 form: self.form,
-            }
+            },
+            // Nothing is served without a connection; actions refuse rather than queue.
+            DataState::Disconnected => Env {
+                conn: Conn::Down,
+                mode: DataMode::Live,
+                form: self.form,
+            },
         }
     }
 
@@ -213,10 +271,34 @@ impl AppState {
         });
     }
 
-    /// Opens Ask and requests composer focus without discarding its current context.
+    /// Opens Ask and requests composer focus without discarding its current context. Against
+    /// corrald it opens only when the daemon hosts the assistant for the app; a daemon not yet
+    /// reached (cold boot offline, still connecting) is not a refusal, just not available yet.
     pub fn open_ask(&self) {
-        if untracked(|| self.daemon()) {
-            self.toast("corrald does not serve Ask yet");
+        use crate::model::Availability;
+        let refusal = untracked(|| {
+            match self.data.get() {
+            DataState::Daemon => self.feed.with(|feed| {
+                match crate::model::health::capability_availability(
+                    feed,
+                    corral_protocol::app::ASSISTANT_V1,
+                ) {
+                    Availability::Ready => None,
+                    Availability::Missing(_) => Some(
+                        "This corrald does not offer Ask to the app (assistant.v1 is not advertised).",
+                    ),
+                    Availability::Connecting if feed.link == crate::model::daemon::Link::Down => {
+                        Some("corrald is not reachable. Ask opens once a session with it is open.")
+                    }
+                    Availability::Connecting => Some("Connecting to corrald; Ask opens once it answers."),
+                }
+            }),
+            DataState::Disconnected => Some("Ask needs a connection to corrald."),
+            _ => None,
+        }
+        });
+        if let Some(refusal) = refusal {
+            self.toast(refusal);
             return;
         }
         self.change(|nav| nav.open(Overlay::Ask));
@@ -245,13 +327,20 @@ impl AppState {
         self.change(|nav| nav.close(overlay));
         if overlay == Overlay::Ask {
             self.assistant.update(|state| state.attach(None));
+            self.ask_context.set(None);
+            self.close_attach_field();
         }
     }
 
-    /// Escape priority: confirmation, model list, newest overlay, then top page.
+    /// Escape priority: confirmation, model list, newest overlay, the narrow sidebar's labels,
+    /// then top page.
     pub fn close_newest(&self) {
-        if self.confirm.get_untracked().is_some() {
+        if self.confirm.get_untracked().is_some() || self.confirmation.get_untracked().is_some() {
             self.confirm_no();
+            return;
+        }
+        if self.ask_field.with_untracked(Option::is_some) {
+            self.close_attach_field();
             return;
         }
         let mut closed = false;
@@ -263,7 +352,9 @@ impl AppState {
             self.close(overlay);
             return;
         }
-        self.back();
+        if !self.close_sidebar_peek() {
+            self.back();
+        }
     }
 
     /// Changes the persisted appearance and system color scheme.
@@ -271,16 +362,56 @@ impl AppState {
         self.theme.set(choice);
     }
 
-    /// Changes the source without carrying fixture dialogs into a live session.
+    /// Changes the source without carrying the fixture preview's dialogs and demos out of it.
     pub fn set_data(&self, state: DataState) {
-        if state == DataState::Daemon {
+        if state != DataState::Fixture {
             self.close(Overlay::Ask);
             self.confirm.set(None);
             self.hotkey.set(false);
             self.share.set(false);
             self.lock.set(false);
         }
+        // A live confirmation never outlives its source.
+        self.confirmation.set(None);
         self.data.set(state);
+    }
+
+    /// A browser that finishes pairing shows its live session at once, from whichever source
+    /// it paired: the stored identity is what a reload resumes anyway. A browser whose stored
+    /// pairing turns out to be gone (the client clears its marker) is unpaired, so it returns to
+    /// Connection's pairing form instead of waiting on a session that cannot start.
+    fn follow_browser_pairing(self) {
+        let paired = computed(move || {
+            self.feed.with(|feed| {
+                matches!(
+                    feed.browser_pairing,
+                    crate::model::devices::BrowserPairing::Paired { .. }
+                )
+            })
+        });
+        let failed = computed(move || {
+            self.feed
+                .with(|feed| matches!(feed.device, crate::model::devices::DeviceLink::Failed(_)))
+        });
+        // Each transition follows only its own change, so an explicit later choice of source
+        // is never overridden by the other.
+        effect(move || {
+            if paired.get() && !untracked(|| self.daemon()) {
+                untracked(|| self.set_data(DataState::Daemon));
+            }
+        });
+        effect(move || {
+            if failed.get()
+                && untracked(|| self.daemon())
+                && crate::client::pairing_supported()
+                && !crate::client::configured()
+            {
+                untracked(|| {
+                    self.go_settings(SettingsSection::Connection);
+                    self.set_data(DataState::Disconnected);
+                });
+            }
+        });
     }
 
     /// Removes the stored layout and asks Now to restore its default arrangement.
@@ -294,10 +425,11 @@ impl AppState {
         self.toast.set(Some(text.into()));
     }
 
-    /// Opens fresh confirmation, refusing risky commands while the daemon is unreachable.
+    /// Opens the fixture preview's fresh confirmation; corrald commands go through `dispatch`.
     pub fn confirm(&self, risk: Risk, name: Option<String>) {
         if untracked(|| self.daemon()) {
-            self.toast("The app sends corrald no commands yet");
+            // A fixture reducer's sample command has no live target.
+            self.toast("The fixture preview's sample command is not sent to corrald.");
             return;
         }
         if self.env_untracked().conn.refuses() {
@@ -307,11 +439,11 @@ impl AppState {
         self.confirm.set(Some((risk, name)));
     }
 
-    /// Closes confirmation and shows its named, device-attributed success receipt.
+    /// Confirms what the sheet shows: a live command with corrald's fresh preview proof, or
+    /// the fixture preview's sample with its receipt.
     pub fn confirm_yes(&self) {
-        if untracked(|| self.daemon()) {
-            self.confirm.set(None);
-            self.toast("The app sends corrald no commands yet");
+        if self.confirmation.get_untracked().is_some() {
+            self.confirm_live();
             return;
         }
         let Some((risk, name)) = self.confirm.get_untracked() else {
@@ -325,13 +457,14 @@ impl AppState {
         self.toast(format!(
             "{}{name} · actor=owner via=app:{}",
             commands::risk(risk).ok,
-            self.env().device()
+            self.env_untracked().device()
         ));
     }
 
-    /// Cancels the preview without applying any effect.
+    /// Cancels the confirmation without sending or applying anything.
     pub fn confirm_no(&self) {
         self.confirm.set(None);
+        self.cancel_live();
     }
 
     /// Applies every reducer effect in source order.
@@ -353,6 +486,7 @@ impl AppState {
                 }
                 Effect::CloseAsk => self.close(Overlay::Ask),
                 Effect::SetConn(conn) => self.conn.set(conn),
+                live => self.run_live(live),
             }
         }
     }
@@ -377,6 +511,7 @@ impl AppState {
             Action::Go(destination) => self.go(destination),
             Action::Settings(section) => self.go_settings(section),
             Action::Open(page) => self.open(page),
+            Action::OpenLive(live) => self.open_live(live),
             Action::Ask(text) => match text {
                 Some(text) => self.open_ask_with(&text),
                 None => self.open_ask(),
@@ -435,9 +570,10 @@ impl AppState {
             set_color_scheme(appearance(choice));
             remember(THEME_KEY, choice.slug());
         });
-        effect(move || remember(DATA_KEY, self.data.get().slug()));
+        effect(move || remember(DATA_KEY, remembered_data(self.data.get())));
         effect(move || remember(CONN_KEY, self.conn.get().slug()));
         effect(move || remember(MODE_KEY, self.mode.get().slug()));
+        effect(move || remember(SIDEBAR_KEY, self.sidebar.get().slug()));
     }
 
     fn bind_keys(self) {
@@ -471,14 +607,44 @@ impl AppState {
             }
         });
         on_key_with("escape", anywhere, move |_| self.close_newest());
+        on_key_with("mod+b", typing, move |_| self.toggle_sidebar());
         on_key_with("mod+shift+m", anywhere, move |_| {
-            let mut effects = Vec::new();
-            self.assistant.update(|state| effects = state.cycle_model());
-            self.run(effects);
+            match self.data.get_untracked() {
+                DataState::Fixture => {
+                    let mut effects = Vec::new();
+                    self.assistant.update(|state| effects = state.cycle_model());
+                    self.run(effects);
+                    return;
+                }
+                DataState::Disconnected => return,
+                DataState::Daemon => {}
+            }
+            let top = self.nav.with_untracked(|nav| nav.live().cloned());
+            let ask_open = self.nav.with_untracked(|nav| nav.is_open(Overlay::Ask));
+            self.reduce(self.assistant, |state, feed, _, env| {
+                state.cycle_model_live(top.as_ref(), ask_open, feed, env)
+            });
         });
     }
 
+    /// The fixture session's transcript/terminal switch, or the live selected session's.
     fn toggle_session(&self) {
+        match self.data.get_untracked() {
+            DataState::Daemon => {
+                let selected = self.nav.with_untracked(|nav| nav.selection.session.clone());
+                let Some(session) = selected else {
+                    return;
+                };
+                self.agents.update(|state| state.toggle_view());
+                let live = crate::model::Live::Session(session);
+                if self.nav.with_untracked(|nav| nav.live() != Some(&live)) {
+                    self.open_live(live);
+                }
+                return;
+            }
+            DataState::Disconnected => return,
+            DataState::Fixture => {}
+        }
         self.agents.update(|state| state.toggle_view());
         let session = self.agents.with_untracked(|state| state.session);
         if self.page() != Some(Page::Session(session)) {
@@ -488,6 +654,7 @@ impl AppState {
 
     fn press_key(&self, key: &str) {
         if self.confirm.get_untracked().is_some()
+            || self.confirmation.with_untracked(Option::is_some)
             || self.nav.with_untracked(|nav| nav.newest().is_some())
         {
             return;
@@ -507,30 +674,12 @@ impl AppState {
             }
             _ => {}
         }
-        let page = self.page();
-        let env = self.env();
-        let mut effects = None;
-        let daemon = self.data.get_untracked() == DataState::Daemon;
-        match (self.destination(), page) {
-            (Destination::Now, _) if daemon => self.feed.with_untracked(|feed| {
-                self.work.update(|state| {
-                    effects = state.key_daemon(key, page, &feed.board, self.form);
-                });
-            }),
-            (Destination::Inbox, None | Some(Page::Question)) if !daemon => self
-                .inbox
-                .update(|state| effects = state.key(key, page, env)),
-            (Destination::Now, _) => self
-                .work
-                .update(|state| effects = state.key(key, page, env)),
-            (Destination::Plans, _) if !daemon => self
-                .plans
-                .update(|state| effects = state.key(key, page, env)),
-            (Destination::Review, _) if !daemon => self
-                .review
-                .update(|state| effects = state.key(key, page, env)),
-            _ => {}
-        }
+        // Without a connection no destination is served, so only destination keys answer.
+        let effects = match self.data.get_untracked() {
+            DataState::Daemon => self.key_live(key),
+            DataState::Fixture => self.key_fixture(key),
+            DataState::Disconnected => None,
+        };
         if let Some(effects) = effects {
             self.run(effects);
         } else if let Some(destination) = Destination::ALL
@@ -540,13 +689,66 @@ impl AppState {
             self.go(destination);
         }
     }
+
+    /// Routes a key to the served destination's live reducer with the feed and selection.
+    fn key_live(&self, key: &str) -> Option<Vec<Effect>> {
+        let destination = self.nav.with_untracked(|nav| nav.destination);
+        if untracked(|| self.available(destination)) != crate::model::Availability::Ready {
+            return None;
+        }
+        let (top, selection) = self
+            .nav
+            .with_untracked(|nav| (nav.live().cloned(), nav.selection.clone()));
+        let top = top.as_ref();
+        let env = self.env_untracked();
+        let mut effects = None;
+        self.feed.with_untracked(|feed| match destination {
+            Destination::Now => self.work.update(|state| {
+                effects = state.key_live(key, top, &selection, feed, env);
+            }),
+            Destination::Inbox => self.inbox.update(|state| {
+                effects = state.key_live(key, top, &selection, feed, env);
+            }),
+            Destination::Plans => self.plans.update(|state| {
+                effects = state.key_live(key, top, &selection, feed, env);
+            }),
+            Destination::Review => self.review.update(|state| {
+                effects = state.key_live(key, top, &selection, feed, env);
+            }),
+            _ => {}
+        });
+        effects
+    }
+
+    /// Routes a key to the fixture preview's reducers.
+    fn key_fixture(&self, key: &str) -> Option<Vec<Effect>> {
+        let page = self.nav.with_untracked(NavState::page);
+        let env = self.env_untracked();
+        let mut effects = None;
+        match (self.nav.with_untracked(|nav| nav.destination), page) {
+            (Destination::Inbox, None | Some(Page::Question)) => self
+                .inbox
+                .update(|state| effects = state.key(key, page, env)),
+            (Destination::Now, _) => self
+                .work
+                .update(|state| effects = state.key(key, page, env)),
+            (Destination::Plans, _) => self
+                .plans
+                .update(|state| effects = state.key(key, page, env)),
+            (Destination::Review, _) => self
+                .review
+                .update(|state| effects = state.key(key, page, env)),
+            _ => {}
+        }
+        effects
+    }
 }
 
 fn startup(
     nav: &mut NavState,
     browser: bool,
     configured: bool,
-    preferred_data: Option<DataState>,
+    stored_data: Option<&str>,
     pairing_link: Result<Option<String>, &'static str>,
 ) -> (DataState, daemon::Feed) {
     let mut feed = daemon::Feed::default();
@@ -556,17 +758,27 @@ fn startup(
             feed.browser_pairing = crate::model::devices::BrowserPairing::Blocked(line);
         }
     }
+    // The fixture preview is never a fallback: only an explicit, remembered Demo choice
+    // restores it, and only where no connection is configured.
     let data = if feed.browser_pairing_pending() || (browser && !configured) {
         nav.go_settings(SettingsSection::Connection);
         DataState::Disconnected
     } else if configured {
         DataState::Daemon
+    } else if stored_data == Some(PREVIEW) {
+        DataState::Fixture
     } else {
-        preferred_data
-            .filter(|data| *data != DataState::Daemon)
-            .unwrap_or(DataState::Fixture)
+        DataState::Disconnected
     };
     (data, feed)
+}
+
+/// What `DATA_KEY` remembers of a source.
+fn remembered_data(data: DataState) -> &'static str {
+    match data {
+        DataState::Fixture => PREVIEW,
+        other => other.slug(),
+    }
 }
 
 fn preference<T>(key: &str, parse: fn(&str) -> Option<T>) -> Option<T> {
@@ -595,10 +807,26 @@ mod tests {
     fn unpaired_browser_opens_connection_instead_of_restoring_mockup() {
         let mut nav = NavState::new(Form::Desktop);
         nav.destination = Destination::Now;
-        let (data, _) = startup(&mut nav, true, false, Some(DataState::Fixture), Ok(None));
+        let (data, _) = startup(&mut nav, true, false, Some(PREVIEW), Ok(None));
         assert_eq!(nav.destination, Destination::Settings);
         assert_eq!(nav.settings, SettingsSection::Connection);
         assert_eq!(data, DataState::Disconnected);
+    }
+
+    #[test]
+    fn startup_never_falls_back_to_the_fixture_preview() {
+        // `fixture` is what older builds stored by default, not a choice.
+        for stored_data in [None, Some("fixture"), Some("daemon"), Some("disconnected")] {
+            let mut nav = NavState::new(Form::Terminal);
+            let (data, _) = startup(&mut nav, false, false, stored_data, Ok(None));
+            assert_eq!(data, DataState::Disconnected, "{stored_data:?}");
+        }
+        let chosen = Some(remembered_data(DataState::Fixture));
+        let mut nav = NavState::new(Form::Terminal);
+        let (data, _) = startup(&mut nav, false, true, chosen, Ok(None));
+        assert_eq!(data, DataState::Daemon);
+        let (data, _) = startup(&mut nav, false, false, chosen, Ok(None));
+        assert_eq!(data, DataState::Fixture);
     }
 
     #[test]
@@ -609,7 +837,7 @@ mod tests {
                 &mut nav,
                 true,
                 true,
-                Some(DataState::Daemon),
+                Some("daemon"),
                 Ok(Some("corral-pair-1.fixture".into())),
             );
             assert_eq!(nav.destination, Destination::Settings);

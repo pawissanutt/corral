@@ -7,6 +7,8 @@ pub const DEVICE_V1: &str = "device.v1";
 pub const DEVICE_ENROL: &str = "device.enrol";
 pub const DEVICE_ATTACH: &str = "device.attach";
 pub const DEVICE_LIST: &str = "device.list";
+pub const DEVICE_PAGE: &str = "device.page";
+pub const DEVICE_PAGE_LIMIT_MAX: u16 = 50;
 pub const DEVICE_REVOKE: &str = "device.revoke";
 pub const PAIR_BEGIN: &str = "pair.begin";
 pub const PAIR_STATUS: &str = "pair.status";
@@ -48,6 +50,8 @@ pub struct DeviceInfo {
     pub app_version: String,
     pub enrolled_at: String,
     pub revoked_at: Option<String>,
+    #[serde(default)]
+    pub authority: Option<crate::app::DeviceAuthority>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -63,6 +67,21 @@ pub struct DeviceAttach {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DeviceList {}
+
+/// App-safe device enumeration without changing the Unix device.list contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DevicePageQuery {
+    /// Resume strictly after this canonical device ID.
+    pub after: Option<String>,
+    /// At most DEVICE_PAGE_LIMIT_MAX; replies also obey APP_CONTROL_MAX.
+    pub limit: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DevicePage {
+    pub devices: Vec<DeviceInfo>,
+    pub next: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct DeviceRevoke {

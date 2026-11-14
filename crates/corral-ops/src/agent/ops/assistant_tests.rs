@@ -238,7 +238,7 @@ fn prepare_prefers_existing_linked_scratch_then_project_then_workspace() {
             })
             .unwrap();
         // When the next generation is prepared.
-        let prepared = prepare(&ctx, &session.id, PANE, &resolved).unwrap();
+        let prepared = prepare(&ctx, &session.id, Some(PANE), &resolved).unwrap();
         let saved: Value =
             serde_json::from_slice(&std::fs::read(prepared.bootstrap).unwrap()).unwrap();
         // Then the same selection drives both tools and project guidance.

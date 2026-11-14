@@ -1,6 +1,7 @@
-//! The desktop and web shell: a top bar across the window, the sidebar of
-//! destinations, and the content container that holds the connection banner and the current
-//! page, with the Ask drawer, the palette, the confirmation and the toast over it.
+//! The desktop and web shell: a top bar across the window, the sidebar of destinations
+//! (folding to a rail of icons by choice or on a narrow window), and the content container that
+//! holds the connection banner and the current page, with the Ask drawer, the palette, the
+//! confirmation and the toast over it.
 
 use nsh_core::element::StyleRefinement;
 use nsh_core::prelude::*;
@@ -10,7 +11,7 @@ use crate::model::nav::{
 };
 use crate::model::{Destination, SettingsSection, Workspace};
 use crate::screens;
-use crate::shell::{banner, confirmation, stale, toast};
+use crate::shell::{banner, confirmation, section_short, sidebar_collapsed, stale, toast};
 use crate::state::AppState;
 use crate::ui::ask;
 use crate::ui::atoms::{HealthLayout, count, health_line, key_hint, nav_row, nav_row_icon};
@@ -21,6 +22,9 @@ use crate::ui::tokens::{FONT_MONO, Token, color, row_height, text_size};
 
 const TOP_BAR_HEIGHT: f32 = 38.0;
 const SIDEBAR_WIDTH: f32 = 208.0;
+/// The folded sidebar: room for a destination's icon and its count badge.
+const RAIL_WIDTH: f32 = 56.0;
+const RAIL_BUTTON: f32 = 40.0;
 const RADIUS_CONTROL: f32 = 6.0;
 const FOCUS_RING: f32 = 2.0;
 /// Settings sections sit past the width of a destination's icon and the gap after it (16 + 10),
@@ -40,31 +44,43 @@ pub fn shell(app: AppState) -> AnyElement {
     // opening) does not rebuild the sidebar rows or the workspace blocks.
     let destination = computed(move || app.destination());
     let workspace = computed(move || app.snapshot().workspace);
+    let collapsed = computed(move || sidebar_collapsed(app));
     view()
         .flex_1()
         .min_h(px(0.0))
         .bg(color(Token::Shell))
-        .child(top_bar(app, workspace))
+        .child(top_bar(app, workspace, collapsed))
         .child(
             view()
                 .flex_1()
                 .flex_row()
+                .relative()
                 .min_h(px(0.0))
-                .child(sidebar(app, destination, workspace))
-                .child(content(app)),
+                .child(dynamic(move || {
+                    if collapsed.get() {
+                        untracked(|| rail(app, destination))
+                    } else {
+                        untracked(|| sidebar(app, destination, workspace))
+                    }
+                }))
+                .child(content(app))
+                .child(when(
+                    move || collapsed.get() && app.sidebar_peeking(),
+                    move || untracked(|| peek(app, destination, workspace)),
+                )),
         )
         .child(ask::hotkey(app))
         .into_element()
 }
 
-fn top_bar(app: AppState, workspace: Memo<Option<Workspace>>) -> AnyElement {
+fn top_bar(app: AppState, workspace: Memo<Option<Workspace>>, collapsed: Memo<bool>) -> AnyElement {
     view()
         .h(px(TOP_BAR_HEIGHT))
         .flex_shrink_0()
         .flex_row()
         .items_center()
         .gap(px(14.0))
-        .pl(px(14.0))
+        .pl(px(8.0))
         .pr(px(10.0))
         .bg(color(Token::Shell))
         .border_b(px(1.0))
@@ -75,6 +91,7 @@ fn top_bar(app: AppState, workspace: Memo<Option<Workspace>>) -> AnyElement {
                 .flex_shrink_0()
                 .items_center()
                 .gap(px(8.0))
+                .child(sidebar_toggle(app, collapsed))
                 .child(icon(Icon::Brand, 18.0, color(Token::ShellInk)))
                 .child(
                     text("Corral")
@@ -148,6 +165,216 @@ fn sidebar(
             workspace.get().map(|ws| device_footer(app, ws))
         }))
         .into_element()
+}
+
+/// Folds or unfolds the sidebar; its glyph points the way it will move.
+/// test_id "sidebar-toggle".
+fn sidebar_toggle(app: AppState, collapsed: Memo<bool>) -> AnyElement {
+    let ink = color(Token::ShellInk);
+    view()
+        .size(px(28.0))
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .rounded(px(RADIUS_CONTROL))
+        .cursor_pointer()
+        .transition_colors()
+        .duration(120.0_f32)
+        .hover(move |s| s.bg(ink.opacity(0.1)))
+        .active(move |s| s.bg(ink.opacity(0.16)))
+        .focus_visible(focus_ring)
+        .role(AccessibilityRole::Button)
+        .label("Show or hide sidebar labels")
+        .test_id("sidebar-toggle")
+        .on_press(move || app.toggle_sidebar())
+        .child(dynamic(move || {
+            let glyph = if collapsed.get() && !app.sidebar_peeking() {
+                Icon::Chevron
+            } else {
+                Icon::Back
+            };
+            icon(glyph, 16.0, color(Token::ShellInk2))
+        }))
+        .into_element()
+}
+
+/// The narrow layout's labels, opened from the rail over the content for the moment: a scrim
+/// that closes them over the whole area under the top bar, and the full sidebar pinned to that
+/// area's top and bottom edges. The panel is a row, as the layout row that holds the sidebar
+/// when wide, so the sidebar stretches to the full height and its list scrolls inside it.
+fn peek(
+    app: AppState,
+    destination: Memo<Destination>,
+    workspace: Memo<Option<Workspace>>,
+) -> AnyElement {
+    view()
+        .absolute()
+        .inset_0()
+        .test_id("sidebar-peek")
+        .child(
+            view()
+                .absolute()
+                .inset_0()
+                .bg(color(Token::Shell).opacity(0.35))
+                .focusable(false)
+                .accessibility_elements_hidden(true)
+                .on_press(move || {
+                    app.close_sidebar_peek();
+                }),
+        )
+        .child(
+            view()
+                .absolute()
+                .top(px(0.0))
+                .bottom(px(0.0))
+                .left(px(0.0))
+                .flex_row()
+                .bg(color(Token::Shell))
+                .shadow_2xl()
+                .shadow_color(color(Token::Shell))
+                .child(sidebar(app, destination, workspace)),
+        )
+        .into_element()
+}
+
+/// The folded sidebar: Ask and the palette, then each destination as its icon with its count,
+/// and the Settings sections as short names under Settings. Every control keeps its full name
+/// for assistive technology, and the palette lists them all.
+fn rail(app: AppState, destination: Memo<Destination>) -> AnyElement {
+    let ink = color(Token::ShellInk);
+    let rows = Destination::ALL.map(|d| {
+        rail_button(
+            app,
+            d.label(),
+            format!("nav-{}", d.slug()),
+            move || destination.get() == d,
+            move || app.go(d),
+        )
+        .child(icon(Icon::destination(d), 18.0, ink))
+        .child(
+            view()
+                .absolute()
+                .top(px(1.0))
+                .right(px(0.0))
+                .child(count(app, d)),
+        )
+        .into_element()
+    });
+    view()
+        .w(px(RAIL_WIDTH))
+        .flex_shrink_0()
+        .min_h(px(0.0))
+        .items_center()
+        .pt(px(10.0))
+        .pb(px(10.0))
+        .gap(px(2.0))
+        .bg(color(Token::Shell))
+        .child(
+            rail_button(
+                app,
+                ASK_LABEL,
+                "ask-open".into(),
+                || false,
+                move || app.open_ask(),
+            )
+            .bg(ink.opacity(0.1))
+            .child(icon(Icon::Ask, 18.0, ink)),
+        )
+        .child(
+            rail_button(
+                app,
+                PALETTE_HINT,
+                "palette-open".into(),
+                || false,
+                move || app.open_palette(),
+            )
+            .mb(px(10.0))
+            .child(icon(Icon::Search, 18.0, color(Token::ShellInk2))),
+        )
+        .child(
+            scroll().flex_1().min_h(px(0.0)).child(
+                view()
+                    .items_center()
+                    .gap(px(2.0))
+                    .children(rows)
+                    .child(when(
+                        move || destination.get() == Destination::Settings,
+                        move || rail_sections(app),
+                    )),
+            ),
+        )
+        .into_element()
+}
+
+/// The Settings sections in the rail, each its short name under its full one for assistive
+/// technology.
+fn rail_sections(app: AppState) -> AnyElement {
+    view()
+        .items_center()
+        .gap(px(2.0))
+        .children(SettingsSection::ALL.map(|section| {
+            let selected = move || {
+                app.nav
+                    .with(|nav| nav.destination == Destination::Settings && nav.settings == section)
+            };
+            rail_button(
+                app,
+                section.label(),
+                format!("settings-{}", section.slug()),
+                selected,
+                move || app.go_settings(section),
+            )
+            .h(px(row_height(app.form)))
+            .child(
+                text(section_short(section))
+                    .text_size(px(text_size(app.form) - 2.5))
+                    .text_color(move || {
+                        if selected() {
+                            color(Token::ShellInk)
+                        } else {
+                            color(Token::ShellInk2)
+                        }
+                    }),
+            )
+            .into_element()
+        }))
+        .into_element()
+}
+
+/// One square control of the rail, tinted while selected, named for assistive technology.
+fn rail_button(
+    app: AppState,
+    label: &'static str,
+    test_id: String,
+    selected: impl Fn() -> bool + 'static,
+    on_press: impl Fn() + 'static,
+) -> View {
+    let ink = color(Token::ShellInk);
+    view()
+        .relative()
+        .w(px(RAIL_BUTTON))
+        .h(px(row_height(app.form) + 8.0))
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .rounded(px(RADIUS_CONTROL))
+        .cursor_pointer()
+        .transition_colors()
+        .duration(120.0_f32)
+        .bg(move || {
+            if selected() {
+                ink.opacity(0.14)
+            } else {
+                AdaptiveColor::TRANSPARENT
+            }
+        })
+        .hover(move |s| s.bg(ink.opacity(0.1)))
+        .active(move |s| s.bg(ink.opacity(0.18)))
+        .focus_visible(focus_ring)
+        .role(AccessibilityRole::Button)
+        .label(label)
+        .test_id(&test_id)
+        .on_press(on_press)
 }
 
 fn project(app: AppState, ws: Workspace) -> AnyElement {

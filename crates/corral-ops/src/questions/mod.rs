@@ -4,15 +4,24 @@
 //! triage it by key and revision; `terminalize`, `expire_deadlines` and `unattended` are the
 //! sweeps the sync hook (integration-seams) calls. Readers apply the F4 container closure, so a
 //! question of a closed container is non-pending before `terminalize` persists it.
+//! Workspace owner asks reuse the PM/assistant container's state (`pm/Q<n>` or
+//! `assistant/A-<n>/Q<n>`). Authorship follows that container, never the answerer.
+//! Answers and bounded follow-ups compare the question revision under the same writer lock;
+//! follow-ups notify the asking worker without answering or reopening the question.
 mod ask;
 mod basis;
 mod events;
+mod followup;
+#[cfg(test)]
+mod followup_tests;
 mod group;
 #[cfg(test)]
 mod heads_tests;
 #[cfg(test)]
 mod known_hot_tests;
 mod lifecycle;
+mod metadata;
+pub(crate) mod owner;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -43,6 +52,7 @@ pub use ask::{
 pub(crate) use events::pending_keys;
 pub(crate) use events::pending_keys_ref;
 pub use events::{QUESTION_EVENT_KINDS, reconcile_events, reconcile_question};
+pub use followup::followup;
 pub use group::{GroupAnswer, PmAnswerGroup, group};
 pub use lifecycle::{expire_deadlines, terminalize, unattended};
 pub use triage::{
@@ -54,9 +64,10 @@ pub use triage::{hold_owner_attention, settle_needs_me};
 use crate::Ctx;
 
 /// Inbox message kinds of the corral-pi adapter that a closed container never receives.
-pub const CORRAL_PI_MESSAGE_KINDS: [&str; 7] = [
+pub const CORRAL_PI_MESSAGE_KINDS: [&str; 8] = [
     "question_answer",
     "question_correction",
+    "question_followup",
     "turn_nudge",
     "wait_wake",
     "question_wake",
@@ -247,14 +258,15 @@ pub fn is_pending(task: &Task, container: &ContainerRef, question: &AgentQuestio
     question.recorded_pending() && agent::container_closure(task, container).is_none()
 }
 
-/// A pending question that waits on the owner: escalated, or marked unattended at its current
-/// revision.
+/// A question waiting on the owner: a host-authored owner ask, escalation or unattended ask.
 pub fn needs_owner(question: &AgentQuestion) -> bool {
-    question.state == QuestionState::Escalated || unattended_marked(question)
+    agent::owner_question::owner_question_container(&question.key).is_some()
+        || question.state == QuestionState::Escalated
+        || unattended_marked(question)
 }
 
-/// `unattended_at` is the current revision's marker: every revision transition clears it, so it
-/// never depends on the evictable triage tail.
+/// `unattended_at` is retained across conversational follow-ups, but cleared by lifecycle
+/// transitions. It never depends on the evictable triage tail.
 pub(crate) fn unattended_marked(question: &AgentQuestion) -> bool {
     question.unattended_at.is_some()
 }
@@ -414,20 +426,30 @@ pub fn list(ctx: &Ctx, task: Option<&str>, all: bool) -> Result<Vec<QuestionView
                     .filter(|view| view.pending),
             );
         }
+        if task.is_none() {
+            out.extend(
+                owner::list(ctx, false)?
+                    .into_iter()
+                    .filter(|view| view.pending),
+            );
+        }
         return Ok(out);
     }
     let tasks = match task {
         Some(id) => vec![ctx.store.get(id)?],
         None => ctx.store.list()?,
     };
-    Ok(tasks
-        .iter()
-        .flat_map(views)
-        .filter(|view| all || view.pending)
-        .collect())
+    let mut out: Vec<_> = tasks.iter().flat_map(views).collect();
+    if task.is_none() {
+        out.extend(owner::list(ctx, true)?);
+    }
+    Ok(out)
 }
 
 pub fn show(ctx: &Ctx, key: &str) -> Result<QuestionView> {
+    if agent::owner_question::owner_question_container(key).is_some() {
+        return owner::show(ctx, key);
+    }
     let parsed = QuestionKey::parse(key)?;
     let task = ctx.store.get(parsed.task())?;
     views(&task)

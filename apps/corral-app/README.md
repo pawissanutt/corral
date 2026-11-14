@@ -1,6 +1,6 @@
 # Corral app
 
-Corral is a Rust app built on [NSH 0.5.0](https://nsh.dev), with desktop, web, phone and terminal forms. The crate is `nsh-app-corral` and its root component is `App`. Unpaired browsers open Connection for pairing; paired browsers and enrolled native builds can show `corrald`'s live health and board. Native builds without `CORRAL_SOCKET` open the explicit fixture preview, where actions change local state only. See [Live data](#live-data).
+Corral is a Rust app built on [NSH 0.5.0](https://nsh.dev), with desktop, web, phone-layout and terminal forms. The crate is `nsh-app-corral` and its root component is `App`. Normal startup uses live daemon data or shows an honest disconnected, unknown or unpaired state; fixture data is an explicitly selected preview only. See [Live data](#live-data).
 
 Fixture mode includes:
 
@@ -14,7 +14,7 @@ Fixture mode includes:
 - **Settings**: device pairing, notifications, profiles and other preferences.
 - **Ask**: a composer for questions, ideas and instructions, plus assistant threads. Replies to newly typed messages are not simulated, as in the mockup.
 
-The command palette's **Demo** group changes Connection, Data and Assistant states and opens the hotkey window, share sheet and lock-screen push demos. Open the palette with `Ctrl K`.
+The explicit fixture preview includes the palette's Demo controls and local hotkey window, share sheet and lock-screen push demos. Open the palette with `Ctrl K` and choose `Data: fixture` to enter it.
 
 The app lives in the corral repository as `apps/corral-app/`. It is its own Cargo workspace with its own toolchain, not a member of corral's workspace. The [design handoff](../../docs/app-design/README.md) contains the requirements, architecture proposal and runnable mockup, with their authority and implementation-status caveats.
 
@@ -35,25 +35,28 @@ on the same port, even when its target differs.
 
 ## Live data
 
+Use a daemon built from this checkout; an older installed daemon may not support the
+app contracts. The frontend does not emulate missing capabilities.
+
 With a `corrald` running for the workspace (see `docs/guide/daemon.md` in this repository), start the terminal build with the daemon's socket:
 
 ```sh
 CORRAL_SOCKET="$(corral daemon socket)" nsh run --target tui
 ```
 
-The native app opens in its Daemon data state. In Settings › Connection, name the device
-and press **Enrol** to load Now. The device id is stored in a private `0600` file at
+The native app uses the Unix socket and peer-UID trust. In Settings › Connection, name the device
+and enrol it. The device id is stored in a private `0600` file at
 `$XDG_STATE_HOME/corral-app/devices.json` (fallback `$HOME/.local/state`), keyed by the
 daemon's store. This is a file fallback, not an OS keychain; Settings identifies it.
-A restart attaches that enrolled identity without asking again.
+A restart attaches that enrolled identity.
 
 ### Browser
 
 Opening the web app without a saved pairing goes straight to Settings › Connection,
 even if an older build saved a mockup destination or Fixture preference. Until paired,
 the shell reports **not connected**, without mockup dates, health or task counts.
-Other destinations do not fall back to mockup content. Fixture remains an explicit
-choice in the palette's Demo group.
+Other destinations do not fall back to mockup content. Fixture is an explicit
+data choice, not a connection fallback.
 
 Enable the optional listener in the workspace's `.corral/corral.toml`, then restart
 `corrald`. It is off by default; the browser endpoint must bind `127.0.0.1`:
@@ -75,18 +78,52 @@ app. A pairing code expires after two minutes; claiming it starts a separate two
 confirmation window. Opening a link does not claim, approve or replace a stored identity.
 The browser cannot confirm itself. LAN access remains disabled.
 
-Choose **Open live data** after pairing. Reload preserves the device and daemon pin:
+Pairing switches to live data automatically. Reload preserves the device and daemon pin:
 the browser stores its credential encrypted in IndexedDB with a non-extractable
 WebCrypto AES-GCM key. NSH Storage holds only the non-secret paired marker, never keys.
 The WebSocket carrier uses Noise IK; initial pairing uses single-use Noise IKpsk2.
 
 ### Live behavior and revocation
 
-Health and Now follow the daemon on both carriers. On ordinary link loss the last board
-stays marked stale and reconnect restores subscriptions. Unserved destinations remain
-explicitly unavailable; no fixture content is presented as daemon data. Neither app
-sends task/question commands. Native device administration is separate from that boundary;
-browser sessions can read only board and health.
+Typed live subscriptions, details and permitted actions cover Inbox, Now, Changes, Plans,
+Agents, Review, Timeline, Usage, Settings and Ask. Availability depends on negotiated
+capabilities and device authority; missing facts, provider failures and unsupported operations
+are shown as such. Quotas without a source are unknown, not invented headroom. Raw terminal
+access is not supplied for daemon-hosted assistants.
+
+Native enrolled devices have Admin authority. A newly paired browser has `reply`, `act` and
+`assistant` authority, but not `admin` or `assistant_act`; trusted-side administration
+controls device authority. Commands use canonical revisions and device-bound confirmations
+where required. They do not run locally when disconnected.
+
+On link loss, last known data is marked stale and subscriptions reconnect. Drafts and the
+bounded assistant message outbox persist per device and store; queued sends retain their
+identity. Other offline actions are refused. An uncertain command result is recovered with
+the same command ID, not a new execution; conflicts and unknown results remain distinct.
+
+Accepting a send into the durable outbox also retires its matching saved composer draft.
+Reloading or remounting the composer does not restore that sent text. Unsent drafts stay
+with their own quick thread or named session.
+
+The Upcoming bucket includes ideas, backlog and ready tasks; each row retains its canonical
+state. Task bodies are selectable Markdown source, without automatic image fetches or HTML.
+
+Reopening a scoped subscription waits for the previous close response. Retired pages are
+neither displayed nor acknowledged; rapid reopen requests coalesce within the original
+deadline. Sent assistant messages retire when their canonical thread entry arrives.
+
+Agents › Filed from chat reads a server-wide filing registry, including ended threads,
+without opening their histories. Newest, Newer and Older page through at most 50 summaries
+at a time. The count is corrald's total, not the device's loaded thread count. This history
+remains available without a configured assistant runtime.
+
+The first daemon start builds the derived filing index from canonical filing records;
+an initialization failure stops startup with an error. Tasks, conversations and billing
+records are unchanged by this indexing.
+
+Delivered owner messages retain their original typed time; a different receipt time is
+shown separately. Receipt order still orders the conversation. If an assistant cannot run,
+File as idea saves the owner's words as written rather than inventing an AI summary.
 
 `corral device list [--json]` lists identities; `corral device revoke <id>` closes their
 live sessions and stops automatic reconnect. Native devices can explicitly enrol again.
@@ -94,7 +131,25 @@ Browsers recover with **Forget this browser**, which returns to Connection for p
 Forget removes local credentials, not the daemon's record; revoke obsolete records
 from the trusted side.
 
-The palette's Demo group still switches Data back to Fixture.
+### Ask and attachments
+
+Ask uses one composer for questions and ideas, addressed to the assistant or PM. Assistant
+threads use a supervised daemon-hosted assistant and stream actual replies; PM messages enter
+the PM inbox rather than steering supervision. Settings › Assistant manages configured profiles
+and the assistant profile. The model selector offers `corral-pi` profiles that name a model;
+changing it applies to the next message. Provider setup and authentication must work on the
+daemon host; discovery or a configured model does not prove access or execution. See
+[profile setup](../../docs/profile-setup.md). An alternate rollover summary profile is not a
+canonical supported setting.
+
+Named sessions use the same model picker and durable transcript. Stop interrupts the current
+turn; End session stops the host while retaining its record and conversation.
+
+The composer can attach a saved image or bounded UTF-8 file, or an opaque link. Native
+clients can enter a local-client file path; it is not a daemon host path. Links are not fetched
+by the app. Attachment uploads require a connection; ready uploads may accompany a queued
+message, but expiry or delivery failure is shown. Queued messages can be cancelled; a
+cancellation that loses a delivery race is reported rather than presented as withdrawn.
 
 ## Commands
 
@@ -150,4 +205,10 @@ Native desktop backends are behind the off-by-default `desktop` Cargo feature be
 
 ## Not built
 
-Not built: task/question commands to the daemon, live data for destinations other than Now and connection/device Settings, remote/LAN/relay transport, native window chrome, tray, system-level global hotkey, share and push integration, biometric confirmation and installer packaging. The hotkey window, share sheet and lock-screen push are local demos. The web package command produces a static site, not an installer. Native window-backend connection smoke remains unverified on this GTK-less host; terminal and Chromium journeys are recorded in [the connection increment](../../docs/app-design/NEXT-STEP.md#verification-receipt).
+Not built: LAN or relay access, native window chrome, tray, system-level global hotkey,
+share and push integration, biometric confirmation and installer packaging. The hotkey
+window, share sheet and lock-screen push are local demos. The web package is a static site,
+not an installer; `com.example.corral` is a placeholder identifier before release.
+GTK desktop and physical phone builds have not been exercised on this host; phone web
+layout is part of the app. Local terminal and paired Chromium verification is not evidence
+of native OS integration or a full release gate.

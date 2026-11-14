@@ -1,13 +1,19 @@
 //! The inspector for the selected task (`.insp`): its Story (goal, the run, gate, review, land
 //! stepper, steps, who moves next, needs and unblocks with their marks, cost, actions), the
-//! illustrative Evidence list, and the Session hand-off with its terminal tail. In the Daemon
-//! state: the daemon's facts about the task in the same header, stepper and key/value parts.
+//! Evidence list, and the Session hand-off with its terminal tail. In the Daemon state the same
+//! header, stepper and key/value parts carry corrald's task detail: its body, progress, needs,
+//! holds, run and plan position, the legal task commands and this device's last command's
+//! outcome, the artifacts and the captured log tail, each with its detail's loading, stale or
+//! failed state.
 
 use nsh_core::prelude::*;
 
 use crate::model::board::Mark;
 use crate::model::text::span;
-use crate::model::work::{self, Dependency, Inspector, NowTab, OwnerNext, Stage, Story, TaskFacts};
+use crate::model::work::{
+    self, Dependency, DetailNote, Fact, Inspector, LiveEvidence, LiveSession, LiveStory, NowTab,
+    OwnerNext, Press, Stage, Story,
+};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::chip::{chip, illus};
@@ -18,14 +24,14 @@ use crate::ui::kit::text::{dim, h3, mono, plain, rich, rich_small};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::context::tail;
-use super::parts::{act, action_id, model_button, quiet};
+use super::parts::{model_button, press, press_id, pressable, quiet};
 
 /// The panel key of the inspector that follows the model's selected tab (the two-pane fallback).
 pub(super) const FOLLOW: &str = "inspector";
 
 /// The inspector for `tab`, or for the model's selected tab when `None`. The model decides what
 /// shows: the loading placeholders, or the tab's content for the selected task, from the
-/// fixtures or the daemon's board.
+/// fixtures or the daemon's feed.
 pub(super) fn panel(app: AppState, tab: Option<NowTab>) -> AnyElement {
     let form = app.form;
     let inspector = computed(move || {
@@ -34,9 +40,10 @@ pub(super) fn panel(app: AppState, tab: Option<NowTab>) -> AnyElement {
             state.now_tab = tab;
         }
         if app.daemon() {
+            let selection = app.selection();
             return app
                 .feed
-                .with(|feed| work::daemon_inspector(&state, feed, form));
+                .with(|feed| work::daemon_inspector(&state, feed, &selection, form));
         }
         work::inspector(&state, app.env())
     });
@@ -61,7 +68,9 @@ pub(super) fn content(app: AppState, inspector: &Inspector) -> AnyElement {
     let body = match inspector {
         Inspector::Loading => skeleton(app, &[(0.3, 10.0), (0.6, 18.0), (1.0, 60.0)]),
         Inspector::Quiet(words) => return quiet(app, *words),
-        Inspector::Facts(facts) => self::facts_view(app, facts),
+        Inspector::LiveStory(story) => live_story(app, story),
+        Inspector::LiveEvidence(evidence) => live_evidence(app, evidence),
+        Inspector::LiveSession(session) => live_session(app, session),
         Inspector::Story(story) => self::story(app, story),
         Inspector::Evidence(evidence) => view()
             .child(h3(app, evidence.title.clone(), None))
@@ -87,11 +96,7 @@ pub(super) fn content(app: AppState, inspector: &Inspector) -> AnyElement {
             )
             .into_element(),
         Inspector::Session(session) => view()
-            .gap(px(if app.form == Form::Terminal {
-                0.0
-            } else {
-                12.0
-            }))
+            .gap(px(gap(app)))
             .child(dim(app, session.description))
             .child(view().flex_row().child(model_button(
                 app,
@@ -105,23 +110,35 @@ pub(super) fn content(app: AppState, inspector: &Inspector) -> AnyElement {
     padded(app, body)
 }
 
+fn gap(app: AppState) -> f32 {
+    if app.form == Form::Terminal {
+        0.0
+    } else {
+        12.0
+    }
+}
+
 /// The story of the selected task, as the inspector and the phone's task page show it. The
 /// desktop's action row is the model's (the phone page lays its own under the story).
 pub(super) fn story(app: AppState, story: &Story) -> AnyElement {
     let form = app.form;
-    let mut out: Vec<AnyElement> = vec![head(app, story), title(app, story.title)];
+    let mut out: Vec<AnyElement> = vec![
+        head(
+            app,
+            story.id,
+            None,
+            story.plan_label.clone().zip(story.plan_action.clone()),
+            story.changed.map(str::to_owned),
+        ),
+        title(app, story.title),
+    ];
     let goal = if story.facts.is_empty() {
         &story.summary
     } else {
         &story.facts
     };
     if !goal.is_empty() {
-        out.push(
-            view()
-                .pb(px(if form == Form::Terminal { 0.0 } else { 14.0 }))
-                .child(rich_small(app, goal))
-                .into_element(),
-        );
+        out.push(paragraph(app, rich_small(app, goal)));
     }
     if let Some(stages) = &story.stages {
         out.push(stepper(app, stages));
@@ -148,88 +165,234 @@ pub(super) fn story(app: AppState, story: &Story) -> AnyElement {
             .into_element(),
     );
     if !story.actions.is_empty() {
-        out.push(
-            view()
-                .flex_row()
-                .flex_wrap()
-                .gap(px(8.0))
-                .pt(px(16.0))
-                .children(
-                    story
-                        .actions
-                        .iter()
-                        .map(|button| {
-                            let id = button.action.map_or_else(String::new, action_id);
-                            model_button(app, button, id, false)
-                        })
-                        .collect::<Vec<_>>(),
-                )
-                .into_element(),
-        );
+        out.push(actions(app, &story.actions));
     }
     view().children(out).into_element()
 }
 
-/// The daemon's facts about the selected task: the id with who acts next, the title, the rail's
-/// stages, then the facts as label and value rows.
-fn facts_view(app: AppState, facts: &TaskFacts) -> AnyElement {
-    let head = view()
+/// The model's action row under a story: each button by what it does.
+fn actions(app: AppState, buttons: &[work::Button]) -> AnyElement {
+    view()
         .flex_row()
-        .items_center()
         .flex_wrap()
         .gap(px(8.0))
-        .child(mono(app, facts.id).text_color(color(Token::Ink3)))
-        .child(chip(app, facts.who, facts.who_hue));
-    let rows = facts
-        .facts
-        .iter()
-        .map(|(label, value)| ((*label).to_owned(), rich(app, value)))
-        .collect();
-    view()
-        .child(head)
-        .child(title(app, facts.title.clone()))
-        .child(stepper(app, &facts.stages))
-        .child(kv(app, rows))
+        .pt(px(16.0))
+        .children(
+            buttons
+                .iter()
+                .map(|button| pressable(app, button, false))
+                .collect::<Vec<_>>(),
+        )
         .into_element()
 }
 
-/// The id, the plan it belongs to (a press opens the plan), and the changed-since chip.
-fn head(app: AppState, story: &Story) -> AnyElement {
-    let form = app.form;
-    let plan = story
-        .plan_label
-        .clone()
-        .zip(story.plan_action)
-        .map(|(label, action)| {
-            let words = text(label.clone())
-                .number_of_lines(1u32)
-                .text_color(color(Token::Ink3));
-            let words = if form == Form::Terminal {
-                words
-            } else {
-                words.font_family(FONT_TEXT).text_size(px(12.0))
+/// A goal or summary paragraph under the title.
+fn paragraph(app: AppState, child: AnyElement) -> AnyElement {
+    view()
+        .pb(px(if app.form == Form::Terminal {
+            0.0
+        } else {
+            14.0
+        }))
+        .child(child)
+        .into_element()
+}
+
+/// A detail's loading, stale or failed line in its hue.
+fn note(app: AppState, note: &DetailNote) -> AnyElement {
+    let words = rich_small(app, &vec![span(note.text.clone()).hue(note.hue)]);
+    view()
+        .pb(px(if app.form == Form::Terminal {
+            0.0
+        } else {
+            10.0
+        }))
+        .child(words)
+        .into_element()
+}
+
+/// The selected daemon task's story: the same header, title, stepper and facts as the
+/// fixture's, from the board row and corrald's task detail.
+fn live_story(app: AppState, story: &LiveStory) -> AnyElement {
+    let mut out: Vec<AnyElement> = vec![
+        head(
+            app,
+            story.id.clone(),
+            Some((story.who, story.who_hue)),
+            story.plan.clone(),
+            story.changed.clone(),
+        ),
+        title(app, story.title.clone()),
+    ];
+    if let Some(detail) = &story.note {
+        out.push(note(app, detail));
+    }
+    if !story.summary.is_empty() {
+        out.push(paragraph(app, rich_small(app, &story.summary)));
+    }
+    out.push(stepper(app, &story.stages));
+    if let Some(progress) = &story.progress {
+        out.push(h3(app, progress.label, Some(progress.figure.clone())));
+        if let Some(words) = &story.progress_note {
+            out.push(plain(app, words.clone()).into_element());
+        }
+    }
+    if let Some(source) = &story.body {
+        // The canonical Markdown exactly as written: its lines, indentation, link targets and
+        // fenced code all stay; nothing is interpreted. Selectable so it can be copied.
+        out.push(paragraph(
+            app,
+            plain(app, source.clone())
+                .text_color(color(Token::Ink2))
+                .select_text()
+                .into_element(),
+        ));
+    }
+    let rows = story
+        .facts
+        .iter()
+        .map(|(label, value)| {
+            let value = match value {
+                Fact::Text(words) => rich(app, words),
+                Fact::Tasks(tasks) => ids(app, tasks),
+                Fact::Answer(button) => view()
+                    .flex_row()
+                    .child(model_button(app, button, "btn-answer".into(), false))
+                    .into_element(),
             };
+            ((*label).to_owned(), value)
+        })
+        .collect();
+    out.push(
+        view()
+            .pt(px(if app.form == Form::Terminal {
+                0.0
+            } else {
+                14.0
+            }))
+            .child(kv(app, rows))
+            .into_element(),
+    );
+    if let Some(sent) = &story.sent {
+        out.push(
             view()
-                .cursor_pointer()
-                .role(AccessibilityRole::Link)
-                .label(label)
-                .test_id(&action_id(action))
-                .on_press(move || act(app, action))
-                .child(words)
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap(px(8.0))
+                .pt(px(if app.form == Form::Terminal {
+                    0.0
+                } else {
+                    12.0
+                }))
+                .child(rich_small(
+                    app,
+                    &vec![span(sent.text.clone()).hue(sent.hue)],
+                ))
+                .children(
+                    sent.recover
+                        .as_ref()
+                        .map(|button| pressable(app, button, false)),
+                )
+                .into_element(),
+        );
+    }
+    if !story.actions.is_empty() {
+        out.push(actions(app, &story.actions));
+    }
+    view().children(out).into_element()
+}
+
+/// The selected daemon task's artifacts: each one's title over its source reference.
+fn live_evidence(app: AppState, evidence: &LiveEvidence) -> AnyElement {
+    view()
+        .child(h3(app, evidence.title.clone(), None))
+        .children(evidence.note.as_ref().map(|detail| note(app, detail)))
+        .children(evidence.empty.map(|empty| dim(app, empty).into_element()))
+        .when(!evidence.rows.is_empty(), |list| {
+            list.child(steps(
+                app,
+                evidence
+                    .rows
+                    .iter()
+                    .map(|(title, source)| {
+                        let row = view()
+                            .flex_row()
+                            .flex_wrap()
+                            .gap(px(8.0))
+                            .child(plain(app, title.clone()))
+                            .child(mono(app, source.clone()).text_color(color(Token::Ink3)));
+                        (Mark::Na, Hue::Neutral, row.into_element())
+                    })
+                    .collect(),
+            ))
+        })
+        .into_element()
+}
+
+/// The selected daemon task's Session tab: the hand-off to its transcript, its run, and the
+/// captured log tail.
+fn live_session(app: AppState, session: &LiveSession) -> AnyElement {
+    view()
+        .gap(px(gap(app)))
+        .child(dim(app, session.description))
+        .children(session.note.as_ref().map(|detail| note(app, detail)))
+        .children(session.open.as_ref().map(|open| {
+            view()
+                .flex_row()
+                .child(model_button(app, open, "btn-session-open".into(), false))
                 .into_element()
-        });
+        }))
+        .when(!session.run.is_empty(), |panel| {
+            panel.child(rich_small(app, &session.run))
+        })
+        .children(
+            session
+                .tail
+                .as_ref()
+                .map(|captured| tail(app, captured, Some("btn-live-session".into()))),
+        )
+        .children(session.empty.map(|empty| dim(app, empty).into_element()))
+        .into_element()
+}
+
+/// The id, who acts next (in the Daemon state), the plan it belongs to (a press opens the plan),
+/// and the changed-since chip.
+fn head(
+    app: AppState,
+    id: impl Into<SharedString>,
+    who: Option<(&'static str, Hue)>,
+    plan: Option<(String, Press)>,
+    changed: Option<String>,
+) -> AnyElement {
+    let form = app.form;
+    let plan = plan.map(|(label, action)| {
+        let words = text(label.clone())
+            .number_of_lines(1u32)
+            .text_color(color(Token::Ink3));
+        let words = if form == Form::Terminal {
+            words
+        } else {
+            words.font_family(FONT_TEXT).text_size(px(12.0))
+        };
+        view()
+            .cursor_pointer()
+            .role(AccessibilityRole::Link)
+            .label(label)
+            .test_id(&press_id(&action))
+            .on_press(move || press(app, action.clone()))
+            .child(words)
+            .into_element()
+    });
     view()
         .flex_row()
         .items_center()
         .flex_wrap()
         .gap(px(8.0))
-        .child(mono(app, story.id).text_color(color(Token::Ink3)))
+        .child(mono(app, id).text_color(color(Token::Ink3)))
+        .children(who.map(|(who, hue)| chip(app, who, hue)))
         .children(plan)
-        .children(
-            story
-                .changed
-                .map(|changed| chip(app, changed, Hue::Neutral)),
-        )
+        .children(changed.map(|changed| chip(app, changed, Hue::Neutral)))
         .into_element()
 }
 
@@ -378,7 +541,7 @@ fn ids(app: AppState, dependencies: &[Dependency]) -> AnyElement {
             dependencies
                 .iter()
                 .map(|dependency| {
-                    let action = dependency.action;
+                    let action = dependency.action.clone();
                     view()
                         .flex_row()
                         .items_center()
@@ -387,8 +550,8 @@ fn ids(app: AppState, dependencies: &[Dependency]) -> AnyElement {
                         .role(AccessibilityRole::Link)
                         .label(format!("{} {}", dependency.id, dependency.mark.label()))
                         .test_id(&format!("btn-dep-{}", dependency.id))
-                        .on_press(move || act(app, action))
-                        .child(mono(app, dependency.id))
+                        .on_press(move || press(app, action.clone()))
+                        .child(mono(app, dependency.id.clone()))
                         .when(dependency.show_mark, |link| {
                             link.child(mark(app, dependency.mark, Hue::Neutral))
                         })

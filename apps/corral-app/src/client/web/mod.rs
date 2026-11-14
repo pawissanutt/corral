@@ -1,10 +1,11 @@
-//! Browser-owned Noise sessions. Only the non-secret paired marker uses NSH Storage.
+//! Browser-owned Noise sessions and shared app data; only the paired marker uses NSH Storage.
 mod keystore;
 mod noise;
 mod socket;
 
 use super::{
     PAIRED_KEY,
+    app::{self, AppState},
     core::{Core, Event},
     map,
     requests::ClientRequest,
@@ -17,7 +18,6 @@ use corral_protocol::{
     self as wire,
     device::*,
     frame::{MESSAGE_MAX, decode_message, encode_message},
-    subscription::Topic,
 };
 use futures_channel::mpsc::{self, UnboundedSender};
 use futures_core::Stream;
@@ -81,6 +81,7 @@ pub(super) fn start(feed: Signal<Feed>) {
             feed,
             sender,
             clock,
+            app: AppState::new(),
             credential: None,
             connection: None,
             generation: 0,
@@ -155,12 +156,22 @@ impl Connection {
         }
         Ok(())
     }
+
+    // Each app transition registers and flushes synchronously, before the next input/event.
+    // Unlike native batching, no later cancel/discard can invalidate an unregistered tuple.
+    fn flush_app(&mut self, outgoing: Vec<app::Outgoing>, now: u64) -> Result<(), String> {
+        for (method, params, tag) in outgoing {
+            self.core.request_tagged(method, params, tag, now)?;
+        }
+        self.flush()
+    }
 }
 
 struct Driver {
     feed: Signal<Feed>,
     sender: UnboundedSender<Input>,
     clock: web_sys::Performance,
+    app: AppState,
     credential: Option<WebCredential>,
     connection: Option<Connection>,
     generation: u64,
@@ -195,7 +206,8 @@ impl Driver {
                 feed.tick(
                     seconds,
                     format!("{:02}:{:02}", local.hour(), local.minute()),
-                )
+                );
+                feed.date = local.date().to_string();
             });
         }
     }
@@ -251,6 +263,7 @@ impl Driver {
 
     fn lost(&mut self, problem: String) {
         self.connection = None;
+        self.app.disconnected(self.feed);
         self.feed.update(|feed| feed.link_lost(problem));
         let seconds = match self.failures {
             0 => 1,
@@ -270,14 +283,17 @@ impl Driver {
         self.retry_at = None;
         match failure {
             Failure::Retry(problem) if !pair => self.lost(problem),
-            Failure::Retry(problem) | Failure::Fatal(problem) => self.feed.update(|feed| {
-                if pair {
-                    feed.browser_pairing = BrowserPairing::Failed(problem);
-                } else {
-                    feed.device = DeviceLink::Failed(problem.clone());
-                    feed.link_lost(problem);
-                }
-            }),
+            Failure::Retry(problem) | Failure::Fatal(problem) => {
+                self.app.disconnected(self.feed);
+                self.feed.update(|feed| {
+                    if pair {
+                        feed.browser_pairing = BrowserPairing::Failed(problem);
+                    } else {
+                        feed.device = DeviceLink::Failed(problem.clone());
+                        feed.link_lost(problem);
+                    }
+                });
+            }
         }
     }
 
@@ -287,6 +303,8 @@ impl Driver {
                 self.connection = None;
                 self.retry_at = None;
                 self.credential = None;
+                self.app.disconnected(self.feed);
+                self.app = AppState::new();
                 let blocked = self.feed.with_untracked(|feed| match feed.browser_pairing {
                     BrowserPairing::Blocked(line) => Some(line),
                     _ => None,
@@ -301,6 +319,7 @@ impl Driver {
                         feed.browser_pairing = BrowserPairing::Failed(problem);
                     }
                 });
+                self.tick_clock();
             }
             Input::Request(ClientRequest::Pair { code, name }) => {
                 if self.feed.with_untracked(|feed| {
@@ -310,6 +329,7 @@ impl Driver {
                 }
                 self.connection = None;
                 self.retry_at = None;
+                self.app.disconnected(self.feed);
                 self.feed
                     .update(|feed| feed.browser_pairing = BrowserPairing::Connecting);
                 let result = (|| {
@@ -344,7 +364,19 @@ impl Driver {
                     self.failed(true, Failure::Fatal(problem));
                 }
             }
-            Input::Request(_) => {}
+            Input::Request(request) => {
+                let outgoing = self.app.request(self.feed, request);
+                if outgoing.is_empty() {
+                    return;
+                }
+                let Some(mut conn) = self.connection.take() else {
+                    return;
+                };
+                match conn.flush_app(outgoing, self.now()) {
+                    Ok(()) => self.connection = Some(conn),
+                    Err(problem) => self.failed(false, Failure::Retry(problem)),
+                }
+            }
             Input::Tick => {
                 self.tick_clock();
                 let now = self.now();
@@ -395,6 +427,7 @@ impl Driver {
                     self.connection = Some(conn);
                     return;
                 }
+                self.app.disconnected(self.feed);
                 if matches!(conn.role, Role::Pair { .. }) {
                     self.failed(
                         true,
@@ -530,7 +563,7 @@ impl Driver {
             );
             conn.stage = Stage::Transport;
             let caps: &[&str] = if matches!(conn.role, Role::Session) {
-                &[wire::BOARD_V1]
+                app::CAPS
             } else {
                 &[]
             };
@@ -568,6 +601,7 @@ impl Driver {
                         .credential
                         .as_ref()
                         .ok_or_else(|| "missing browser pairing".to_owned())?;
+                    self.app.welcomed(self.feed, &welcome);
                     self.feed.update(|feed| {
                         feed.welcome_received(welcome.daemon.store, map::health(welcome.health));
                         feed.device = DeviceLink::Enrolled {
@@ -575,8 +609,8 @@ impl Driver {
                             name: credential.name.clone(),
                         };
                     });
-                    conn.core.open(Topic::Health, now)?;
-                    conn.core.open(Topic::Board, now)?;
+                    let outgoing = self.app.ready(self.feed);
+                    conn.flush_app(outgoing, now)?;
                 }
                 Role::Pair { credential, .. } => conn.core.request(
                     PAIR_CLAIM,
@@ -586,29 +620,19 @@ impl Driver {
             }
         }
         while let Some(event) = conn.core.next_event() {
-            match event {
-                Event::Health(health) if matches!(conn.role, Role::Session) => self
-                    .feed
-                    .update(|feed| feed.health_received(map::health(health))),
-                Event::Board {
-                    epoch,
-                    rows,
-                    left,
-                    replacement,
-                } if matches!(conn.role, Role::Session) => {
+            if matches!(conn.role, Role::Session) && app::handles(&event) {
+                if matches!(&event, Event::Board { .. }) {
                     self.failures = 0;
-                    self.feed.update(|feed| {
-                        feed.board_received(
-                            epoch,
-                            rows.into_iter().map(map::task).collect(),
-                            &left,
-                            replacement,
-                        )
-                    });
                 }
+                let outgoing = self.app.event(self.feed, event)?;
+                conn.flush_app(outgoing, now)?;
+                continue;
+            }
+            match event {
                 Event::Reply {
                     method: PAIR_CLAIM,
                     outcome,
+                    ..
                 } => {
                     let value = outcome.map_err(|(_, message)| Failure::Fatal(message))?;
                     let claimed: PairClaimed = serde_json::from_value(value)
@@ -647,10 +671,13 @@ impl Driver {
                     if method == wire::BYE && params["reason"] == CLOSE_REVOKED =>
                 {
                     if let Some(credential) = &self.credential {
-                        self.feed
-                            .update(|feed| feed.revoked(credential.device.clone()));
+                        self.feed.update(|feed| {
+                            feed.revoked(credential.device.clone());
+                            feed.link_lost("This browser was revoked.".into());
+                        });
                     }
                     self.retry_at = None;
+                    self.app.disconnected(self.feed);
                     return Ok(Action::Stop);
                 }
                 Event::Closed(problem) => return Err(Failure::Retry(problem)),

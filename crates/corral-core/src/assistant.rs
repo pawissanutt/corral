@@ -13,8 +13,10 @@ use crate::agent::{
 };
 use crate::{Store, Usage};
 
+pub mod attachments;
 mod records;
 mod scratch_lease;
+pub mod threads;
 
 pub const ASSISTANT_VERSION: u32 = 1;
 /// Ordinary journal limit; a first permission may occupy one extra slot to preserve citable inputs.

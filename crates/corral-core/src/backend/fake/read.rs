@@ -398,6 +398,7 @@ impl ReadView for FakeView {
             ordered
                 .filter(|e| !q.valid_only || !e.malformed)
                 .filter(|e| q.after.is_none_or(|after| e.seq > after))
+                .filter(|e| q.before.is_none_or(|before| e.seq < before))
                 .filter(|e| q.task.is_none() || e.event.task == q.task)
                 .filter(|e| q.kinds.is_empty() || q.kinds.contains(&e.event.kind))
                 .filter(|e| q.run.is_none() || e.event.run == q.run)

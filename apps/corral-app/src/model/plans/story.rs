@@ -1,6 +1,8 @@
-//! The selected member's Story inspector, resolved from the shared board snapshot.
+//! The selected member's Story inspector. `story` resolves the fixture's member from the shared
+//! board snapshot; `live_story.rs` builds the same inspector from corrald's board and plan.
 
 use super::{Action, Button, ButtonKind, Chip};
+use crate::model::Id;
 use crate::model::board::{Actor, LAST_VISIT, Mark, STAGES, money, task};
 use crate::model::hue::Hue;
 use crate::model::text::{Rich, span};
@@ -35,9 +37,9 @@ pub struct StoryField {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Story {
     /// Selected task id.
-    pub id: &'static str,
+    pub id: Id,
     /// The full task title.
-    pub title: &'static str,
+    pub title: String,
     /// Optional parent-plan label next to the id.
     pub plan: Option<String>,
     /// Changed-since-last-visit chip, absent for the compact queued story.
@@ -51,20 +53,21 @@ pub struct Story {
     /// Done/total fraction shown at the progress heading's trailing edge.
     pub progress_count: Option<String>,
     /// Worker progress marks and text.
-    pub steps: &'static [(Mark, &'static str)],
+    pub steps: Vec<(Mark, String)>,
     /// Next, You, Needs, Unblocks and Cost, or the queued task's compact fields.
     pub fields: Vec<StoryField>,
     /// Open session, Ask about this and Review candidate, absent for queued tasks.
     pub buttons: Vec<Button>,
 }
 
-fn ids(ids: &[&'static str], separator: &str) -> Rich {
+/// Ids in mono joined by `separator`, or `−` when there are none.
+pub(super) fn ids<S: AsRef<str>>(ids: &[S], separator: &str) -> Rich {
     let mut rich = Vec::new();
     for (i, id) in ids.iter().enumerate() {
         if i > 0 {
             rich.push(span(separator));
         }
-        rich.push(span(*id).mono());
+        rich.push(span(id.as_ref()).mono());
     }
     if rich.is_empty() {
         rich.push(span("−"));
@@ -84,7 +87,7 @@ fn needs(id: &'static str) -> Rich {
     rich
 }
 
-fn field(label: &'static str, value: Rich) -> StoryField {
+pub(super) fn field(label: &'static str, value: Rich) -> StoryField {
     StoryField {
         label,
         value,
@@ -97,8 +100,8 @@ pub fn story(id: &'static str) -> Story {
     let t = task(id);
     let simple = t.steps.is_empty();
     let mut view = Story {
-        id,
-        title: t.title,
+        id: Id::from(id),
+        title: t.title.into(),
         plan: if simple {
             None
         } else {
@@ -116,7 +119,11 @@ pub fn story(id: &'static str) -> Story {
         stages: vec![],
         progress: None,
         progress_count: None,
-        steps: t.steps,
+        steps: t
+            .steps
+            .iter()
+            .map(|&(mark, words)| (mark, words.to_owned()))
+            .collect(),
         fields: vec![],
         buttons: vec![],
     };
