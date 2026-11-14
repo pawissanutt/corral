@@ -10,7 +10,7 @@ use super::{
     outbox::{self, Outbox},
     requests::{self, ClientRequest},
 };
-use crate::model::{Id, daemon::*};
+use crate::model::{Id, daemon::*, devices::Registry};
 use corral_protocol::attachment::*;
 use corral_protocol::device::{
     DEVICE_PAGE, DEVICE_PAGE_LIMIT_MAX, DeviceInfo, DevicePage, DevicePageQuery,
@@ -147,7 +147,11 @@ impl AppState {
                 feed.settings.clear();
                 feed.threads.clear();
                 feed.details.clear();
-                feed.devices.clear();
+                // A registry listed after this connection's welcome already belongs to the new
+                // namespace; anything older does not.
+                if feed.registry != Registry::Current {
+                    feed.devices.clear();
+                }
                 feed.changes.clear();
                 feed.changes_head = 0;
                 feed.changes_older = None;
@@ -173,8 +177,9 @@ impl AppState {
         }
         self.ready = true;
         feed.update(|feed| {
-            if feed.devices.is_empty() {
-                feed.devices_received(vec![super::map::device(session.device.clone())]);
+            // Until the list arrives, show this device alone; it does not make the list current.
+            if feed.devices.is_empty() && feed.registry != Registry::Current {
+                feed.devices = vec![super::map::device(session.device.clone())];
             }
             feed.seen = Some(session.seen.clone());
             feed.session = Some(session);

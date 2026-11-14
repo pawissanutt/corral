@@ -9,7 +9,7 @@ use corral_protocol::rows::{GrantLine, OperatingMode, SettingsSnapshot};
 
 use crate::model::Act;
 use crate::model::daemon::{self, Feed, Link, RuntimeLevel};
-use crate::model::devices::{BrowserPairing, DeviceRow};
+use crate::model::devices::{BrowserPairing, DeviceLink, DeviceRow, Registry};
 use crate::model::hue::Hue;
 use crate::model::nav::SettingsSection;
 
@@ -359,10 +359,20 @@ pub const NOTIFICATIONS_NOTE: &str = "Notifications are not delivered: corrald h
 pub fn phone_subtitle(feed: &Feed, section: SettingsSection) -> String {
     let settings = snapshot(feed);
     match section {
-        SettingsSection::Devices => {
-            let active = feed.devices.iter().filter(|d| d.revoked.is_none()).count();
-            format!("{active} enrolled")
-        }
+        // Only a current registry is a count; seeded, retained or unlisted rows are not.
+        SettingsSection::Devices => match (feed.registry, &feed.device) {
+            (Registry::Current, _) => {
+                let active = feed.devices.iter().filter(|d| d.revoked.is_none()).count();
+                format!("{active} enrolled")
+            }
+            (_, DeviceLink::Unenrolled) => "not enrolled".into(),
+            (_, DeviceLink::Revoked { .. }) => "this device was revoked".into(),
+            _ if matches!(feed.device, DeviceLink::Failed(_)) || feed.link == Link::Down => {
+                "needs a connection to corrald".into()
+            }
+            (Registry::Failed, _) => "couldn't load the list".into(),
+            _ => "loading".into(),
+        },
         SettingsSection::Machines => "this daemon host only".into(),
         SettingsSection::Connection => match feed.link {
             Link::Up => "connected".into(),

@@ -222,11 +222,11 @@ fn empty_body(feed: &Feed, env: Env) -> String {
     let upcoming = feed.board.count(Group::Queued);
     if phone(env) {
         format!(
-            "Corral is verifying {verifying} · workers producing {producing} · {upcoming} upcoming."
+            "Corral is verifying {verifying} · worker runs in progress {producing} · {upcoming} upcoming."
         )
     } else {
         format!(
-            "Corral is verifying {verifying}, workers are producing {producing}, {upcoming} are upcoming."
+            "Corral is verifying {verifying}, worker runs in progress {producing}, {upcoming} are upcoming."
         )
     }
 }

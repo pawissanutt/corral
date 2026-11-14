@@ -133,6 +133,17 @@ impl AppState {
                         .into(),
                     message,
                 };
+                // A failed first page, or a later page of the walk in progress, leaves the
+                // registry unlisted on this connection.
+                let walk_failed = method == DEVICE_PAGE
+                    && (params["after"].is_null()
+                        || self
+                            .device_walk
+                            .as_ref()
+                            .is_some_and(|(current, _)| id.as_ref() == Some(current)));
+                if walk_failed && !params["after"].is_null() {
+                    self.device_walk = None;
+                }
                 let mut conflict = false;
                 feed.update(|feed| {
                     if let Some(id) = &id {
@@ -173,6 +184,9 @@ impl AppState {
                         }
                     }
                     feed.problem = Some(error.message.clone());
+                    if walk_failed {
+                        feed.registry = Registry::Failed;
+                    }
                 });
                 if method != ACT_RESULT {
                     if let Some(id) = &id {
@@ -448,5 +462,121 @@ mod tests {
         // A reopened bounded page that no longer holds the echo cannot revive the local copy.
         thread_page(&mut app, feed, Vec::new());
         assert_eq!(owners(feed), ["queued words"]);
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+    use crate::model::SettingsSection;
+    use crate::model::devices::DeviceLink;
+    use crate::model::settings::live::phone_subtitle;
+
+    fn info(id: &str) -> Value {
+        json!({
+            "id": id, "name": id, "platform": "native", "app_version": "0",
+            "enrolled_at": "2026-11-14T09:00:00Z", "revoked_at": null
+        })
+    }
+
+    fn session(app: &mut AppState, feed: Signal<Feed>) {
+        let event = Event::Reply {
+            method: APP_SESSION,
+            tag: None,
+            params: json!({}),
+            outcome: Ok(json!({
+                "device": info("dev-1"),
+                "authority": {
+                    "reply": true, "act": true, "assistant": true,
+                    "assistant_act": false, "admin": true
+                },
+                "seen": {"through": 0, "at": null},
+                "server_time": "2026-11-14T09:00:00Z"
+            })),
+            error_data: None,
+        };
+        app.event(feed, event).unwrap();
+    }
+
+    fn page(app: &mut AppState, feed: Signal<Feed>, devices: Vec<Value>) {
+        let (method, params, tag) = super::super::devices();
+        let event = Event::Reply {
+            method,
+            tag,
+            params,
+            outcome: Ok(json!({"devices": devices, "next": null})),
+            error_data: None,
+        };
+        assert!(app.event(feed, event).unwrap().is_empty());
+    }
+
+    fn state(feed: Signal<Feed>) -> (Registry, usize, String) {
+        feed.with_untracked(|feed| {
+            (
+                feed.registry,
+                feed.devices.len(),
+                phone_subtitle(feed, SettingsSection::Devices),
+            )
+        })
+    }
+
+    #[test]
+    fn device_count_is_known_only_after_a_completed_walk_on_the_current_connection() {
+        let runtime = nsh_core::element::Runtime::default();
+        let _entered = runtime.enter();
+        let feed = signal(Feed::default());
+        feed.update(|feed| {
+            feed.link = Link::Up;
+            feed.device = DeviceLink::Enrolled {
+                id: "dev-1".into(),
+                name: "dev-1".into(),
+            };
+        });
+        let mut app = AppState::new();
+        let (registry, _, unlisted) = state(feed);
+        assert_eq!(registry, Registry::Unknown);
+
+        // The session seeds this device for the Devices page; that is not the registry.
+        session(&mut app, feed);
+        assert_eq!(state(feed), (Registry::Unknown, 1, unlisted.clone()));
+
+        // A completed empty walk is a known count, distinct from an unlisted registry, and a
+        // later session refresh does not reseed it.
+        page(&mut app, feed, Vec::new());
+        session(&mut app, feed);
+        let (registry, rows, empty) = state(feed);
+        assert_eq!((registry, rows), (Registry::Current, 0));
+        assert_ne!(empty, unlisted);
+
+        // A lost connection makes the retained list unknown again.
+        app.disconnected(feed);
+        assert_eq!(state(feed).0, Registry::Unknown);
+        assert_eq!(state(feed).2, unlisted);
+
+        // Reconnected to another store: the walk answered before the session belongs to it.
+        feed.update(|feed| feed.store = Some("/elsewhere/.corral".into()));
+        page(&mut app, feed, vec![info("dev-1"), info("dev-2")]);
+        session(&mut app, feed);
+        assert_eq!(state(feed).0, Registry::Current);
+        assert_eq!(state(feed).1, 2);
+
+        // A refused listing on a fresh connection is neither a count nor still pending.
+        app.disconnected(feed);
+        let (method, params, tag) = super::super::devices();
+        let refused = Event::Reply {
+            method,
+            tag,
+            params,
+            outcome: Err((
+                corral_protocol::rpc::ErrorCode::Unavailable,
+                "device registry unavailable".into(),
+            )),
+            error_data: None,
+        };
+        assert!(app.event(feed, refused).unwrap().is_empty());
+        let (registry, _, failed) = state(feed);
+        assert_eq!(registry, Registry::Failed);
+        assert_ne!(failed, unlisted);
+        assert_ne!(failed, empty);
     }
 }
