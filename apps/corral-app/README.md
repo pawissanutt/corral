@@ -50,7 +50,7 @@ A restart attaches that enrolled identity without asking again.
 ### Browser
 
 Enable the optional listener in the workspace's `.corral/corral.toml`, then restart
-`corrald`. It is off by default; only numeric loopback addresses are accepted:
+`corrald`. It is off by default; the browser endpoint must bind `127.0.0.1`:
 
 ```toml
 [daemon]
@@ -59,10 +59,15 @@ web_origins = ["http://127.0.0.1:8790"]
 ```
 
 Run `corral device pair`, or choose **Pair a browser** in the enrolled native app's
-Settings › Devices. Paste the offered code into the browser's Settings › Connection.
+Settings › Devices. Open the offered local pairing link. It opens Settings › Connection
+with the code prefilled; press **Pair**. The short-lived code is in the URL fragment,
+not the query/path, and the app clears it from the address bar before pairing.
+It is never saved to NSH Storage. Raw-code entry remains available when no link is offered.
+
 Compare the six-digit codes on both devices, then confirm in the terminal or native
 app. A pairing code expires after two minutes; claiming it starts a separate two-minute
-confirmation window. The browser cannot confirm itself.
+confirmation window. Opening a link does not claim, approve or replace a stored identity.
+The browser cannot confirm itself. LAN access remains disabled.
 
 Choose **Open live data** after pairing. Reload preserves the device and daemon pin:
 the browser stores its credential encrypted in IndexedDB with a non-extractable

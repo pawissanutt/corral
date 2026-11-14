@@ -83,11 +83,11 @@ impl<'de> Deserialize<'de> for LoopbackAddr {
         let text = String::deserialize(deserializer)?;
         text.parse::<SocketAddr>()
             .ok()
-            .filter(|addr| addr.ip().is_loopback())
+            .filter(|addr| addr.ip() == std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST))
             .map(Self)
             .ok_or_else(|| {
                 serde::de::Error::custom(
-                    "daemon.listen must be a numeric loopback address such as \"127.0.0.1:7841\"",
+                    "daemon.listen must use 127.0.0.1, such as \"127.0.0.1:7841\" (browser pairing is local-only)",
                 )
             })
     }
@@ -164,10 +164,15 @@ mod tests {
 
     #[test]
     fn listen_and_origins_refuse_non_loopback_and_insecure_values() {
-        for value in ["0.0.0.0:7841", "localhost:7841"] {
+        for value in [
+            "0.0.0.0:7841",
+            "localhost:7841",
+            "127.0.0.2:7841",
+            "[::1]:7841",
+        ] {
             assert!(serde_json::from_value::<LoopbackAddr>(serde_json::json!(value)).is_err());
         }
-        for value in ["127.0.0.1:7841", "[::1]:7841"] {
+        for value in ["127.0.0.1:7841", "127.0.0.1:0"] {
             let addr: LoopbackAddr = serde_json::from_value(serde_json::json!(value)).unwrap();
             assert!(addr.addr().ip().is_loopback());
         }

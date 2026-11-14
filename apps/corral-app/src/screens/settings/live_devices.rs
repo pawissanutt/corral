@@ -39,12 +39,17 @@ pub fn page(app: AppState) -> AnyElement {
                     PairingPanel::Offered {
                         pair_id,
                         code,
+                        url,
                         line,
                     } => {
                         parts.push(cell(app, line, Token::Ink, false).into_element());
+                        let (offer, id) = match url {
+                            Some(url) => (url, "pair-link-offer"),
+                            None => (code, "pair-code-offer"),
+                        };
                         parts.push(
-                            mono_cell(app, code, Token::Ink)
-                                .test_id("pair-code-offer")
+                            mono_cell(app, offer, Token::Ink)
+                                .test_id(id)
                                 .select_text()
                                 .into_element(),
                         );

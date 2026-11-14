@@ -203,6 +203,8 @@ pub struct Feed {
     pub devices: Vec<crate::model::devices::DeviceRow>,
     pub pairing: crate::model::devices::Pairing,
     pub browser_pairing: crate::model::devices::BrowserPairing,
+    /// Pairing-link draft, held only in memory and never written to app preferences.
+    pub pairing_code: Option<String>,
     pub now: u64,
     /// Local wall clock of `now`, HH:MM.
     pub clock: String,
@@ -218,6 +220,15 @@ pub struct Feed {
 }
 
 impl Feed {
+    /// An explicit link (including a refused one) must never resume an old browser identity.
+    pub fn browser_pairing_pending(&self) -> bool {
+        self.pairing_code.is_some()
+            || matches!(
+                self.browser_pairing,
+                crate::model::devices::BrowserPairing::Blocked(_)
+            )
+    }
+
     pub fn connecting(&mut self, endpoint: String) {
         self.endpoint = Some(endpoint);
         self.link = Link::Connecting;

@@ -65,7 +65,7 @@ pub(crate) fn serve_listener(
         .context("reading app listener address")?
         .port();
     let devices = shared.devices().context("device registry is unavailable")?;
-    devices.set_port(port);
+    devices.set_listener(port, origins.first().cloned());
     std::thread::Builder::new()
         .name("corrald-app-server".into())
         .spawn(move || {

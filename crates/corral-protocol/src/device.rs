@@ -17,6 +17,7 @@ pub const PAIR_DONE: &str = "pair.done";
 pub const PAIR_REFUSED: &str = "pair.refused";
 pub const SESSION_PATH: &str = "/v1/session";
 pub const PAIR_PATH_PREFIX: &str = "/v1/pair/";
+pub const PAIR_LINK_FRAGMENT: &str = "corral-pair=";
 pub const NOISE_SESSION: &str = "Noise_IK_25519_ChaChaPoly_BLAKE2s";
 pub const NOISE_PAIR: &str = "Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s";
 pub const NOISE_TAG: usize = 16;
@@ -76,6 +77,8 @@ pub struct PairOffer {
     pub pair_id: String,
     pub code: String,
     pub expires_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

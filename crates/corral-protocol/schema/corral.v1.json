@@ -2159,6 +2159,12 @@
           },
           "pair_id": {
             "type": "string"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [

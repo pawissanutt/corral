@@ -114,7 +114,10 @@ pub fn pair_browser(app: AppState) -> AnyElement {
     if !crate::client::pairing_supported() || untracked(|| app.daemon()) {
         return view().into_element();
     }
-    let code = signal(String::new());
+    let code = signal(
+        app.feed
+            .with_untracked(|feed| feed.pairing_code.clone().unwrap_or_default()),
+    );
     let name = signal(String::from("Browser"));
     let state = computed(move || app.feed.with(devices::pair_browser));
     dynamic(move || {
@@ -135,6 +138,9 @@ pub fn pair_browser(app: AppState) -> AnyElement {
                     cell(app, line, Token::Fail, false).into_element(),
                     pair_form(app, code, name),
                 ],
+                PairBrowser::Blocked { line } => {
+                    vec![cell(app, line, Token::Fail, false).into_element()]
+                }
                 PairBrowser::Paired { line } => vec![
                     cell(app, line, Token::Ink, false).into_element(),
                     button_row(

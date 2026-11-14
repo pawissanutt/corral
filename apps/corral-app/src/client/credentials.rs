@@ -1,4 +1,4 @@
-//! Native device-id file fallback. It contains no daemon or browser private keys.
+//! Native device-id fallback (no private keys). Writers lock across atomic replacement.
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
@@ -78,7 +78,7 @@ fn read(root: &Path) -> Result<Credentials, String> {
     Ok(saved)
 }
 
-fn write(root: &Path, saved: &Credentials) -> Result<(), String> {
+fn lock(root: &Path) -> Result<fs::File, String> {
     fs::create_dir_all(root)
         .map_err(|error| format!("cannot create device state directory: {error}"))?;
     let dir = root.join("corral-app");
@@ -102,6 +102,48 @@ fn write(root: &Path, saved: &Credentials) -> Result<(), String> {
     return Err("private device-id file storage is unavailable on this platform".into());
     #[cfg(unix)]
     {
+        let path = dir.join("devices.lock");
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) => check_lock_file(&metadata)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("cannot inspect devices.lock: {error}")),
+        }
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .custom_flags(
+                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32,
+            )
+            .open(path)
+            .map_err(|error| format!("cannot open devices.lock: {error}"))?;
+        check_lock_file(&file.metadata().map_err(|error| error.to_string())?)?;
+        file.lock()
+            .map_err(|error| format!("cannot lock device-id file: {error}"))?;
+        // Never unlink this file: queued writers must keep locking the same inode.
+        Ok(file)
+    }
+}
+
+#[cfg(unix)]
+fn check_lock_file(metadata: &fs::Metadata) -> Result<(), String> {
+    if !metadata.is_file() {
+        return Err("devices.lock must be a regular file".into());
+    }
+    if metadata.mode() & 0o077 != 0 || metadata.uid() != rustix::process::getuid().as_raw() {
+        return Err("devices.lock must be readable only by you".into());
+    }
+    Ok(())
+}
+
+fn write(root: &Path, saved: &Credentials) -> Result<(), String> {
+    #[cfg(not(unix))]
+    return Err("private device-id file storage is unavailable on this platform".into());
+    #[cfg(unix)]
+    {
+        let dir = root.join("corral-app");
         let stage = dir.join(format!("devices.json.{}.tmp", std::process::id()));
         let mut file = fs::OpenOptions::new()
             .write(true)
@@ -127,11 +169,13 @@ pub(super) fn load_in(root: &Path, store: &str) -> Result<Option<String>, String
     Ok(read(root)?.devices.remove(store))
 }
 pub(super) fn save_in(root: &Path, store: &str, device: &str) -> Result<(), String> {
+    let _lock = lock(root)?;
     let mut saved = read(root)?;
     saved.devices.insert(store.into(), device.into());
     write(root, &saved)
 }
 pub(super) fn remove_in(root: &Path, store: &str) -> Result<(), String> {
+    let _lock = lock(root)?;
     let mut saved = read(root)?;
     saved.devices.remove(store);
     write(root, &saved)
@@ -185,5 +229,129 @@ mod tests {
             "devices.json must be readable only by you"
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn lock_file_is_private_and_rejects_unsafe_replacements() {
+        let root = std::env::temp_dir().join(format!(
+            "corral-app-credential-lock-{}-{}",
+            std::process::id(),
+            jiff::Timestamp::now().as_nanosecond()
+        ));
+        save_in(&root, "workspace-a", "dev-first").unwrap();
+        let path = root.join("corral-app/devices.lock");
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        assert_eq!(
+            save_in(&root, "workspace-b", "dev-second").unwrap_err(),
+            "devices.lock must be readable only by you"
+        );
+        assert_eq!(
+            remove_in(&root, "workspace-a").unwrap_err(),
+            "devices.lock must be readable only by you"
+        );
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink("devices.json", &path).unwrap();
+        assert_eq!(
+            save_in(&root, "workspace-b", "dev-second").unwrap_err(),
+            "devices.lock must be a regular file"
+        );
+        fs::remove_file(&path).unwrap();
+        let socket = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        assert_eq!(
+            remove_in(&root, "workspace-a").unwrap_err(),
+            "devices.lock must be a regular file"
+        );
+        assert_eq!(
+            load_in(&root, "workspace-a").unwrap().as_deref(),
+            Some("dev-first")
+        );
+        assert_eq!(load_in(&root, "workspace-b").unwrap(), None);
+        drop(socket);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn concurrent_updates_preserve_other_workspace_enrolments() {
+        use rustix::fs::inotify;
+        use std::{mem::MaybeUninit, process::Command};
+
+        const CHILD_ROOT: &str = "CORRAL_CREDENTIAL_SERIALIZATION_TEST_ROOT";
+        const CHILD_OPERATION: &str = "CORRAL_CREDENTIAL_SERIALIZATION_TEST_OPERATION";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let root = PathBuf::from(root);
+            match std::env::var(CHILD_OPERATION).unwrap().as_str() {
+                "save" => save_in(&root, "workspace-c", "dev-third").unwrap(),
+                "remove" => remove_in(&root, "workspace-remove").unwrap(),
+                operation => panic!("unknown credential test operation: {operation}"),
+            }
+            return;
+        }
+
+        for operation in ["save", "remove"] {
+            let root = std::env::temp_dir().join(format!(
+                "corral-app-credential-serialization-{}-{}-{operation}",
+                std::process::id(),
+                jiff::Timestamp::now().as_nanosecond()
+            ));
+            save_in(&root, "workspace-a", "dev-first").unwrap();
+            save_in(&root, "workspace-remove", "dev-remove").unwrap();
+            let mut unrelated_update = read(&root).unwrap();
+            unrelated_update
+                .devices
+                .insert("workspace-b".into(), "dev-second".into());
+            let lock_path = root.join("corral-app/devices.lock");
+            let held = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .open(&lock_path)
+                .unwrap();
+            held.lock().unwrap();
+            let notifications = inotify::init(inotify::CreateFlags::CLOEXEC).unwrap();
+            for path in [&lock_path, &root.join("corral-app/devices.json")] {
+                inotify::add_watch(&notifications, path, inotify::WatchFlags::OPEN).unwrap();
+            }
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "client::credentials::tests::concurrent_updates_preserve_other_workspace_enrolments",
+                    "--nocapture",
+                ])
+                .env(CHILD_ROOT, &root)
+                .env(CHILD_OPERATION, operation)
+                .spawn()
+                .unwrap();
+
+            // A serialized writer opens the lock before reading and blocks on it.
+            // The old writer instead opens devices.json, retaining its old inode.
+            // Either event lets us publish B without timing or scheduling assumptions:
+            // an unlocked writer can only replace B or be replaced by B, losing data.
+            let mut buffer = [MaybeUninit::uninit(); 512];
+            inotify::Reader::new(notifications, &mut buffer)
+                .next()
+                .unwrap();
+            write(&root, &unrelated_update).unwrap();
+            drop(held);
+            assert!(child.wait().unwrap().success());
+            let saved = read(&root).unwrap();
+            assert_eq!(saved.devices.get("workspace-a").unwrap(), "dev-first");
+            assert_eq!(
+                saved.devices.get("workspace-b").map(String::as_str),
+                Some("dev-second")
+            );
+            match operation {
+                "save" => assert_eq!(
+                    saved.devices.get("workspace-c").map(String::as_str),
+                    Some("dev-third")
+                ),
+                "remove" => assert!(!saved.devices.contains_key("workspace-remove")),
+                _ => unreachable!(),
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 }

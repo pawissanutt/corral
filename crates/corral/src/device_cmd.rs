@@ -5,7 +5,7 @@ use clap::Subcommand;
 
 #[derive(Subcommand)]
 pub enum DeviceCmd {
-    /// Offer a short-lived browser pairing code and confirm its matching code
+    /// Offer a short-lived browser pairing link or code and confirm its matching code
     Pair,
     /// List enrolled and revoked app devices
     List {
@@ -79,9 +79,15 @@ fn pair(client: &mut corral_ops::daemon_client::Client) -> Result<()> {
     use std::time::Duration;
 
     let offer = client.pair_begin()?;
-    println!("Pairing code (expires {}):", offer.expires_at);
-    println!("{}", offer.code);
-    println!("Paste it in the Corral web app under Settings › Connection.");
+    if let Some(url) = &offer.url {
+        println!("Pairing link (expires {}):", offer.expires_at);
+        println!("{url}");
+        println!("Open it in your browser, then choose Pair in the Corral web app.");
+    } else {
+        println!("Pairing code (expires {}):", offer.expires_at);
+        println!("{}", offer.code);
+        println!("Paste it in the Corral web app under Settings › Connection.");
+    }
     println!("Waiting for a browser…");
     loop {
         match client
