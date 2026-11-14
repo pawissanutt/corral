@@ -124,7 +124,7 @@ fn send_changes(
     if let Some(expected) = expected {
         expected.check(&ctx.store.head(&task.id)?.shell_task()?)?;
     }
-    let changes_round = crate::round_notice::next_round(previous, ctx.store.now());
+    let changes_round = crate::round_notice::next_round(previous, ctx.store.now())?;
     let notice = (continuation.session.policy != corral_core::SessionPolicy::Fresh)
         .then(|| crate::round_notice::changes(&task, previous, &changes_round, round));
     let text = &match &notice {

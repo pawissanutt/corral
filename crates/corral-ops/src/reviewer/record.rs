@@ -82,6 +82,9 @@ pub(super) fn record_verdict(
     report: Option<&effects::Report<'_>>,
 ) -> Result<Recorded> {
     refuse_review_child(ctx, task, &run.id)?;
+    // Separate processes need not share a monotonic clock; preserve transition order.
+    let ended =
+        crate::round_notice::ordered_after(ended, run.changes_round.as_ref().map(|r| r.at))?;
     if let Some(report) = report {
         report.check_gate_ref(ctx, task)?;
     }
