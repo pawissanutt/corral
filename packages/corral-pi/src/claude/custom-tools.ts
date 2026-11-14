@@ -57,8 +57,34 @@ function schemaToZod(schema: JsonSchema): z.ZodType {
   return typeof schema.description === "string" ? converted.describe(schema.description) : converted;
 }
 
+/**
+ * An MCP input schema must be one object. A root union of objects (`corral_todo`'s per-op variants)
+ * is merged: each key accepts any of its variants' schemas and is required only when every variant
+ * requires it. Pi still validates the call against the exact union before executing it.
+ */
+function rootObject(schema: JsonSchema): JsonSchema {
+  const variants = schema.anyOf ?? schema.oneOf;
+  if (schema.properties || !variants || variants.length === 0) return schema;
+  const objects = variants.map(rootObject);
+  const byKey = new Map<string, Map<string, JsonSchema>>();
+  for (const variant of objects) {
+    for (const [key, value] of Object.entries(variant.properties ?? {})) {
+      const seen = byKey.get(key) ?? new Map<string, JsonSchema>();
+      seen.set(JSON.stringify(value), value);
+      byKey.set(key, seen);
+    }
+  }
+  const properties: Record<string, JsonSchema> = {};
+  for (const [key, seen] of byKey) {
+    const unique = [...seen.values()];
+    properties[key] = unique.length === 1 ? unique[0]! : { anyOf: unique };
+  }
+  const required = [...byKey.keys()].filter((key) => objects.every((variant) => variant.required?.includes(key)));
+  return { type: "object", properties, required };
+}
+
 export function jsonSchemaToZodShape(schema: unknown): Record<string, z.ZodType> {
-  const object = (schema ?? {}) as JsonSchema;
+  const object = rootObject((schema ?? {}) as JsonSchema);
   const required = new Set(object.required ?? []);
   const shape: Record<string, z.ZodType> = {};
   for (const [key, value] of Object.entries(object.properties ?? {})) {
