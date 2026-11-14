@@ -9,7 +9,7 @@ use crate::Ctx;
 #[path = "lessons_tests.rs"]
 mod tests;
 
-/// Match project-local lessons using only paths and write scopes declared by the task.
+/// Match project-local lessons using only the task's declared write scopes for files.
 pub fn lessons_for(ctx: &Ctx, task: &Task, run: Option<&Run>) -> Result<Vec<Lesson>> {
     let Some(project) = task.project.as_deref() else {
         return Ok(vec![]);
