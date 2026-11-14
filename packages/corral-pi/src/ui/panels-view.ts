@@ -2,7 +2,7 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ContextUsage, Theme } from "@earendil-works/pi-coding-agent";
 import type { BuildPanelState } from "../build/types.ts";
-import type { TodoProgress } from "./todo-widget.ts";
+import type { ContinuedState, TodoProgress } from "./todo.ts";
 import type { AgentObservation } from "./agents-model.ts";
 import type { InspectorSnapshot } from "./inspector.ts";
 import type { QueuedItem } from "../host/queue-control.ts";
@@ -29,6 +29,8 @@ export interface PanelSnapshot {
   readonly skills: readonly string[];
   readonly ledger: TodoProgress | null;
   readonly ledgerStale: boolean;
+  /** The continuation record for the plan; null when none is recorded, absent when the snapshot never read one. */
+  readonly ledgerContinued?: ContinuedState | null;
   readonly jobs: readonly PanelJob[] | null;
   readonly auxiliary: { explore: { running: number; queued: number }; oracle: { running: number; queued: number } } | null;
   readonly helpers?: readonly import("../extensions/subagent/inspection.ts").HelperInspection[] | null;

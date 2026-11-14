@@ -1,42 +1,26 @@
-// Usage (F2 or `/panels usage`): stored collector accounting as one aligned table with a section rule per scope,
-// then the configured run budget. Read-only source tables: never reprice history or interpret SDK cost as an invoice.
-import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { z } from "zod";
-import type { InspectionStore } from "./inspection.ts";
-import { backLine, chip, chipHeader, sectionRule, toneColor, wrap, type Tone } from "./panel-parts.ts";
+// Usage (F2 or `/panels usage`): what this session used, where the run budget stood at the last receipt
+// (usage-budget-view.ts), what the task/run collector stored, and that receipt's diagnostics. Each source is its own
+// section with its state and freshness on its rule; the scopes are never added together. Presentation only: no reads
+// here, no repricing, a cost is never a bill, and an unknown is never drawn as zero.
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { Role } from "../roles/types.ts";
+import { agentColor } from "./agent-hues.ts";
+import { ago, backLine, bold, clock, glyphRows, legacyRow, sectionRule, stateBanner, stateNote, stateRow, wrap } from "./panel-parts.ts";
+import { splitRow } from "./panels-chrome.ts";
 import { pad, plainLabel, PANEL_BLUE, PANEL_MUTED, PANEL_TEXT, PANEL_WARNING, type PanelLine } from "./panels-view.ts";
+import type { ReadState } from "./read-state.ts";
+import { budgetDigest, budgetSection, diagnosticItems, diagnosticsSection } from "./usage-budget-view.ts";
+import { dollars, fieldRows, grouped, itemRows, muted, NARROW, plural, wall } from "./usage-format.ts";
+import type { SessionUsage, UsageIdentity, UsageModel, UsagePanel } from "./usage-model.ts";
 
-const Count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const Dollars = z.number().finite().nonnegative().nullable().optional();
-const Usage = z.object({ input: Count, output: Count, cache_read: Count, cache_write: Count,
-  reported_usd: Dollars, cost_usd: Dollars, estimated_usd: Dollars, unpriced_tokens: Count,
-  cost_basis: z.enum(["reported", "estimated", "mixed"]).nullable() });
-export const UsagePanelSchema = z.object({ source: z.string().max(16384),
-  rows: z.array(z.object({ scope: z.string().max(16384), usage: Usage.nullable(),
-    wall_seconds: z.number().int().nullable(), known_runs: Count, runs: Count })).max(102), models_omitted: Count });
-const BudgetSchema = z.object({
-  limits: z.object({ max_tokens: Count.nullable(), max_usd_nanos: Count.nullable() }),
-  tokens: Count, usd_nanos: Count, uncertain_requests: Count, pricing_gaps: Count,
-  legacy_usage_gap: z.boolean(), unbounded_requests: Count, exhausted: z.boolean(),
-  stopped: z.boolean().optional(), uncertain: z.boolean().optional(), active: Count.optional(),
-});
-type ScopeRow = z.infer<typeof UsagePanelSchema>["rows"][number];
+type ScopeRow = UsagePanel["rows"][number];
 type Facts = NonNullable<ScopeRow["usage"]>;
 
-/** Thousands separators on an integer, independent of the host locale. */
-const grouped = (value: number) => String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-/** USD at the stored precision (six decimals), grouped; `unknown` when absent, never zero. */
-function dollars(value: number | null | undefined): string {
-  if (value == null) return "unknown";
-  const [whole = "0", cents = ""] = value.toFixed(6).split(".");
-  return `$${grouped(Number(whole))}.${cents}`;
-}
-function wall(seconds: number | null): string {
-  if (seconds === null) return "unknown";
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
-  return `${grouped(Math.floor(seconds / 3600))}h ${String(Math.floor(seconds % 3600 / 60)).padStart(2, "0")}m`;
-}
+/** Views with fewer body rows than this open with the three-row digest. */
+const DIGEST_BELOW = 12;
+const ROLE: Readonly<Record<Role, string>> = {
+  worker: "worker", reviewer: "reviewer", pm: "PM", planner: "planner", plan_reviewer: "plan reviewer", assistant: "assistant", build: "build",
+};
 
 /** Row 0 is the back line; `‹ Chat` (from column 0) is its click target. */
 export function usageBackAt(x: number, y: number): boolean { return y === 0 && x >= 0 && x < visibleWidth("‹ Chat"); }
@@ -58,7 +42,7 @@ const COLUMNS: readonly { readonly head: string; readonly rank: number; readonly
   { head: "wall", rank: 9, right: true, value: row => wall(row.wall_seconds) },
   { head: "basis", rank: 10, right: false, value: (_, u) => u.cost_basis ?? "unknown" },
 ];
-export const COLUMN_GAP = 2;
+const COLUMN_GAP = 2;
 type Column = (typeof COLUMNS)[number] & { readonly width: number };
 
 /** The columns that fit `width`, in display order, each as wide as its header or its widest value. */
@@ -79,111 +63,199 @@ const cell = (text: string, column: Column) => {
   const room = " ".repeat(Math.max(0, column.width - visibleWidth(clipped)));
   return column.right ? room + clipped : clipped + room;
 };
-
-export interface BudgetRow { readonly label: string; readonly value: string; readonly tone: Tone }
-/** The configured run budget from the host's last accounting receipt; an unreadable receipt is never unlimited or zero. */
-export function budgetRows(value: unknown): { readonly rows: readonly BudgetRow[]; readonly uncertain: boolean } {
-  const result = BudgetSchema.safeParse(value);
-  if (!result.success) return { rows: [{ label: "Budget", value: "accounting unavailable / legacy · not zero; configured limits unknown", tone: "warn" }], uncertain: false };
-  const b = result.data;
-  return {
-    rows: [
-      { label: "Token limit", value: b.limits.max_tokens === null ? "not configured" : grouped(b.limits.max_tokens), tone: "none" },
-      { label: "USD limit", value: b.limits.max_usd_nanos === null ? "not configured" : dollars(b.limits.max_usd_nanos / 1e9), tone: "none" },
-      { label: "Settled+reserved", value: `${grouped(b.tokens)} tokens · ${dollars(b.usd_nanos / 1e9)} accounting USD, not billed spend`, tone: "none" },
-      { label: "Unresolved", value: `${grouped(b.uncertain_requests)} ${b.uncertain_requests === 1 ? "reservation" : "reservations"} · ${grouped(b.unbounded_requests)} unbounded`, tone: b.uncertain_requests || b.unbounded_requests ? "warn" : "none" },
-      { label: "Pricing gaps", value: grouped(b.pricing_gaps), tone: b.pricing_gaps ? "warn" : "none" },
-      { label: "Legacy gap", value: b.legacy_usage_gap ? "yes · historical spend unknown" : "not reported", tone: b.legacy_usage_gap ? "warn" : "none" },
-      { label: "State", value: `${b.exhausted ? "exhausted" : "not exhausted at last receipt"} · ${b.stopped ? "host stopped" : "host not stopped"}`, tone: b.exhausted || b.stopped ? "warn" : "none" },
-    ],
-    uncertain: Boolean(b.uncertain || b.uncertain_requests || b.pricing_gaps || b.legacy_usage_gap || b.unbounded_requests),
-  };
-}
-/** `items` joined by ` · ` and broken only between items; an item wider than `width` wraps on its own. */
-function itemRows(items: readonly string[], width: number): string[] {
-  const out: string[] = [];
-  let line = "";
-  for (const item of items) {
-    if (line && visibleWidth(line) + 3 + visibleWidth(item) > width) { out.push(line); line = ""; }
-    line = line ? `${line} · ${item}` : item;
-  }
-  if (line) out.push(line);
-  return out.flatMap(row => wrap(row, width));
-}
-
-/** The reading rules behind `?`; one short form of the first stays on screen. */
+/** The reading rules behind `?`, after Diagnostics; nothing above them moves when they show. */
 const LEGEND = [
+  "Session tokens and API-equivalent USD are counted by this pane and priced from the model catalog; they are not a bill and not a provider quota. A + marks a total with an unknown member.",
+  "The run budget is canonical reservation accounting (settled plus reserved) from the last host receipt, not provider balance or quota. Cancellation is best-effort; provider billing may lag. The host stop state is what that receipt recorded, not whether the host runs now.",
   "Reported USD is transcript-reported, not verified billed metered spend. Subscription costs are API-equivalent estimates, not subscription charges.",
   "Wall time is completed-run elapsed time, not model-active time. Response latency is transcript-derived, not throughput.",
   "workers: workers with collected usage of all workers in the scope. unknown is never zero. No model rows means per-response/model accounting unavailable, not no usage.",
   "Columns that do not fit drop in this order onto the muted row under each scope: basis, wall, workers, unpriced, cache write, cache read, API-equiv. USD, reported USD, output.",
   "c token bars are relative to the largest category in each scope; the exact values stay in the table.",
-  "The run budget is canonical reservation accounting from the last host receipt, not provider balance or quota. Cancellation is best-effort; provider billing may lag. No provider quota or subscription balance is available.",
 ];
+/** The collector's closing caveat, longest first. */
 const CAVEAT = [
-  "Reported USD is transcript-reported, not a verified bill · API-equivalent USD is an estimate, not a charge",
   "Reported USD is not a verified bill · API-equiv. USD is an estimate",
   "reported: not a verified bill · API-equiv.: estimate",
   "reported ≠ billed · API-equiv. = estimate",
   "reported ≠ billed · API ≈ estimate",
 ];
 
+export interface UsageViewOptions {
+  /** `c`: token bars under each collector scope, the exact table kept. */
+  readonly chart: boolean;
+  /** `?`: the reading rules after Diagnostics and problem lines in full. */
+  readonly legend: boolean;
+  readonly now: number;
+  /** The view's body height; below 12 the digest opens the page. 0 when not laid out yet. */
+  readonly bodyRows: number;
+}
+
 /**
- * The Usage page, one styled row per entry, each at most `width` cells: the back line, chips with freshness, the
- * caveat (or the whole legend), the token and cost table with one section rule per scope, then the run budget.
+ * The Usage page, each row at most `width` cells: the back line, the digest on short views, then SESSION, RUN BUDGET,
+ * TASK / RUN, DIAGNOSTICS (when a host or local receipt was read) and READING RULES (with `?`). Pure: renders `model` only.
  */
-export function usageLines(store: InspectionStore, budget: unknown, bound: boolean, width: number, chart = false, legend = false): PanelLine[] {
-  const rows: PanelLine[] = [];
-  const push = (text: string) => rows.push({ text: truncateToWidth(text, Math.max(1, width), "…") });
-  const full = (text: string) => { for (const line of wrap(text, width)) push(line); };
-  const info = store.current, panel = info?.usage;
+export function usageLines(model: UsageModel, width: number, options: UsageViewOptions): PanelLine[] {
+  const lines = [
+    backLine("Chat", "Usage", identityLabel(model.identity), width).line,
+    ...(options.bodyRows > 0 && options.bodyRows < DIGEST_BELOW ? digest(model, width, options.now) : []),
+    ...sessionSection(model.session, width),
+    ...budgetSection(model.budget, width),
+    ...collectorSection(model, width, options),
+    ...diagnosticsSection(model.budget, width),
+    ...(options.legend ? [sectionRule("Reading rules", width), ...LEGEND.flatMap(line => wrap(muted(line), width))] : []),
+  ];
+  return lines.map(text => ({ text: truncateToWidth(text, Math.max(1, width), "…") }));
+}
 
-  push(backLine("Chat", "Usage", info ? `${info.task} / ${info.run}` : "", width).line);
+/** The back line's right side: whose usage this is. */
+function identityLabel(identity: UsageIdentity): string {
+  if (identity.task && identity.run) return `${identity.task} / ${identity.run}`;
+  if (identity.role === "assistant" && identity.assistant) return `assistant ${identity.assistant}`;
+  if (identity.role === "build" && identity.build) return `build ${identity.build}`;
+  const role = identity.task ? `${ROLE[identity.role]} · ${identity.task}` : ROLE[identity.role];
+  return identity.project ? `${role} · ${identity.project}` : role;
+}
 
-  const chips = [chip(panel ? stripTerminalSequences(truncateToWidth(plainLabel(panel.source), 40, "…")) : "no usage source"),
-    ...(panel ? [chip(`${panel.rows.length} ${panel.rows.length === 1 ? "scope" : "scopes"}`)] : []),
-    ...(panel?.models_omitted ? [chip(`! ${grouped(panel.models_omitted)} model rows omitted`, "warn")] : []),
-    ...(!bound ? [chip("! unbound · may be stale", "warn")] : []),
-    ...(store.stale || store.error ? [chip("~ stale", "warn")] : []),
-    ...(store.refreshing ? [chip("reading…")] : []),
-    ...(chart ? [chip("token bars")] : [])];
-  for (const line of chipHeader(chips, width, store.checkedAt, Date.now())) push(line);
-  if (store.stale || store.error) full(`${PANEL_WARNING}~ STALE / unavailable: ${plainLabel(store.error ?? "canonical read required; retained values historical")}${PANEL_TEXT}`);
-  if (legend) for (const line of LEGEND) full(PANEL_MUTED + line + PANEL_TEXT);
-  else if (panel) push(PANEL_MUTED + (CAVEAT.find(c => visibleWidth(c) <= width) ?? CAVEAT.at(-1) ?? "") + PANEL_TEXT);
+/** The session's totals: tokens over the listed rows, cost as the status bar sums it; `partial` when a member is unknown. */
+function sessionTotals(session: SessionUsage): { tokens: number | undefined; tokensPartial: boolean; cost: number | undefined; costPartial: boolean } {
+  const known = session.rows.flatMap(row => row.tokens === undefined ? [] : [row.tokens]);
+  const pane = session.rows[0];
+  const cost = session.rows.length > 1 || session.total ? session.total : pane?.cost === undefined ? undefined : { cost: pane.cost, partial: false };
+  return { tokens: known.length ? known.reduce((sum, n) => sum + n, 0) : undefined, tokensPartial: known.length < session.rows.length,
+    cost: cost?.cost, costPartial: cost?.partial ?? false };
+}
 
-  if (!panel) full(`${PANEL_WARNING}! Collected usage unavailable / legacy · not zero${PANEL_TEXT}`);
+/** Three rows that answer the page's questions on a short view; the full sections follow, nothing is dropped. */
+function digest(model: UsageModel, width: number, now: number): string[] {
+  const one = (text: string, color: string) => color + truncateToWidth(plainLabel(text), Math.max(1, width), "…") + PANEL_TEXT;
+  const session = model.session, out: string[] = [];
+  if (!session) out.push(one("○ this pane has not reported usage yet · unknown, not zero", PANEL_MUTED));
   else {
-    const { shown, dropped } = usageColumns(panel.rows, width);
-    push(PANEL_MUTED + shown.map(c => cell(c.head, c)).join(" ".repeat(COLUMN_GAP)) + PANEL_TEXT);
-    for (const row of panel.rows) {
-      push(sectionRule(row.scope, width));
-      const u = row.usage;
-      if (!u) {
-        for (const line of itemRows(["○ usage unknown", "no collected sample", `workers ${grouped(row.known_runs)}/${grouped(row.runs)}`, `wall ${wall(row.wall_seconds)}`], width))
-          push(PANEL_MUTED + line + PANEL_TEXT);
-        continue;
-      }
-      push(shown.map(c => { const v = c.value(row, u); return (v === "unknown" ? PANEL_MUTED : PANEL_TEXT) + cell(v, c) + PANEL_TEXT; }).join(" ".repeat(COLUMN_GAP)));
-      if (dropped.length) for (const line of itemRows(dropped.map(c => `${c.head} ${c.value(row, u)}`), width)) push(PANEL_MUTED + line + PANEL_TEXT);
-      if (chart) {
-        const bars = [["input", u.input], ["output", u.output], ["cache read", u.cache_read], ["cache write", u.cache_write]] as const;
-        const max = Math.max(...bars.map(([, n]) => n), 1), numbers = Math.max(...bars.map(([, n]) => grouped(n).length));
-        const room = Math.max(1, Math.min(24, width - 11 - 2 - numbers - 2));
-        for (const [label, n] of bars) {
-          const filled = n ? Math.max(1, Math.round(n / max * room)) : 0;
-          push(`${PANEL_MUTED}${pad(label, 11)}  ${PANEL_BLUE}${"█".repeat(filled)}${" ".repeat(room - filled)}  ${PANEL_MUTED}${grouped(n).padStart(numbers)}${PANEL_TEXT}`);
-        }
+    const t = sessionTotals(session), agents = session.rows.length - 1;
+    const tokens = t.tokens === undefined ? "unknown" : grouped(t.tokens) + (t.tokensPartial ? "+" : "");
+    const cost = t.cost === undefined ? "API-equiv. unknown" : `${dollars(t.cost)}${t.costPartial ? "+" : ""} estimate`;
+    out.push(one(`${tokens} tokens · ${cost} · ${agents > 0 ? `this pane + ${plural(agents, "agent")}` : "this pane"}`, PANEL_TEXT));
+  }
+  const budget = budgetDigest(model.budget);
+  out.push(one(budget.text, budget.color));
+  const issues = model.budget.kind === "read" ? diagnosticItems(model.budget.facts.diagnostics, true) : [];
+  const collector = collectorDigest(model.collector.state, now);
+  const warn = issues.length > 0 || collector.warn;
+  out.push(one(`${warn ? "!" : "○"} ${[...issues, collector.text].join(" · ")}`, warn ? PANEL_WARNING : PANEL_MUTED));
+  return out;
+}
+function collectorDigest(state: ReadState, now: number): { text: string; warn: boolean } {
+  const since = state.readAt === undefined ? undefined : ago(state.readAt, now);
+  switch (state.phase) {
+    case "not_applicable": return { text: "task and run accounting does not apply", warn: false };
+    case "loading": return { text: "reading task accounting", warn: false };
+    case "never_read": return { text: "task accounting not read yet", warn: false };
+    case "failed": return { text: "task accounting could not be read", warn: true };
+    case "retained": return { text: `task stale · read ${state.readAt === undefined ? "earlier" : clock(state.readAt)}`, warn: true };
+    case "current": return { text: since ? `task read ${since}` : "task read", warn: false };
+  }
+}
+
+function sessionSection(session: SessionUsage | undefined, width: number): string[] {
+  const agents = (session?.rows.length ?? 0) > 1;
+  const right = width >= 90 ? [agents ? "this pane and its agents · live" : "this pane · live", "live"]
+    : !agents && width >= NARROW ? ["this pane · live", "live"] : ["live"];
+  const rule = sectionRule("Session", width, right);
+  if (!session) return [rule, ...glyphRows("○ This pane has not reported usage yet · unknown, not zero", width)];
+  return [rule, ...(agents ? sessionTable(session, width) : sessionFields(session, width))];
+}
+/** This pane alone: tokens with its API-equivalent estimate, the context window and the model. */
+function sessionFields(session: SessionUsage, width: number): string[] {
+  const labels = width >= NARROW ? 13 : 10, pane = session.rows[0], context = session.context;
+  const tokens = pane?.tokens === undefined ? muted("unknown") : grouped(pane.tokens);
+  const cost = pane?.cost === undefined ? muted("unknown") : `${dollars(pane.cost)}, an estimate`;
+  const joined = `${tokens} · API-equiv. ${cost}`;
+  const share = context?.percent == null ? muted("percent unknown") : `${Math.round(context.percent)}%`;
+  return [
+    ...(visibleWidth(joined) <= width - labels - 1 ? fieldRows("tokens", joined, labels, width)
+      : [...fieldRows("tokens", tokens, labels, width), ...fieldRows("API-equiv.", cost, labels, width)]),
+    ...fieldRows("context", context?.tokens == null ? muted("unknown")
+      : `${grouped(context.tokens)} / ${grouped(context.contextWindow)} · ${share}`, labels, width),
+    ...fieldRows("model", session.model === null ? muted("unknown")
+      : plainLabel(session.model) + (session.effort ? ` · effort ${plainLabel(session.effort)}` : ""), labels, width),
+  ];
+}
+/**
+ * This pane and its build children: an aligned table with a `total` row from 64 cells, else one `name … tokens · USD`
+ * row each under a caption (context stays in the Agents view and the status bar). A `+` beside a total marks an
+ * unknown member; it stands outside the column so the digits stay aligned.
+ */
+function sessionTable(session: SessionUsage, width: number): string[] {
+  const rows = session.rows, totals = sessionTotals(session);
+  const names = rows.map((row, i) => i === 0 ? "this pane" : `  ${row.hue === undefined ? "" : agentColor(row.hue)}${bold(plainLabel(row.name))}${PANEL_TEXT}`);
+  const value = (text: string | undefined, absent = "unknown") => text === undefined ? muted(absent) : text;
+  const tokens = rows.map(row => value(row.tokens === undefined ? undefined : grouped(row.tokens)));
+  const usd = rows.map(row => value(row.cost === undefined ? undefined : dollars(row.cost)));
+  const context = rows.map(row => value(row.contextPercent === undefined ? undefined : `${Math.round(row.contextPercent)}%`, "–"));
+  const tokenTotal = value(totals.tokens === undefined ? undefined : grouped(totals.tokens));
+  const usdTotal = value(totals.cost === undefined ? undefined : dollars(totals.cost));
+  const widest = (head: string, values: readonly string[]) => Math.max(head.length, ...values.map(v => visibleWidth(v)));
+  const nameW = Math.min(24, Math.max(14, ...names.map(n => visibleWidth(n)))), tokW = widest("tokens", [...tokens, tokenTotal]);
+  const usdW = widest("API-equiv. USD", [...usd, usdTotal]), ctxW = widest("context", context);
+  const right = (text: string, w: number) => " ".repeat(Math.max(0, w - visibleWidth(text))) + text;
+  if (width >= NARROW && nameW + tokW + usdW + ctxW + 3 * COLUMN_GAP <= width) {
+    return [
+      muted(`${pad("", nameW)}  ${right("tokens", tokW)}  ${right("API-equiv. USD", usdW)}  ${right("context", ctxW)}`),
+      ...rows.map((_, i) => `${pad(names[i] ?? "", nameW)}  ${right(tokens[i] ?? "", tokW)}  ${right(usd[i] ?? "", usdW)}  ${right(context[i] ?? "", ctxW)}`),
+      `${pad(bold("total"), nameW)}  ${right(tokenTotal, tokW)}${totals.tokensPartial ? "+ " : "  "}${right(usdTotal, usdW)}${totals.costPartial ? "+" : ""}`,
+    ];
+  }
+  const line = (name: string, values: string) => splitRow(truncateToWidth(name, Math.max(1, width - visibleWidth(values) - 2), "…"), values, width);
+  return [
+    ...rows.map((_, i) => line(names[i] ?? "", `${tokens[i] ?? ""} · ${usd[i] ?? ""}`)),
+    line(bold("total"), `${tokenTotal}${totals.tokensPartial ? "+" : ""} · ${usdTotal}${totals.costPartial ? "+" : ""}`),
+    ...wrap(muted("tokens · API-equiv. USD, estimates"), width),
+  ];
+}
+
+/**
+ * The stored collector facets. Without a task run (or a reader) it is one neutral row and nothing is read; otherwise
+ * the rule carries the read note, a problem line follows when the read failed or is retained, then the table: the
+ * column header once, each scope as a bold row with its numbers and its dropped columns, the omitted-rows warning,
+ * then the source and the caveat.
+ */
+function collectorSection(model: UsageModel, width: number, options: UsageViewOptions): string[] {
+  const { identity, collector } = model, state = collector.state;
+  if (state.phase === "not_applicable") {
+    const why = identity.task && identity.run ? "this session has no reader for stored task accounting." : `this ${ROLE[identity.role]} session has no task run.`;
+    return [sectionRule("Task and run", width), ...stateRow(state, "task accounting", width, why)];
+  }
+  const notes = stateNote(state, options.now);
+  const unbound = model.bound ? [] : notes.map(note => `${PANEL_WARNING}! host unbound${PANEL_MUTED} · ${note}`);
+  const out = [sectionRule(`Task ${identity.task ?? ""} / ${identity.run ?? ""}`, width, [...unbound, ...notes]),
+    ...stateBanner(state, "stored accounting", width, options.legend)];
+  if (state.phase !== "current" && state.phase !== "retained") return [...out, ...stateRow(state, "stored accounting", width)];
+  const panel = collector.panel;
+  if (!panel) return [...out, ...legacyRow("collected usage", "run record (older collector)", width)];
+  const { shown, dropped } = usageColumns(panel.rows, width), gap = " ".repeat(COLUMN_GAP);
+  out.push(muted(shown.map(c => cell(c.head, c)).join(gap)));
+  for (const row of panel.rows) {
+    out.push(...wrap(bold(plainLabel(row.scope)), width));
+    const u = row.usage;
+    if (!u) {
+      out.push(...itemRows(["○ usage unknown", "no collected sample", `workers ${grouped(row.known_runs)}/${grouped(row.runs)}`, `wall ${wall(row.wall_seconds)}`], width).map(muted));
+      continue;
+    }
+    out.push(shown.map(c => { const v = c.value(row, u); return (v === "unknown" ? PANEL_MUTED : PANEL_TEXT) + cell(v, c) + PANEL_TEXT; }).join(gap));
+    if (dropped.length) out.push(...itemRows(dropped.map(c => `${c.head} ${c.value(row, u)}`), width).map(muted));
+    if (options.chart) {
+      const bars = [["input", u.input], ["output", u.output], ["cache read", u.cache_read], ["cache write", u.cache_write]] as const;
+      const max = Math.max(...bars.map(([, n]) => n), 1), numbers = Math.max(...bars.map(([, n]) => grouped(n).length));
+      const room = Math.max(1, Math.min(24, width - 11 - 2 - numbers - 2));
+      for (const [label, n] of bars) {
+        const filled = n ? Math.max(1, Math.round(n / max * room)) : 0;
+        out.push(`${PANEL_MUTED}${pad(label, 11)}  ${PANEL_BLUE}${"█".repeat(filled)}${" ".repeat(room - filled)}  ${PANEL_MUTED}${grouped(n).padStart(numbers)}${PANEL_TEXT}`);
       }
     }
   }
-
-  push(sectionRule("Budget", width));
-  const plan = budgetRows(budget), labels = Math.min(16, Math.max(...plan.rows.map(r => r.label.length)));
-  for (const { label, value, tone } of plan.rows) {
-    const color = tone === "none" ? PANEL_TEXT : toneColor(tone);
-    wrap(plainLabel(value), Math.max(1, width - labels - 1)).forEach((line, i) => push(`${PANEL_MUTED}${pad(i ? "" : label, labels)} ${color}${line}${PANEL_TEXT}`));
-  }
-  if (plan.uncertain) full(`${PANEL_WARNING}! UNCERTAIN spend · unresolved or interrupted requests retain reservations; unknown pricing is not free${PANEL_TEXT}`);
-  return rows;
+  if (panel.models_omitted) out.push(...glyphRows(`! ${plural(panel.models_omitted, "model row")} omitted by the row limit`, width, PANEL_WARNING));
+  const caveat = CAVEAT.find(c => visibleWidth(c) <= width) ?? CAVEAT.at(-1) ?? "";
+  out.push(...itemRows([`source ${plainLabel(panel.source)}`, caveat], width).map(muted));
+  return out;
 }

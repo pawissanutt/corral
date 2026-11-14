@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { getCapabilities, setCapabilities, stripTerminalSequences, visibleWidth, type ImageSource } from "@earendil-works/pi-tui";
 import { ArtifactView, COMPARE_ROW_MIN, type ArtifactCatalog } from "./artifact-view.ts";
 import { VIEW_INSET } from "./frame.ts";
+import { clock } from "./panel-parts.ts";
 import { SPLIT_MIN } from "./proof-view.ts";
 
 const identity = { store: "s", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 1 };
@@ -168,16 +169,25 @@ test("export reaches the existing flow; refusals and stale reads stay visible", 
     const absent = harness(catalog); await absent.view.refresh();
     absent.view.handleInput("x"); await settle();
     expect(text(absent.view)).toContain("Session export unavailable");
-    let fail = false;
-    const flaky = new ArtifactView({ identity, load: async () => { if (fail) throw new Error("disconnected"); return catalog; }, openImage: () => true, bound: () => true, changed: () => {}, canInteract: () => true });
-    await flaky.refresh(); fail = true; await flaky.refresh();
-    expect(text(flaky)).toContain("STALE / disconnected · disconnected");
+    let fail = false, bound = true;
+    const flaky = new ArtifactView({ identity, load: async () => { if (fail) throw new Error("db locked"); return catalog; }, openImage: () => true, bound: () => bound, changed: () => {}, canInteract: () => true });
+    await flaky.refresh();
+    const readAt = flaky.state.readAt;
+    fail = true; bound = false; await flaky.refresh();
+    expect(flaky.state).toMatchObject({ phase: "retained", readAt, error: "db locked" });
+    for (const width of [44, 68, 101]) {
+      const shown = text(flaky, width);
+      expect(shown).toContain(clock(readAt ?? NaN));
+      expect(shown).toContain("db locked");
+      expect(shown).toContain("host unbound");
+    }
     expect(text(flaky)).toContain("1111-shot.png");
     const foreign = new ArtifactView({ identity, load: async () => ({ ...catalog, run: "R9" }), openImage: () => true, bound: () => true, changed: () => {}, canInteract: () => false });
     await foreign.refresh();
     expect(foreign.current).toBeUndefined();
-    expect(text(foreign)).toContain("Unavailable · no empty catalog inferred");
-    expect(foreign.handleInput("\r")).toBe(false);
+    expect(foreign.state.phase).toBe("failed");
+    expect(text(foreign)).toContain("R9");
+    expect(text(foreign)).not.toContain("1111-shot.png");
   } finally { rmSync(store, { recursive: true, force: true }); }
 });
 

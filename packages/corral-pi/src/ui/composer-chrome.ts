@@ -11,19 +11,35 @@ export interface ComposerHit { readonly from: number; readonly to: number }
 export const COMPOSER_INSET = 3;
 
 /**
+ * Where Enter sends a draft Pi runs as an owner shell command, read exactly as Pi reads the submitted text: trimmed, then
+ * `!!` (output stays here, out of the agent's context) or `!` (output goes to the agent) before a non-empty command.
+ * Undefined for any other draft, including a bare `!`, which Pi sends as a message.
+ */
+export type ShellDisposition = "agent" | "local";
+export function shellDisposition(draft: string): ShellDisposition | undefined {
+  const text = draft.trim();
+  if (!text.startsWith("!")) return undefined;
+  const local = text.startsWith("!!");
+  if (!text.slice(local ? 2 : 1).trim()) return undefined;
+  return local ? "local" : "agent";
+}
+
+/**
  * `Message`, plus the last typed input's disposition while it still matters: pending admission,
  * queued, or refused with its reason. Started and handled input adds nothing. `target` names who
- * the message goes to, in that receiver's colour, when it is not the session's own agent.
+ * the message goes to, in that receiver's colour, when it is not the session's own agent. `shell` replaces the
+ * receiver while the draft is an owner `!command`: `→ shell` and where its output goes.
  */
 export function composerTitle(snapshot: PanelSnapshot | null,
-  target?: { readonly label: string; readonly color: string }): string {
+  target?: { readonly label: string; readonly color: string }, shell?: ShellDisposition): string {
   const input = snapshot?.input;
   const reason = input?.reason ? plainLabel(input.reason) : "";
   const state = input?.disposition === "pending" ? " · last input pending admission"
     : input?.disposition === "queued" ? " · last input queued"
     : input?.disposition === "rejected" ? ` · last input refused${reason ? `: ${reason}` : ""}`
     : "";
-  const to = target ? ` ${target.color}→ ${plainLabel(target.label)}${PANEL_MUTED}` : "";
+  const to = shell ? ` ${PANEL_TEXT}→ shell${PANEL_MUTED} · ${shell === "agent" ? "output goes to the agent" : "output stays here"}`
+    : target ? ` ${target.color}→ ${plainLabel(target.label)}${PANEL_MUTED}` : "";
   return PANEL_MUTED + "Message" + to + state;
 }
 

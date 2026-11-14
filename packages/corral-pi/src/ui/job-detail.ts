@@ -110,6 +110,6 @@ export function pagerLines(job: PanelJob): string[] {
   return all.map(line => (line.number === undefined ? "" : String(line.number).padStart(gutter) + " │ ") + line.text);
 }
 /** The retained output in the shared pager; never reads or follows the job's output file. */
-export function openOutputPager(ui: ExtensionUIContext, title: string, lines: readonly string[], start = 0): Promise<void> {
-  return openPager(ui, { title, lines, start });
+export async function openOutputPager(ui: ExtensionUIContext, title: string, lines: readonly string[], start = 0): Promise<void> {
+  await openPager(ui, { title, lines, start });
 }

@@ -7,7 +7,7 @@ import { createTodoLedger } from "../src/build/todo-ledger.ts";
 import { RequestContext } from "../src/host/request.ts";
 import { sessionTodoTool } from "../src/roles/common/todo.ts";
 import type { HostIdentity } from "../src/roles/types.ts";
-import { ProgressSchema } from "../src/ui/todo-widget.ts";
+import { ProgressSchema } from "../src/ui/todo.ts";
 import { TodoLedger, snapshotLedger } from "../src/ui/todo.ts";
 
 const identity: HostIdentity = { store: "", project: "", role: "assistant", assistant: "build-test", generation: 1 };

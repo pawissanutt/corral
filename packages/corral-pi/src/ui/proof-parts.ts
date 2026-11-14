@@ -1,5 +1,7 @@
 // Proof (F10) building blocks: the I T R A ladder, its chips and the selectable row model.
-// Pure presentation of the canonical inspection; nothing here reads or infers freshness.
+// Pure presentation of the canonical inspection; nothing here reads or infers freshness. Two staleness facts stay
+// apart: a gate or review that corral marks not fresh is `stale` (its own validity); data kept from an earlier read
+// is `retained` (the source's state, stated once by the shared chip header).
 import type { Inspection, InspectionStore } from "./inspection.ts";
 import { plainLabel, PANEL_TEXT } from "./panels-view.ts";
 import { chip, toneColor, type Tone } from "./panel-parts.ts";
@@ -11,7 +13,7 @@ export type SectionId = "notes" | "findings" | "artifacts" | "summary";
 export type ProofItem = { readonly kind: "criterion"; readonly index: number } | { readonly kind: "section"; readonly id: SectionId };
 
 export const short = (sha: string) => sha.slice(0, 8);
-/** The four steps for one criterion. Glyph and word always travel together. */
+/** The four steps for one criterion. Glyph and word always travel together; a retained read marks T and R `retained`. */
 export function ladder(store: InspectionStore, data: Inspection, c: Criterion): readonly Step[] {
   const invalid = c.failures.length > 0 || data.manifest_failures.length > 0;
   const status = c.observation?.status;
@@ -21,11 +23,12 @@ export function ladder(store: InspectionStore, data: Inspection, c: Criterion): 
     : status === "fail" ? { letter: "T", glyph: "✗", word: "fail · worker", tone: "bad" }
     : status === "not_run" ? { letter: "T", glyph: "○", word: "not run", tone: "none" }
     : { letter: "T", glyph: "·", word: "missing", tone: "none" };
-  const review = data.review;
+  const review = data.review, verdict = plainLabel(review?.verdict ?? "pending");
   const reviewed: Step = !review ? { letter: "R", glyph: "·", word: "missing", tone: "none" }
-    : store.stale || !review.fresh ? { letter: "R", glyph: "~", word: `${plainLabel(review.verdict ?? "pending")} stale*`, tone: "warn" }
+    : store.stale ? { letter: "R", glyph: "~", word: `${verdict} retained*`, tone: "warn" }
+    : !review.fresh ? { letter: "R", glyph: "~", word: `${verdict} stale*`, tone: "warn" }
     : review.verdict === "approve" ? { letter: "R", glyph: "✓", word: "approve*", tone: "ok" }
-    : review.verdict ? { letter: "R", glyph: "✗", word: `${plainLabel(review.verdict)}*`, tone: "bad" }
+    : review.verdict ? { letter: "R", glyph: "✗", word: `${verdict}*`, tone: "bad" }
     : { letter: "R", glyph: "…", word: "pending*", tone: "warn" };
   return [
     c.implemented ? { letter: "I", glyph: "✓", word: "implemented", tone: "ok" } : { letter: "I", glyph: "○", word: "not claimed", tone: "none" },
@@ -37,14 +40,17 @@ export function ladder(store: InspectionStore, data: Inspection, c: Criterion): 
 export const glyphs = (steps: readonly Step[]) => steps.map(s => `${toneColor(s.tone)}${s.glyph}`).join(" ") + PANEL_TEXT;
 export const stepChips = (steps: readonly Step[]) => steps.map(s => chip(`${s.letter} ${s.glyph} ${s.word}`, s.tone));
 
-/** Top chip row: gate, review, manifest, candidate range and worktree. Stale or missing states stay inline as chips. */
-export function topChips(store: InspectionStore, data: Inspection): string[] {
-  const gate = data.gate, review = data.review, fresh = (f: boolean) => f && !store.stale;
+/**
+ * Top chip row: gate, review, manifest, candidate range and worktree. Missing records and a gate or review corral
+ * marks not fresh stay inline as chips; whether the whole read is retained is the header's state chip, not these.
+ */
+export function topChips(data: Inspection): string[] {
+  const gate = data.gate, review = data.review;
   const gateChip = !gate ? chip("gate · missing")
-    : chip(`gate ${!fresh(gate.fresh) && gate.result !== "running" ? "~" : gate.result === "pass" ? "✓" : gate.result === "fail" ? "✗" : gate.result === "running" ? "…" : "~"} ${gate.result} · ${fresh(gate.fresh) ? "fresh" : "STALE"}${gate.tier ? ` · ${gate.tier} tier` : ""}`,
-      gate.result === "fail" ? "bad" : !fresh(gate.fresh) ? "warn" : gate.result === "pass" ? "ok" : "none");
+    : chip(`gate ${!gate.fresh && gate.result !== "running" ? "~" : gate.result === "pass" ? "✓" : gate.result === "fail" ? "✗" : gate.result === "running" ? "…" : "~"} ${gate.result} · ${gate.fresh ? "fresh" : "stale"}${gate.tier ? ` · ${gate.tier} tier` : ""}`,
+      gate.result === "fail" ? "bad" : !gate.fresh ? "warn" : gate.result === "pass" ? "ok" : "none");
   const reviewChip = !review ? chip("review · missing")
-    : !fresh(review.fresh) ? chip(`review ~ ${review.verdict ?? "pending"} · STALE`, "warn")
+    : !review.fresh ? chip(`review ~ ${review.verdict ?? "pending"} · stale`, "warn")
     : review.verdict === "approve" ? chip("review ✓ approve", "ok")
     : review.verdict ? chip(`review ✗ ${review.verdict}`, "bad") : chip("review … pending", "warn");
   return [

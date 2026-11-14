@@ -5,10 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripTerminalSequences, Text, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { getLayoutBoxesAt, renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
-import { InspectionStore, evidenceLines, type Inspection } from "./inspection.ts";
+import { InspectionStore, type Inspection } from "./inspection.ts";
+import { renderProof, SPLIT_MIN } from "./proof-view.ts";
+import { proofItems, type SectionId } from "./proof-parts.ts";
+import { budgetState } from "./usage-model.ts";
 import { ReviewStore } from "./review-store.ts";
 import { NativeWorkbench } from "./workbench.ts";
-import { SPLIT_MIN } from "./proof-view.ts";
 import { parseChangedPaths } from "./candidate-git.ts";
 import { CorralClient } from "../tools/corral.ts";
 import { writeFakeCorral } from "../../test/support/fake-corral.ts";
@@ -30,17 +32,22 @@ function data(): Inspection {
     worker_summary: "worker says complete",
   };
 }
-const text = (store: InspectionStore, width = 120) => evidenceLines(store, 0, width).map(row => row.text).join("\n");
+const OPEN = new Set<SectionId>(["notes", "findings", "artifacts", "summary"]);
+/** Every Proof row a reader can reach: each criterion and section selected in turn, sections expanded. */
+function text(store: InspectionStore, width = 120): string {
+  const count = Math.max(1, proofItems(store.current).length);
+  return Array.from({ length: count }, (_, i) => renderProof(store, i, width, false, OPEN).lines).flat().map(line => stripTerminalSequences(line)).join("\n");
+}
 
 test("evidence stays canonical, explicit and read-only across candidate/manifest/artifact identity changes", async () => {
   let current = data(), reads = 0;
   const store = new InspectionStore(identity, async () => { reads++; return current; }, () => {});
   await store.refresh();
   const first = text(store);
-  expect(first).toContain("worker_assertion"); expect(first).toContain("Gate receipt: pass · STALE");
-  expect(first).toContain("approve · STALE"); expect(first).toContain("SUPERSEDED");
-  expect(first).toContain("Accepted"); expect(first).toContain("not recorded");
-  expect(first).toContain("evidence_missing:C2"); expect(first).toContain("SHA256 " + "c".repeat(64));
+  expect(first).toContain("worker assertion"); expect(first).toMatch(/gate ~ pass · stale/);
+  expect(first).toMatch(/review ~ approve · stale/); expect(first).toContain("superseded");
+  expect(first).toContain("A — not recorded");
+  expect(first).toContain("evidence_missing:C2"); expect(first).toContain("sha256 cccccccc");
   for (const defect of ["candidate", "manifest", "artifact"] as const) {
     current = data();
     if (defect === "candidate") current.head = "d".repeat(40);
@@ -61,17 +68,74 @@ test("legacy, failed/not-run, invalid manifest and unavailable read are not empt
   let current = data(), fail = false;
   const store = new InspectionStore(identity, async () => { if (fail) throw new Error("offline"); return current; }, () => {});
   current.manifest_digest = null; current.criteria = [];
-  await store.refresh(); expect(text(store)).toContain("Legacy / no criterion manifest");
+  await store.refresh(); expect(text(store)).toContain("no criterion manifest");
   for (const status of ["fail", "not_run"] as const) {
     current = data(); current.criteria[0]!.observation!.status = status;
     current.criteria[0]!.failures = ["evidence_" + (status === "fail" ? "failed" : "not_run") + ":C1"];
     current.manifest_failures = ["manifest_spec_stale"];
-    await store.refresh(true); expect(text(store)).toContain(status); expect(text(store)).toContain("manifest_spec_stale");
+    await store.refresh(true); expect(text(store)).toContain(status.replace("_", " ")); expect(text(store)).toContain("manifest_spec_stale");
   }
+  const readAt = store.state.readAt;
   fail = true; await store.refresh(true);
-  expect(store.stale).toBeTrue(); expect(text(store)).toContain("STALE / unavailable: offline");
+  expect(store.state.phase).toBe("retained"); expect(store.state.readAt).toBe(readAt);
+  expect(store.state.failedAt).toBeDefined();
+  expect(store.stale).toBeTrue(); expect(text(store)).toContain("offline");
   expect(text(store)).toContain("worker says complete"); // retained with assertion provenance, never accepted.
   store.dispose();
+});
+
+test("taskless interactive roles never read or invalidate inspection", async () => {
+  for (const role of ["pm", "assistant", "build"] as const) {
+    let reads = 0, changes = 0;
+    const store = new InspectionStore({ store: "s", project: "demo", role, generation: 1 },
+      async () => { reads++; return data(); }, () => { changes++; });
+    expect(store.applicable).toBeFalse(); expect(store.state.phase).toBe("not_applicable");
+    await store.refresh(); await store.refresh(true); store.invalidate(); await store.refresh(true);
+    expect(reads).toBe(0); expect(changes).toBe(0); expect(store.current).toBeUndefined();
+    expect(store.state.readAt).toBeUndefined(); store.dispose();
+  }
+});
+
+test("budget distinguishes absent, malformed and zero accounting", () => {
+  expect(budgetState(undefined, 6).kind).toBe("legacy");
+  expect(budgetState(undefined, undefined).kind).toBe("unavailable");
+  expect(budgetState({ stopped: false, active: 0 }, 7).kind).toBe("unavailable");
+  expect(budgetState({ limits: {} }, 7).kind).toBe("unreadable");
+  const result = budgetState({ limits: { max_tokens: 0, max_usd_nanos: 0 }, tokens: 0, usd_nanos: 0,
+    uncertain_requests: 0, pricing_gaps: 0, legacy_usage_gap: false, unbounded_requests: 0,
+    exhausted: false, stopped: false }, 7);
+  expect(result.kind).toBe("read");
+  if (result.kind === "read") {
+    expect(result.facts.limits).toEqual({ tokens: 0, usd: 0 });
+    expect(result.facts.accounted).toEqual({ tokens: 0, usd: 0 });
+    expect(result.facts.atLastReceipt.stopped).toBeFalse();
+  }
+  const withoutStop = budgetState({ limits: { max_tokens: 10, max_usd_nanos: 1_000_000_000 },
+    tokens: 3, usd_nanos: 500_000_000, uncertain_requests: 0, pricing_gaps: 0,
+    legacy_usage_gap: false, unbounded_requests: 0, exhausted: false }, 7);
+  expect(withoutStop.kind).toBe("read");
+  if (withoutStop.kind === "read") {
+    expect(withoutStop.facts.atLastReceipt.stopped).toBeUndefined();
+    expect(withoutStop.facts.limits).toEqual({ tokens: 10, usd: 1 });
+    expect(withoutStop.facts.accounted).toEqual({ tokens: 3, usd: 0.5 });
+  }
+});
+
+test("local budget receipts preserve settled and reserved amounts without canonical diagnostics", () => {
+  const receipt = { admitted: true, exhausted: false, guard_paused: false,
+    limits: { max_tokens: null, max_usd_nanos: null },
+    used: { tokens: 12, usd_nanos: 250_000_000 }, reserved: { tokens: 8, usd_nanos: 125_000_000 },
+    stopped: false, active: 1 };
+  const result = budgetState(receipt, 7);
+  expect(result.kind).toBe("local");
+  if (result.kind === "local") {
+    expect(result.facts.limits).toEqual({ tokens: null, usd: null });
+    expect(result.facts.settled).toEqual({ tokens: 12, usd: 0.25 });
+    expect(result.facts.reserved).toEqual({ tokens: 8, usd: 0.125 });
+    expect(result.facts.accounted).toEqual({ tokens: 20, usd: 0.375 });
+    expect("diagnostics" in result.facts).toBeFalse();
+  }
+  expect(budgetState({ ...receipt, used: { tokens: Number.MAX_SAFE_INTEGER, usd_nanos: 0 } }, 7).kind).toBe("unreadable");
 });
 
 test("overlapping invalidation, wrong-run responses and malformed projections fail closed", async () => {

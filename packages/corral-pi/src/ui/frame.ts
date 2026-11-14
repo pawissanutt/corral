@@ -113,13 +113,15 @@ export function rule(width: number): string {
   return `${PANEL_BG}${PANEL_LINE}${"─".repeat(Math.max(0, width))}${PANEL_TEXT}`;
 }
 /**
- * A popup (the F1 keys list, the F2 actions) exactly `width` cells wide on the raised surface: a rounded border in
- * the rule colour, a title row (`title` left, `right` right), a divider in the line colour, then the body rows.
- * Body row `selected` is on the selected surface with the accent bar in its first cell.
+ * A popup (the F1 keys list, the F2 actions, the History and resume lists) exactly `width` cells wide on the raised
+ * surface: a rounded border in the rule colour, a title row (`title` left, `right` right), a divider in the line
+ * colour, then the body rows. Body row (or rows) `selected` is on the selected surface with the accent bar in the
+ * first cell of its first row.
  */
-export function popup(title: string, right: string, body: readonly string[], width: number, selected?: number): string[] {
+export function popup(title: string, right: string, body: readonly string[], width: number, selected?: CardSelection): string[] {
   if (width < 6) return [];
   const inner = width - 2, side = PANEL_RAISED + PANEL_RULE + "│";
+  const range = selected === undefined ? undefined : typeof selected === "number" ? { from: selected, to: selected } : selected;
   const rightWidth = right ? Math.min(visibleWidth(right), Math.max(0, inner - 6)) : 0;
   const head = rightWidth ? fit(title, inner - 3 - rightWidth, PANEL_RAISED) + " " + fit(right, rightWidth, PANEL_RAISED) : fit(title, inner - 2, PANEL_RAISED);
   return [
@@ -127,8 +129,9 @@ export function popup(title: string, right: string, body: readonly string[], wid
     `${side}${PANEL_RAISED}${PANEL_TEXT} ${head} ${side}${canvas()}`,
     `${side}${PANEL_LINE}${"─".repeat(inner)}${side}${canvas()}`,
     ...body.map((row, index) => {
-      const back = index === selected ? PANEL_SELECTED : PANEL_RAISED;
-      const bar = index === selected ? PANEL_BLUE + "▌" + PANEL_TEXT : " ";
+      const on = range !== undefined && index >= range.from && index <= range.to;
+      const back = on ? PANEL_SELECTED : PANEL_RAISED;
+      const bar = on && index === range.from ? PANEL_BLUE + "▌" + PANEL_TEXT : " ";
       return `${side}${back}${PANEL_TEXT}${bar}${fit(row, inner - 1, back)}${side}${canvas()}`;
     }),
     `${PANEL_RAISED}${PANEL_RULE}╰${"─".repeat(inner)}╯${canvas()}`,

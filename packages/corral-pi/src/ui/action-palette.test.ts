@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { Theme } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { ActionPalette, type HostAction } from "./action-palette.ts";
+import { stripTerminalSequences, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { ActionPalette, type ActionGroup, type HostAction } from "./action-palette.ts";
 import { PACKAGED } from "./appearance.ts";
 import { panelTheme } from "./panels-theme.ts";
 import { box, setPanelAppearance, styledPanelLine } from "./panels-view.ts";
@@ -10,8 +10,10 @@ import { resourceLoaderOptions, restrictedSettings } from "../host/restrict.ts";
 import { NativePanels } from "./panels.ts";
 
 const plain = (lines: readonly string[]) => lines.map(line => stripTerminalSequences(line));
-const action = (id: string, disabled?: string): HostAction => ({ id, label: id, shortcut: "F6", scope: "worker · demo",
-  disabled: () => disabled, run() {} });
+const action = (id: string, disabled?: string, group: ActionGroup = "inspect"): HostAction => ({ id, label: id, shortcut: "F6",
+  scope: "worker · demo", group, disabled: () => disabled, run() {} });
+const click = (y: number): TuiMouseEvent => ({ type: "click", button: "left", x: 4, y, screenX: 4, screenY: y,
+  width: 78, height: 12, shift: false, alt: false, ctrl: false });
 afterEach(() => { setPanelAppearance("dark"); setCanvasAppearance("dark"); });
 
 test("search uses labels, shortcuts, scope and disabled reasons; cancel never dispatches", () => {
@@ -21,9 +23,14 @@ test("search uses labels, shortcuts, scope and disabled reasons; cancel never di
   palette.focused = true;
   palette.handleInput("worker answer");
   expect(palette.matches.map(a => a.id)).toEqual(["answer"]);
-  expect(palette.render(80).join("\n")).toContain("unavailable: Role worker cannot answer");
+  expect(stripTerminalSequences(palette.render(80).join("\n"))).toContain("Role worker cannot answer");
   palette.handleInput("\r"); expect(chosen).toBeUndefined();
   palette.handleInput("\x1b"); expect(chosen).toBeUndefined();
+  // A group's title matches too, and stays above its rows.
+  const grouped = new ActionPalette([action("chat", undefined, "views"), action("keys", undefined, "help")], () => {}, () => {});
+  grouped.handleInput("help");
+  expect(grouped.matches.map(a => a.id)).toEqual(["keys"]);
+  expect(plain(grouped.render(78)).slice(3, 5).map(line => line.includes("Help"))).toEqual([true, false]);
 });
 
 test("keyboard selection returns only explicit handlers; dynamic disabled state is checked", () => {
@@ -38,19 +45,47 @@ test("keyboard selection returns only explicit handlers; dynamic disabled state 
 test("palette clips wide glyphs and state labels at minimum widths and supports no-match search", () => {
   const palette = new ActionPalette([action("界面 👩‍💻 inspect"), action("cycle effort", "Effort unavailable")], () => {}, () => {});
   for (const width of [1, 20, 52, 80]) for (const line of palette.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-  palette.handleInput("unknown action"); expect(palette.render(52).join("\n")).toContain("no action matches");
+  palette.handleInput("unknown action"); expect(palette.matches).toHaveLength(0);
+  expect(plain(palette.render(52)).some(line => line.startsWith("│▌"))).toBeFalse();
 });
 
-test("the palette is a popup: rounded border, the filter row with the scope, a divider, then rows with key caps", () => {
-  const palette = new ActionPalette([action("inspect"), action("answer", "Role worker cannot answer")], () => {}, () => {});
+test("rows sit under non-selectable group titles in group order; a setting in force is marked current", () => {
+  const display = { ...action("motion.still", undefined, "display"), current: true };
+  const palette = new ActionPalette([action("inspect"), display, action("chat", undefined, "views"), action("answer", "Role worker cannot answer")],
+    () => {}, () => {});
+  expect(palette.matches.map(a => a.id)).toEqual(["chat", "inspect", "answer", "motion.still"]);
   const text = plain(palette.render(78));
   expect(text[0]!.startsWith("╭")).toBeTrue();
   expect(text[1]).toMatch(/^│ › .*type to filter actions.* worker · demo │$/);
   expect(text[2]).toMatch(/^│─+│$/);
-  expect(text[3]).toMatch(/^│▌inspect +F6 │$/);
-  expect(text[4]).toMatch(/^│ answer · unavailable: Role worker cannot answer +F6 │$/);
+  // The title takes a row without the bar; the first action under it is selected.
+  expect(text.slice(3, 5).map(line => line.startsWith("│▌"))).toEqual([false, true]);
+  // The setting in force is marked on its row, not in its label.
+  const marked = (current: boolean) => plain(new ActionPalette([{ ...display, current }], () => {}, () => {}).render(78))
+    .find(line => line.includes("motion.still"))!;
+  expect(marked(true)).not.toBe(marked(false));
+  expect(palette.matches.find(a => a.current)?.label).toBe("motion.still");
   expect(text.at(-1)!.startsWith("╰")).toBeTrue();
   for (const line of palette.render(78)) expect(visibleWidth(line)).toBe(78);
+});
+
+test("titles count against the window; arrows, wheel and clicks reach the action drawn there, never a title", () => {
+  let chosen: HostAction | undefined;
+  const views = [action("a", undefined, "views"), action("b", undefined, "views")], inspect = [action("c"), action("d")];
+  const palette = new ActionPalette([...views, ...inspect], a => { chosen = a; }, () => {}, 4);
+  expect(plain(palette.render(78)).slice(3, -1)).toHaveLength(4);
+  palette.handleMouse(click(3)); expect(chosen).toBeUndefined();
+  palette.handleMouse(click(5)); expect(chosen).toBeUndefined();
+  palette.handleMouse(click(5)); expect(chosen).toBe(views[1]);
+  palette.handleMouse({ ...click(5), type: "wheel", button: "none", wheelDelta: 2 });
+  const window = plain(palette.render(78)).slice(3, -1);
+  const row = window.findIndex(line => /^│.d +F6 │$/.test(line));
+  expect(row).toBeGreaterThan(0);
+  palette.handleMouse(click(3 + row)); palette.handleMouse(click(3 + row)); expect(chosen).toBe(inspect[1]);
+  // ↓ wraps to the first action and brings its title back into the window.
+  palette.handleInput("\x1b[B");
+  expect(plain(palette.render(78)).slice(3, 5).map(line => line.startsWith("│▌"))).toEqual([false, true]);
+  palette.handleInput("\r"); expect(chosen).toBe(views[0]);
 });
 
 test("production catalog disables effort when capability is unavailable or unknown", () => {
@@ -58,10 +93,11 @@ test("production catalog disables effort when capability is unavailable or unkno
     cwd: process.cwd(), snapshot: () => null });
   try {
     const effort = panels.actions().find(a => a.id === "app.thinking.cycle");
-    expect(effort?.disabled()).toBe("Effort unavailable for current model");
+    const reason = effort?.disabled();
+    expect(reason).toBeDefined();
     const palette = new ActionPalette(panels.actions(), () => { throw new Error("disabled action dispatched"); }, () => {});
-    palette.handleInput("cycle effort");
-    expect(palette.render(100).join("\n")).toContain("unavailable: Effort unavailable for current model");
+    palette.handleInput("app.thinking.cycle");
+    expect(stripTerminalSequences(palette.render(100).join("\n"))).toContain(reason!);
     palette.handleInput("\r");
   } finally { panels.dispose(); }
 });

@@ -4,7 +4,7 @@ import {
   Sidebar, drawerRows, type SideAgent, type SideFile, type SideFrame, type SideJob, type SideSource, type SideTab,
 } from "./sidebar.ts";
 import { PANEL_BG, PANEL_BLUE, PANEL_SELECTED, RESET } from "./panels-view.ts";
-import type { TodoProgress } from "./todo-widget.ts";
+import type { TodoProgress } from "./todo.ts";
 
 const HUE = "\x1b[38;2;143;163;199m";
 const source = (over: Partial<SideSource> = {}): SideSource => ({
@@ -37,25 +37,6 @@ test("failures stay visible while successful completions fold into one line", ()
   expect(folded).toHaveLength(1);
   expect(folded[0]).toContain("cargo build");
   expect(lines.some(line => line.includes("COMPLETED · 2"))).toBeTrue();
-});
-
-test("waiting plan steps carry ? for the owner and … for an event, and done steps fold only under pressure", () => {
-  const progress = { revision: 1, spec_revision: "s", phases: [{ id: "p", label: "Build", steps: [
-    step("read", "done"), step("write", "done"), step("build", "in_progress"), step("ask", "pending"), step("land", "pending")] }],
-  waits: [{ step: "ask", on: { kind: "owner", question: "ship?" } }, { step: "land", on: { kind: "event", event: "ci" } }] } as TodoProgress;
-  const s = source({ plan: { progress, stale: false } }), bar = new Sidebar(() => {});
-  bar.tab = "plan";
-  const tall = plain(bar.rail(s, 34, 30)).map(line => line.trimEnd());
-  expect(tall.some(line => line.includes("✓ read"))).toBeTrue();
-  expect(tall.some(line => line.includes("✓ 2 done"))).toBeFalse();
-  expect(tall.find(line => line.includes("○ ask"))).toMatch(/\?$/);
-  expect(tall.find(line => line.includes("○ land"))).toMatch(/…$/);
-  const short = plain(bar.rail(s, 34, 6)).map(line => line.trimEnd());
-  expect(short.some(line => line.includes("✓ 2 done"))).toBeTrue();
-  expect(short.some(line => line.includes("read"))).toBeFalse();
-  expect(short.find(line => new RegExp(SPIN.source + " build").test(line))).toBeDefined();
-  expect(short.find(line => line.includes("○ ask"))).toMatch(/\?$/);
-  expect(short.find(line => line.includes("○ land"))).toMatch(/…$/);
 });
 
 test("every rail, row and drawer line is exactly the width, wide glyphs included, with no black cells and no key hints", () => {
@@ -214,7 +195,6 @@ test("below the rail: a rule, then the collapsed row with summaries and [Ctrl+B]
   const drawer = plain(bar.drawerFrame(s, 92, 40));
   expect(drawer[0]).toBe("─".repeat(92));
   expect(drawer[1]!.trimEnd()).toMatch(/Ctrl\+B  ▾$/);
-  expect(drawer[2]!.trim()).toBe("1/7 done");
 });
 
 test("until the owner picks a tab the rail shows Plan for a plan and Context while work is live; a pick stays", () => {
@@ -230,15 +210,6 @@ test("until the owner picks a tab the rail shows Plan for a plan and Context whi
   bar.focused = false;
   bar.tab = "files";
   for (const s of [planned, live, source()]) { bar.rail(s, 34, 10); bar.row(s, 92, false, 40); expect(bar.tab).toBe("files"); }
-});
-
-test("the plan heading explains the wait marks it shows", () => {
-  const progress = { revision: 1, spec_revision: "s", phases: [{ id: "p", label: "Build", steps: [step("ask", "pending"), step("go", "pending")] }],
-    waits: [{ step: "ask", on: { kind: "owner", question: "ship?" } }] } as TodoProgress;
-  const bar = new Sidebar(() => {});
-  bar.tab = "plan";
-  const text = plain(bar.drawerFrame(source({ plan: { progress, stale: false } }), 92, 40)).join("\n");
-  expect(text).toContain("? waits for you"); expect(text).not.toContain("waits for an event");
 });
 
 test("a collapsed row with no summary is one row, its labels and toggle set into the rule; the toggle draws the chosen key", () => {

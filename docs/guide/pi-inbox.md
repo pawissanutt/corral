@@ -42,10 +42,20 @@ Stale revisions, missing/closed records, failed reads and ineligible flow reques
 are refused. A removed selection is not silently replaced with another task.
 Resolved/history and attention-only rows are inspection-only here; existing owner
 correction and other control-plane operations remain outside this panel.
-Unavailable, malformed or over-limit reads are shown as unavailable/stale, never
-as a successful empty inbox. The last successful snapshot may remain visible with
-its observation timestamp. Navigation and details do not dispatch, accept,
-restart, resume, attend, present or authorize anything.
+The reader has one read state, worded like the Task, Proof, Graph, Timeline,
+Artifacts and Usage views: `reading…`, `not read yet`, `! read failed` with the
+reason, or `! stale · 12:04` when the last successful snapshot stays visible with
+the time it was read (and, after a failed reread, the reason and when it failed).
+Unavailable, malformed or over-limit reads are never a successful empty inbox, and
+the count of waiting items is drawn only from a snapshot: with nothing read it is
+unknown, not zero. A session with no canonical inbox reader says so
+(`Does not apply: no canonical inbox reader is attached to this session.`).
+Navigation and details do not dispatch, accept, restart, resume, attend, present
+or authorize anything.
+
+The owner decision cards that Pi dialogs use (see
+[Owner decisions and pickers](pi-panels.md#owner-decisions-and-pickers)) are a
+different surface: they answer one live dialog request and are not Inbox records.
 
 ## Isolated real-input check
 

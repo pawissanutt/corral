@@ -4,8 +4,7 @@
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 
-import type { TodoProgress } from "../ui/todo-widget.ts";
-import type { ContinuedState, TodoLedger } from "../ui/todo.ts";
+import type { TodoProgress, ContinuedState, TodoLedger } from "../ui/todo.ts";
 import { requestCheckpoint, type RequestCheckpoint } from "./request-checkpoint.ts";
 import type { MarkSink, TurnWait } from "./transcript-marks.ts";
 

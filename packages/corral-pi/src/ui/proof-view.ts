@@ -1,12 +1,13 @@
 // Proof (F10) split layout: criterion list with an I T R A ladder and MORE sections beside the selected row's detail.
 // Below SPLIT_MIN columns the list collapses to a one-line picker above the same detail.
-// Read-only presentation of the canonical inspection; freshness comes only from corral.
+// Read-only presentation of the canonical inspection; freshness comes only from corral. Every read state draws the
+// shared chip header first (its state chip and read note), then the shared problem line, then the body.
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Inspection, InspectionStore } from "./inspection.ts";
-import { box, pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, PANEL_RULE, PANEL_SELECTED, PANEL_WARNING, PANEL_ERROR, RESET } from "./panels-view.ts";
+import { box, pad, plainLabel, PANEL_BG, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, PANEL_RULE, PANEL_WARNING, PANEL_ERROR, RESET } from "./panels-view.ts";
 import { splitRow } from "./panels-chrome.ts";
 import { glyphs, ladder, proofItems, sectionCount, SECTION_LABEL, short, stepChips, topChips, type Criterion, type ProofItem, type SectionId } from "./proof-parts.ts";
-import { ago, bold, chip, chipRows, clock, field, listRow as paneRow, sectionRule, toneColor, wrap } from "./panel-parts.ts";
+import { ago, bold, chip, chipHeader, chipRows, field, listRow as paneRow, sectionRule, stateBanner, stateRow, toneColor, wrap } from "./panel-parts.ts";
 
 /** Main-area width at which Proof splits into list + detail; below it a one-line picker is used. */
 export const SPLIT_MIN = 105;
@@ -19,19 +20,21 @@ const plainFit = (text: string, width: number) => stripTerminalSequences(truncat
 const listRow = (left: string, right: string, selected: boolean) => paneRow(left, right, selected, LIST_WIDTH);
 const tagOf = (c: Criterion) => c.required ? (c.live ? "req·live" : "req") : "opt";
 
-function header(store: InspectionStore, data: Inspection, width: number, legend: boolean, now: number): string[] {
-  const lines: string[] = [];
+/** Why Proof does not apply, completing the shared `Does not apply:` sentence. */
+const NOT_APPLICABLE: Record<string, string> = {
+  no_reader: "no evidence reader is attached to this session.",
+  no_task_run: "this session has no task run.",
+};
+
+/** Chip header, problem line, manifest failures and the reading rules: the rows above the body in every read state. */
+function header(store: InspectionStore, data: Inspection | undefined, width: number, legend: boolean, now: number): string[] {
+  const state = store.state;
+  const lines = [...chipHeader(data ? topChips(data) : [], width, state, now), ...stateBanner(state, "proof", width)];
   const full = (text: string) => lines.push(...wrap(PANEL_TEXT + text, width));
-  const at = store.checkedAt;
-  const reads = at ? [`read ${clock(at)} (${ago(at, now)}) · r reread`, `read ${ago(at, now)} · r reread`, "r reread"] : ["not read · r reread", "r reread"];
-  const chips = chipRows(topChips(store, data), width), last = chips.at(-1) ?? "";
-  const read = reads.find(r => visibleWidth(last) + 2 + visibleWidth(r) <= width);
-  lines.push(...chips.slice(0, -1), read ? splitRow(last, PANEL_MUTED + read + PANEL_TEXT, width) : last);
-  if (!read) lines.push(pad(PANEL_MUTED + "r reread" + PANEL_TEXT, width));
-  for (const failure of data.manifest_failures) full(`${PANEL_ERROR}! Manifest: ${plainLabel(failure)}${PANEL_TEXT}`);
+  for (const failure of data?.manifest_failures ?? []) full(`${PANEL_ERROR}! Manifest: ${plainLabel(failure)}${PANEL_TEXT}`);
   if (legend) {
     full(`${PANEL_MUTED}I implemented · T tested · R reviewed · A accepted. Implemented ≠ tested ≠ reviewed ≠ accepted; no per-criterion acceptance record exists.${PANEL_TEXT}`);
-    full(`${PANEL_MUTED}Tests are worker assertions, never machine PASS. Review is candidate-wide. * marks a self-report or retained value. ✓ done · ✗ failed · ~ stale · ! invalid · ○ not run · · missing · — not recorded${PANEL_TEXT}`);
+    full(`${PANEL_MUTED}Tests are worker assertions, never machine PASS. Review is candidate-wide. * marks a self-report or retained value. stale: corral marks the record out of date · retained: kept from an earlier read. ✓ done · ✗ failed · ~ stale or retained · ! invalid · ○ not run · · missing · — not recorded${PANEL_TEXT}`);
   }
   return lines;
 }
@@ -130,17 +133,23 @@ export function proofSplit(store: InspectionStore, selected: number, width: numb
 
 /**
  * The Proof body at any width: list + detail at `SPLIT_MIN`+, otherwise a one-line picker above the same detail.
- * The selected row's bar is accent while the view has the keys (`focused`), muted otherwise.
+ * The selected row's bar is accent while the view has the keys (`focused`), muted otherwise. Without data the chip
+ * header and one state row stand in for the body: a source with nothing shown never implies acceptance.
  */
 export function renderProof(store: InspectionStore, selected: number, width: number, legend: boolean, open: ReadonlySet<SectionId>, now = Date.now(),
   wide = width >= SPLIT_MIN, focused = true): ProofFrame {
   const lines: string[] = [], hits = new Map<number, number>();
   const full = (text: string) => lines.push(...wrap(PANEL_TEXT + text, width));
-  const data = store.current;
-  if (store.stale || store.error) full(`${PANEL_WARNING}~ STALE / unavailable: ${plainLabel(store.error ?? "canonical read required; retained rows are historical")}${PANEL_TEXT}`);
-  if (store.refreshing) full(`${PANEL_MUTED}Checking canonical records… retained results are not a new check${PANEL_TEXT}`);
-  if (!data) { full("Evidence unavailable · no acceptance inferred"); return { lines, hits, wide }; }
+  const state = store.state, data = store.current;
+  if (state.phase === "not_applicable") {
+    lines.push(...stateRow(state, "proof", width, NOT_APPLICABLE[state.reason ?? ""]));
+    return { lines, hits, wide };
+  }
   lines.push(...header(store, data, width, legend, now));
+  if (!data) {
+    lines.push(...stateRow(state, "canonical evidence", width, "No evidence shown · acceptance is not inferred"));
+    return { lines, hits, wide };
+  }
   const items = proofItems(data), index = Math.max(0, Math.min(selected, items.length - 1)), current = items[index];
 
   if (!wide) {

@@ -49,7 +49,7 @@ import { InspectorActivity } from "../ui/inspector.ts";
 import { buildToolRenderers } from "../ui/build/tool-renderers.ts";
 import { installToolRenderers, type ToolRenderDeps } from "../ui/tool-rendering.ts";
 import { installMarkRows } from "../ui/mark-rows.ts";
-import { TodoLedger, installTodo } from "../ui/todo.ts";
+import { TodoLedger, installPlanCommand } from "../ui/todo.ts";
 import { type DueContinuation, RequestContext, continuationText } from "./request.ts";
 import type { HostCapabilities, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
@@ -92,6 +92,7 @@ import { memoryContext } from "./memory.ts";
 import { transcriptPreview } from "./transcript-preview.ts";
 import { AssistantRelink } from "./assistant-relink.ts";
 import { AssistantResume } from "./assistant-resume.ts";
+import { chooseResume } from "../ui/resume-list.ts";
 import { PlanningPolicy, type AdmissionHandle, type PlanningState, type WorkflowExpected } from "./planning-policy.ts";
 import { ManagedEffects, type Lifecycle } from "./managed-effects.ts";
 import { PlanReviews, reviewAssociation } from "./plan-review.ts";
@@ -439,7 +440,7 @@ export class HostSession {
         assistant: options.identity.assistant, generation: options.identity.generation, runtimeDir: options.runtimeDir,
         events: options.events, read: request => options.client.history(request),
         idle: () => this.bound && !this.closing && !this.open && !this.session.isBashRunning,
-        request: () => { this.closing = true; options.resumeAssistant?.(); },
+        request: () => { this.closing = true; options.resumeAssistant?.(); }, choose: chooseResume,
       }) : undefined;
     this.buildControls = options.build ? createBuildControls({
       sdk: options.sdk, context: options.build,
@@ -709,7 +710,7 @@ export class HostSession {
         const message = id ? ownerInputText(answer, id) : answer;
         this.dialogPi.sendUserMessage(message, { deliverAs: "followUp" });
         return message;
-      }, this.ownerQuestions, () => this.questionUi?.busy === true)] : []),
+      }, this.ownerQuestions, () => this.questionUi?.busy === true, () => this.dialogPresentation())] : []),
       ...(this.additionalLsp?.tools ?? []).map(tool => ({ ...tool, execute: (...args: Parameters<ToolDefinition["execute"]>) => {
         const current = this.additionalLsp?.tools.find(candidate => candidate.name === tool.name);
         if (!current) throw new Error("LSP runtime unavailable; no effect started");
@@ -1129,7 +1130,7 @@ export class HostSession {
     if (this.ownerQuestions) {
       this.questionUi = new OwnerQuestionUi(this.ownerQuestions, () => this.bound && !this.closing,
         message => { this.session.sessionManager.appendCustomMessageEntry(message.customType, message.content, message.display, undefined); },
-        () => this.session.model?.api === CLAUDE_SDK_API);
+        () => this.session.model?.api === CLAUDE_SDK_API, () => this.dialogPresentation());
       this.questionUi.install(pi);
       this.panels?.attachQuestions(this.questionUi.dock());
     }
@@ -1205,8 +1206,7 @@ export class HostSession {
         identity: this.options.identity, provider: this.provider, model: this.options.model,
         cwd: this.options.cwd, ...(this.options.effort ? { effort: this.options.effort } : {}),
       }, this.options.events, () => this.bound, this.options.sdk.Theme);
-      if (this.ledger) installTodo(pi, this.ledger, this.request === undefined,
-        () => !!this.options.identity.task && (this.panels?.wide ?? false));
+      if (this.ledger) installPlanCommand(pi, this.ledger, this.request === undefined, () => this.panels?.planSurface());
       this.panels?.install(pi, this.options.sdk);
       this.markRows = installMarkRows(pi);
       // Every other tool call is one kit row; build cards and corral operations keep their renderers.
@@ -1736,6 +1736,12 @@ export class HostSession {
     return this.continuations;
   }
 
+  /** Native panels frame the dialog and give its row budget; every other host keeps the plain dialog. */
+  private dialogPresentation(): { surface: "panels"; rows: () => number } | { surface: "plain" } {
+    const panels = this.panels;
+    return panels ? { surface: "panels", rows: () => panels.dialogRows() } : { surface: "plain" };
+  }
+
   /** Local review lifetimes started so far have settled and their notices were attempted. */
   async reviewNoticed(): Promise<void> { await this.planReviews?.drained(); }
 
@@ -1973,6 +1979,7 @@ export class HostSession {
       contextFiles: this.guidance.contextFiles.map(file => file.path),
       skills: this.runtime.services.resourceLoader.getSkills().skills.map(skill => skill.name),
       ledger: this.ledger?.current ?? null, ledgerStale: this.ledger?.unavailable ?? true,
+      ledgerContinued: this.ledger?.continued ?? null,
       inspector: {
         session: session.sessionId, boundSession: this.boundSessionId ?? null,
         turn: this.turn, turnOpen: this.open,
@@ -2019,7 +2026,7 @@ export class HostSession {
       connection: resolveConnection((session.model?.provider ?? this.provider) as ProviderId, this.options.binding?.connection),
       native_children: this.auxiliary?.inspection().map(({ sessionFile: _file, ...child }) => child) ?? null,
       todo: this.loadout.includes("corral_todo"),
-      // The plan the widget renders and the model summary names: one host ledger.
+      // The plan the sidebar renders and the model summary names: one host ledger.
       ledger: this.ledger?.current ? { plan: this.ledger.current.plan ?? null, revision: this.ledger.current.revision } : null,
       capabilities: this.options.capabilities ?? null,
       mcp: this.mcp?.state() ?? null,

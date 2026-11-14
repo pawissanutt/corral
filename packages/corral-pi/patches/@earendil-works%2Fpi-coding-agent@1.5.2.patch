@@ -4,7 +4,13 @@ index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2
 diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-54d2205a3614960d b/.bun-tag-54d2205a3614960d
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-98cc4d713cd0cf4e b/.bun-tag-98cc4d713cd0cf4e
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-a623d2c712400c20 b/.bun-tag-a623d2c712400c20
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-bbe6a83ed201364 b/.bun-tag-bbe6a83ed201364
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-f675643e48a4a4b8 b/.bun-tag-f675643e48a4a4b8
@@ -381,12 +387,15 @@ index 7ee05014e13c6434040bfdd7b39b455a6731a7d6..70ec5185af15a96c14395a1623a23573
      }
      /** Append a session info entry (e.g., display name). Returns entry id. */
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index bb8acdb1b034f89e8fcb86a5933fa513d49a8ef3..998f83a42bc3adcf2bc3b06f36f4fbbcd07cd322 100644
+index bb8acdb1b034f89e8fcb86a5933fa513d49a8ef3..b6518e4bbe692c51eb6dbd0d73e8abf9f51f0949 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
-@@ -1,8 +1,11 @@
+@@ -1,8 +1,14 @@
 +export { withBuiltInRenderers } from "./core/tools/renderers/index.ts";
-+export type { InteractiveChatPresentation } from "./modes/interactive/interactive-mode.ts";
++export type { DialogDone, DialogPresentation, InputDialogRequest, InteractiveChatPresentation, ModelSelectorRequest, PresentedDialog, SelectDialogRequest, SelectorPresentation, SettingsSelectorRequest, StatusLevel, StatusNotice, StatusOrigin, StatusPresentation, StatusSource, StatusTopic, ThinkingSelectorRequest, } from "./modes/interactive/interactive-mode.ts";
++export type { BashExecutionState, BashExecutionStatus, BashPresentation } from "./modes/interactive/components/bash-execution.ts";
++export type { OptionSelectorRequest, SelectorComponent } from "./modes/interactive/components/settings-submenu.ts";
++export type { SettingsListPresentation, SettingsListRequest } from "./modes/interactive/components/settings-selector.ts";
  export { type Args, parseArgs } from "./cli/args.ts";
  export { CONFIG_DIR_NAME, getAgentDir, getDocsPath, getExamplesPath, getPackageDir, getReadmePath, VERSION, } from "./config.ts";
 -export { AgentSession, type AgentSessionConfig, type AgentSessionEvent, type AgentSessionEventListener, type ModelCycleResult, type ParsedSkillBlock, type PromptOptions, parseSkillBlock, type SessionStats, } from "./core/agent-session.ts";
@@ -397,7 +406,7 @@ index bb8acdb1b034f89e8fcb86a5933fa513d49a8ef3..998f83a42bc3adcf2bc3b06f36f4fbbc
  export { type BranchPreparation, type BranchSummaryResult, type CollectEntriesResult, type CompactionResult, type CutPointResult, calculateContextTokens, collectEntriesForBranchSummary, compact, DEFAULT_COMPACTION_SETTINGS, estimateTokens, type FileOperations, findCutPoint, findTurnStartIndex, type GenerateBranchSummaryOptions, generateBranchSummary, generateSummary, generateSummaryWithUsage, getLastAssistantUsage, prepareBranchEntries, serializeConversation, shouldCompact, } from "./core/compaction/index.ts";
  export { createEventBus, type EventBus, type EventBusController } from "./core/event-bus.ts";
  export type { AfterProviderResponseEvent, AgentActivityOutcome, AgentBeforeSettleEvent, AgentBeforeSettleEventResult, AgentEndEvent, AgentSettledEvent, AgentStartEvent, AgentToolResult, AgentToolUpdateCallback, AppKeybinding, AutocompleteProviderFactory, BashToolCallEvent, BeforeAgentStartCustomEvent, BeforeAgentStartEvent, BeforeAgentStartEventResult, BeforeAgentStartUserEvent, BeforeProviderHeadersEvent, BeforeProviderRequestEvent, BeforeProviderRequestEventResult, BoundaryContextPreview, BoundaryResult, BoundaryState, BuildSystemPromptOptions, CacheWarmingDecisionEvent, CacheWarmingDecisionEventResult, CompactionEntryDraft, CompactOptions, ContextEditEntryDraft, ContextEvent, ContextEventResult, ContextUsage, ContextWithSystemEvent, CustomEntryDraft, CustomMessageEntryDraft, CustomToolCallEvent, EditToolCallEvent, EntryRenderer, EntryRenderOptions, ExecOptions, ExecResult, ExecuteToolOptions, Extension, ExtensionActions, ExtensionAPI, ExtensionCommandContext, ExtensionCommandContextActions, ExtensionContext, ExtensionContextActions, ExtensionError, ExtensionEvent, ExtensionFactory, ExtensionFlag, ExtensionHandler, ExtensionRuntime, ExtensionShortcut, ExtensionToolContext, ExtensionUIContext, ExtensionUIDialogOptions, ExtensionVirtualModel, ExtensionWidgetOptions, FindToolCallEvent, GrepToolCallEvent, InlineExtension, InputEvent, InputEventResult, InputSource, KeybindingHints, KeybindingsManager, LoadExtensionsResult, LsToolCallEvent, MarkdownMessageType, MarkdownTransformContext, MarkdownTransformer, MarkdownTransformerOptions, MarkdownTransformerRegistration, McpServersChangeEvent, MessageEndEvent, MessageEndEventResult, MessageRenderer, MessageRenderOptions, MessageStartEvent, MessageUpdateEvent, ModelSelectEvent, ModelSelectSource, NormalizedBuildSystemPromptOptions, PowerShellToolCallEvent, ProjectTrustContext, ProjectTrustEvent, ProjectTrustEventDecision, ProjectTrustEventResult, ProjectTrustHandler, ProviderConfig, ProviderModelConfig, ProviderStreamEvent, ReadToolCallEvent, RegisteredCommand, RegisteredTool, ResolvedCommand, ResourcesDiscoverEvent, ResourcesDiscoverResult, SessionBeforeCompactEvent, SessionBeforeCompactResult, SessionBeforeForkEvent, SessionBeforeForkResult, SessionBeforeSwitchEvent, SessionBeforeSwitchResult, SessionBeforeTreeEvent, SessionBeforeTreeResult, SessionBoundaryDraft, SessionCompactEvent, SessionCompactFailedEvent, SessionInfoChangedEvent, SessionShutdownEvent, SessionStartEvent, SessionTreeEvent, SlashCommandInfo, SlashCommandSource, SourceInfo, TerminalInputHandler, ThinkingLevelSelectEvent, ToolAnnotations, ToolCallEvent, ToolCallEventResult, ToolDefinition, ToolExecutionEndEvent, ToolExecutionMode, ToolExecutionStartEvent, ToolExecutionUpdateEvent, ToolExposure, ToolInfo, ToolLoadout, ToolLoadoutChanges, ToolNamespace, ToolRendererResolver, ToolRenderers, ToolRenderResultOptions, ToolResultEvent, ToolResultEventResult, TurnEndEvent, TurnEndEventResult, TurnStartEvent, UIPromptEndEvent, UIPromptKind, UIPromptStartEvent, UserBashEvent, UserBashEventResult, WidgetPlacement, WorkingIndicatorOptions, WriteToolCallEvent, } from "./core/extensions/index.ts";
-@@ -35,6 +38,7 @@ export { createToolSearchExtension } from "./extensions/tool-search/index.ts";
+@@ -35,6 +41,7 @@ export { createToolSearchExtension } from "./extensions/tool-search/index.ts";
  export { type MainOptions, main } from "./main.ts";
  export { InteractiveMode, type InteractiveModeOptions, type JsonAgentSessionEvent, type ModelInfo, type PrintModeOptions, RpcClient, type RpcClientOptions, type RpcCommand, type RpcEventListener, type RpcExtensionUIRequest, type RpcExtensionUIResponse, type RpcResponse, type RpcSessionState, runPrintMode, runRpcMode, } from "./modes/index.ts";
  export { ArminComponent, AssistantMessageComponent, BashExecutionComponent, BorderedLoader, BranchSummaryMessageComponent, CompactionSummaryMessageComponent, CustomEditor, type CustomEditorOptions, CustomMessageComponent, DynamicBorder, ExtensionEditorComponent, ExtensionInputComponent, ExtensionSelectorComponent, FooterComponent, keyHint, keyText, LoginDialogComponent, ModelSelectorComponent, OAuthSelectorComponent, type RenderDiffOptions, rawKeyHint, renderDiff, SessionSelectorComponent, type SettingsCallbacks, type SettingsConfig, SettingsSelectorComponent, ShowImagesSelectorComponent, SkillInvocationMessageComponent, ThemeSelectorComponent, ThinkingSelectorComponent, ToolExecutionComponent, type ToolExecutionOptions, TreeSelectorComponent, truncateToVisualLines, UserMessageComponent, UserMessageSelectorComponent, type VisualTruncateResult, } from "./modes/interactive/components/index.ts";
@@ -693,6 +702,139 @@ index 1e16f4cb43136e7c20264f1e3dc8c5c43c0bd8a8..51da101919f122a0d9facc49cdd85324
  }
  //# sourceMappingURL=assistant-message.js.map
 \ No newline at end of file
+diff --git a/dist/modes/interactive/components/bash-execution.d.ts b/dist/modes/interactive/components/bash-execution.d.ts
+index bfcb1776c19950f5da12084cc0aa41ca3cec4475..c2cefa096e03d0f29b1caef0ae9b652cb50c99f8 100644
+--- a/dist/modes/interactive/components/bash-execution.d.ts
++++ b/dist/modes/interactive/components/bash-execution.d.ts
+@@ -3,6 +3,35 @@
+  */
+ import { Container, type TUI } from "@earendil-works/pi-tui";
+ import { type TruncationResult } from "../../../core/tools/truncate.ts";
++/** Where an owner `!command` block stands. */
++export type BashExecutionStatus = "running" | "complete" | "cancelled" | "error";
++/** What a `bashPresentation` hook is told about one owner `!command` block. */
++export interface BashExecutionState {
++    readonly command: string;
++    /** `!!`: output excluded from the model context. */
++    readonly excludeFromContext: boolean;
++    readonly status: BashExecutionStatus;
++    /** The process exit code; undefined while running, when cancelled without one, or when unknown. */
++    readonly exitCode: number | undefined;
++    /** Output lines after Pi's context truncation (the same limits as the bash tool), ANSI stripped. */
++    readonly lines: readonly string[];
++    /** The transcript's tool-output expansion. */
++    readonly expanded: boolean;
++    /** The output the model received was truncated. */
++    readonly truncated: boolean;
++    /** The whole output, when Pi saved it to a file. */
++    readonly fullOutputPath?: string;
++    /** Epoch ms Pi started running the command; absent for a block redrawn from the session file or an extension's result. */
++    readonly startedAt?: number;
++    /** Epoch ms the command ended; set only with `startedAt`. */
++    readonly endedAt?: number;
++}
++/**
++ * Presentation-only drawing of an owner `!command` block: the lines to draw at `width`, or undefined for Pi's own
++ * block. Pi starts no animation timer for a presented block; the host redraws it. The state object is replaced only when
++ * the block changes. The command, its output and what the model receives are unchanged.
++ */
++export type BashPresentation = (state: BashExecutionState, width: number) => string[] | undefined;
+ export declare class BashExecutionComponent extends Container {
+     private command;
+     private outputLines;
+@@ -16,7 +45,16 @@ export declare class BashExecutionComponent extends Container {
+     /** `dim` marks `!!` commands, whose output is excluded from the model context. */
+     private readonly colorKey;
+     private outputPad;
+-    constructor(command: string, ui: TUI, excludeFromContext?: boolean, outputPad?: number);
++    private excludeFromContext;
++    /** The host's drawing of this block (`bashPresentation`); undefined keeps Pi's. */
++    private present?;
++    private startedAt?;
++    private endedAt?;
++    /** What `bashPresentation` draws; rebuilt only when the block changes. */
++    private presentedState?;
++    /** `startedAt`: epoch ms a command Pi runs live started; omitted for a block Pi did not time (replayed, or an extension's result). */
++    constructor(command: string, ui: TUI, excludeFromContext?: boolean, outputPad?: number, present?: BashPresentation, startedAt?: number);
++    render(width: number): string[];
+     /**
+      * Set whether the output is expanded (shows full output) or collapsed (preview only).
+      */
+diff --git a/dist/modes/interactive/components/bash-execution.js b/dist/modes/interactive/components/bash-execution.js
+index 45a755862b076edf24f4bc9ef9dd46ca11868d78..a6511394c863c17bfe95f035e985732b2fc274d1 100644
+--- a/dist/modes/interactive/components/bash-execution.js
++++ b/dist/modes/interactive/components/bash-execution.js
+@@ -23,11 +23,20 @@ export class BashExecutionComponent extends Container {
+     /** `dim` marks `!!` commands, whose output is excluded from the model context. */
+     colorKey;
+     outputPad;
+-    constructor(command, ui, excludeFromContext = false, outputPad = 1) {
++    excludeFromContext;
++    /** The host's drawing of this block (`bashPresentation`); undefined keeps Pi's. */
++    present;
++    startedAt;
++    endedAt;
++    presentedState;
++    constructor(command, ui, excludeFromContext = false, outputPad = 1, present, startedAt) {
+         super();
+         this.command = command;
++        this.excludeFromContext = excludeFromContext;
+         this.colorKey = excludeFromContext ? "dim" : "bashMode";
+         this.outputPad = outputPad;
++        this.present = present;
++        this.startedAt = startedAt;
+         const borderColor = (str) => theme.fg(this.colorKey, str);
+         // Add spacer
+         this.addChild(new Spacer(1));
+@@ -37,10 +46,17 @@ export class BashExecutionComponent extends Container {
+         this.contentContainer = new Container();
+         this.addChild(this.contentContainer);
+         this.loader = new Loader(ui, (spinner) => theme.fg(this.colorKey, spinner), (text) => theme.fg("muted", text), `Running... (${keyText("tui.select.cancel")} to cancel)`);
++        // A presented block keeps no animation timer of its own; the host redraws it.
++        if (present)
++            this.loader.stop();
+         // Bottom border
+         this.addChild(new DynamicBorder(borderColor));
+         this.updateDisplay();
+     }
++    render(width) {
++        const lines = this.present && this.presentedState ? this.present(this.presentedState, width) : undefined;
++        return lines ?? super.render(width);
++    }
+     /**
+      * Set whether the output is expanded (shows full output) or collapsed (preview only).
+      */
+@@ -81,6 +97,8 @@ export class BashExecutionComponent extends Container {
+                 : "complete";
+         this.truncationResult = truncationResult;
+         this.fullOutputPath = fullOutputPath;
++        if (this.startedAt !== undefined)
++            this.endedAt = Date.now();
+         // Stop loader
+         this.loader.stop();
+         this.updateDisplay();
+@@ -94,6 +112,21 @@ export class BashExecutionComponent extends Container {
+         });
+         // Get the lines to potentially display (after context truncation)
+         const availableLines = contextTruncation.content ? contextTruncation.content.split("\n") : [];
++        // What `bashPresentation` draws: the same facts Pi's own block shows, rebuilt only when they change.
++        if (this.present) {
++            this.presentedState = {
++                command: this.command,
++                excludeFromContext: this.excludeFromContext,
++                status: this.status,
++                exitCode: this.exitCode ?? undefined,
++                lines: availableLines,
++                expanded: this.expanded,
++                truncated: Boolean(this.truncationResult?.truncated || contextTruncation.truncated),
++                ...(this.fullOutputPath ? { fullOutputPath: this.fullOutputPath } : {}),
++                ...(this.startedAt !== undefined ? { startedAt: this.startedAt } : {}),
++                ...(this.endedAt !== undefined ? { endedAt: this.endedAt } : {}),
++            };
++        }
+         // Apply preview truncation based on expanded state
+         const previewLogicalLines = availableLines.slice(-PREVIEW_LINES);
+         const hiddenLineCount = availableLines.length - previewLogicalLines.length;
 diff --git a/dist/modes/interactive/components/compaction-summary-message.d.ts b/dist/modes/interactive/components/compaction-summary-message.d.ts
 index 6befa12a48256c46cdd9f5ec334f5be73a231ff6..93db00640f74efc5b3aa3b70f37673279178f420 100644
 --- a/dist/modes/interactive/components/compaction-summary-message.d.ts
@@ -951,6 +1093,650 @@ index 1e998a7b86b0589f6d5fc8d693f7a7ae567c25f1..77bce69ce5bc0c37fb514104a7cb6f8a
  export { TreeSelectorComponent } from "./tree-selector.js";
  export { TrustSelectorComponent } from "./trust-selector.js";
  export { UserMessageComponent } from "./user-message.js";
+diff --git a/dist/modes/interactive/components/settings-selector.d.ts b/dist/modes/interactive/components/settings-selector.d.ts
+index 03d06fb9743282adc1ebe5f97456998540ea32f2..50cac2d8490f560b2e6a8de9db58b9d932894b5c 100644
+--- a/dist/modes/interactive/components/settings-selector.d.ts
++++ b/dist/modes/interactive/components/settings-selector.d.ts
+@@ -1,8 +1,9 @@
+ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+ import { type Model, type Transport } from "@earendil-works/pi-ai";
+-import { Container, type ScrollViewScrollbar, SettingsList, type WheelScrollLines } from "@earendil-works/pi-tui";
++import { Container, type ScrollViewScrollbar, type SettingItem, SettingsList, type WheelScrollLines } from "@earendil-works/pi-tui";
+ import { type CacheWarmingMode, type DefaultProjectTrust, type FullscreenExitOutput, type MermaidRenderingMode, type QuietStartup, type SessionShareDestination, type TuiMode, type WarningSettings } from "../../../core/settings-manager.ts";
+ import { type TerminalTheme } from "../theme/theme.ts";
++import { type OptionPresentation, type SelectorComponent } from "./settings-submenu.ts";
+ export interface SettingsConfig {
+     autoCompact: boolean;
+     defaultModel: string;
+@@ -87,12 +88,46 @@ export interface SettingsCallbacks {
+     onWarningsChange: (warnings: WarningSettings) => void;
+     onCancel: () => void;
+ }
++/** One of Pi's settings lists as data: the top-level settings, or a nested list (Warnings, Automatic Theme). */
++export interface SettingsListRequest {
++    /** Nested lists only: Pi's own heading for the list. Absent for the top-level settings. */
++    readonly title?: string;
++    /** Nested lists only: Pi's own explanation; may hold several lines separated by `\n`. */
++    readonly description?: string;
++    /**
++     * Pi's items in Pi's order. `currentValue` is live: Pi updates it on `change` and when it restores a change it
++     * refused. An item with `submenu` opens Pi's own submenu component; a value its `done` returns goes to `change`.
++     */
++    readonly items: readonly SettingItem[];
++    /** Pi's own dispatch of a changed value. */
++    change(id: string, value: string): void;
++    /** Pi's own back/cancel (a nested list restores what it previewed). */
++    cancel(): void;
++}
++/** The host's drawing of a nested settings list, or undefined (or a throw) for Pi's own list. */
++export type SettingsListPresentation = (request: SettingsListRequest) => SelectorComponent | undefined;
++/** Pi's settings as data, shared by the stock selector and a host's `selectorPresentation.settings`. */
++export interface SettingsModel {
++    /** Every Pi setting in Pi's order, with its submenu; `currentValue` is live (Pi updates it). */
++    readonly items: SettingItem[];
++    /** Pi's own change dispatch: records `value` on the item, then applies it as the stock selector does. */
++    change(id: string, value: string): void;
++    /** Records a value without applying it (Pi restoring a change it refused). */
++    update(id: string, value: string): void;
++}
++/**
++ * Pi's settings as data: every item (with its submenu) and Pi's own change dispatch. The stock selector and a host's
++ * `selectorPresentation.settings` both draw these items; `presentOptions` is the host's option list for submenus and
++ * `presentSettings` the host's list for the nested Warnings and Automatic Theme settings. A nested submenu forwards
++ * `focused` to the host's component and disposes it when it closes, cancels, applies or switches menus.
++ */
++export declare function createSettingsModel(config: SettingsConfig, callbacks: SettingsCallbacks, presentOptions?: OptionPresentation, presentSettings?: SettingsListPresentation): SettingsModel;
+ /**
+  * Main settings selector component.
+  */
+ export declare class SettingsSelectorComponent extends Container {
+     private settingsList;
+-    constructor(config: SettingsConfig, callbacks: SettingsCallbacks);
++    constructor(config: SettingsConfig, callbacks: SettingsCallbacks, presentOptions?: OptionPresentation, presentSettings?: SettingsListPresentation);
+     getSettingsList(): SettingsList;
+ }
+ //# sourceMappingURL=settings-selector.d.ts.map
+\ No newline at end of file
+diff --git a/dist/modes/interactive/components/settings-selector.js b/dist/modes/interactive/components/settings-selector.js
+index f7929f1dfb9dcdd1e80e71e1c4e6fc05578d8a49..59b3726f5d43e18b0ce09c24e124dced6528fdff 100644
+--- a/dist/modes/interactive/components/settings-selector.js
++++ b/dist/modes/interactive/components/settings-selector.js
+@@ -6,7 +6,7 @@ import { CACHE_WARMING_MODES, } from "../../../core/settings-manager.js";
+ import { getSettingsListTheme, parseAutoThemeSetting, SYSTEM_THEME_NAME, theme, } from "../theme/theme.js";
+ import { DynamicBorder } from "./dynamic-border.js";
+ import { keyDisplayText } from "./keybinding-hints.js";
+-import { SelectSubmenu, SteppedSubmenu } from "./settings-submenu.js";
++import { createSelectSubmenu, SelectSubmenu, SteppedSubmenu } from "./settings-submenu.js";
+ const MODEL_PICKER_LAYOUT = { minPrimaryColumnWidth: 12, maxPrimaryColumnWidth: 46 };
+ const THINKING_DESCRIPTIONS = {
+     off: "No reasoning",
+@@ -23,36 +23,85 @@ const DEFAULT_PROJECT_TRUST_LABELS = {
+     never: "Never trust",
+ };
+ const DEFAULT_PROJECT_TRUST_BY_LABEL = new Map(Object.entries(DEFAULT_PROJECT_TRUST_LABELS).map(([value, label]) => [label, value]));
++/**
++ * The host's drawing of one of Pi's nested settings lists (`selectorPresentation.settings`), or undefined for Pi's own:
++ * no hook, the hook declined, or it threw.
++ */
++function presentNestedSettings(presentSettings, request) {
++    if (!presentSettings)
++        return undefined;
++    try {
++        return presentSettings(request);
++    }
++    catch {
++        return undefined;
++    }
++}
++/** The warning settings as data: Pi's items and Pi's own change dispatch, shared by its list and a host's. */
++function createWarningSettingsModel(warnings, onChange) {
++    let state = { ...warnings };
++    const items = [
++        {
++            id: "anthropic-extra-usage",
++            label: "Anthropic extra usage",
++            description: "Warn when Anthropic subscription auth may use paid extra usage",
++            currentValue: (state.anthropicExtraUsage ?? SETTINGS_DEFAULTS.warnings.anthropicExtraUsage) ? "true" : "false",
++            values: ["true", "false"],
++        },
++    ];
++    const change = (id, newValue) => {
++        const changed = items.find((item) => item.id === id);
++        if (changed)
++            changed.currentValue = newValue;
++        switch (id) {
++            case "anthropic-extra-usage":
++                state = { ...state, anthropicExtraUsage: newValue === "true" };
++                onChange({ ...state });
++                break;
++        }
++    };
++    return { items, change };
++}
+ /**
+  * A submenu component for selecting from a list of options.
+  */
+ class WarningSettingsSubmenu extends Container {
+-    settingsList;
+-    state;
+-    constructor(warnings, onChange, onCancel) {
++    inputComponent;
++    /** The host's list, when it draws this submenu. */
++    presented;
++    _focused = false;
++    get focused() {
++        return this._focused;
++    }
++    set focused(value) {
++        this._focused = value;
++        if (this.presented)
++            this.presented.focused = value;
++    }
++    constructor(warnings, onChange, onCancel, presentSettings) {
+         super();
+-        this.state = { ...warnings };
+-        const items = [
+-            {
+-                id: "anthropic-extra-usage",
+-                label: "Anthropic extra usage",
+-                description: "Warn when Anthropic subscription auth may use paid extra usage",
+-                currentValue: (this.state.anthropicExtraUsage ?? SETTINGS_DEFAULTS.warnings.anthropicExtraUsage) ? "true" : "false",
+-                values: ["true", "false"],
+-            },
+-        ];
+-        this.settingsList = new SettingsList(items, Math.min(items.length, 10), getSettingsListTheme(), (id, newValue) => {
+-            switch (id) {
+-                case "anthropic-extra-usage":
+-                    this.state = { ...this.state, anthropicExtraUsage: newValue === "true" };
+-                    onChange({ ...this.state });
+-                    break;
+-            }
+-        }, onCancel);
+-        this.addChild(this.settingsList);
++        const settings = createWarningSettingsModel(warnings, onChange);
++        const cancel = () => {
++            this.dispose();
++            onCancel();
++        };
++        this.presented = presentNestedSettings(presentSettings, {
++            title: "Warnings",
++            description: "Enable or disable individual warnings",
++            items: settings.items,
++            change: settings.change,
++            cancel,
++        });
++        this.inputComponent = this.presented ?? new SettingsList(settings.items, Math.min(settings.items.length, 10), getSettingsListTheme(), settings.change, cancel);
++        this.addChild(this.inputComponent);
+     }
+     handleInput(data) {
+-        this.settingsList.handleInput(data);
++        this.inputComponent.handleInput?.(data);
++    }
++    dispose() {
++        const presented = this.presented;
++        this.presented = undefined;
++        presented?.dispose?.();
+     }
+ }
+ const CLEAR_OVERRIDE_VALUE = "__clear__";
+@@ -111,21 +160,36 @@ function defaultAutomaticThemes(currentThemeSetting, availableThemes) {
+ }
+ class ThemeSubmenu extends Container {
+     inputComponent;
++    /** The host's component for the current menu, when it draws it. */
++    presented;
++    presentSettings;
++    _focused = false;
++    get focused() {
++        return this._focused;
++    }
++    set focused(value) {
++        this._focused = value;
++        if (this.presented)
++            this.presented.focused = value;
++    }
+     callbacks;
+     availableThemes;
+     terminalTheme;
+     onDone;
++    presentOptions;
+     originalThemeSetting;
+     mode;
+     singleTheme;
+     lightTheme;
+     darkTheme;
+-    constructor(currentThemeSetting, terminalTheme, availableThemes, callbacks, onDone) {
++    constructor(currentThemeSetting, terminalTheme, availableThemes, callbacks, onDone, presentOptions, presentSettings) {
+         super();
+         this.callbacks = callbacks;
+         this.availableThemes = availableThemes;
+         this.terminalTheme = terminalTheme;
+         this.onDone = onDone;
++        this.presentOptions = presentOptions;
++        this.presentSettings = presentSettings;
+         this.originalThemeSetting = currentThemeSetting;
+         const autoTheme = parseAutoThemeSetting(currentThemeSetting);
+         const automaticThemes = defaultAutomaticThemes(currentThemeSetting, availableThemes);
+@@ -144,14 +208,23 @@ class ThemeSubmenu extends Container {
+     handleInput(data) {
+         this.inputComponent?.handleInput?.(data);
+     }
+-    setContent(renderComponent, inputComponent = renderComponent) {
++    setContent(renderComponent, inputComponent = renderComponent, presented) {
++        this.dispose();
++        this.presented = presented;
++        if (presented)
++            presented.focused = this._focused;
+         this.clear();
+         this.addChild(renderComponent);
+         this.inputComponent = inputComponent;
+     }
++    dispose() {
++        const presented = this.presented;
++        this.presented = undefined;
++        presented?.dispose?.();
++    }
+     showSingleMenu() {
+         this.mode = "single";
+-        const menu = new SelectSubmenu("Theme", "Select a theme, or choose automatic to follow terminal appearance.", singleModeThemeItems(this.availableThemes, this.singleTheme), this.singleTheme, (value) => {
++        const menu = createSelectSubmenu("Theme", "Select a theme, or choose automatic to follow terminal appearance.", singleModeThemeItems(this.availableThemes, this.singleTheme), this.singleTheme, (value) => {
+             if (value === AUTOMATIC_THEME_VALUE) {
+                 this.mode = "automatic";
+                 this.callbacks.onThemePreview?.(this.getThemeSetting());
+@@ -162,17 +235,36 @@ class ThemeSubmenu extends Container {
+             this.apply(value);
+         }, () => this.cancel(), (value) => {
+             this.callbacks.onThemePreview?.(value === AUTOMATIC_THEME_VALUE ? this.getAutomaticThemeSetting() : value);
+-        });
+-        this.setContent(menu);
++        }, undefined, this.presentOptions);
++        this.setContent(menu, menu, menu instanceof SelectSubmenu ? undefined : menu);
+     }
+     showAutomaticMenu() {
+         this.mode = "automatic";
++        const settings = this.automaticThemeSettings();
++        const cancel = () => this.cancel();
++        const presented = presentNestedSettings(this.presentSettings, {
++            title: "Automatic Theme",
++            description: "Choose themes for terminal light and dark appearance.\nLight/dark detection requires terminal support.",
++            items: settings.items,
++            change: settings.change,
++            cancel,
++        });
++        if (presented) {
++            this.setContent(presented, presented, presented);
++            return;
++        }
+         const content = new Container();
+         content.addChild(new Text(theme.bold(theme.fg("accent", "Automatic Theme")), 0, 0));
+         content.addChild(new Spacer(1));
+         content.addChild(new Text(theme.fg("muted", "Choose themes for terminal light and dark appearance."), 0, 0));
+         content.addChild(new Text(theme.fg("muted", "Light/dark detection requires terminal support."), 0, 0));
+         content.addChild(new Spacer(1));
++        const settingsList = new SettingsList(settings.items, Math.min(settings.items.length, 10), getSettingsListTheme(), settings.change, cancel);
++        content.addChild(settingsList);
++        this.setContent(content, settingsList);
++    }
++    /** The automatic-theme settings as data: Pi's items and Pi's own change dispatch, shared by its list and a host's. */
++    automaticThemeSettings() {
+         const items = [
+             {
+                 id: "light-theme",
+@@ -211,7 +303,10 @@ class ThemeSubmenu extends Container {
+                 values: ["switch to single theme"],
+             },
+         ];
+-        const settingsList = new SettingsList(items, Math.min(items.length, 10), getSettingsListTheme(), (id) => {
++        const change = (id, newValue) => {
++            const changed = items.find((item) => item.id === id);
++            if (changed)
++                changed.currentValue = newValue;
+             switch (id) {
+                 case "single-mode":
+                     this.mode = "single";
+@@ -223,15 +318,14 @@ class ThemeSubmenu extends Container {
+                     this.apply(this.getAutomaticThemeSetting());
+                     break;
+             }
+-        }, () => this.cancel());
+-        content.addChild(settingsList);
+-        this.setContent(content, settingsList);
++        };
++        return { items, change };
+     }
+     createThemeSelect(title, description, currentValue, done, onSelect) {
+-        return new SelectSubmenu(title, description, themeItems(this.availableThemes, currentValue), currentValue, onSelect, () => {
++        return createSelectSubmenu(title, description, themeItems(this.availableThemes, currentValue), currentValue, onSelect, () => {
+             this.callbacks.onThemePreview?.(this.getThemeSetting());
+             done();
+-        }, (value) => this.callbacks.onThemePreview?.(value));
++        }, (value) => this.callbacks.onThemePreview?.(value), undefined, this.presentOptions);
+     }
+     getThemeSetting() {
+         return this.mode === "automatic" ? this.getAutomaticThemeSetting() : this.singleTheme;
+@@ -243,20 +337,21 @@ class ThemeSubmenu extends Container {
+         return `${this.lightTheme}/${this.darkTheme}`;
+     }
+     apply(themeSetting) {
++        this.dispose();
+         this.onDone(themeSetting);
+     }
+     cancel() {
++        this.dispose();
+         this.callbacks.onThemePreview?.(this.originalThemeSetting);
+         this.onDone();
+     }
+ }
+ /**
+- * Main settings selector component.
++ * Pi's settings as data: every item (with its submenu) and Pi's own change dispatch. The stock selector and a host's
++ * `selectorPresentation.settings` both draw these items; `presentOptions` is the host's option list for submenus and
++ * `presentSettings` the host's list for the nested Warnings and Automatic Theme settings.
+  */
+-export class SettingsSelectorComponent extends Container {
+-    settingsList;
+-    constructor(config, callbacks) {
+-        super();
++export function createSettingsModel(config, callbacks, presentOptions, presentSettings) {
+         const supportsImages = getCapabilities().images;
+         const followUpKey = keyDisplayText("app.message.followUp");
+         const cycleThinkingKey = keyDisplayText("app.thinking.cycle");
+@@ -386,7 +481,7 @@ export class SettingsSelectorComponent extends Container {
+                 submenu: (_currentValue, done) => new WarningSettingsSubmenu(currentWarnings, (warnings) => {
+                     currentWarnings = warnings;
+                     callbacks.onWarningsChange(warnings);
+-                }, () => done()),
++                }, () => done(), presentSettings),
+             },
+             {
+                 id: "model-thinking",
+@@ -480,7 +575,7 @@ export class SettingsSelectorComponent extends Container {
+                         }
+                     }, () => {
+                         done(summary());
+-                    }, { loop: true });
++                    }, { loop: true, presentOptions });
+                 },
+             },
+             {
+@@ -529,7 +624,7 @@ export class SettingsSelectorComponent extends Container {
+                 label: "Theme",
+                 description: "Color theme for the interface",
+                 currentValue: config.currentTheme,
+-                submenu: (currentValue, done) => new ThemeSubmenu(currentValue, config.terminalTheme, config.availableThemes, callbacks, done),
++                submenu: (currentValue, done) => new ThemeSubmenu(currentValue, config.terminalTheme, config.availableThemes, callbacks, done, presentOptions, presentSettings),
+             },
+         ];
+         // Only show image toggle if terminal supports it
+@@ -630,9 +725,10 @@ export class SettingsSelectorComponent extends Container {
+             currentValue: config.showTerminalProgress ? "true" : "false",
+             values: ["true", "false"],
+         });
+-        // Add borders
+-        this.addChild(new DynamicBorder());
+-        this.settingsList = new SettingsList(items, 10, getSettingsListTheme(), (id, newValue) => {
++        const change = (id, newValue) => {
++            const changed = items.find((item) => item.id === id);
++            if (changed)
++                changed.currentValue = newValue;
+             switch (id) {
+                 case "autocompact":
+                     callbacks.onAutoCompactChange(newValue === "true");
+@@ -742,7 +838,25 @@ export class SettingsSelectorComponent extends Container {
+                     callbacks.onThemeChange(newValue);
+                     break;
+             }
+-        }, callbacks.onCancel, { enableSearch: true });
++        };
++        const update = (id, value) => {
++            const item = items.find((candidate) => candidate.id === id);
++            if (item)
++                item.currentValue = value;
++        };
++        return { items, change, update };
++}
++/**
++ * Main settings selector component.
++ */
++export class SettingsSelectorComponent extends Container {
++    settingsList;
++    constructor(config, callbacks, presentOptions, presentSettings) {
++        super();
++        const settings = createSettingsModel(config, callbacks, presentOptions, presentSettings);
++        // Add borders
++        this.addChild(new DynamicBorder());
++        this.settingsList = new SettingsList(settings.items, 10, getSettingsListTheme(), settings.change, callbacks.onCancel, { enableSearch: true });
+         this.addChild(this.settingsList);
+         this.addChild(new DynamicBorder());
+     }
+diff --git a/dist/modes/interactive/components/settings-submenu.d.ts b/dist/modes/interactive/components/settings-submenu.d.ts
+index 088c785d1a90f6cca55980af48b6edcb40905536..5e579714ae8d4379db8b85e8f3ea43824adb89b4 100644
+--- a/dist/modes/interactive/components/settings-submenu.d.ts
++++ b/dist/modes/interactive/components/settings-submenu.d.ts
+@@ -1,4 +1,30 @@
+-import { Container, type SelectItem, type SelectListLayoutOptions } from "@earendil-works/pi-tui";
++import { type Component, Container, type SelectItem, type SelectListLayoutOptions } from "@earendil-works/pi-tui";
++/** A host component Pi shows in its selector slot in place of its own selector; it holds keyboard focus there. */
++export interface SelectorComponent extends Component {
++    handleInput(data: string): void;
++    focused?: boolean;
++    /** Called when Pi closes the selector. */
++    dispose?(): void;
++}
++/** One option list Pi's settings open (a theme, a model, a thinking level), with Pi's own callbacks. */
++export interface OptionSelectorRequest {
++    readonly title: string;
++    readonly description?: string;
++    /** Pi's items; a label may carry Pi's own `✓ ` mark and theme colours. */
++    readonly items: readonly SelectItem[];
++    /** The value Pi preselects; may match no item. */
++    readonly current: string;
++    /** Pi's list is filterable by typing. */
++    readonly searchable: boolean;
++    /** Pi's own choice handling. */
++    select(value: string): void;
++    /** Pi's own back/cancel handling. */
++    cancel(): void;
++    /** Pi's live preview of the highlighted value (themes); absent when Pi previews nothing. */
++    preview?(value: string): void;
++}
++/** The host's option list, or undefined for Pi's own. */
++export type OptionPresentation = (request: OptionSelectorRequest) => SelectorComponent | undefined;
+ export interface SelectSubmenuOptions {
+     /** Enable type-to-search fuzzy filtering. */
+     searchable?: boolean;
+@@ -23,6 +49,11 @@ export declare class SelectSubmenu extends Container {
+     private applyFilter;
+     handleInput(data: string): void;
+ }
++/**
++ * Pi's option submenu, or the host's own (`selectorPresentation.options`) when it presents one. The host receives Pi's
++ * items and Pi's own select, cancel and preview callbacks; what a choice changes is unchanged.
++ */
++export declare function createSelectSubmenu(title: string, description: string, options: SelectItem[], currentValue: string, onSelect: (value: string) => void, onCancel: () => void, onSelectionChange?: (value: string) => void, submenuOptions?: SelectSubmenuOptions, presentOptions?: OptionPresentation): Component;
+ /** One step in a {@link SteppedSubmenu}. */
+ export interface SteppedSubmenuStep {
+     /** Unique key \u2014 the selected value is stored in the result context under this key. */
+@@ -47,6 +78,8 @@ interface SteppedSubmenuOptions {
+     initialContext?: Record<string, string>;
+     /** After completing the last step, loop back to step 0 instead of closing. */
+     loop?: boolean;
++    /** The host's option list for every step (`selectorPresentation.options`). */
++    presentOptions?: OptionPresentation;
+ }
+ /**
+  * Generic N-step submenu built on top of {@link SelectSubmenu}.
+@@ -54,6 +87,8 @@ interface SteppedSubmenuOptions {
+  * Each step's options can depend on prior selections via the shared context.
+  * Esc goes back one step; Esc at step 0 cancels.
+  * With `loop: true`, completing the final step invokes `onComplete` then returns to step 0.
++ * `focused` reaches a host's option list (`presentOptions`); the step a transition, completion or cancel leaves is
++ * disposed once.
+  */
+ export declare class SteppedSubmenu extends Container {
+     private readonly steps;
+@@ -61,8 +96,15 @@ export declare class SteppedSubmenu extends Container {
+     private readonly onCancel;
+     private readonly opts;
+     private activeComponent;
++    private activeDisposed;
+     private context;
++    private _focused;
++    get focused(): boolean;
++    set focused(value: boolean);
+     constructor(steps: SteppedSubmenuStep[], onComplete: (context: Record<string, string>) => void, onCancel: () => void, opts?: SteppedSubmenuOptions);
++    private setActive;
++    /** Disposes the current step's component once. */
++    dispose(): void;
+     private buildStep;
+     render(width: number): string[];
+     handleInput(data: string): void;
+diff --git a/dist/modes/interactive/components/settings-submenu.js b/dist/modes/interactive/components/settings-submenu.js
+index 391d1f8bda43bb6796cbf04373c7746eb0f662dc..54ba674db7d223bb3bdc7186b4f0ff7e81fc55f7 100644
+--- a/dist/modes/interactive/components/settings-submenu.js
++++ b/dist/modes/interactive/components/settings-submenu.js
+@@ -96,6 +96,30 @@ export class SelectSubmenu extends Container {
+         }
+     }
+ }
++/**
++ * Pi's option submenu, or the host's own (`selectorPresentation.options`) when it presents one. The host receives Pi's
++ * items and Pi's own select, cancel and preview callbacks; what a choice changes is unchanged. A hook that declines or
++ * throws leaves Pi's own submenu.
++ */
++export function createSelectSubmenu(title, description, options, currentValue, onSelect, onCancel, onSelectionChange, submenuOptions, presentOptions) {
++    let presented;
++    try {
++        presented = presentOptions?.({
++            title,
++            ...(description ? { description } : {}),
++            items: options,
++            current: currentValue,
++            searchable: submenuOptions?.searchable === true,
++            select: onSelect,
++            cancel: onCancel,
++            ...(onSelectionChange ? { preview: onSelectionChange } : {}),
++        });
++    }
++    catch {
++        presented = undefined;
++    }
++    return presented ?? new SelectSubmenu(title, description, options, currentValue, onSelect, onCancel, onSelectionChange, submenuOptions);
++}
+ /**
+  * Generic N-step submenu built on top of {@link SelectSubmenu}.
+  *
+@@ -109,7 +133,18 @@ export class SteppedSubmenu extends Container {
+     onCancel;
+     opts;
+     activeComponent;
++    /** The current step's component has been disposed (it is closing or was replaced). */
++    activeDisposed = false;
+     context;
++    _focused = false;
++    get focused() {
++        return this._focused;
++    }
++    set focused(value) {
++        this._focused = value;
++        if (this.activeComponent && !(this.activeComponent instanceof SelectSubmenu))
++            this.activeComponent.focused = value;
++    }
+     constructor(steps, onComplete, onCancel, opts = {}) {
+         super();
+         this.steps = steps;
+@@ -117,7 +152,23 @@ export class SteppedSubmenu extends Container {
+         this.onCancel = onCancel;
+         this.opts = opts;
+         this.context = { ...(opts.initialContext ?? {}) };
+-        this.activeComponent = this.buildStep(opts.startAtStep ?? 0);
++        this.setActive(this.buildStep(opts.startAtStep ?? 0));
++    }
++    /** Shows `component` as the current step; the step it replaces is disposed. */
++    setActive(component) {
++        if (this.activeComponent)
++            this.dispose();
++        this.activeComponent = component;
++        this.activeDisposed = false;
++        if (!(component instanceof SelectSubmenu))
++            component.focused = this._focused;
++    }
++    /** Disposes the current step's component once (a host's option list; Pi's own has nothing to release). */
++    dispose() {
++        if (this.activeDisposed)
++            return;
++        this.activeDisposed = true;
++        this.activeComponent.dispose?.();
+     }
+     buildStep(stepIndex) {
+         const step = this.steps[stepIndex];
+@@ -127,32 +178,34 @@ export class SteppedSubmenu extends Container {
+         const desc = typeof step.description === "function" ? step.description(this.context) : step.description;
+         const items = step.options(this.context);
+         const preselect = step.preselect?.(this.context) ?? "";
+-        return new SelectSubmenu(title, `${stepLabel}${desc}`, items, preselect, (value) => {
++        return createSelectSubmenu(title, `${stepLabel}${desc}`, items, preselect, (value) => {
+             this.context[step.key] = value;
+             if (stepIndex < total - 1) {
+                 // Advance to next step
+-                this.activeComponent = this.buildStep(stepIndex + 1);
++                this.setActive(this.buildStep(stepIndex + 1));
+             }
+             else {
+                 // Final step \u2014 deliver result
+                 this.onComplete({ ...this.context });
+                 if (this.opts.loop) {
+                     this.context = {};
+-                    this.activeComponent = this.buildStep(0);
++                    this.setActive(this.buildStep(0));
+                 }
+                 else {
++                    this.dispose();
+                     this.onCancel();
+                 }
+             }
+         }, () => {
+             if (stepIndex > 0) {
+                 delete this.context[step.key];
+-                this.activeComponent = this.buildStep(stepIndex - 1);
++                this.setActive(this.buildStep(stepIndex - 1));
+             }
+             else {
++                this.dispose();
+                 this.onCancel();
+             }
+-        }, undefined, step.searchable || step.layout ? { searchable: step.searchable, layout: step.layout } : undefined);
++        }, undefined, step.searchable || step.layout ? { searchable: step.searchable, layout: step.layout } : undefined, this.opts.presentOptions);
+     }
+     render(width) {
+         return this.activeComponent.render(width);
+diff --git a/dist/modes/interactive/components/thinking-selector.d.ts b/dist/modes/interactive/components/thinking-selector.d.ts
+index b4a337007b2258a1652e5a53ad7617da703e96bc..7561219ed0283b10feda15eed992b4bf1f9f17b5 100644
+--- a/dist/modes/interactive/components/thinking-selector.d.ts
++++ b/dist/modes/interactive/components/thinking-selector.d.ts
+@@ -1,5 +1,7 @@
+ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+ import { Container, type Focusable, SelectList } from "@earendil-works/pi-tui";
++/** Pi's own description of a thinking level, as its selector shows it. */
++export declare function thinkingLevelDescription(level: ThinkingLevel): string;
+ /**
+  * Component that renders a thinking level selector with borders
+  */
+diff --git a/dist/modes/interactive/components/thinking-selector.js b/dist/modes/interactive/components/thinking-selector.js
+index d0b11ac65857fce038d0bdff43dccf623df5897d..7bb71e2bfa51144e0bb51d1e162e2a5a6589c61d 100644
+--- a/dist/modes/interactive/components/thinking-selector.js
++++ b/dist/modes/interactive/components/thinking-selector.js
+@@ -15,6 +15,10 @@ const LEVEL_DESCRIPTIONS = {
+     xhigh: "Extra-high reasoning (~32k tokens)",
+     max: "Maximum reasoning",
+ };
++/** Pi's own description of a thinking level, as its selector shows it. */
++export function thinkingLevelDescription(level) {
++    return LEVEL_DESCRIPTIONS[level];
++}
+ /**
+  * Component that renders a thinking level selector with borders
+  */
 diff --git a/dist/modes/interactive/components/tool-execution.d.ts b/dist/modes/interactive/components/tool-execution.d.ts
 index 89cf0519dc56399ebb4017054d9a2ac0f2563347..5831d2aeedccf6e1c8cb1f66a8f2d1d061a6b461 100644
 --- a/dist/modes/interactive/components/tool-execution.d.ts
@@ -1307,26 +2093,150 @@ index 4f5722425293a837926b8fb42de5ce6d820757dc..12194a23e323b737a74af27b2b6ac383
              return lines;
          }
 diff --git a/dist/modes/interactive/interactive-mode.d.ts b/dist/modes/interactive/interactive-mode.d.ts
-index 6fc601645f5fe0ad734e64d10026ccddfc80f506..057c5dfaa92f2e80450d034818de650f7ff4d174 100644
+index 6fc601645f5fe0ad734e64d10026ccddfc80f506..9cbb4feff1f3af3ea0274cc610a951adc7c0ff78 100644
 --- a/dist/modes/interactive/interactive-mode.d.ts
 +++ b/dist/modes/interactive/interactive-mode.d.ts
-@@ -3,12 +3,14 @@
+@@ -2,16 +2,138 @@
+  * Interactive mode for the coding agent.
   * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
   */
++import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
++import type { Api, Model, ModelsRefreshResult } from "@earendil-works/pi-ai";
  import { type ImageContent } from "@earendil-works/pi-ai/compat";
 -import { type Terminal } from "@earendil-works/pi-tui";
 +import { type Component, type MarkdownTheme, type Terminal, type TUI } from "@earendil-works/pi-tui";
 +import type { MarkdownTransformer, ToolRenderers } from "../../core/extensions/types.ts";
  import { type AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
  import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
++import type { ScopedModel } from "../../core/model-resolver.ts";
  import { SessionManager } from "../../core/session-manager.ts";
  import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
  import { type LatestPiRelease } from "../../utils/version-check.ts";
 +import type { ErrorPresentation } from "./components/assistant-message.ts";
++import type { BashPresentation } from "./components/bash-execution.ts";
++import type { SettingsListRequest } from "./components/settings-selector.ts";
++import type { OptionSelectorRequest, SelectorComponent } from "./components/settings-submenu.ts";
  export { createInteractiveTui, createInteractiveTuiReference } from "./tui-renderer.ts";
  export declare function formatCrashExtensionHint(extensionMatches: readonly string[] | undefined): string | undefined;
  export declare function formatResumeCommand(sessionManager: SessionManager): string | undefined;
-@@ -38,6 +40,32 @@ export interface InteractiveModeOptions {
++/** A host component shown in the editor slot in place of Pi's extension dialog; it holds keyboard focus there. */
++export interface PresentedDialog extends Component {
++    handleInput(data: string): void;
++    /** Seconds left before Pi cancels the dialog: once when it opens, then once per second while a timeout runs. */
++    setCountdown?(seconds: number): void;
++    /** Called once when the dialog closes for any reason. */
++    dispose?(): void;
++}
++/** An extension `ui.select` or `ui.confirm` (and Pi's own option prompts), as Pi would show it. */
++export interface SelectDialogRequest {
++    /** `confirm`: `ui.confirm`, offered `Yes` and `No`; only `Yes` confirms. */
++    readonly kind: "select" | "confirm";
++    readonly title: string;
++    /** `confirm` only: the message Pi's own dialog shows under the title. */
++    readonly message?: string;
++    readonly options: readonly string[];
++    /** Present when Pi cancels the dialog after this many ms; Pi's timer drives `setCountdown`. */
++    readonly timeoutMs?: number;
++    readonly tui: TUI;
++    /** Pi's tool-output expansion toggle (`app.tools.expand`). */
++    toggleToolsExpanded(): void;
++}
++/** An extension `ui.input`, as Pi would show it. */
++export interface InputDialogRequest {
++    readonly title: string;
++    readonly placeholder?: string;
++    /** Present when Pi cancels the dialog after this many ms; Pi's timer drives `setCountdown`. */
++    readonly timeoutMs?: number;
++    readonly tui: TUI;
++}
++/**
++ * Settles a presented dialog: the chosen option (select, confirm) or the entered text (input); undefined cancels.
++ * Only the first call counts, and an option that was not offered settles as undefined.
++ */
++export type DialogDone = (value: string | undefined) => void;
++/**
++ * Presentation-only extension dialogs. Pi keeps the promise, the abort signal, the timeout, the blocked status, the
++ * dialog stack and the `Yes` comparison of `confirm`; the host supplies only the component. A hook that returns
++ * undefined or throws leaves Pi's own dialog.
++ */
++export interface DialogPresentation {
++    select?(request: SelectDialogRequest, done: DialogDone): PresentedDialog | undefined;
++    input?(request: InputDialogRequest, done: DialogDone): PresentedDialog | undefined;
++}
++export type StatusLevel = "info" | "warning" | "error";
++/** `extension`: `ui.notify`. `pi`: Pi's own line. */
++export type StatusOrigin = "extension" | "pi";
++export type StatusTopic = "model" | "effort" | "compaction";
++/** One status, warning or error line Pi would add to the transcript. */
++export interface StatusNotice {
++    /** The text without Pi's `Error: ` or `Warning: ` prefix. */
++    readonly text: string;
++    readonly level: StatusLevel;
++    readonly origin: StatusOrigin;
++    readonly topic?: StatusTopic;
++}
++/** Where a notice comes from, as Pi's own callers pass it to `showStatus`, `showWarning` and `showError`. */
++export interface StatusSource {
++    readonly origin?: StatusOrigin;
++    readonly topic?: StatusTopic;
++}
++/**
++ * Presentation-only notices. A component is drawn in the transcript in place of Pi's line; `true` means the host
++ * showed it elsewhere and Pi adds nothing; undefined keeps Pi's line.
++ */
++export type StatusPresentation = (notice: StatusNotice) => Component | true | undefined;
++/** Pi's model selector data and Pi's own commit callbacks. */
++export interface ModelSelectorRequest {
++    readonly tui: TUI;
++    readonly current: Model<Api> | undefined;
++    /** The models available now; changes after `refresh` resolves. */
++    models(): readonly Model<Api>[];
++    /** The session's model scope; empty when unscoped. */
++    readonly scoped: readonly ScopedModel[];
++    readonly defaultModel?: {
++        readonly provider: string;
++        readonly id: string;
++    };
++    readonly initialSearch?: string;
++    /** The catalog refresh Pi's own selector performs (it gives up after 15 s); the caller owns the signal. */
++    refresh(signal: AbortSignal): Promise<ModelsRefreshResult>;
++    /** Pi's own commit: `session.setModel(model, { persist })`, then Pi's status or error notice; closes the selector. */
++    select(model: Model<Api>, persist: boolean): void;
++    cancel(): void;
++}
++/** Pi's thinking-level selector data and Pi's own commit callbacks. */
++export interface ThinkingSelectorRequest {
++    readonly current: ThinkingLevel;
++    readonly levels: readonly ThinkingLevel[];
++    readonly defaultLevel: ThinkingLevel;
++    /** Pi's own description of a level. */
++    describe(level: ThinkingLevel): string;
++    /** Pi's own commit, then Pi's status or error notice; closes the selector. */
++    select(level: ThinkingLevel, persist: boolean): void;
++    cancel(): void;
++}
++/**
++ * Pi's settings and Pi's own change dispatch: the top-level settings (no `title`), or a nested Warnings or Automatic
++ * Theme list (with Pi's `title` and `description`). A hook that declines or throws on a nested list leaves Pi's list.
++ */
++export interface SettingsSelectorRequest extends SettingsListRequest {
++    readonly tui: TUI;
++}
++/**
++ * Presentation-only selectors. A hook that returns undefined or throws keeps Pi's own selector; only the hook call is
++ * guarded, so errors from Pi's commit callbacks (`select`, `change`) are Pi's own as before.
++ */
++export interface SelectorPresentation {
++    model?(request: ModelSelectorRequest): SelectorComponent | undefined;
++    thinking?(request: ThinkingSelectorRequest): SelectorComponent | undefined;
++    settings?(request: SettingsSelectorRequest): SelectorComponent | undefined;
++    /** Every option list Pi's settings open (theme, per-model thinking), in Pi's settings or in the host's. */
++    options?(request: OptionSelectorRequest): SelectorComponent | undefined;
++}
+ /**
+  * Options for InteractiveMode initialization.
+  */
+@@ -38,6 +160,40 @@ export interface InteractiveModeOptions {
      initialThemeSetting?: string;
      /** Terminal implementation. Defaults to the current process terminal. */
      terminal?: Terminal;
@@ -1348,6 +2258,14 @@ index 6fc601645f5fe0ad734e64d10026ccddfc80f506..057c5dfaa92f2e80450d034818de650f
 +    errorPresentation?: ErrorPresentation;
 +    /** `false` when the host has its own resume command: the `To resume this session: pi --session …` line is not printed on quit. */
 +    resumeHint?: false;
++    /** Presentation-only extension dialogs (`ui.select`, `ui.confirm`, `ui.input`); undefined keeps Pi's. */
++    dialogPresentation?: DialogPresentation;
++    /** Presentation-only status, warning and error lines; undefined keeps Pi's. */
++    statusPresentation?: StatusPresentation;
++    /** Presentation-only owner `!command` blocks; undefined keeps Pi's. */
++    bashPresentation?: BashPresentation;
++    /** Presentation-only model, thinking-level and settings selectors; undefined keeps Pi's. */
++    selectorPresentation?: SelectorPresentation;
 +}
 +/** Live, presentation-only chat surface owned by this same interactive mode. */
 +export interface InteractiveChatPresentation {
@@ -1359,8 +2277,21 @@ index 6fc601645f5fe0ad734e64d10026ccddfc80f506..057c5dfaa92f2e80450d034818de650f
  }
  export declare class InteractiveMode {
      private runtimeHost;
-@@ -336,6 +364,8 @@ export declare class InteractiveMode {
+@@ -297,6 +453,8 @@ export declare class InteractiveMode {
+      * Show a text input for extensions.
+      */
+     private showExtensionInput;
++    /** The host's component for an extension dialog (`dialogPresentation`), or undefined for Pi's own. */
++    private presentDialog;
+     /**
+      * Show a multi-line editor for extensions (with Ctrl+G support).
+      */
+@@ -334,8 +492,12 @@ export declare class InteractiveMode {
+      * we update the previous status line instead of appending new ones to avoid log spam.
+      */
      private showStatus;
++    /** Offer one of Pi's notices to `statusPresentation`; true when the host took it. */
++    private presentStatus;
      private addCustomEntryToChat;
      private addMessageToChat;
 +    /** A stopped turn with `errorPresentation`: its tool calls read as not run, then the hook's row under them. */
@@ -1368,8 +2299,19 @@ index 6fc601645f5fe0ad734e64d10026ccddfc80f506..057c5dfaa92f2e80450d034818de650f
      private renderSessionItems;
      /**
       * Render session entries to chat. Used for initial load and rebuild after compaction.
+@@ -404,8 +566,8 @@ export declare class InteractiveMode {
+     private toggleThinkingBlockVisibility;
+     private handleOpenExternalEditor;
+     clearEditor(): void;
+-    showError(errorMessage: string): void;
+-    showWarning(warningMessage: string): void;
++    showError(errorMessage: string, source?: StatusSource): void;
++    showWarning(warningMessage: string, source?: StatusSource): void;
+     showNewVersionNotification(release: LatestPiRelease): void;
+     showPackageUpdateNotification(packages: string[]): void;
+     /**
 diff --git a/dist/modes/interactive/interactive-mode.js b/dist/modes/interactive/interactive-mode.js
-index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e4201941516 100644
+index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e73020a05b 100644
 --- a/dist/modes/interactive/interactive-mode.js
 +++ b/dist/modes/interactive/interactive-mode.js
 @@ -16,6 +16,7 @@ import { parseSkillBlock } from "../../core/agent-session.js";
@@ -1389,7 +2331,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
  import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
  import { getSourcePackageKey } from "../../core/source-info.js";
  import { isInstallTelemetryEnabled } from "../../core/telemetry.js";
-@@ -53,10 +54,10 @@ import { checkForNewPiVersion } from "../../utils/version-check.js";
+@@ -53,10 +54,11 @@ import { checkForNewPiVersion } from "../../utils/version-check.js";
  import { reportBug } from "./bug-report.js";
  import { createChatViewport } from "./chat-viewport.js";
  import { ArminComponent } from "./components/armin.js";
@@ -1399,19 +2341,46 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
  import { BranchSummaryMessageComponent } from "./components/branch-summary-message.js";
 -import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.js";
 +import { CompactionSummaryMessageComponent, TranscriptLoadEarlierComponent } from "./components/compaction-summary-message.js";
++import { CountdownTimer } from "./components/countdown-timer.js";
  import { CustomEditor } from "./components/custom-editor.js";
  import { CustomEntryComponent } from "./components/custom-entry.js";
  import { CustomMessageComponent } from "./components/custom-message.js";
-@@ -82,7 +83,7 @@ import { SkillInvocationMessageComponent } from "./components/skill-invocation-m
+@@ -77,12 +79,12 @@ import { piLogoLines, piWordmark, supportsPiLogo } from "./components/pi-logo.js
+ import { createLoginMenuSelector } from "./components/radius-login-selector.js";
+ import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.js";
+ import { SessionSelectorComponent } from "./components/session-selector.js";
+-import { SettingsSelectorComponent } from "./components/settings-selector.js";
++import { createSettingsModel, SettingsSelectorComponent } from "./components/settings-selector.js";
+ import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.js";
  import { BranchSummaryStatusIndicator, CompactionStatusIndicator, IdleStatus, RetryStatusIndicator, WorkingStatusIndicator, } from "./components/status-indicator.js";
  import { ThemedText } from "./components/themed-text.js";
- import { ThinkingSelectorComponent } from "./components/thinking-selector.js";
+-import { ThinkingSelectorComponent } from "./components/thinking-selector.js";
 -import { ToolExecutionComponent } from "./components/tool-execution.js";
++import { thinkingLevelDescription, ThinkingSelectorComponent } from "./components/thinking-selector.js";
 +import { ToolExecutionComponent, TranscriptContainer } from "./components/tool-execution.js";
  import { TreeSelectorComponent } from "./components/tree-selector.js";
  import { TrustSelectorComponent } from "./components/trust-selector.js";
  import { UserMessageComponent } from "./components/user-message.js";
-@@ -133,6 +134,65 @@ function isCustomSessionEntry(item) {
+@@ -105,6 +107,18 @@ function isEmbeddedStatus(editor) {
+ function isExpandable(obj) {
+     return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
+ }
++/**
++ * Asks a presentation hook for the host's component; a hook that throws counts as declining, so Pi shows its own.
++ * Only the hook call is guarded: Pi's commit callbacks the host calls later report their own errors.
++ */
++function presentOrDecline(present) {
++    try {
++        return present();
++    }
++    catch {
++        return undefined;
++    }
++}
+ class ExpandableText extends ThemedText {
+     state;
+     constructor(getCollapsedText, getExpandedText, expanded = false, paddingX = 0, paddingY = 0) {
+@@ -133,6 +147,65 @@ function isCustomSessionEntry(item) {
  function isCompactionCostNotice(item) {
      return "type" in item && item.type === "compaction_cost";
  }
@@ -1477,7 +2446,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
  function isUsageSessionEntry(item) {
      return "type" in item && item.type === "usage";
  }
-@@ -292,7 +352,8 @@ export class InteractiveMode {
+@@ -292,7 +365,8 @@ export class InteractiveMode {
      managedToolStatusStarted = false;
      // Streaming message tracking
      streamingComponent = undefined;
@@ -1487,7 +2456,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
      streamingMessage = undefined;
      // Tool execution tracking: toolCallId -> component
      pendingTools = new Map();
-@@ -400,7 +461,7 @@ export class InteractiveMode {
+@@ -400,7 +474,7 @@ export class InteractiveMode {
          this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
          this.headerContainer = new Container();
          this.loadedResourcesContainer = new Container();
@@ -1496,7 +2465,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
          this.documentContainer = new Container();
          this.documentContainer.addChild(this.headerContainer);
          this.documentContainer.addChild(this.loadedResourcesContainer);
-@@ -466,7 +527,7 @@ export class InteractiveMode {
+@@ -466,7 +540,7 @@ export class InteractiveMode {
          return description ? `[${sourceTag}] ${description}` : `[${sourceTag}]`;
      }
      getBuiltInCommandConflictDiagnostics(extensionRunner) {
@@ -1505,7 +2474,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
          return extensionRunner
              .getRegisteredCommands()
              .filter((command) => builtinNames.has(command.name))
-@@ -707,6 +768,15 @@ export class InteractiveMode {
+@@ -707,6 +781,15 @@ export class InteractiveMode {
          this.renderWidgets(); // Initialize with default spacer
          const viewport = createChatViewport({
              document: this.documentContainer,
@@ -1521,7 +2490,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
              pendingMessages: this.pendingMessagesContainer,
              status: this.statusContainer,
              widgetsAbove: this.widgetContainerAbove,
-@@ -774,7 +844,7 @@ export class InteractiveMode {
+@@ -774,7 +857,7 @@ export class InteractiveMode {
                  rawKeyHint("!", "to run bash"),
                  rawKeyHint("!!", "to run bash (no context)"),
                  hint("app.message.followUp", "to queue follow-up"),
@@ -1530,7 +2499,167 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
                  hint("app.clipboard.pasteImage", "to paste files on macOS, images, or text"),
                  rawKeyHint("drop files", "to attach"),
              ].join("\n");
-@@ -2780,7 +2850,7 @@ export class InteractiveMode {
+@@ -2253,22 +2336,54 @@ export class InteractiveMode {
+     /**
+      * Show a selector for extensions.
+      */
+-    showExtensionSelector(title, options, opts, blocked = { kind: "question", message: title }) {
++    showExtensionSelector(title, options, opts, blocked = { kind: "question", message: title }, confirm) {
+         return new Promise((resolve) => {
+             if (opts?.signal?.aborted) {
+                 resolve(undefined);
+                 return;
+             }
++            const offered = [...options];
++            const timeoutMs = opts?.timeout && opts.timeout > 0 ? opts.timeout : undefined;
++            let settled = false;
++            let dialog;
++            let countdown;
+             const finish = (option) => {
++                if (settled)
++                    return;
++                settled = true;
+                 opts?.signal?.removeEventListener("abort", onAbort);
+-                selector.dispose();
+-                this.removeExtensionDialog(selector);
++                countdown?.dispose();
++                if (dialog) {
++                    dialog.dispose?.();
++                    this.removeExtensionDialog(dialog);
++                }
+                 resolve(option);
+             };
+             const onAbort = () => finish(undefined);
+             opts?.signal?.addEventListener("abort", onAbort, { once: true });
+-            const selector = new ExtensionSelectorComponent(title, options, (option) => finish(option), () => finish(undefined), { tui: this.ui, timeout: opts?.timeout, onToggleToolsExpanded: () => this.toggleToolOutputExpansion() });
+-            this.pushExtensionDialog(selector, blocked);
++            // The host draws the dialog; Pi keeps the promise, abort, timeout, blocked status and dialog stack.
++            const presented = this.presentDialog("select", {
++                kind: confirm ? "confirm" : "select",
++                title: confirm ? confirm.title : title,
++                ...(confirm ? { message: confirm.message } : {}),
++                options: offered,
++                ...(timeoutMs ? { timeoutMs } : {}),
++                tui: this.ui,
++                toggleToolsExpanded: () => this.toggleToolOutputExpansion(),
++            }, (option) => finish(typeof option === "string" && offered.includes(option) ? option : undefined));
++            if (settled) {
++                presented?.dispose?.();
++                return;
++            }
++            if (presented) {
++                dialog = presented;
++                if (timeoutMs)
++                    countdown = new CountdownTimer(timeoutMs, this.ui, (seconds) => presented.setCountdown?.(seconds), () => finish(undefined));
++            }
++            else {
++                dialog = new ExtensionSelectorComponent(title, options, (option) => finish(option), () => finish(undefined), { tui: this.ui, timeout: opts?.timeout, onToggleToolsExpanded: () => this.toggleToolOutputExpansion() });
++            }
++            this.pushExtensionDialog(dialog, blocked);
+         });
+     }
+     /**
+@@ -2278,7 +2393,7 @@ export class InteractiveMode {
+         const result = await this.showExtensionSelector(`${title}\n${message}`, ["Yes", "No"], opts, {
+             kind: "permission",
+             message: title,
+-        });
++        }, { title, message });
+         return result === "Yes";
+     }
+     async promptForMissingSessionCwd(error) {
+@@ -2295,18 +2410,69 @@ export class InteractiveMode {
+                 resolve(undefined);
+                 return;
+             }
++            const timeoutMs = opts?.timeout && opts.timeout > 0 ? opts.timeout : undefined;
++            let settled = false;
++            let dialog;
++            let countdown;
+             const finish = (value) => {
++                if (settled)
++                    return;
++                settled = true;
+                 opts?.signal?.removeEventListener("abort", onAbort);
+-                input.dispose();
+-                this.removeExtensionDialog(input);
++                countdown?.dispose();
++                if (dialog) {
++                    dialog.dispose?.();
++                    this.removeExtensionDialog(dialog);
++                }
+                 resolve(value);
+             };
+             const onAbort = () => finish(undefined);
+             opts?.signal?.addEventListener("abort", onAbort, { once: true });
+-            const input = new ExtensionInputComponent(title, placeholder, (value) => finish(value), () => finish(undefined), { tui: this.ui, timeout: opts?.timeout });
+-            this.pushExtensionDialog(input, { kind: "question", message: title });
++            const presented = this.presentDialog("input", {
++                title,
++                ...(placeholder !== undefined ? { placeholder } : {}),
++                ...(timeoutMs ? { timeoutMs } : {}),
++                tui: this.ui,
++            }, (value) => finish(typeof value === "string" ? value : undefined));
++            if (settled) {
++                presented?.dispose?.();
++                return;
++            }
++            if (presented) {
++                dialog = presented;
++                if (timeoutMs)
++                    countdown = new CountdownTimer(timeoutMs, this.ui, (seconds) => presented.setCountdown?.(seconds), () => finish(undefined));
++            }
++            else {
++                dialog = new ExtensionInputComponent(title, placeholder, (value) => finish(value), () => finish(undefined), { tui: this.ui, timeout: opts?.timeout });
++            }
++            this.pushExtensionDialog(dialog, { kind: "question", message: title });
+         });
+     }
++    /**
++     * The host's component for an extension dialog (`dialogPresentation`), or undefined for Pi's own: no hook, the
++     * hook declined, or it threw. After a fallback the hook's `done` is ignored, so only Pi's dialog answers.
++     */
++    presentDialog(kind, request, done) {
++        const hooks = this.options.dialogPresentation;
++        if (!hooks?.[kind])
++            return undefined;
++        let owned = true;
++        const answer = (value) => {
++            if (owned)
++                done(value);
++        };
++        let presented;
++        try {
++            presented = kind === "select" ? hooks.select(request, answer) : hooks.input(request, answer);
++        }
++        catch {
++            presented = undefined;
++        }
++        if (!presented)
++            owned = false;
++        return presented;
++    }
+     /**
+      * Show a multi-line editor for extensions (with Ctrl+G support).
+      */
+@@ -2402,13 +2568,13 @@ export class InteractiveMode {
+      */
+     showExtensionNotify(message, type) {
+         if (type === "error") {
+-            this.showError(message);
++            this.showError(message, { origin: "extension" });
+         }
+         else if (type === "warning") {
+-            this.showWarning(message);
++            this.showWarning(message, { origin: "extension" });
+         }
+         else {
+-            this.showStatus(message);
++            this.showStatus(message, { origin: "extension" });
+         }
+     }
+     /** Show a custom component with keyboard focus. Overlay mode renders on top of existing content. */
+@@ -2780,7 +2946,7 @@ export class InteractiveMode {
                  this.editor.setText("");
                  return;
              }
@@ -1539,7 +2668,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
                  this.showSessionSelector();
                  this.editor.setText("");
                  return;
-@@ -2881,8 +2951,6 @@ export class InteractiveMode {
+@@ -2881,8 +3047,6 @@ export class InteractiveMode {
                  this.ui.requestRender();
                  break;
              case "entry_appended":
@@ -1548,7 +2677,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
                  if (event.entry.type === "custom") {
                      this.addCustomEntryToChat(event.entry);
                      this.ui.requestRender();
-@@ -2896,26 +2964,8 @@ export class InteractiveMode {
+@@ -2896,26 +3060,8 @@ export class InteractiveMode {
                      this.ui.requestRender();
                  }
                  else if (event.entry.type === "compaction") {
@@ -1577,7 +2706,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
                      this.footer.invalidate();
                      this.ui.requestRender();
                  }
-@@ -2940,7 +2990,10 @@ export class InteractiveMode {
+@@ -2940,7 +3086,10 @@ export class InteractiveMode {
                      this.ui.requestRender();
                  }
                  else if (event.message.role === "assistant") {
@@ -1589,7 +2718,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
                      this.streamingMessage = event.message;
                      this.chatContainer.addChild(this.streamingComponent);
                      this.streamingComponent.updateContent(this.streamingMessage, true);
-@@ -2993,11 +3046,14 @@ export class InteractiveMode {
+@@ -2993,11 +3142,14 @@ export class InteractiveMode {
                          if (!errorMessage) {
                              errorMessage = this.streamingMessage.errorMessage || "Error";
                          }
@@ -1609,7 +2738,16 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
                          }
                          this.pendingTools.clear();
                          this.maybeSuggestBugReport(this.streamingMessage);
-@@ -3110,21 +3166,12 @@ export class InteractiveMode {
+@@ -3103,35 +3255,26 @@ export class InteractiveMode {
+                 this.clearStatusIndicator("compaction");
+                 if (event.aborted) {
+                     if (event.reason === "manual") {
+-                        this.showError("Compaction cancelled");
++                        this.showError("Compaction cancelled", { topic: "compaction" });
+                     }
+                     else {
+-                        this.showStatus("Auto-compaction cancelled");
++                        this.showStatus("Auto-compaction cancelled", { topic: "compaction" });
                      }
                  }
                  else if (event.result) {
@@ -1636,7 +2774,16 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
                      this.footer.invalidate();
                  }
                  else if (event.errorMessage) {
-@@ -3160,7 +3207,24 @@ export class InteractiveMode {
+                     if (event.reason === "manual") {
+-                        this.showError(event.errorMessage);
++                        this.showError(event.errorMessage, { topic: "compaction" });
+                     }
+-                    else {
++                    else if (!this.presentStatus(event.errorMessage, "error", { topic: "compaction" })) {
+                         this.chatContainer.addChild(new Spacer(1));
+                         const errorMessage = event.errorMessage;
+                         this.chatContainer.addChild(new ThemedText(() => theme.fg("error", errorMessage), 1, 0));
+@@ -3160,7 +3303,24 @@ export class InteractiveMode {
                  this.clearStatusIndicator("retry");
                  // Show error only on final failure (success shows normal response)
                  if (!event.success) {
@@ -1662,7 +2809,57 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
                  }
                  this.ui.requestRender();
                  break;
-@@ -3280,7 +3344,7 @@ export class InteractiveMode {
+@@ -3220,7 +3380,9 @@ export class InteractiveMode {
+      * If multiple status messages are emitted back-to-back (without anything else being added to the chat),
+      * we update the previous status line instead of appending new ones to avoid log spam.
+      */
+-    showStatus(message) {
++    showStatus(message, source) {
++        if (this.presentStatus(message, "info", source))
++            return;
+         const children = this.chatContainer.children;
+         const last = children.length > 0 ? children[children.length - 1] : undefined;
+         const secondLast = children.length > 1 ? children[children.length - 2] : undefined;
+@@ -3239,6 +3401,29 @@ export class InteractiveMode {
+         this.lastStatusText = text;
+         this.ui.requestRender();
+     }
++    /**
++     * Offer one of Pi's notices to `statusPresentation`. True when the host took it (a component drawn in the
++     * transcript in place of Pi's line, or shown elsewhere), so Pi adds nothing.
++     */
++    presentStatus(text, level, source) {
++        const presented = this.options.statusPresentation?.({
++            text,
++            level,
++            origin: source?.origin ?? "pi",
++            ...(source?.topic ? { topic: source.topic } : {}),
++        });
++        if (!presented)
++            return false;
++        if (presented !== true) {
++            if (isExpandable(presented)) {
++                presented.setExpanded(this.toolOutputExpanded);
++            }
++            this.chatContainer.addChild(new Spacer(1));
++            this.chatContainer.addChild(presented);
++            this.ui.requestRender();
++        }
++        return true;
++    }
+     addCustomEntryToChat(entry) {
+         const renderer = this.session.extensionRunner.getEntryRenderer(entry.customType);
+         if (!renderer) {
+@@ -3261,7 +3446,7 @@ export class InteractiveMode {
+     addMessageToChat(message, options) {
+         switch (message.role) {
+             case "bashExecution": {
+-                const component = new BashExecutionComponent(message.command, this.ui, message.excludeFromContext, this.outputPad);
++                const component = new BashExecutionComponent(message.command, this.ui, message.excludeFromContext, this.outputPad, this.options.bashPresentation);
+                 if (message.output) {
+                     component.appendOutput(message.output);
+                 }
+@@ -3280,7 +3465,7 @@ export class InteractiveMode {
              }
              case "compactionSummary": {
                  this.chatContainer.addChild(new Spacer(1));
@@ -1671,7 +2868,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
                  component.setExpanded(this.toolOutputExpanded);
                  this.chatContainer.addChild(component);
                  break;
-@@ -3314,6 +3378,15 @@ export class InteractiveMode {
+@@ -3314,6 +3499,15 @@ export class InteractiveMode {
                          }
                      }
                      else {
@@ -1687,7 +2884,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
                          const userComponent = new UserMessageComponent(textContent, this.getMarkdownThemeWithSettings(), this.outputPad, this.getMarkdownTransformers(), options?.messageId, options?.timestamp);
                          this.chatContainer.addChild(userComponent);
                      }
-@@ -3324,7 +3397,8 @@ export class InteractiveMode {
+@@ -3324,7 +3518,8 @@ export class InteractiveMode {
                  break;
              }
              case "assistant": {
@@ -1697,7 +2894,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
                  this.chatContainer.addChild(assistantComponent);
                  break;
              }
-@@ -3337,6 +3411,33 @@ export class InteractiveMode {
+@@ -3337,6 +3532,33 @@ export class InteractiveMode {
              }
          }
      }
@@ -1731,7 +2928,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
      renderSessionItems(items, messageMeta, options = {}) {
          this.pendingTools.clear();
          const renderedPendingTools = new Map();
-@@ -3371,6 +3472,7 @@ export class InteractiveMode {
+@@ -3371,6 +3593,7 @@ export class InteractiveMode {
                      timestamp: meta?.timestamp,
                  });
                  // Render tool call components
@@ -1739,7 +2936,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
                  for (const content of message.content) {
                      if (content.type === "toolCall") {
                          const component = new ToolExecutionComponent(content.name, content.id, content.arguments, {
-@@ -3381,24 +3483,29 @@ export class InteractiveMode {
+@@ -3381,24 +3604,29 @@ export class InteractiveMode {
                          component.setExpanded(this.toolOutputExpanded);
                          this.chatContainer.addChild(component);
                          if (message.stopReason === "aborted" || message.stopReason === "error") {
@@ -1781,7 +2978,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
                  if (message.stopReason !== "aborted" && message.stopReason !== "error") {
                      const miss = cacheMisses.get(message);
                      if (miss)
-@@ -3550,19 +3657,177 @@ export class InteractiveMode {
+@@ -3550,19 +3778,177 @@ export class InteractiveMode {
          this.chatContainer.addChild(new ThemedText(() => theme.fg("warning", `${label}: ${reBilled}`), 1, 0));
      }
      renderInitialMessages() {
@@ -1886,7 +3083,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
 +        if (!history || index < 0) {
 +            this.transcriptHistory = undefined;
 +            return;
-         }
++        }
 +        const chunk = history.chunks.pop();
 +        if (!chunk)
 +            return;
@@ -1912,7 +3109,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
 +        if (history.chunks.length === 0) {
 +            this.chatContainer.children.splice(index, 1);
 +            this.transcriptHistory = undefined;
-+        }
+         }
 +        else {
 +            this.updateLoadEarlierRow();
 +        }
@@ -1967,7 +3164,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
      }
      renderProjectTrustWarningIfNeeded() {
          if (this.settingsManager.isProjectTrusted() || !hasTrustRequiringProjectResources(this.sessionManager.getCwd())) {
-@@ -3587,7 +3852,7 @@ export class InteractiveMode {
+@@ -3587,7 +3973,7 @@ export class InteractiveMode {
      }
      rebuildChatFromMessages() {
          this.chatContainer.clear();
@@ -1976,7 +3173,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
      }
      // =========================================================================
      // Key handlers
-@@ -3643,7 +3908,7 @@ export class InteractiveMode {
+@@ -3643,7 +4029,7 @@ export class InteractiveMode {
          this.stop();
          await this.runtimeHost.dispose();
          const resumeCommand = formatResumeCommand(this.sessionManager);
@@ -1985,7 +3182,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
              process.stdout.write(`${chalk.dim("To resume this session:")} ${resumeCommand}\n`);
          }
          process.exit(0);
-@@ -3814,6 +4079,10 @@ export class InteractiveMode {
+@@ -3814,6 +4200,10 @@ export class InteractiveMode {
          }
      }
      handleDequeue() {
@@ -1996,7 +3193,63 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
          const restored = this.restoreQueuedMessagesToEditor();
          if (restored === 0) {
              this.showStatus("No queued messages to restore");
-@@ -3990,7 +4259,7 @@ export class InteractiveMode {
+@@ -3836,12 +4226,12 @@ export class InteractiveMode {
+     cycleThinkingLevel() {
+         const newLevel = this.session.cycleThinkingLevel();
+         if (newLevel === undefined) {
+-            this.showStatus("Current model does not support thinking");
++            this.showStatus("Current model does not support thinking", { topic: "effort" });
+         }
+         else {
+             this.footer.invalidate();
+             this.updateEditorBorderColor();
+-            this.showStatus(`Thinking level: ${newLevel}`);
++            this.showStatus(`Thinking level: ${newLevel}`, { topic: "effort" });
+         }
+     }
+     async cycleModel(direction) {
+@@ -3849,18 +4239,18 @@ export class InteractiveMode {
+             const result = await this.session.cycleModel(direction);
+             if (result === undefined) {
+                 const msg = this.session.scopedModels.length > 0 ? "Only one model in scope" : "Only one model available";
+-                this.showStatus(msg);
++                this.showStatus(msg, { topic: "model" });
+             }
+             else {
+                 this.footer.invalidate();
+                 this.updateEditorBorderColor();
+                 const thinkingStr = result.model.reasoning && result.thinkingLevel !== "off" ? ` (thinking: ${result.thinkingLevel})` : "";
+-                this.showStatus(`Switched to ${result.model.name || result.model.id}${thinkingStr}`);
++                this.showStatus(`Switched to ${result.model.name || result.model.id}${thinkingStr}`, { topic: "model" });
+                 void this.maybeWarnAboutAnthropicSubscriptionAuth(result.model);
+             }
+         }
+         catch (error) {
+-            this.showError(error instanceof Error ? error.message : String(error));
++            this.showError(error instanceof Error ? error.message : String(error), { topic: "model" });
+         }
+     }
+     toggleToolOutputExpansion() {
+@@ -3926,12 +4316,16 @@ export class InteractiveMode {
+         this.editor.setText("");
+         this.ui.requestRender();
+     }
+-    showError(errorMessage) {
++    showError(errorMessage, source) {
++        if (this.presentStatus(errorMessage, "error", source))
++            return;
+         this.chatContainer.addChild(new Spacer(1));
+         this.chatContainer.addChild(new ThemedText(() => theme.fg("error", `Error: ${errorMessage}`), this.outputPad, 0));
+         this.ui.requestRender();
+     }
+-    showWarning(warningMessage) {
++    showWarning(warningMessage, source) {
++        if (this.presentStatus(warningMessage, "warning", source))
++            return;
+         this.chatContainer.addChild(new Spacer(1));
+         this.chatContainer.addChild(new ThemedText(() => theme.fg("warning", `Warning: ${warningMessage}`), 1, 0));
+         this.ui.requestRender();
+@@ -3990,7 +4384,7 @@ export class InteractiveMode {
       * Clears both session queue and compaction queue.
       */
      clearAllQueues() {
@@ -2005,7 +3258,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
          const compactionSteering = this.compactionQueuedMessages
              .filter((msg) => msg.mode === "steer")
              .map((msg) => msg.text);
-@@ -4010,6 +4279,8 @@ export class InteractiveMode {
+@@ -4010,6 +4404,8 @@ export class InteractiveMode {
              this.pendingMessagesContainer.addChild(component);
          }
          const { steering: steeringMessages, followUp: followUpMessages } = this.getAllQueuedMessages();
@@ -2014,7 +3267,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
          if (steeringMessages.length > 0 || followUpMessages.length > 0) {
              this.pendingMessagesContainer.addChild(new Spacer(1));
              for (const message of steeringMessages) {
-@@ -4026,6 +4297,13 @@ export class InteractiveMode {
+@@ -4026,6 +4422,13 @@ export class InteractiveMode {
          }
      }
      restoreQueuedMessagesToEditor(options) {
@@ -2028,7 +3281,196 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
          const { steering, followUp } = this.clearAllQueues();
          const allQueued = [...steering, ...followUp];
          if (allQueued.length === 0) {
-@@ -5919,7 +6197,7 @@ export class InteractiveMode {
+@@ -4178,10 +4581,11 @@ export class InteractiveMode {
+     showSettingsSelector() {
+         this.showSelector((done) => {
+             let selector;
++            let settings;
+             const defaultProvider = this.settingsManager.getDefaultProvider();
+             const defaultModelId = this.settingsManager.getDefaultModel();
+             const defaultModel = defaultProvider && defaultModelId ? `${defaultProvider}/${defaultModelId}` : "not set";
+-            selector = new SettingsSelectorComponent({
++            const config = {
+                 autoCompact: this.session.autoCompactionEnabled,
+                 defaultModel,
+                 currentModel: this.session.model,
+@@ -4224,7 +4628,8 @@ export class InteractiveMode {
+                 fullscreenCopyOnSelect: this.settingsManager.getFullscreenCopyOnSelect(),
+                 fullscreenWheelScrollLines: this.settingsManager.getFullscreenWheelScrollLines(),
+                 warnings: this.settingsManager.getWarnings(),
+-            }, {
++            };
++            const callbacks = {
+                 onAutoCompactChange: (enabled) => {
+                     this.session.setAutoCompactionEnabled(enabled);
+                     this.footer.setAutoCompactEnabled(enabled);
+@@ -4378,6 +4783,7 @@ export class InteractiveMode {
+                 onTuiModeChange: (mode) => {
+                     if (!this.switchTuiMode(mode)) {
+                         selector?.getSettingsList().updateValue("tui-mode", this.ui.mode);
++                        settings?.update("tui-mode", this.ui.mode);
+                         this.showStatus("Close active overlays before changing TUI mode");
+                         return;
+                     }
+@@ -4410,7 +4816,20 @@ export class InteractiveMode {
+                     done();
+                     this.ui.requestRender();
+                 },
+-            });
++            };
++            const selectorHooks = this.options.selectorPresentation;
++            const presentOptions = selectorHooks?.options ? (request) => selectorHooks.options(request) : undefined;
++            const presentNested = selectorHooks?.settings ? (request) => selectorHooks.settings({ ...request, tui: this.ui }) : undefined;
++            if (selectorHooks?.settings) {
++                // The host draws Pi's own items; every change still goes through Pi's dispatch.
++                settings = createSettingsModel(config, callbacks, presentOptions, presentNested);
++                const presented = presentOrDecline(() => selectorHooks.settings({ tui: this.ui, items: settings.items, change: settings.change, cancel: callbacks.onCancel }));
++                if (presented) {
++                    return { component: presented, focus: presented, dispose: () => presented.dispose?.() };
++                }
++                settings = undefined;
++            }
++            selector = new SettingsSelectorComponent(config, callbacks, presentOptions, presentNested);
+             return { component: selector, focus: selector.getSettingsList() };
+         });
+     }
+@@ -4423,7 +4842,7 @@ export class InteractiveMode {
+         const normalized = searchTerm.trim().toLowerCase();
+         const level = availableLevels.find((candidate) => candidate.toLowerCase() === normalized);
+         if (!level) {
+-            this.showError(`Unknown thinking level "${searchTerm}". Available levels: ${availableLevels.join(", ")}.`);
++            this.showError(`Unknown thinking level "${searchTerm}". Available levels: ${availableLevels.join(", ")}.`, { topic: "effort" });
+             return;
+         }
+         this.selectThinkingLevel(level, false);
+@@ -4433,10 +4852,10 @@ export class InteractiveMode {
+             this.session.setThinkingLevel(level, { persist });
+             this.footer.invalidate();
+             this.updateEditorBorderColor();
+-            this.showStatus(persist ? `Default thinking level: ${level}` : `Thinking level: ${level}`);
++            this.showStatus(persist ? `Default thinking level: ${level}` : `Thinking level: ${level}`, { topic: "effort" });
+         }
+         catch (error) {
+-            this.showError(error instanceof Error ? error.message : String(error));
++            this.showError(error instanceof Error ? error.message : String(error), { topic: "effort" });
+         }
+     }
+     showThinkingSelector() {
+@@ -4445,10 +4864,25 @@ export class InteractiveMode {
+                 this.selectThinkingLevel(level, persist);
+                 done();
+             };
+-            const selector = new ThinkingSelectorComponent(this.session.thinkingLevel ?? DEFAULT_THINKING_LEVEL, this.session.getAvailableThinkingLevels(), (level) => selectLevel(level, false), () => {
++            const cancel = () => {
+                 done();
+                 this.ui.requestRender();
+-            }, (level) => selectLevel(level, true), this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL);
++            };
++            const current = this.session.thinkingLevel ?? DEFAULT_THINKING_LEVEL;
++            const levels = this.session.getAvailableThinkingLevels();
++            const defaultLevel = this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL;
++            const presented = presentOrDecline(() => this.options.selectorPresentation?.thinking?.({
++                current,
++                levels,
++                defaultLevel,
++                describe: thinkingLevelDescription,
++                select: selectLevel,
++                cancel,
++            }));
++            if (presented) {
++                return { component: presented, focus: presented, dispose: () => presented.dispose?.() };
++            }
++            const selector = new ThinkingSelectorComponent(current, levels, (level) => selectLevel(level, false), cancel, (level) => selectLevel(level, true), defaultLevel);
+             return { component: selector, focus: selector };
+         });
+     }
+@@ -4463,11 +4897,11 @@ export class InteractiveMode {
+                 await this.session.setModel(model, { persist: false });
+                 this.footer.invalidate();
+                 this.updateEditorBorderColor();
+-                this.showStatus(`Model: ${model.id}`);
++                this.showStatus(`Model: ${model.id}`, { topic: "model" });
+                 void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
+             }
+             catch (error) {
+-                this.showError(error instanceof Error ? error.message : String(error));
++                this.showError(error instanceof Error ? error.message : String(error), { topic: "model" });
+             }
+             return;
+         }
+@@ -4480,7 +4914,7 @@ export class InteractiveMode {
+         const cachedMatch = findExactModelReferenceMatch(searchTerm, cachedModels);
+         if (cachedMatch || this.session.scopedModels.length > 0)
+             return cachedMatch;
+-        this.showStatus("Refreshing model catalogs…");
++        this.showStatus("Refreshing model catalogs…", { topic: "model" });
+         const controller = new AbortController();
+         let timedOut = false;
+         const timeout = setTimeout(() => {
+@@ -4490,16 +4924,16 @@ export class InteractiveMode {
+         try {
+             const result = await refreshModelCatalogs(this.session.modelRuntime, controller.signal);
+             if (result.aborted && timedOut) {
+-                this.showWarning("Model refresh timed out; searching cached models.");
++                this.showWarning("Model refresh timed out; searching cached models.", { topic: "model" });
+             }
+             else if (result.errors.size > 0) {
+-                this.showWarning(`Could not refresh ${[...result.errors.keys()].join(", ")}; searching cached models.`);
++                this.showWarning(`Could not refresh ${[...result.errors.keys()].join(", ")}; searching cached models.`, { topic: "model" });
+             }
+         }
+         catch (error) {
+             this.showWarning(timedOut
+                 ? "Model refresh timed out; searching cached models."
+-                : `Could not refresh model catalogs: ${error instanceof Error ? error.message : String(error)}`);
++                : `Could not refresh model catalogs: ${error instanceof Error ? error.message : String(error)}`, { topic: "model" });
+         }
+         finally {
+             clearTimeout(timeout);
+@@ -4595,20 +5029,36 @@ export class InteractiveMode {
+                     this.footer.invalidate();
+                     this.updateEditorBorderColor();
+                     done();
+-                    this.showStatus(persist ? `Default model: ${model.provider}/${model.id}` : `Model: ${model.id}`);
++                    this.showStatus(persist ? `Default model: ${model.provider}/${model.id}` : `Model: ${model.id}`, { topic: "model" });
+                     void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
+                 }
+                 catch (error) {
+                     done();
+-                    this.showError(error instanceof Error ? error.message : String(error));
++                    this.showError(error instanceof Error ? error.message : String(error), { topic: "model" });
+                 }
+             };
+-            const defaultProvider = this.settingsManager.getDefaultProvider();
+-            const defaultModel = this.settingsManager.getDefaultModel();
+-            const selector = new ModelSelectorComponent(this.ui, this.session.model, this.session.modelRuntime, this.session.scopedModels, (model) => selectModel(model, false), () => {
++            const cancel = () => {
+                 done();
+                 this.ui.requestRender();
+-            }, initialSearchInput, (model) => selectModel(model, true), defaultProvider && defaultModel ? { provider: defaultProvider, id: defaultModel } : undefined);
++            };
++            const defaultProvider = this.settingsManager.getDefaultProvider();
++            const defaultModel = this.settingsManager.getDefaultModel();
++            const defaultReference = defaultProvider && defaultModel ? { provider: defaultProvider, id: defaultModel } : undefined;
++            const presented = presentOrDecline(() => this.options.selectorPresentation?.model?.({
++                tui: this.ui,
++                current: this.session.model,
++                models: () => this.session.modelRuntime.getAvailableSnapshot(),
++                scoped: this.session.scopedModels,
++                ...(defaultReference ? { defaultModel: defaultReference } : {}),
++                ...(initialSearchInput ? { initialSearch: initialSearchInput } : {}),
++                refresh: (signal) => refreshModelCatalogs(this.session.modelRuntime, signal),
++                select: (model, persist) => void selectModel(model, persist),
++                cancel,
++            }));
++            if (presented) {
++                return { component: presented, focus: presented, dispose: () => presented.dispose?.() };
++            }
++            const selector = new ModelSelectorComponent(this.ui, this.session.model, this.session.modelRuntime, this.session.scopedModels, (model) => selectModel(model, false), cancel, initialSearchInput, (model) => selectModel(model, true), defaultReference);
+             return { component: selector, focus: selector, dispose: () => selector.dispose() };
+         });
+     }
+@@ -5919,7 +6369,7 @@ export class InteractiveMode {
  | \`${externalEditor}\` | Edit message in external editor |
  | \`${copyMessage}\` | Copy selection or last assistant message |
  | \`${followUp}\` | Queue follow-up message |
@@ -2037,6 +3479,24 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..7b4a07aff401be4bfe4dc90b64b11e42
  | \`${pasteImage}\` | Paste files on macOS, images, or text from clipboard |
  | \`/\` | Slash commands |
  | \`!\` | Run bash command |
+@@ -6022,7 +6472,7 @@ export class InteractiveMode {
+         if (eventResult?.result) {
+             const result = eventResult.result;
+             // Create UI component for display
+-            this.bashComponent = new BashExecutionComponent(command, this.ui, excludeFromContext, this.outputPad);
++            this.bashComponent = new BashExecutionComponent(command, this.ui, excludeFromContext, this.outputPad, this.options.bashPresentation);
+             this.bashComponent.setExpanded(this.toolOutputExpanded);
+             if (this.session.isStreaming) {
+                 this.pendingMessagesContainer.addChild(this.bashComponent);
+@@ -6044,7 +6494,7 @@ export class InteractiveMode {
+         }
+         // Normal execution path (possibly with custom operations)
+         const isDeferred = this.session.isStreaming;
+-        this.bashComponent = new BashExecutionComponent(command, this.ui, excludeFromContext, this.outputPad);
++        this.bashComponent = new BashExecutionComponent(command, this.ui, excludeFromContext, this.outputPad, this.options.bashPresentation, Date.now());
+         this.bashComponent.setExpanded(this.toolOutputExpanded);
+         if (isDeferred) {
+             // Show in pending area when agent is streaming
 diff --git a/dist/utils/image-process.js b/dist/utils/image-process.js
 index 65b15afe6f7532d030e841d3ac163b462e833849..75c1e84ccc88e7e0c4b2798dfada5ee62b769672 100644
 --- a/dist/utils/image-process.js
