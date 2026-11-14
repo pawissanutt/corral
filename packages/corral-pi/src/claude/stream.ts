@@ -62,12 +62,32 @@ export function claudeSystemPrompt(messages: readonly Message[]): Options["syste
   return { type: "preset", preset: "claude_code", ...(append ? { append } : {}) };
 }
 
+/** Claude Code's window for a plain model id; legacy ids open 1M only through a `[1m]` opt-in this lane never sends. */
+const CLAUDE_CODE_DEFAULT_CONTEXT_WINDOW = 200_000;
+const LEGACY_LONG_CONTEXT_MODEL_IDS = new Set(["claude-3-7-sonnet", "claude-opus-4-6", "claude-sonnet-4-0",
+  "claude-sonnet-4-5", "claude-sonnet-4-6"]);
+/** The output budget Claude Code holds back from its window, capped, plus its refusal margin (senpi#3801). */
+const CLAUDE_CODE_OUTPUT_RESERVE_CAP = 20_000;
+const CLAUDE_CODE_BLOCKING_BUFFER = 3_000;
+
+/**
+ * The `CLAUDE_CODE_MAX_CONTEXT_TOKENS` that lets Claude Code accept a conversation up to the window Pi
+ * compacts against. With `DISABLE_COMPACT`, Claude Code refuses locally once a prompt passes this value
+ * minus its output reserve and buffer, so both are added back.
+ */
+export function claudeMaxContextTokens(model: Pick<Model<string>, "id" | "contextWindow">): number {
+  const window = LEGACY_LONG_CONTEXT_MODEL_IDS.has(model.id)
+    ? Math.min(model.contextWindow, CLAUDE_CODE_DEFAULT_CONTEXT_WINDOW) : model.contextWindow;
+  return window + CLAUDE_CODE_OUTPUT_RESERVE_CAP + CLAUDE_CODE_BLOCKING_BUFFER;
+}
+
 /**
  * The subprocess environment: the host's, without any ambient Anthropic or Claude Code auth, with
  * the corral-owned OAuth token as the only credential and a private config directory.
  */
 export function claudeEnvironment(
   parent: NodeJS.ProcessEnv, token: string, configDir: string, retention: ClaudeCacheRetention = DEFAULT_CACHE_TTL,
+  model?: Pick<Model<string>, "id" | "contextWindow">,
 ): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(parent)) {
@@ -88,6 +108,13 @@ export function claudeEnvironment(
   env.CLAUDE_CODE_PROMPT_CACHE_TTL = retention === "none" ? DEFAULT_CACHE_TTL : retention;
   if (retention === "5m") env.FORCE_PROMPT_CACHING_5M = "1";
   if (retention === "none") env.DISABLE_PROMPT_CACHING = "1";
+  // Pi owns compaction. Claude Code's per-turn token-budget reminder changes the prompt every turn and
+  // defeats cache reuse, and its native compaction must stay off at the window Pi plans against.
+  env.CLAUDE_CODE_TOTAL_TOKENS_REMINDER = "off";
+  env.DISABLE_COMPACT = "1";
+  if (model) env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(claudeMaxContextTokens(model));
+  // Claude Code loads auto memory independently of settingSources; corral supplies its own memory.
+  env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
   env.CLAUDE_AGENT_SDK_CLIENT_APP = "corral-pi";
   return env;
 }
@@ -163,11 +190,11 @@ export function streamClaudeSdk(
         hooks: HOST_TOOL_DENIAL_HOOKS,
         systemPrompt: claudeSystemPrompt(messages),
         settingSources: [],
-        settings: { autoCompactEnabled: false },
+        settings: { autoCompactEnabled: false, autoMemoryEnabled: false },
         strictMcpConfig: true,
         persistSession: false,
         pathToClaudeCodeExecutable: executable,
-        env: claudeEnvironment(config.env ?? process.env, token, config.configDir, retention),
+        env: claudeEnvironment(config.env ?? process.env, token, config.configDir, retention, model),
         ...(mcpServers ? { mcpServers } : {}),
         ...(toolLess ? { maxTurns: 1 } : {}),
         ...thinkingOptions(model, options),

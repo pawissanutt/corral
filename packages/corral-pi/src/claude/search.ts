@@ -33,10 +33,10 @@ export function streamClaudeSearch(
       mkdirSync(config.configDir, { recursive: true, mode: 0o700 });
       const queryOptions: Options = {
         cwd: config.cwd ?? process.cwd(), model: model.id, tools: ["WebSearch"], allowedTools: ["WebSearch"],
-        permissionMode: "dontAsk", settingSources: [], settings: { autoCompactEnabled: false },
+        permissionMode: "dontAsk", settingSources: [], settings: { autoCompactEnabled: false, autoMemoryEnabled: false },
         strictMcpConfig: true, persistSession: false,
         maxTurns: 3, pathToClaudeCodeExecutable: (config.executable ?? resolveClaudeCode)(),
-        env: claudeEnvironment(config.env ?? process.env, token, config.configDir, retention),
+        env: claudeEnvironment(config.env ?? process.env, token, config.configDir, retention, model),
         systemPrompt: claudeSystemPrompt(context.messages),
         canUseTool: async (name, input) => name === "WebSearch"
           ? { behavior: "allow", updatedInput: input }
