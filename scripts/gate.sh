@@ -256,10 +256,12 @@ end_step
 
 # Reuse installed Darwin standard libraries; this checks all Rust (including macOS
 # cfg paths), not native linking. Do not download targets during a review gate.
-# Skip only the bundled C work: SQLite's linked path still copies its bundled Rust
-# bindings, and zstd has checked-in bindings so Cargo can override its build script.
+# Skip only native C/assembly work: SQLite's linked path still copies its bundled
+# Rust bindings; zstd has checked-in bindings; ring 0.17.14 emits only native link
+# directives (no generated Rust, cfg or env). Cargo can override the latter scripts
+# without changing Rust/cfg coverage. Re-audit ring's versioned links key on upgrades.
 # These command-local overrides must never reach a build/test command: real builds
-# still compile and link the bundled C libraries with the platform's toolchain.
+# still compile and link the native libraries with the platform's toolchain.
 if ((!darwin_touched)); then
   printf '\nSkipping Darwin checks (no platform or dependency changes).\n'
 elif command -v rustup >/dev/null 2>&1; then
@@ -268,10 +270,11 @@ elif command -v rustup >/dev/null 2>&1; then
   for target in aarch64-apple-darwin x86_64-apple-darwin; do
     if [[ $'\n'"$installed_targets"$'\n' == *$'\n'"$target"$'\n'* ]]; then
       begin_step "cargo check --workspace --all-targets --target $target"
-      printf 'Rust-only check: skipping SQLite/zstd C compilation (no Apple SDK required).\n'
+      printf 'Rust-only check: skipping SQLite/zstd/ring native compilation (no Apple SDK required).\n'
       LIBSQLITE3_SYS_USE_PKG_CONFIG=1 python3 scripts/gate_timer.py compile \
         "$CORRAL_TEST_BUDGET_STATE" "$target" -- bash scripts/cargo.sh check --workspace --all-targets --target "$target" \
-        --config "target.$target.zstd.rustc-link-lib=[]"
+        --config "target.$target.zstd.rustc-link-lib=[]" \
+        --config "target.$target.ring_core_0_17_14_.rustc-link-lib=[]"
       end_step
     else
       printf '\nSkipping %s check (install with: rustup target add %s).\n' "$target" "$target"
