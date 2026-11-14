@@ -1,5 +1,6 @@
 #![cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
-use super::{Event, Session};
+use super::Session;
+use crate::client::core::Event;
 use corral_protocol::rpc::Request;
 use corral_protocol::subscription::{SubAck, SubOpen, Topic};
 use corral_protocol::{
@@ -83,7 +84,7 @@ fn handshake(listener: UnixListener) -> UnixStream {
     let hello = request(&mut stream);
     assert_eq!(hello.method, wire::HELLO);
     assert_eq!(hello.params["client"]["kind"], "app");
-    assert_eq!(hello.params["caps"], json!(["board.v1"]));
+    assert_eq!(hello.params["caps"], json!(["board.v1", "device.v1"]));
     respond(
         &mut stream,
         &hello,
@@ -140,6 +141,7 @@ fn ack(stream: &mut UnixStream, topic: Topic, rev: u64, after: Option<&str>) -> 
     request
 }
 fn board(session: &mut Session) -> (u64, Vec<wire::board::BoardRow>, Vec<String>, bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
         match session.next() {
             Event::Board {
@@ -148,8 +150,11 @@ fn board(session: &mut Session) -> (u64, Vec<wire::board::BoardRow>, Vec<String>
                 left,
                 replacement,
             } => return (epoch, rows, left, replacement),
-            Event::Health(_) => {}
-            Event::Idle => panic!("board was not delivered"),
+            Event::Health(_) | Event::Reply { .. } | Event::Notice { .. } => {}
+            Event::Idle => assert!(
+                std::time::Instant::now() < deadline,
+                "board was not delivered"
+            ),
             Event::Closed(reason) => panic!("session closed: {reason}"),
         }
     }
@@ -211,6 +216,8 @@ fn paged_snapshot_and_delta_are_two_batches_and_every_page_is_acknowledged() {
         respond(&mut stream, &delta_ack, json!({}));
     });
     let (mut session, _) = Session::connect(&path).unwrap();
+    session.open(Topic::Health).unwrap();
+    session.open(Topic::Board).unwrap();
     let (epoch, rows, left, replacement) = board(&mut session);
     assert_eq!(epoch, 1);
     assert_eq!(rows.len(), 2);
@@ -278,6 +285,8 @@ fn sub_reset_reopens_without_since_and_delivers_a_complete_replacement() {
         respond(&mut stream, &last_ack, json!({}));
     });
     let (mut session, _) = Session::connect(&path).unwrap();
+    session.open(Topic::Health).unwrap();
+    session.open(Topic::Board).unwrap();
     let (epoch, rows, _, _) = board(&mut session);
     assert_eq!(epoch, 1);
     assert_eq!(rows[0].id, "T-9");

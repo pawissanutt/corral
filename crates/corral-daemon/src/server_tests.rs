@@ -1,4 +1,5 @@
 use super::*;
+use crate::topics;
 use crate::{Exit, RunOptions, run_with_pass, tests::Fixture};
 use corral_core::{Status, Store};
 use corral_ops::{boardview::Projection, daemon_client};

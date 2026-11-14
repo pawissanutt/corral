@@ -49,6 +49,9 @@ pub fn daemon_status(feed: &daemon::Feed) -> Status {
 /// The inspector in the Daemon state: the selected task's facts on Story; the other tabs, which
 /// the daemon does not serve, one quiet line.
 pub fn daemon_inspector(state: &State, feed: &daemon::Feed, form: Form) -> Inspector {
+    if let Some(line) = feed.device.board_notice() {
+        return Inspector::Quiet(line);
+    }
     let board = &feed.board;
     if !board.complete {
         return match feed.link {

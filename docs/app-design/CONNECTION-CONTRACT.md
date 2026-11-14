@@ -1,6 +1,6 @@
 # App connection contract: Phase 2a
 
-Status: implementation contract for the next app integration increment. The accompanying transport experiment proves feasibility only; it does not install a listener, enrol a device or enable commands in the shipped app. Product authority remains [REQUIREMENTS.md](REQUIREMENTS.md), especially D7, D11, D17–D18 and R3, R8–R10, R17. This contract does not grant automation or permission to answer live questions.
+Status: connection prerequisite implemented and verified on private native-terminal and Chromium surfaces; see [receipt](NEXT-STEP.md#verification-receipt). The earlier transport experiment remains feasibility-only evidence. The question/command admission sections below constrain subsequent Phase 2a work, not currently enabled app commands. Product authority remains [REQUIREMENTS.md](REQUIREMENTS.md), especially D7, D11, D17–D18 and R3, R8–R10, R17. This contract does not grant automation or permission to answer live questions.
 
 ## Boundaries
 

@@ -13,6 +13,7 @@ mod config_cmd;
 mod daemon_cmd;
 mod daemon_unit;
 mod dashboard_cmd;
+mod device_cmd;
 mod digest_cmd;
 mod doctor;
 mod entry;
@@ -596,6 +597,11 @@ pub enum Cmd {
     Daemon {
         #[command(subcommand)]
         cmd: daemon_cmd::DaemonCmd,
+    },
+    /// Pair, list and revoke app devices (needs a running daemon)
+    Device {
+        #[command(subcommand)]
+        cmd: device_cmd::DeviceCmd,
     },
     /// Compatibility alias: shared status, workspace pause, or guidance for scoped activation
     Autopilot {

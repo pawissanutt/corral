@@ -274,6 +274,12 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
             | crate::daemon_cmd::DaemonCmd::Stop { .. }
             | crate::daemon_cmd::DaemonCmd::Install { .. } => Refused,
         },
+        Cmd::Device { cmd } => match cmd {
+            crate::device_cmd::DeviceCmd::List { .. } => Read,
+            crate::device_cmd::DeviceCmd::Pair | crate::device_cmd::DeviceCmd::Revoke { .. } => {
+                Refused
+            }
+        },
         Cmd::Pm { cmd } => match cmd {
             Some(PmCmd::Bench { .. } | PmCmd::Next { .. } | PmCmd::Brief { .. }) => Read,
             Some(PmCmd::Notes { cmd }) => match cmd {

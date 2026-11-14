@@ -107,7 +107,7 @@ pub fn run(start: &Path, cmd: DaemonCmd, entry: &crate::entry::Entry) -> Result<
     }
 }
 
-fn owner_store(start: &Path, entry: &crate::entry::Entry) -> Result<Store> {
+pub(crate) fn owner_store(start: &Path, entry: &crate::entry::Entry) -> Result<Store> {
     // Check authority before observing config edits or running store migrations.
     let store = Store::open_unobserved(&Store::find_root(start)?)?;
     corral_ops::require_automation_owner(&store, entry.invoker())?;

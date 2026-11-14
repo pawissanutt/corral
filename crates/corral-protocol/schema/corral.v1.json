@@ -1070,6 +1070,87 @@
         ],
         "type": "string"
       },
+      "DeviceAttach": {
+        "properties": {
+          "device": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "device"
+        ],
+        "type": "object"
+      },
+      "DeviceEnrol": {
+        "properties": {
+          "app_version": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "app_version"
+        ],
+        "type": "object"
+      },
+      "DeviceInfo": {
+        "properties": {
+          "app_version": {
+            "type": "string"
+          },
+          "enrolled_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/DevicePlatform"
+          },
+          "revoked_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "platform",
+          "app_version",
+          "enrolled_at"
+        ],
+        "type": "object"
+      },
+      "DeviceList": {
+        "type": "object"
+      },
+      "DevicePlatform": {
+        "enum": [
+          "native",
+          "web",
+          "other"
+        ],
+        "type": "string"
+      },
+      "DeviceRevoke": {
+        "properties": {
+          "device": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "device"
+        ],
+        "type": "object"
+      },
       "Error": {
         "properties": {
           "code": {
@@ -2003,6 +2084,222 @@
           "stream",
           "bytes",
           "frames"
+        ],
+        "type": "object"
+      },
+      "PairBegin": {
+        "type": "object"
+      },
+      "PairCancel": {
+        "properties": {
+          "pair_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pair_id"
+        ],
+        "type": "object"
+      },
+      "PairClaim": {
+        "properties": {
+          "app_version": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "app_version"
+        ],
+        "type": "object"
+      },
+      "PairClaimed": {
+        "properties": {
+          "sas": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sas"
+        ],
+        "type": "object"
+      },
+      "PairConfirm": {
+        "properties": {
+          "pair_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pair_id"
+        ],
+        "type": "object"
+      },
+      "PairDone": {
+        "properties": {
+          "device": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "device"
+        ],
+        "type": "object"
+      },
+      "PairOffer": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "pair_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pair_id",
+          "code",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "PairRefused": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "type": "object"
+      },
+      "PairState": {
+        "oneOf": [
+          {
+            "properties": {
+              "expires_at": {
+                "type": "string"
+              },
+              "state": {
+                "const": "offered",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "expires_at"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "app_version": {
+                "type": "string"
+              },
+              "expires_at": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "sas": {
+                "type": "string"
+              },
+              "state": {
+                "const": "claimed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "name",
+              "app_version",
+              "sas",
+              "expires_at"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "device": {
+                "$ref": "#/components/schemas/DeviceInfo"
+              },
+              "state": {
+                "const": "paired",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "device"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "state": {
+                "const": "ended",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "state": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "PairStatus": {
+        "properties": {
+          "pair_id": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PairState"
+          }
+        },
+        "required": [
+          "pair_id",
+          "state"
+        ],
+        "type": "object"
+      },
+      "PairStatusQuery": {
+        "properties": {
+          "pair_id": {
+            "type": "string"
+          },
+          "wait_ms": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pair_id",
+          "wait_ms"
         ],
         "type": "object"
       },
@@ -4896,6 +5193,454 @@
           "message": "internal"
         }
       ]
+    },
+    {
+      "name": "device.enrol",
+      "params": [
+        {
+          "name": "app_version",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DeviceInfo"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/DeviceEnrol"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "device.attach",
+      "params": [
+        {
+          "name": "device",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DeviceInfo"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/DeviceAttach"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "revoked",
+          "message": "revoked"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "device.list",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "items": {
+            "$ref": "#/components/schemas/DeviceInfo"
+          },
+          "type": "array"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/DeviceList"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "device.revoke",
+      "params": [
+        {
+          "name": "device",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DeviceInfo"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/DeviceRevoke"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "pair.begin",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PairOffer"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/PairBegin"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "busy",
+          "message": "busy"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "pair.status",
+      "params": [
+        {
+          "name": "pair_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "wait_ms",
+          "required": true,
+          "schema": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PairStatus"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/PairStatusQuery"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "expired",
+          "message": "expired"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "pair.confirm",
+      "params": [
+        {
+          "name": "pair_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/DeviceInfo"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/PairConfirm"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "expired",
+          "message": "expired"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "pair.cancel",
+      "params": [
+        {
+          "name": "pair_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "type": "null"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/PairCancel"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "expired",
+          "message": "expired"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "pair.claim",
+      "params": [
+        {
+          "name": "app_version",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PairClaimed"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/PairClaim"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "expired",
+          "message": "expired"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "pair.done",
+      "params": [
+        {
+          "name": "device",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "x-notification": true,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/PairDone"
+      },
+      "x-wire-errors": []
+    },
+    {
+      "name": "pair.refused",
+      "params": [
+        {
+          "name": "reason",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "x-notification": true,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/PairRefused"
+      },
+      "x-wire-errors": []
     }
   ],
   "openrpc": "1.3.2",

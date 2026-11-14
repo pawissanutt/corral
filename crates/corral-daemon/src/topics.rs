@@ -7,13 +7,13 @@ use corral_protocol::{
     self as wire,
     board::BoardCursor,
     classic::ClassicNotice,
-    frame::{CONTROL_MAX, Frame, FrameKind, write_frame_until},
+    frame::{CONTROL_MAX, Frame, FrameKind},
     rpc,
     subscription::{SubAck, SubClose, SubDelta, SubOpen, SubReset, SubSince, Topic},
 };
 use serde::Serialize;
-use std::os::unix::net::UnixStream;
 
+use crate::conn::Conn;
 use crate::state::Shared;
 
 struct Subscriber {
@@ -130,20 +130,15 @@ impl<'a> Topics<'a> {
         }
     }
 
-    pub fn flush(&mut self, stream: &mut UnixStream) -> Result<()> {
+    pub fn flush(&mut self, conn: &mut dyn Conn) -> Result<()> {
         for topic in [Topic::Board, Topic::Health, Topic::Classic] {
             let result = self.next(topic);
             match result {
-                Ok(Some(frame)) => write_frame_until(
-                    stream,
-                    &frame,
-                    std::time::Instant::now() + super::IO_TIMEOUT,
-                )
-                .context("pushing topic frame")?,
+                Ok(Some(frame)) => conn.send_frame(&frame).context("pushing topic frame")?,
                 Ok(None) => {}
                 Err(error) => {
-                    super::error(
-                        stream,
+                    crate::conn::error(
+                        conn,
                         serde_json::Value::Null,
                         rpc::ErrorCode::Internal,
                         &format!("{error:#}"),
