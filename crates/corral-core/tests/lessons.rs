@@ -238,7 +238,7 @@ fn symlink_storage_paths_are_rejected_without_touching_target() {
 
 #[test]
 fn scopes_require_every_dimension_and_allow_alternatives() {
-    // Given a fully scoped lesson and a task referencing its file.
+    // Given a fully scoped lesson and a task declaring its file.
     let dir = tempdir().unwrap();
     let store = Store::init(dir.path()).unwrap();
     let mut task = store
@@ -250,6 +250,7 @@ fn scopes_require_every_dimension_and_allow_alternatives() {
         )
         .unwrap();
     task.kind = Some("bug".into());
+    task.write_scope = vec!["src/cache.rs".into()];
     let mut value = lesson("a");
     value.scope = LessonScope {
         files: vec!["src/**/*.rs".into()],
@@ -285,15 +286,23 @@ fn scopes_require_every_dimension_and_allow_alternatives() {
 }
 
 #[test]
-fn files_match_overlapping_write_globs() {
-    // Given a scoped lesson without text path references.
+fn file_advice_requires_write_scope_even_when_text_names_file() {
+    // Naming a path in a title or command does not declare it as a write target.
     let dir = tempdir().unwrap();
     let store = Store::init(dir.path()).unwrap();
-    let mut task = store.create("Fix", None, Status::Backlog, "").unwrap();
+    let mut task = store
+        .create(
+            "Fix src/nested/cache.rs",
+            None,
+            Status::Backlog,
+            "Run checks for `src/nested/cache.rs`.",
+        )
+        .unwrap();
     let mut value = lesson("a");
     value.scope.files = vec!["src/**/cache*.rs".into()];
     let values = [value];
     let matching = |task: &Task| match_lessons(&values, task, None, None, 5, at(1));
+    assert!(matching(&task).is_empty());
 
     // When declared write globs intersect the lesson, then it matches.
     for glob in ["src/**", "src/*test.rs", "src/nested/**/cache.rs"] {

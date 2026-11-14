@@ -197,6 +197,7 @@ fn task_preview_matches_scope_without_recording_dispatch_exposure() {
         .update(&task.id, |t| {
             t.kind = Some("fix".into());
             t.profile = Some("generic".into());
+            t.write_scope = vec!["src/lib.rs".into()];
             Ok(())
         })
         .unwrap();

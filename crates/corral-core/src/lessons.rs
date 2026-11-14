@@ -309,7 +309,7 @@ impl Store {
 /// age. Stored/returned confidence is unchanged. Pins are immune to decay but not
 /// scope restrictions. Contradicted lessons are always excluded, even when pinned.
 /// Tags are case-insensitive whole words/phrases in title/body. File scopes match
-/// punctuation-delimited title/body paths or overlapping declared write scopes.
+/// only overlapping declared write scopes, never paths mentioned in task text.
 #[must_use]
 pub fn match_lessons<T: crate::TaskFieldsRef + ?Sized>(
     lessons: &[Lesson],
@@ -319,13 +319,7 @@ pub fn match_lessons<T: crate::TaskFieldsRef + ?Sized>(
     limit: usize,
     now: Timestamp,
 ) -> Vec<Lesson> {
-    let text = format!("{}\n{}", task.title(), task.body());
-    let paths: Vec<_> = text
-        .split(|c: char| c.is_whitespace() || "`'\"(),;:<>".contains(c))
-        .filter(|p| !p.is_empty())
-        .map(|p| p.trim_end_matches('.'))
-        .collect();
-    let words = text.to_lowercase();
+    let words = format!("{}\n{}", task.title(), task.body()).to_lowercase();
     let matches_dimension = |values: &[String], value: Option<&str>| {
         values.is_empty() || value.is_some_and(|v| values.iter().any(|s| s == v))
     };
@@ -342,10 +336,9 @@ pub fn match_lessons<T: crate::TaskFieldsRef + ?Sized>(
                 && (scope.files.is_empty()
                     || scope.files.iter().any(|glob| {
                         validate_glob(glob).is_ok()
-                            && (paths.iter().any(|path| glob_matches(glob, path))
-                                || task.write_scope().iter().any(|other| {
-                                    validate_glob(other).is_ok() && globs_overlap(glob, other)
-                                }))
+                            && task.write_scope().iter().any(|other| {
+                                validate_glob(other).is_ok() && globs_overlap(glob, other)
+                            })
                     }))
         })
         .collect();
@@ -381,54 +374,6 @@ fn contains_tag(text: &str, tag: &str) -> bool {
                     .next()
                     .is_none_or(|c| !c.is_alphanumeric() && c != '_')
         })
-}
-
-fn glob_matches(glob: &str, path: &str) -> bool {
-    let glob: Vec<_> = glob.split('/').collect();
-    let path: Vec<_> = path.strip_prefix("./").unwrap_or(path).split('/').collect();
-    let mut pending = vec![(0, 0)];
-    let mut seen = HashSet::new();
-    while let Some((g, p)) = pending.pop() {
-        if !seen.insert((g, p)) {
-            continue;
-        }
-        match (glob.get(g), path.get(p)) {
-            (None, None) => return true,
-            (Some(&"**"), next) => {
-                pending.push((g + 1, p));
-                if next.is_some() {
-                    pending.push((g, p + 1));
-                }
-            }
-            (Some(pattern), Some(segment)) if segment_matches(pattern, segment) => {
-                pending.push((g + 1, p + 1))
-            }
-            _ => {}
-        }
-    }
-    false
-}
-
-fn segment_matches(pattern: &str, segment: &str) -> bool {
-    let mut pattern = pattern.split('*');
-    let first = pattern.next().unwrap_or("");
-    let Some(mut rest) = segment.strip_prefix(first) else {
-        return false;
-    };
-    let parts: Vec<_> = pattern.collect();
-    if parts.is_empty() {
-        return rest.is_empty();
-    }
-    for (index, part) in parts.iter().enumerate() {
-        if index + 1 == parts.len() {
-            return rest.ends_with(part);
-        }
-        let Some(pos) = rest.find(part) else {
-            return false;
-        };
-        rest = &rest[pos + part.len()..];
-    }
-    false
 }
 
 // Product of the two glob automata: ** consumes any path segment, * any

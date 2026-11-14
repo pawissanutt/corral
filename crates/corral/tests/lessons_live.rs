@@ -185,6 +185,12 @@ fn isolated_distillation_apply_dispatch_and_review_share_exact_lessons() {
     )
     .trim()
     .to_string();
+    store
+        .update(&task, |t| {
+            t.write_scope = vec!["startup.rs".into()];
+            Ok(())
+        })
+        .unwrap();
     // When the real dispatch path submits to herdr and the owner later deletes the source lesson.
     cli(
         &root,

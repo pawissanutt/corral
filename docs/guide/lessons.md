@@ -90,9 +90,9 @@ markers. Keep marker lines intact. `<project>.index.json` is a derived scope ind
 on save; matching reads the document so a stale index cannot hide an owner edit.
 
 Nonempty scope dimensions are ANDed; alternatives inside one dimension are ORed.
-File globs match only punctuation-delimited paths in the title/spec and overlapping declared
-write scopes. A task that declares no path receives only rules without a file scope.
-Tags match whole words or phrases.
+File globs match only overlapping declared write scopes. Paths mentioned in titles, specs,
+or commands do not declare a write target. A task with no write scope receives only rules
+without a file scope. Tags still match whole words or phrases in the title/spec.
 Profile and harness restrictions use the run's resolved launch selection.
 
 Pins rank first. Unpinned ranking confidence has a 90-day half-life, with the stored
