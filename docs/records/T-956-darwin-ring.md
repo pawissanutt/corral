@@ -1,5 +1,9 @@
 # T-956 — SDK-free Darwin checks with ring 0.17.14
 
+Historical record of the original Darwin-only candidate `254175e7`. The owner later
+authorized the exact T-955 fixture consolidation; see the [combined-scope record](T-956-consolidation.md).
+Checks and approval of the original candidate are not approval of that combined candidate.
+
 ## Cause, not attribution
 
 The original full-landing failure is retained unchanged at
